@@ -2,6 +2,7 @@ import { Deferred, Effect, Option, type Scope } from "effect"
 import { createSignal } from "solid-js"
 import type { BranchId, EventEnvelope, Model, SessionId } from "@gent/core/protocol"
 import type {
+  ClientActivitySnapshot,
   ClientContextDeps,
   AnyExtensionClientModule,
   ClientContributions,
@@ -33,11 +34,56 @@ interface ClientExtensionHarnessOptions {
   /** The model catalog the shell holds; settled empty by default. */
   readonly modelCatalog?: () => Option.Option<ReadonlyArray<Model>>
   /**
-   * Workspace the extension sees. Defaults to a shared `/tmp` pair, which is
-   * fine for a setup that only reads `cwd`; a test whose extension writes
-   * under `home` must supply its own temp directory, or runs share one file.
+   * Workspace the extension sees. Defaults to a shared `/nonexistent` pair,
+   * which is fine for a setup that only reads `cwd`; a test whose extension
+   * writes under `home` must supply its own temp directory, or runs share one
+   * file. The session's directory defaults to `cwd`.
    */
-  readonly workspace?: ClientContextDeps["workspace"]
+  readonly workspace?: TestWorkspace
+}
+
+type TestWorkspace = Omit<ClientContextDeps["workspace"], "sessionCwd"> &
+  Partial<Pick<ClientContextDeps["workspace"], "sessionCwd">>
+
+/**
+ * Every `ClientContext` dependency, with the test defaults: a test transport
+ * with no session, a `/nonexistent` workspace whose session directory is its
+ * `cwd`, a shell whose `cast` forks and whose other callbacks do nothing, an
+ * idle activity and a cleanup registry that keeps nothing. `deps` replaces any
+ * default; `shell` is merged over the default shell.
+ */
+export const testClientContextDeps = (
+  deps: Partial<Omit<ClientContextDeps, "shell" | "workspace">> & {
+    readonly shell?: Partial<ClientShell>
+    readonly workspace?: TestWorkspace
+  } = {},
+): ClientContextDeps => {
+  const workspace = Option.getOrElse(Option.fromUndefinedOr(deps.workspace), () => ({
+    cwd: "/nonexistent/test-cwd",
+    home: "/nonexistent/test-home",
+  }))
+  return {
+    transport: Option.getOrElse(Option.fromUndefinedOr(deps.transport), () =>
+      makeClientTestTransport({ currentSession: () => Option.none() }),
+    ),
+    workspace: { sessionCwd: Effect.succeed(workspace.cwd), ...workspace },
+    shell: {
+      notify: () => {},
+      switchSession: () => {},
+      cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
+        Effect.runFork(effect)
+      },
+      pane: makePaneSlot(),
+      ...deps.shell,
+    },
+    activity: Option.getOrElse(
+      Option.fromUndefinedOr(deps.activity),
+      () => (): ClientActivitySnapshot => ({ state: "idle" }),
+    ),
+    lifecycle: Option.getOrElse(Option.fromUndefinedOr(deps.lifecycle), () => ({
+      addCleanup: () => {},
+    })),
+  }
 }
 
 /** One pane slot, as the session overlay keeps it: opening a pane replaces the open one. */
@@ -117,23 +163,15 @@ export const makeUnreachableTransport = (): ClientShellTransport => ({
 export const makeClientExtensionRuntime = (
   opts: ClientExtensionHarnessOptions = {},
 ): ClientRuntime =>
-  makeClientRuntime(BunServices.layer, {
-    transport: Option.getOrElse(Option.fromUndefinedOr(opts.transport), () =>
-      makeClientTestTransport(opts),
-    ),
-    workspace: Option.getOrElse(Option.fromUndefinedOr(opts.workspace), () => ({
-      cwd: "/nonexistent/test-cwd",
-      home: "/nonexistent/test-home",
-    })),
-    shell: {
-      cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
-        Effect.runFork(effect)
-      },
-      pane: makePaneSlot(),
-      ...Option.getOrElse(Option.fromUndefinedOr(opts.shell), () => ({})),
-    },
-    activity: () => ({ state: "idle" }),
-  })
+  makeClientRuntime(
+    BunServices.layer,
+    testClientContextDeps({
+      ...opts,
+      transport: Option.getOrElse(Option.fromUndefinedOr(opts.transport), () =>
+        makeClientTestTransport(opts),
+      ),
+    }),
+  )
 
 export const runClientExtensionSetup = (
   runtime: ClientRuntime,

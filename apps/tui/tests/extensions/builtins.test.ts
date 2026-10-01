@@ -48,7 +48,7 @@ import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
-  makePaneSlot,
+  testClientContextDeps,
   makePromiseHold,
   provideClientServices,
   runClientExtensionSetup,
@@ -687,13 +687,10 @@ describe("files popup finder", () => {
 })
 
 /** A `ClientContext` layer over a test transport; `deps` replaces any default. */
-const contextLayer = (deps: Partial<ClientContextDeps> = {}) =>
-  makeClientContextLayer({
-    transport: makeClientTestTransport({ currentSession: () => Option.none() }),
-    workspace: { cwd: "/nonexistent/test-cwd", home: "/nonexistent/test-home" },
-    shell: { cast: createMockRuntime().cast, pane: makePaneSlot() },
-    ...deps,
-  })
+const contextLayer = (deps: Partial<Omit<ClientContextDeps, "shell" | "workspace">> = {}) =>
+  makeClientContextLayer(
+    testClientContextDeps({ shell: { cast: createMockRuntime().cast }, ...deps }),
+  )
 
 // ── driver transport ────────────────────────────────────────────────────────
 

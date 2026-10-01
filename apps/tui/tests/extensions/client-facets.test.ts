@@ -8,15 +8,9 @@ import {
   defineClientExtension,
   sessionQuery,
 } from "../../src/extensions/client-facets"
-import { BunServices } from "@effect/platform-bun"
-import { makeClientRuntime } from "../../src/extensions/host"
-import {
-  makeClientTestTransport,
-  makePaneSlot,
-  provideClientServices,
-} from "../extension-test-harness-boundary"
-import { createMockRuntime, renderWithProviders } from "../render-harness-boundary"
-import { inRuntime, waitUntil } from "../helpers-boundary"
+import { provideClientServices } from "../extension-test-harness-boundary"
+import { renderWithProviders } from "../render-harness-boundary"
+import { waitUntil } from "../helpers-boundary"
 
 // ── extension lifecycle ─────────────────────────────────────────────────────
 
@@ -200,80 +194,4 @@ describe("sessionQuery", () => {
       dispose()
     }),
   )
-})
-
-// ── client runtime ──────────────────────────────────────────────────────────
-
-/**
- * `makeClientRuntime` is the one runtime every client-extension surface
- * loads against. A surface gives it a transport, a workspace, and
- * `cast`; everything else defaults so a test does not
- * restate no-op callbacks.
- */
-
-const workspace = {
-  cwd: "/nonexistent/client-runtime-cwd",
-  home: "/nonexistent/client-runtime-home",
-}
-const mockRuntime = createMockRuntime()
-const runCast = { cast: mockRuntime.cast, pane: makePaneSlot() }
-const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }
-
-describe("makeClientRuntime", () => {
-  it.live("transport, workspace and cast alone resolve every client facet", () => {
-    const runtime = makeClientRuntime(BunServices.layer, {
-      transport: makeClientTestTransport({ currentSession: () => Option.some(session) }),
-      workspace,
-      shell: runCast,
-    })
-    return Effect.gen(function* () {
-      const seen = yield* inRuntime(
-        runtime,
-        Effect.gen(function* () {
-          const { shell, workspace: ws, lifecycle, activity, transport } = yield* ClientContext
-          shell.notify("ignored")
-          shell.switchSession({ ...session, name: "ignored" })
-          lifecycle.addCleanup(() => {})
-          return {
-            cwd: ws.cwd,
-            activity: activity.snapshot().state,
-            session: transport.currentSession(),
-          }
-        }),
-      )
-      expect(seen).toEqual({
-        cwd: workspace.cwd,
-        activity: "unknown",
-        session: Option.some(session),
-      })
-      yield* Effect.promise(() => runtime.dispose())
-    })
-  })
-
-  it.live("supplied shell, activity and lifecycle callbacks replace the no-op defaults", () => {
-    const sent: Array<string> = []
-    const cleanups: Array<() => void> = []
-    const runtime = makeClientRuntime(BunServices.layer, {
-      transport: makeClientTestTransport({ currentSession: () => Option.some(session) }),
-      workspace,
-      shell: { ...runCast, notify: (message) => sent.push(message) },
-      activity: () => ({ state: "working" }),
-      lifecycle: { addCleanup: (fn) => cleanups.push(fn) },
-    })
-    return Effect.gen(function* () {
-      const state = yield* inRuntime(
-        runtime,
-        Effect.gen(function* () {
-          const { shell, lifecycle, activity } = yield* ClientContext
-          shell.notify("hello")
-          lifecycle.addCleanup(() => {})
-          return activity.snapshot().state
-        }),
-      )
-      expect(state).toEqual("working")
-      expect(sent).toEqual(["hello"])
-      expect(cleanups).toHaveLength(1)
-      yield* Effect.promise(() => runtime.dispose())
-    })
-  })
 })
