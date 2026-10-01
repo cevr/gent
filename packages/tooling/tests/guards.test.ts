@@ -47,7 +47,7 @@ import {
 } from "../src/guards"
 import { indexFileNames, scanTrackedTexts, trackedTexts } from "../src/check-guardrails"
 import { BunServices } from "@effect/platform-bun"
-import { Config, Effect, FileSystem, Option, Path } from "effect"
+import { Config, Effect, FileSystem, Option, Path, Schema } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { it } from "effect-bun-test"
 
@@ -1234,6 +1234,13 @@ describe("a defined rule must be enabled", () => {
     })
     expect([...enabled].toSorted()).toEqual(["gent/no-script-glob", "gent/no-sleep"])
   })
+
+  test('"allow" turns a rule off, as the oxlint schema says', () => {
+    const enabled = enabledLintRules({
+      rules: { "gent/a": "allow", "gent/b": "error", "gent/c": ["allow", {}] },
+    })
+    expect([...enabled]).toEqual(["gent/b"])
+  })
 })
 
 describe("a read variable must have a writer", () => {
@@ -2381,6 +2388,36 @@ describe("suppression inventory guard", () => {
     ).toEqual([1, 1])
   })
 
+  test("a directive is read in every spelling the language service honors", () => {
+    const fileScope = nextLine.replace("-next-line", "")
+    expect(
+      [
+        `${nextLine} floatingEffect:OFF`,
+        `${nextLine} *:Off`,
+        `${nextLine} reason first floatingEffect:off`,
+        `${fileScope} floatingEffect:OFF`,
+        `${fileScope} reason first *:off`,
+        `${nextLine} FLOATINGEFFECT:off`,
+        `${nextLine} see:this x-floatingEffect:skip-file`,
+      ].map((text) => findSuppressionInventoryFindings("sample.ts", text).length),
+    ).toEqual([1, 1, 1, 1, 1, 1, 1])
+  })
+
+  test("a spelling the language service ignores is not a directive", () => {
+    expect(
+      [
+        `${nextLine} effect/floatingEffect:off`,
+        `${nextLine} floatingEffect: off`,
+        `${nextLine}: floatingEffect:off`,
+        `${nextLine}s floatingEffect:off`,
+        `${nextLine} floatingEffect:off2`,
+        `${nextLine} (floatingEffect:off)`,
+        `${nextLine} x.floatingEffect:off`,
+        nextLine.replace("effect-diagnostics", "EFFECT-DIAGNOSTICS") + " floatingEffect:off",
+      ].map((text) => findSuppressionInventoryFindings("sample.ts", text).length),
+    ).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
+  })
+
   test("a directive in a string literal is read, since the language service honors it", () => {
     const marker = nextLine.replace("// ", "")
     expect(
@@ -2466,6 +2503,98 @@ describe("suppression inventory guard", () => {
       expect(findSuppressionInventoryFindings(membraneFile, holding(2), single)).toHaveLength(1)
     })
   })
+})
+
+describe("the directive grammar is the language service's", () => {
+  const lsTest = it.scopedLive.layer(BunServices.layer)
+  const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))
+  const fileScope = nextLine.replace("-next-line", "")
+
+  /**
+   * Spellings on both sides of the grammar. Each goes in its own probe file
+   * above a floating `Effect`: the language service honors it when `tsc`
+   * reports no `floatingEffect` in that file.
+   */
+  const SPELLINGS: ReadonlyArray<string> = [
+    `${nextLine} floatingEffect:off`,
+    `${nextLine} floatingEffect:OFF`,
+    `${nextLine} *:Off`,
+    `${nextLine} reason first floatingEffect:off`,
+    `${nextLine} see:this x-floatingEffect:off`,
+    `${nextLine}\tfloatingEffect:off -- a reason`,
+    `${nextLine} FLOATINGEFFECT:skip-file`,
+    `${nextLine} floatingEffect:off, then prose`,
+    `/* ${nextLine.replace("// ", "")} floatingEffect:off */`,
+    `// x ${nextLine.replace("// ", "")} floatingEffect:off`,
+    `${fileScope} floatingEffect:OFF`,
+    `${fileScope} reason first *:off`,
+    `${nextLine} effect/floatingEffect:off`,
+    `${nextLine} x.floatingEffect:off`,
+    `${nextLine} (floatingEffect:off)`,
+    `${nextLine} comment, floatingEffect:off`,
+    `${nextLine} floatingEffect: off`,
+    `${nextLine} floatingEffect :off`,
+    `${nextLine} floatingEffect:off2`,
+    `${nextLine} floatingEffect:off-x`,
+    `${nextLine}: floatingEffect:off`,
+    `${nextLine}s floatingEffect:off`,
+    `${fileScope}-file floatingEffect:off`,
+    `${fileScope}floatingEffect:off`,
+    nextLine.replace("effect-diagnostics", "EFFECT-DIAGNOSTICS") + " floatingEffect:off",
+  ]
+
+  const probeSource = (spelling: string, index: number): string =>
+    [
+      'import { Effect } from "effect"',
+      "export const probe = Effect.gen(function* () {",
+      "  yield* Effect.void",
+      `  ${spelling}`,
+      `  Effect.succeed(${index})`,
+      "})",
+      "",
+    ].join("\n")
+
+  /** Bound on one `tsc` run over the probe files; about a second on an idle machine. */
+  const TSC_BOUND = "40 seconds"
+
+  lsTest(
+    "the inventory reads a spelling as a directive exactly when tsc honors it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+        const repo = yield* path.fromFileUrl(new URL("../../..", import.meta.url))
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-directive-grammar-" })
+        yield* fs.symlink(path.join(repo, "node_modules"), path.join(dir, "node_modules"))
+        yield* fs.writeFileString(
+          path.join(dir, "tsconfig.json"),
+          yield* encodeJson({ extends: path.join(repo, "tsconfig.json"), include: ["*.ts"] }),
+        )
+        for (const [index, spelling] of SPELLINGS.entries()) {
+          yield* fs.writeFileString(path.join(dir, `p${index}.ts`), probeSource(spelling, index))
+        }
+        const output = yield* spawner.string(
+          ChildProcess.make(path.join(repo, "node_modules", ".bin", "tsc"), ["-p", dir], {
+            cwd: dir,
+          }),
+          { includeStderr: true },
+        )
+        // The control: an unhonored spelling leaves the floating Effect reported.
+        expect(output).toContain("floatingEffect")
+        const verdicts = SPELLINGS.map((spelling, index) => ({
+          spelling,
+          honored: !new RegExp(`p${index}\\.ts\\(\\d+,\\d+\\)[^\\n]*floatingEffect`).test(output),
+        }))
+        expect(
+          SPELLINGS.map((spelling) => ({
+            spelling,
+            honored: findSuppressionInventoryFindings("sample.ts", spelling).length > 0,
+          })),
+        ).toEqual(verdicts)
+      }).pipe(Effect.timeout(TSC_BOUND)),
+    60_000,
+  )
 })
 
 // ── export consumers ────────────────────────────────────────────────────────

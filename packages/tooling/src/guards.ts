@@ -1202,9 +1202,9 @@ export const findUnmatchedTsconfigOverrides = (
 const lineOfRule = (pluginText: string, rule: string): number =>
   Math.max(1, pluginText.split("\n").findIndex((line) => line.includes(`"${rule}":`)) + 1)
 
-const OffLevel = Schema.Literals(["off", 0])
+const OffLevel = Schema.Literals(["off", "allow", 0])
 
-/** A rule setting that turns the rule off: `"off"`, `0`, or either first in an options array. */
+/** A rule setting that turns the rule off: `"off"`, `"allow"`, `0`, or one of them first in an options array. */
 const isOffSetting = Schema.is(
   Schema.Union([OffLevel, Schema.TupleWithRest(Schema.Tuple([OffLevel]), [Schema.Unknown])]),
 )
@@ -2423,10 +2423,9 @@ export const findUnhashedSteeringFiles = (
  * entry listed twice fails as well.
  *
  * The language service honors a directive anywhere in a file's text, a string
- * literal too: the marker, then whitespace, then a `rule:severity` flag,
- * whose rule is a name or `*`. So the scan reads each line for that form, not
- * only the comment tokens. A
- * directive without `-next-line` suppresses its rules from there to the end
+ * literal too, with the `rule:severity` flag after other words on the line
+ * (`HONORED_DIRECTIVE` states the grammar). So the scan reads each line for
+ * that form, not only the comment tokens. A directive without `-next-line` suppresses its rules from there to the end
  * of the file; like a file-wide lint disable, it is banned outright.
  */
 
@@ -2443,8 +2442,30 @@ interface ApprovedSuppressionEntry {
 
 const directiveMarker = "@effect-diagnostics"
 
-/** The form the language service honors; the capture is `-next-line`, or empty for the file scope. */
-const HONORED_DIRECTIVE = /@effect-diagnostics(-next-line)?\s+(?:[\w/]+|\*):[a-z]/
+/** A literal word in any letter case, as a regex source. */
+const anyCase = (word: string): string =>
+  word.replace(/[a-z]/g, (char) => `[${char}${char.toUpperCase()}]`)
+
+/**
+ * The form the language service honors; the capture is `-next-line`, or empty
+ * for the file scope. The marker is lowercase, then a space or a tab; words of
+ * letters, digits, `_`, `-` and `:` may come first; then `<rule or *>:<severity>`,
+ * the rule and the severity in any case, with no word character or `-` after
+ * the severity. `tests/guards.test.ts` holds this grammar to `tsc` on a matrix
+ * of spellings, so a language-service change fails a test.
+ */
+const HONORED_DIRECTIVE = new RegExp(
+  `@effect-diagnostics(-next-line)?[ \\t][ \\t\\w:-]*?(?:\\w+|\\*):(?:${[
+    "off",
+    "warning",
+    "error",
+    "message",
+    "suggestion",
+    "skip-file",
+  ]
+    .map(anyCase)
+    .join("|")})(?![\\w-])`,
+)
 
 const approvedComment = (entry: ApprovedSuppressionEntry): string =>
   `// ${directiveMarker}-next-line ${entry.text}`
