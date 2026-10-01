@@ -846,28 +846,70 @@ const plugin: Plugin = {
      * with an equivalence on the ids.
      *
      * What is reported, in `apps/tui/src/`: a `.session()` call in a function
-     * Solid tracks -- a function passed to `createEffect`, `createMemo`,
-     * `createRenderEffect`, `createComputed`, `createResource` or `on` (a
-     * member call such as `emitter.on(` is a listener, not Solid's `on`), a
-     * callback such a function passes to a call (`items.map(() => ...)` runs
-     * while it tracks), and a same-file function such a function names or
-     * calls. A function it only builds -- an object's `onSelect`, a returned
-     * accessor -- runs later, outside the scope, and is not followed. A name bound to a `.session` accessor
-     * (`const read = client.session`) and called there is the same read. A
-     * read in a JSX expression, an event handler or a plain accessor is
-     * untouched: those want the record, and the name and the model live on it.
+     * Solid tracks. Solid tracks one position of each primitive
+     * (`TRACKED_POSITIONS`): the body of `createEffect`, `createMemo`,
+     * `createRenderEffect` and `createComputed`; the source of
+     * `createResource(source, fetcher)`, not the fetcher, and nothing of
+     * `createResource(fetcher)`; the deps of `on(deps, fn)`, one function or
+     * each of an array, not `fn`. A member call such as `emitter.on(` is a
+     * listener, not Solid's `on`. The scope also runs a function called where
+     * it is built, a callback an array method or `batch` runs at once
+     * (`SYNC_CALLERS`), and a same-file function it names or calls. Any other
+     * function it hands on -- to `untrack`, a listener, a scheduler, an
+     * object's `onSelect`, a return -- runs later or untracked, and is not
+     * followed. A name bound to a `.session` accessor (`const read =
+     * client.session`) and called there is the same read. A read in a JSX
+     * expression, an event handler or a plain accessor is untouched: those
+     * want the record, and the name and the model live on it.
      * `transport.currentSession()` already answers with the identity alone.
      */
     "no-tracked-session-record": {
       create(context) {
         if (!/^apps\/tui\/src\//.test(ruleSubject(context))) return {}
-        const TRACKERS = new Set([
-          "createEffect",
-          "createMemo",
-          "createRenderEffect",
-          "createComputed",
-          "createResource",
-          "on",
+        /** The arguments of a Solid primitive that Solid runs while it tracks. */
+        const TRACKED_POSITIONS: ReadonlyMap<
+          string,
+          (args: ReadonlyArray<AstNode>) => ReadonlyArray<AstNode | undefined>
+        > = new Map([
+          ["createEffect", (args: ReadonlyArray<AstNode>) => [args[0]]],
+          ["createMemo", (args: ReadonlyArray<AstNode>) => [args[0]]],
+          ["createRenderEffect", (args: ReadonlyArray<AstNode>) => [args[0]]],
+          ["createComputed", (args: ReadonlyArray<AstNode>) => [args[0]]],
+          [
+            "createResource",
+            (args: ReadonlyArray<AstNode>) => {
+              const fetcher = args[1]
+              if (fetcher === undefined || fetcher.type === "ObjectExpression") return []
+              return [args[0]]
+            },
+          ],
+          [
+            "on",
+            (args: ReadonlyArray<AstNode>) => {
+              const deps = args[0]
+              if (deps?.type !== "ArrayExpression") return [deps]
+              return getNodeArrayField(deps, "elements") ?? []
+            },
+          ],
+        ])
+        /** Calls that run a function argument at once, inside the caller's scope. */
+        const SYNC_CALLERS = new Set([
+          "batch",
+          "every",
+          "filter",
+          "find",
+          "findIndex",
+          "findLast",
+          "findLastIndex",
+          "flatMap",
+          "forEach",
+          "from",
+          "map",
+          "reduce",
+          "reduceRight",
+          "some",
+          "sort",
+          "toSorted",
         ])
         const FUNCTION_TYPES = new Set([
           "FunctionDeclaration",
@@ -892,10 +934,26 @@ const plugin: Plugin = {
             property === undefined ? "" : (getStringField(property, "name") ?? ""),
           )
         }
+        /** The name a call goes by: `f(` or the member of `x.f(`. */
+        const calleeName = (call: AstNode): string | undefined => {
+          const callee = getNodeField(call, "callee")
+          if (callee?.type === "Identifier") return getStringField(callee, "name")
+          if (callee?.type !== "MemberExpression" || fieldOf(callee, "computed") === true)
+            return undefined
+          const property = getNodeField(callee, "property")
+          return property === undefined ? undefined : getStringField(property, "name")
+        }
+        /** Whether the enclosing call runs `fn` at once: `fn` is its callee, or a sync callback. */
+        const runsAtOnce = (fn: AstNode): boolean => {
+          const holder = getNodeField(fn, "parent")
+          if (holder?.type !== "CallExpression") return false
+          if (getNodeField(holder, "callee") === fn) return true
+          return SYNC_CALLERS.has(calleeName(holder) ?? "")
+        }
         /**
          * The functions a node runs inside while its innermost one runs: up
-         * through each function passed as a call argument, and no further
-         * than the first function that is not one.
+         * through each function its caller runs at once, and no further than
+         * the first function that runs later.
          */
         const runningFunctions = (node: AstNode): ReadonlyArray<AstNode> => {
           const found: Array<AstNode> = []
@@ -903,11 +961,7 @@ const plugin: Plugin = {
           while (at !== undefined) {
             if (FUNCTION_TYPES.has(at.type)) {
               found.push(at)
-              const holder = getNodeField(at, "parent")
-              const isCallback =
-                (holder?.type === "CallExpression" || holder?.type === "NewExpression") &&
-                getNodeField(holder, "callee") !== at
-              if (!isCallback) break
+              if (!runsAtOnce(at)) break
             }
             at = getNodeField(at, "parent")
           }
@@ -938,8 +992,10 @@ const plugin: Plugin = {
             if (callee?.type !== "Identifier") return
             const name = getStringField(callee, "name") ?? ""
             namedCalls.push({ node, name })
-            if (!TRACKERS.has(name)) return
-            for (const argument of callExpressionArgs(node)) {
+            const positions = TRACKED_POSITIONS.get(name)
+            if (positions === undefined) return
+            for (const argument of positions(callExpressionArgs(node))) {
+              if (argument === undefined) continue
               if (FUNCTION_TYPES.has(argument.type)) tracked.add(argument)
               if (argument.type === "Identifier")
                 trackedNames.push(getStringField(argument, "name") ?? "")
