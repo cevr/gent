@@ -1066,16 +1066,30 @@ describe("slash autocomplete contribution", () => {
     expect(ids(slashAutocompleteItems(commands, "thi"))[0]).toBe("think")
   })
 
-  test("offers every command when nothing is typed yet", () => {
-    // One row per slash name plus the alias.
+  test("offers every command once when nothing is typed yet", () => {
+    // One row per command, by its name: an alias row would read the same
+    // title twice.
     expect(ids(slashAutocompleteItems(commands, ""))).toEqual([
       "fork",
       "auth",
       "agents",
-      "tree",
       "model",
       "think",
     ])
+  })
+
+  test("a filter both names match shows the command once", () => {
+    const fresh: ReadonlyArray<Command> = [
+      {
+        id: "session.new",
+        title: "New Session",
+        slash: "new",
+        aliases: ["clear"],
+        onSelect: () => {},
+      },
+    ]
+    expect(ids(slashAutocompleteItems(fresh, "e"))).toHaveLength(1)
+    expect(ids(slashAutocompleteItems(fresh, "cl"))).toEqual(["clear"])
   })
 
   test("offers nothing for a filter no command matches", () => {

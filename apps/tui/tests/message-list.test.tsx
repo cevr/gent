@@ -218,6 +218,11 @@ describe("session event labels", () => {
     expect(getSessionEventLabel({ ...event, reason: "" }, createdAt)).toBe("Retrying in 2s... 1/3")
   })
 
+  test("an interruption row joins its parts with the separator every row uses", () => {
+    const event: SessionEvent = { _tag: "interruption", createdAt: 1, seq: 1 }
+    expect(getSessionEventLabel(event)).toBe("Interrupted · what do you want to do instead?")
+  })
+
   // A pending retry's row is the one row that follows the clock.
   it.scopedLive("a pending retry row counts down to now", () =>
     Effect.gen(function* () {
@@ -245,6 +250,40 @@ describe("session event labels", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("Retrying in 1s... 1/3"), "countdown")
       yield* waitForFrame(setup, (frame) => frame.includes("Retrying now... 1/3"), "now", 3000)
     }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  // A row too long for the width wraps under its text: the glyph keeps its column.
+  it.scopedLive("a wrapped retry row hangs its next line under the text", () =>
+    Effect.gen(function* () {
+      const event: SessionEvent = {
+        _tag: "retrying",
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 2000,
+        outcome: "retried",
+        reason: "overloaded (529) the provider asked us to slow down",
+        createdAt: 1,
+        seq: 1,
+      }
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[event]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            openAnswer={Option.none()}
+          />
+        ),
+        { width: 40, height: 10 },
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("Retried 1/3"), "the row")
+      const lines = frame.split("\n")
+      const first = lines.findIndex((line) => line.includes("● Retried"))
+      const textColumn = (lines[first] ?? "").indexOf("Retried")
+      const next = lines[first + 1] ?? ""
+      expect(next.trim().length).toBeGreaterThan(0)
+      expect(next.search(/\S/)).toBe(textColumn)
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   test("a retry the turn's cancel cut short is not called finished", () => {
@@ -2766,6 +2805,48 @@ describe("expanded grep body", () => {
 })
 
 describe("write body", () => {
+  // The preview level draws the last call as the full level does, cut short:
+  // one call has one owner for what shows beneath it, never its raw result.
+  it.scopedLive("the preview draws a write through its renderer, not its JSON", () =>
+    Effect.gen(function* () {
+      const cwd = "/work/proj"
+      const path = `${cwd}/apps/tui/src/ops.ts`
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        path,
+        bytesWritten: 7373,
+      })
+      const items: SessionItem[] = [
+        assistantToolMessage("assistant-write-preview", {
+          id: "write-preview",
+          toolName: "write",
+          status: "completed",
+          input: { path, content: "x" },
+          summary: absent,
+          output,
+        }),
+      ]
+      const setup = yield* renderScoped(
+        () => {
+          const renderers = useToolRenderers()
+          return (
+            <Show when={renderers().size > 0}>
+              <MessageList
+                items={items}
+                disclosure="preview"
+                syntaxStyle={syntaxStyle}
+                openAnswer={Option.none()}
+              />
+            </Show>
+          )
+        },
+        { width: 100, height: 20, cwd },
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("written"), "the preview")
+      expect(frame).toContain("7.2 KB written")
+      expect(frame).not.toContain("bytesWritten")
+      expect(frame).not.toContain(cwd)
+    }),
+  )
   // The header names the file, so the open body says only what the write did.
   it.scopedLive("an open write frame draws no raw path under its header", () =>
     Effect.gen(function* () {
@@ -2801,43 +2882,47 @@ describe("write body", () => {
 })
 
 describe("read_session row", () => {
-  it.scopedLive("draws the counts the result carries", () =>
-    Effect.gen(function* () {
-      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
-        sessionId: "session-read-1234",
-        content: "READ-SESSION-TREE",
-        messageCount: 4,
-        branchCount: 2,
-      })
-      const items: SessionItem[] = [
-        assistantToolMessage("assistant-read-session", {
-          id: "call-read-session",
-          toolName: "read_session",
-          status: "completed",
-          input: { sessionId: "session-read-1234" },
-          summary: absent,
-          output,
-        }),
-      ]
-      const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={items}
-            disclosure="full"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
-        { width: 100, height: 40 },
-      )
-      const frame = yield* waitForFrame(
-        setup,
-        (text) => text.includes("4 messages"),
-        "read_session row",
-      )
-      expect(frame).toContain("✓ 4 messages, 2 branches")
-    }),
-  )
+  // A count of one reads singular, like every other count row.
+  const counts = [
+    { messages: 4, branches: 2, shown: "✓ 4 messages, 2 branches" },
+    { messages: 1, branches: 1, shown: "✓ 1 message, 1 branch" },
+  ]
+  for (const { messages, branches, shown } of counts)
+    it.scopedLive(`draws ${shown}`, () =>
+      Effect.gen(function* () {
+        const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+          sessionId: "session-read-1234",
+          content: "READ-SESSION-TREE",
+          messageCount: messages,
+          branchCount: branches,
+        })
+        const items: SessionItem[] = [
+          assistantToolMessage("assistant-read-session", {
+            id: "call-read-session",
+            toolName: "read_session",
+            status: "completed",
+            input: { sessionId: "session-read-1234" },
+            summary: absent,
+            output,
+          }),
+        ]
+        const setup = yield* renderScoped(
+          () => (
+            <MessageList
+              items={items}
+              disclosure="full"
+              syntaxStyle={syntaxStyle}
+              openAnswer={Option.none()}
+            />
+          ),
+          { width: 100, height: 40 },
+        )
+        const frame = yield* waitForFrame(setup, (text) => text.includes(shown), "read_session row")
+        // The count ends its row: `1 branch` is not the start of `1 branches`.
+        const row = frame.split("\n").find((line) => line.includes(shown)) ?? ""
+        expect(row.trimEnd().endsWith(shown)).toBe(true)
+      }),
+    )
 
   // A cell draws each op as a collapsed sub-row. A click on the row's header
   // opens it, and the open row shows what the read returned.

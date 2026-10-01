@@ -603,16 +603,6 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       }),
     )
 
-  const emptyRow = () => {
-    let label = "No matches"
-    if (loading()) label = "Loading…"
-    return (
-      <box paddingLeft={1}>
-        <text style={{ fg: theme.textMuted }}>{label}</text>
-      </box>
-    )
-  }
-
   return (
     <PickerFrame title={title()} keys={keys} error={Option.none()}>
       <SelectList
@@ -630,7 +620,8 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         rowKey={(entry) => entry.item.id}
         sticky={() => Option.some(0)}
         api={(api) => (list = Option.some(api))}
-        empty={emptyRow}
+        loading={loading}
+        query={() => props.state.filter}
         onCursor={setCursor}
         extraKeys={(event, selected) => {
           // Tab completes without running. The popup is the last place that

@@ -10,7 +10,6 @@ import {
   type SelectListRow,
   usePickerGeometry,
 } from "./ui"
-import { useTheme } from "./theme"
 import { formatError, shortId, truncate } from "./utils"
 import { textWidth } from "./bun-adapter"
 import { useClient, useRuntime } from "./client"
@@ -183,14 +182,7 @@ interface PromptSearchPaletteProps {
 }
 
 export function PromptSearchPalette(props: PromptSearchPaletteProps) {
-  const { theme } = useTheme()
   const { rowWidth } = usePickerGeometry()
-
-  const emptyRow = () => (
-    <box paddingLeft={1}>
-      <text style={{ fg: theme.textMuted }}>No prompt matches</text>
-    </box>
-  )
 
   return (
     <Show when={props.state._tag === "open"}>
@@ -217,7 +209,6 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
               rows={rows}
               rowKey={(entry) => entry.key}
               filter={{ onQueryChange: setQuery }}
-              empty={emptyRow}
               extraKeys={(event) => {
                 // Enter accepts whatever the composer previews, an empty list
                 // included; the list would swallow it with nothing selected.
@@ -470,7 +461,6 @@ interface SettingsPickerProps {
  * columns come from the picker's budget rather than a bordered box.
  */
 export function SettingsPicker(props: SettingsPickerProps) {
-  const { theme } = useTheme()
   const [query, setQuery] = createSignal("")
 
   const visible = () => filterRows(props.rows, query())
@@ -508,7 +498,6 @@ export function SettingsPicker(props: SettingsPickerProps) {
           rowKey={(row) => row.id}
           filter={{ onQueryChange: setQuery }}
           sticky={sticky}
-          empty={() => <text style={{ fg: theme.textMuted }}> nothing matches</text>}
           onSelect={(row) => props.onSelect(row.id)}
           onDismiss={props.onClose}
         />

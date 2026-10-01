@@ -5,7 +5,6 @@ import {
   formatCellRowLabel,
   formatCost,
   formatDuration,
-  formatGenericToolText,
   formatPreviewFooter,
   formatRowCounts,
   getString,
@@ -198,7 +197,7 @@ export const getSessionEventLabel = (event: SessionEvent, now = currentMillis())
       ...stepSummary(event.steps),
     ].join(" · ")
   }
-  if (event._tag === "interruption") return "Interrupted - what do you want to do instead?"
+  if (event._tag === "interruption") return "Interrupted · what do you want to do instead?"
   if (event._tag === "error") return event.error
   if (event._tag === "notice") return event.text
   const count = `${event.attempt}/${event.maxAttempts}`
@@ -245,21 +244,30 @@ function SessionEventIndicator(props: SessionEventIndicatorProps) {
     }
   }
 
+  // The glyph keeps its own column, so a row that wraps hangs its next line
+  // under the text, not under the glyph.
   const event = props.event
   if (event._tag === "notice") {
     return (
-      <box marginTop={1}>
-        <text>
-          <span style={{ fg: resolveThemeColor(theme, event.color) }}>{`${event.glyph} `}</span>
-          <span style={{ fg: theme.textMuted }}>{event.text}</span>
+      <box marginTop={1} flexDirection="row">
+        <text flexShrink={0} style={{ fg: resolveThemeColor(theme, event.color) }}>
+          {`${event.glyph} `}
+        </text>
+        <text flexShrink={1} style={{ fg: theme.textMuted }}>
+          {event.text}
         </text>
       </box>
     )
   }
 
   return (
-    <box marginTop={1}>
-      <text style={{ fg: color() }}>● {content()}</text>
+    <box marginTop={1} flexDirection="row">
+      <text flexShrink={0} style={{ fg: color() }}>
+        {"● "}
+      </text>
+      <text flexShrink={1} style={{ fg: color() }}>
+        {content()}
+      </text>
     </box>
   )
 }
@@ -301,18 +309,22 @@ const cellResultText = (call: ToolCall) =>
     }),
   })
 
-/** What a row would show beneath itself: the cell display, the command output, or the raw result. */
-const rowOutputText = (call: ToolCall): string => {
+/**
+ * The text a cell or bash row shows beneath itself: the cell display, or the
+ * command output. Any other call shows its renderer's body instead.
+ */
+const rowOutputText = (call: ToolCall): Option.Option<string> => {
   if (call.toolName === "cell") {
     const result = cellResultText(call)
-    if (result.error.length > 0) return result.error
-    return result.display
+    if (result.error.length > 0) return Option.some(result.error)
+    return Option.some(result.display)
   }
-  if (call.toolName === "bash") {
-    return Option.match(parseBashOutput(call.output), {
-      onNone: () => formatGenericToolText(call.output) ?? "",
-      // Each stream's final newline ends its last line, so the joined text
-      // holds as many lines as the two streams do.
+  if (call.toolName !== "bash") return Option.none()
+  // Each stream's final newline ends its last line, so the joined text
+  // holds as many lines as the two streams do. Output it cannot read shows nothing.
+  return Option.some(
+    Option.match(parseBashOutput(call.output), {
+      onNone: () => "",
       onSome: (value) =>
         [value.stdout, value.stderr]
           .values()
@@ -320,9 +332,8 @@ const rowOutputText = (call: ToolCall): string => {
           .map((text) => text.replace(/\n$/, ""))
           .toArray()
           .join("\n"),
-    })
-  }
-  return formatGenericToolText(call.output) ?? ""
+    }),
+  )
 }
 
 /**
@@ -333,7 +344,39 @@ const rowOutputLines = (call: ToolCall): number => {
   if (call.toolName === "bash" && Option.isSome(parseBashOutput(call.output))) {
     return bashOutputRows(call).total
   }
-  return lineCount(rowOutputText(call))
+  return lineCount(Option.getOrElse(rowOutputText(call), () => ""))
+}
+
+/**
+ * A call's renderer body at the preview level: the body the full level draws,
+ * cut to the preview's rows, with the preview's footer for the rest.
+ */
+function PreviewBody(props: { call: ToolCall }) {
+  const { theme } = useTheme()
+  const [height, setHeight] = createSignal(0)
+  const hidden = () => Math.max(0, height() - PREVIEW_LINES)
+  return (
+    <box flexDirection="column">
+      <box flexDirection="column" maxHeight={PREVIEW_LINES} overflow="hidden">
+        <box
+          flexDirection="column"
+          flexShrink={0}
+          onSizeChange={function () {
+            setHeight(this.height)
+          }}
+        >
+          <ToolFrameBody>
+            <SingleToolCall toolCall={props.call} expanded={true} />
+          </ToolFrameBody>
+        </box>
+      </box>
+      <Show when={hidden() > 0}>
+        <text>
+          <span style={{ fg: theme.textMuted, dim: true }}>{formatPreviewFooter(hidden())}</span>
+        </text>
+      </Show>
+    </box>
+  )
 }
 
 /** A declined command (stored by an earlier version) never ran and a background one has not ended: neither has lines to count. */
@@ -596,15 +639,24 @@ function ToolCallGroup(props: {
     if (rowsOpen() || props.disclosure === "preview") return props.calls
     return props.calls.filter((call) => call.status === "error")
   }
-  // Preview shows the head of the last finished call's output beneath the rows.
-  const preview = createMemo(() => {
-    if (props.fullDetail || props.disclosure !== "preview") return previewOutput("")
-    return Option.fromNullishOr(props.calls.at(-1)).pipe(
-      Option.filter((last) => last.status === "completed"),
-      Option.map((last) => previewOutput(rowOutputText(last), PREVIEW_LINES)),
-      Option.getOrElse(() => previewOutput("")),
+  // Preview shows the head of the last finished call beneath the rows: a cell
+  // or bash row its output text, any other call its renderer body.
+  const previewed = createMemo(() => {
+    if (props.fullDetail || props.disclosure !== "preview") return Option.none<ToolCall>()
+    return Option.filter(
+      Option.fromNullishOr(props.calls.at(-1)),
+      (last) => last.status === "completed",
     )
   })
+  const preview = createMemo(() =>
+    previewed().pipe(
+      Option.flatMap(rowOutputText),
+      Option.map((text) => previewOutput(text, PREVIEW_LINES)),
+      Option.getOrElse(() => previewOutput("")),
+    ),
+  )
+  const previewBody = () =>
+    Option.toArray(Option.filter(previewed(), (last) => Option.isNone(rowOutputText(last))))
   return (
     <Show when={props.calls.length > 0}>
       <box flexDirection="column">
@@ -705,6 +757,7 @@ function ToolCallGroup(props: {
             </Show>
           </box>
         </Show>
+        <For each={previewBody()}>{(call) => <PreviewBody call={call} />}</For>
       </box>
     </Show>
   )

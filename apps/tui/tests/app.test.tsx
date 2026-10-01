@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import {
   Cause,
   Clock,
@@ -34,7 +34,9 @@ import {
   DEFAULT_AGENT_NAME,
   GentRpcError,
   MessageId,
+  Model,
   ModelId,
+  ProviderId,
   Message as StoredMessage,
   Session,
   SessionId,
@@ -46,7 +48,12 @@ import {
   type GentClientRpcError,
   type QueueEntryInfo,
 } from "@gent/core/protocol"
-import { emptyQueueSnapshot, EventId, makeTempDirectoryScoped } from "@gent/core/test-utils"
+import {
+  emptyQueueSnapshot,
+  EventId,
+  makeTempDirectoryScoped,
+  testAgent,
+} from "@gent/core/test-utils"
 import { Gent, type GentRuntime } from "@gent/sdk"
 import {
   App,
@@ -58,6 +65,8 @@ import {
   resolveInteractiveState,
   resolveHeadlessMissingSignIns,
   resolveInteractiveBootstrap,
+  activityLine,
+  statusModelName,
 } from "../src/app"
 import {
   applySnapshotAgent,
@@ -571,6 +580,21 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
         command: (input: { readonly command: { readonly _tag: string } }) =>
           Effect.sync(() => {
             steers.push(input.command._tag)
+          }),
+      },
+      queue: {
+        // One follow-up waits behind the turn; alt+up takes it back into the draft.
+        drain: () =>
+          Effect.succeed({
+            steering: [],
+            followUp: [
+              {
+                _tag: "FollowUp" satisfies "FollowUp",
+                id: MessageId.make("queued-follow-up"),
+                content: "the queued follow-up",
+                createdAt: 0,
+              },
+            ],
           }),
       },
       message: {
@@ -1858,7 +1882,7 @@ describe("App auth gate", () => {
       view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
       yield* waitForFrame(
         view.setup,
-        (frame) => frame.includes("transcript · esc return"),
+        (frame) => frame.includes("transcript · esc close"),
         "transcript",
       )
     }).pipe(Effect.timeout("10 seconds")),
@@ -1938,6 +1962,109 @@ describe("App auth gate", () => {
       expect(view.activity()).toBe("working")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // Every state shows its way out: a running turn names the key that stops it.
+  // The tray's hint names alt+up; the key it names takes the queue back.
+  it.scopedLive("alt+up takes the queued follow-up back into the draft", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.mockInput.pressArrow("up", { meta: true })
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("the queued follow-up"),
+        "the restored draft",
+      )
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  it.scopedLive("a running turn's activity row shows esc cancel", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      const frame = yield* waitForFrame(view.setup, (next) => next.includes("Generating"), "busy")
+      const row = frame.split("\n").find((line) => line.includes("Generating")) ?? ""
+      expect(row.trim()).toMatch(/^Generating( \(\d+s\))? · esc cancel$/)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  test("a narrow activity row drops the elapsed time first, then cuts the label, and keeps the way out", () => {
+    expect(activityLine("Generating", " (12s)", 40)).toBe("Generating (12s) · esc cancel")
+    expect(activityLine("Generating", " (12s)", 24)).toBe("Generating · esc cancel")
+    expect(activityLine("read(src/very/long/path.ts)", " (3s)", 20)).toBe("read(s… · esc cancel")
+  })
+  // Two catalogs can share a model name; the row says which provider runs,
+  // and bills, the next turn.
+  it.scopedLive("the status row names the provider of a model whose name another shares", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-shared-name")
+      const branchId = BranchId.make("branch-shared-name")
+      const sonnet = (provider: string) =>
+        new Model({
+          id: ModelId.make(`${provider}/claude-sonnet-5`),
+          name: "Claude Sonnet 5",
+          provider: ProviderId.make(provider),
+        })
+      const provider = (id: string, name: string) => ({
+        provider: id,
+        name,
+        hasKey: true,
+        required: false,
+        source: "stored" satisfies "stored",
+        authType: absent,
+      })
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([provider("anthropic", "Anthropic"), provider("opencode", "OpenCode")]),
+        },
+        branch: { getTree: () => Effect.succeed([]) },
+        model: { list: () => Effect.succeed([sonnet("anthropic"), sonnet("opencode")]) },
+        driver: {
+          list: () =>
+            Effect.succeed({
+              drivers: [{ id: "anthropic" }, { id: "opencode" }],
+              overrides: {},
+              agents: [testAgent],
+            }),
+        },
+        session: {
+          getSnapshot: () =>
+            Effect.succeed({
+              sessionId,
+              branchId,
+              messages: [],
+              lastEventId: nullValue,
+              reasoningLevel: absent,
+              resolvedModelId: ModelId.make("opencode/claude-sonnet-5"),
+              agent: AgentName.make("main"),
+              runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+              metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+            }),
+        },
+      })
+      const setup = yield* renderScoped(() => <App />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 120,
+        initialSession: {
+          id: sessionId,
+          activeBranchId: branchId,
+          name: "Shared",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Claude Sonnet 5 (OpenCode)"),
+        "the provider in the status row",
+      )
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  test("a model name no other provider shares stays bare", () => {
+    const model = new Model({
+      id: ModelId.make("anthropic/claude-opus-5"),
+      name: "Claude Opus 5",
+      provider: ProviderId.make("anthropic"),
+    })
+    expect(statusModelName(model, [model], [])).toBe("Claude Opus 5")
+  })
   it.scopedLive("escape cancels a running turn while an error shows, and never quits", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
@@ -2346,6 +2473,16 @@ describe("App auth gate", () => {
   // A `/word` no command source names is a typo, not a message: it stays in
   // the draft with the way to the commands. A first word that reads as a
   // path, with a second `/` or a `.`, is text for the model.
+  // `/help` is the usual way to look for commands: it opens the one list of
+  // them and starts no turn.
+  it.scopedLive("/help opens the command palette and sends nothing", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      yield* typeCommand("/help")(view.setup)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Commands"), "the palette")
+      expect(view.sent()).toEqual([])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   it.scopedLive("an unknown slash command is refused into its draft, and a path is sent", () =>
     Effect.gen(function* () {
       const typo = yield* mountIdleSession()
@@ -2807,7 +2944,7 @@ describe("App auth gate", () => {
       setup.mockInput.pressKey("t", { ctrl: true })
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Agents ·") && frame.includes("delegate: task 3"),
+        (frame) => frame.includes("Sessions ·") && frame.includes("delegate: task 3"),
         "the agents pane",
       )
       setup.mockInput.pressKey("x", { ctrl: true })
@@ -2825,7 +2962,7 @@ describe("App auth gate", () => {
         setup.mockInput.pressKey("t", { ctrl: true })
         yield* waitForFrame(
           setup,
-          (frame) => frame.includes("Agents ·") && frame.includes("delegate: task 3 · running"),
+          (frame) => frame.includes("Sessions ·") && frame.includes("delegate: task 3 · running"),
           "the agents pane with its cursor row",
         )
         const opened = renderFrame(setup)
@@ -2843,7 +2980,7 @@ describe("App auth gate", () => {
         setup.mockInput.pressEscape()
         yield* waitForFrame(
           setup,
-          (frame) => !frame.includes("Agents ·") && frame.includes("alarm in now"),
+          (frame) => !frame.includes("Sessions ·") && frame.includes("alarm in now"),
           "the trays back once the pane closes",
         )
       }).pipe(Effect.timeout("10 seconds")),
@@ -3047,7 +3184,7 @@ describe("App auth gate", () => {
     {
       name: "agents pane",
       open: (view) => Effect.sync(() => view.setup.mockInput.pressArrow("left")),
-      shown: "Agents ·",
+      shown: "Sessions ·",
       rowClean: () => true,
     },
   ]
@@ -3191,7 +3328,7 @@ describe("App auth gate", () => {
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
-      yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions ·"), "the agents pane")
       view.setup.resize(view.setup.renderer.terminalWidth, 5)
       yield* waitForFrame(
         view.setup,
@@ -3240,12 +3377,12 @@ describe("App auth gate", () => {
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
-      yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions ·"), "the agents pane")
       const width = view.setup.renderer.terminalWidth
       view.setup.resize(width, 5)
       yield* waitForFrame(
         view.setup,
-        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("Agents ·"),
+        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("Sessions ·"),
         "the agents pane with no row",
       )
       view.setup.mockInput.pressEscape()
@@ -3257,7 +3394,7 @@ describe("App auth gate", () => {
         (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("Generating"),
         "the full terminal",
       )
-      expect(renderFrame(view.setup)).not.toContain("Agents ·")
+      expect(renderFrame(view.setup)).not.toContain("Sessions ·")
       expect(view.steers).toEqual([])
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
@@ -4825,7 +4962,7 @@ describe("App clipboard", () => {
 // ── agents view on the left arrow ───────────────────────────────────────────
 
 describe("agents view on the left arrow", () => {
-  const paneOpen = (frame: string) => frame.includes("Agents ·")
+  const paneOpen = (frame: string) => frame.includes("Sessions ·")
 
   it.scopedLive("← on an empty composer opens the agents pane; ← again and Esc close it", () =>
     Effect.gen(function* () {
@@ -5170,7 +5307,7 @@ describe("TUI renderer surfaces", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("[steer 1] switch to secondary")
       expect(frame).toContain("[queued 1] line one +2 lines")
-      expect(frame).toContain("cmd+up restore")
+      expect(frame).toContain("alt+up restore")
     }),
   )
   it.scopedLive("ConnectionWidget renders nothing when no connection issue", () =>

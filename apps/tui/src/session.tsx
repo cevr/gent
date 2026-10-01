@@ -38,6 +38,7 @@ import {
   Branch,
   type BranchId,
   Message as DurableMessage,
+  type AuthProviderInfo,
   type EventEnvelope,
   InteractionPresented,
   type MessageId,
@@ -1359,6 +1360,8 @@ interface SessionCommandRegistryProps {
   readonly openModelPicker: () => void
   readonly openReasoningPicker: () => void
   readonly openAuth: () => void
+  /** Opens the palette: every command and its key. */
+  readonly openPalette: () => void
 }
 
 /** `/think <level>`: a core reasoning level, or `default`/`off` to clear the session override. */
@@ -1398,19 +1401,40 @@ export const slashAutocompleteItems = (
   frecency: FrecencyLookup = noFrecency,
 ): ReadonlyArray<AutocompleteItem> => {
   const items: Array<AutocompleteItem> = []
+  // The command each name runs: an alias reaches its command, but the popup
+  // shows one row per command, its best-ranked name (`/new` until `/cl` is typed).
+  const owner = new Map<string, Command>()
   for (const command of commands) {
     const slash = Option.fromNullishOr(command.slash)
     if (Option.isNone(slash)) continue
     const description = command.description ?? command.title
-    items.push({ id: slash.value, label: `/${slash.value}`, description })
-    for (const alias of command.aliases ?? []) {
-      items.push({ id: alias, label: `/${alias}`, description })
+    for (const name of [slash.value, ...(command.aliases ?? [])]) {
+      items.push({ id: name, label: `/${name}`, description })
+      owner.set(name, command)
     }
   }
-  return rankAutocompleteItems(items, filter, { prefix: "/", frecency })
+  const shown = new Set<Command>()
+  return rankAutocompleteItems(items, filter, { prefix: "/", frecency }).filter((item) =>
+    Option.match(Option.fromUndefinedOr(owner.get(item.id)), {
+      onNone: () => true,
+      onSome: (command) => {
+        if (shown.has(command)) return false
+        shown.add(command)
+        return true
+      },
+    }),
+  )
 }
 
 const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] => [
+  {
+    // The usual way to look for commands: it opens the one list of them.
+    id: "session.help",
+    title: "Show Commands",
+    category: "Session",
+    slash: "help",
+    onSelect: props.openPalette,
+  },
   {
     id: "session.new",
     title: "New Session",
@@ -1422,7 +1446,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
   {
     id: "session.frecency-reset",
     title: "Reset Autocomplete Ranking",
-    description: "Forget which commands and skills you pick most (/frecency-reset)",
+    description: "Forget which commands and skills you pick most",
     category: "Session",
     slash: "frecency-reset",
     onSelect: props.resetFrecency,
@@ -2657,6 +2681,8 @@ export interface SessionController {
   messages: () => Message[]
   /** The answer the step in flight streams into: the one row drawn as streaming. */
   openAnswer: () => Option.Option<string>
+  /** The providers the newest auth check read: the status row names a provider by them. */
+  authProviders: () => ReadonlyArray<AuthProviderInfo>
   forkMessages: () => readonly DurableMessage[]
   queueState: () => QueueState
   composerState: () => ComposerState
@@ -2666,6 +2692,7 @@ export interface SessionController {
   /** The `ctrl+r` palette: its state, its entries, and its key handling. */
   promptSearch: PromptSearchController
   activity: () => { phase: "idle" } | { phase: "thinking" } | { phase: "tool"; toolInfo: string }
+  /** The phase word: `idle`/`ready` for the status row, `Generating` or the tool for the activity row. */
   phaseLabel: () => string
   /** The status row's cue while a key's second press is armed (`esc again to clear`). */
   armedCue: () => Option.Option<string>
@@ -2823,6 +2850,8 @@ export function createSessionController(props: {
 
   // ── Auth gate ──
   const [controllerState, setControllerState] = createSignal(initialSessionControllerState())
+  // The providers the newest auth check read, with the names `/auth` shows.
+  const [authProviders, setAuthProviders] = createSignal<ReadonlyArray<AuthProviderInfo>>([])
   const authGateState = () => controllerState().authGate
   const validatedAgent = () => controllerState().validatedAgent
   const queueState = () => controllerState().queue
@@ -2847,6 +2876,9 @@ export function createSessionController(props: {
                 .pipe(
                   Effect.tap((providers) =>
                     Effect.sync(() => {
+                      // The newest check names the providers: the status row labels by them.
+                      if (version === controllerState().authCheckVersion)
+                        setAuthProviders(providers)
                       const missing = providers.some((p) => p.required && !p.hasKey)
                       updateControllerState((state) =>
                         completeAuthCheck(state, {
@@ -3160,7 +3192,7 @@ export function createSessionController(props: {
         if (Option.exists(client.turnsStarted(), (turns) => turns > 0)) return "idle"
         return "ready"
       case "thinking":
-        return "thinking"
+        return "Generating"
       case "tool":
         return nextActivity.toolInfo
     }
@@ -3196,6 +3228,7 @@ export function createSessionController(props: {
     openReasoningPicker: () =>
       dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "reasoning" })),
     openAuth: () => dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false })),
+    openPalette: command.openPalette,
   })
 
   const onRestoreQueue = () => {
@@ -3505,6 +3538,7 @@ export function createSessionController(props: {
     itemsSettled: noticeRowsSettled,
     messages: feed.messages,
     openAnswer: feed.openAnswer,
+    authProviders,
     forkMessages: () => {
       const overlay = uiState().overlay
       if (overlay._tag !== "fork") return []

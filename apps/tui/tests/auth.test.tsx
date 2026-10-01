@@ -348,6 +348,42 @@ describe("Auth route", () => {
       expect(deleted).toEqual(["openai"])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A row with nothing stored has nothing to delete, so its hints leave
+  // ctrl+x out; the hint returns on a row that stores a key.
+  it.scopedLive("ctrl+x delete is offered only on a row that stores a key", () =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("anthropic"),
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+              {
+                provider: ProviderId.make("openai"),
+                hasKey: true,
+                required: false,
+                source: "stored",
+                authType: "api",
+              },
+            ]),
+          listMethods: () => Effect.succeed({ openai: [apiMethodRoute] }),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+      })
+      const list = yield* waitForFrame(setup, (frame) => frame.includes("enter select"))
+      expect(list).not.toContain("ctrl+x delete")
+      setup.mockInput.pressArrow("down")
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x delete"), "the stored row")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   // The session's profile decides which driver owns a sign-in, so a typed
   // key is saved in that profile, as a sign-out is.
   it.scopedLive("a typed key is saved in the session's profile", () =>

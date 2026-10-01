@@ -785,21 +785,22 @@ export function Auth(props: AuthProps) {
     if (enforced()) return KeyHints.exit
     return KeyHints.close
   }
+  // The row under the cursor: ctrl+x is offered only where a stored key can go.
+  const [cursor, setCursor] = createSignal(Option.none<AuthProviderInfo>())
   const listKeys = () => {
     if (Option.isSome(state().error)) return [keyHint("r", "retry"), listLeave()]
-    return [KeyHints.move, KeyHints.select, KeyHints.delete, listLeave()]
+    if (Option.exists(cursor(), (provider) => provider.source === "stored"))
+      return [KeyHints.move, KeyHints.select, KeyHints.delete, listLeave()]
+    return [KeyHints.move, KeyHints.select, listLeave()]
   }
   const dismissList = () => {
     if (enforced()) return
     Option.map(Option.fromNullishOr(props.onClose), (onClose) => onClose())
   }
-  const emptyList = () => (
-    <text style={{ fg: theme.textMuted }}>
-      <Show when={Option.isSome(state().error)} fallback=" Loading providers...">
-        {" Press r to retry."}
-      </Show>
-    </text>
-  )
+  // An empty list is still loading, unless its load failed: then it says how to retry.
+  const listLoading = () => Option.isNone(state().error)
+  const retryRow = () =>
+    Option.map(state().error, () => <text style={{ fg: theme.textMuted }}> Press r to retry.</text>)
   const keyMask = (value: string) => "*".repeat(value.length)
   const codeLabel = (method: string) => {
     if (method === "code") return "Paste code:"
@@ -925,7 +926,9 @@ export function Auth(props: AuthProps) {
               send(AuthEvent.cases.OpenMethod.make({ provider: provider.provider }))
             }
             onDismiss={dismissList}
-            empty={emptyList}
+            loading={listLoading}
+            empty={retryRow}
+            onCursor={setCursor}
             extraKeys={(event, selected) => {
               if (event.ctrl === true && event.name === "x") return armOrDelete(selected)
               // Any other key steps back from an armed row; Esc does only that.

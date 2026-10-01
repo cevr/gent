@@ -93,6 +93,7 @@ interface CommandContextValue {
     composerIdle: boolean,
   ) => boolean
   paletteOpen: Accessor<boolean>
+  openPalette: () => void
   closePalette: () => void
 }
 
@@ -143,6 +144,7 @@ export function CommandProvider(props: CommandProviderProps) {
   const value: CommandContextValue = {
     handleKeybind,
     paletteOpen,
+    openPalette: () => setPaletteOpen(true),
     closePalette: () => setPaletteOpen(false),
   }
 
@@ -573,23 +575,15 @@ export function CommandPalette() {
       }),
     )
 
-  const emptyRow = () => {
-    const failure = levelFailure()
-    let label = "No matches"
-    if (loading()) label = "Loading…"
-    let color = theme.textMuted
-    if (Option.isSome(failure)) {
-      label = failure.value
-      color = theme.error
-    }
-    return (
+  // A level whose source failed says why; the list owns every other empty row.
+  const failureRow = () =>
+    Option.map(levelFailure(), (failure) => (
       <box paddingLeft={1}>
-        <text wrapMode="none" truncate style={{ fg: color }}>
-          {label}
+        <text wrapMode="none" truncate style={{ fg: theme.error }}>
+          {failure}
         </text>
       </box>
-    )
-  }
+    ))
 
   return (
     <Show when={command.paletteOpen()}>
@@ -609,7 +603,8 @@ export function CommandPalette() {
           rows={rows}
           rowKey={(item) => item.id}
           filter={{ onQueryChange: setSearchQuery }}
-          empty={emptyRow}
+          loading={loading}
+          empty={failureRow}
           api={(api) => (list = Option.some(api))}
           extraKeys={(event, selected) => {
             if (event.name === "tab") {

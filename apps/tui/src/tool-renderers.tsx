@@ -1417,11 +1417,11 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
     const o = output()
     if (Option.isNone(o)) return Option.none()
     const branches = Option.fromNullishOr(o.value.branchCount).pipe(
-      Option.map((count) => `, ${count} branches`),
+      Option.map((count) => `, ${plural(count, "branch", "branches")}`),
       Option.getOrElse(() => ""),
     )
     return Option.fromNullishOr(o.value.messageCount).pipe(
-      Option.map((count) => `${count} messages${branches}`),
+      Option.map((count) => `${plural(count, "message")}${branches}`),
     )
   }
 
