@@ -280,9 +280,19 @@
       "files": ["testbeds/gamut/gamut.ts"],
       "rules": {
         "effect/noAsyncFunction": "off",
-        // `effect/noGlobals` off lets the script reach Bun; the retired members stay out.
-        "effect/noGlobals": "off",
-        "gent/no-retired-bun-member": "error",
+        // The script reaches the host directly; only the retired Bun members stay out.
+        "effect/noGlobals": [
+          "error",
+          {
+            "builtins": false,
+            "members": {
+              "Bun": {
+                "properties": ["Glob", "randomUUIDv7"],
+                "use": "Effect FileSystem to list files, GentPlatform.randomId for ids"
+              }
+            }
+          }
+        ],
         "effect/noKnownValueWidening": "off",
         "effect/noNewError": "off",
         "effect/noNodeBuiltinImport": "off",
@@ -303,8 +313,19 @@
       "rules": {
         "effect/noAs": "off",
         "effect/noAsyncFunction": "off",
-        "effect/noGlobals": "off",
-        "gent/no-retired-bun-member": "error",
+        // The preload reaches the host directly; only the retired Bun members stay out.
+        "effect/noGlobals": [
+          "error",
+          {
+            "builtins": false,
+            "members": {
+              "Bun": {
+                "properties": ["Glob", "randomUUIDv7"],
+                "use": "Effect FileSystem to list files, GentPlatform.randomId for ids"
+              }
+            }
+          }
+        ],
         "effect/noNewError": "off",
         "effect/noNodeBuiltinImport": "off",
         "effect/noNullish": "off",

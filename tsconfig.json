@@ -26,10 +26,10 @@
         // `asyncFunction`, `effect/noNodeBuiltinImport` holds `nodeBuiltinImport`,
         // `effect/noGlobals` holds the `global*`, `processEnv` and
         // `cryptoRandomUUID` diagnostics, and `effect/noNewPromise` holds
-        // `newPromise`, through `globalThis` and aliases too. Where oxlint turns
-        // `effect/noGlobals` off (the gamut driver, the capture preload), the
-        // overrides below turn on each diagnostic for a global the file does
-        // not use. The style suggestions are off (`strictBooleanExpressions`,
+        // `newPromise`, through `globalThis` and aliases too. Where oxlint drops
+        // the `effect/noGlobals` built-in bans (the gamut driver, the capture
+        // preload), the overrides below turn on each diagnostic for a global
+        // the file does not use. The style suggestions are off (`strictBooleanExpressions`,
         // `effectMapFlatten`, `missedPipeableOpportunity`, `unnecessaryPipe`,
         // `unnecessaryPipeChain`), and so is `unstableApiUsage`: gent builds on
         // the `@stability unstable` surface (ai, sql, process, http, rpc, cli,
