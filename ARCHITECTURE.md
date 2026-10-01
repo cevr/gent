@@ -528,7 +528,11 @@ Shape:
   `DEFAULT_SESSION_NAME` to the first line of its branch's first user
   message (the rename trims it to 80 characters), as a delegate child takes
   its task. No prompt text asks the model to name a session; `rename_session`
-  stays for a rename the user asks for, and a name it gave first wins.
+  stays for a rename the user asks for, and a name it gave first wins: the
+  automatic rename passes `expectedName`, and the storage write renames only
+  while the stored name is still the default (`renameCurrent`,
+  `SessionStorage.renameSession`). A session whose first message has no text
+  keeps the default; its history is read once per process, not every turn.
 - `Interject` steering never interrupts an open stream. The item is admitted to
   the durable steering queue; a running turn delivers it at its next safe step
   boundary (tool results stored, no stream open) by persisting the interjection

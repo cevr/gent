@@ -951,13 +951,22 @@ const makeSessionMutationsService: Effect.Effect<
       const trimmed = input.name.trim().slice(0, 80)
       if (trimmed.length === 0) return { renamed: false }
       const unchanged: RenameSessionResult = { renamed: false }
+      const expectedName = Option.fromUndefinedOr(input.expectedName)
       return yield* transactWithEvents(
         Effect.gen(function* () {
           const session = yield* sessionStorage.getSession(input.sessionId)
           if (Predicate.isUndefined(session) || session.name === trimmed) {
             return { result: unchanged, events: [] }
           }
-          yield* sessionStorage.renameSession(input.sessionId, trimmed, yield* DateTime.nowAsDate)
+          // The write itself checks the expected name, so a rename that lands
+          // after the read above still wins.
+          const written = yield* sessionStorage.renameSession(
+            input.sessionId,
+            trimmed,
+            yield* DateTime.nowAsDate,
+            expectedName,
+          )
+          if (!written) return { result: unchanged, events: [] }
           return {
             result: { renamed: true, name: trimmed },
             events: [SessionNameUpdated.make({ sessionId: input.sessionId, name: trimmed })],
