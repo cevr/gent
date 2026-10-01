@@ -2130,7 +2130,6 @@ describe("steering file paths", () => {
       "packages/core/AGENTS.md",
       "docs/extensions.md",
       "testbeds/gamut/README.md",
-      ".claude/skills/architecture-loop/prior-art.md",
       "patches/README.md",
       "packages/extensions/src/skills/bundled/principles/SKILL.md",
       "packages/extensions/src/skills/bundled/principles/references/fix-root-causes.md",
@@ -2226,7 +2225,6 @@ describe("steering file links", () => {
   const tracked = [
     skill,
     "packages/extensions/src/skills/bundled/principles/references/fix-root-causes.md",
-    ".claude/skills/architecture-loop/safety.md",
     "docs/extensions.md",
   ]
   const linkLines = (file: string, text: string): ReadonlyArray<number> =>
@@ -2243,8 +2241,8 @@ describe("steering file links", () => {
   })
 
   test("a link climbs with .. and fails above the root", () => {
-    const prompt = ".claude/skills/architecture-loop/prompts/apply.md"
-    expect(linkLines(prompt, "read [safety](../safety.md) first")).toEqual([])
+    const prompt = "packages/extensions/src/skills/bundled/principles/references/apply.md"
+    expect(linkLines(prompt, "read [the skill](../SKILL.md) first")).toEqual([])
     expect(linkLines(prompt, "read [safety](../../gone/safety.md) first")).toEqual([1])
     expect(linkLines("AGENTS.md", "see [x](../outside.md)")).toEqual([1])
   })
@@ -2358,15 +2356,21 @@ describe("guide check inputs", () => {
     "!../docs/research/**",
     "../testbeds/*/README.md",
     "../patches/README.md",
-    "../.claude/skills/**/*.md",
     "../packages/extensions/src/skills/bundled/**/*.md",
   ]
   const tracked = [
     "AGENTS.md",
+    "CLAUDE.md",
+    "ARCHITECTURE.md",
     "README.md",
     "docs/extensions.md",
     "docs/research/2026-09-06-x.md",
     "apps/tui/AGENTS.md",
+    "apps/tui/CLAUDE.md",
+    "packages/core/AGENTS.md",
+    "packages/core/CLAUDE.md",
+    "testbeds/gamut/README.md",
+    "patches/README.md",
     "packages/extensions/src/skills/bundled/principles/SKILL.md",
     "examples/extensions/a.ts",
   ]
@@ -2390,6 +2394,12 @@ describe("guide check inputs", () => {
     const messages = files([...exact.filter((input) => !input.startsWith("!")), "../*.md"])
     expect(messages.some((message) => message.includes("docs/research/2026-09-06-x.md"))).toBe(true)
     expect(messages.some((message) => message.includes("README.md"))).toBe(true)
+  })
+
+  test("an input that matches no tracked file is reported, as a dead lint glob is", () => {
+    expect(files([...exact, "../.claude/skills/**/*.md"])).toEqual([
+      expect.stringContaining("`../.claude/skills/**/*.md` matches no tracked file"),
+    ])
   })
 })
 

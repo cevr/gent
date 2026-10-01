@@ -2051,14 +2051,13 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * `NORTH_STAR.md` and `PRIOR_ARTS.md` the architecture loop reads, a package's
  * own `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, a testbed's
  * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), the
- * dependency patch notes in `patches/README.md`, the project skills under
- * `.claude/skills/`, and the skills gent ships to its own model under
+ * dependency patch notes in `patches/README.md`, and the skills gent ships to its own model under
  * `packages/extensions/src/skills/bundled/`. The path claims, the Markdown
  * links, the retired-surface rows and the code-block compile all read exactly
  * this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE|NORTH_STAR|PRIOR_ARTS)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|\.claude\/skills\/.+\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE|NORTH_STAR|PRIOR_ARTS)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
@@ -2466,11 +2465,24 @@ export const findUnhashedSteeringFiles = (
     }
     return `the typecheck inputs read \`${path}\`, which is not steering prose, so a change to it reruns the guide check for nothing; make the inputs match \`isSteeringFile\``
   }
-  return trackedFiles
+  const unhashed = trackedFiles
     .values()
     .filter((path) => path.endsWith(".md") && hashed(path) !== isSteeringFile(path))
     .map((path) => ({ file, line: 1, message: message(path) }))
     .toArray()
+  // An input that matches nothing hashes nothing: it is dead, like an
+  // override glob that matches no file.
+  const dead = inputs
+    .values()
+    .filter((input) => !input.startsWith("!"))
+    .filter((input) => !trackedFiles.some((path) => repoGlob(input).test(path)))
+    .map((input) => ({
+      file,
+      line: 1,
+      message: `the typecheck input \`${input}\` matches no tracked file; delete it`,
+    }))
+    .toArray()
+  return [...unhashed, ...dead]
 }
 
 // ── the approved diagnostics suppressions ───────────────────────────────────
@@ -2492,7 +2504,8 @@ export const findUnhashedSteeringFiles = (
  * The language service honors a directive anywhere in a file's text, a string
  * literal too, with the `rule:severity` flag after other words on the line
  * (`HONORED_DIRECTIVE` states the grammar). So the scan reads each line for
- * that form, not only the comment tokens. A directive without `-next-line` suppresses its rules from there to the end
+ * that form, not only the comment tokens. A directive without `-next-line`
+ * suppresses its rules from there to the end
  * of the file; like a file-wide lint disable, it is banned outright.
  */
 
