@@ -205,7 +205,10 @@ a committed row, which takes a full-width row's last cell (a table's right
 border). A whole item whose highlight does not settle, and every whole item
 at exit, commits as plain text (`PlainHistoryContext`); the plain layout has
 other rows, so rows of an item the live view shows in part commit as drawn. Closing the palette or a
-picker replays nothing, and no replay clears the terminal's saved lines.
+picker replays nothing, so the shell's lines above gent stay. A replay (a
+resize, a disclosure change, an item changed in history, `/clear`, another
+session or branch) writes history again, so its reset clears the terminal's
+saved lines first (`resetHistory`): the old copy would show each row twice.
 Exit commits the live tail first (`leaveTerminal`), and the renderer is
 created with `clearOnShutdown: false`, so exit leaves every turn on screen.
 

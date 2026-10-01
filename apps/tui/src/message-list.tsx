@@ -1989,16 +1989,28 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   })
   exitFlushes.set(renderer, flushForExit)
 
+  /**
+   * Starts history again from the screen's top. Every caller writes the
+   * transcript's rows again, so the reset also clears the terminal's saved
+   * lines: the copy they hold would show each row twice. Scrollback cannot
+   * lose some of its rows and keep others, so the shell's lines above gent go
+   * too. Only the first transcript keeps them: nothing of gent is above it.
+   */
+  const resetHistory = () => renderer.resetSplitFooterForReplay({ clearSavedLines: true })
+
   onMount(() => {
     renderer.footerHeight = props.footerHeight
     // The first transcript finds the renderer made in this mode; a later one
-    // (another session) finds the alternate screen the last one left.
-    if (renderer.screenMode !== "split-footer") renderer.screenMode = "split-footer"
+    // (another session or branch) finds the alternate screen the last one left.
+    const later = renderer.screenMode !== "split-footer"
+    if (later) renderer.screenMode = "split-footer"
     renderer.externalOutputMode = "capture-stdout"
     // Native history scrolls in the terminal. Mouse tracking would swallow the wheel.
     renderer.useMouse = false
     // A new transcript must not inherit the previous screen's cursor origin.
-    renderer.resetSplitFooterForReplay()
+    // A later one writes its own history, which may share rows with the last.
+    if (later) resetHistory()
+    else renderer.resetSplitFooterForReplay()
     setReady(true)
   })
 
@@ -2057,13 +2069,12 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     if (replayPending() && !settlingNative) {
       settlingNative = true
       renderer.once("frame", finishNativeReturn)
-      // A resize or a disclosure change replays all of history: the reset
-      // clears the screen, not the terminal's saved lines, which hold the
-      // reader's own shell. Clear before the layout frame; replay only after
-      // its measurements arrive.
+      // A resize, a disclosure change or an item that changed in history
+      // replays all of history (`resetHistory`). Clear before the layout
+      // frame; replay only after its measurements arrive.
       enqueueNative(
         Effect.sync(() => {
-          renderer.resetSplitFooterForReplay()
+          resetHistory()
           renderer.requestRender()
         }),
       )
@@ -2093,9 +2104,10 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         setPartialRows(0)
         setCommittedCount(0)
       })
-      // The renderer reset joins the commit queue rather than jumping it, so
-      // the queue stays the single writer of scrollback.
-      enqueueNative(Effect.sync(() => renderer.resetSplitFooterForReplay()))
+      // The reset takes the dismissed rows out of scrollback as well. It joins
+      // the commit queue rather than jumping it, so the queue stays the
+      // single writer of scrollback.
+      enqueueNative(Effect.sync(resetHistory))
     })
   })
 

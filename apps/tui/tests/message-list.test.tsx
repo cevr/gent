@@ -3781,6 +3781,43 @@ describe("native transcript region at the terminal's bottom", () => {
     25_000,
   )
 
+  // A resize writes history again at the new width. The rows written before
+  // are in the terminal's saved lines: the replay clears them, else each row
+  // shows twice.
+  it.scopedLive(
+    "a resize replay leaves every transcript row once",
+    () =>
+      Effect.gen(function* () {
+        const { setup, renderer } = yield* settledLongSession({
+          items: () => [...longSession(), assistant("tail", "TAIL")],
+          streaming: () => false,
+          footer: () => 3,
+          paneOpen: () => false,
+          overlayOpen: () => false,
+        })
+        const replayed: string[] = []
+        renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+          replayed.push(committedTextOf(event))
+        })
+        setup.resize(50, height)
+        yield* waitForFrame(
+          setup,
+          () => replayed.join("").includes("ITEM-0 line 1"),
+          "the replay of the first item",
+          6_000,
+        )
+        yield* waitForStableFrame(setup)
+        const counts = bodyRowCounts(terminalText(setup))
+        for (const item of longSession().keys()) {
+          for (let line = 1; line <= 12; line++) {
+            const row = `ITEM-${item} line ${line}`
+            expect([row, counts.get(row)]).toEqual([row, 1])
+          }
+        }
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
   it.scopedLive(
     "a turn that ends leaves no blank row above the composer",
     () =>
