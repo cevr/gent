@@ -65,6 +65,7 @@ import {
   type ExtensionHostService,
   ProviderAuthError,
   type ProviderHints,
+  SessionId,
   ProviderAuthInfo,
 } from "@gent/core/extensions/api"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
@@ -2281,6 +2282,67 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         expect(yield* fs.readDirectory(claudeDir)).toEqual([".credentials.json"])
         expect(yield* fs.readFileString(credentialsFile)).toContain("refreshed-refresh")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+  it.live("a sign-in stopped after the token endpoint rotated the token still writes it back", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const credentialsFile = path.join(home, ".claude", ".credentials.json")
+      yield* fs.makeDirectory(path.join(home, ".claude"))
+      yield* fs.writeFileString(
+        credentialsFile,
+        encodeExternalJson({
+          claudeAiOauth: {
+            accessToken: "keychain-access",
+            refreshToken: "keychain-refresh",
+            expiresAt: 0,
+          },
+        }),
+      )
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildAnthropicModelDriverLive(
+        credentialCellRef,
+        Option.none(),
+        yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
+        testCatalogSource(),
+        "1h",
+      )
+      const rotated = yield* Deferred.make<void>()
+      const answered = yield* Deferred.make<void>()
+      // The endpoint spends the token it is sent; its answer is on the way back.
+      const fetchLayer = fakeFetchLayer(makeFakeFetchState(), () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(rotated, void 0)
+          yield* Deferred.await(answered)
+          return {
+            status: 200,
+            body: encodeExternalJson({
+              access_token: "refreshed-access",
+              refresh_token: "refreshed-refresh",
+              expires_in: 3600,
+            }),
+          }
+        }),
+      )
+      const authorize = Option.fromUndefinedOr(driver.auth?.authorize)
+      if (Option.isNone(authorize)) return yield* Effect.die(new Error("no authorize"))
+      const signIn = authorize.value({
+        sessionId: SessionId.make("session-sign-in"),
+        methodIndex: 0,
+        authorizationId: "sign-in",
+        persist: () => Effect.void,
+      })
+      const first = yield* Effect.forkChild(signIn.pipe(Effect.provide(fetchLayer)))
+      yield* Deferred.await(rotated)
+      // Stop the sign-in while the rotated token is in flight.
+      const stopping = yield* Effect.forkChild(Fiber.interrupt(first), { startImmediately: true })
+      yield* Deferred.succeed(answered, void 0)
+      yield* Fiber.join(stopping)
+
+      expect(yield* fs.readFileString(credentialsFile)).toContain("refreshed-refresh")
+    }).pipe(Effect.timeout("5 seconds"), Effect.scoped, Effect.provide(BunServices.layer)),
   )
   it.live("a sign-in written during the refresh survives, and the request uses it", () =>
     Effect.gen(function* () {

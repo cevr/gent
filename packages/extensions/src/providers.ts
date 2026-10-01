@@ -323,12 +323,18 @@ export const makeCredentialCache = <C>(
         )
     }
 
-    const getFresh: Effect.Effect<C, CredentialFailure> = SynchronizedRef.modifyEffect(
-      config.cellRef,
-      (cell): Effect.Effect<Step, CredentialFailure> =>
+    // A refresh and the write of its result are one step a caller cannot
+    // stop: the provider spends the token it is sent, so a rotation stopped
+    // before it is stored would leave only the spent token. The step is
+    // uninterruptible from the lock to the cell write, except the store
+    // retry and the source read (`restore`). Each refresh request carries its
+    // own timeout (`postOAuthForm`, the keychain process timeouts),
+    // so the step is bounded.
+    const getFresh: Effect.Effect<C, CredentialFailure> = Effect.uninterruptibleMask((restore) =>
+      SynchronizedRef.modifyEffect(config.cellRef, (cell): Effect.Effect<Step, CredentialFailure> =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis
-          const current = yield* settlePending(cell, now)
+          const current = yield* restore(settlePending(cell, now))
           const cached = trusted(current)
 
           if (
@@ -344,7 +350,7 @@ export const makeCredentialCache = <C>(
 
           // Without an external source the cell is the only copy.
           let fromSource = cached
-          if (Option.isSome(config.read)) fromSource = yield* config.read.value(cached)
+          if (Option.isSome(config.read)) fromSource = yield* restore(config.read.value(cached))
           // After a 401 the source may still hold the rejected credential, and
           // its expiry says nothing about a revocation: only a refresh helps.
           const rejected =
@@ -367,6 +373,7 @@ export const makeCredentialCache = <C>(
           const refreshed = yield* config.refresh(held)
           return [Exit.succeed(refreshed), durable(refreshed, now, false)]
         }),
+      ),
     ).pipe(Effect.flatten)
 
     // Compare, then invalidate: a 401 for a credential the cell already

@@ -973,27 +973,8 @@ const refreshClaudeCodeCredentials = (
       )
     if (candidates.length === 0) failures.push("no stored refresh token")
     for (const sent of candidates) {
-      const refreshed = yield* Effect.exit(refreshViaOAuth(sent.refreshToken))
-      if (Exit.isSuccess(refreshed)) {
-        // Best-effort write-back so subsequent processes pick up the
-        // new token. A failure here doesn't lose the refresh — the
-        // caller has it in memory.
-        const base: RefreshBase = { read, sent }
-        const outcome = yield* writeBackCredentials(refreshed.value, base).pipe(
-          Effect.catchEager((e: ProviderAuthError) =>
-            Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
-              Effect.annotateLogs({ error: String(e) }),
-              Effect.as(WriteBack.cases.Kept.make({})),
-            ),
-          ),
-        )
-        // A sign-in written during the refresh is newer: use it, and drop
-        // this refresh rather than overwrite it.
-        if (outcome._tag === "Superseded" && Option.isSome(outcome.stored)) {
-          return outcome.stored.value
-        }
-        return refreshed.value
-      }
+      const refreshed = yield* Effect.exit(rotateAndWriteBack({ read, sent }))
+      if (Exit.isSuccess(refreshed)) return refreshed.value
       const error = Cause.findErrorOption(refreshed.cause)
       failures.push(
         Option.match(error, {
@@ -1010,7 +991,9 @@ const refreshClaudeCodeCredentials = (
     // Direct path failed — fall back to the CLI spawn (second attempt
     // historically helps when the first invocation kicks a stale-token
     // error). The CLI refreshes its active account, which is the
-    // primary one read here.
+    // primary one read here. The CLI rotates and stores the token itself,
+    // so a caller may stop it even inside the credential cache's
+    // uninterruptible refresh step.
     const platform = yield* AnthropicPlatform
     return yield* spawnClaudeCli(platform.home).pipe(
       Effect.retry({ times: 1 }),
@@ -1020,8 +1003,38 @@ const refreshClaudeCodeCredentials = (
         if (endpointUnavailable) return new CredentialRefreshUnavailable({ message, cause })
         return new ProviderAuthError({ message, cause })
       }),
+      Effect.interruptible,
     )
   })
+
+/**
+ * One direct OAuth refresh and its write-back, as one step a caller cannot
+ * stop: the token endpoint spends the refresh token it is sent, so a
+ * rotation stopped before the write-back would leave the keychain only the
+ * spent token. The token request and the keychain write each carry a
+ * timeout, so the step is bounded.
+ *
+ * The write-back is best-effort so later processes pick up the new token. A
+ * failed write-back does not lose the refresh: the caller has it in memory.
+ */
+const rotateAndWriteBack = (base: RefreshBase) =>
+  Effect.gen(function* () {
+    const refreshed = yield* refreshViaOAuth(base.sent.refreshToken)
+    const outcome = yield* writeBackCredentials(refreshed, base).pipe(
+      Effect.catchEager((e: ProviderAuthError) =>
+        Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
+          Effect.annotateLogs({ error: String(e) }),
+          Effect.as(WriteBack.cases.Kept.make({})),
+        ),
+      ),
+    )
+    // A sign-in written during the refresh is newer: use it, and drop
+    // this refresh rather than overwrite it.
+    if (outcome._tag === "Superseded" && Option.isSome(outcome.stored)) {
+      return outcome.stored.value
+    }
+    return refreshed
+  }).pipe(Effect.uninterruptible)
 
 // ── credential service ──────────────────────────────────────────────────────
 

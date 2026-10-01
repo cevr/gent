@@ -1005,5 +1005,47 @@ for (const kind of SOURCES) {
         }),
       ),
     )
+
+    it.live("a caller stopped after the provider rotated the token still stores the rotation", () =>
+      onTestClock(
+        Effect.gen(function* () {
+          const used: Array<string> = []
+          const rotated = yield* Deferred.make<void>()
+          const answered = yield* Deferred.make<void>()
+          const answers = [
+            credentialsNamed("rotated", EXPIRING_SOON_MS),
+            credentialsNamed("third", FAR_FUTURE_MS),
+          ]
+          const { cache } = yield* sourcedCache(
+            kind,
+            credentialsNamed("seed", EXPIRING_SOON_MS),
+            (held) =>
+              Effect.gen(function* () {
+                used.push(Option.match(held, { onNone: () => "", onSome: (h) => h.refresh }))
+                const answer = Option.fromUndefinedOr(answers[used.length - 1])
+                if (Option.isNone(answer))
+                  return yield* Effect.die(new Error("one refresh too many"))
+                if (used.length > 1) return answer.value
+                // The provider spent the token it was sent; its answer is on the way back.
+                yield* Deferred.succeed(rotated, void 0)
+                yield* Deferred.await(answered)
+                return answer.value
+              }),
+          )
+          const first = yield* Effect.forkChild(cache.getFresh)
+          yield* Deferred.await(rotated)
+          // Stop the caller (an Esc during the model build) while the answer is in flight.
+          const stopping = yield* Effect.forkChild(Fiber.interrupt(first), {
+            startImmediately: true,
+          })
+          yield* Deferred.succeed(answered, void 0)
+          yield* Fiber.join(stopping)
+
+          // The rotation was stored, so the next refresh sends the rotated token, not the spent one.
+          expect((yield* cache.getFresh).access).toBe("third-access")
+          expect(used).toEqual(["seed-refresh", "rotated-refresh"])
+        }),
+      ),
+    )
   })
 }
