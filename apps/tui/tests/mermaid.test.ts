@@ -115,6 +115,17 @@ describe("inline mermaid replace", () => {
     }
   }
 
+  // Only an edge statement is an edge: a subgraph title keeps its text.
+  test("a subgraph title stays as written", () => {
+    const drawn = uncached(
+      "```mermaid\ngraph LR\n  subgraph a-->b\n    Alpha-->Beta\n  end\n```",
+      120,
+    )
+    expect(drawn).toContain("a-->b")
+    expect(drawn).toContain("Alpha")
+    expect(drawn).toContain("Beta")
+  })
+
   test("an arrow inside a label stays as written", () => {
     const drawn = uncached("```mermaid\ngraph LR\n  Alpha[a-->b]-->Beta\n```", 120)
     expect(drawn).toContain("a-->b")

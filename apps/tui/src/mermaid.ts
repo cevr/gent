@@ -98,9 +98,17 @@ const isFlowchart = (lines: ReadonlyArray<string>): boolean =>
     { onNone: () => false, onSome: (header) => FLOWCHART_HEADER.test(header) },
   )
 
-/** One line with a space between each id and the dash arrow written against it. */
-const spaceLineArrows = (line: string): string =>
-  line
+/**
+ * A line that is not an edge statement: the diagram header, a comment, or a
+ * subgraph, style, class or click line, whose text holds no edge.
+ */
+const NOT_AN_EDGE =
+  /^(?:%%|(?:graph|flowchart|subgraph|end|direction|style|classDef|class|linkStyle|click)\b)/
+
+/** One edge statement with a space between each id and the dash arrow written against it. */
+const spaceLineArrows = (line: string): string => {
+  if (NOT_AN_EDGE.test(line.trim())) return line
+  return line
     .split(WRITTEN_TEXT)
     .map((part, index) => {
       // The split puts each quoted or shaped run at an odd index.
@@ -108,6 +116,7 @@ const spaceLineArrows = (line: string): string =>
       return part.replace(ID_AGAINST_ARROW, " ")
     })
     .join("")
+}
 
 const spaceEdgeArrows = (source: string): string => {
   const lines = source.split("\n")
