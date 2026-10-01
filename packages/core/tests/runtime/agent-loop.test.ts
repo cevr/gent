@@ -3111,11 +3111,8 @@ describe("startup recovery", () => {
             const agentLoop = yield* makeAgentLoopService
             const state = yield* agentLoop.getState({ sessionId, branchId })
             expect(state._tag).toBe("Idle")
-            const called = yield* Deferred.await(providerCalled).pipe(
-              Effect.timeout("500 millis"),
-              Effect.option,
-            )
-            expect(Option.isNone(called)).toBe(true)
+            // The loop decides recovery as it opens, before `getState` answers.
+            expect(yield* Deferred.isDone(providerCalled)).toBe(false)
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -3182,11 +3179,8 @@ describe("startup recovery", () => {
             const agentLoop = yield* makeAgentLoopService
             const state = yield* agentLoop.getState({ sessionId, branchId })
             expect(state._tag).toBe("Idle")
-            const called = yield* Deferred.await(providerCalled).pipe(
-              Effect.timeout("500 millis"),
-              Effect.option,
-            )
-            expect(Option.isNone(called)).toBe(true)
+            // The loop decides recovery as it opens, before `getState` answers.
+            expect(yield* Deferred.isDone(providerCalled)).toBe(false)
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -3249,11 +3243,8 @@ describe("startup recovery", () => {
             const agentLoop = yield* makeAgentLoopService
             const state = yield* agentLoop.getState({ sessionId, branchId })
             expect(state._tag).toBe("Idle")
-            const called = yield* Deferred.await(providerCalled).pipe(
-              Effect.timeout("500 millis"),
-              Effect.option,
-            )
-            expect(Option.isNone(called)).toBe(true)
+            // The loop decides recovery as it opens, before `getState` answers.
+            expect(yield* Deferred.isDone(providerCalled)).toBe(false)
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -3296,11 +3287,8 @@ describe("startup recovery", () => {
             const agentLoop = yield* makeAgentLoopService
             const state = yield* agentLoop.getState({ sessionId, branchId })
             expect(state._tag).toBe("Idle")
-            const called = yield* Deferred.await(providerCalled).pipe(
-              Effect.timeout("500 millis"),
-              Effect.option,
-            )
-            expect(Option.isNone(called)).toBe(true)
+            // The loop decides recovery as it opens, before `getState` answers.
+            expect(yield* Deferred.isDone(providerCalled)).toBe(false)
           }).pipe(Effect.provide(makeLayer(providerLayer))),
         )
       }),
