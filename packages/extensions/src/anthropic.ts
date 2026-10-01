@@ -55,6 +55,7 @@ import {
   postOAuthForm,
   apiKeyFrom,
   readOptionalEnv,
+  requestJsonObject,
   withHeaders,
 } from "./providers.js"
 import { ChildProcessSpawner } from "effect/process"
@@ -476,20 +477,13 @@ const getBillingHeaderInputs = (env: AnthropicKeychainEnv) => ({
 })
 
 /**
- * Pull the `model` field from a JSON request body. Returns "unknown"
- * for missing/non-string bodies or unparseable JSON. Pure — both the
- * request pipelines read this from their respective request shapes (string
- * body / Uint8Array body) and call this helper to derive the model id used for
- * header construction.
+ * The request body's `model`, which picks the model's beta headers;
+ * "unknown" when the body is not JSON or names no model.
  */
-const ModelRequestBody = Schema.Struct({ model: Schema.String })
-const decodeModelRequestBody = Schema.decodeUnknownOption(Schema.fromJsonString(ModelRequestBody))
-
-const parseModelIdFromBody = (bodyText: Option.Option<string>): string =>
-  bodyText.pipe(
-    Option.filter((text) => text.length > 0),
-    Option.flatMap(decodeModelRequestBody),
-    Option.map((body) => body.model),
+const requestModelId = (req: HttpClientRequest.HttpClientRequest): string =>
+  requestJsonObject(req).pipe(
+    Option.flatMap((body) => Option.fromUndefinedOr(body["model"])),
+    Option.filter(Predicate.isString),
     Option.getOrElse(() => "unknown"),
   )
 
@@ -1942,8 +1936,6 @@ type SdkClientLayer = (
   rewriteBody: (client: HttpClient.HttpClient) => HttpClient.HttpClient,
 ) => Layer.Layer<AnthropicClient.AnthropicClient, never, HttpClient.HttpClient>
 
-const decodeJsonBody = Schema.decodeUnknownOption(Schema.fromJsonString(JsonRecordSchema))
-
 /**
  * The raw `stop_reason` goes to the loop (`ProviderStopReason`). The SDK maps
  * a reason its table lacks to `"unknown"` and keeps no copy, and
@@ -1976,7 +1968,7 @@ const anthropicClientLayer = <R>(
       const pathContext = yield* Effect.context<R>()
       const rewriteBody = HttpClient.mapRequestEffect(
         (request: HttpClientRequest.HttpClientRequest) =>
-          Option.match(Option.flatMap(requestBodyText(request), decodeJsonBody), {
+          Option.match(requestJsonObject(request), {
             onNone: () => Effect.succeed(request),
             onSome: (payload) =>
               path.payload(applyRequestPlan(payload, plan)).pipe(
@@ -2111,24 +2103,6 @@ const claudeCodeClientPath = (
 
 // ── Helpers ──
 
-/**
- * Decode the request body to a string for model-id extraction. The
- * Anthropic SDK serializes JSON bodies as Uint8Array; some caller surfaces use
- * Raw strings. Anything else (FormData / Stream / Empty) returns None and
- * the parser short-circuits to "unknown".
- */
-const decodeString = Schema.decodeUnknownOption(Schema.String)
-
-const requestBodyText = (req: HttpClientRequest.HttpClientRequest): Option.Option<string> => {
-  if (req.body._tag === "Uint8Array") {
-    return Option.some(new TextDecoder().decode(req.body.body))
-  }
-  if (req.body._tag === "Raw") {
-    return decodeString(req.body.body)
-  }
-  return Option.none()
-}
-
 /** Build the OAuth header set for a request. */
 const buildOauthHeaders = (
   req: HttpClientRequest.HttpClientRequest,
@@ -2179,7 +2153,7 @@ export const buildKeychainTransformClient = (
   env: AnthropicKeychainEnv,
 ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   authorizedClient(creds, (req, fresh) => {
-    const modelId = parseModelIdFromBody(requestBodyText(req))
+    const modelId = requestModelId(req)
     return withHeaders(req, buildOauthHeaders(req, fresh.accessToken, modelId, env))
   })
 

@@ -19,6 +19,7 @@ import {
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderHints,
+  ReasoningEffort,
 } from "@gent/core/extensions/api"
 import { type ClassifierEntry, classifierModel, typeSafeDecisionModel } from "./typesafe.js"
 import {
@@ -27,10 +28,12 @@ import {
   catalogSource,
   driverListModels,
   driverModelWire,
+  isJsonObject,
   effortAtOrAbove,
   type ModelWire,
   type ReasoningOption,
   readOptionalEnv,
+  rewriteJsonBody,
 } from "./providers.js"
 
 // Test seam: only tests read OPENCODE_GATEWAYS and buildOpenCodeModelDriver,
@@ -183,16 +186,13 @@ const unsupportedWireFormat = (
 // ── reasoning ───────────────────────────────────────────────────────────────
 
 /** Every effort level, lowest first; the catalog's `null` effort reads as `"none"`. */
-const Effort = Schema.Literals(["none", "minimal", "low", "medium", "high", "xhigh", "max"])
-type Effort = typeof Effort.Type
-const EFFORT_ORDER = Effort.literals
-const decodeEffort = Schema.decodeUnknownOption(Effort)
+const EFFORT_ORDER = ReasoningEffort.literals
 
 /** The hint's level, when the model reasons, the catalog says so, and the request names one. */
-const reasoningHint = (hints: Option.Option<ProviderHints>): Option.Option<Effort> =>
+const reasoningHint = (hints: Option.Option<ProviderHints>): Option.Option<ReasoningEffort> =>
   hints.pipe(
     Option.filter((value) => value.supportsReasoning !== false),
-    Option.flatMap((value) => decodeEffort(value.reasoning)),
+    Option.flatMap((value) => Option.fromUndefinedOr(value.reasoning)),
   )
 
 /** The model's reasoning controls; none when the catalog lists none. */
@@ -203,7 +203,10 @@ const reasoningOptions = (wire: Option.Option<ModelWire>): ReadonlyArray<Reasoni
   )
 
 /** The effort the request names: the lowest the model accepts at or above the hint, else its highest. */
-const effortFor = (options: ReadonlyArray<ReasoningOption>, hint: Effort): Option.Option<Effort> =>
+const effortFor = (
+  options: ReadonlyArray<ReasoningOption>,
+  hint: ReasoningEffort,
+): Option.Option<ReasoningEffort> =>
   Option.fromUndefinedOr(options.find((option) => option.type === "effort")).pipe(
     Option.flatMap((option) =>
       effortAtOrAbove(
@@ -228,7 +231,7 @@ const BUDGET_CEILING = 31_999
  */
 const thinkingBudget = (
   options: ReadonlyArray<ReasoningOption>,
-  hint: Effort,
+  hint: ReasoningEffort,
   maxTokens: Option.Option<number>,
 ): Option.Option<number> =>
   Option.fromUndefinedOr(options.find((option) => option.type === "budget_tokens")).pipe(
@@ -251,38 +254,13 @@ const thinkingBudget = (
 
 // ── request bodies ──────────────────────────────────────────────────────────
 
-const JsonBody = Schema.fromJsonString(Schema.Json)
-const decodeJsonBody = Schema.decodeUnknownOption(JsonBody)
-const isObject = Schema.is(Schema.JsonObject)
 const isArray = Schema.is(Schema.Array(Schema.Json))
-const isJsonObject = (value: Schema.Json): value is Schema.JsonObject => isObject(value)
 const isJsonArray = (value: Schema.Json): value is Schema.JsonArray => isArray(value)
 const isJsonString = Schema.is(Schema.String)
 
 /** A field of a JSON object; none when it is absent. */
 const field = (object: Schema.JsonObject, key: string): Option.Option<Schema.Json> =>
   Option.fromUndefinedOr(object[key])
-
-/** The request's JSON object body; none for any other body. */
-const requestJson = (
-  request: HttpClientRequest.HttpClientRequest,
-): Option.Option<Schema.JsonObject> => {
-  if (request.body._tag !== "Uint8Array") return Option.none()
-  return decodeJsonBody(new TextDecoder().decode(request.body.body)).pipe(
-    Option.filter(isJsonObject),
-  )
-}
-
-/** A client that rewrites each JSON request body with `rewrite`; any other body passes. */
-const rewriteJsonBody =
-  (rewrite: (body: Schema.JsonObject) => Schema.JsonObject) =>
-  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
-    HttpClient.mapRequest(client, (request) =>
-      Option.match(requestJson(request), {
-        onNone: () => request,
-        onSome: (body) => HttpClientRequest.bodyJsonUnsafe(request, rewrite(body)),
-      }),
-    )
 
 /** The body's `messages`; none when it has no list there. */
 const messagesOf = (body: Schema.JsonObject): Option.Option<ReadonlyArray<Schema.Json>> =>
@@ -384,7 +362,7 @@ type MessagesConfig = NonNullable<Parameters<typeof AnthropicLanguageModel.layer
 /** What a Messages request carries for reasoning: the thinking object and `output_config.effort`. */
 interface MessagesPlan {
   readonly thinking: Option.Option<Schema.JsonObject>
-  readonly effort: Option.Option<Effort>
+  readonly effort: Option.Option<ReasoningEffort>
 }
 
 const NO_PLAN: MessagesPlan = { thinking: Option.none(), effort: Option.none() }

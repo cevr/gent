@@ -53,7 +53,7 @@ import { Model as AiModel, LanguageModel } from "effect/ai"
 import { test as bunTest } from "bun:test"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { ModelId, ProviderId, Model } from "../../src/domain/agent"
+import { ModelId, ProviderId, Model, type ReasoningEffort } from "../../src/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
@@ -1210,7 +1210,7 @@ const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): Loaded
 })
 interface ModelRequest {
   readonly model: string
-  readonly reasoning?: string
+  readonly reasoning?: ReasoningEffort
   readonly maxTokens?: number
   readonly temperature?: number
   readonly driverId?: string

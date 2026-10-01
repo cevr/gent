@@ -475,7 +475,7 @@ describe("OpenCode reasoning", () => {
     Effect.gen(function* () {
       const { zen } = yield* fixtureDrivers
       const state = makeFakeFetchState()
-      const sent = (modelName: string, reasoning: string) =>
+      const sent = (modelName: string, reasoning: ProviderHints["reasoning"]) =>
         generate(zen, modelName, state, { cacheKey: "s", reasoning, maxTokens: 8192 }).pipe(
           Effect.andThen(Effect.suspend(() => bodyOf(lastRequest(state)))),
           Effect.map((body) => ({
@@ -511,7 +511,7 @@ describe("OpenCode reasoning", () => {
     Effect.gen(function* () {
       const { go, zen } = yield* fixtureDrivers
       const state = makeFakeFetchState()
-      const hints = { cacheKey: "s", reasoning: "high", supportsReasoning: false }
+      const hints: ProviderHints = { cacheKey: "s", reasoning: "high", supportsReasoning: false }
       yield* generate(go, "glm-5.3", state, hints)
       yield* generate(go, "gpt-5.6-luna", state, hints)
       yield* generate(zen, "claude-opus-4-6", state, hints)

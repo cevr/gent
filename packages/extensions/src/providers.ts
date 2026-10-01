@@ -560,7 +560,38 @@ const CredentialRejection = Context.Reference<Option.Option<{ reject: Effect.Eff
   { defaultValue: () => Option.none() },
 )
 
-// ── oauth token endpoint ────────────────────────────────────────────────────
+// ── json request bodies ─────────────────────────────────────────────────────
+
+/**
+ * The provider SDKs send every JSON body as bytes (`bodyJsonUnsafe`). A
+ * driver that rewrites a request reads the body with `requestJsonObject` and
+ * writes it back the same way; a body of any other kind passes unread.
+ */
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))
+/** True for a JSON object (not an array). */
+const isObject = Schema.is(Schema.JsonObject)
+export const isJsonObject = (value: Schema.Json): value is Schema.JsonObject => isObject(value)
+
+/** The request's JSON object body; none for any other body. */
+export const requestJsonObject = (
+  request: HttpClientRequest.HttpClientRequest,
+): Option.Option<Schema.JsonObject> => {
+  if (request.body._tag !== "Uint8Array") return Option.none()
+  return decodeJson(new TextDecoder().decode(request.body.body)).pipe(Option.filter(isJsonObject))
+}
+
+/** A client that rewrites each JSON object body with `rewrite`; any other body passes. */
+export const rewriteJsonBody =
+  (rewrite: (body: Schema.JsonObject) => Schema.JsonObject) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+    HttpClient.mapRequest(client, (request) =>
+      Option.match(requestJsonObject(request), {
+        onNone: () => request,
+        onSome: (body) => HttpClientRequest.bodyJsonUnsafe(request, rewrite(body)),
+      }),
+    )
+
+// ── oauth token endpoint────────────────────────────────────────────────────
 
 /**
  * An OAuth token POST runs inside the credential lock, so a hung endpoint
@@ -652,9 +683,6 @@ const CACHE_RELATIVE = ".gent/models.json"
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10_000
 const EMPTY_MODELS = [] satisfies ReadonlyArray<Model>
-
-const JsonSchema = Schema.fromJsonString(Schema.Json)
-const decodeJson = Schema.decodeUnknownOption(JsonSchema)
 
 const ModelsDevCost = Schema.Struct({
   input: Schema.Finite,

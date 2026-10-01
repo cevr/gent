@@ -601,8 +601,8 @@ const validCredsIO = (label: string): AnthropicCredentialIO => ({
 })
 // `HttpBody.jsonUnsafe` mirrors how the Anthropic SDK serializes
 // outgoing JSON bodies (via `text` → Uint8Array). The transform reads
-// the body via `requestBodyText` which decodes that Uint8Array back to
-// a string, so this matches production representation.
+// the body via `requestJsonObject`, which decodes that Uint8Array back to
+// JSON, so this matches production representation.
 const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 // `Effect.orDie` collapses typed errors to defects so test bodies can
 // assert success without `as Effect<unknown, never, never>` casts.

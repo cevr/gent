@@ -25,7 +25,6 @@ import { Base64Url } from "effect/encoding"
 import {
   FetchHttpClient,
   Headers,
-  type HttpBody,
   HttpClient,
   HttpClientRequest,
   type HttpClientResponse,
@@ -47,6 +46,7 @@ import {
   type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
   type ProviderHints,
+  ReasoningEffort,
 } from "@gent/core/extensions/api"
 import {
   type CatalogSource,
@@ -68,7 +68,9 @@ import {
   type CredentialStore,
   postOAuthForm,
   apiKeyFrom,
+  isJsonObject,
   readOptionalEnv,
+  requestJsonObject,
   replaceHeldCredential,
   withHeaders,
 } from "./providers.js"
@@ -1116,45 +1118,32 @@ const splitInstructions = (
 }
 
 /**
- * Try to read the request body as a JSON object. Returns `None`
- * when the body isn't a `Uint8Array` HttpBody (the only shape the SDK
- * emits via `bodyJsonUnsafe`) or when JSON parsing fails. Both cases
- * cause the URL/header rewrite to still apply but the body to pass
- * through unchanged.
+ * The Codex body for a request with an `input` array; any other body passes
+ * unchanged, so the URL and header rewrite still apply.
  */
-const CodexBodyJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
-const decodeCodexBody = Schema.decodeUnknownOption(CodexBodyJson)
-const encodeCodexBody = Schema.encodeSync(CodexBodyJson)
-
-// oxlint-disable-next-line effect/noUnsafeDictionaryType -- preserve vendor JSON fields that this transport adapter does not interpret
-const tryReadJsonBody = (body: HttpBody.HttpBody): Option.Option<Record<string, unknown>> => {
-  if (body._tag !== "Uint8Array") return Option.none()
-  return decodeCodexBody(new TextDecoder().decode(body.body))
-}
-
 const rewriteCodexBody = (
   req: HttpClientRequest.HttpClientRequest,
 ): HttpClientRequest.HttpClientRequest => {
-  const parsed = tryReadJsonBody(req.body)
+  const parsed = requestJsonObject(req)
   if (Option.isNone(parsed)) return req
   const split = splitInstructions(parsed.value["input"])
   if (Option.isNone(split)) return req
   const { instructions, input } = split.value
-  const next = { ...parsed.value }
   // The Codex backend rejects sampling limits ("Unsupported parameter:
   // max_output_tokens"); reasoning models there also take no temperature.
-  delete next["max_output_tokens"]
-  delete next["temperature"]
+  const { max_output_tokens: _maxOutputTokens, temperature: _temperature, ...kept } = parsed.value
   const existingInstructions = parsed.value["instructions"]
   if (Predicate.isString(existingInstructions) && existingInstructions.length > 0) {
     instructions.unshift(existingInstructions)
   }
-  next["instructions"] = CODEX_DEFAULT_INSTRUCTIONS
-  if (instructions.length > 0) next["instructions"] = instructions.join("\n\n")
-  next["input"] = input
-  next["store"] = false
-  const encoded = new TextEncoder().encode(encodeCodexBody(next))
-  return HttpClientRequest.bodyUint8Array(req, encoded, "application/json")
+  let joined = CODEX_DEFAULT_INSTRUCTIONS
+  if (instructions.length > 0) joined = instructions.join("\n\n")
+  return HttpClientRequest.bodyJsonUnsafe(req, {
+    ...kept,
+    instructions: joined,
+    input,
+    store: false,
+  })
 }
 
 // ── Header construction ──
@@ -1168,7 +1157,7 @@ const rewriteCodexBody = (
  * request of the session. A request without a key gets no header.
  */
 const codexSessionId = (req: HttpClientRequest.HttpClientRequest): Option.Option<string> =>
-  tryReadJsonBody(req.body).pipe(
+  requestJsonObject(req).pipe(
     Option.flatMap((body) => Option.fromUndefinedOr(body["prompt_cache_key"])),
     Option.filter(Predicate.isString),
     Option.filter((key) => key.length > 0),
@@ -1293,20 +1282,8 @@ const OAUTH_ALLOCATORS: ReadonlyArray<typeof allocateOpenAIAuthorization> = [
 type OpenAiResponsesConfig = Required<
   Parameters<typeof OpenAiResponsesLanguageModel.layer>[0]
 >["config"]
-const OpenAiReasoningEffort = Schema.Literals([
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-])
-
-type OpenAiReasoningEffort = typeof OpenAiReasoningEffort.Type
-
 /** Every effort level, lowest first. */
-const OPENAI_EFFORT_ORDER = OpenAiReasoningEffort.literals
+const OPENAI_EFFORT_ORDER = ReasoningEffort.literals
 
 /**
  * The `reasoning.effort` values each model family accepts, lowest first;
@@ -1317,7 +1294,7 @@ const OPENAI_EFFORT_ORDER = OpenAiReasoningEffort.literals
  */
 const OPENAI_ACCEPTED_EFFORTS: ReadonlyArray<{
   readonly pattern: RegExp
-  readonly accepts: ReadonlyArray<OpenAiReasoningEffort>
+  readonly accepts: ReadonlyArray<ReasoningEffort>
 }> = [
   { pattern: /^gpt-5-pro(-|$)/, accepts: ["high"] },
   // GPT-5.2, 5.4 and 5.5 Pro. Anchored, so o1-pro and o3-pro fall to the o-series row.
@@ -1346,9 +1323,9 @@ const OPENAI_ACCEPTED_EFFORTS: ReadonlyArray<{
 const openAiReasoningEffort = (
   modelName: string,
   hints: ProviderHints,
-): Option.Option<OpenAiReasoningEffort> => {
+): Option.Option<ReasoningEffort> => {
   if (hints.supportsReasoning === false) return Option.none()
-  return Schema.decodeUnknownOption(OpenAiReasoningEffort)(hints.reasoning).pipe(
+  return Option.fromUndefinedOr(hints.reasoning).pipe(
     Option.flatMap((effort) => {
       const family = OPENAI_ACCEPTED_EFFORTS.find((entry) => entry.pattern.test(modelName))
       if (Predicate.isUndefined(family)) return Option.some(effort)
@@ -1427,13 +1404,12 @@ class SummaryRefusedError extends Schema.TaggedError<SummaryRefusedError>(
 const withoutReasoningSummary = (
   req: HttpClientRequest.HttpClientRequest,
 ): HttpClientRequest.HttpClientRequest => {
-  const parsed = tryReadJsonBody(req.body)
+  const parsed = requestJsonObject(req)
   if (Option.isNone(parsed)) return req
-  const reasoning = parsed.value["reasoning"]
-  if (!isRecord(reasoning) || !("summary" in reasoning)) return req
-  const { summary: _summary, ...kept } = reasoning
-  const encoded = new TextEncoder().encode(encodeCodexBody({ ...parsed.value, reasoning: kept }))
-  return HttpClientRequest.bodyUint8Array(req, encoded, "application/json")
+  const reasoning = Option.filter(Option.fromUndefinedOr(parsed.value["reasoning"]), isJsonObject)
+  if (Option.isNone(reasoning) || !("summary" in reasoning.value)) return req
+  const { summary: _summary, ...kept } = reasoning.value
+  return HttpClientRequest.bodyJsonUnsafe(req, { ...parsed.value, reasoning: kept })
 }
 
 /** The driver-owned record of the API keys whose summary was refused. */
@@ -1530,7 +1506,7 @@ const isEncryptedReasoningItem = Schema.is(EncryptedReasoningItem)
 
 /** The request body's `input` array; empty when there is none. */
 const requestInput = (req: HttpClientRequest.HttpClientRequest): ReadonlyArray<unknown> => {
-  const input = Option.map(tryReadJsonBody(req.body), (body) => body["input"])
+  const input = Option.map(requestJsonObject(req), (body) => body["input"])
   if (Option.isNone(input) || !Array.isArray(input.value)) return []
   return input.value
 }
@@ -1547,15 +1523,14 @@ const withoutRejectedReasoning = (
   rejected: HashSet.HashSet<string>,
 ): HttpClientRequest.HttpClientRequest => {
   if (HashSet.size(rejected) === 0) return req
-  const parsed = tryReadJsonBody(req.body)
+  const parsed = requestJsonObject(req)
   if (Option.isNone(parsed)) return req
   const input = requestInput(req)
   const kept = input.filter(
     (item) => !(isEncryptedReasoningItem(item) && HashSet.has(rejected, item.id)),
   )
   if (kept.length === input.length) return req
-  const encoded = new TextEncoder().encode(encodeCodexBody({ ...parsed.value, input: kept }))
-  return HttpClientRequest.bodyUint8Array(req, encoded, "application/json")
+  return HttpClientRequest.bodyJsonUnsafe(req, { ...parsed.value, input: kept })
 }
 
 /**
