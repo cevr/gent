@@ -12,6 +12,8 @@ export {
 export { ASK_USER_INTERACTION_TYPE, AskUserAnswers, AskUserMetadata } from "./interaction-tools.js"
 export { SkillsRpc } from "./skills.js"
 export { FilesRpc } from "./fs-tools.js"
+// The TUI file popup memoizes its finder's scan with the shape the catalog and the MCP prune use.
+export { makeStartedMemo } from "./started-memo.js"
 export {
   GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,

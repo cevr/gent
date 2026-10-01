@@ -2155,42 +2155,55 @@ describe("mcp binary content", () => {
     45_000,
   )
 
-  it.scopedLive("a save stopped during the first prune does not stop later saves", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-blobs-" })
-      const blobs = path.join(home, "mcp-blobs")
-      const reached = yield* Deferred.make<void>()
-      const listings = yield* Ref.make(0)
-      // The first prune waits in its directory listing until its caller stops,
-      // as a cell stopped by Esc during its first binary result does. It
-      // yields once before it signals, so the save that started it is already
-      // waiting on it when the test stops that save.
-      const slowFirstListing: FileSystem.FileSystem = {
-        ...fs,
-        readDirectory: (directory, options) =>
-          Effect.gen(function* () {
-            if ((yield* Ref.getAndUpdate(listings, (n) => n + 1)) > 0) {
+  it.scopedLive(
+    "a save stopped during the first prune stops only its wait; the prune runs once",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-blobs-" })
+        const blobs = path.join(home, "mcp-blobs")
+        // One file past the prune age, which only a finished prune removes.
+        yield* fs.makeDirectory(blobs, { recursive: true })
+        const stale = path.join(blobs, "stale.png")
+        yield* fs.writeFileString(stale, "old")
+        const fifteenDaysAgo = ((yield* Clock.currentTimeMillis) - 15 * 24 * 60 * 60 * 1000) / 1000
+        yield* fs.utimes(stale, fifteenDaysAgo, fifteenDaysAgo)
+        const reached = yield* Deferred.make<void>()
+        const listed = yield* Deferred.make<void>()
+        const listings = yield* Ref.make(0)
+        // The prune lists the directory only once the test lets it: the first
+        // save is already waiting on it when its caller stops, as a cell
+        // stopped by Esc during its first binary result is. The listing yields
+        // once before it signals, so the stop lands after that wait began.
+        const heldListing: FileSystem.FileSystem = {
+          ...fs,
+          readDirectory: (directory, options) =>
+            Effect.gen(function* () {
+              yield* Ref.update(listings, (n) => n + 1)
+              yield* Effect.yieldNow
+              yield* Deferred.succeed(reached, void 0)
+              yield* Deferred.await(listed)
               return yield* fs.readDirectory(directory, options)
-            }
-            yield* Effect.yieldNow
-            yield* Deferred.succeed(reached, void 0)
-            return yield* Effect.never
-          }),
-      }
-      const store = yield* makeBlobStore(blobs).pipe(
-        Effect.provideService(FileSystem.FileSystem, slowFirstListing),
-      )
-      const block = { type: "image", data: Base64.encode("PNGDATA"), mimeType: "image/png" }
-      const first = yield* Effect.forkChild(store.save([block]))
-      yield* Deferred.await(reached)
-      yield* Fiber.interrupt(first)
+            }),
+        }
+        const store = yield* makeBlobStore(blobs).pipe(
+          Effect.provideService(FileSystem.FileSystem, heldListing),
+        )
+        const block = { type: "image", data: Base64.encode("PNGDATA"), mimeType: "image/png" }
+        const first = yield* Effect.forkChild(store.save([block]))
+        yield* Deferred.await(reached)
+        yield* Fiber.interrupt(first)
 
-      const saved = (yield* store.save([block]))[0] ?? Option.none<string>()
-      expect(Option.isSome(saved)).toBe(true)
-      expect(yield* fs.readFileString(Option.getOrElse(saved, () => ""))).toBe("PNGDATA")
-    }).pipe(Effect.timeout("5 seconds"), Effect.provide(platformLayer)),
+        const next = yield* Effect.forkChild(store.save([block]))
+        yield* Deferred.succeed(listed, void 0)
+        const saved = (yield* Fiber.join(next))[0] ?? Option.none<string>()
+        expect(Option.isSome(saved)).toBe(true)
+        expect(yield* fs.readFileString(Option.getOrElse(saved, () => ""))).toBe("PNGDATA")
+        // The stopped save's prune went on to its end, and the next save joined it.
+        expect(yield* fs.exists(stale)).toBe(false)
+        expect(yield* Ref.get(listings)).toBe(1)
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(platformLayer)),
   )
 })
 

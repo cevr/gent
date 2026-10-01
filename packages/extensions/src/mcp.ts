@@ -1,5 +1,4 @@
 import {
-  Cache,
   Cause,
   Clock,
   Config,
@@ -47,6 +46,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { compareIds } from "./cell-protocol.js"
 import { type SdkFetch, sdkFetch } from "./mcp-boundary.js"
+import { makeStartedMemo } from "./started-memo.js"
 import {
   defineExtension,
   defineResource,
@@ -614,13 +614,11 @@ export const makeBlobStore = (directory: string) =>
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const crypto = yield* Crypto.Crypto
-    // An effect `Cache` runs the prune of the directory once, in its own fiber.
-    // A save stopped while it waits only stops waiting; when every waiter
-    // stopped, the prune stops and the next save runs it again, so no save
-    // gets the interruption back.
-    const prunes = yield* Cache.make({
-      capacity: 1,
-      lookup: (pruned: string) =>
+    // The prune of the directory runs once, as its own fiber in the store's
+    // scope (`makeStartedMemo`). A save stopped while it waits only stops
+    // waiting: the prune goes on, and the next save joins it.
+    const prunes = yield* makeStartedMemo({
+      load: (pruned: string) =>
         pruneBlobs(pruned).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("mcp.blobs.prune.failed").pipe(
@@ -628,8 +626,9 @@ export const makeBlobStore = (directory: string) =>
             ),
           ),
         ),
+      keep: () => Duration.infinity,
     })
-    const prune = Cache.get(prunes, directory)
+    const prune = prunes.get(directory)
     const saveOne = (data: string, mimeType: Option.Option<string>) =>
       Effect.gen(function* () {
         if (base64Bytes(data) > BLOB_FILE_LIMIT) return Option.none<string>()

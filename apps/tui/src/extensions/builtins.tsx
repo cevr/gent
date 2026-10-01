@@ -1,6 +1,6 @@
 import { FileFinder } from "@ff-labs/fff-bun"
 import {
-  Cache,
+  Duration,
   Clock,
   FileSystem,
   Config,
@@ -55,6 +55,7 @@ import {
   sessionMessageBody,
   FilesRpc,
   SkillsRpc,
+  makeStartedMemo,
 } from "@gent/extensions/client"
 import builtinAgentsView from "./agents.client"
 import builtinBtw from "./btw.client"
@@ -146,13 +147,13 @@ const createFinder = (cwd: string, dbDir: string) =>
     })
     if (!created.ok) return yield* new FileFinderError({ reason: String(created.error) })
     const finder = created.value
-    // An effect `Cache` waits for the finder's scan once, in its own fiber. A
-    // key stopped while it waits only stops waiting; when no key waits, the
-    // wait stops and the next key waits again, so no key gets an
-    // interruption back.
-    const scans = yield* Cache.make({
-      capacity: 1,
-      lookup: (scanning: FileFinder) =>
+    // The wait for the finder's scan runs once, as its own fiber in the client
+    // lifetime (`makeStartedMemo`). A key stopped while it waits only stops
+    // waiting: the wait goes on, and the next key joins it. A failed wait is
+    // dropped, so the next key waits again.
+    const scans = yield* makeStartedMemo({
+      keep: () => Duration.infinity,
+      load: (scanning: FileFinder) =>
         Effect.tryPromise({
           try: () => scanning.waitForScan(15_000),
           catch: (cause) => new FileFinderError({ reason: String(cause) }),
@@ -163,7 +164,7 @@ const createFinder = (cwd: string, dbDir: string) =>
           }),
         ),
     })
-    return { finder, scanned: Cache.get(scans, finder) } satisfies FinderEntry
+    return { finder, scanned: scans.get(finder) } satisfies FinderEntry
   })
 
 /**
@@ -296,7 +297,7 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
     const holds = (claim: FinderClaim) => Option.exists(held, (current) => current.claim === claim)
     const createClaimed = (cwd: string, claim: FinderClaim) =>
       Effect.ignore(fs.makeDirectory(dbDir, { recursive: true })).pipe(
-        Effect.andThen(createFinder(cwd, dbDir)),
+        Effect.andThen(lifecycle.scoped(createFinder(cwd, dbDir))),
         Effect.tap((entry) =>
           Effect.sync(() => {
             // A finder that lands after teardown, or after a key moved to

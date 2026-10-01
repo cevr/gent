@@ -760,31 +760,52 @@ describe("models.dev catalog", () => {
   )
 
   it.scopedLive(
-    "a load interrupted during its fetch is not kept; the next load reaches the host",
+    "a read stopped during the first fetch stops only its wait; the next read gets that fetch's catalog",
     () =>
       Effect.gen(function* () {
-        const home = yield* freshHome("interrupted")
-        const reached = yield* Deferred.make<void>()
-        // The host never answers: the first load waits in its fetch until the
-        // caller stops it, as an Esc during the day's first turn does.
-        const hanging = Layer.succeed(
-          HttpClient.HttpClient,
-          HttpClient.make(() =>
-            Deferred.succeed(reached, void 0).pipe(Effect.andThen(Effect.never)),
-          ),
-        )
-        const first = yield* Effect.forkChild(modelsDevCatalog(home).pipe(Effect.provide(hanging)))
-        yield* Deferred.await(reached)
-        yield* Fiber.interrupt(first)
+        // The stop lands at every point around the scheduler's yield budget
+        // (2048 steps), where a waiter can be counted before its cleanup is in place.
+        for (let steps = 1990; steps < 2060; steps++) {
+          const home = yield* freshHome("stopped")
+          const calls = yield* Ref.make(0)
+          const reached = yield* Deferred.make<void>()
+          const answer = yield* Deferred.make<void>()
+          // The host answers only once the test lets it: the first read is still
+          // waiting in the fetch when its caller stops, as an Esc during the
+          // day's first turn does.
+          const host = Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Effect.gen(function* () {
+                yield* Ref.update(calls, (n) => n + 1)
+                yield* Deferred.succeed(reached, void 0)
+                yield* Deferred.await(answer)
+                return HttpClientResponse.fromWeb(
+                  request,
+                  new Response(encodeAnyJson(remotePayload), { status: 200 }),
+                )
+              }),
+            ),
+          )
+          const busy = Effect.forEach(Array.from({ length: steps }), () => Effect.void, {
+            discard: true,
+          })
+          const first = yield* Effect.forkChild(
+            busy.pipe(Effect.andThen(modelsDevCatalog(home)), Effect.provide(host)),
+          )
+          yield* Deferred.await(reached)
+          yield* Fiber.interrupt(first)
 
-        const calls = yield* Ref.make(0)
-        const next = yield* modelsDevCatalog(home).pipe(
-          Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
-        )
+          const next = yield* Effect.forkChild(modelsDevCatalog(home).pipe(Effect.provide(host)))
+          yield* Deferred.succeed(answer, void 0)
+          const models = yield* Fiber.join(next)
 
-        expect(yield* Ref.get(calls)).toBe(1)
-        expect(next.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
-      }).pipe(Effect.timeout(5_000), Effect.provide(platformLayer)),
+          expect(models.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
+          // The stopped read's fetch went on and served the next read.
+          expect(yield* Ref.get(calls)).toBe(1)
+        }
+      }).pipe(Effect.timeout(10_000), Effect.provide(platformLayer)),
+    15_000,
   )
 })
 
