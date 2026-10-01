@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import {
   AgentEvent,
   BranchCreated,
@@ -78,56 +78,14 @@ describe("event branch routing", () => {
 
 const FIXED_NOW_MILLIS = dateFromMillis(1_767_225_600_000).getTime()
 
-// Real AgentEvent variants used as stand-ins for synthetic test fixtures.
-// Tests assert on `event._tag` strings; mapping each placeholder to a distinct
-// real tag keeps the test logic stable while passing schema validation
-// inside `getEventSessionId` / `getEventBranchId`.
-const TAG_MAP = {
-  OuterEvent: "ToolCallStarted",
-  NestedEvent: "ToolCallSucceeded",
-  BusNestedEvent: "ToolCallFailed",
-  PrimaryEvent: "ToolCallStarted",
-  SecondaryEvent: "ToolCallSucceeded",
-  EventA: "ToolCallStarted",
-  EventB: "ToolCallSucceeded",
-  FallbackEvent: "ToolCallFailed",
-} satisfies Record<string, "ToolCallStarted" | "ToolCallSucceeded" | "ToolCallFailed">
-type SyntheticTag = keyof typeof TAG_MAP
-type RealTag = (typeof TAG_MAP)[SyntheticTag]
-const toBranchId = (branchId: Option.Option<string | BranchId>): BranchId => {
-  if (Option.isNone(branchId)) return BranchId.make("default-branch")
-  if (Predicate.isString(branchId.value)) return BranchId.make(branchId.value)
-  return branchId.value
-}
-const toSessionId = (sessionId: string | SessionId): SessionId => {
-  if (Predicate.isString(sessionId)) return SessionId.make(sessionId)
-  return sessionId
-}
-const makeEvent = (
-  tag: SyntheticTag,
-  sessionId: string | SessionId,
-  branchId?: string | BranchId,
-): AgentEvent => {
-  const realTag = TAG_MAP[tag]
-  const sid = toSessionId(sessionId)
-  const bid = toBranchId(Option.fromUndefinedOr(branchId))
-  const base = {
-    sessionId: sid,
-    branchId: bid,
-    toolCallId: ToolCallId.make(`${tag}-${sid}`),
-    toolName: tag,
-  }
-  switch (realTag) {
-    case "ToolCallStarted":
-      return AgentEvent.cases.ToolCallStarted.make(base)
-    case "ToolCallSucceeded":
-      return AgentEvent.cases.ToolCallSucceeded.make(base)
-    case "ToolCallFailed":
-      return AgentEvent.cases.ToolCallFailed.make(base)
-  }
-}
-// Tests reference these by their real tag names in expectations.
-const TAG = TAG_MAP satisfies Record<SyntheticTag, RealTag>
+// One real event for the store tests: they read only its tag and its ids.
+const toolCallStarted = (sessionId: string, branchId: string): AgentEvent =>
+  AgentEvent.cases.ToolCallStarted.make({
+    sessionId: SessionId.make(sessionId),
+    branchId: BranchId.make(branchId),
+    toolCallId: ToolCallId.make(`call-${sessionId}`),
+    toolName: "probe",
+  })
 
 const makeEventStoreLayer = (
   input: Pick<EventStoreService, "append"> & {
@@ -173,10 +131,10 @@ describe("EventStore publish and delivery", () => {
       const layer = baseLayer
       yield* Effect.gen(function* () {
         const eventStore = yield* EventStore
-        yield* eventStore.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
+        yield* eventStore.publish(toolCallStarted("session-1", "branch-1"))
       }).pipe(Effect.provide(layer))
-      expect(persisted).toEqual([TAG.OuterEvent])
-      expect(broadcasted).toEqual([TAG.OuterEvent])
+      expect(persisted).toEqual(["ToolCallStarted"])
+      expect(broadcasted).toEqual(["ToolCallStarted"])
     }),
   )
   it.live("publish waits for serialized delivery before returning", () =>
@@ -203,7 +161,7 @@ describe("EventStore publish and delivery", () => {
       yield* Effect.gen(function* () {
         const eventStore = yield* EventStore
         const fiber = yield* Effect.forkScoped(
-          eventStore.publish(makeEvent("OuterEvent", "session-1", "branch-1")),
+          eventStore.publish(toolCallStarted("session-1", "branch-1")),
         )
         yield* Deferred.await(broadcastStarted)
         const early = yield* Fiber.join(fiber).pipe(Effect.timeoutOption("1 millis"))
@@ -220,7 +178,7 @@ describe("EventStore publish and delivery", () => {
       const broadcastCount = yield* Ref.make(0)
       const envelope = {
         id: EventId.make(1),
-        event: makeEvent("OuterEvent", "session-1", "branch-1"),
+        event: toolCallStarted("session-1", "branch-1"),
         createdAt: FIXED_NOW_MILLIS,
       }
       const customEventStore = makeEventStoreLayer({
@@ -251,7 +209,7 @@ describe("EventStore publish and delivery", () => {
       const attempts = yield* Ref.make(0)
       const envelope = {
         id: EventId.make(1),
-        event: makeEvent("OuterEvent", "session-1", "branch-1"),
+        event: toolCallStarted("session-1", "branch-1"),
         createdAt: FIXED_NOW_MILLIS,
       }
       const customEventStore = makeEventStoreLayer({

@@ -24,6 +24,7 @@ import {
   EventStorage,
   MessageStorage,
   RelationshipStorage,
+  SESSION_ANCESTORS_SQL,
   SessionOperationStorage,
   SessionStorage,
   SqliteStorage,
@@ -2221,6 +2222,30 @@ describe("thread sessions", () => {
       const branch = yield* relationships.getSessionTree(SessionId.make("delegate"))
       expect(ids(branch)).toEqual(["grandchild", "delegate"])
       expect(yield* relationships.getSessionTree(SessionId.make("missing"))).toEqual([])
+    }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
+  )
+
+  it.live("a session's ancestors are read by id, never by a workspace scan", () =>
+    Effect.gen(function* () {
+      yield* makeSession("root", { at: 1_000 })
+      yield* makeSession("child", { parent: "root", at: 2_000 })
+      yield* makeSession("other", { at: 3_000 })
+      const relationships = yield* RelationshipStorage
+      expect(ids(yield* relationships.getSessionAncestors(SessionId.make("child")))).toEqual([
+        "child",
+        "root",
+      ])
+
+      const sql = yield* SqlClient.SqlClient
+      const plan = yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${SESSION_ANCESTORS_SQL}`,
+        ["child", DefaultWorkspaceId, DefaultWorkspaceId, DefaultWorkspaceId],
+      )
+      // The turn reads this at every step; a workspace index walk costs
+      // milliseconds at 100k sessions where a read by id costs microseconds.
+      expect(
+        plan.map((row) => row.detail).filter((detail) => detail.includes("idx_sessions_workspace")),
+      ).toEqual([])
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
 

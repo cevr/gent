@@ -26,6 +26,7 @@ import {
   type BranchTreeNode,
   copyMessageToBranch,
   DEFAULT_SESSION_NAME,
+  headChars,
   projectMessagesWithToolInteractions,
   Session,
   type SessionAdmission,
@@ -203,7 +204,7 @@ type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
   children: MutableBranchTreeNode[]
 }
 
-export const buildBranchTree = (
+const buildBranchTree = (
   branches: ReadonlyArray<Branch>,
   messageCounts: ReadonlyMap<BranchId, number>,
 ): BranchTreeNode[] => {
@@ -244,7 +245,7 @@ export const buildBranchTree = (
   return roots
 }
 
-export const getBranchTree = (
+const getBranchTree = (
   sessionId: SessionId,
 ): Effect.Effect<ReadonlyArray<BranchTreeNode>, StorageError, BranchStorage> =>
   Effect.gen(function* () {
@@ -455,8 +456,6 @@ const makeSessionMutationsService: Effect.Effect<
       Effect.flatMap((workspaceId) => governance.clearTerminated(workspaceId, sessionId)),
       Effect.orDie,
     )
-  const forgetDeletedSessionRuntimeStateForMutation = (sessionId: SessionId) =>
-    eventStore.removeSession(sessionId)
 
   // The host context the `sessionDeleted` hooks run under. No loop owns a
   // deleted session, so no session control is wired.
@@ -522,7 +521,7 @@ const makeSessionMutationsService: Effect.Effect<
     const preSet = new Set(preTombstoned)
     const postDeleteOnly = cascadedIds.filter((id) => !preSet.has(id))
     yield* Effect.forEach(postDeleteOnly, cleanupSessionRuntimeStateForMutation, { discard: true })
-    yield* Effect.forEach(cascadedIds, forgetDeletedSessionRuntimeStateForMutation, {
+    yield* Effect.forEach(cascadedIds, (sessionId) => eventStore.removeSession(sessionId), {
       discard: true,
     })
     yield* Effect.forEach(
@@ -948,25 +947,26 @@ const makeSessionMutationsService: Effect.Effect<
     switchActiveBranch: dedupSwitchActiveBranch,
 
     renameSession: Effect.fn("SessionMutations.renameSession")(function* (input) {
-      const trimmed = input.name.trim().slice(0, 80)
+      // Cut between code points, then trim: a name never ends in half an
+      // emoji or a space.
+      const trimmed = headChars(input.name.trim(), 80).trimEnd()
       if (trimmed.length === 0) return { renamed: false }
       const unchanged: RenameSessionResult = { renamed: false }
       const expectedName = Option.fromUndefinedOr(input.expectedName)
       return yield* transactWithEvents(
         Effect.gen(function* () {
+          // The read and the write share one write transaction (one
+          // connection, `BEGIN IMMEDIATE`), so no rename lands between them:
+          // the expected name is checked on this read.
           const session = yield* sessionStorage.getSession(input.sessionId)
-          if (Predicate.isUndefined(session) || session.name === trimmed) {
+          if (
+            Predicate.isUndefined(session) ||
+            session.name === trimmed ||
+            Option.exists(expectedName, (expected) => session.name !== expected)
+          ) {
             return { result: unchanged, events: [] }
           }
-          // The write itself checks the expected name, so a rename that lands
-          // after the read above still wins.
-          const written = yield* sessionStorage.renameSession(
-            input.sessionId,
-            trimmed,
-            yield* DateTime.nowAsDate,
-            expectedName,
-          )
-          if (!written) return { result: unchanged, events: [] }
+          yield* sessionStorage.renameSession(input.sessionId, trimmed, yield* DateTime.nowAsDate)
           return {
             result: { renamed: true, name: trimmed },
             events: [SessionNameUpdated.make({ sessionId: input.sessionId, name: trimmed })],
@@ -1905,8 +1905,6 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const storageLive = makeStorageLayer(config)
   const clusterRunnerLive = makeClusterRunnerLayer(config.state)
-  // Snapshots and event replay must share a cursor, including in-memory SQLite.
-  const baseEventStoreLive = EventStoreLive
 
   // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
   // The composition root owns FileSystem/Path; this dependency graph only
@@ -1986,7 +1984,8 @@ export const createDependencies = (config: DependenciesConfig) => {
       platformServicesLive,
       runtimeEnvironmentLive,
       clusterRunnerLive,
-      baseEventStoreLive,
+      // Snapshots and event replay share a cursor, including in-memory SQLite.
+      EventStoreLive,
       authLive,
       configServiceLive,
       modelCatalogRecordLive,

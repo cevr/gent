@@ -51,6 +51,7 @@ import {
   MESSAGE_CHUNK_SELECT,
   type MessageChunkRow,
   SESSION_COLUMNS,
+  BRANCH_COLUMNS,
   sessionFromRow,
   type SessionRow,
   toSqlNull,
@@ -145,16 +146,13 @@ export interface SessionStorageService {
   /**
    * Each write sets only the columns it names, so two writers that touch
    * different fields of one session (a rename and a `/model` switch) never
-   * restore each other's old value. A rename with an `expectedName` writes
-   * only while the stored name is still that one, in the same statement, and
-   * answers whether it wrote.
+   * restore each other's old value.
    */
   readonly renameSession: (
     id: SessionId,
     name: string,
     updatedAt: Date,
-    expectedName?: Option.Option<string>,
-  ) => Effect.Effect<boolean, StorageError>
+  ) => Effect.Effect<void, StorageError>
   readonly updateSessionSettings: (
     id: SessionId,
     settings: Pick<Session, "modelId" | "reasoningLevel">,
@@ -319,15 +317,9 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
         ).pipe(Effect.mapError(storageError("Failed to list sessions"))),
 
         renameSession: Effect.fn("SessionStorage.renameSession")(
-          function* (id, name, updatedAt, expectedName = Option.none()) {
+          function* (id, name, updatedAt) {
             const workspaceId = yield* CurrentWorkspaceId
-            const written = yield* Option.match(expectedName, {
-              onNone: () =>
-                sql`UPDATE sessions SET name = ${name}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId} RETURNING id`,
-              onSome: (expected) =>
-                sql`UPDATE sessions SET name = ${name}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId} AND name = ${expected} RETURNING id`,
-            })
-            return written.length > 0
+            yield* sql`UPDATE sessions SET name = ${name}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId}`
           },
           Effect.mapError(storageError("Failed to rename session")),
         ),
@@ -447,8 +439,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
         getBranch: Effect.fn("BranchStorage.getBranch")(
           function* (id) {
             const workspaceId = yield* CurrentWorkspaceId
-            const rows =
-              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.created_at
+            const rows = yield* sql<BranchRow>`SELECT ${sql.literal(BRANCH_COLUMNS)}
               FROM branches b
               JOIN sessions s ON s.id = b.session_id
               WHERE b.id = ${id} AND s.workspace_id = ${workspaceId}`
@@ -463,8 +454,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
         listBranches: Effect.fn("BranchStorage.listBranches")(
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
-            const rows =
-              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.created_at
+            const rows = yield* sql<BranchRow>`SELECT ${sql.literal(BRANCH_COLUMNS)}
               FROM branches b
               JOIN sessions s ON s.id = b.session_id
               WHERE b.session_id = ${sessionId} AND s.workspace_id = ${workspaceId}
@@ -788,9 +778,6 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
           function* (event, options) {
             const workspaceId = yield* CurrentWorkspaceId
             const sessionId = getEventSessionId(event)
-            if (Predicate.isUndefined(sessionId)) {
-              return yield* new StorageError({ message: "Event missing sessionId" })
-            }
             const sessionRows = yield* sql<{ id: SessionId }>`
               SELECT id FROM sessions
               WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
@@ -965,6 +952,24 @@ interface RelationshipStorageService {
   >
 }
 
+/**
+ * A session and its parent chain, read by id at every step. `UNION` over ids
+ * alone ends on a cycle: a repeated id adds no row. The unary `+` keeps the
+ * planner off the workspace index, which would scan the whole workspace.
+ * Parameters: the session id, then the workspace id three times.
+ */
+export const SESSION_ANCESTORS_SQL = `WITH RECURSIVE ancestors(id) AS (
+  SELECT id FROM sessions WHERE id = ? AND +workspace_id = ?
+  UNION
+  SELECT s.parent_session_id
+  FROM ancestors a
+  JOIN sessions s ON s.id = a.id
+  WHERE +s.workspace_id = ? AND s.parent_session_id IS NOT NULL
+)
+SELECT ${SESSION_COLUMNS}
+FROM sessions
+WHERE id IN (SELECT id FROM ancestors) AND +workspace_id = ?`
+
 export class RelationshipStorage extends Context.Service<
   RelationshipStorage,
   RelationshipStorageService
@@ -978,18 +983,12 @@ export class RelationshipStorage extends Context.Service<
         getSessionAncestors: Effect.fn("RelationshipStorage.getSessionAncestors")(
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
-            // `UNION` over ids alone ends on a cycle: a repeated id adds no row.
-            const rows = yield* sql<SessionRow>`WITH RECURSIVE ancestors(id) AS (
-            SELECT id FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
-            UNION
-            SELECT s.parent_session_id
-            FROM sessions s
-            JOIN ancestors a ON s.id = a.id
-            WHERE s.workspace_id = ${workspaceId} AND s.parent_session_id IS NOT NULL
-          )
-          SELECT ${sql.literal(SESSION_COLUMNS)}
-          FROM sessions
-          WHERE workspace_id = ${workspaceId} AND id IN (SELECT id FROM ancestors)`
+            const rows = yield* sql.unsafe<SessionRow>(SESSION_ANCESTORS_SQL, [
+              sessionId,
+              workspaceId,
+              workspaceId,
+              workspaceId,
+            ])
             const byId = new Map<string, SessionRow>(rows.map((row) => [row.id, row]))
             const chain: SessionRow[] = []
             let next = Option.fromNullishOr(byId.get(sessionId))
@@ -1057,8 +1056,7 @@ export class RelationshipStorage extends Context.Service<
             }
             const session = yield* sessionFromRow(sessionRow)
 
-            const branchRows =
-              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.created_at
+            const branchRows = yield* sql<BranchRow>`SELECT ${sql.literal(BRANCH_COLUMNS)}
                 FROM branches b
                 JOIN sessions s ON s.id = b.session_id
                 WHERE b.session_id = ${sessionId} AND s.workspace_id = ${workspaceId}
