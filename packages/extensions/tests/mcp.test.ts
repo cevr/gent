@@ -296,16 +296,21 @@ const toolIds = (contributions: { readonly tools?: ReadonlyArray<ToolCapability>
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 /**
- * An environment whose data directory is a fixed scratch path, so a test that
- * cannot name the harness's home still shares its catalog cache.
+ * Runs `self` with a fixed scratch data directory, so a test that cannot name
+ * the harness's home still shares its catalog cache. The directory belongs to
+ * the test's own scope and is acquired before the harness, so it is removed
+ * after the harness and its relist fibers stop writing to it.
  */
-const withDataDir = Layer.unwrap(
+const withDataDir = <A, E, R>(self: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-data-" })
-    return ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: directory }))
-  }),
-)
+    return yield* self.pipe(
+      Effect.provide(
+        ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: directory })),
+      ),
+    )
+  })
 
 /** An environment with `GENT_MCP_VALUE` set to `value`. */
 const withVariable = (value: string) =>
@@ -2253,10 +2258,7 @@ describe("mcp tools in the cell", () => {
             display: encodeJson({ echoed: "hi", id: "mcp.fixture.bulk_599", schema: 2000 }),
           },
         })
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )
 
@@ -2429,10 +2431,7 @@ describe("mcp tools in the cell", () => {
         expect(toolIds(next)).not.toContain("mcp.fixture.count")
         expect(toolIds(next)).toContain("mcp.fixture.echo")
         expect(yield* fixture.starts).toBe(2)
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )
 
@@ -2471,10 +2470,7 @@ describe("mcp tools in the cell", () => {
         })
         expect(toolIds(next)).toHaveLength(5)
         expect(yield* fixture.starts).toBe(2)
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )
 
@@ -2514,10 +2510,7 @@ describe("mcp tools in the cell", () => {
         expect(next).toContain("mcp.fixture.echo")
         // The open connection relisted; no server started for it.
         expect(yield* fixture.starts).toBe(2)
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )
 
@@ -2566,10 +2559,7 @@ describe("mcp tools in the cell", () => {
           "list",
           "listed",
         ])
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )
 
@@ -2617,10 +2607,7 @@ describe("mcp tools in the cell", () => {
             10_000,
             "the cache drops count",
           )
-        }).pipe(
-          Effect.timeout("25 seconds"),
-          Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-        ),
+        }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
       30_000,
     )
   }
