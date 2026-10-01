@@ -410,6 +410,10 @@ describe("process name guard", () => {
     ["R26", "-tooling-1"],
     ["EF12", "-3"],
     ["T24", "-3"],
+    ["TL26", "-3"],
+    ["BG26", "-1"],
+    ["GR", "-8"],
+    ["WK", "-1"],
     ["wave", "14"],
     ["batch", "12"],
     ["pass", "-26"],
@@ -422,7 +426,7 @@ describe("process name guard", () => {
           findProcessNames("packages/core/tests/a.test.ts", `// fixed in ${token}\n`).length,
       ),
     ).toEqual(tokens.map(() => 1))
-    expect(findProcessNames("apps/tui/src/a.ts", `\nconst ${tokens[4]}Probe = 1\n`)).toMatchObject([
+    expect(findProcessNames("apps/tui/src/a.ts", `\nconst ${tokens[8]}Probe = 1\n`)).toMatchObject([
       { file: "apps/tui/src/a.ts", line: 2 },
     ])
   })
@@ -435,6 +439,7 @@ describe("process name guard", () => {
           "const T = 1 // T-1 is a type",
           "ES2022, UTF-8, C17 and W3C",
           "batchSize, waves, passes",
+          "GPT-5, SHA-256, X-Forwarded-For, TLS-1",
         ].join("\n"),
       ),
     ).toEqual([])

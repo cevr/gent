@@ -625,10 +625,12 @@ export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArr
 
 /**
  * Guard: source and tests name product behavior, not the process that made
- * them (AGENTS.md "Process-shaped names"). A ledger id (`PROCESS_NAME`
- * spells the forms: a work-item id, an architecture-loop row id) or a pass
- * name (wave, batch or pass with its number) in a comment, a test name or
- * an identifier is history, and it outlives the ledger that explains it.
+ * them (AGENTS.md "Process-shaped names"). A ledger id or a pass name (wave,
+ * batch or pass with its number) in a comment, a test name or an identifier
+ * is history, and it outlives the ledger that explains it. `PROCESS_NAME`
+ * spells the id forms: a work-item id; a row id keyed by its pass (up to four
+ * capitals, the two-digit pass, a dash and a number); and a row id of one of
+ * the ledger's unnumbered classes (its prefix, a dash and a number).
  * Seven commits since 2026-09-15 removed such ids by hand. Only the id form
  * is read; history told in prose stays a review item. `plans/` and the dated
  * receipts are outside the source roots, so they keep their ids.
@@ -636,7 +638,7 @@ export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArr
 const PROCESS_NAME_ROOT = /^(?:packages|apps|examples|testbeds)\//
 
 const PROCESS_NAME =
-  /\bW\d{2}-C\d|\b(?:R|EF|UI|TUI|T|C|X)\d{2}-[\w-]*\d\b|\bwave\d+|\bbatch\d+|\bpass-\d+/
+  /\bW\d{2}-C\d|\b[A-Z]{1,4}\d{2}-[\w-]*\d\b|\b(?:AN|AV|CE|CM|DL|EX|FS|GD|GR|GX|LV|MX|NT|PV|SK|SS|TL|WK)-\d+\b|\bwave\d+|\bbatch\d+|\bpass-\d+/
 
 export const findProcessNames = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!PROCESS_NAME_ROOT.test(file)) return []
