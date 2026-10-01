@@ -68,9 +68,14 @@ interface Span {
 /** The 1-based line of a character index. */
 const lineAt = (code: string, index: number): number => code.slice(0, index).split("\n").length
 
-/** A `.tsx` or `.jsx` file also reads JSX; any other source file is TypeScript. */
-const parseLanguage = (file: string): "ts" | "tsx" => {
+/**
+ * A `.tsx` or `.jsx` file also reads JSX, and a `.d.ts` file holds
+ * declarations, which need no body or initializer; any other source file is
+ * TypeScript.
+ */
+const parseLanguage = (file: string): "ts" | "tsx" | "dts" => {
   if (/\.[cm]?[jt]sx$/.test(file)) return "tsx"
+  if (/\.d\.[cm]?ts$/.test(file)) return "dts"
   return "ts"
 }
 
@@ -156,6 +161,7 @@ const blankedSpans = (
 const sourceFormsCache = {
   ts: new Map<string, SourceForms>(),
   tsx: new Map<string, SourceForms>(),
+  dts: new Map<string, SourceForms>(),
   json: new Map<string, SourceForms>(),
 }
 

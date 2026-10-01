@@ -2830,6 +2830,15 @@ describe("the guards read source as oxc parses it", () => {
     ]).toMatchObject([[{ file: "sample.tsx", line: 2 }], []])
   })
 
+  test("a declaration file is read as declarations, so a const needs no initializer", () => {
+    const declarations = "export const a: string\nexport declare function f(): void\n"
+    expect([
+      findUnparsedSources("types/sample.d.ts", declarations),
+      findUnparsedSources("types/sample.d.mts", declarations),
+      findUnparsedSources("sample.ts", declarations),
+    ]).toMatchObject([[], [], [{ file: "sample.ts", line: 1 }]])
+  })
+
   test("a defaulted type parameter in a .tsx file hides no read after it", () => {
     const findings = findingsFor([
       {
