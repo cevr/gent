@@ -42,6 +42,7 @@ export {
   multiToolCallStep,
   oneGenerate,
   seedAuthKeys,
+  storedCredentialModel,
   type SequenceStep,
   textStep,
   toolCallStep,

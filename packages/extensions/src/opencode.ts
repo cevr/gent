@@ -52,20 +52,38 @@ import {
 interface Gateway {
   /** The driver id and the models.dev provider key. */
   readonly id: string
+  /** The gateway's name in error messages. */
   readonly name: string
   /** The gateway root. The OpenAI paths live under `/v1`; the Anthropic SDK adds `/v1/messages` itself. */
   readonly origin: string
+  /** The driver's display name, which `/auth` shows for the sign-in it owns. */
+  readonly signInName: string
   readonly authLabel: string
+  /**
+   * The driver whose sign-in this gateway's driver uses. Core hides this
+   * driver's own sign-in while that driver is registered; without it, this
+   * driver signs in with its own key.
+   */
+  readonly credentialFrom?: string
   /** The classifier models (Jev) the gateway serves over TypeSafe's API; models.dev lists none. */
   readonly classifiers: ReadonlyArray<ClassifierEntry>
 }
 
+/**
+ * One OpenCode API key serves Zen, Go and Go Plus, so gent asks for it once:
+ * the Zen driver owns the sign-in, stored under `opencode`, and the Go driver
+ * reads it (`credentialFrom`). A key stored for Go before the two shared
+ * still serves both. The catalogs and model ids stay apart: the gateways
+ * bill differently, and one model can sit in both. OpenCode itself lists the
+ * two in `/connect` with a key each.
+ */
 export const OPENCODE_GATEWAYS = {
   zen: {
     id: "opencode",
     name: "OpenCode Zen",
     origin: "https://opencode.ai/zen",
-    authLabel: "OpenCode Zen API key",
+    signInName: "OpenCode",
+    authLabel: "OpenCode API key — Zen, Go and Go Plus",
     // From Zen's own list, `https://opencode.ai/zen/v1/models` (read 2026-10-01),
     // priced per its docs: $0.042 per million input tokens, output free.
     // Zen serves no `jev-latest`.
@@ -78,12 +96,14 @@ export const OPENCODE_GATEWAYS = {
     id: "opencode-go",
     name: "OpenCode Go",
     origin: "https://opencode.ai/zen/go",
+    signInName: "OpenCode Go",
     authLabel: "OpenCode Go / Go Plus API key",
+    credentialFrom: "opencode",
     classifiers: [],
   },
 } satisfies Record<string, Gateway>
 
-/** models.dev names this variable for both gateways; each keeps its own stored key. */
+/** models.dev names this variable for both gateways. */
 const ENV_CREDENTIAL = "OPENCODE_API_KEY"
 
 /**
@@ -660,7 +680,11 @@ export const buildOpenCodeModelDriver = (
 ): ModelDriverContribution => {
   const driver: ModelDriverContribution = {
     id: gateway.id,
-    name: gateway.name,
+    name: gateway.signInName,
+    ...Option.match(Option.fromUndefinedOr(gateway.credentialFrom), {
+      onNone: () => ({}),
+      onSome: (credentialFrom) => ({ credentialFrom }),
+    }),
     envCredential: ENV_CREDENTIAL,
     retry: DEFAULT_RETRY_POLICY,
     resolveModel: (modelName, authInfo, hintsInput) =>
