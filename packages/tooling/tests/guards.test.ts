@@ -8,6 +8,7 @@ import {
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findProcessNames,
   findEffectVersionDrift,
   findRepoTempDirectories,
   findSharedTestHomes,
@@ -21,7 +22,6 @@ import {
   findStaleSteeringReceipts,
   findSuppressionInventoryFindings,
   findTestLaneDefaults,
-  findTuiSessionIdentityReads,
   findUnadaptedSeams,
   findUnconsumedExports,
   enabledLintRules,
@@ -29,6 +29,7 @@ import {
   findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
   findUnmatchedTsconfigOverrides,
+  findUnparsedSources,
   findUnshippedSkillFiles,
   findUnhashedSteeringFiles,
   BUNDLED_SKILLS_MODULE,
@@ -47,7 +48,7 @@ import {
 } from "../src/guards"
 import { indexFileNames, scanTrackedTexts, trackedTexts } from "../src/check-guardrails"
 import { BunServices } from "@effect/platform-bun"
-import { Config, Effect, FileSystem, Option, Path } from "effect"
+import { Config, Effect, FileSystem, Option, Path, Schema } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { it } from "effect-bun-test"
 
@@ -402,6 +403,51 @@ export const requireTelepathy = Effect.gen(function* () {
   })
 })
 
+// ── process-shaped names ────────────────────────────────────────────────────
+
+describe("process name guard", () => {
+  // Each token is spelled in two parts, so this file holds none of them.
+  const tokens = [
+    ["W33", "-C4"],
+    ["R26", "-tooling-1"],
+    ["EF12", "-3"],
+    ["T24", "-3"],
+    ["wave", "14"],
+    ["batch", "12"],
+    ["pass", "-26"],
+  ].map(([head, tail]) => `${head}${tail}`)
+
+  test("a ledger id or a pass name in source or a test is reported", () => {
+    expect(
+      tokens.map(
+        (token) =>
+          findProcessNames("packages/core/tests/a.test.ts", `// fixed in ${token}\n`).length,
+      ),
+    ).toEqual(tokens.map(() => 1))
+    expect(findProcessNames("apps/tui/src/a.ts", `\nconst ${tokens[4]}Probe = 1\n`)).toMatchObject([
+      { file: "apps/tui/src/a.ts", line: 2 },
+    ])
+  })
+
+  test("product words that only look like ids are not reported", () => {
+    expect(
+      findProcessNames(
+        "packages/core/src/a.ts",
+        [
+          "const T = 1 // T-1 is a type",
+          "ES2022, UTF-8, C17 and W3C",
+          "batchSize, waves, passes",
+        ].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
+  test("plans and files outside the source roots are not read", () => {
+    expect(findProcessNames("plans/a.ts", `// ${tokens[0]}`)).toEqual([])
+    expect(findProcessNames("scripts/a.ts", `// ${tokens[0]}`)).toEqual([])
+  })
+})
+
 // ── e2e fixture imports ─────────────────────────────────────────────────────
 
 const noFixtureSource = [
@@ -638,7 +684,7 @@ describe("shared test home checker", () => {
       "RuntimeEnvironment.Live({ home, cwd })",
       'RuntimeEnvironment.Live({ home: root, cwd: yield* makeTempDirectoryScoped("gent-cwd-") })',
       'const workspace = workspaceIdForCwd("/tmp/run-workspace")',
-      '{ extension, scope: "user", sourcePath: "/tmp/good.ts" }',
+      'const loaded = { extension, scope: "user", sourcePath: "/tmp/good.ts" }',
       'const home = mkdtempSync(join(tmpdir(), "gent-home-"))',
       'const homePage = "/tmp/page"',
       '// home: "/tmp" in a comment',
@@ -1233,6 +1279,13 @@ describe("a defined rule must be enabled", () => {
       ],
     })
     expect([...enabled].toSorted()).toEqual(["gent/no-script-glob", "gent/no-sleep"])
+  })
+
+  test('"allow" turns a rule off, as the oxlint schema says', () => {
+    const enabled = enabledLintRules({
+      rules: { "gent/a": "allow", "gent/b": "error", "gent/c": ["allow", {}] },
+    })
+    expect([...enabled]).toEqual(["gent/b"])
   })
 })
 
@@ -2077,7 +2130,6 @@ describe("steering file paths", () => {
       "packages/core/AGENTS.md",
       "docs/extensions.md",
       "testbeds/gamut/README.md",
-      ".claude/skills/architecture-loop/prior-art.md",
       "patches/README.md",
       "packages/extensions/src/skills/bundled/principles/SKILL.md",
       "packages/extensions/src/skills/bundled/principles/references/fix-root-causes.md",
@@ -2133,6 +2185,17 @@ describe("steering receipts", () => {
     expect(linesOfReceipts("the policy (`readKnownSteps` in `runtime/turn.ts`) holds")).toEqual([])
   })
 
+  test("a pair that continues a parenthesised list of receipts is a receipt", () => {
+    expect(
+      linesOfReceipts(
+        "the policy (`readKnownSteps` in `runtime/turn.ts`, `gone` in `runtime/turn.ts`) holds",
+      ),
+    ).toEqual([1])
+    expect(
+      linesOfReceipts("the policy (not `mutex` in `runtime/turn.ts`, `gone` in `runtime/turn.ts`)"),
+    ).toEqual([])
+  })
+
   test("a pair outside a receipt run or a parenthesis is prose, not a receipt", () => {
     const text = [
       "Avoid `mutex` in `packages/core/src/runtime/turn.ts`.",
@@ -2173,7 +2236,6 @@ describe("steering file links", () => {
   const tracked = [
     skill,
     "packages/extensions/src/skills/bundled/principles/references/fix-root-causes.md",
-    ".claude/skills/architecture-loop/safety.md",
     "docs/extensions.md",
   ]
   const linkLines = (file: string, text: string): ReadonlyArray<number> =>
@@ -2190,8 +2252,8 @@ describe("steering file links", () => {
   })
 
   test("a link climbs with .. and fails above the root", () => {
-    const prompt = ".claude/skills/architecture-loop/prompts/apply.md"
-    expect(linkLines(prompt, "read [safety](../safety.md) first")).toEqual([])
+    const prompt = "packages/extensions/src/skills/bundled/principles/references/apply.md"
+    expect(linkLines(prompt, "read [the skill](../SKILL.md) first")).toEqual([])
     expect(linkLines(prompt, "read [safety](../../gone/safety.md) first")).toEqual([1])
     expect(linkLines("AGENTS.md", "see [x](../outside.md)")).toEqual([1])
   })
@@ -2305,15 +2367,21 @@ describe("guide check inputs", () => {
     "!../docs/research/**",
     "../testbeds/*/README.md",
     "../patches/README.md",
-    "../.claude/skills/**/*.md",
     "../packages/extensions/src/skills/bundled/**/*.md",
   ]
   const tracked = [
     "AGENTS.md",
+    "CLAUDE.md",
+    "ARCHITECTURE.md",
     "README.md",
     "docs/extensions.md",
     "docs/research/2026-09-06-x.md",
     "apps/tui/AGENTS.md",
+    "apps/tui/CLAUDE.md",
+    "packages/core/AGENTS.md",
+    "packages/core/CLAUDE.md",
+    "testbeds/gamut/README.md",
+    "patches/README.md",
     "packages/extensions/src/skills/bundled/principles/SKILL.md",
     "examples/extensions/a.ts",
   ]
@@ -2338,102 +2406,15 @@ describe("guide check inputs", () => {
     expect(messages.some((message) => message.includes("docs/research/2026-09-06-x.md"))).toBe(true)
     expect(messages.some((message) => message.includes("README.md"))).toBe(true)
   })
-})
 
-// ── tui session identity ────────────────────────────────────────────────────
-
-const FILE_TUI_IDENTITY = "apps/tui/src/hooks/use-thing.ts"
-
-const linesOfTuiIdentity = (text: string): ReadonlyArray<number> =>
-  findTuiSessionIdentityReads(FILE_TUI_IDENTITY, text).map((finding) => finding.line)
-
-describe("TUI session identity guard", () => {
-  test("flags the record as an `on` source", () => {
-    const text = [
-      "  createEffect(",
-      "    on(",
-      "      () => client.session(),",
-      "      (session) => startTracking(session),",
-      "    ),",
-      "  )",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([3])
-    expect(findTuiSessionIdentityReads(FILE_TUI_IDENTITY, text)[0]?.message).toContain(
-      "sessionIdentity()",
-    )
+  test("an input that matches no tracked file is reported, as a dead lint glob is", () => {
+    expect(files([...exact, "../.claude/skills/**/*.md"])).toEqual([
+      expect.stringContaining("`../.claude/skills/**/*.md` matches no tracked file"),
+    ])
   })
 
-  test("an emitter's `.on(` is not a reactive scope", () => {
-    const text = ['  emitter.on("change", () => {', "    render(client.session())", "  })"].join(
-      "\n",
-    )
-    expect(linesOfTuiIdentity(text)).toEqual([])
-  })
-
-  test("flags the record read in a createEffect body", () => {
-    const text = [
-      "  createEffect(() => {",
-      "    const current = Option.fromNullishOr(client.session())",
-      "    if (Option.isNone(current)) return",
-      "  })",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([2])
-  })
-
-  test("flags the record read in a createMemo", () => {
-    const text = [
-      "  const identity = createMemo(() =>",
-      "    Option.map(Option.fromNullishOr(sessionClient.session()), (s) => s.sessionId),",
-      "  )",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([2])
-  })
-
-  test("reports one finding per reactive scope, not one per opener", () => {
-    const text = [
-      "  createEffect(",
-      "    on(",
-      "      () => client.session(),",
-      "      () => {},",
-      "    ),",
-      "  )",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toHaveLength(1)
-  })
-
-  test("allows the record in an event handler", () => {
-    const text = ["  const onSelect = () => {", "    const s = client.session()", "  }"].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([])
-  })
-
-  test("allows the record in a JSX expression", () => {
-    const text = ["  return (", "    <text>{client.session()?.name}</text>", "  )"].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([])
-  })
-
-  test("allows the narrowed identity accessors", () => {
-    const text = [
-      "  createEffect(() => {",
-      "    const current = client.activeSessionId()",
-      "    const identity = client.sessionIdentity()",
-      "  })",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([])
-  })
-
-  test("allows the transport identity accessor", () => {
-    const text = [
-      "  createEffect(() => {",
-      "    const session = Option.fromNullishOr(opts.transport.currentSession())",
-      "  })",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([])
-  })
-
-  test("leaves files outside the TUI source alone", () => {
-    const text = ["  createEffect(() => {", "    const s = client.session()", "  })"].join("\n")
-    expect(findTuiSessionIdentityReads("packages/core/src/runtime/thing.ts", text)).toEqual([])
-    expect(findTuiSessionIdentityReads("apps/tui/tests/thing.test.ts", text)).toEqual([])
+  test("a turbo token is not a glob, so it is never a dead input", () => {
+    expect(files([...exact, "$TURBO_DEFAULT$", "$TURBO_ROOT$/AGENTS.md"])).toEqual([])
   })
 })
 
@@ -2476,6 +2457,36 @@ describe("suppression inventory guard", () => {
         (text) => findSuppressionInventoryFindings("sample.ts", text).length,
       ),
     ).toEqual([1, 1])
+  })
+
+  test("a directive is read in every spelling the language service honors", () => {
+    const fileScope = nextLine.replace("-next-line", "")
+    expect(
+      [
+        `${nextLine} floatingEffect:OFF`,
+        `${nextLine} *:Off`,
+        `${nextLine} reason first floatingEffect:off`,
+        `${fileScope} floatingEffect:OFF`,
+        `${fileScope} reason first *:off`,
+        `${nextLine} FLOATINGEFFECT:off`,
+        `${nextLine} see:this x-floatingEffect:skip-file`,
+      ].map((text) => findSuppressionInventoryFindings("sample.ts", text).length),
+    ).toEqual([1, 1, 1, 1, 1, 1, 1])
+  })
+
+  test("a spelling the language service ignores is not a directive", () => {
+    expect(
+      [
+        `${nextLine} effect/floatingEffect:off`,
+        `${nextLine} floatingEffect: off`,
+        `${nextLine}: floatingEffect:off`,
+        `${nextLine}s floatingEffect:off`,
+        `${nextLine} floatingEffect:off2`,
+        `${nextLine} (floatingEffect:off)`,
+        `${nextLine} x.floatingEffect:off`,
+        nextLine.replace("effect-diagnostics", "EFFECT-DIAGNOSTICS") + " floatingEffect:off",
+      ].map((text) => findSuppressionInventoryFindings("sample.ts", text).length),
+    ).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
   })
 
   test("a directive in a string literal is read, since the language service honors it", () => {
@@ -2565,6 +2576,129 @@ describe("suppression inventory guard", () => {
   })
 })
 
+describe("the directive grammar is the language service's", () => {
+  const lsTest = it.scopedLive.layer(BunServices.layer)
+  const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))
+  const fileScope = nextLine.replace("-next-line", "")
+
+  /**
+   * Spellings on both sides of the grammar. Each goes in its own probe file
+   * above a floating `Effect`: the language service honors it when `tsc`
+   * reports no `floatingEffect` in that file.
+   */
+  const SPELLINGS: ReadonlyArray<string> = [
+    `${nextLine} floatingEffect:off`,
+    `${nextLine} floatingEffect:OFF`,
+    `${nextLine} *:Off`,
+    `${nextLine} reason first floatingEffect:off`,
+    `${nextLine} see:this x-floatingEffect:off`,
+    `${nextLine}\tfloatingEffect:off -- a reason`,
+    `${nextLine} FLOATINGEFFECT:skip-file`,
+    `${nextLine} floatingEffect:off, then prose`,
+    `/* ${nextLine.replace("// ", "")} floatingEffect:off */`,
+    `// x ${nextLine.replace("// ", "")} floatingEffect:off`,
+    `${fileScope} floatingEffect:OFF`,
+    `${fileScope} reason first *:off`,
+    `${nextLine} effect/floatingEffect:off`,
+    `${nextLine} x.floatingEffect:off`,
+    `${nextLine} (floatingEffect:off)`,
+    `${nextLine} comment, floatingEffect:off`,
+    `${nextLine} floatingEffect: off`,
+    `${nextLine} floatingEffect :off`,
+    `${nextLine} floatingEffect:off2`,
+    `${nextLine} floatingEffect:off-x`,
+    `${nextLine}: floatingEffect:off`,
+    `${nextLine}s floatingEffect:off`,
+    `${fileScope}-file floatingEffect:off`,
+    `${fileScope}floatingEffect:off`,
+    nextLine.replace("effect-diagnostics", "EFFECT-DIAGNOSTICS") + " floatingEffect:off",
+    // The compiler reads the marker, then whitespace as Go's `\s` spells it
+    // (a form feed too, a vertical tab or a no-break space not), then words
+    // of letters, digits, `_`, `-`, `:` and `*`.
+    `${nextLine}\ffloatingEffect:off`,
+    `${nextLine} \f floatingEffect:off`,
+    `${nextLine}\vfloatingEffect:off`,
+    `${nextLine} floatingEffect:off`,
+    `${nextLine} x*floatingEffect:off`,
+    `${nextLine} floatingEffect*:off`,
+    `${nextLine} reason: floatingEffect:off`,
+    `${nextLine} reason. floatingEffect:off`,
+    // After the severity: `--` and any mark but a word character after an
+    // optional `-`.
+    `${nextLine} floatingEffect:off--reason`,
+    `${nextLine} floatingEffect:off-`,
+    `${nextLine} floatingEffect:off*x`,
+    `${nextLine} floatingEffect:off.`,
+    `${nextLine} floatingEffect:off_x`,
+    // A downgrade is honored: `warn` is a warning, as `warning` is.
+    `${nextLine} floatingEffect:warn`,
+    `${nextLine} floatingEffect:WARN--x`,
+    `${nextLine} floatingEffect:warning`,
+    `${nextLine} floatingEffect:message`,
+    `${nextLine} floatingEffect:suggestion`,
+    `${nextLine} floatingEffect:warning-x`,
+    `${nextLine} floatingEffect:warnx`,
+    `${nextLine} floatingEffect:msg`,
+    `${nextLine} floatingEffect:info`,
+  ]
+
+  const probeSource = (spelling: string, index: number): string =>
+    [
+      'import { Effect } from "effect"',
+      "export const probe = Effect.gen(function* () {",
+      "  yield* Effect.void",
+      `  ${spelling}`,
+      `  Effect.succeed(${index})`,
+      "})",
+      "",
+    ].join("\n")
+
+  /** Bound on one `tsc` run over the probe files; about a second on an idle machine. */
+  const TSC_BOUND = "40 seconds"
+
+  lsTest(
+    "the inventory reads a spelling as a directive exactly when tsc honors it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+        const repo = yield* path.fromFileUrl(new URL("../../..", import.meta.url))
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-directive-grammar-" })
+        yield* fs.symlink(path.join(repo, "node_modules"), path.join(dir, "node_modules"))
+        yield* fs.writeFileString(
+          path.join(dir, "tsconfig.json"),
+          yield* encodeJson({ extends: path.join(repo, "tsconfig.json"), include: ["*.ts"] }),
+        )
+        for (const [index, spelling] of SPELLINGS.entries()) {
+          yield* fs.writeFileString(path.join(dir, `p${index}.ts`), probeSource(spelling, index))
+        }
+        const output = yield* spawner.string(
+          ChildProcess.make(path.join(repo, "node_modules", ".bin", "tsc"), ["-p", dir], {
+            cwd: dir,
+          }),
+          { includeStderr: true },
+        )
+        // The control: an unhonored spelling leaves the floating Effect
+        // reported as an error. An honored one silences it or downgrades it.
+        expect(output).toContain("floatingEffect")
+        const verdicts = SPELLINGS.map((spelling, index) => ({
+          spelling,
+          honored: !new RegExp(`p${index}\\.ts\\(\\d+,\\d+\\): error[^\\n]*floatingEffect`).test(
+            output,
+          ),
+        }))
+        expect(
+          SPELLINGS.map((spelling) => ({
+            spelling,
+            honored: findSuppressionInventoryFindings("sample.ts", spelling).length > 0,
+          })),
+        ).toEqual(verdicts)
+      }).pipe(Effect.timeout(TSC_BOUND)),
+    60_000,
+  )
+})
+
 // ── export consumers ────────────────────────────────────────────────────────
 
 const CORE_FILE = "packages/core/src/runtime/provider.ts"
@@ -2609,7 +2743,7 @@ const consumedThroughApi = (file: string, text: string): ReadonlySet<string> =>
 
 // ── the lexer every scan reads through ──────────────────────────────────────
 
-describe("the guards' lexer", () => {
+describe("the guards read source as oxc parses it", () => {
   test("a regex literal that holds a backtick or `/*` hides no read after it", () => {
     const consumer = {
       file: "packages/e2e/tests/probe.test.ts",
@@ -2669,7 +2803,6 @@ describe("the guards' lexer", () => {
     expect([
       homes(tsx, 'const f = <A,>(a: A) => a; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <A extends object>(a: A) => a; const env = { cwd: "/tmp" }'),
-      homes(tsx, 'const f = <A>(a: A) => a; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <Row = unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <Row=unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
       homes(tsx, 'type F = <Row>(x: Row) => Row; const env = { cwd: "/tmp" }'),
@@ -2677,7 +2810,7 @@ describe("the guards' lexer", () => {
         "apps/tui/tests/probe.test.ts",
         'const f = <Row>(a: Row) => a; const env = { cwd: "/tmp" }',
       ),
-    ]).toEqual([1, 1, 1, 1, 1, 1, 1])
+    ]).toEqual([1, 1, 1, 1, 1, 1])
   })
 
   test("a trailing directive is read after each JSX, regex and division form", () => {
@@ -2688,7 +2821,7 @@ describe("the guards' lexer", () => {
       ["sample.tsx", "const a = <b>(it's) (twice)</b>"],
       ["sample.tsx", "const a = <X>(it's)</X>"],
       ["sample.tsx", "type F = <A>(a: A) => A; const s = 'it'"],
-      ["sample.tsx", "const f = <A>(a: (b: A) => A) => a; const s = 'it'"],
+      ["sample.ts", "const f = <A>(a: (b: A) => A) => a; const s = 'it'"],
       ["sample.tsx", "const n = i++ <a; const s = 'it'"],
       ["sample.ts", "const r = /it's/"],
       ["sample.ts", "const r = a + /it's/.source"],
@@ -2702,6 +2835,43 @@ describe("the guards' lexer", () => {
       ["sample.tsx", "type G = <T>(x: T) /* reason */ => T;"],
     ]
     expect(sources.map(([file, source]) => trailing(file, source))).toEqual(sources.map(() => 1))
+  })
+
+  test("a generic call or construct signature in a .tsx file hides no directive after it", () => {
+    const fileWide = `/* ${["oxlint", "disable"].join("-")} */`
+    const signatures = [
+      "type Call = { <A>(a: A): A }",
+      "interface Call { <A>(a: A): A }",
+      "type Make = { new <A>(a: A): A }",
+    ]
+    expect(
+      signatures.map((signature) => {
+        const text = `${signature}\n${fileWide}\nexport const x = 1\n`
+        return [
+          findBlanketEslintDisables("sample.tsx", text).length,
+          findBannedEslintDisableBlocks("sample.tsx", text).length,
+        ]
+      }),
+    ).toEqual(signatures.map(() => [1, 1]))
+  })
+
+  test("a source oxc cannot parse is reported at its first error", () => {
+    // In a .tsx file `<A>(` opens an element, so a generic arrow there is a
+    // syntax error; the same text is a generic arrow in a .ts file.
+    const arrow = "export const x = 1\nconst f = <A>(a: A) => a\n"
+    expect([
+      findUnparsedSources("sample.tsx", arrow),
+      findUnparsedSources("sample.ts", arrow),
+    ]).toMatchObject([[{ file: "sample.tsx", line: 2 }], []])
+  })
+
+  test("a declaration file is read as declarations, so a const needs no initializer", () => {
+    const declarations = "export const a: string\nexport declare function f(): void\n"
+    expect([
+      findUnparsedSources("types/sample.d.ts", declarations),
+      findUnparsedSources("types/sample.d.mts", declarations),
+      findUnparsedSources("sample.ts", declarations),
+    ]).toMatchObject([[], [], [{ file: "sample.ts", line: 1 }]])
   })
 
   test("a defaulted type parameter in a .tsx file hides no read after it", () => {

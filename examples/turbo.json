@@ -20,7 +20,6 @@
         "!../docs/research/**",
         "../testbeds/*/README.md",
         "../patches/README.md",
-        "../.claude/skills/**/*.md",
         "../packages/extensions/src/skills/bundled/**/*.md",
         "../apps/tui/tsconfig.json",
         "../packages/tooling/src/check-guide-code.ts",

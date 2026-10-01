@@ -26,7 +26,7 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/process"
-import { isSteeringFile } from "./guards"
+import { fencedBlocks, isSteeringFile } from "./guards"
 import { fileSet } from "./check-guardrails"
 
 // ── the blocks and their compile contexts ───────────────────────────────────
@@ -75,37 +75,28 @@ const BLOCK_EXTENSION = new Map<string, GuideBlock["extension"]>([
   ["typescript", "ts"],
   ["tsx", "tsx"],
 ])
-const FENCE_OPEN = /^```\S*\s*$/
-const FENCE_CLOSE = /^```\s*$/
-const ILLUSTRATIVE_MARK = /^<!--\s*illustrative:\s*\S.*-->\s*$/
+const ILLUSTRATIVE_MARK = /^\s*<!--\s*illustrative:\s*\S.*-->\s*$/
 
 /** Whether the line above the fence at `fence` marks its block illustrative. */
 const markedIllustrative = (lines: ReadonlyArray<string>, fence: number): boolean =>
   fence > 0 && ILLUSTRATIVE_MARK.test(lines[fence - 1] ?? "")
 
+/**
+ * The compiling blocks of a steering file, from the guards' fence reader
+ * (`fencedBlocks`), so a fence the guards skip is a fence this check reads:
+ * at any indent, of tildes, of any length, with attributes after the
+ * language. A code line drops up to the opener's indent of its leading space.
+ */
 export const guideCodeBlocks = (file: string, text: string): ReadonlyArray<GuideBlock> => {
-  const blocks: Array<GuideBlock> = []
   const lines = text.split("\n")
-  let open = Option.none<{ readonly start: number; readonly language: string }>()
-  for (const [index, line] of lines.entries()) {
-    if (Option.isNone(open)) {
-      if (!FENCE_OPEN.test(line)) continue
-      open = Option.some({ start: index + 1, language: line.slice(3).trim() })
-      continue
-    }
-    if (!FENCE_CLOSE.test(line)) continue
-    const { start, language } = open.value
-    open = Option.none()
-    const extension = Option.fromNullishOr(BLOCK_EXTENSION.get(language))
-    if (Option.isNone(extension) || markedIllustrative(lines, start - 1)) continue
-    blocks.push({
-      file,
-      line: start + 1,
-      code: lines.slice(start, index).join("\n"),
-      extension: extension.value,
-    })
-  }
-  return blocks
+  return fencedBlocks(text).flatMap(({ open, close, indent, info }) => {
+    const extension = Option.fromNullishOr(BLOCK_EXTENSION.get(info.split(/\s/)[0] ?? ""))
+    if (Option.isNone(extension) || markedIllustrative(lines, open)) return []
+    const code = lines
+      .slice(open + 1, close)
+      .map((line) => line.slice(Math.min(indent.length, line.length - line.trimStart().length)))
+    return [{ file, line: open + 2, code: code.join("\n"), extension: extension.value }]
+  })
 }
 
 /** The module file a block is written to: `b1.ts` for the first, `b2.tsx` for a TSX second. */

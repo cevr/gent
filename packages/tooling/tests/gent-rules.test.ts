@@ -20,7 +20,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, Option, Path, Schema, Stream } from "effect"
+import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/process"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import gentRules, {
@@ -39,6 +39,9 @@ const DiagnosticSchema = Schema.Struct({
   rule_id: Schema.optional(Schema.String),
   message: Schema.String,
   filename: Schema.optional(Schema.String),
+  labels: Schema.optional(
+    Schema.Array(Schema.Struct({ span: Schema.Struct({ line: Schema.Int }) })),
+  ),
 })
 type Diagnostic = typeof DiagnosticSchema.Type
 
@@ -89,10 +92,17 @@ const decodeOxlintReport = Schema.decodeUnknownEffect(Schema.fromJsonString(Oxli
  * kill escalates to SIGKILL after `OXLINT_KILL_GRACE`, so a process that
  * ignores SIGTERM cannot hold the scope open.
  */
-const runOxlint = (fixtureFiles: ReadonlyArray<string>) =>
+const runOxlint = (
+  fixtureFiles: ReadonlyArray<string>,
+  /** Where to lint from: the fixture directory and its config by default. */
+  at: Option.Option<{ readonly dir: string; readonly config: string }> = Option.none(),
+) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const fixtures = yield* fixturesBeside(new URL(import.meta.url))
+      const fixtures = yield* Option.match(at, {
+        onNone: () => fixturesBeside(new URL(import.meta.url)),
+        onSome: Effect.succeed,
+      })
       const handle = yield* ChildProcess.make(
         "bunx",
         ["oxlint", "--format=json", "-c", fixtures.config, ...fixtureFiles],
@@ -256,8 +266,9 @@ const CASES: ReadonlyArray<RuleCase> = [
       "packages/core/src/test-utils/no-hand-rolled-module-path.valid.ts",
       "apps/tui/src/no-hand-rolled-module-path.valid.ts",
     ],
-    // `.pathname` and `.href` read off `new URL(import.meta.url)`
-    expectedCount: 2,
+    // `.pathname` and `.href` read off `new URL(import.meta.url)`, `.pathname`
+    // off the two-argument form, and the four `import.meta` path facts
+    expectedCount: 7,
   },
   {
     // A child-session writer admits the depth in its own function, first.
@@ -284,6 +295,19 @@ const CASES: ReadonlyArray<RuleCase> = [
     // broken across lines, an encoder called where it is built, and three
     // in-place structs with a field of open or unknown encoding
     expectedCount: 16,
+  },
+  {
+    // A TUI reactive scope tracks the session identity; a handler, a JSX
+    // expression and an emitter listener read the record.
+    rule: "gent/no-tracked-session-record",
+    invalid: "apps/tui/src/no-tracked-session-record.invalid.tsx",
+    valid: ["apps/tui/src/no-tracked-session-record.valid.tsx"],
+    // an `on` source, a createEffect body, a createMemo, a read past twelve
+    // lines into an effect, an aliased accessor, a function handed to `on` by
+    // name, a function a tracked scope calls, a createResource source, and a
+    // callback an array method runs in a tracked scope, a deps-array source, a
+    // function called where it is built, and a resource source read by name
+    expectedCount: 12,
   },
 ]
 
@@ -357,6 +381,60 @@ effectDescribe("custom lint rules", () => {
         config: "/work/gent checkout/packages/tooling/fixtures/.oxlintrc.json",
       })
     }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  /**
+   * The held shapes: each invalid line of a retired gent rule, marked with the
+   * rule that holds it now (`// held-by: effect/noGlobals`), under
+   * `fixtures/held/` at the path it mirrors. They are linted with the repo's
+   * own `.oxlintrc.json`, rooted at a scratch copy of the tree, so the
+   * override globs match the mirrored paths; the config's two `./` paths (the
+   * preset and the gent plugin) are made absolute. An upgrade or a retirement
+   * that stops reporting a line fails here, not at counsel.
+   */
+  it.scopedLive(
+    "every shape a retired gent rule held is still reported by the rule that holds it now",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const repo = yield* path.fromFileUrl(new URL("../../..", import.meta.url))
+        const held = yield* path.fromFileUrl(new URL("../fixtures/held", import.meta.url))
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-held-shapes-" })
+        yield* fs.copy(held, root)
+        yield* fs.symlink(path.join(repo, "node_modules"), path.join(root, "node_modules"))
+        const configText = yield* fs.readFileString(path.join(repo, ".oxlintrc.json"))
+        yield* fs.writeFileString(
+          path.join(root, ".oxlintrc.json"),
+          configText.replaceAll('"./', `"${repo}/`),
+        )
+        const files = (yield* fs.readDirectory(held, { recursive: true }))
+          .filter((file) => file.endsWith(".ts"))
+          .toSorted()
+        const expected = (yield* Effect.forEach(files, (file) =>
+          Effect.map(fs.readFileString(path.join(held, file)), (text) =>
+            text.split("\n").flatMap((line, index) =>
+              Option.match(Option.fromNullishOr(/held-by: (\S+)/.exec(line)?.[1]), {
+                onNone: () => [],
+                onSome: (rule) => [`${file}:${index + 1} ${rule}`],
+              }),
+            ),
+          ),
+        )).flat()
+        const run = yield* runOxlint(
+          files,
+          Option.some({ dir: root, config: path.join(root, ".oxlintrc.json") }),
+        )
+        const reported = new Set(
+          run.report.diagnostics.map(
+            (d) =>
+              `${d.filename ?? ""}:${d.labels?.[0]?.span.line ?? 0} ${(d.code ?? "").replace(/^(\w+)\((.+)\)$/, "$1/$2")}`,
+          ),
+        )
+        expect(expected.length).toBeGreaterThan(90)
+        expect(expected.filter((line) => !reported.has(line))).toEqual([])
+      }).pipe(Effect.timeout(FIXTURE_LINT_BOUND), Effect.provide(BunServices.layer)),
+    FIXTURE_LINT_BACKSTOP_MS,
   )
 
   test("every rule the plugin defines has a positive and a negative fixture", () => {
