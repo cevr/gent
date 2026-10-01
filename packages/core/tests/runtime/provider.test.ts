@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
+  ConfigProvider,
   Context,
   Deferred,
   Duration,
@@ -22,6 +23,7 @@ import {
   isContextOverflow,
   type ModelDriverContribution,
   ProviderAuthError,
+  type ProviderAuthInfo,
   type ProviderResolution,
 } from "../../src/domain/driver"
 import { ProviderError } from "../../src/domain/errors"
@@ -36,6 +38,8 @@ import {
   ModelResolver,
   authorizeProvider,
   completeProviderAuth,
+  DecisionModelResolver,
+  removeSignIn,
   listAuthMethods,
   retryProviderCall,
   ModelCatalogRecord,
@@ -1757,6 +1761,230 @@ describe("Provider model resolution", () => {
           return false
         }),
       ).toBe(false)
+    }),
+  )
+})
+
+// ── shared sign-in ──────────────────────────────────────────────────────────
+
+/**
+ * Two drivers one account serves: `gateway-plus` uses `gateway`'s sign-in.
+ * Each driver records the API key every call hands it (`none` for no stored
+ * credential).
+ */
+const sharedSignInDrivers = (seen: Array<string>): ReadonlyArray<ModelDriverContribution> => {
+  const keyOf = (auth?: ProviderAuthInfo) =>
+    Option.fromUndefinedOr(auth).pipe(
+      Option.flatMap((info) => {
+        if (info._tag === "Api") return Option.some(info.key)
+        return Option.none()
+      }),
+      Option.getOrElse(() => "none"),
+    )
+  const recording = (id: string, extra: Partial<ModelDriverContribution>) => ({
+    id,
+    name: id,
+    resolveModel: (_name: string, auth?: ProviderAuthInfo) =>
+      Effect.sync(() => {
+        seen.push(`${id} model ${keyOf(auth)}`)
+        return fakeResolution()
+      }),
+    listModels: (auth?: ProviderAuthInfo) =>
+      Effect.sync(() => {
+        seen.push(`${id} list ${keyOf(auth)}`)
+        return [Model.make({ ...catalogModel(`${id}/judge`), kind: "classifier" })]
+      }),
+    resolveDecisionModel: (_name: string, auth?: ProviderAuthInfo) =>
+      Effect.sync(() => seen.push(`${id} decision ${keyOf(auth)}`)).pipe(
+        Effect.andThen(Effect.fail(new ProviderAuthError({ message: "recorded" }))),
+      ),
+    ...extra,
+  })
+  return [
+    recording("gateway", {
+      envCredential: "GATEWAY_KEY",
+      auth: { methods: [AuthMethod.make({ type: "api", label: "Gateway key" })] },
+    }),
+    recording("gateway-plus", {
+      credentialFrom: "gateway",
+      envCredential: "GATEWAY_PLUS_KEY",
+      auth: { methods: [AuthMethod.make({ type: "api", label: "Gateway Plus key" })] },
+    }),
+    recording("solo", {}),
+  ]
+}
+
+const sharedSignInRegistry = (seen: Array<string>) =>
+  ExtensionRegistry.fromResolved(
+    resolveExtensions([makeExt("shared-sign-in", [...sharedSignInDrivers(seen)])]),
+  )
+
+/** Every read a turn, a catalog and both classifiers make, from a store holding `stored`. */
+const readsWithStored = (stored: Record<string, string>) =>
+  Effect.gen(function* () {
+    const seen: Array<string> = []
+    const seed = Object.fromEntries(
+      Object.entries(stored).map(([id, key]) => [id, AuthApi.make({ type: "api", key })]),
+    )
+    const layer = Layer.mergeAll(
+      ModelResolver.Live,
+      DecisionModelResolver.Live,
+      ModelCatalogRecord.Live,
+    ).pipe(Layer.provideMerge(Layer.merge(Auth.Test(seed), sharedSignInRegistry(seen))))
+    yield* Effect.gen(function* () {
+      const resolver = yield* ModelResolver
+      yield* resolver.resolve({ modelId: "gateway/m" })
+      yield* resolver.resolve({ modelId: "gateway-plus/m" })
+      yield* resolver.resolve({ modelId: "solo/m" })
+      yield* modelCatalog()
+      const classifiers = yield* DecisionModelResolver
+      yield* Effect.exit(classifiers.resolve(Option.some("gateway/judge")))
+      yield* Effect.exit(classifiers.resolve(Option.some("gateway-plus/judge")))
+    }).pipe(Effect.provide(layer))
+    return seen
+  })
+
+describe("shared sign-in", () => {
+  const rows = (stored: Record<string, AuthInfo>, required: ReadonlyArray<string>) =>
+    listAuthProviders(required).pipe(
+      Effect.map((providers) =>
+        providers.map((row) => [String(row.provider), row.source ?? "none", row.required]),
+      ),
+      Effect.provide(Layer.merge(Auth.Test(stored), sharedSignInRegistry([]))),
+    )
+
+  it.live("one sign-in is listed for two drivers, required when either is", () =>
+    Effect.gen(function* () {
+      expect(yield* rows({}, ["gateway-plus"])).toEqual([
+        ["gateway", "none", true],
+        ["solo", "none", false],
+      ])
+      const methods = yield* listAuthMethods().pipe(Effect.provide(sharedSignInRegistry([])))
+      expect(Object.keys(methods)).toEqual(["gateway"])
+    }),
+  )
+
+  it.live("the row reads a key stored under either driver", () =>
+    Effect.gen(function* () {
+      const key = AuthApi.make({ type: "api", key: "sk-plus" })
+      expect(yield* rows({ "gateway-plus": key }, [])).toEqual([
+        ["gateway", "stored", false],
+        ["solo", "none", false],
+      ])
+    }),
+  )
+
+  it.live(
+    "the row is ready from env only when each driver that needs it reads a set variable",
+    () =>
+      Effect.gen(function* () {
+        const withEnv = (env: Record<string, string>) => (required: ReadonlyArray<string>) =>
+          rows({}, required).pipe(
+            Effect.map((listed) => listed[0]),
+            Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+          )
+        const plusOnly = withEnv({ GATEWAY_PLUS_KEY: "sk-env" })
+        expect(yield* plusOnly([])).toEqual(["gateway", "none", false])
+        expect(yield* plusOnly(["gateway"])).toEqual(["gateway", "none", true])
+        expect(yield* plusOnly(["gateway-plus"])).toEqual(["gateway", "env", true])
+        expect(yield* plusOnly(["gateway", "gateway-plus"])).toEqual(["gateway", "none", true])
+        const ownerOnly = withEnv({ GATEWAY_KEY: "sk-env" })
+        expect(yield* ownerOnly([])).toEqual(["gateway", "env", false])
+        expect(yield* ownerOnly(["gateway-plus"])).toEqual(["gateway", "none", true])
+      }),
+  )
+
+  it.live("a driver naming a sharing driver, or a cycle, keeps a sign-in of its own", () =>
+    Effect.gen(function* () {
+      const driver = (id: string, credentialFrom: Option.Option<string>) => {
+        const base: ModelDriverContribution = {
+          id,
+          name: id,
+          resolveModel: () => Effect.succeed(fakeResolution()),
+          auth: { methods: [AuthMethod.make({ type: "api", label: `${id} key` })] },
+        }
+        return Option.match(credentialFrom, {
+          onNone: () => base,
+          onSome: (owner) => ({ ...base, credentialFrom: owner }),
+        })
+      }
+      const registry = ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          makeExt("indirect", [
+            driver("a", Option.some("b")),
+            driver("b", Option.some("c")),
+            driver("c", Option.none()),
+            driver("x", Option.some("y")),
+            driver("y", Option.some("x")),
+          ]),
+        ]),
+      )
+      const inRegistry = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(Effect.provide(Layer.merge(Auth.Test({}), registry)))
+      const listed = yield* inRegistry(listAuthProviders(["a"]))
+      expect(listed.map((row) => [String(row.provider), row.required])).toEqual([
+        ["a", true],
+        ["c", false],
+        ["x", false],
+        ["y", false],
+      ])
+      const methods = yield* inRegistry(listAuthMethods())
+      expect(Object.keys(methods)).toEqual(["a", "c", "x", "y"])
+    }),
+  )
+
+  it.live("one stored key serves both drivers' models, catalogs and classifiers", () =>
+    Effect.gen(function* () {
+      expect(yield* readsWithStored({ gateway: "sk-one" })).toEqual([
+        "gateway model sk-one",
+        "gateway-plus model sk-one",
+        "solo model none",
+        "gateway list sk-one",
+        "gateway-plus list sk-one",
+        "solo list none",
+        "gateway list sk-one",
+        "gateway-plus list sk-one",
+        "solo list none",
+        "gateway decision sk-one",
+        "gateway list sk-one",
+        "gateway-plus list sk-one",
+        "solo list none",
+        "gateway-plus decision sk-one",
+      ])
+    }).pipe(Effect.scoped),
+  )
+
+  it.live("a key stored for the sharing driver serves both until the owner has one", () =>
+    Effect.gen(function* () {
+      const legacy = yield* readsWithStored({ "gateway-plus": "sk-plus" })
+      expect(legacy.filter((read) => !read.includes("list"))).toEqual([
+        "gateway model sk-plus",
+        "gateway-plus model sk-plus",
+        "solo model none",
+        "gateway decision sk-plus",
+        "gateway-plus decision sk-plus",
+      ])
+      const both = yield* readsWithStored({ gateway: "sk-one", "gateway-plus": "sk-plus" })
+      expect(both.slice(0, 2)).toEqual(["gateway model sk-one", "gateway-plus model sk-one"])
+    }).pipe(Effect.scoped),
+  )
+
+  it.live("signing out removes every key the sign-in reads, and no other", () =>
+    Effect.gen(function* () {
+      const key = (value: string) => AuthApi.make({ type: "api", key: value })
+      const stored = {
+        gateway: key("sk-one"),
+        "gateway-plus": key("sk-plus"),
+        solo: key("sk-solo"),
+      }
+      const left = yield* Effect.gen(function* () {
+        yield* removeSignIn("gateway")
+        const auth = yield* Auth
+        return yield* Effect.forEach(["gateway", "gateway-plus", "solo"], (id) =>
+          Effect.map(auth.get(id), Option.fromUndefinedOr),
+        )
+      }).pipe(Effect.provide(Layer.merge(Auth.Test(stored), sharedSignInRegistry([]))))
+      expect(left).toEqual([Option.none(), Option.none(), Option.some(key("sk-solo"))])
     }),
   )
 })

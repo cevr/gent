@@ -239,8 +239,13 @@ export const SetAuthKeyInput = Schema.Struct({
 })
 export type SetAuthKeyInput = typeof SetAuthKeyInput.Type
 
+/**
+ * The sign-in to remove, read in the session's profile; the launch profile
+ * without one. A session that does not exist fails and removes nothing.
+ */
 export const DeleteAuthKeyInput = Schema.Struct({
   provider: Schema.String,
+  sessionId: Schema.optional(SessionId),
 })
 export type DeleteAuthKeyInput = typeof DeleteAuthKeyInput.Type
 

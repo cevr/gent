@@ -118,7 +118,7 @@ type AuthSource = typeof AuthSource.Type
 
 export const AuthProviderInfo = Schema.Struct({
   provider: ProviderId,
-  /** The driver's display name ("OpenCode Go"); a client shows it in place of the id. */
+  /** The driver's display name ("OpenCode"); a client shows it in place of the id. */
   name: Schema.optional(Schema.String),
   hasKey: Schema.Boolean,
   source: Schema.optional(AuthSource),
@@ -414,6 +414,82 @@ export class Auth extends Context.Service<Auth, AuthService>()(
     })
 }
 
+// ── shared sign-in ──────────────────────────────────────────────────────────
+//
+// A driver may use another driver's sign-in (`credentialFrom`): one account
+// that serves two drivers is one sign-in, stored once, under the owner's id.
+// Sharing is one hop, so every credential has one owner.
+
+type ModelDrivers = ReadonlyMap<string, ModelDriverContribution>
+
+/**
+ * The driver that owns `driverId`'s sign-in: the driver its `credentialFrom`
+ * names when the profile registers it and it names none itself, else the
+ * driver itself. A chain or a cycle leaves each driver in it its own owner.
+ */
+const credentialOwner = (drivers: ModelDrivers, driverId: string): string =>
+  Option.fromUndefinedOr(drivers.get(driverId)).pipe(
+    Option.flatMap((driver) => Option.fromUndefinedOr(driver.credentialFrom)),
+    Option.filter((owner) =>
+      Option.exists(Option.fromUndefinedOr(drivers.get(owner)), (named) =>
+        Predicate.isUndefined(named.credentialFrom),
+      ),
+    ),
+    Option.getOrElse(() => driverId),
+  )
+
+/**
+ * The store keys `driverId`'s credential is read from, first found wins: its
+ * sign-in owner's, then the own id of each driver that shares the sign-in (a
+ * credential stored before it shared). Signing out removes them all.
+ */
+const credentialKeys = (drivers: ModelDrivers, driverId: string): ReadonlyArray<string> => {
+  const owner = credentialOwner(drivers, driverId)
+  const sharers = [...drivers.keys()].filter(
+    (id) => id !== owner && credentialOwner(drivers, id) === owner,
+  )
+  return [owner, ...sharers]
+}
+
+interface StoredCredential {
+  /** The store key the credential sits under. */
+  readonly key: string
+  readonly info: AuthInfo
+}
+
+/** The credential `driverId`'s sign-in has stored; none when no key holds one. */
+const storedCredential = Effect.fn("storedCredential")(function* (
+  auth: AuthService,
+  drivers: ModelDrivers,
+  driverId: string,
+) {
+  for (const key of credentialKeys(drivers, driverId)) {
+    const info = yield* auth.get(key)
+    if (Predicate.isNotUndefined(info)) return Option.some<StoredCredential>({ key, info })
+  }
+  return Option.none<StoredCredential>()
+})
+
+/** The stored credential `driverId` receives, as a driver sees it. */
+const driverAuthInfo = (
+  auth: AuthService,
+  drivers: ModelDrivers,
+  driverId: string,
+): Effect.Effect<Option.Option<ProviderAuthInfo>, AuthError> =>
+  storedCredential(auth, drivers, driverId).pipe(
+    Effect.map(Option.map((found) => toProviderAuthInfo(auth, found.key, found.info))),
+  )
+
+/**
+ * Sign out of `provider`'s sign-in: remove every credential it reads, in the
+ * profile of the `ExtensionRegistry` in context.
+ */
+export const removeSignIn = Effect.fn("removeSignIn")(function* (provider: string) {
+  const auth = yield* Auth
+  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  for (const key of credentialKeys(modelDrivers, provider)) yield* auth.remove(key)
+})
+
 // ── auth guard ──────────────────────────────────────────────────────────────
 
 /** True when the named env variable holds a non-empty value. */
@@ -428,25 +504,53 @@ const envCredentialSet = (name: Option.Option<string>): Effect.Effect<boolean> =
   })
 
 /**
- * Every registered model driver with its stored auth. A driver is `required`
- * when it is one of `requiredDriverIds`: the drivers the caller's turns route
- * through, resolved as the turn resolves them (`effectiveModelDriver`).
+ * True when the driver's own env variable is set: the fallback the driver
+ * reads when nothing is stored. A driver that shares a sign-in reads only
+ * its own variable, so readiness is per driver.
+ */
+const driverEnvReady = (driver: ModelDriverContribution): Effect.Effect<boolean> =>
+  envCredentialSet(Option.fromUndefinedOr(driver.envCredential))
+
+/**
+ * Every sign-in of the registered model drivers, with its stored auth: one
+ * row per driver, except a driver that uses another's sign-in
+ * (`credentialFrom`), whose owner's row stands for both. A row is `required`
+ * when one of `requiredDriverIds` uses it: the drivers the caller's turns
+ * route through, resolved as the turn resolves them (`effectiveModelDriver`).
+ * With nothing stored, a row is ready from env only when every driver that
+ * needs it (the required ones, else the owner) has its own variable set.
  */
 export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
   requiredDriverIds: ReadonlyArray<string>,
 ) {
   const auth = yield* Auth
-  const registry = yield* ExtensionRegistry
-  const required = new Set(requiredDriverIds)
+  const drivers = (yield* ExtensionRegistry).getResolved().modelDrivers
+  const required = new Set(requiredDriverIds.map((id) => credentialOwner(drivers, id)))
   const providers: AuthProviderInfo[] = []
-  for (const driver of registry.getResolved().modelDrivers.values()) {
+  for (const driver of drivers.values()) {
+    if (credentialOwner(drivers, driver.id) !== driver.id) continue
+    if (Predicate.isNotUndefined(driver.credentialFrom) && drivers.has(driver.credentialFrom)) {
+      yield* Effect.logWarning("credentialFrom names a driver that shares a sign-in").pipe(
+        Effect.annotateLogs({ driver: driver.id, credentialFrom: driver.credentialFrom }),
+      )
+    }
     const provider = ProviderId.make(driver.id)
     const name = driver.name
-    const storedInfo = yield* auth.get(driver.id)
-    if (Predicate.isUndefined(storedInfo)) {
-      // Drivers try a stored credential first, then their env variable.
-      const fromEnv = yield* envCredentialSet(Option.fromUndefinedOr(driver.envCredential))
-      if (fromEnv) {
+    const stored = yield* storedCredential(auth, drivers, driver.id)
+    if (Option.isNone(stored)) {
+      // Drivers try a stored credential first, then their own env variable.
+      const group = credentialKeys(drivers, driver.id).flatMap((id) =>
+        Option.toArray(Option.fromUndefinedOr(drivers.get(id))),
+      )
+      const requiredUsers = requiredDriverIds.flatMap((id) =>
+        group.filter((member) => member.id === id),
+      )
+      let users = requiredUsers
+      if (users.length === 0) users = [driver]
+      const notReady = yield* Effect.findFirst(users, (user) =>
+        Effect.map(driverEnvReady(user), (ready) => !ready),
+      )
+      if (Option.isNone(notReady)) {
         providers.push({
           provider,
           name,
@@ -464,7 +568,7 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
       name,
       hasKey: true,
       source: "stored",
-      authType: storedInfo.type,
+      authType: stored.value.info.type,
       required: required.has(driver.id),
     })
   }
@@ -556,6 +660,8 @@ export const listAuthMethods = Effect.fn("ProviderLogin.listMethods")(function* 
   const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
   const result: Record<string, ReadonlyArray<AuthMethod>> = {}
   for (const provider of modelDrivers.values()) {
+    // A driver that uses another's sign-in signs in through that one.
+    if (credentialOwner(modelDrivers, provider.id) !== provider.id) continue
     if (!Predicate.isUndefined(provider.auth) && provider.auth.methods.length > 0) {
       result[provider.id] = provider.auth.methods
     }
@@ -701,7 +807,11 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
     })
   }
 
-  const authInfo = yield* authStore.get(providerName).pipe(
+  const authParam = yield* driverAuthInfo(
+    authStore,
+    extensionRegistry.getResolved().modelDrivers,
+    providerName,
+  ).pipe(
     Effect.mapError(
       (e) =>
         new ProviderError({
@@ -710,10 +820,6 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
           cause: e,
         }),
     ),
-    Effect.map(Option.fromUndefinedOr),
-  )
-  const authParam = Option.map(authInfo, (info) =>
-    toProviderAuthInfo(authStore, providerName, info),
   )
 
   return yield* Effect.suspend(() =>
@@ -798,13 +904,9 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
   auth: AuthService,
   requested: Option.Option<string>,
 ) {
+  const allDrivers = (yield* ExtensionRegistry).getResolved().modelDrivers
   const storedAuth = (driverId: string) =>
-    auth.get(driverId).pipe(
-      Effect.map((info) =>
-        Option.map(Option.fromUndefinedOr(info), (found) =>
-          toProviderAuthInfo(auth, driverId, found),
-        ),
-      ),
+    driverAuthInfo(auth, allDrivers, driverId).pipe(
       Effect.mapError(
         (cause) =>
           new DecisionModelError({
@@ -814,9 +916,7 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
       ),
     )
   const drivers = new Map(
-    [...(yield* ExtensionRegistry).getResolved().modelDrivers].filter(([, driver]) =>
-      Predicate.isNotUndefined(driver.resolveDecisionModel),
-    ),
+    [...allDrivers].filter(([, driver]) => Predicate.isNotUndefined(driver.resolveDecisionModel)),
   )
   // Only the classifier drivers' catalogs: a failed one leaves its models out.
   const catalog = yield* listModelCatalog(drivers, (driverId) =>
@@ -854,9 +954,7 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
         const usable = yield* Effect.filter(classifiers, (entry) =>
           Effect.gen(function* () {
             const stored = yield* storedAuth(entry.driver.id)
-            const fromEnv = yield* envCredentialSet(
-              Option.fromUndefinedOr(entry.driver.envCredential),
-            )
+            const fromEnv = yield* driverEnvReady(entry.driver)
             return Option.isSome(stored) || fromEnv
           }),
         )
@@ -984,14 +1082,8 @@ export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* ()
   const catalogRecord = yield* ModelCatalogRecord
   const profile = (yield* ExtensionRegistry).getResolved()
   const catalog = yield* listModelCatalog(profile.modelDrivers, (providerId) =>
-    authStore.get(providerId).pipe(
-      Effect.map((info) =>
-        Option.getOrUndefined(
-          Option.map(Option.fromUndefinedOr(info), (found) =>
-            toProviderAuthInfo(authStore, providerId, found),
-          ),
-        ),
-      ),
+    driverAuthInfo(authStore, profile.modelDrivers, providerId).pipe(
+      Effect.map(Option.getOrUndefined),
       Effect.mapError(
         (e) =>
           new ProviderAuthError({
