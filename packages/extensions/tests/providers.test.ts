@@ -758,6 +758,34 @@ describe("models.dev catalog", () => {
       expect(online.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
     }).pipe(Effect.provide(platformLayer)),
   )
+
+  it.scopedLive(
+    "a load interrupted during its fetch is not kept; the next load reaches the host",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* freshHome("interrupted")
+        const reached = yield* Deferred.make<void>()
+        // The host never answers: the first load waits in its fetch until the
+        // caller stops it, as an Esc during the day's first turn does.
+        const hanging = Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make(() =>
+            Deferred.succeed(reached, void 0).pipe(Effect.andThen(Effect.never)),
+          ),
+        )
+        const first = yield* Effect.forkChild(modelsDevCatalog(home).pipe(Effect.provide(hanging)))
+        yield* Deferred.await(reached)
+        yield* Fiber.interrupt(first)
+
+        const calls = yield* Ref.make(0)
+        const next = yield* modelsDevCatalog(home).pipe(
+          Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
+        )
+
+        expect(yield* Ref.get(calls)).toBe(1)
+        expect(next.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
+      }).pipe(Effect.timeout(5_000), Effect.provide(platformLayer)),
+  )
 })
 
 describe("freshEnoughAt", () => {

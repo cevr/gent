@@ -1,5 +1,6 @@
 import { FileFinder } from "@ff-labs/fff-bun"
 import {
+  Cache,
   Clock,
   FileSystem,
   Config,
@@ -145,18 +146,24 @@ const createFinder = (cwd: string, dbDir: string) =>
     })
     if (!created.ok) return yield* new FileFinderError({ reason: String(created.error) })
     const finder = created.value
-    const scanned = yield* Effect.cached(
-      Effect.tryPromise({
-        try: () => finder.waitForScan(15_000),
-        catch: (cause) => new FileFinderError({ reason: String(cause) }),
-      }).pipe(
-        Effect.flatMap((scan) => {
-          if (scan.ok) return Effect.void
-          return Effect.fail(new FileFinderError({ reason: String(scan.error) }))
-        }),
-      ),
-    )
-    return { finder, scanned } satisfies FinderEntry
+    // An effect `Cache` waits for the finder's scan once, in its own fiber. A
+    // key stopped while it waits only stops waiting; when no key waits, the
+    // wait stops and the next key waits again, so no key gets an
+    // interruption back.
+    const scans = yield* Cache.make({
+      capacity: 1,
+      lookup: (scanning: FileFinder) =>
+        Effect.tryPromise({
+          try: () => scanning.waitForScan(15_000),
+          catch: (cause) => new FileFinderError({ reason: String(cause) }),
+        }).pipe(
+          Effect.flatMap((scan) => {
+            if (scan.ok) return Effect.void
+            return Effect.fail(new FileFinderError({ reason: String(scan.error) }))
+          }),
+        ),
+    })
+    return { finder, scanned: Cache.get(scans, finder) } satisfies FinderEntry
   })
 
 /**

@@ -1,4 +1,5 @@
 import {
+  Cache,
   Cause,
   Clock,
   Config,
@@ -723,7 +724,7 @@ export const effortAtOrAbove = <Level extends string>(
  * concern, so the fetch, the parse, and the disk cache live here — shared by
  * the anthropic and openai drivers.
  *
- * One load per home directory. `Effect.cached` memoizes it, so several drivers
+ * One load per home directory. An effect `Cache` memoizes it, so several drivers
  * listing at once share one read and at most one fetch. There is no background
  * refresh: a cache older than a day, or written in another format, refetches
  * on the next load, and a failed fetch serves whatever the disk still holds. A load that finds neither a
@@ -1096,39 +1097,37 @@ type CatalogEffect = Effect.Effect<ReadonlyArray<Model>, never, CatalogServices>
  * process picks up the fresh catalog once the host is reachable. A memo that
  * resolved to nothing drops its own entry at once, and the next `listModels`
  * loads again.
+ *
+ * The memo is an effect `Cache`: the load runs in its own fiber, and a caller
+ * that is stopped (an Esc during the day's first fetch) only stops waiting.
+ * When every caller stopped, the load stops and its entry is dropped, so the
+ * next caller loads again instead of getting the interruption back.
  */
 const CATALOG_MEMO_TTL = Duration.minutes(5)
 
-const catalogsByHome = new Map<string, Effect.Effect<Catalog, never, CatalogServices>>()
+/** A catalog holds for `CATALOG_MEMO_TTL`; an empty one (no cache, no reachable host) is not kept. */
+const catalogMemoTtl = (exit: Exit.Exit<Catalog>) => {
+  if (Exit.isSuccess(exit) && exit.value.models.length > 0) return CATALOG_MEMO_TTL
+  return Duration.zero
+}
+
+// `Cache.makeWith` only allocates the map — no IO, no failure — so running it
+// here is allocation, not work. The services come from each `Cache.get`.
+const catalogsByHome = Effect.runSync(
+  Cache.makeWith(loadCatalog, {
+    capacity: Number.POSITIVE_INFINITY,
+    timeToLive: catalogMemoTtl,
+    requireServicesAt: "lookup",
+  }),
+)
 
 /**
  * The parsed catalog for `home`, loaded at most once per `CATALOG_MEMO_TTL`
- * while the load produces models.
- *
- * The memo is built the first time a home is asked for and stored before the
- * effect is handed back, so every driver that lists models for the same home
- * shares one read and at most one fetch. `Effect.cachedWithTTL` is a constructor: it
- * allocates the latch and performs no IO, so building the memo here decides
- * nothing about when the catalog loads.
+ * while the load produces models. Every driver that lists models for the same
+ * home shares one read and at most one fetch.
  */
-const catalogFor = (home: string): Effect.Effect<Catalog, never, CatalogServices> => {
-  const existing = Option.fromUndefinedOr(catalogsByHome.get(home))
-  if (Option.isSome(existing)) return existing.value
-  // `Effect.cachedWithTTL` only allocates the memo's latch — no IO, no failure —
-  // so running it here is allocation, not work. The catalog loads when a driver
-  // runs the effect this returns, and the TTL reads that driver's clock.
-  const memo = Effect.runSync(Effect.cachedWithTTL(loadCatalog(home), CATALOG_MEMO_TTL)).pipe(
-    // An empty result means no cache and no reachable host. Forget it, so a
-    // later call retries instead of serving nothing for the whole process.
-    Effect.tap((catalog) =>
-      Effect.sync(() => {
-        if (catalog.models.length === 0) catalogsByHome.delete(home)
-      }),
-    ),
-  )
-  catalogsByHome.set(home, memo)
-  return memo
-}
+const catalogFor = (home: string): Effect.Effect<Catalog, never, CatalogServices> =>
+  Cache.get(catalogsByHome, home)
 
 /** The models.dev catalog for `home`: every provider's models. */
 export const modelsDevCatalog = (home: string): CatalogEffect =>

@@ -1,4 +1,5 @@
 import {
+  Cache,
   Cause,
   Clock,
   Config,
@@ -608,20 +609,27 @@ const pruneBlobs = Effect.fn("Mcp.pruneBlobs")(function* (directory: string) {
  * The first write of the process removes files older than `BLOB_MAX_AGE`
  * (see `pruneBlobs`); a reused file's modification time is set to now.
  */
-const makeBlobStore = (directory: string) =>
+export const makeBlobStore = (directory: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const crypto = yield* Crypto.Crypto
-    const prune = yield* Effect.cached(
-      pruneBlobs(directory).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("mcp.blobs.prune.failed").pipe(
-            Effect.annotateLogs({ error: String(cause) }),
+    // An effect `Cache` runs the prune of the directory once, in its own fiber.
+    // A save stopped while it waits only stops waiting; when every waiter
+    // stopped, the prune stops and the next save runs it again, so no save
+    // gets the interruption back.
+    const prunes = yield* Cache.make({
+      capacity: 1,
+      lookup: (pruned: string) =>
+        pruneBlobs(pruned).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("mcp.blobs.prune.failed").pipe(
+              Effect.annotateLogs({ error: String(cause) }),
+            ),
           ),
         ),
-      ),
-    )
+    })
+    const prune = Cache.get(prunes, directory)
     const saveOne = (data: string, mimeType: Option.Option<string>) =>
       Effect.gen(function* () {
         if (base64Bytes(data) > BLOB_FILE_LIMIT) return Option.none<string>()

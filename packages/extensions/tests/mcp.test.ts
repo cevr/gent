@@ -12,6 +12,7 @@ import {
   Path,
   Predicate,
   Queue,
+  Ref,
   Schema,
   Stream,
 } from "effect"
@@ -24,6 +25,7 @@ import {
   HttpServerResponse,
 } from "effect/http"
 import type * as Prompt from "effect/ai/Prompt"
+import { Base64 } from "effect/encoding"
 import {
   BunGentPlatformLive,
   collectTestContributions,
@@ -37,7 +39,13 @@ import {
 } from "@gent/core/test-utils"
 import { ExtensionId, getToolId, type ToolCapability } from "@gent/core/extensions/api"
 import { messagePartsText } from "@gent/core/protocol"
-import { HostEnvironment, McpExtension, McpServers, projectCallResult } from "../src/mcp.js"
+import {
+  HostEnvironment,
+  makeBlobStore,
+  McpExtension,
+  McpServers,
+  projectCallResult,
+} from "../src/mcp.js"
 import { shippedPreset } from "./helpers/test-preset.js"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -2145,6 +2153,44 @@ describe("mcp binary content", () => {
         expect(shown.files).not.toContain("stale.png")
       }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
     45_000,
+  )
+
+  it.scopedLive("a save stopped during the first prune does not stop later saves", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-blobs-" })
+      const blobs = path.join(home, "mcp-blobs")
+      const reached = yield* Deferred.make<void>()
+      const listings = yield* Ref.make(0)
+      // The first prune waits in its directory listing until its caller stops,
+      // as a cell stopped by Esc during its first binary result does. It
+      // yields once before it signals, so the save that started it is already
+      // waiting on it when the test stops that save.
+      const slowFirstListing: FileSystem.FileSystem = {
+        ...fs,
+        readDirectory: (directory, options) =>
+          Effect.gen(function* () {
+            if ((yield* Ref.getAndUpdate(listings, (n) => n + 1)) > 0) {
+              return yield* fs.readDirectory(directory, options)
+            }
+            yield* Effect.yieldNow
+            yield* Deferred.succeed(reached, void 0)
+            return yield* Effect.never
+          }),
+      }
+      const store = yield* makeBlobStore(blobs).pipe(
+        Effect.provideService(FileSystem.FileSystem, slowFirstListing),
+      )
+      const block = { type: "image", data: Base64.encode("PNGDATA"), mimeType: "image/png" }
+      const first = yield* Effect.forkChild(store.save([block]))
+      yield* Deferred.await(reached)
+      yield* Fiber.interrupt(first)
+
+      const saved = (yield* store.save([block]))[0] ?? Option.none<string>()
+      expect(Option.isSome(saved)).toBe(true)
+      expect(yield* fs.readFileString(Option.getOrElse(saved, () => ""))).toBe("PNGDATA")
+    }).pipe(Effect.timeout("5 seconds"), Effect.provide(platformLayer)),
   )
 })
 
