@@ -19,6 +19,7 @@ import {
   type SessionMessageDetails,
   sessionMessageBody,
   sessionMessageText,
+  sessionTitleOf,
   SessionToolsExtension,
 } from "../src/session-tools.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
@@ -103,6 +104,23 @@ describe("session naming", () => {
       ),
     10_000,
   )
+
+  // A handoff's first message is the model's markdown, and an `@file`
+  // reference arrives as a fenced block: the title is the first plain words.
+  test("the title skips fenced file text and leading markdown markers", () => {
+    const fileRef = "```src/foo.ts\nconst a = 1\n```"
+    const cases: ReadonlyArray<readonly [string, Option.Option<string>]> = [
+      ["## Current task\nShip the fix.", Option.some("Current task")],
+      ["- **Ship the fix**", Option.some("Ship the fix")],
+      ["> `retry` loops forever", Option.some("`retry` loops forever")],
+      [`${fileRef} fix this`, Option.some("fix this")],
+      [`${fileRef}\nfix this`, Option.some("fix this")],
+      ["---\n\nFix the login redirect", Option.some("Fix the login redirect")],
+      ["  Fix the login redirect\nIt loops.", Option.some("Fix the login redirect")],
+      [fileRef, Option.none()],
+    ]
+    for (const [text, title] of cases) expect([text, sessionTitleOf(text)]).toEqual([text, title])
+  })
 })
 
 // ── read session ────────────────────────────────────────────────────────────

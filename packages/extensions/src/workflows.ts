@@ -58,8 +58,12 @@ const researchRecipe = (input: string) => {
   ].join("\n")
 }
 
-const handoffRecipe = () =>
-  "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session."
+const handoffRecipe = (input: string) => {
+  const ask =
+    "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session."
+  if (input.length === 0) return ask
+  return `${ask}\nFocus: ${input}`
+}
 
 const command = (params: {
   readonly id: string

@@ -161,12 +161,19 @@ describe("goals", () => {
           const refused = yield* Effect.exit(command("Another objective"))
           expect(Exit.isFailure(refused)).toBe(true)
           if (Exit.isFailure(refused)) {
-            expect(Cause.pretty(refused.cause)).toContain("already budget_limited")
+            expect(Cause.pretty(refused.cause)).toContain("A goal is already out of budget")
           }
           const resumed = yield* Effect.exit(command("resume"))
           expect(Exit.isFailure(resumed)).toBe(true)
           if (Exit.isFailure(resumed)) {
             expect(Cause.pretty(resumed.cause)).toContain("budget is spent")
+          }
+          // A change the goal's state does not allow names the change and the state.
+          yield* command("pause")
+          const pausedTwice = yield* Effect.exit(command("pause"))
+          expect(Exit.isFailure(pausedTwice)).toBe(true)
+          if (Exit.isFailure(pausedTwice)) {
+            expect(Cause.pretty(pausedTwice.cause)).toContain("Cannot pause a goal that is paused")
           }
           // Clear forgets the goal; status reports none afterwards.
           yield* command("clear")

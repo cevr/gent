@@ -144,14 +144,45 @@ export const ReadSessionTool = tool({
 
 // ── rename-session ──────────────────────────────────────────────────────────
 
-/** The first line of `text` with any text on it, trimmed. */
-const firstTextLine = (text: string): Option.Option<string> =>
-  Option.fromUndefinedOr(
-    text
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => line.length > 0),
-  )
+/** A code fence: three backticks or tildes at the start of a trimmed line. */
+const FENCE = /^(?:`{3,}|~{3,})/
+/** Markdown that opens a line: a heading, a quote, a list bullet, a rule, emphasis. */
+const LEADING_MARKERS = /^(?:(?:#{1,6}|[-*+]|[-*_]{3,})(?=\s|$)|\*\*|__|>)\s*/
+const TRAILING_EMPHASIS = /\s*(?:\*\*|__)$/
+
+/** A line with its markdown markers taken off both ends. */
+const plainWords = (line: string): string => {
+  let words = line
+  let previous = ""
+  while (words !== previous) {
+    previous = words
+    words = words.replace(LEADING_MARKERS, "").replace(TRAILING_EMPHASIS, "")
+  }
+  return words.trim()
+}
+
+/**
+ * The first plain words of `text`: the first line with words on it once its
+ * markdown markers are off. A fenced block, as an `@file` reference expands
+ * to, is skipped; words after its closing fence count.
+ */
+export const sessionTitleOf = (text: string): Option.Option<string> => {
+  let fenced = false
+  for (const raw of text.split("\n")) {
+    const line = raw.trim()
+    const fence = Option.fromNullishOr(FENCE.exec(line))
+    let rest = line
+    if (Option.isSome(fence)) {
+      fenced = !fenced
+      if (fenced) continue
+      rest = line.slice(fence.value[0].length)
+    }
+    if (fenced) continue
+    const words = plainWords(rest)
+    if (words.length > 0) return Option.some(words)
+  }
+  return Option.none()
+}
 
 /**
  * The sessions this process found no text to name from, so a session whose
@@ -169,8 +200,9 @@ const UntitledResource = defineResource({
 })
 
 /**
- * A session that still has the default name takes the first line of its
- * first user message at a turn end, as a delegate child takes its task. The
+ * A session that still has the default name takes the first plain words of
+ * its first user message (`sessionTitleOf`) at a turn end, as a delegate
+ * child takes its task. The
  * rename trims it to the title length. A name given before, by the create or
  * by `rename_session`, is left alone: the rename expects the default name,
  * and the write checks it, so a rename that lands after the read here wins.
@@ -193,7 +225,7 @@ const nameFromFirstMessage = Effect.fn("SessionTools.nameFromFirstMessage")(func
         entry.messages.find((message) => message.role === "user" && !isRuntimeUserMessage(message)),
       ),
     ),
-    Option.flatMap((message) => firstTextLine(messagePartsDisplayText(message.parts))),
+    Option.flatMap((message) => sessionTitleOf(messagePartsDisplayText(message.parts))),
   )
   if (Option.isNone(title)) {
     yield* Ref.update(untitled, (current) => new Set([...current, input.sessionId]))
@@ -204,7 +236,7 @@ const nameFromFirstMessage = Effect.fn("SessionTools.nameFromFirstMessage")(func
 
 const RenameSessionParams = Schema.Struct({
   name: Schema.String.annotate({
-    description: "Short session title, 3-5 lowercase words describing the current task",
+    description: "The new session name",
   }),
 })
 

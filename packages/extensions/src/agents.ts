@@ -47,7 +47,7 @@ export const basePromptSections = [
 ]
 
 /**
- * The one shipped agent and its persona. Its model is `DEFAULT_MODEL_ID`.
+ * The default agent and its persona. Its model is `DEFAULT_MODEL_ID`.
  * Children run as the `delegate` agent, so there is no roster of role
  * agents to pick from.
  */
