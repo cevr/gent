@@ -1,7 +1,7 @@
 import { createContext, createSignal, type JSX, onCleanup, onMount } from "solid-js"
 import { useRequiredContext } from "./utils"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
-import { type Cause, Context, Effect, Fiber, FileSystem, Option, Stream } from "effect"
+import { Context, Effect, Fiber, FileSystem, Option, Stream } from "effect"
 
 // ── environment provider ────────────────────────────────────────────────────
 
@@ -103,116 +103,65 @@ const getGitInfo = (
     return Option.some({ root, branch })
   })
 
+/** The files git writes when the checkout's branch or index moves. */
+const GIT_STATE_FILES = new Set(["index", "HEAD", "MERGE_HEAD"])
+
+/**
+ * A tick each time the checkout may have moved. Git names the directory that
+ * holds this checkout's HEAD and index: the launch directory may be a
+ * subdirectory of the repository, or a worktree whose `.git` is a file. Its
+ * writes are watched and debounced. Outside a repository nothing ticks. Where
+ * the watch cannot run (no `FileSystem`, no git, a failed watch) a poll
+ * stands in.
+ */
+const gitStateChanges = (
+  cwd: string,
+  fs: Option.Option<FileSystem.FileSystem>,
+): Stream.Stream<void, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const watcher = yield* Effect.fromOption(fs)
+      const gitDir = yield* gitCommand(cwd, ["rev-parse", "--absolute-git-dir"])
+      if (gitDir.length === 0) return Stream.empty
+      return watcher.watch(gitDir).pipe(
+        Stream.filter((event) => GIT_STATE_FILES.has(event.path.split("/").pop() ?? "")),
+        Stream.debounce("200 millis"),
+        Stream.map((): void => {}),
+      )
+    }),
+  ).pipe(
+    Stream.catchCause((cause) =>
+      Stream.fromEffect(
+        Effect.logDebug("[workspace] git watch failed, falling back to polling").pipe(
+          Effect.annotateLogs({ error: String(cause) }),
+        ),
+      ).pipe(Stream.drain, Stream.concat(Stream.tick("2 seconds"))),
+    ),
+  )
+
 export function WorkspaceProvider(props: WorkspaceProviderProps) {
   const [gitInfo, setGitInfo] = createSignal<Option.Option<GitInfo>>(Option.none())
   const services = Option.getOrElse(Option.fromNullishOr(props.services), () => Context.empty())
-  let currentFiber = Option.none<Fiber.Fiber<Option.Option<GitInfo>, never>>()
 
-  const refreshGitInfo = () => {
-    if (Option.isSome(currentFiber)) {
-      Effect.runFork(Fiber.interrupt(currentFiber.value))
-    }
-    const gitServices = Context.getOption(services, ChildProcessSpawner.ChildProcessSpawner)
-    if (Option.isNone(gitServices)) {
-      setGitInfo(Option.none())
-      return
-    }
-    const gitContext = Context.make(ChildProcessSpawner.ChildProcessSpawner, gitServices.value)
-    currentFiber = Option.some(
-      Effect.runForkWith(gitContext)(
-        getGitInfo(props.cwd).pipe(
-          Effect.tap((info) =>
-            Effect.sync(() => {
-              setGitInfo(info)
-            }),
-          ),
-        ),
-      ),
-    )
-  }
-
+  // One fiber reads the checkout now and again on each change; a read still
+  // running when the next change lands is dropped for the newer one. It reads
+  // `FileSystem` and the process spawner from the services the root provides
+  // (`uiServices` in `main.tsx`); without a spawner nothing is read.
   onMount(() => {
-    // Initial fetch
-    refreshGitInfo()
-
-    // Watch .git/index and .git/HEAD for changes (debounced)
-    let debounceFiber = Option.none<Fiber.Fiber<void, never>>()
-    const DEBOUNCE_MS = 200
-    const debouncedRefresh = () => {
-      if (Option.isSome(debounceFiber)) Effect.runFork(Fiber.interrupt(debounceFiber.value))
-      debounceFiber = Option.some(
-        Effect.runFork(
-          Effect.sleep(`${DEBOUNCE_MS} millis`).pipe(
-            Effect.andThen(
-              Effect.sync(() => {
-                debounceFiber = Option.none()
-                refreshGitInfo()
-              }),
-            ),
-          ),
-        ),
-      )
-    }
-
-    let watchFiber = Option.none<Fiber.Fiber<void, never>>()
-    let fallbackFiber = Option.none<Fiber.Fiber<void, never>>()
-
-    const startPollingFallback = (reason: Cause.Cause<unknown>) => {
-      Effect.runFork(
-        Effect.logDebug("[workspace] git watch failed, falling back to polling").pipe(
-          Effect.annotateLogs({ error: String(reason) }),
-        ),
-      )
-      fallbackFiber = Option.some(
-        Effect.runFork(
-          Effect.forever(
-            Effect.sleep("2 seconds").pipe(Effect.andThen(Effect.sync(refreshGitInfo))),
-          ),
-        ),
-      )
-    }
-
-    // The watch reads `FileSystem` and the process spawner from the services
-    // the root provides (`uiServices` in `main.tsx`); without them the poll
-    // stands in. Git names the directory that holds this checkout's HEAD and
-    // index: the launch directory may be a subdirectory of the repository, or
-    // a worktree whose `.git` is a file. Outside a repository nothing is
-    // watched.
-    const watchProgram = Effect.gen(function* () {
-      const fs = yield* Effect.fromOption(Context.getOption(services, FileSystem.FileSystem))
-      const spawner = yield* Effect.fromOption(
-        Context.getOption(services, ChildProcessSpawner.ChildProcessSpawner),
-      )
-      const gitDir = yield* gitCommand(props.cwd, ["rev-parse", "--absolute-git-dir"]).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      )
-      if (gitDir.length === 0) return
-      yield* fs.watch(gitDir).pipe(
-        Stream.runForEach((event) => {
-          const name = Option.getOrElse(Option.fromNullishOr(event.path.split("/").pop()), () => "")
-          if (name === "index" || name === "HEAD" || name === "MERGE_HEAD") {
-            debouncedRefresh()
-          }
-          return Effect.void
-        }),
-      )
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.sync(() => {
-          startPollingFallback(cause)
-        }),
-      ),
+    const spawner = Context.getOption(services, ChildProcessSpawner.ChildProcessSpawner)
+    if (Option.isNone(spawner)) return
+    const reads = Stream.concat(
+      Stream.fromEffect(Effect.void),
+      gitStateChanges(props.cwd, Context.getOption(services, FileSystem.FileSystem)),
+    ).pipe(
+      Stream.switchMap(() => Stream.fromEffect(getGitInfo(props.cwd))),
+      Stream.runForEach((info) => Effect.sync(() => setGitInfo(info))),
     )
-
-    watchFiber = Option.some(Effect.runFork(watchProgram))
-
+    const fiber = Effect.runForkWith(
+      Context.make(ChildProcessSpawner.ChildProcessSpawner, spawner.value),
+    )(reads)
     onCleanup(() => {
-      if (Option.isSome(currentFiber)) {
-        Effect.runFork(Fiber.interrupt(currentFiber.value))
-      }
-      if (Option.isSome(debounceFiber)) Effect.runFork(Fiber.interrupt(debounceFiber.value))
-      if (Option.isSome(watchFiber)) Effect.runFork(Fiber.interrupt(watchFiber.value))
-      if (Option.isSome(fallbackFiber)) Effect.runFork(Fiber.interrupt(fallbackFiber.value))
+      Effect.runFork(Fiber.interrupt(fiber))
     })
   })
 
