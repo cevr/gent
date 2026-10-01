@@ -2748,7 +2748,7 @@ describe("AI transcript projection", () => {
     }
   })
 
-  test("hidden metadata excludes messages from model context unless explicitly included", () => {
+  test("hidden metadata excludes messages from model context", () => {
     const visible = baseMessage({
       id: MessageId.make("visible"),
       sessionId: SessionId.make("session"),
@@ -2766,7 +2766,6 @@ describe("AI transcript projection", () => {
     })
 
     expect(toPromptMessages([visible, hidden]).length).toBe(1)
-    expect(toPromptMessages([visible, hidden], { includeHidden: true }).length).toBe(2)
   })
 
   test("converts Effect Response parts back to persisted assistant and tool parts", () => {

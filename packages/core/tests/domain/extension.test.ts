@@ -14,7 +14,7 @@ const layer = Layer.merge(
 const run = <A, E>(effect: Effect.Effect<A, E, FileLockService | Path.Path>) =>
   Effect.provide(effect, layer)
 
-describe("FileLockService", () => {
+describe("file locks", () => {
   it.live("serializes concurrent effects on same path", () =>
     run(
       Effect.gen(function* () {

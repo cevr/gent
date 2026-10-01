@@ -39,7 +39,6 @@ interface PromptTranscriptOptions {
    * driver can end a cached prefix at a block (see `systemPromptBlocks`).
    */
   readonly systemPrompt?: ReadonlyArray<string>
-  readonly includeHidden?: boolean
   /** The turn's notices, placed after the conversation; see `turnNoticesText`. */
   readonly notices?: ReadonlyArray<TurnNotice>
 }
@@ -283,7 +282,6 @@ const reasoningReplayAt = (index: number, lastModelChange: number): ReasoningRep
 
 export const toPromptMessages = (
   messages: ReadonlyArray<Message>,
-  options?: Pick<PromptTranscriptOptions, "includeHidden">,
 ): ReadonlyArray<Prompt.Message> => {
   const result: Prompt.Message[] = []
   const lastModelChange = messages.findLastIndex(
@@ -291,7 +289,7 @@ export const toPromptMessages = (
   )
 
   for (const [index, message] of messages.entries()) {
-    if (options?.includeHidden !== true && !isAiVisibleMessage(message)) continue
+    if (!isAiVisibleMessage(message)) continue
     const promptMessage = toPromptMessage(message, reasoningReplayAt(index, lastModelChange))
     if (Option.isSome(promptMessage)) result.push(promptMessage.value)
   }
@@ -336,7 +334,7 @@ export const toPrompt = (
   const systemBlocks = (options?.systemPrompt ?? []).filter((block) => block !== "")
   const promptMessages = [
     ...systemBlocks.map((block) => Prompt.systemMessage({ content: block })),
-    ...toPromptMessages(messages, options),
+    ...toPromptMessages(messages),
   ]
   const notices = turnNoticesText(options?.notices ?? [])
   if (Option.isSome(notices)) promptMessages.push(Prompt.systemMessage({ content: notices.value }))

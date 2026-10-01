@@ -204,7 +204,7 @@ type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
   children: MutableBranchTreeNode[]
 }
 
-export const buildBranchTree = (
+const buildBranchTree = (
   branches: ReadonlyArray<Branch>,
   messageCounts: ReadonlyMap<BranchId, number>,
 ): BranchTreeNode[] => {
@@ -245,7 +245,7 @@ export const buildBranchTree = (
   return roots
 }
 
-export const getBranchTree = (
+const getBranchTree = (
   sessionId: SessionId,
 ): Effect.Effect<ReadonlyArray<BranchTreeNode>, StorageError, BranchStorage> =>
   Effect.gen(function* () {

@@ -532,7 +532,7 @@ const turnAdmitted = (s: AgentLoopState, messageId: MessageId): boolean =>
  * one question.
  */
 
-export const canStartTurnNow = (s: AgentLoopState): boolean =>
+const canStartTurnNow = (s: AgentLoopState): boolean =>
   s.state._tag === "Idle" && Predicate.isUndefined(s.startingState)
 
 /** How many failures this branch had recorded, or 0 if it has had none. */

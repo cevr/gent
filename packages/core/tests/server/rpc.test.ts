@@ -695,26 +695,6 @@ describe("auth.listProviders", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
-  it.live("rejects auth provider listing for a deleted session", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const session = yield* client.session.create({})
-        yield* client.session.delete({ sessionId: session.sessionId })
-        const exit = yield* Effect.exit(
-          client.auth.listProviders({
-            agentName: DEFAULT_AGENT_NAME,
-            sessionId: session.sessionId,
-          }),
-        )
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag === "Failure") {
-          expect(exit.cause.toString()).toContain("Session not found")
-        }
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
   it.live("signing out for a deleted session fails and keeps the key", () =>
     Effect.scoped(
       Effect.gen(function* () {

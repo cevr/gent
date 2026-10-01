@@ -20,8 +20,6 @@ import {
   buildExtensionHealthSnapshot,
   getSessionSnapshot,
   SessionMutationsLive,
-  buildBranchTree,
-  getBranchTree,
   RpcHandlersLive,
 } from "../../src/server/server"
 import { ExtensionHealthSnapshot, GentRpcs } from "../../src/server/rpc"
@@ -372,7 +370,7 @@ const interleavedSessionMutationsLayer = (params: {
 
 // ── extension health ────────────────────────────────────────────────────────
 
-describe("buildExtensionHealthSnapshot", () => {
+describe("extension health snapshot", () => {
   test("reports one typed issue row per failed extension", () => {
     const snapshot = buildExtensionHealthSnapshot([
       {
@@ -546,69 +544,54 @@ describe("buildExtensionHealthSnapshot", () => {
 
 // ── branch tree ─────────────────────────────────────────────────────────────
 
-// `getBranchTree` composes `BranchStorage.listBranches`,
-// `BranchStorage.countMessagesByBranches` and the pure `buildBranchTree`.
-
-const SESSION_ID = SessionId.make("test-session")
-const ROOT_ID = BranchId.make("branch-root")
-const CHILD_ID = BranchId.make("branch-child")
-const ORPHAN_ID = BranchId.make("branch-orphan")
-
-const makeBranch = (id: BranchId, createdMs: number, parentBranchId?: BranchId) => {
-  const base = {
-    id,
-    sessionId: SESSION_ID,
-    createdAt: dateFromMillis(createdMs),
-  }
-  if (Predicate.isUndefined(parentBranchId)) return new Branch(base)
-  return new Branch({ ...base, parentBranchId })
-}
-
-const die = (label: string) => (): Effect.Effect<never, StorageError, never> =>
-  Effect.die(`${label} not wired in test`)
-
-const branchStorageLayer = (
-  branches: ReadonlyArray<Branch>,
-  counts: ReadonlyMap<BranchId, number>,
-) =>
-  Layer.succeed(
-    BranchStorage,
-    BranchStorage.of({
-      createBranch: die("createBranch"),
-      getBranch: die("getBranch"),
-      listBranches: () => Effect.succeed(branches),
-      countMessagesByBranches: () => Effect.succeed(counts),
-    }),
-  )
-
 describe("branch tree", () => {
   it.live("nests each branch under its parent with its message count", () =>
-    Effect.gen(function* () {
-      const branches = [
-        makeBranch(ROOT_ID, 0),
-        makeBranch(CHILD_ID, 100, ROOT_ID),
-        makeBranch(ORPHAN_ID, 50),
-      ]
-      const counts = new Map<BranchId, number>([
-        [ROOT_ID, 3],
-        [CHILD_ID, 7],
-        [ORPHAN_ID, 1],
-      ])
-      const tree = yield* getBranchTree(SESSION_ID).pipe(
-        Effect.provide(branchStorageLayer(branches, counts)),
-      )
-      // Assert exact equality against the pure builder. A regression
-      // that drops listBranches' or countMessagesByBranches' values
-      // (e.g. passing [] or an empty map) would fail this equality.
-      expect(tree).toEqual(buildBranchTree(branches, counts))
-      // Sanity check the shape so the equality target is non-trivial.
-      expect(tree).toHaveLength(2)
-      const root = tree.find((node) => node.branch.id === ROOT_ID)
-      expect(root?.messageCount).toBe(3)
-      expect(root?.children).toHaveLength(1)
-      expect(root?.children[0]?.branch.id).toBe(CHILD_ID)
-      expect(root?.children[0]?.messageCount).toBe(7)
-    }),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("first reply"),
+        ])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { sessionId, branchId: rootId } = yield* client.session.create({})
+        yield* client.message.send({ sessionId, branchId: rootId, content: "hello" })
+        const rootMessages = yield* waitFor(
+          client.message.list({ branchId: rootId }),
+          (messages) => messages.some((message) => message.role === "assistant"),
+          5_000,
+          "the first reply",
+        )
+        const prompt = rootMessages.find((message) => message.role === "user")
+        if (Predicate.isUndefined(prompt)) return yield* Effect.die("prompt missing")
+        const { branchId: forkId } = yield* client.branch.fork({
+          sessionId,
+          fromBranchId: rootId,
+          atMessageId: prompt.id,
+        })
+        const { branchId: siblingId } = yield* client.branch.create({ sessionId })
+        const forkMessages = yield* client.message.list({ branchId: forkId })
+
+        const tree = yield* client.branch.getTree({ sessionId })
+
+        expect(
+          tree.map((node) => ({
+            id: node.branch.id,
+            messageCount: node.messageCount,
+            children: node.children.map((child) => ({
+              id: child.branch.id,
+              messageCount: child.messageCount,
+              children: child.children.length,
+            })),
+          })),
+        ).toEqual([
+          {
+            id: rootId,
+            messageCount: rootMessages.length,
+            children: [{ id: forkId, messageCount: forkMessages.length, children: 0 }],
+          },
+          { id: siblingId, messageCount: 0, children: [] },
+        ])
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
   )
 })
 
