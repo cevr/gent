@@ -1019,8 +1019,9 @@ const refreshClaudeCodeCredentials = (
  * One direct OAuth refresh and its write-back, as one step a caller cannot
  * stop: the token endpoint spends the refresh token it is sent, so a
  * rotation stopped before the write-back would leave the keychain only the
- * spent token. The token request and the keychain write each carry a
- * timeout, so the step is bounded.
+ * spent token. Timeouts bound the token request and interruptible keychain
+ * IO. Masked filesystem acquisition and finalizers can still exceed those
+ * deadlines; the step waits for them before cancellation surfaces.
  *
  * The write-back is best-effort so later processes pick up the new token. A
  * failed write-back does not lose the refresh: the caller has it in memory.

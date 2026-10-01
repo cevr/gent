@@ -328,9 +328,9 @@ export const makeCredentialCache = <C>(
     // stop: the provider spends the token it is sent, so a rotation stopped
     // before it is stored would leave only the spent token. The step is
     // uninterruptible from the lock to the cell write, except the store
-    // retry and the source read (`restore`). Each refresh request carries its
-    // own timeout (`postOAuthForm`, the keychain process timeouts),
-    // so the step is bounded.
+    // retry and the source read (`restore`). Request and interruptible IO
+    // timeouts bound those operations. Masked filesystem acquisition and
+    // finalizers can exceed the deadline, so the full step has no absolute bound.
     const getFresh: Effect.Effect<C, CredentialFailure> = Effect.uninterruptibleMask((restore) =>
       SynchronizedRef.modifyEffect(config.cellRef, (cell): Effect.Effect<Step, CredentialFailure> =>
         Effect.gen(function* () {
@@ -1108,7 +1108,7 @@ type CatalogEffect = Effect.Effect<ReadonlyArray<Model>, never, CatalogServices>
  *
  * The memo starts the load as its own fiber (`makeStartedMemo`). A caller
  * that is stopped (an Esc during the day's first fetch) only stops waiting:
- * the load goes on, bounded by its fetch timeout, and the next caller joins
+ * the load goes on, with a timeout on its fetch, and the next caller joins
  * it instead of getting the interruption back.
  */
 const CATALOG_MEMO_TTL = Duration.minutes(5)
