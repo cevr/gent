@@ -929,7 +929,7 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("extension hooks and resource layers reject Promise values", () => {
-    const promiseVoid = Bun.sleep(0) // oxlint-disable-line effect/noGlobals, gent/no-wrapped-sleep-in-tests -- This host call creates a Promise solely for the compile-time rejection lock; nothing waits on it.
+    const promiseVoid = Bun.sleep(0) // oxlint-disable-line effect/noGlobals, effect/noFixedWaitInTests, gent/no-wrapped-sleep-in-tests -- This host call creates a Promise solely for the compile-time rejection lock; nothing waits on it.
     defineExtension({
       id: "purity-hook",
       setup: Effect.gen(function* () {

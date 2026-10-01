@@ -1344,7 +1344,7 @@ const settled = (
       })
       if (done) return
       yield* TestClock.adjust("1 milli")
-      // oxlint-disable-next-line gent/no-wrapped-sleep-in-tests -- the wait is for real file I/O, which only the wall clock paces
+      // oxlint-disable-next-line effect/noFixedWaitInTests, gent/no-wrapped-sleep-in-tests -- the wait is for real file I/O, which only the wall clock paces
       yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
     }
     expect("wake timers still pending").toBe("no wake timer pending")
@@ -1359,7 +1359,7 @@ const eventually = <A>(read: Effect.Effect<A>, done: (value: A) => boolean, labe
     const deadline = wallClock.currentTimeMillisUnsafe() + 5_000
     while (wallClock.currentTimeMillisUnsafe() < deadline) {
       if (done(yield* read)) return
-      // oxlint-disable-next-line gent/no-wrapped-sleep-in-tests -- the wait is for real file I/O, which only the wall clock paces
+      // oxlint-disable-next-line effect/noFixedWaitInTests, gent/no-wrapped-sleep-in-tests -- the wait is for real file I/O, which only the wall clock paces
       yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
     }
     expect(`still waiting: ${label}`).toBe(label)
@@ -1382,7 +1382,7 @@ const advanceUntil = <A>(
     while (wallClock.currentTimeMillisUnsafe() < deadline) {
       if (done(yield* read)) return
       yield* TestClock.adjust(step)
-      // oxlint-disable-next-line gent/no-wrapped-sleep-in-tests -- the wait is for real file I/O, which only the wall clock paces
+      // oxlint-disable-next-line effect/noFixedWaitInTests, gent/no-wrapped-sleep-in-tests -- the wait is for real file I/O, which only the wall clock paces
       yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
     }
     expect(`still waiting: ${label}`).toBe(label)
@@ -1918,7 +1918,7 @@ describe("wake store", () => {
       yield* Deferred.succeed(release, true)
       yield* settled(alarms.pending).pipe(
         Effect.raceFirst(
-          // oxlint-disable-next-line gent/no-wrapped-sleep-in-tests -- a fire the re-arm holds back never settles; the bound lets the re-arm go on
+          // oxlint-disable-next-line effect/noFixedWaitInTests, gent/no-wrapped-sleep-in-tests -- a fire the re-arm holds back never settles; the bound lets the re-arm go on
           Effect.sleep("300 millis").pipe(Effect.provideService(Clock.Clock, wallClock)),
         ),
       )
