@@ -111,6 +111,15 @@ export const reservedToolSegments: ReadonlySet<string> = new Set([
 export const toolDiscoveryKeys: ReadonlySet<string> = new Set(["search"])
 
 /**
+ * The host call name of an operation of a host-served namespace (`context`,
+ * `models`). Namespace calls share the host call channel with tool calls,
+ * whose name is the tool id. A tool id never holds `:` (`isWireToolId`), so a
+ * namespace call cannot collide with a tool such as `models.compare`.
+ */
+export const namespaceCallName = (namespace: "context" | "models", operation: string): string =>
+  `${namespace}:${operation}`
+
+/**
  * The one order for tool ids: by UTF-16 code unit. It is total and does not
  * read the process locale, so a listing sorted by it is byte-stable.
  */

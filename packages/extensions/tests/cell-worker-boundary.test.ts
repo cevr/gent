@@ -1082,7 +1082,7 @@ describe("Bun cell evaluation", () => {
           ),
       })
       const status = yield* kernel.evaluate("(await context.status()).name")
-      expect(status.display).toBe("context.status")
+      expect(status.display).toBe("context:status")
       const read = yield* kernel.evaluate(
         "const page = await context.read('m1', { offset: 2, limit: 5 }); `${page.echoed.id}:${page.echoed.offset}:${page.echoed.limit}`",
       )
@@ -1092,13 +1092,13 @@ describe("Bun cell evaluation", () => {
       const compact = yield* kernel.evaluate(
         "await context.compact('keep paths'); (await context.newWindow()).name",
       )
-      expect(compact.display).toBe("context.newWindow")
+      expect(compact.display).toBe("context:newWindow")
       expect(yield* Ref.get(names)).toEqual([
-        "context.status",
-        "context.read",
-        "context.history",
-        "context.compact",
-        "context.newWindow",
+        "context:status",
+        "context:read",
+        "context:history",
+        "context:compact",
+        "context:newWindow",
       ])
       expect(read.bindings).toEqual(["page"])
       expect(read.bindings).not.toContain("context")

@@ -196,7 +196,7 @@ describe("cell context host", () => {
       const before = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.status",
+          name: "context:status",
           input: {},
         }),
       )
@@ -211,7 +211,7 @@ describe("cell context host", () => {
       const after = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.status",
+          name: "context:status",
           input: {},
         }),
       )
@@ -227,7 +227,7 @@ describe("cell context host", () => {
       const first = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.history",
+          name: "context:history",
           input: { limit: 1 },
         }),
       )
@@ -241,7 +241,7 @@ describe("cell context host", () => {
       const rest = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.history",
+          name: "context:history",
           input: { offset: 1 },
         }),
       )
@@ -256,7 +256,7 @@ describe("cell context host", () => {
       const page = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.read",
+          name: "context:read",
           input: { id: "m-long", offset: 7, limit: 13 },
         }),
       )
@@ -268,7 +268,7 @@ describe("cell context host", () => {
       const result = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.read",
+          name: "context:read",
           input: { id: "call-1" },
         }),
       )
@@ -276,7 +276,7 @@ describe("cell context host", () => {
       expect(result.text).toContain("full file body")
       const missing = yield* handleContextCall({
         branchId: branchIdContextHost,
-        name: "context.read",
+        name: "context:read",
         input: { id: "nope" },
       }).pipe(Effect.flip)
       expect(missing.message).toContain("No stored message or result has id nope")
@@ -289,7 +289,7 @@ describe("cell context host", () => {
       const compact = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.compact",
+          name: "context:compact",
           input: { instructions: "keep file paths" },
         }),
       )
@@ -299,7 +299,7 @@ describe("cell context host", () => {
       if (directive._tag === "Compact") expect(directive.instructions).toBe("keep file paths")
       yield* handleContextCall({
         branchId: branchIdContextHost,
-        name: "context.newWindow",
+        name: "context:newWindow",
         input: {},
       })
       expect(Option.map(yield* ledger.pendingDirective, (d) => d._tag)).toEqual(
@@ -307,7 +307,7 @@ describe("cell context host", () => {
       )
       const unknown = yield* handleContextCall({
         branchId: branchIdContextHost,
-        name: "context.reset",
+        name: "context:reset",
         input: {},
       }).pipe(Effect.flip)
       expect(unknown.message).toContain("Unknown context operation")
@@ -466,6 +466,7 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
   readonly code: string
   readonly storeKey: boolean
   readonly calls: Ref.Ref<ReadonlyArray<JudgeCall>>
+  readonly extensions?: ReadonlyArray<(typeof BuiltinExtensions)[number]>
 }) {
   const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
     toolCallStep("cell", { code: params.code }),
@@ -477,6 +478,7 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
     extensionInputs: [
       ...BuiltinExtensions.filter((extension) => !SHIPPED_JEV_DRIVERS.has(extension.manifest.id)),
       judgeExtension(params.calls),
+      ...Option.getOrElse(Option.fromUndefinedOr(params.extensions), () => []),
     ],
     providerLayer,
   })
@@ -604,6 +606,43 @@ describe("cell models host", () => {
           `models.decide: No classifier model has a credential: set ${JUDGE_ENV}, or sign in with /auth`,
         )
         expect(yield* Ref.get(calls)).toEqual([])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    20000,
+  )
+
+  // The namespaces share the host call channel with the tools; a tool id
+  // can spell `models.x` or `context.x`, so it must still reach its tool.
+  it.scopedLive(
+    "a tool whose id starts with models or context runs from a cell",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+        const echo = (id: string) =>
+          tool({
+            id,
+            description: "Echo the tool's id.",
+            params: Schema.Struct({}),
+            output: Schema.Struct({ echoed: Schema.String }),
+            execute: () => Effect.succeed({ echoed: id }),
+          })
+        const namesake = defineExtension({
+          id: "@test/namespace-namesake",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("tool", echo("models.compare"))
+            yield* host.register("tool", echo("context.pin"))
+          }),
+        })
+        const { display } = yield* runJudgeCell({
+          calls,
+          storeKey: false,
+          extensions: [namesake],
+          code: "JSON.stringify([await tools.models.compare({}), await tools.context.pin({})])",
+        })
+        expect(yield* decodeDecideJson(display)).toEqual([
+          { echoed: "models.compare" },
+          { echoed: "context.pin" },
+        ])
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
     20000,
   )

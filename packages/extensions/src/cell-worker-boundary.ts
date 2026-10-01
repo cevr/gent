@@ -39,6 +39,7 @@ import {
   maximumCellSourceLength,
   maximumPendingCellCalls,
   compareIds,
+  namespaceCallName,
   type SnapshotBinding,
   snapshotReviverSource,
 } from "./cell-protocol.js"
@@ -771,7 +772,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       ),
     )
   const contextCall = (operation: string, input: Schema.Json) =>
-    namespaceCall(`context.${operation}`, input)
+    namespaceCall(namespaceCallName("context", operation), input)
   const context = {
     status: () => contextCall("status", {}),
     history: (options: { offset?: number; limit?: number } = {}) =>
@@ -794,7 +795,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       if (!Predicate.isUndefined(options.model)) request = { ...request, model: options.model }
       if (!Predicate.isUndefined(options.timeoutMs))
         request = { ...request, timeoutMs: options.timeoutMs }
-      return namespaceCall("models.decide", request)
+      return namespaceCall(namespaceCallName("models", "decide"), request)
     },
     classify: (options: DecisionOptions) => ({ _tag: "Classify", ...options }),
     rate: (options: DecisionOptions) => ({ _tag: "Rate", ...options }),

@@ -116,6 +116,7 @@ import {
   type SnapshotBinding,
   toolDetailsOf,
   toolPath,
+  namespaceCallName,
 } from "./cell-protocol.js"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import * as AiTool from "effect/ai/Tool"
@@ -1581,7 +1582,7 @@ const buildCellCatalog = Effect.fn("CellCatalog.build")(function* (
 // ── context host ────────────────────────────────────────────────────────────
 
 /** Host calls under this prefix serve the cell's `context` namespace, not a selected tool. */
-const CONTEXT_CALL_PREFIX = "context."
+const CONTEXT_CALL_PREFIX = namespaceCallName("context", "")
 
 const isContextCall = (name: string): boolean => name.startsWith(CONTEXT_CALL_PREFIX)
 
@@ -1783,7 +1784,7 @@ export const handleContextCall = Effect.fn("CellContextHost.call")(function* (pa
 // ── models host ─────────────────────────────────────────────────────────────
 
 /** Host calls under this prefix serve the cell's `models` namespace, not a selected tool. */
-const MODELS_CALL_PREFIX = "models."
+const MODELS_CALL_PREFIX = namespaceCallName("models", "")
 
 const isModelsCall = (name: string): boolean => name.startsWith(MODELS_CALL_PREFIX)
 
