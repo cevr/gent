@@ -13,10 +13,9 @@ plugin entry in `tsconfig.json`. Gent runs every rule as an error except
 `strictBooleanExpressions`, pipe-shaped suggestions, and the rules an oxlint
 rule holds at every site, so one site takes one suppression:
 `effect/noAsyncFunction` holds `asyncFunction`, `effect/noNodeBuiltinImport`
-holds `nodeBuiltinImport`, and `effect/noGlobals` holds the `global*`,
-`processEnv` and `cryptoRandomUUID` rules, including their `globalThis` and
-alias spellings. `newPromise` stays an error, because `effect/noNewPromise`
-misses `new globalThis.Promise` and an alias of `Promise`. The gamut driver,
+holds `nodeBuiltinImport`, `effect/noGlobals` holds the `global*`,
+`processEnv` and `cryptoRandomUUID` rules, and `effect/noNewPromise` holds
+`newPromise`, including their `globalThis` and alias spellings. The gamut driver,
 its tests and the capture preload turn `effect/noGlobals` off, so overrides
 turn the matching rules back on there for each global the file does not use.
 Test files inherit the
@@ -88,7 +87,7 @@ binary is not part of the compiler path.
 | `globalTimers`             | off      |
 | `globalTimersInEffect`     | off      |
 | `instanceOfSchema`         | error    |
-| `newPromise`               | error    |
+| `newPromise`               | off      |
 | `nodeBuiltinImport`        | off      |
 | `preferSchemaOverJson`     | error    |
 | `processEnv`               | off      |
