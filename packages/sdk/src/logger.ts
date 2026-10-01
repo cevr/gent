@@ -1,6 +1,3 @@
-import * as NodeSdk from "@effect/opentelemetry/NodeSdk"
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base"
 import {
   Cause,
   Clock,
@@ -28,17 +25,32 @@ import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/
  * Effect OpenTelemetry wiring.
  *
  * If `OTEL_EXPORTER_OTLP_ENDPOINT` is set, exports spans via OTLP/HTTP.
- * Otherwise the Effect default Tracer (a no-op) is left in place.
+ * Otherwise the Effect default Tracer (a no-op) is left in place, and the
+ * OpenTelemetry SDK is never loaded: it costs a launch time to evaluate.
  */
 
 const otlpEndpoint = Config.option(Config.String("OTEL_EXPORTER_OTLP_ENDPOINT"))
 const otlpServiceName = Config.option(Config.String("OTEL_SERVICE_NAME"))
+
+/** The tracer SDK. A failed or interrupted load keeps nothing; the next build imports again. */
+const loadTracerSdk = Effect.all(
+  [
+    // oxlint-disable-next-line effect/noDynamicImports -- the tracer SDK loads only when an endpoint is set
+    Effect.tryPromise(() => import("@effect/opentelemetry/NodeSdk")),
+    // oxlint-disable-next-line effect/noDynamicImports -- the tracer SDK loads only when an endpoint is set
+    Effect.tryPromise(() => import("@opentelemetry/exporter-trace-otlp-http")),
+    // oxlint-disable-next-line effect/noDynamicImports -- the tracer SDK loads only when an endpoint is set
+    Effect.tryPromise(() => import("@opentelemetry/sdk-trace-base")),
+  ],
+  { concurrency: "unbounded" },
+)
 
 const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
   Effect.gen(function* () {
     const endpoint = yield* otlpEndpoint
     if (Option.isNone(endpoint)) return Layer.empty
     const serviceName = Option.getOrElse(yield* otlpServiceName, () => "gent")
+    const [NodeSdk, { OTLPTraceExporter }, { BatchSpanProcessor }] = yield* loadTracerSdk
     const exporter = new OTLPTraceExporter({
       url: `${endpoint.value.replace(/\/$/, "")}/v1/traces`,
     })

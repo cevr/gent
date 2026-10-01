@@ -17,13 +17,12 @@ import { dateFromMillis } from "@gent/core/protocol"
 import { BunGentPlatformLive, makeTempDirectoryScoped } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
 import {
-  buildFingerprint,
-  ownBuildFingerprint,
+  buildFingerprint as ownBuildFingerprint,
   dataPaths,
   serverLock,
   serverLockFile,
   ServerLockEntry,
-} from "../src/server"
+} from "../src/discovery"
 import { BunServices } from "@effect/platform-bun"
 import { homedir, hostname } from "node:os"
 import { Gent } from "../src/client"
@@ -88,7 +87,11 @@ const compiledServices = (execPath: string, counter: Ref.Ref<number>, mtime: Opt
       GentPlatform,
       Effect.gen(function* () {
         const platform = yield* GentPlatform
-        return GentPlatform.of({ ...platform, execPath: Effect.succeed(execPath) })
+        return GentPlatform.of({
+          ...platform,
+          execPath: Effect.succeed(execPath),
+          compiled: Effect.succeed(true),
+        })
       }),
     ).pipe(Layer.provide(GentPlatform.Test("bf"))),
     makeCountingFs(counter, mtime),
@@ -108,7 +111,7 @@ describe("buildFingerprint", () => {
     Effect.gen(function* () {
       const counter = yield* Ref.make(0)
       const mtime = dateFromMillis(36_000)
-      const fingerprint = yield* buildFingerprint(Effect.succeed(true)).pipe(
+      const fingerprint = yield* ownBuildFingerprint.pipe(
         Effect.provide(
           compiledServices("/nonexistent/gent-probe-x/gent", counter, Option.some(mtime)),
         ),
@@ -123,7 +126,7 @@ describe("buildFingerprint", () => {
   it.live("a binary whose stat has no mtime names no build", () =>
     Effect.gen(function* () {
       const counter = yield* Ref.make(0)
-      const fingerprint = yield* buildFingerprint(Effect.succeed(true)).pipe(
+      const fingerprint = yield* ownBuildFingerprint.pipe(
         Effect.provide(compiledServices("/nonexistent/gent-probe-x/gent", counter, Option.none())),
       )
       expect(fingerprint).toBe("unknown")

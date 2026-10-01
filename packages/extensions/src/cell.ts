@@ -2377,24 +2377,17 @@ export const makeCellToolHost = (
 /** The worker binary a compiled build ships next to its executable. */
 const CELL_WORKER_BINARY = "gent-cell"
 
-/** The compiled build defines this symbol; a source run leaves it undeclared. */
-declare const __GENT_COMPILED__: unknown
-
-// An undeclared symbol throws a ReferenceError: a source run.
-export const isCompiledBuild = Effect.try(() => __GENT_COMPILED__ === true).pipe(
-  Effect.orElseSucceed(() => false),
-)
-
 /**
- * Where the worker lives. A compiled build runs the `gent-cell` binary beside
- * its executable. A source run executes this checkout's worker source with the
- * running Bun, so it never launches a stale built worker.
+ * Where the worker lives. A compiled build (`GentPlatform.compiled`) runs the
+ * `gent-cell` binary beside its executable. A source run executes this
+ * checkout's worker source with the running Bun, so it never launches a stale
+ * built worker.
  */
 export const cellWorkerLaunch = Effect.gen(function* () {
   const platform = yield* GentPlatform
   const path = yield* Path.Path
   const execPath = yield* platform.execPath
-  if (yield* isCompiledBuild) {
+  if (yield* platform.compiled) {
     return CellWorker.cases.Compiled.make({
       binaryPath: path.join(path.dirname(execPath), CELL_WORKER_BINARY),
     })

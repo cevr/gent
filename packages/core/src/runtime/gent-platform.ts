@@ -34,6 +34,7 @@ import { causeMessage } from "../domain/guards.js"
  *   - `osInfo`           — `{ platform, arch, release, hostname, type }`
  *   - `pid`              — current process id
  *   - `execPath`         — absolute path to the running executable
+ *   - `compiled`         — whether this process is the compiled gent binary
  *   - `homeDirectory`    — current user home directory
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
  *   - `hash(alg, input)` — content-addressed `sha256` hex digest for durable
@@ -93,6 +94,11 @@ interface GentPlatformApi {
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>
   readonly execPath: Effect.Effect<string>
+  /**
+   * True in the compiled gent, whose build defines it; false in a source run.
+   * The cell picks its worker by it, and the SDK names its build by it.
+   */
+  readonly compiled: Effect.Effect<boolean>
   readonly homeDirectory: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
@@ -125,6 +131,7 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           }),
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
+          compiled: Effect.succeed(false),
           homeDirectory: Effect.succeed("/nonexistent/gent-test-home"),
           signal: () => Effect.void,
           // Deterministic, content-derived stub: same input → same digest.

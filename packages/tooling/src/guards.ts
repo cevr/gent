@@ -2362,11 +2362,11 @@ const approvedComment = (entry: ApprovedSuppressionEntry): string =>
 /** Matching ignores line churn: an entry is keyed by file and exact comment text. */
 const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
-    file: "packages/sdk/src/server.ts",
+    file: "packages/sdk/src/discovery.ts",
     text: "strictEffectProvide:off -- the public entry point provides the local platform it resolves on.",
   },
   {
-    file: "packages/sdk/src/server.ts",
+    file: "packages/sdk/src/discovery.ts",
     text: "strictEffectProvide:off -- self-contained probe, no scope lifetime",
   },
   {

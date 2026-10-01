@@ -224,6 +224,7 @@
         "packages/core/src/runtime/gent-platform.ts",
         "packages/core/src/runtime/gent-platform-bun.ts",
         "packages/core/src/host.ts",
+        "packages/sdk/src/discovery.ts",
         "packages/sdk/src/server.ts",
         "apps/tui/src/main.tsx",
         "apps/tui/scripts/build.ts",
@@ -265,7 +266,7 @@
       }
     },
     {
-      "files": ["packages/sdk/src/server.ts"],
+      "files": ["packages/sdk/src/discovery.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off"
       }
