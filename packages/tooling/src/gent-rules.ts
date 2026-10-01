@@ -683,10 +683,11 @@ const plugin: Plugin = {
      *
      * `effect/noPlatformLayerOutsideEntry` keeps the `@effect/platform-*`
      * layers in the platform entry files: it follows each read of a binding a
-     * module takes from a platform package, and reports a re-export. Upstream
-     * (0.20.0) follows the reads inside the module only, so
-     * `export const Services = BunServices` passes it, and every importer of
-     * `Services` then provides `Services.layer` where no rule sees it.
+     * module takes from a platform package, and reports a re-export. Since
+     * 0.22.0 it also reports a platform module or package exported as a
+     * declaration's value (`export const Services = BunServices`), through
+     * aliases and destructures. It leaves an exported non-layer member alone
+     * (`export const socket = Local.makeNet`); this rule reports that too.
      *
      * Reported outside test code: an exported `const`, `let` or `var` whose
      * value is a binding imported from an `@effect/platform-*` package or
@@ -696,7 +697,6 @@ const plugin: Plugin = {
      * (`BunServices.layer`, `import { layer }`) is left to upstream, which
      * reports it where it stands. The platform entry files are exempt by
      * their `.oxlintrc.json` override, as they are from the upstream rule.
-     * Goes when an upstream release follows an exported alias.
      */
     "no-platform-module-export-alias": {
       create(context) {
