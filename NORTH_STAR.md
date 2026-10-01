@@ -1,6 +1,68 @@
-# Rejected candidates
+# North star
 
-A sweep re-proposes one of these only with a new receipt. The full reasons are the ledger rows in `plans/architecture-loop-2026-09-22.md`, `plans/architecture-loop-2026-09-17.md` and `plans/architecture-loop-2026-09-15.md`. A row leaves this table when its subject leaves the tree.
+gent is a minimal, opinionated agent harness: a lean Effect-native core, one actor per session loop, and every feature an extension. Each architecture pass aims at fewer concepts, less code and fewer files, with every valuable feature kept.
+
+## North stars
+
+| North star                                     | It holds when                                                                                                                                                                                                                                           | A candidate breaks it when                                                                                                                                                    |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Effect-native**                              | Work is an `Effect`, `Stream` or `Layer`; services are `Context.Service` with a `Live` layer and are yielded; errors are `Schema.TaggedError`; tagged unions are Effect Schema; files, paths, processes and ids come from the Effect platform services. | It adds a Promise, an `async` function, an untyped `throw`, a hand-rolled `{ _tag }` union, a raw global where a platform service exists, or a service passed as a parameter. |
+| **Actor model**                                | Each session loop is one actor (`packages/core/src/runtime/agent-loop.ts`): its mailbox applies each message once and in order, and the turn engine (`packages/core/src/runtime/turn.ts`) runs inside it.                                               | A second path changes loop state outside the mailbox, or a caller waits on a loop it should message.                                                                          |
+| **Lean core, expressive extensions**           | Core owns only what every extension needs; a feature is an extension in `packages/extensions/` built on `@gent/core/extensions/api`; core names no feature built on it.                                                                                 | Core grows a feature one extension could own, or an extension reaches core internals instead of a public entry.                                                               |
+| **Single files**                               | One concern lives in one file under section banners. A new file has a reason: a process entry, a package entry, a module two concerns share, or a lint-scoped boundary. A test split by feature area is not fragmentation.                              | It splits a concern into fragment or helper files (`x-part.ts`). Merging fragments back is a reduction.                                                                       |
+| **Cheap per task** (drafted 2026-10-01)        | The price-weighted token cost of a task (a parent turn and its children) falls with no measured drop in quality: the cached prefix is byte-stable and large output spills to storage.                                                                   | It sends bytes the model does not need, puts volatile content in the cached prefix, or trims a request but adds steps.                                                        |
+| **One interaction model** (drafted 2026-10-01) | The same key does the same thing on every TUI surface, every state shows its way out, and nothing gent draws is worse than a prior-art TUI draws for the same moment.                                                                                   | A surface gives a key a second meaning, or a state has no visible exit.                                                                                                       |
+
+## Tiebreaks
+
+None stated by the owner. A candidate that trades one north star for another is an owner question on the ledger, not a change.
+
+## Owner rules
+
+Propose nothing against these.
+
+- Every sweep, apply and counsel agent reads `ARCHITECTURE.md` in full before the code: its numbered rules are the invariants a change must keep, and its receipts name where each lives.
+- Children wake, never block.
+- The cell runs in full Bun, with no sandbox.
+- `effect-wide-event` stays.
+- No persisted-format change unless it is additive and optional.
+- Docked panes, not modal overlays.
+- A shipped extension is never more privileged than a user extension.
+- Bash and monitor run each command as given, with no classifier or ask in front.
+- Personal library, no shims.
+- Child sessions cache 5 minutes, and they keep their own effort.
+- The handoff leans on discovery (message ids, read tools).
+- Classifiers are one cell primitive (`models.decide`), with no Jev-aware features.
+- In the TUI, state that follows the session identity reads the identity (`sessionIdentity()`, `activeSessionId()`), not the session record, and one-shot state lives outside a component instance.
+
+Project safety, beside `~/.claude/skills/architecture-loop/safety.md`:
+
+- A live gent run uses `--debug` only, with `GENT_DATA_DIR` under the scratch directory the prompt names. Never `bun run install:global`. Every run calls no paid model, except as the next three rules allow.
+- The efficiency capture, for the efficiency sweep only: a run under the in-repo capture preload [`docs/architecture/fetch-capture.ts`](docs/architecture/fetch-capture.ts) (never a copy outside the repo) with fake provider keys and no `--debug`, with `HOME`, `GENT_AUTH_DIRECTORY` and `GENT_DATA_DIR` under the scratch directory (the preload refuses to start otherwise). The preload answers every provider request itself, so no request leaves the box but the model catalog read (`GET https://models.dev/api.json`), which it forwards.
+- The live check, for the orchestrator only: `bun run gamut`, on real models with the owner's login, its data directory under `$TMPDIR/gent-gamut-*`. It is the only run that calls a paid model. No other agent (sweep, apply, counsel, or the agent inside the gamut session) runs `bun run gamut`.
+- The ui sweep only: a prior-art TUI (fx, pi, opencode) runs in a herdr pane with `HOME` and `XDG_*` under the scratch directory and no credentials, so it cannot reach a model. A binary comes from `gh release download` into the scratch directory or from PATH, never from a `curl … | bash` installer. Never complete a login in it.
+- The owner's database `~/.gent/data.db` is read only as a copy: `/bin/cp` the database and its `-wal` file, then open the copy with `sqlite3 -readonly`, or as `file:<copy>?immutable=1` when that fails with code 14. Never write to the owner's database, and never commit, publish or attach it or a copy of it.
+- The owner's auth store `~/.gent/auth/` (one file per provider) is never read, copied or printed. A run that must not sign in as the owner sets `GENT_AUTH_DIRECTORY` under the scratch directory.
+
+## Sweeps
+
+| Sweep      | Serves                | Scope                                                      | Method                                                             | Done when                                                                                       |
+| ---------- | --------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| efficiency | Cheap per task        | what the harness sends to the model, per task              | [docs/architecture/efficiency.md](docs/architecture/efficiency.md) | no measured saving left that it can change directly; the ledger has the efficiency baseline row |
+| ui         | One interaction model | the rendered TUI beside the prior-art TUIs, in herdr panes | [docs/architecture/ui.md](docs/architecture/ui.md)                 | a matrix row per checklist moment, gent × each reference; the ledger has the UI matrix row      |
+
+## Live check
+
+The orchestrator runs it alone (Owner rules). The gamut testbed, [`testbeds/gamut/README.md`](testbeds/gamut/README.md), drives the real TUI on real models with an isolated database.
+
+- Prompt: a file whose first line sends the agent inside the gamut to read `~/.claude/skills/architecture-loop/safety.md` and this file's Owner rules in full before any action, and whose task drives every ability the batches changed (each apply report names them).
+- Drive: `bun run gamut up <preset> --prompt <file>`, then `bun run gamut wait` and `bun run gamut read`. Keys the prompt cannot reach (`/btw`, `/model`, queued follow-ups, Esc, `!cmd`) go through `herdr pane send-text`; `bun run gamut restart` checks resume. Use `herdr pane`, never `herdr agent`.
+- State: `bun run gamut status` prints the stored user messages, the session tree, the model per session, tool calls, extension pulses and the work dir's `bun test`: the pane shows what rendered, `status` shows what happened.
+- Stop: `bun run gamut down`.
+
+## Rejected
+
+A sweep re-proposes a row only with a new receipt. A row leaves when its subject leaves the tree. The full reasons are the ledger rows in `plans/architecture-loop-2026-09-22.md`, `plans/architecture-loop-2026-09-17.md` and `plans/architecture-loop-2026-09-15.md`.
 
 | Candidate                                                             | Why it stays                                                                                                                                                                                                                                                                                                                                                         |
 | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

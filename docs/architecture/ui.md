@@ -4,17 +4,11 @@ Every pass sweeps the TUI as a user sees it, next to the prior-art TUIs, run sid
 
 ## Reference TUIs
 
-| Agent                            | Read it for                                                                                                                                                    | How to run it                                                                                                                                                        |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| vercel-labs/fx (first reference) | Shell-like inline output that keeps scrollback, the input line, slash commands, streaming and tool-call rendering, settle-then-capture pty tests (`tests/e2e`) | Release binary into the scratch directory: `gh release download --repo vercel-labs/fx --pattern '*linux*' --dir <scratch>/fx`. Never the `curl … \| bash` installer. |
-| badlogic/pi-mono (branch `pico`) | Minimal chrome, editor keys, model and session pickers                                                                                                         | `pi` on PATH                                                                                                                                                         |
-| sst/opencode (branch `v2`)       | Docked panes, dialogs, theme tokens, permission prompts                                                                                                        | Source only unless a binary is on PATH                                                                                                                               |
-
-Sources live under `okra repo path <slug>`; read the TUI code and e2e captures for any screen the running binary cannot reach without a model.
+The references are the `ui` rows of [`PRIOR_ARTS.md`](../../PRIOR_ARTS.md): vercel-labs/fx first, then pi and opencode, each with what to read and how to run it. Never the `curl … | bash` installer. Sources live under `okra repo path <slug>`; read the TUI code and e2e captures for any screen the running binary cannot reach without a model.
 
 ## How to run
 
-- gent: `bun run --cwd <warm source>/apps/tui dev --debug` with `GENT_DATA_DIR` and `HOME` under the scratch directory. `--debug` uses the scripted model, so a conversation, streaming, tool calls and errors render with no paid call.
+- gent: `bun run --cwd <main checkout>/apps/tui dev --debug` with `GENT_DATA_DIR` and `HOME` under the scratch directory. `--debug` uses the scripted model, so a conversation, streaming, tool calls and errors render with no paid call.
 - A reference TUI runs with `HOME` (and `XDG_*`) under the scratch directory and no credentials, so it can never reach a paid model. Screens that need a model come from its source and test captures instead. A login prompt is a screen to compare, not a step to complete.
 - One herdr tab per comparison, split into panes of the same size: `herdr pane split`, `herdr pane run <pane> '<cmd>'`, `herdr pane send-keys` / `send-text` to drive, `herdr pane wait-output` to settle, `herdr pane read` to capture. Never `herdr agent`. Close every pane and tab the sweep opened before the report.
 - Capture each screen at two sizes (a normal pane and a narrow one near 60×20) and after a resize.

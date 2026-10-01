@@ -187,5 +187,19 @@ Core tests record the event sequence for assertions with `RecordingEventStore` a
 | Path                       | Focus                                                          |
 | -------------------------- | -------------------------------------------------------------- |
 | `ARCHITECTURE.md`          | Package structure, concepts                                    |
+| `NORTH_STAR.md`            | North stars, owner rules, project sweeps, live check, rejected |
+| `PRIOR_ARTS.md`            | Prior-art repos and settled comparisons                        |
+| `docs/architecture/`       | The efficiency and ui sweep methods, the capture preload       |
 | `apps/tui/AGENTS.md`       | OpenTUI, Solid patterns                                        |
 | `testbeds/gamut/README.md` | Live TUI check: `bun run gamut up <preset>`, isolated database |
+
+## Architecture loop
+
+The owner's `architecture-loop` skill runs on `NORTH_STAR.md` and `PRIOR_ARTS.md`; what it needs from gent beyond them:
+
+- **Baseline** (lines and files per package): `git ls-files ':(glob)packages/*/src/**/*.ts' ':(glob)packages/*/src/**/*.tsx' ':(glob)apps/*/src/**/*.ts' ':(glob)apps/*/src/**/*.tsx' | xargs wc -l | awk '$2 != "total" { split($2, p, "/"); n[p[2]] += $1; f[p[2]]++ } END { for (k in n) print n[k], f[k], k }' | sort -rn`. `:(glob)` keeps `*` in one path segment, so the lint fixtures under `packages/tooling/fixtures/` do not count.
+- **Source roots** for caller-count greps: `packages/`, `apps/`, `examples/`. Workspace packages for the review sweep: `packages/*`, `apps/*`, `examples/`, `testbeds/`.
+- **Workspaces**: the warm source is `/workspaces/gent` (btrfs), a clone whose `origin` is the main checkout. Before each pass: `git -C /workspaces/gent pull --ff-only`, then `bun install --frozen-lockfile` when the lockfile changed, then `bun run build`. A rift created with `--copy-all` keeps the build; a git worktree runs `bun install` and `bun run build` first. The merge fetches the batch into the main checkout with `git fetch <rift path> HEAD:refs/heads/p<N>-<batch>`.
+- **Guards**: the lint rules live in `packages/tooling/src/gent-rules.ts` and the text and AST guards in `packages/tooling/src/guards.ts`; a directory or file kind none of them scans is a guard gap.
+- **Apply work**: sync tests use `test(...)` and effect tests `it.live`; after adding tests, check the pass count rose. Commit through the hook with output to a log (`git commit -qm "..." > <log> 2>&1; echo EXIT $?`), then read the gate and commit logs with `grep -nE " error |\(fail\)"`. Reports use ASD-STE100 style. Never restore a file with `git checkout` or `git stash`: snapshot it with `/bin/cp`. No edits under `plans/` but the ledger, by the orchestrator.
+- **Counsel questions** also ask whether a permit or an atomic update was lost in a move, and whether a consumer that needs the session record now reads only the identity.

@@ -8,7 +8,7 @@
     "tests",
     "../../testbeds/gamut/gamut.ts",
     "../../testbeds/gamut/tests",
-    "../../.claude/skills/architecture-loop/fetch-capture.ts"
+    "../../docs/architecture/fetch-capture.ts"
   ],
   "exclude": ["fixtures"]
 }
