@@ -14,7 +14,7 @@
  * visible: the live view looked correct the whole time.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { waitFor } from "@gent/core/test-utils"
 import {
   countRows,
@@ -24,6 +24,7 @@ import {
   seedAndSpawn,
   settleAndCapture,
   settlePty,
+  signalAndExit,
   type TestContext,
 } from "../src/pty-fixture"
 
@@ -136,6 +137,25 @@ describe("E2E: Scrollback ownership", () => {
       }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
+
+  // A signal from outside (`kill`, a closing multiplexer) leaves the terminal
+  // as ctrl+c twice does: the transcript stays above the shell prompt.
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    it.scopedLive(
+      `${signal} from outside leaves every message on screen`,
+      () =>
+        Effect.gen(function* () {
+          const ctx = yield* seedAndSpawn(["--mock-empty"], SHORT_SCREEN)
+          yield* submitMessages(ctx, 2)
+          expect(Option.isSome(yield* signalAndExit(ctx, signal, "10 seconds"))).toBe(true)
+          const rows = gridText(yield* settleAndCapture(ctx, SETTLE))
+          for (const index of [1, 2]) {
+            expect([index, countRows(rows, messageText(index))]).toEqual([index, 1])
+          }
+        }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
+      TEST_TIMEOUT,
+    )
+  }
 })
 
 describe("E2E: Settle then capture", () => {

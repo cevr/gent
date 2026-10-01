@@ -11,7 +11,7 @@
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace.tsx`.
 - **Error boundaries** - A failure travels in the Effect error channel and shows in the status row or the open pane's note row. No try/catch (`effect/noTryCatch`).
-- **Exit pattern** - Exit through `useExit()` (`session.tsx`): it leaves the terminal through `leaveTerminal` (`message-list.tsx`: commit the live transcript tail with `flushTranscriptForExit`, then `renderer.destroy()`), then runs `useEnv().shutdown()`. A signal takes the same path: the entry's hold on the renderer (`holdUntilRendererDestroyed`) runs `leaveTerminal` when it is interrupted. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
+- **Exit pattern** - Exit through `useExit()` (`session.tsx`): it leaves the terminal through `leaveTerminal` (`message-list.tsx`: commit the live transcript tail with `flushTranscriptForExit`, then `renderer.destroy()`), then runs `useEnv().shutdown()`. SIGINT and SIGTERM take the same path: the entry's hold on the renderer (`holdUntilRendererDestroyed`) runs `leaveTerminal` when it is interrupted, and the renderer leaves both signals to gent (`exitSignals` in `main.tsx`), so its own listener does not destroy it first. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
 - **Intrinsic names** - Take the names from the opentui catalogue: some multi-word intrinsics use underscores (`tab_select`, `ascii_font`), `scrollbox` is one word.
 - **Use `<For>`** - Never `.map()` for JSX lists; use `<For each={items}>{item => ...}</For>`.
 

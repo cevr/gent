@@ -1,6 +1,15 @@
 import { makeTempDirectoryScoped, seedAuthKeys, waitFor } from "@gent/core/test-utils"
 import { Terminal } from "@xterm/headless"
-import { Clock, Effect, FileSystem, Option, Predicate, Schema, type Scope } from "effect"
+import {
+  Clock,
+  type Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Predicate,
+  Schema,
+  type Scope,
+} from "effect"
 import { spawn, type IPty } from "zigpty"
 import { exitWithin, tuiDirectory } from "./server-process-fixture"
 
@@ -95,6 +104,15 @@ export const seedAndSpawn = (extraArgs: string[] = [], size?: PtySize) =>
     yield* seedAuthKeys(`${tempDir}/auth`).pipe(Effect.orDie)
     return yield* spawnWithDir(tempDir, extraArgs, {}, size)
   })
+
+/**
+ * Send the TUI a signal from outside, as `kill` does, and wait for its exit
+ * code. `None`: it outlived `within`.
+ */
+export const signalAndExit = (ctx: TestContext, signal: NodeJS.Signals, within: Duration.Input) =>
+  ignoreSyncDefect(() => process.kill(ctx.pty.pid, signal)).pipe(
+    Effect.andThen(exitWithin(ctx.pty.exited, within)),
+  )
 
 export const spawnNoAuth = Effect.gen(function* () {
   const tempDir = yield* makeTempDirectoryScoped("gent-e2e-")

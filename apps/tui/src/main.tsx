@@ -341,6 +341,12 @@ const runGent = ({
         // Exit clears the split region only: the transcript above it stays
         // on screen, and the shell prompt follows.
         clearOnShutdown: false,
+        // SIGINT and SIGTERM are the process entry's (`runCliMain`): they
+        // interrupt the main fiber, whose hold on the renderer commits the
+        // live tail before it destroys the renderer. OpenTUI's own listener
+        // would destroy it first and clear the transcript. It keeps the
+        // signals gent does not handle, so they still restore the terminal.
+        exitSignals: ["SIGQUIT", "SIGABRT", "SIGHUP", "SIGPIPE", "SIGBUS"],
         onDestroy: () => {
           shutdownLog("exit.renderer-destroy")
         },
