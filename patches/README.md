@@ -44,3 +44,23 @@ Remove this patch when the SDK keeps a later system message in place.
 Rechecked on 2026-09-30: rc.118 still replaces `system`, so the patch was
 regenerated for that release. It patches `dist` only; the shipped `src` copy
 keeps the upstream text.
+
+## `@effect/ai-openai-compat@4.0.0-rc.118`
+
+The SDK reads a model's reasoning from a Chat Completions reply
+(`reasoning_content`), but never sends it back. The prompt conversion drops
+a reasoning part without an OpenAI item id, which every part this SDK
+produces lacks, and `toChatMessages` drops reasoning items. It also starts
+a new assistant message for a tool call that follows text. DeepSeek, Kimi
+and GLM want their reasoning back on the assistant message that holds it,
+and the tool calls on the same message as the text.
+
+The patch keeps a reasoning part without an id as a reasoning item, and
+`toChatMessages` puts its text in `reasoning_content` on the next assistant
+message. A tool call joins the assistant message before it. The OpenCode
+driver (`packages/extensions/src/opencode.ts`) then moves the text to the
+field the model's models.dev entry names (`interleaved.field`), or drops
+it when the entry names none.
+
+Remove this patch when the SDK sends the reasoning back itself. It patches
+`dist` only; the shipped `src` copy keeps the upstream text.

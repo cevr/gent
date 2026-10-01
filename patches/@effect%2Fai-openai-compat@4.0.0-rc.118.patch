@@ -1,0 +1,71 @@
+diff --git a/node_modules/@effect/ai-openai-compat/.bun-tag-65b143343c3ce065 b/.bun-tag-65b143343c3ce065
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@effect/ai-openai-compat/.bun-tag-edbdab4f5bc6a53b b/.bun-tag-edbdab4f5bc6a53b
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/OpenAiLanguageModel.js b/dist/OpenAiLanguageModel.js
+index 53783fcab2843189b0890dbf4b981c21726e1bcc..fc647de66f3d3320802ba69075e6d1ec2167e9bf 100644
+--- a/dist/OpenAiLanguageModel.js
++++ b/dist/OpenAiLanguageModel.js
+@@ -379,6 +379,15 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
+                   if (hasConversation && Predicate.isNotNull(id)) {
+                     break;
+                   }
++                  if (Predicate.isNull(id) && part.text.length > 0) {
++                    messages.push({
++                      type: "reasoning",
++                      summary: [{
++                        type: "summary_text",
++                        text: part.text
++                      }]
++                    });
++                  }
+                   if (Predicate.isNotNull(id)) {
+                     const message = reasoningMessages[id];
+                     if (config.store === true) {
+@@ -1144,24 +1153,36 @@ const toChatMessages = input => {
+     }];
+   }
+   const messages = [];
++  let reasoning = undefined;
++  const withReasoning = message => {
++    if (reasoning === undefined || message.role !== "assistant") return message;
++    const text = reasoning;
++    reasoning = undefined;
++    return {
++      ...message,
++      reasoning_content: (message.reasoning_content ?? "") + text
++    };
++  };
+   for (const item of input) {
+-    if (Predicate.hasProperty(item, "type") && item.type === "function_call") {
++    if (Predicate.hasProperty(item, "type") && item.type === "reasoning") {
++      reasoning = (reasoning ?? "") + (item.summary ?? []).map(part => part.text).join("");
++    } else if (Predicate.hasProperty(item, "type") && item.type === "function_call") {
+       const previous = messages.at(-1);
+       const toolCall = toChatToolCall(item);
+-      if (previous?.role === "assistant" && previous.tool_calls !== undefined) {
+-        messages[messages.length - 1] = {
++      if (previous?.role === "assistant") {
++        messages[messages.length - 1] = withReasoning({
+           ...previous,
+-          tool_calls: [...previous.tool_calls, toolCall]
+-        };
++          tool_calls: [...(previous.tool_calls ?? []), toolCall]
++        });
+       } else {
+-        messages.push({
++        messages.push(withReasoning({
+           role: "assistant",
+           content: null,
+           tool_calls: [toolCall]
+-        });
++        }));
+       }
+     } else {
+-      messages.push(...toChatMessagesFromItem(item));
++      messages.push(...toChatMessagesFromItem(item).map(withReasoning));
+     }
+   }
+   return messages;
