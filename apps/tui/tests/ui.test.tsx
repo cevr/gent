@@ -4,6 +4,7 @@ import { Clock, Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import {
   decoration,
+  groupedRows,
   keyHint,
   keyHintsLine,
   KeyHints,
@@ -474,6 +475,22 @@ describe("select list sticky selection", () => {
 })
 
 describe("select list rows", () => {
+  test("a heading opens each run of one group and counts the group", () => {
+    const rows = groupedRows(
+      ["a1", "a2", "b1"],
+      (item) => item.slice(0, 1),
+      (first, count) => selectable(`# ${first.slice(0, 1)} ${count}`, () => <box />),
+      (item) => selectable(item, () => <box />),
+    )
+    expect(rows.map((row) => Option.getOrElse(row.value, () => ""))).toEqual([
+      "# a 2",
+      "a1",
+      "a2",
+      "# b 1",
+      "b1",
+    ])
+  })
+
   it.live("draws decorations without letting the cursor stop on them", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []

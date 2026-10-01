@@ -20,6 +20,7 @@ import {
   formatAge,
   formatCost,
   formatDuration,
+  groupedRows,
   keyHint,
   KeyHints,
   PickerFrame,
@@ -379,24 +380,6 @@ const SECTION_TITLE = {
   inactive: "Inactive",
 } satisfies Record<AgentRowEntry["section"], string>
 
-/** The list as drawn: a heading opens each section, rows keep their index for selection. */
-type PaneItem =
-  | { readonly kind: "heading"; readonly section: AgentRowEntry["section"]; readonly count: number }
-  | { readonly kind: "row"; readonly row: AgentRowEntry; readonly index: number }
-
-const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> => {
-  const items: PaneItem[] = []
-  rows.forEach((row, index) => {
-    const previous = rows[index - 1]
-    if (Option.isNone(Option.fromNullishOr(previous)) || previous?.section !== row.section) {
-      const count = rows.filter((entry) => entry.section === row.section).length
-      items.push({ kind: "heading", section: row.section, count })
-    }
-    items.push({ kind: "row", row, index })
-  })
-  return items
-}
-
 /** "1 running, 0 idle, 3 inactive" for the pane title: each loop counted by its section, its own state. */
 const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
   const count = (state: AgentRowEntry["section"]) =>
@@ -668,44 +651,42 @@ export function AgentsPane(props: {
 
   /** The list's rows: a heading opens each section. */
   const rows = (): ReadonlyArray<SelectListRow<AgentRowEntry>> =>
-    paneItems(visible()).map((item) => {
-      if (item.kind === "heading") {
-        return decoration<AgentRowEntry>(() => (
+    groupedRows(
+      visible(),
+      (row) => row.section,
+      (first, count) =>
+        decoration<AgentRowEntry>(() => (
           <box paddingLeft={1}>
             <text style={{ fg: theme.textMuted }}>
-              {`${SECTION_TITLE[item.section]} (${item.count})`}
+              {`${SECTION_TITLE[first.section]} (${count})`}
             </text>
           </box>
-        ))
-      }
-      return selectable(item.row, (selected, id) => {
-        const background = () => {
-          if (selected()) return theme.primary
-          return "transparent"
-        }
-        const section = () => item.row.section
-        const line = () => rowLine(item.row, selected())
-        return (
-          <box id={id} backgroundColor={background()} paddingLeft={1}>
-            {/* One row, one line: the time is right-aligned into the budget, so
-                an overflowing label is cut rather than wrapped under it, the
-                way the autocomplete popup and the thread rows clamp theirs. */}
-            <text
-              wrapMode="none"
-              truncate
-              style={{ fg: lineColor(item.row, section(), selected()) }}
-            >
-              {leftRuns(line()).before}
-              <span style={{ fg: glyphColorFor(section(), selected()) }}>
-                {leftRuns(line()).glyph}
-              </span>
-              {leftRuns(line()).after}
-              <span style={{ fg: rightColor(item.row, selected()) }}>{line().right}</span>
-            </text>
-          </box>
-        )
-      })
-    })
+        )),
+      (row) =>
+        selectable(row, (selected, id) => {
+          const background = () => {
+            if (selected()) return theme.primary
+            return "transparent"
+          }
+          const section = () => row.section
+          const line = () => rowLine(row, selected())
+          return (
+            <box id={id} backgroundColor={background()} paddingLeft={1}>
+              {/* One row, one line: the time is right-aligned into the budget, so
+                  an overflowing label is cut rather than wrapped under it, the
+                  way the autocomplete popup and the thread rows clamp theirs. */}
+              <text wrapMode="none" truncate style={{ fg: lineColor(row, section(), selected()) }}>
+                {leftRuns(line()).before}
+                <span style={{ fg: glyphColorFor(section(), selected()) }}>
+                  {leftRuns(line()).glyph}
+                </span>
+                {leftRuns(line()).after}
+                <span style={{ fg: rightColor(row, selected()) }}>{line().right}</span>
+              </text>
+            </box>
+          )
+        }),
+    )
 
   /** Open on the loop the shell is already on. */
   const sticky = (values: ReadonlyArray<AgentRowEntry>): Option.Option<number> =>

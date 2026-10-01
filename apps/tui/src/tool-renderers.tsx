@@ -176,6 +176,17 @@ export const getEditUnifiedDiff = (input: EditInput): Option.Option<EditDiffResu
     ...patchLineCounts(oldString, newString),
   }))
 
+/** The row that stands for what a collapsed view leaves out: `· ··· 3 more lines`. */
+function ElisionRow(props: { readonly text: string }) {
+  const { theme } = useTheme()
+  return (
+    <text>
+      <span style={{ fg: theme.border }}>{"· ··· "}</span>
+      <span style={{ fg: theme.textMuted }}>{props.text}</span>
+    </text>
+  )
+}
+
 // ── generic renderer ────────────────────────────────────────────────────────
 
 export function GenericToolRenderer(props: ToolRendererProps) {
@@ -928,12 +939,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
                     Match.value(item).pipe(
                       Match.tagsExhaustive({
                         elision: (item) => (
-                          <text>
-                            <span style={{ fg: theme.border }}>{"· ··· "}</span>
-                            <span style={{ fg: theme.textMuted }}>
-                              {plural(item.count, `more ${unitNoun(item.unit)}`)}
-                            </span>
-                          </text>
+                          <ElisionRow text={plural(item.count, `more ${unitNoun(item.unit)}`)} />
                         ),
                         line: (item) => (
                           <text>
@@ -959,12 +965,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
             Match.tagsExhaustive({
               run: (item) => <GutterText lines={[...item.lines]} startLine={item.startLine} />,
               elision: (item) => (
-                <text>
-                  <span style={{ fg: theme.border }}>{"· ··· "}</span>
-                  <span style={{ fg: theme.textMuted }}>
-                    {plural(item.count, `more ${unitNoun(item.unit)}`)}
-                  </span>
-                </text>
+                <ElisionRow text={plural(item.count, `more ${unitNoun(item.unit)}`)} />
               ),
             }),
           )
@@ -1006,12 +1007,7 @@ const renderDiffLine = (
   theme: ReturnType<typeof useTheme>["theme"],
 ): SolidJSX.Element => {
   if (item._tag === "elision") {
-    return (
-      <text>
-        <span style={{ fg: theme.border }}>{"· ··· "}</span>
-        <span style={{ fg: theme.textMuted }}>{item.count} more lines</span>
-      </text>
-    )
+    return <ElisionRow text={plural(item.count, "more line")} />
   }
   return (
     <text>
@@ -1332,12 +1328,7 @@ function GrepToolRenderer(props: ToolRendererProps) {
                   Match.tagsExhaustive({
                     gap: (gap) => (
                       <box marginBottom={1}>
-                        <text>
-                          <span style={{ fg: theme.border }}>{"· ··· "}</span>
-                          <span style={{ fg: theme.textMuted }}>
-                            {plural(gap.count, "more match", "more matches")}
-                          </span>
-                        </text>
+                        <ElisionRow text={plural(gap.count, "more match", "more matches")} />
                       </box>
                     ),
                     file: (run) => (

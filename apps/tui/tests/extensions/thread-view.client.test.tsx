@@ -16,7 +16,6 @@ import {
   makeThreadController,
   summaryBody,
   threadChain,
-  threadItems,
   ThreadPane,
   type ThreadWindow,
   windowLabel,
@@ -181,31 +180,6 @@ describe("windows on a branch", () => {
     )
     expect(detailFor(Option.some({ ...window, summary: Option.none() }))).toBe("a … b")
     expect(summaryBody("no preamble")).toBe("no preamble")
-  })
-
-  test("opens a heading per session", () => {
-    const base: ThreadWindow = {
-      sessionId,
-      branchId,
-      sessionName: "Session s1",
-      index: 1,
-      firstMessageId: "a",
-      lastMessageId: "b",
-      count: 1,
-      summary: Option.none(),
-      summarizedCount: 0,
-      omittedCount: 0,
-      preview: "",
-      updatedAt: 0,
-    }
-    const other = { ...base, sessionId: SessionId.make("s2"), sessionName: "Session s2" }
-    expect(threadItems([base, { ...base, index: 2 }, other]).map((item) => item.kind)).toEqual([
-      "heading",
-      "window",
-      "window",
-      "heading",
-      "window",
-    ])
   })
 })
 

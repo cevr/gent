@@ -941,6 +941,24 @@ export const decoration = <A,>(render: () => JSX.Element): SelectListRow<A> => (
 })
 
 /**
+ * A list's rows in groups: a heading opens each run of items in one group,
+ * drawn from the run's first item and the group's size; each item then draws
+ * its own row. Items keep their order.
+ */
+export const groupedRows = <A,>(
+  items: ReadonlyArray<A>,
+  groupOf: (item: A) => string,
+  heading: (first: A, count: number) => SelectListRow<A>,
+  row: (item: A) => SelectListRow<A>,
+): ReadonlyArray<SelectListRow<A>> =>
+  items.flatMap((item, index) => {
+    const previous = Option.fromUndefinedOr(items[index - 1])
+    if (Option.exists(previous, (value) => groupOf(value) === groupOf(item))) return [row(item)]
+    const count = items.filter((entry) => groupOf(entry) === groupOf(item)).length
+    return [heading(item, count), row(item)]
+  })
+
+/**
  * The two moves a pane makes on the list from outside a key press.
  *
  * A pane that swaps the rows under the reader — a level pushed, a category
