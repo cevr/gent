@@ -52,8 +52,8 @@ const widgetMigrations: FeatureMigrations = {
   }),
 }
 
-const kernelOnly = testSqliteStorage(() => Layer.empty, {})
-const withWidgets = testSqliteStorage(() => Layer.empty, widgetMigrations)
+const kernelOnly = testSqliteStorage(Layer.empty, {})
+const withWidgets = testSqliteStorage(Layer.empty, widgetMigrations)
 
 describe("feature migrations", () => {
   it.live("core builds only the kernel's tables when no feature contributes any", () =>
@@ -107,7 +107,7 @@ describe("message search index removal", () => {
         db.close()
       })
 
-      const storage = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
+      const storage = SqliteStorage.LiveWithSql(dbPath, Layer.empty, {}).pipe(
         Layer.provide(GentPlatform.Test()),
         Layer.provide(BunServices.layer),
       )
@@ -155,7 +155,7 @@ describe("session admission", () => {
       Effect.gen(function* () {
         const dir = yield* makeTempDirectoryScoped("gent-session-admission-")
         const dbPath = `${dir}/data.db`
-        const storage = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
+        const storage = SqliteStorage.LiveWithSql(dbPath, Layer.empty, {}).pipe(
           Layer.provide(GentPlatform.Test()),
           Layer.provide(BunServices.layer),
         )

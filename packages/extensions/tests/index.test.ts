@@ -1,12 +1,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Option, Path } from "effect"
-import { getToolId } from "@gent/core/extensions/api"
+import { getToolId, runProcess } from "@gent/core/extensions/api"
 import { BuiltinExtensionModules } from "../src/index.js"
 import { homedir } from "node:os"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
-import { GentPlatform } from "@gent/core/host"
+import { BunPlatformLive, GentPlatform } from "@gent/core/host"
 import {
   collectTestContributions,
   createRpcHarness,
@@ -48,11 +48,80 @@ describe("builtin peer modules", () => {
 
       for (const [specifier, source] of BuiltinExtensionModules) {
         const resolved: object = yield* importSpecifier(specifier)
-        expect({ specifier, same: source() === resolved }).toEqual({ specifier, same: true })
+        let bound = source()
+        if (bound instanceof Promise) {
+          const pending = bound
+          bound = yield* Effect.promise(() => pending)
+        }
+        expect({ specifier, same: bound === resolved }).toEqual({ specifier, same: true })
       }
     }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
   )
+
+  // A test process has loaded the SDKs and bound no module, so these run in a
+  // fresh process.
+  it.live("importing the shipped extensions loads no provider SDK", () =>
+    Effect.gen(function* () {
+      const stdout = yield* runFresh(
+        [
+          `await import("${extensionsEntry}")`,
+          `console.log(Object.keys(require.cache).filter((key) => key.includes("/@effect/ai-")).join("\\n"))`,
+        ],
+        [],
+      )
+      expect(stdout).toBe("")
+    }).pipe(Effect.timeout("25 seconds"), Effect.provide(freshProcessLayer)),
+  )
+
+  it.live("a user extension imports a provider SDK the shipped drivers load late", () =>
+    Effect.gen(function* () {
+      const stdout = yield* runFresh(
+        [
+          `const { Effect } = await import("${import.meta.resolve("effect")}")`,
+          `const { bindBunModules } = await import("${import.meta.resolve("@gent/core/host")}")`,
+          `const { BuiltinExtensionModules } = await import("${extensionsEntry}")`,
+          `await Effect.runPromise(bindBunModules(BuiltinExtensionModules))`,
+          `const { AnthropicClient } = await import("./user-extension.ts")`,
+          `console.log(typeof AnthropicClient.layer)`,
+        ],
+        [["user-extension.ts", `export { AnthropicClient } from "@effect/ai-anthropic"`]],
+      )
+      expect(stdout).toBe("function")
+    }).pipe(Effect.timeout("25 seconds"), Effect.provide(freshProcessLayer)),
+  )
 })
+
+const extensionsEntry = new URL("../src/index.ts", import.meta.url).href
+
+/** Run `lines` as a script in a fresh Bun beside `files`; its stdout, trimmed. */
+const runFresh = (
+  lines: ReadonlyArray<string>,
+  files: ReadonlyArray<readonly [name: string, text: string]>,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const platform = yield* GentPlatform
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-fresh-process-" })
+      for (const [name, text] of files) yield* fs.writeFileString(path.join(directory, name), text)
+      const script = path.join(directory, "script.ts")
+      yield* fs.writeFileString(script, lines.join("\n"))
+      const result = yield* runProcess(yield* platform.execPath, ["--config=/dev/null", script], {
+        cwd: directory,
+      })
+      expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({
+        exitCode: 0,
+        stderr: "",
+      })
+      return result.stdout.trim()
+    }),
+  )
+
+const freshProcessLayer = Layer.mergeAll(
+  BunPlatformLive,
+  BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+)
 
 // ── tool schemas ────────────────────────────────────────────────────────────
 

@@ -1880,15 +1880,6 @@ const makeClusterRunnerLayer = (state: StateLocation) => {
   return SingleRunner.layer({ runnerStorage })
 }
 
-const makeModelResolverLayer = <A, E, R>(
-  config: DependenciesConfig,
-  authDeps: Layer.Layer<A, E, R>,
-) =>
-  Option.match(Option.fromUndefinedOr(config.modelResolverOverride), {
-    onNone: () => Layer.provide(ModelResolver.Live, authDeps),
-    onSome: (override) => override,
-  })
-
 export const createDependencies = (config: DependenciesConfig) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: config.cwd,
@@ -1910,100 +1901,52 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
   const authLive = config.overrides?.authLayer ?? Auth.Live(authDirectory)
 
-  const configServiceLive =
-    config.overrides?.configServiceLayer ??
-    Layer.provide(ConfigService.Live, runtimeEnvironmentLive)
+  const configServiceLive = config.overrides?.configServiceLayer ?? ConfigService.Live
 
   // SessionProfileCache is the sole live profile owner. The launch registry
   // resolves its profile through that same cache entry instead of building a
   // startup-only resource layer beside the cache.
   const sessionProfileCacheLive =
     config.overrides?.sessionProfileCacheLayer ??
-    Layer.provide(
-      SessionProfileCache.Live({
-        home: config.home,
-        platform: config.platform,
-        shell: config.shell,
-        osVersion: config.osVersion,
-        extensions: config.extensions,
-        failOnExtensionFailure: config.failOnExtensionFailure,
-      }),
-      Layer.mergeAll(configServiceLive, runtimeEnvironmentLive, platformServicesLive),
-    )
+    SessionProfileCache.Live({
+      home: config.home,
+      platform: config.platform,
+      shell: config.shell,
+      osVersion: config.osVersion,
+      extensions: config.extensions,
+      failOnExtensionFailure: config.failOnExtensionFailure,
+    })
 
-  const extensionRegistryLive = Layer.provideMerge(
-    Layer.unwrap(
-      Effect.gen(function* () {
-        const cache = yield* SessionProfileCache
-        // Same derivation the client used for its `x-gent-workspace-id`
-        // header; a second one here would split the workspace silently.
-        const launchWorkspaceId = workspaceIdForCwd(config.cwd)
-        const profile = yield* cache
-          .resolve(config.cwd)
-          .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
-        // `SessionProfile.layerContext` carries dynamically acquired resource
-        // services, so its type intentionally cannot enumerate every service
-        // contributed by an extension. Keep the stable registry services
-        // explicit at this package boundary while retaining that context at
-        // runtime for extension consumers.
-        return Layer.mergeAll(
-          Layer.succeed(ExtensionRegistry, profile.registryService),
-          Layer.succeed(LaunchBaseSections, profile.baseSections),
-          Layer.succeedContext(profile.layerContext),
-        )
-      }),
-    ),
-    Layer.merge(storageLive, Layer.merge(sessionProfileCacheLive, platformServicesLive)),
-  )
-  const modelCatalogRecordLive = ModelCatalogRecord.Live
-  const modelRegistryLive =
-    config.overrides?.modelRegistryLayer ??
-    Layer.provide(
-      ModelRegistry.Live,
-      Layer.mergeAll(extensionRegistryLive, authLive, modelCatalogRecordLive),
-    )
-  const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
-  const fileLockServiceLive = FileLockService.layer
-
-  const modelResolverLive = makeModelResolverLayer(config, authDeps)
-  const decisionModelResolverLive = Layer.provide(DecisionModelResolver.Live, authLive)
-
-  const baseServicesLive = Layer.provideMerge(
-    Layer.mergeAll(
-      // The app names the branch-tool feature it ships. The loop builds its
-      // layer without knowing what it is.
-      Layer.succeed(CurrentBranchToolFeature, config.branchTools),
-      platformServicesLive,
-      runtimeEnvironmentLive,
-      clusterRunnerLive,
-      // Snapshots and event replay share a cursor, including in-memory SQLite.
-      EventStoreLive,
-      authLive,
-      configServiceLive,
-      modelCatalogRecordLive,
-      modelRegistryLive,
-      extensionRegistryLive,
-      fileLockServiceLive,
-      AgentLoopSessionGovernance.Live,
-      modelResolverLive,
-      decisionModelResolverLive,
-      ...Option.getOrElse(Option.fromUndefinedOr(config.overrides?.extraLayers), () => []),
-      FetchHttpClient.layer,
-    ),
-    storageLive,
+  const extensionRegistryLive = Layer.unwrap(
+    Effect.gen(function* () {
+      const cache = yield* SessionProfileCache
+      // Same derivation the client used for its `x-gent-workspace-id`
+      // header; a second one here would split the workspace silently.
+      const launchWorkspaceId = workspaceIdForCwd(config.cwd)
+      const profile = yield* cache
+        .resolve(config.cwd)
+        .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
+      // `SessionProfile.layerContext` carries dynamically acquired resource
+      // services, so its type intentionally cannot enumerate every service
+      // contributed by an extension. Keep the stable registry services
+      // explicit at this package boundary while retaining that context at
+      // runtime for extension consumers.
+      return Layer.mergeAll(
+        Layer.succeed(ExtensionRegistry, profile.registryService),
+        Layer.succeed(LaunchBaseSections, profile.baseSections),
+        Layer.succeedContext(profile.layerContext),
+      )
+    }),
   )
 
+  const modelRegistryLive = config.overrides?.modelRegistryLayer ?? ModelRegistry.Live
+  const modelResolverLive = Option.getOrElse(
+    Option.fromUndefinedOr(config.modelResolverOverride),
+    () => ModelResolver.Live,
+  )
   // ApprovalService — single handler for all interaction types
-  const approvalServiceLive = Layer.provide(
-    config.overrides?.approvalLayer ?? ApprovalService.Live,
-    baseServicesLive,
-  )
-
-  const toolRunnerLive =
-    config.overrides?.toolRunnerLayer ??
-    Layer.provide(ToolRunner.Live, Layer.merge(baseServicesLive, approvalServiceLive))
-
-  const allDeps = Layer.mergeAll(baseServicesLive, approvalServiceLive, toolRunnerLive)
+  const approvalServiceLive = config.overrides?.approvalLayer ?? ApprovalService.Live
+  const toolRunnerLive = config.overrides?.toolRunnerLayer ?? ToolRunner.Live
 
   // Recover pending interaction requests from storage by rehydrating the
   // approval presenter state. The actor mailbox owns cold turn replay; this
@@ -2052,25 +1995,60 @@ export const createDependencies = (config: DependenciesConfig) => {
     }),
   )
 
-  const sessionRuntimeLive = Layer.provide(SessionRuntime.Client, allDeps)
-
-  const sessionMutationsLive = Layer.provide(
-    SessionMutationsLive,
-    Layer.merge(allDeps, sessionRuntimeLive),
+  // One graph, built bottom up: each level provides every level above it,
+  // and each layer appears in it once, so each builds once. Effect memoizes
+  // only leaf layers; a composite (`provide`, `merge`) builds once for every
+  // path that reaches it, and a graph that names a composite twice in each of
+  // several levels builds it a power of that many times.
+  const host = Layer.mergeAll(
+    // The app names the branch-tool feature it ships. The loop builds its
+    // layer without knowing what it is.
+    Layer.succeed(CurrentBranchToolFeature, config.branchTools),
+    platformServicesLive,
+    runtimeEnvironmentLive,
   )
-
-  const allWithRuntime = Layer.mergeAll(allDeps, sessionMutationsLive, sessionRuntimeLive)
-
-  const runtimeWithHandlers = Layer.provideMerge(
+  const stored = Layer.provideMerge(storageLive, host)
+  const kernel = Layer.provideMerge(
+    Layer.mergeAll(
+      clusterRunnerLive,
+      // Snapshots and event replay share a cursor, including in-memory SQLite.
+      EventStoreLive,
+      authLive,
+      configServiceLive,
+      ModelCatalogRecord.Live,
+    ),
+    stored,
+  )
+  const launchProfile = Layer.provideMerge(
+    extensionRegistryLive,
+    Layer.provideMerge(sessionProfileCacheLive, kernel),
+  )
+  // Above the launch profile: a core service wins over an extension resource
+  // that provides the same tag.
+  const models = Layer.provideMerge(
+    Layer.mergeAll(
+      modelRegistryLive,
+      modelResolverLive,
+      DecisionModelResolver.Live,
+      FileLockService.layer,
+      AgentLoopSessionGovernance.Live,
+      ...Option.getOrElse(Option.fromUndefinedOr(config.overrides?.extraLayers), () => []),
+      FetchHttpClient.layer,
+    ),
+    launchProfile,
+  )
+  const tools = Layer.provideMerge(toolRunnerLive, Layer.provideMerge(approvalServiceLive, models))
+  const sessions = Layer.provideMerge(
+    SessionMutationsLive,
+    Layer.provideMerge(SessionRuntime.Client, tools),
+  )
+  const actor = Layer.provideMerge(
     Layer.unwrap(
       Effect.map(LaunchBaseSections, (baseSections) => AgentLoopLiveActor({ baseSections })),
     ),
-    allWithRuntime,
+    sessions,
   )
-  return Layer.merge(
-    runtimeWithHandlers,
-    Layer.provide(interactionRecoveryLive, runtimeWithHandlers),
-  )
+  return Layer.provideMerge(interactionRecoveryLive, actor)
 }
 
 // ── websocket lifecycle tracing ─────────────────────────────────────────────

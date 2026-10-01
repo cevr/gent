@@ -96,10 +96,7 @@ const shownRequest = (
 // Interaction Request — cold interaction mechanics
 // ============================================================================
 describe("Interaction Request", () => {
-  const storageLive = Layer.mergeAll(
-    testSqliteStorage(() => Layer.empty, {}),
-    GentPlatform.Test(),
-  )
+  const storageLive = Layer.mergeAll(testSqliteStorage(Layer.empty, {}), GentPlatform.Test())
   const callbacksFor = (is: InteractionStorage["Service"]): InteractionStorageConfig => ({
     persist: (record) => persistInteraction(is, record),
     decide: (branch, requestId, decisionJson) =>

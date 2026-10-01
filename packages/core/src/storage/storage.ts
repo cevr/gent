@@ -2009,32 +2009,40 @@ type FocusedStorage =
  * supplies them here, built over the same SQL client and the same interaction
  * storage, so core never has to name them.
  */
-export type ExtraRepositories<A, E, R> = (
-  base: Layer.Layer<SqlClient.SqlClient, E, R>,
-  interactionStorage: Layer.Layer<InteractionStorage, E, R>,
-) => Layer.Layer<A, E, R | GentPlatform>
+export type ExtraRepositories<A> = Layer.Layer<
+  A,
+  never,
+  SqlClient.SqlClient | InteractionStorage | GentPlatform
+>
 
+/**
+ * The kernel's repositories over one SQL client, and a feature's over both.
+ * Each layer appears once in the graph, so the client and every repository
+ * build once: a composite reached by two paths builds once per path.
+ */
 const provideFocusedRepositories = <A, E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
-  extra: ExtraRepositories<A, E, R>,
-): Layer.Layer<FocusedStorage | A, E, R | GentPlatform | Crypto.Crypto> => {
-  const interactionStorage = Layer.provide(InteractionStorage.Live, base)
-  return Layer.mergeAll(
-    extra(base, interactionStorage),
-    base,
-    Layer.provide(SessionStorage.Live, base),
-    Layer.provide(BranchStorage.Live, base),
-    Layer.provide(MessageStorage.Live, base),
-    Layer.provide(AgentLoopQueueStorage.Live, base),
-    Layer.provide(EventStorage.Live, base),
-    Layer.provide(RelationshipStorage.Live, base),
-    Layer.provide(SessionOperationStorage.Live, base),
-    Layer.provide(ToolCallBindingStorage.Live, base),
-    Layer.provide(TurnRecordStorage.Live, base),
-    Layer.provide(encoreSqlMessageStorage(), base),
-    interactionStorage,
+  extra: ExtraRepositories<A>,
+): Layer.Layer<FocusedStorage | A, E, R | GentPlatform | Crypto.Crypto> =>
+  Layer.provideMerge(
+    extra,
+    Layer.provideMerge(
+      Layer.mergeAll(
+        SessionStorage.Live,
+        BranchStorage.Live,
+        MessageStorage.Live,
+        AgentLoopQueueStorage.Live,
+        EventStorage.Live,
+        RelationshipStorage.Live,
+        SessionOperationStorage.Live,
+        ToolCallBindingStorage.Live,
+        TurnRecordStorage.Live,
+        encoreSqlMessageStorage(),
+        InteractionStorage.Live,
+      ),
+      base,
+    ),
   )
-}
 
 const ensureDbDirectory = (dbPath: string) =>
   Layer.effectDiscard(
@@ -2072,11 +2080,7 @@ export const SqliteStorage = {
   // the recursive SELECT and the DELETE.
   LiveWithSql: <A>(
     dbPath: string,
-    extra: ExtraRepositories<
-      A,
-      StorageError | PlatformError.PlatformError,
-      FileSystem.FileSystem | Path.Path
-    >,
+    extra: ExtraRepositories<A>,
     featureMigrations: FeatureMigrations,
   ): Layer.Layer<
     FocusedStorage | A,
@@ -2085,7 +2089,7 @@ export const SqliteStorage = {
   > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath, featureMigrations), extra),
 
   MemoryWithSql: <A>(
-    extra: ExtraRepositories<A, StorageError, never>,
+    extra: ExtraRepositories<A>,
     featureMigrations: FeatureMigrations,
   ): Layer.Layer<FocusedStorage | A, StorageError, GentPlatform | Crypto.Crypto> =>
     provideFocusedRepositories(makeMemorySqliteLayer(featureMigrations), extra),

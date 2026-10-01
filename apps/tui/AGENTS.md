@@ -3,7 +3,7 @@
 ## Gotchas
 
 - **jsxImportSource** - Must be `@opentui/solid`, not `solid-js`. Set in tsconfig.json.
-- **Preload required** - Source runs only: `apps/tui/bunfig.toml` declares `@opentui/solid/preload` for `bun` (top level) and `bun test` (`[test]`); run from `apps/tui`. Binary doesn't need it.
+- **Preload required** - Source runs only: `apps/tui/bunfig.toml` declares `scripts/dev-preload-boundary.ts` for `bun` (top level) and `@opentui/solid/preload` for `bun test` (`[test]`); run from `apps/tui`. Binary doesn't need it. The source preload caches each `.tsx` transform under `$XDG_CACHE_HOME/gent/solid-transform/` (else `~/.cache`), keyed by `bun.lock` and the file's path and text, and loads Babel only on a miss: a warm launch reaches the first frame in about 1.1 s, a cold one in about 2.1 s.
 - **No shorthand props** - Use `marginTop`/`marginBottom` not `marginY`.
 - **Border placement** - `border` prop goes on `<box>`, not `<input>`.
 - **autoloadBunfig: false** - Required in `Bun.build` compile options, else binary tries to load bunfig at runtime.

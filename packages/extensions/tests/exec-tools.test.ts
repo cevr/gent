@@ -161,7 +161,7 @@ const makeProcessLayerWithFailingMarkFailed = <A, E>(storageLayer: Layer.Layer<A
 
 const makePlatformLayer = () =>
   makeProcessLayer(
-    SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+    SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
   )
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) => Effect.provide(e, makePlatformLayer())
 
@@ -816,7 +816,7 @@ describe("BashTool execution", () => {
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
           `${directory}/storage.db`,
-          () => Layer.empty,
+          Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
 
@@ -889,11 +889,9 @@ describe("BashTool execution", () => {
             send: onQueue((notice) => Deferred.succeed(sent, notice)),
           },
         )
-        const storageLayer = SqliteStorage.LiveWithSql(
-          `${home}/gent.db`,
-          () => Layer.empty,
-          {},
-        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const storageLayer = SqliteStorage.LiveWithSql(`${home}/gent.db`, Layer.empty, {}).pipe(
+          Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
+        )
         const output = Array.from({ length: 3000 }, (_, index) => `old line ${index + 1}\n`).join(
           "",
         )
@@ -964,11 +962,9 @@ describe("BashTool execution", () => {
             send: onQueue((notice) => Deferred.succeed(sent, notice)),
           },
         )
-        const storageLayer = SqliteStorage.LiveWithSql(
-          `${home}/gent.db`,
-          () => Layer.empty,
-          {},
-        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const storageLayer = SqliteStorage.LiveWithSql(`${home}/gent.db`, Layer.empty, {}).pipe(
+          Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
+        )
         const output = Array.from({ length: 3000 }, (_, index) => `row line ${index + 1}\n`).join(
           "",
         )
@@ -1046,7 +1042,7 @@ describe("BashTool execution", () => {
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
           `${directory}/storage.db`,
-          () => Layer.empty,
+          Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
 
@@ -1099,7 +1095,7 @@ describe("BashTool execution", () => {
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
           `${directory}/storage.db`,
-          () => Layer.empty,
+          Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
         const processLayer = makeProcessLayer(storageLayer)
@@ -1154,7 +1150,7 @@ describe("BashTool execution", () => {
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
           `${directory}/storage.db`,
-          () => Layer.empty,
+          Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
         const firstProfile = yield* Layer.build(makeProcessLayer(storageLayer))
@@ -1218,7 +1214,7 @@ describe("BashTool execution", () => {
       if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
     }).pipe(
       Effect.provide(
-        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
       ),
     ),
   )
@@ -1240,7 +1236,7 @@ describe("BashTool execution", () => {
       expect(missing._tag).toBe("Failure")
     }).pipe(
       Effect.provide(
-        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
       ),
     ),
   )
@@ -1277,7 +1273,7 @@ describe("BashTool execution", () => {
         expect(unread.after).toEqual([])
       }).pipe(
         Effect.provide(
-          SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+          SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
         ),
       ),
   )
@@ -1378,7 +1374,7 @@ describe("BashTool execution", () => {
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
           `${directory}/storage.db`,
-          () => Layer.empty,
+          Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
         const undelivered = BackgroundBashStorage.pipe(
@@ -1897,7 +1893,7 @@ describe("a background completion the full follow-up queue refused", () => {
           )
         }).pipe(
           Effect.provide(
-            SqliteStorage.LiveWithSql(storagePath, () => Layer.empty, {}).pipe(
+            SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
               Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
             ),
           ),
@@ -1971,7 +1967,7 @@ describe("a background completion the full follow-up queue refused", () => {
           recursive: true,
         })
         yield* fs.writeFileString(file, printed)
-        const storageLayer = SqliteStorage.LiveWithSql(storagePath, () => Layer.empty, {}).pipe(
+        const storageLayer = SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
           Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
         )
         yield* Effect.gen(function* () {
@@ -2028,7 +2024,7 @@ describe("a background job the server stopped", () => {
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
           `${directory}/storage.db`,
-          () => Layer.empty,
+          Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
         const scope = yield* Scope.make()
