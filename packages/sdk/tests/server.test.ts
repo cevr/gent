@@ -30,21 +30,6 @@ import { buildLogPaths } from "../src/logger"
 
 // ── build fingerprint ───────────────────────────────────────────────────────
 
-// Compiled-binary execPath path. computeLocalFingerprintUncached takes the
-// binary-mtime branch and calls fs.stat(exe), so a counter-driven mtime
-// proves whether the cache is wired correctly.
-const COMPILED_BIN_PATH = "/tmp/fake-gent-binary"
-
-// GentPlatform.Test with execPath at a fake compiled binary, so
-// isCompiledBinary(exe) returns true and the stat branch fires.
-const PlatformCompiledBin: Layer.Layer<GentPlatform> = Layer.effect(
-  GentPlatform,
-  Effect.gen(function* () {
-    const platform = yield* GentPlatform
-    return GentPlatform.of({ ...platform, execPath: Effect.succeed(COMPILED_BIN_PATH) })
-  }),
-).pipe(Layer.provide(GentPlatform.Test("bf")))
-
 // FileSystem.layerNoop with a counter-driven stat: each stat call returns a
 // fresh mtime. Cached: first mtime is locked in. Uncached: every read sees a
 // new mtime → fingerprint changes between calls.
@@ -71,23 +56,76 @@ const makeCountingFs = (counter: Ref.Ref<number>): Layer.Layer<FileSystem.FileSy
       ),
   })
 
+/** Point git at no repository for the scope, so a source run cannot name its build. */
+const gitFindsNoRepository = Effect.acquireRelease(
+  Effect.sync(() => {
+    // oxlint-disable-next-line effect/noGlobals -- git reads GIT_DIR from the environment the server's child process inherits
+    const previous = Option.fromUndefinedOr(Bun.env["GIT_DIR"])
+    // oxlint-disable-next-line effect/noGlobals -- git reads GIT_DIR from the environment the server's child process inherits
+    Bun.env["GIT_DIR"] = "/nonexistent/gent-probe-x"
+    return previous
+  }),
+  (previous) =>
+    Effect.sync(() =>
+      Option.match(previous, {
+        // oxlint-disable-next-line effect/noGlobals -- git reads GIT_DIR from the environment the server's child process inherits
+        onNone: () => Reflect.deleteProperty(Bun.env, "GIT_DIR"),
+        // oxlint-disable-next-line effect/noGlobals -- git reads GIT_DIR from the environment the server's child process inherits
+        onSome: (value) => Reflect.set(Bun.env, "GIT_DIR", value),
+      }),
+    ),
+)
+
+/**
+ * The fingerprint of a compiled gent whose executable is `execPath`, over a
+ * filesystem whose stat counts calls, with a fresh mtime each call. A
+ * compiled build names itself by one stat; the spawner dies if it reaches git.
+ */
+const compiledFingerprintLayer = (execPath: string, counter: Ref.Ref<number>) =>
+  BuildFingerprint.layer(Effect.succeed(true)).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.effect(
+          GentPlatform,
+          Effect.gen(function* () {
+            const platform = yield* GentPlatform
+            return GentPlatform.of({ ...platform, execPath: Effect.succeed(execPath) })
+          }),
+        ).pipe(Layer.provide(GentPlatform.Test("bf"))),
+        makeCountingFs(counter),
+        Path.layer,
+        Layer.succeed(
+          ChildProcessSpawnerNs.ChildProcessSpawner,
+          ChildProcessSpawnerNs.make(() =>
+            Effect.die(new Error("ChildProcessSpawner.spawn unreachable in this test")),
+          ),
+        ),
+      ),
+    ),
+  )
+
 describe("BuildFingerprint", () => {
+  it.live("a compiled gent installed under ~/.bun/bin names its build by the binary", () =>
+    Effect.gen(function* () {
+      const counter = yield* Ref.make(0)
+      const fingerprint = yield* Effect.gen(function* () {
+        return yield* (yield* BuildFingerprint).current
+      }).pipe(
+        Effect.provide(
+          compiledFingerprintLayer("/nonexistent/gent-probe-x/.bun/bin/gent", counter),
+        ),
+      )
+      expect(fingerprint).toMatch(/^bin-/)
+      expect(yield* Ref.get(counter)).toBe(1)
+    }),
+  )
+
   it.live(
     "Live caches local fingerprint across calls (regression — without cache, mtime changes per call)",
     () =>
       Effect.gen(function* () {
         const counter = yield* Ref.make(0)
-        const fs = makeCountingFs(counter)
-        // ChildProcessSpawner stub: binary-mtime branch returns before spawn is reached.
-        // Any actual call would die loudly.
-        const spawnerLayer = Layer.succeed(
-          ChildProcessSpawnerNs.ChildProcessSpawner,
-          ChildProcessSpawnerNs.make(() =>
-            Effect.die(new Error("ChildProcessSpawner.spawn unreachable in this test")),
-          ),
-        )
-        const platformLayer = Layer.mergeAll(PlatformCompiledBin, fs, Path.layer, spawnerLayer)
-        const buildFp = BuildFingerprint.Live.pipe(Layer.provide(platformLayer))
+        const buildFp = compiledFingerprintLayer("/nonexistent/gent-probe-x/gent", counter)
 
         const program = Effect.gen(function* () {
           const bf = yield* BuildFingerprint
@@ -618,6 +656,33 @@ describe("Server Lock Ownership", () => {
         expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe(holder.serverId)
       }),
     ),
+  )
+
+  it.scopedLive(
+    "a gent that cannot know its build does not attach to a server that cannot know its own",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const dbPath = (yield* dataPaths(home)).dbPath
+          const holder = yield* lockWithIdentity(
+            home,
+            makeEntry({ dbPath, buildFingerprint: "unknown" }),
+            {},
+          )
+          yield* holdAsAnotherServer(home)
+          yield* gitFindsNoRepository
+          const { result, signals } = yield* Gent.server({
+            cwd: home,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }).pipe(Effect.flip, withSignalTrap)
+          expect(result._tag).toBe("@gent/core/GentConnectionError")
+          expect(result.message).toContain(`PID ${holder.pid}`)
+          expect(result.message).toContain("gent server stop")
+          expect(signals).toEqual([])
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
   )
 
   it.scopedLive(

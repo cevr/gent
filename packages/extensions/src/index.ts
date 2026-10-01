@@ -22,7 +22,7 @@ import * as EffectHttpClientError from "effect/http/HttpClientError"
 import * as EffectProcess from "effect/process"
 import * as EffectChildProcessSpawner from "effect/process/ChildProcessSpawner"
 import * as EffectSql from "effect/sql"
-import { CellBranchTools, CellExtension } from "./cell.js"
+import { CellBranchTools, CellExtension, isCompiledBuild } from "./cell.js"
 import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
 import { DelegateExtension } from "./delegate.js"
@@ -71,6 +71,13 @@ const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Option.ma
  * kernel are missing fails on first use.
  */
 export { CellBranchTools }
+
+/**
+ * Whether this process is the compiled gent: the one reader of the build's
+ * `__GENT_COMPILED__` define. The cell picks its worker by it; the SDK names
+ * its build by it.
+ */
+export { isCompiledBuild }
 
 export const BuiltinExtensions: ReadonlyArray<
   GentExtension<

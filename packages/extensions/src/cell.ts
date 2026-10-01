@@ -2378,7 +2378,7 @@ const CELL_WORKER_BINARY = "gent-cell"
 declare const __GENT_COMPILED__: unknown
 
 // An undeclared symbol throws a ReferenceError: a source run.
-const isCompiledBuild = Effect.try(() => __GENT_COMPILED__ === true).pipe(
+export const isCompiledBuild = Effect.try(() => __GENT_COMPILED__ === true).pipe(
   Effect.orElseSucceed(() => false),
 )
 

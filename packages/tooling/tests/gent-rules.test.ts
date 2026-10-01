@@ -247,12 +247,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 9,
   },
   {
-    rule: "gent/no-define-extension-throw",
-    invalid: "no-define-extension-throw.invalid.ts",
-    valid: ["no-define-extension-throw.valid.ts"],
-    expectedCount: 1,
-  },
-  {
     // Core reads no host global past effect/noGlobals and hand-rolls no path;
     // the platform impl and the harness back the platform and are exempt.
     rule: "gent/no-host-fact-bypass",

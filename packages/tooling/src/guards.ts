@@ -169,20 +169,21 @@ const regexEnd = (text: string, start: number): number => {
 
 /**
  * A tag name after `<`, and what follows it. A `,`, an `extends` or a `=`
- * after the name, or a one-letter capital name, makes the `<` a type
- * parameter list: `.tsx` spells a generic arrow `<A,>(a: A) => a`, with a
- * constraint `<A extends B,>` or a default `<A = B,>`. No JSX tag name is
- * followed by `=`.
+ * after the name, or `>(` right after it, makes the `<` a type parameter
+ * list: `.tsx` spells a generic arrow `<A,>(a: A) => a`, with a constraint
+ * `<A extends B,>` or a default `<A = B,>`, and a generic function type
+ * `<A>(a: A) => A`. No JSX tag name is followed by `=`. Any other name,
+ * one letter or more (`<X>it's</X>`), opens an element.
  */
-const JSX_OPENER = /^<(?:>|([A-Za-z_$][\w$.:-]*)(\s*(?:,|=|extends\b))?)/
+const JSX_OPENER = /^<(?:>|[A-Za-z_$][\w$.:-]*(\s*(?:,|=|extends\b)|>\()?)/
 
 /** Whether the `<` at `at` opens a JSX element. */
 const opensJsx = (text: string, at: number): boolean => {
   if (!startsOperand(text, at)) return false
   const opener = Option.fromNullishOr(JSX_OPENER.exec(text.slice(at, at + 64)))
   if (Option.isNone(opener)) return false
-  const [, name = "", typeParameter] = opener.value
-  return Predicate.isUndefined(typeParameter) && !/^[A-Z]$/.test(name)
+  const [, typeParameter] = opener.value
+  return Predicate.isUndefined(typeParameter)
 }
 
 /** A lookup of the character codes in `chars`, for a scan that stops on any of them. */
@@ -437,19 +438,56 @@ const lineAt = (code: string, index: number): number => code.slice(0, index).spl
 // ── a lint directive names its rules ────────────────────────────────────────
 
 /**
- * oxlint honors both spellings, `eslint-disable` and `oxlint-disable`, so each
- * pattern matches both. A blanket directive names no rule; a file-wide
- * directive, written as a block or a line comment, disables its rules to the
- * end of the file or the next enable.
+ * oxlint reads a directive from a comment's body, trimmed: the text after
+ * `//`, or between `/*` and `*\/` across any number of lines. It honors both
+ * spellings, `eslint-disable` and `oxlint-disable`, so each pattern matches
+ * both. A blanket directive names no rule; a file-wide directive, written as
+ * a block or a line comment, disables its rules to the end of the file or the
+ * next enable.
  *
  * `effect/requireSuppressionReason` reports a blanket `-next-line` directive,
  * but not a blanket `-line` or file-wide one: that directive disables every
  * rule on its own line, the upstream rule with them. So the guards read them.
  */
-const blanketDisableDirective =
-  /(?:\/\*\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:\*\/|--|$))|(?:\/\/\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:--|$))/
+const blanketDisableDirective = /^(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:--|$)/
 
-const blockDisableDirective = /(?:\/\*|\/\/)\s*(?:es|ox)lint-disable(?:\s|$)/
+const fileWideDisableDirective = /^(?:es|ox)lint-disable(?:\s|$)/
+
+/** A comment's trimmed body, and the line it starts on. */
+interface CommentBody {
+  readonly line: number
+  readonly body: string
+}
+
+/** Each comment of a source text, its body trimmed, keyed by the text: both directive guards read one lex. */
+const commentCache = () => new Map<string, ReadonlyArray<CommentBody>>()
+
+const commentBodyCache = { ts: commentCache(), tsx: commentCache() }
+
+/** A comment token's body: after `//`, or between `/*` and its `*\/` when it has one. */
+const COMMENT_BODY = /^(?:\/\/([^]*)|\/\*([^]*?)(?:\*\/)?)$/
+
+/** Every comment token of `text`, read by the lexer, so a `//` in a string is text. */
+const commentBodies = (text: string, syntax: Syntax): ReadonlyArray<CommentBody> => {
+  const cache = commentBodyCache[syntax]
+  return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
+    const bodies: Array<CommentBody> = []
+    const frames = [0]
+    let at = 0
+    while (at < text.length) {
+      const token = lexStep(text, at, frames, syntax)
+      if (token.kind === "comment") {
+        const [, line = "", block = ""] = COMMENT_BODY.exec(text.slice(at, token.end)) ?? []
+        const raw = line + block
+        const lead = raw.length - raw.trimStart().length
+        bodies.push({ line: lineAt(text, at + 2 + lead), body: raw.trim() })
+      }
+      at = token.end
+    }
+    cache.set(text, bodies)
+    return bodies
+  })
+}
 
 /** A file inside a fixture directory; a basename such as `pty-fixture.ts` is not one. */
 const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)\//
@@ -459,11 +497,11 @@ const isExplicitFixtureFile = (file: string): boolean => fixtureFilePattern.test
 const DISABLE_MESSAGE =
   "blanket and file-wide lint-disable comments (eslint- or oxlint- spelling) are banned; use line-local suppressions with exact rules"
 
-/** Every line of `text` a directive pattern matches. */
+/** Every comment of a source file whose body is a directive `directive` matches. */
 const directiveLines = (file: string, text: string, directive: RegExp): ReadonlyArray<Finding> =>
-  text.split("\n").flatMap((line, index) => {
-    if (!directive.test(line)) return []
-    return [{ file, line: index + 1, message: DISABLE_MESSAGE }]
+  commentBodies(text, syntaxOf(file)).flatMap(({ line, body }) => {
+    if (!directive.test(body)) return []
+    return [{ file, line, message: DISABLE_MESSAGE }]
   })
 
 export const findBlanketEslintDisables = (file: string, text: string): ReadonlyArray<Finding> =>
@@ -474,7 +512,7 @@ export const findBannedEslintDisableBlocks = (
   text: string,
 ): ReadonlyArray<Finding> => {
   if (isExplicitFixtureFile(file)) return []
-  return directiveLines(file, text, blockDisableDirective)
+  return directiveLines(file, text, fileWideDisableDirective)
 }
 
 // ── core names no feature built on it ───────────────────────────────────────
@@ -787,10 +825,12 @@ const DECLARATION_SITE = "packages/core/src/domain/agent.ts"
 /**
  * A provider-qualified model id in a string literal, e.g. `"anthropic/claude-…"`.
  * Deliberately narrow: it matches `<provider>/<model>` inside quotes, which is
- * the shape core would use to call `ModelResolver.resolve`.
+ * the shape core would use to call `ModelResolver.resolve`. The providers are
+ * the shipped model drivers (`anthropic`, `openai`, `opencode`, `opencode-go`,
+ * `typesafe`) and the other catalog vendors.
  */
 const VENDOR_MODEL_PATTERN =
-  /["'`](?:anthropic|openai|google|mistral|xai|groq|deepseek)\/[a-z0-9][a-z0-9.-]*["'`]/i
+  /["'`](?:anthropic|openai|opencode|opencode-go|typesafe|google|mistral|xai|groq|deepseek)\/[a-z0-9][a-z0-9.-]*["'`]/i
 
 /** Report vendor model SKUs pinned in core source. */
 export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArray<Finding> => {
@@ -2460,7 +2500,7 @@ export const findTuiSessionIdentityReads = (file: string, text: string): Readonl
 /**
  * The one suppression the linters cannot police: `@effect-diagnostics` comments.
  * Every other kind (`@ts-ignore`, `as any`, block eslint-disables) is banned by
- * oxlint or by `blanket-eslint-disable`, so this inventory is the approved list
+ * oxlint or by `findBlanketEslintDisables`, so this inventory is the approved list
  * of diagnostics suppressions and nothing else.
  *
  * The inventory is checked in both directions: a suppression comment with no
@@ -2505,36 +2545,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive",
   },
   {
-    file: "apps/tui/src/client.tsx",
-    scope: "next-line",
-    text: "nodeBuiltinImport:off -- synchronous shutdown logging runs after the Effect runtime closes.",
-  },
-  {
-    file: "apps/tui/tests/extensions/loader-boundary.test.ts",
-    scope: "next-line",
-    text: "nodeBuiltinImport:off -- synchronous filesystem fixture setup is a test boundary.",
-  },
-  {
-    file: "apps/tui/tests/extensions/loader-boundary.test.ts",
-    scope: "next-line",
-    text: "nodeBuiltinImport:off -- synchronous path fixture setup is a test boundary.",
-  },
-  {
-    file: "packages/core/src/server/workspace-rpc.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off -- the workspace id is a wire constant, see workspaceIdForCwd",
-  },
-  {
-    file: "packages/core/src/server/workspace-rpc.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off -- the workspace id canonicalizes its cwd before hashing",
-  },
-  {
-    file: "packages/sdk/src/server.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off -- server primitive owns filesystem path resolution for gent's data directory",
-  },
-  {
     file: "packages/sdk/src/server.ts",
     scope: "next-line",
     text: "strictEffectProvide:off -- the public entry point provides the local platform it resolves on.",
@@ -2553,16 +2563,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/tooling/src/check-guide-code.ts",
     scope: "next-line",
     text: "strictEffectProvide:off -- the script's process entry provides the platform once.",
-  },
-  {
-    file: "packages/core/src/test-utils/language-model.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off -- test fixture lifecycle comes from bun:test",
-  },
-  {
-    file: "packages/tooling/src/test-preload.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off -- the test preload runs in bun's test host before any Effect runtime",
   },
   {
     file: "packages/core/src/test-utils/language-model.ts",

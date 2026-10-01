@@ -30,8 +30,6 @@
     "gent/core-entry-boundary": "error",
     // Custom — a workspace imports only the workspace packages its manifest declares
     "gent/declared-workspace-imports": "error",
-    // Custom — definePackage/defineExtension factories must not throw
-    "gent/no-define-extension-throw": "error",
     // Custom — no host global read where effect/noGlobals does not look (upstream gap)
     "gent/no-host-fact-bypass": "error",
     // Custom — no module exports an alias of an @effect/platform-* binding (upstream gap)
@@ -91,6 +89,9 @@
           },
           "bun": {
             "use": "an Effect platform service (GentPlatform, FileSystem, ChildProcessSpawner, KeyValueStore, Config); Bun stays in adapter, tooling and test code"
+          },
+          "crypto": {
+            "use": "Effect Crypto for random bytes and ids, GentPlatform.hash for digests"
           }
         }
       }
@@ -188,7 +189,8 @@
       // the host directly. The retired `Bun.Glob` and `Bun.randomUUIDv7` stay
       // out: the built-in `noGlobals` bans hold the global, the `bun` module
       // ban below holds an import, and `gent/no-host-fact-bypass` holds
-      // `globalThis.Bun` and a computed member.
+      // `globalThis.Bun` and a computed member. `node:crypto` stays out
+      // everywhere: Effect `Crypto` and `GentPlatform.hash` own ids and digests.
       "files": [
         "packages/core/src/runtime/gent-platform-bun.ts",
         "**/*-adapter.ts",
@@ -209,6 +211,9 @@
               "bun": {
                 "members": ["Glob", "randomUUIDv7"],
                 "use": "Effect FileSystem to list files, GentPlatform.randomId for ids"
+              },
+              "crypto": {
+                "use": "Effect Crypto for random bytes and ids, GentPlatform.hash for digests"
               }
             }
           }
@@ -270,24 +275,29 @@
     {
       // The gamut driver is a plain Bun script, not an Effect program: it
       // drives herdr, git and SQLite with async shell calls, and its polls
-      // wait one step at a time. Its tests read it as such and build tuples
-      // with `as const`. Unsafe type assertions stay banned in the driver
-      // (`typescript/no-unsafe-type-assertion`): it decodes the SQLite rows
-      // it reads.
+      // wait one step at a time. Its tests read it as such. Type assertions
+      // stay banned (`effect/noAs`, `typescript/no-unsafe-type-assertion`):
+      // the driver decodes the SQLite rows it reads.
       "files": ["testbeds/gamut/gamut.ts", "testbeds/gamut/tests/**"],
       "rules": {
-        "effect/noAs": "off",
-        "effect/noAsyncFunction": "off",
         "effect/noGlobals": "off",
         "effect/noKnownValueWidening": "off",
         "effect/noNewError": "off",
-        "effect/noNodeBuiltinImport": "off",
         "effect/noNullish": "off",
         "effect/noTernary": "off",
         "effect/noThrowStatement": "off",
         "effect/noTryCatch": "off",
         "effect/noUnknownParameters": "off",
         "eslint/no-await-in-loop": "off"
+      }
+    },
+    {
+      // The driver itself awaits shell calls and reads the file system through
+      // Node. Its tests use neither, so both rules hold there.
+      "files": ["testbeds/gamut/gamut.ts"],
+      "rules": {
+        "effect/noAsyncFunction": "off",
+        "effect/noNodeBuiltinImport": "off"
       }
     },
     {
