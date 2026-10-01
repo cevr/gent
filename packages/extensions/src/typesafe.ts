@@ -1,7 +1,6 @@
 import { Effect, Layer, Option, Redacted, Schema } from "effect"
 import { FetchHttpClient, type HttpClient } from "effect/http"
 import type { DecisionModel } from "effect/ai"
-import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe"
 import {
   AuthMethod,
   defineExtension,
@@ -38,20 +37,30 @@ interface DecisionEndpoint {
   readonly transformClient?: (client: HttpClient.HttpClient) => HttpClient.HttpClient
 }
 
-/** A Jev model as an Effect AI `DecisionModel`, on the host's `fetch`. */
+/**
+ * A Jev model as an Effect AI `DecisionModel`, on the host's `fetch`. The SDK
+ * loads when the layer builds, not at launch.
+ */
 export const typeSafeDecisionModel = (
   model: string,
   endpoint: DecisionEndpoint,
 ): Layer.Layer<DecisionModel.DecisionModel> =>
-  TypeSafeDecisionModel.layer({ model }).pipe(
-    Layer.provide(
-      TypeSafeClient.layer({
-        apiKey: Redacted.make(endpoint.apiKey),
-        apiUrl: endpoint.apiUrl,
-        transformClient: endpoint.transformClient,
-      }),
+  Layer.unwrap(
+    Effect.map(
+      // oxlint-disable-next-line effect/noDynamicImports -- the SDK loads at the first decision model build, not at launch
+      Effect.promise(() => import("@effect/ai-typesafe")),
+      ({ TypeSafeClient, TypeSafeDecisionModel }) =>
+        TypeSafeDecisionModel.layer({ model }).pipe(
+          Layer.provide(
+            TypeSafeClient.layer({
+              apiKey: Redacted.make(endpoint.apiKey),
+              apiUrl: endpoint.apiUrl,
+              transformClient: endpoint.transformClient,
+            }),
+          ),
+          Layer.provide(FetchHttpClient.layer),
+        ),
     ),
-    Layer.provide(FetchHttpClient.layer),
   )
 
 // ── catalog ─────────────────────────────────────────────────────────────────

@@ -1604,6 +1604,13 @@ fetched from npm. The bound specifiers are exact:
   `packages/extensions/tests/index.test.ts` derives that set from the sources
   and fails when the map differs, so a shipped extension never reads a module
   a user extension cannot. A user extension is as capable as a shipped one.
+  The provider SDKs (`@effect/ai-anthropic`, `-openai`, `-openai-compat`,
+  `-typesafe`) bind lazily: a shipped driver imports its SDK at its first model
+  build, and a user extension's import loads it then too, so a launch does not
+  evaluate their generated schemas (compiled launch module evaluation 122 ms
+  to 79 ms). A binding loads its SDK through the `#unbound/*` alias in
+  `packages/extensions/package.json`: once bound, the SDK's own name resolves
+  to the binding, which would import itself.
 - Client files only: `@gent/core/protocol`, `@gent/tui/extensions`,
   `@gent/extensions/client` (the shipped extensions' RPCs, ids and message
   types), `solid-js`, `solid-js/store` and `@opentui/solid`. A test in

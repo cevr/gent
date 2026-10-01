@@ -78,11 +78,20 @@ import {
   modelReasons,
   withHeaders,
 } from "./providers.js"
-import {
+import type {
   OpenAiClient as OpenAiResponsesClient,
   OpenAiLanguageModel as OpenAiResponsesLanguageModel,
 } from "@effect/ai-openai"
+import type * as OpenAiSdkModule from "@effect/ai-openai"
 import { Model as AiModel } from "effect/ai"
+
+/**
+ * The SDK, loaded by the first model build: its generated schemas cost a
+ * launch time to evaluate, and a launch that streams nothing never reads them.
+ */
+type OpenAiSdk = typeof OpenAiSdkModule
+// oxlint-disable-next-line effect/noDynamicImports -- the SDK loads at the first model build, not at launch
+const loadOpenAiSdk = Effect.promise((): Promise<OpenAiSdk> => import("@effect/ai-openai"))
 
 // Test seam: only tests read these exports. OAuthError, authorizeOpenAIDevice,
 // OpenAICredentials, OpenAICredentialIO and makeOpenAICredentialCache let a test
@@ -1597,6 +1606,7 @@ const reasoningReplayClient =
  * Codex backend rewrite + OAuth headers are specific to the ChatGPT OAuth path.
  */
 const makeApiKeyOpenAIResolution = (
+  sdk: OpenAiSdk,
   modelName: string,
   config: OpenAiResponsesConfig,
   apiKey: string,
@@ -1604,6 +1614,8 @@ const makeApiKeyOpenAIResolution = (
   rejectedReasoning: RejectedReasoning,
   reasons: boolean,
 ) => {
+  const { OpenAiClient: OpenAiResponsesClient, OpenAiLanguageModel: OpenAiResponsesLanguageModel } =
+    sdk
   const httpClientLayer = Layer.effect(
     HttpClient.HttpClient,
     Effect.map(HttpClient.HttpClient, (client) =>
@@ -1639,12 +1651,15 @@ const makeApiKeyOpenAIResolution = (
  * refresh-token contract.
  */
 const makeOauthOpenAILayer = (
+  sdk: OpenAiSdk,
   modelName: string,
   config: OpenAiResponsesConfig,
   creds: CredentialCache<OpenAICredentials>,
   rejectedReasoning: RejectedReasoning,
   reasons: boolean,
 ) => {
+  const { OpenAiClient: OpenAiResponsesClient, OpenAiLanguageModel: OpenAiResponsesLanguageModel } =
+    sdk
   const codexHttpClientLayer = Layer.effect(
     HttpClient.HttpClient,
     Effect.gen(function* () {
@@ -1656,12 +1671,13 @@ const makeOauthOpenAILayer = (
     apiUrl: "https://chatgpt.com/backend-api/codex",
   }).pipe(Layer.provide(codexHttpClientLayer))
   return OpenAiResponsesLanguageModel.layer({ model: modelName, config }).pipe(
-    Layer.provide(explainedClientLayer(creds).pipe(Layer.provide(clientLayer))),
+    Layer.provide(explainedClientLayer(sdk, creds).pipe(Layer.provide(clientLayer))),
   )
 }
 
 /** Wraps the Responses client so a credential failure keeps its own message. */
 const explainedClientLayer = (
+  { OpenAiClient: OpenAiResponsesClient }: OpenAiSdk,
   creds: CredentialCache<OpenAICredentials>,
 ): Layer.Layer<OpenAiResponsesClient.OpenAiClient, never, OpenAiResponsesClient.OpenAiClient> =>
   Layer.effect(
@@ -1839,7 +1855,14 @@ export const buildOpenAIModelDriver = (
           return AiModel.make(
             "openai",
             modelName,
-            makeOauthOpenAILayer(modelName, config, creds, rejectedReasoning, reasons),
+            makeOauthOpenAILayer(
+              yield* loadOpenAiSdk,
+              modelName,
+              config,
+              creds,
+              rejectedReasoning,
+              reasons,
+            ),
           )
         }
 
@@ -1849,6 +1872,7 @@ export const buildOpenAIModelDriver = (
         if (Option.isSome(apiKey)) {
           const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
           return makeApiKeyOpenAIResolution(
+            yield* loadOpenAiSdk,
             modelName,
             config,
             apiKey.value,

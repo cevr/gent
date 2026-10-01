@@ -3,6 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#unbound/ai-anthropic": "@effect/ai-anthropic",
+    "#unbound/ai-openai": "@effect/ai-openai",
+    "#unbound/ai-openai-compat": "@effect/ai-openai-compat",
+    "#unbound/ai-typesafe": "@effect/ai-typesafe"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts"
