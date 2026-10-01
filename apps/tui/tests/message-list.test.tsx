@@ -2995,7 +2995,12 @@ describe("native transcript markdown", () => {
           { length: 8 },
           (_, index) => `## Section ${index + 1}\n\nbody ${index + 1}`,
         )
-        const items = [assistant("first", sections.join("\n\n")), assistant("second", "TAIL")]
+        // A later answer pushes the first above the live tail, so it commits whole.
+        const items = [
+          assistant("first", sections.join("\n\n")),
+          assistant("later", longBody("LATER")),
+          assistant("second", "TAIL"),
+        ]
         const setup = yield* renderScoped(
           () =>
             transcriptCommit({
@@ -3807,6 +3812,157 @@ describe("native transcript region at the terminal's bottom", () => {
         const counts = bodyRowCounts(terminalText(setup))
         for (const [row, count] of counts) expect([row, count]).toEqual([row, 1])
         expect(counts.get("ANSWER-0 line 1")).toBe(1)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // An answer whose top rows are in history writes the rest at exit from the
+  // same layout: the plain layout has other rows, so the rest would start
+  // at the wrong row and lose or repeat rows.
+  it.scopedLive(
+    "exit writes the rest of an answer cut by history, every row once",
+    () =>
+      Effect.gen(function* () {
+        const history: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items: () => [...longSession(), assistant("tail", "TAIL")],
+              streaming: () => false,
+              footer: () => 3,
+              paneOpen: () => false,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  history.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height },
+        )
+        yield* waitForFrame(
+          setup,
+          () => bodyRowCounts(history.join("")).has("ITEM-0 line 1"),
+          "history",
+          6_000,
+        )
+        yield* waitForStableFrame(setup)
+        // The live tail starts inside an answer: its top rows are in history.
+        const shown = bodyRowCounts(renderFrame(setup))
+        const kept = bodyRowCounts(history.join(""))
+        expect([...shown.keys()].some((row) => kept.has(row.replace(/line \d+/, "line 1")))).toBe(
+          true,
+        )
+        yield* flushTranscriptForExit(Option.getOrThrow(screen))
+        const counts = bodyRowCounts(history.join(""))
+        for (const item of longSession().keys()) {
+          for (let line = 1; line <= 12; line++) {
+            const row = `ITEM-${item} line ${line}`
+            expect([row, counts.get(row)]).toEqual([row, 1])
+          }
+        }
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // An answer whose highlight never settles commits plain, and the plain
+  // layout has other rows than the live view: its top rows never go alone,
+  // so no row reaches history twice or shows in history and on screen.
+  it.scopedLive(
+    "an answer that never settles goes to history whole, no row twice",
+    () =>
+      Effect.gen(function* () {
+        const timeouts = makeSettleTimeouts(Number.MAX_SAFE_INTEGER)
+        const history: string[] = []
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items: () => [...longSession(), assistant("tail", "TAIL")],
+              streaming: () => false,
+              footer: () => 3,
+              paneOpen: () => false,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                timeouts.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  history.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height },
+        )
+        yield* waitForFrame(
+          setup,
+          () => bodyRowCounts(history.join("")).has("ITEM-0 line 12"),
+          "history",
+          8_000,
+        )
+        yield* waitForStableFrame(setup)
+        const counts = bodyRowCounts(history.join("") + renderFrame(setup))
+        for (const [row, count] of counts) expect([row, count]).toEqual([row, 1])
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // An answer whose top rows went to history goes on in the region's first
+  // row: no blank row between history and the tail, across turns that end.
+  it.scopedLive(
+    "the rows of an answer cut by history run on into the region with no blank row",
+    () =>
+      Effect.gen(function* () {
+        const listAnswer = (id: string, label: string, rows: number): ListMessage =>
+          assistant(
+            id,
+            Array.from({ length: rows }, (_, index) => `- ${label}-${index + 10} row`).join("\n"),
+          )
+        const asked = (id: string, text: string): ListMessage => ({
+          ...userMessage("regular-message", id, text, "queued"),
+          pendingMode: absent,
+          metadata: { fromClient: true },
+        })
+        const [items, setItems] = createSignal<ListMessage[]>([
+          asked("p1", "FIRST-ASK"),
+          listAnswer("a1", "ROWA", 60),
+        ])
+        const [streaming, setStreaming] = createSignal(false)
+        const [footer, setFooter] = createSignal(4)
+        const { setup } = yield* settledLongSession({
+          items,
+          streaming,
+          footer,
+          paneOpen: () => false,
+          overlayOpen: () => false,
+        })
+        // A short turn runs and ends, with the activity row in the footer.
+        batch(() => {
+          setItems([
+            asked("p1", "FIRST-ASK"),
+            listAnswer("a1", "ROWA", 60),
+            asked("p2", "SECOND-ASK"),
+            { ...listAnswer("a2", "ROWB", 4), draft: true },
+          ])
+          setStreaming(true)
+          setFooter(6)
+        })
+        yield* waitForStableFrame(setup)
+        batch(() => {
+          setItems([
+            asked("p1", "FIRST-ASK"),
+            listAnswer("a1", "ROWA", 60),
+            asked("p2", "SECOND-ASK"),
+            listAnswer("a2", "ROWB", 4),
+          ])
+          setStreaming(false)
+          setFooter(3)
+        })
+        yield* waitForStableFrame(setup)
+        const rows = terminalText(setup).split("\n")
+        const at = (label: string) => rows.findIndex((row) => row.includes(`${label} row`))
+        for (let index = 10; index < 69; index++) {
+          expect([index, at(`ROWA-${index + 1}`) - at(`ROWA-${index}`)]).toEqual([index, 1])
+        }
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
   )

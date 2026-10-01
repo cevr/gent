@@ -492,9 +492,11 @@ export const renderFrame = (setup: TestRenderSetup) =>
 /** The rows each render committed to native history, in commit order. */
 const histories = new WeakMap<CliRenderer, Array<string>>()
 
+/** A snapshot's rows. Each row ends with a line break, the last one too; the rows join on them. */
 const snapshotText = (snapshot: CliRendererExternalOutputEvent["snapshot"]) =>
   new TextDecoder()
     .decode(snapshot.getRealCharBytes(true))
+    .replace(/\n$/, "")
     .split("\n")
     .map((row) => row.trimEnd())
     .join("\n")

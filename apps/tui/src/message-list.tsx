@@ -1769,7 +1769,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    *
    * A highlight that misses its budget is tried again: scrollback keeps
    * forever what it is given. The last try, and every commit once the
-   * reader leaves, draws the item plain.
+   * reader leaves, draws the item plain, unless history holds its top rows:
+   * those were drawn, so the rest is drawn too.
    *
    * The rows move in place. `handOver` takes the item out of the live view
    * and shrinks the split region by its rows before the rows are queued, so
@@ -1821,14 +1822,19 @@ export function NativeTranscript(props: NativeTranscriptProps) {
             ),
           )
         })
-      const commitPlain = Effect.scoped(
+      // The rows an earlier commit took from this item were drawn, and the
+      // plain layout has other rows: the rest comes from the drawn layout, so
+      // it starts at the row the live view shows first. It waits no longer
+      // than a plain draw.
+      const plain = rows.from === 0
+      const commitLast = Effect.scoped(
         Effect.gen(function* () {
-          const surface = yield* drawSurface(items, true)
+          const surface = yield* drawSurface(items, plain)
           yield* Effect.tryPromise(() => surface.settle(PLAIN_SETTLE_MS)).pipe(Effect.ignore)
           return yield* commitDrawn(surface)
         }),
       )
-      if (lastTry || isLeaving()) return commitPlain
+      if (lastTry || isLeaving()) return commitLast
       return Effect.scoped(
         Effect.gen(function* () {
           const surface = yield* drawSurface(items, false)
@@ -1838,7 +1844,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
             Effect.raceFirst(Deferred.await(leaving).pipe(Effect.as(false))),
           )
           if (settled) return yield* commitDrawn(surface)
-          if (isLeaving()) return yield* commitPlain
+          if (isLeaving()) return yield* commitLast
           return "unsettled"
         }),
       )
@@ -2183,6 +2189,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         continue
       }
       if (plan.turnRunning) return
+      // An item on its last try commits plain, and the plain layout has other
+      // rows than the live view: it waits to go whole.
+      if ((unsettledTries.get(value) ?? 0) + 1 >= SETTLE_TRIES) return
       offer(item, value, Option.some(queuedRows + excess))
       return
     }
