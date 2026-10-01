@@ -2185,6 +2185,17 @@ describe("steering receipts", () => {
     expect(linesOfReceipts("the policy (`readKnownSteps` in `runtime/turn.ts`) holds")).toEqual([])
   })
 
+  test("a pair that continues a parenthesised list of receipts is a receipt", () => {
+    expect(
+      linesOfReceipts(
+        "the policy (`readKnownSteps` in `runtime/turn.ts`, `gone` in `runtime/turn.ts`) holds",
+      ),
+    ).toEqual([1])
+    expect(
+      linesOfReceipts("the policy (not `mutex` in `runtime/turn.ts`, `gone` in `runtime/turn.ts`)"),
+    ).toEqual([])
+  })
+
   test("a pair outside a receipt run or a parenthesis is prose, not a receipt", () => {
     const text = [
       "Avoid `mutex` in `packages/core/src/runtime/turn.ts`.",

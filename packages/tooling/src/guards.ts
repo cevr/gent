@@ -2250,18 +2250,30 @@ const RECEIPT =
 /** One backticked name of a receipt; a dotted name is read by its last segment. */
 const RECEIPT_NAME = /`(?:[\w$]+\.)*([A-Za-z_$][\w$]*)(?:\(\))?`/g
 
+/** A whole receipt pair, then the comma that continues a list after it. */
+const LISTED_PAIR = new RegExp(`${RECEIPT.source},\\s*$`)
+
 /** A sentence end, or a blank line that ends a paragraph. */
 const SENTENCE_END = /[.!?]\s|\n[ \t]*\n/g
 
 /**
  * Whether the pair at `at` is stated as a receipt: it opens a parenthesis
- * (`(`name` in `path`)`), or its sentence runs from a `Receipt:` or
- * `Receipts:` label. Any other pair is prose, such as "avoid `x` in `y.ts`",
- * which asserts nothing about where `x` lives.
+ * (`(`name` in `path`)`), it continues a list after a stated pair in the
+ * same parentheses (`(`a` in `x.ts`, `b` in `y.ts`)`), or its sentence runs
+ * from a `Receipt:` or `Receipts:` label. Any other pair is prose, such as
+ * "avoid `x` in `y.ts`", which asserts nothing about where `x` lives.
  */
-const isStatedReceipt = (prose: string, at: number): boolean => {
+const isStatedReceipt: (prose: string, at: number) => boolean = (prose, at) => {
   const before = prose.slice(Math.max(0, at - 600), at)
   if (/\(\s*$/.test(before)) return true
+  return Option.match(Option.fromNullishOr(LISTED_PAIR.exec(before)), {
+    onSome: (listed) => isStatedReceipt(prose, at - before.length + listed.index),
+    onNone: () => isLabelled(before),
+  })
+}
+
+/** Whether the sentence that ends at the end of `before` runs from a receipt label. */
+const isLabelled = (before: string): boolean => {
   const sentenceStart = Option.match(
     Option.fromUndefinedOr(before.matchAll(SENTENCE_END).toArray().at(-1)),
     {
