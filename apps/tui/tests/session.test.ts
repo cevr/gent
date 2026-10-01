@@ -1,5 +1,16 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Clock, Deferred, Effect, Fiber, FileSystem, Option, Exit, Predicate, Stream } from "effect"
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Exit,
+  Predicate,
+  Queue,
+  Stream,
+} from "effect"
 import { TestClock } from "effect/testing"
 import {
   beginAuthCheck,
@@ -2547,6 +2558,200 @@ describe("useSessionFeed", () => {
       }),
     )
   }
+
+  // ── the answer in progress ──
+  // Core publishes each chunk as a stored event and stores the step's answer
+  // only when the step ends, so a snapshot taken mid-step lacks the answer
+  // its cursor already covers.
+
+  const midStepIds = (name: string) => {
+    const sessionId = SessionId.make(`session-${name}`)
+    const branchId = BranchId.make(`branch-${name}`)
+    const inputId = MessageId.make(`${name}-input`)
+    const answerId = assistantMessageIdForTurn(inputId, 1)
+    const started = AgentEvent.cases.StreamStarted.make({
+      sessionId,
+      branchId,
+      messageId: inputId,
+      step: 1,
+    })
+    const chunk = (text: string) =>
+      AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: text })
+    const synchronized = (id: number) =>
+      makeEnvelope(
+        id,
+        AgentEvent.cases.StreamSynchronized.make({
+          sessionId,
+          branchId,
+          lastEventId: EventId.make(id),
+        }),
+      )
+    return { sessionId, branchId, answerId, started, chunk, synchronized }
+  }
+
+  const assistantContents = (feed: Option.Option<ReturnType<typeof useSessionFeed>>) =>
+    Option.match(feed, {
+      onNone: (): string[] => [],
+      onSome: (value) =>
+        value
+          .messages()
+          .filter((message) => message.role === "assistant")
+          .map((message) => message.content),
+    })
+
+  it.live("a feed opened mid-step shows the whole answer, then the stored one", () =>
+    Effect.gen(function* () {
+      const { sessionId, branchId, answerId, started, chunk, synchronized } =
+        midStepIds("feed-mid-step")
+      const later = yield* Queue.unbounded<EventEnvelope>()
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              // The snapshot's cursor covers the step's first chunk, not its answer.
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, 2)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(
+                    makeEnvelope(1, started),
+                    makeEnvelope(2, chunk("Hello ")),
+                    synchronized(2),
+                    makeEnvelope(3, chunk("world")),
+                  ),
+                  Stream.fromQueue(later),
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
+        )
+        return disposeRoot
+      })
+      yield* waitUntil(() => assistantContents(feed).join("").includes("world"))
+      expect(assistantContents(feed)).toEqual(["Hello world"])
+      // The step ends: the stored answer replaces the streamed text.
+      const stored = Message.cases.regular.make({
+        id: answerId,
+        sessionId,
+        branchId,
+        role: "assistant",
+        parts: [
+          Prompt.reasoningPart({ text: "weighed it" }),
+          Prompt.textPart({ text: "Hello world" }),
+        ],
+        createdAt: dateFromMillis(0),
+      })
+      yield* Queue.offerAll(later, [
+        makeEnvelope(4, AgentEvent.cases.StreamEnded.make({ sessionId, branchId })),
+        makeEnvelope(5, AgentEvent.cases.MessageReceived.make({ message: stored })),
+      ])
+      yield* waitUntil(() =>
+        Option.exists(feed, (value) =>
+          value.messages().some((message) => message.reasoning === "weighed it"),
+        ),
+      ).pipe(Effect.ensuring(Effect.sync(dispose)))
+      expect(assistantContents(feed)).toEqual(["Hello world"])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a reconnect mid-step keeps the answer streamed before the drop", () =>
+    Effect.gen(function* () {
+      const { sessionId, branchId, started, chunk, synchronized } = midStepIds("feed-reconnect")
+      let attempts = 0
+      let cursor = 0
+      // The feed backs off on a test clock.
+      const clock = yield* TestClock.make()
+      const withClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
+      const runtime: GentRuntime = {
+        ...createMockRuntime(),
+        cast: withClock.cast,
+        fork: withClock.fork,
+      }
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              // The second snapshot still lacks the answer: the step runs on.
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, cursor)),
+              events: () => {
+                attempts += 1
+                cursor = 4
+                if (attempts === 1)
+                  return Stream.concat(
+                    Stream.make(
+                      makeEnvelope(1, started),
+                      makeEnvelope(2, chunk("Hello ")),
+                      synchronized(2),
+                    ),
+                    Stream.fail(
+                      new RpcClientError({
+                        reason: new RpcClientDefect({ message: "connection lost", cause: "drop" }),
+                      }),
+                    ),
+                  )
+                // The chunks that streamed while the connection was down replay.
+                return Stream.concat(
+                  Stream.make(
+                    makeEnvelope(3, chunk("big ")),
+                    makeEnvelope(4, chunk("wide ")),
+                    synchronized(4),
+                    makeEnvelope(5, chunk("world")),
+                  ),
+                  Stream.never,
+                )
+              },
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime,
+        })
+        feed = Option.some(
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
+        )
+        return disposeRoot
+      })
+      yield* waitUntilAdvancing(
+        clock.adjust("1 second"),
+        () => assistantContents(feed).join("").includes("world"),
+        "the live chunk after the reconnect",
+        3_000,
+      ).pipe(Effect.ensuring(Effect.sync(dispose)))
+      expect(assistantContents(feed)).toEqual(["Hello big wide world"])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
 
   it.live("starts a late tool call on the message the event names, not the newest one", () =>
     Effect.gen(function* () {

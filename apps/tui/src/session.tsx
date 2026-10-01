@@ -101,7 +101,7 @@ import {
   recordFrecencyPick,
 } from "./autocomplete"
 import { type Command, executeSlashCommand, isSlashCommandName, useCommand } from "./commands"
-import { createStore, produce, type SetStoreFunction } from "solid-js/store"
+import { createStore, produce, type SetStoreFunction, unwrap } from "solid-js/store"
 import {
   addStep,
   type AssistantSegment,
@@ -1743,30 +1743,25 @@ const buildSegments = (
   )
 }
 
-const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
-  const filteredMsgs = msgs.filter((m) => m.role !== "tool")
+const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] =>
+  msgs.flatMap((m) => {
+    if (m.role === "tool") return []
+    return [buildMessage(m, m.toolInteractions.map(toToolCall))]
+  })
 
-  return filteredMsgs.map((m) => {
-    // Only an assistant message calls tools, and its segments name every call it made.
-    let segments = Option.none<AssistantSegment[]>()
-    if (m.role === "assistant")
-      segments = Option.some(buildSegments(m.segments, m.toolInteractions.map(toToolCall)))
-    if (m._tag === "interjection")
-      return {
-        _tag: "interjection-message",
-        id: m.id,
-        role: "user",
-        content: messagePartsText(m.parts),
-        reasoning: messagePartsReasoning(m.parts),
-        images: messagePartsImages(m.parts),
-        createdAt: m.createdAt.getTime(),
-        segments: Option.getOrUndefined(segments),
-        metadata: m.metadata,
-      }
+/**
+ * One feed message from a projected one. Its tool-call segments draw the
+ * `toolCalls` they name; a segment that names no call draws nothing.
+ */
+const buildMessage = (m: ProjectedMessage, toolCalls: ReadonlyArray<ToolCall>): Message => {
+  // Only an assistant message calls tools, and its segments name every call it made.
+  let segments = Option.none<AssistantSegment[]>()
+  if (m.role === "assistant") segments = Option.some(buildSegments(m.segments, toolCalls))
+  if (m._tag === "interjection")
     return {
-      _tag: "regular-message",
+      _tag: "interjection-message",
       id: m.id,
-      role: m.role,
+      role: "user",
       content: messagePartsText(m.parts),
       reasoning: messagePartsReasoning(m.parts),
       images: messagePartsImages(m.parts),
@@ -1774,24 +1769,42 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
       segments: Option.getOrUndefined(segments),
       metadata: m.metadata,
     }
-  })
+  return {
+    _tag: "regular-message",
+    id: m.id,
+    role: m.role,
+    content: messagePartsText(m.parts),
+    reasoning: messagePartsReasoning(m.parts),
+    images: messagePartsImages(m.parts),
+    createdAt: m.createdAt.getTime(),
+    segments: Option.getOrUndefined(segments),
+    metadata: m.metadata,
+  }
 }
 
+/**
+ * A received message takes its row, or replaces the row its id names. The
+ * replaced row's tool calls stay: the feed attached them live, and their
+ * status is newer than the received message's.
+ */
 const upsertReceivedMessage = (
   setStore: SetStoreFunction<SessionFeedStore>,
   message: ProjectedMessage,
 ) => {
-  const next = buildMessages([message])[0]
-  const nextMessage = Option.fromNullishOr(next)
-  if (Option.isNone(nextMessage)) return
+  if (message.role === "tool") return
   setStore(
     produce((draft) => {
-      const index = draft.messages.findIndex((candidate) => candidate.id === nextMessage.value.id)
-      if (index === -1) {
-        draft.messages.push(nextMessage.value)
+      const index = draft.messages.findIndex((candidate) => candidate.id === message.id)
+      const projectedCalls = message.toolInteractions.map(toToolCall)
+      const existing = Option.fromNullishOr(draft.messages[index])
+      if (Option.isNone(existing)) {
+        draft.messages.push(buildMessage(message, projectedCalls))
         return
       }
-      draft.messages[index] = nextMessage.value
+      draft.messages[index] = buildMessage(message, [
+        ...projectedCalls,
+        ...messageToolCalls(existing.value),
+      ])
     }),
   )
 }
@@ -1996,14 +2009,12 @@ const toActiveInteraction = (event: AgentEvent): Option.Option<ActiveInteraction
 
 /**
  * Events whose effect the session snapshot already carries. Replay skips them
- * so a reload does not re-count turns or re-append settled tool payloads.
+ * so a reload does not re-append settled tool payloads. A replayed chunk is
+ * the answer in progress's to decide (`useSessionFeed`).
  */
 const isSnapshotHeldEvent = Predicate.or(
-  Predicate.isTagged("StreamChunk"),
-  Predicate.or(
-    Predicate.isTagged("ToolCallStarted"),
-    Predicate.or(Predicate.isTagged("ToolCallSucceeded"), Predicate.isTagged("ToolCallFailed")),
-  ),
+  Predicate.isTagged("ToolCallStarted"),
+  Predicate.or(Predicate.isTagged("ToolCallSucceeded"), Predicate.isTagged("ToolCallFailed")),
 )
 
 const isToolResultEvent = Predicate.or(
@@ -2139,7 +2150,8 @@ export function useSessionFeed(
     switch (event._tag) {
       case "MessageReceived":
         // A replayed message is already in the snapshot unless it is standalone.
-        if (isStandaloneMessage(event.message) || (live && event.message.role === "user")) {
+        // A live answer is the step's stored answer: it replaces the streamed text.
+        if (isStandaloneMessage(event.message) || live) {
           upsertReceivedMessage(setStore, projectMessage(event.message, []))
         }
         return
@@ -2227,28 +2239,71 @@ export function useSessionFeed(
     return true
   }
 
+  // ── the answer in progress ──
+  //
+  // Core publishes each chunk as a stored event and stores the step's answer
+  // (its `MessageReceived`) only when the step ends. So the answer in
+  // progress is built from chunks, stored and live alike: a `StreamStarted`
+  // opens it, each chunk extends it, and the step's live `MessageReceived`
+  // replaces it with the stored answer (`applySettledEvent`). A step whose
+  // answer the snapshot holds is settled: its replayed chunks add nothing.
+
+  /** The ids of the answers the latest snapshot holds. */
+  let snapshotAnswers: ReadonlySet<string> = new Set()
+
   /**
-   * Start the message this turn's answer belongs to. The durable input id and
-   * step name it, so a later chunk or receipt finds the same owner.
+   * Take a snapshot. It holds settled answers only, so the answer in
+   * progress stays on top of it unless the snapshot already holds its id.
+   */
+  const applySnapshotMessages = (messages: ReadonlyArray<ProjectedMessage>) => {
+    snapshotAnswers = new Set(messages.map((message) => String(message.id)))
+    const next = buildMessages(messages)
+    streamMessageId = Option.filter(streamMessageId, (id) => !snapshotAnswers.has(id))
+    const inProgress = Option.flatMap(streamMessageId, (id) =>
+      Option.fromNullishOr(store.messages.find((message) => message.id === id)),
+    )
+    if (Option.isSome(inProgress)) next.push(unwrap(inProgress.value))
+    setStore("messages", next)
+  }
+
+  /**
+   * Open the message this step's answer belongs to. The durable input id and
+   * step name it, so a later chunk or receipt finds the same owner. A
+   * replayed start opens only an answer the snapshot does not hold; one with
+   * no input id cannot say, so it opens nothing.
    */
   const openStreamedAnswer = (
     event: Extract<AgentEvent, { _tag: "StreamStarted" }>,
     stampedAt: number,
+    live: boolean,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
-      const id = yield* Option.fromUndefinedOr(event.messageId).pipe(
-        Option.match({
-          onNone: () => randomId,
-          onSome: (inputId) => Effect.succeed(assistantMessageIdForTurn(inputId, event.step)),
-        }),
+      const durable = Option.map(Option.fromUndefinedOr(event.messageId), (inputId) =>
+        String(assistantMessageIdForTurn(inputId, event.step)),
       )
+      if (!live) {
+        streamMessageId = Option.filter(durable, (id) => !snapshotAnswers.has(id))
+        if (Option.isSome(streamMessageId))
+          ensureAssistantMessage(setStore, "", streamMessageId.value, stampedAt)
+        return
+      }
+      const id = yield* Option.match(durable, { onNone: () => randomId, onSome: Effect.succeed })
       streamMessageId = Option.some(id)
       ensureAssistantMessage(setStore, "", id, stampedAt)
     })
 
-  /** A chunk extends the open answer. A history stream without one gets a local id. */
-  const appendStreamedChunk = (chunk: string, stampedAt: number): Effect.Effect<void> =>
+  /**
+   * A chunk extends the open answer. A replayed chunk with no open answer
+   * belongs to a settled step; a live one opens a local answer (a history
+   * stream with no start).
+   */
+  const appendStreamedChunk = (
+    chunk: string,
+    stampedAt: number,
+    live: boolean,
+  ): Effect.Effect<void> =>
     Effect.gen(function* () {
+      if (!live && Option.isNone(streamMessageId)) return
       const id = yield* streamMessageId.pipe(
         Option.match({ onNone: () => randomId, onSome: Effect.succeed }),
       )
@@ -2368,7 +2423,7 @@ export function useSessionFeed(
               yield* Effect.sync(() => {
                 client.applySessionSnapshot(snapshot)
                 callbacks.onQueueSnapshot(snapshot.runtime.queue)
-                setStore("messages", buildMessages(snapshot.messages))
+                applySnapshotMessages(snapshot.messages)
               })
 
               const after = lastSeenEventId
@@ -2516,8 +2571,9 @@ export function useSessionFeed(
    * One event handler for both passes.
    *
    * `replay` covers envelopes at or before the snapshot cursor: the snapshot
-   * already holds their message, tool, and metric state, so replay only
-   * rebuilds the event-only UI rows and stamps them with the recorded time.
+   * already holds their settled message, tool, and metric state, so replay
+   * rebuilds the event-only UI rows and the answer still in progress, and
+   * stamps them with the recorded time.
    * `live` covers everything after it and stamps rows with the current time so
    * they sort after the snapshot's own rows.
    */
@@ -2549,15 +2605,14 @@ export function useSessionFeed(
         case "StreamStarted":
           // A new step means the last step's retries ran.
           settleRetryingEvents(setStore, "retried")
-          if (!live) break
-          setRunningCalls([])
-          yield* openStreamedAnswer(event, stampedAt)
+          if (live) setRunningCalls([])
+          yield* openStreamedAnswer(event, stampedAt, live)
           break
 
         case "StreamChunk":
           // The answer streams: the retry ran.
           settleRetryingEvents(setStore, "retried")
-          yield* appendStreamedChunk(event.chunk, stampedAt)
+          yield* appendStreamedChunk(event.chunk, stampedAt, live)
           break
 
         default:
