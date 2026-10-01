@@ -33,7 +33,14 @@ import {
   usePickerGeometry,
 } from "./ui"
 import { formatError, plural, type UiError } from "./utils"
-import { pastedLine, typedText, useScopedKeyboard, useTerminalDimensions } from "./terminal"
+import {
+  pastedLine,
+  type ScopedKeyboardEvent,
+  typedText,
+  useClipboard,
+  useScopedKeyboard,
+  useTerminalDimensions,
+} from "./terminal"
 
 // ── auth state ──────────────────────────────────────────────────────────────
 
@@ -249,6 +256,24 @@ const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<AuthM
 const providerFor = (catalog: AuthCatalog, provider: string): Option.Option<AuthProviderInfo> =>
   Option.fromNullishOr(catalog.providers.find((entry) => entry.provider === provider))
 
+/**
+ * What the pane calls a provider: its driver's name ("OpenCode Go"), or its
+ * id when the server sends no name. A name two providers share carries the
+ * id beside it: "Mirror (mirror-a)".
+ */
+const providerLabel = (catalog: AuthCatalog, provider: string): string =>
+  Option.match(
+    Option.flatMap(providerFor(catalog, provider), (entry) => Option.fromUndefinedOr(entry.name)),
+    {
+      onNone: () => provider,
+      onSome: (name) => {
+        if (catalog.providers.filter((entry) => entry.name === name).length > 1)
+          return `${name} (${provider})`
+        return name
+      },
+    },
+  )
+
 /** The required providers that still have no credentials. */
 const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> =>
   catalog.providers.filter((entry) => entry.required && !entry.hasKey)
@@ -294,13 +319,16 @@ export function Auth(props: AuthProps) {
   const dimensions = useTerminalDimensions()
   const { sectionWidth } = usePickerGeometry()
   const { cast } = useRuntime()
+  const copyToClipboard = useClipboard()
 
   const [state, setState] = createSignal(AuthState.initial())
   const send = (event: AuthEvent) => setState((current) => transitionAuth(current, event))
   const catalog = () => catalogOf(state())
+  /** What the pane calls `provider` ({@link providerLabel}). */
+  const label = (provider: string) => providerLabel(catalog(), provider)
 
   const [autoPrompted, setAutoPrompted] = createSignal(false)
-  const [successMessage, setSuccessMessage] = createSignal(Option.none<string>())
+  const [flashNote, setFlashNote] = createSignal(Option.none<string>())
   const sessionId = props.sessionId
 
   // ── Staleness ─────────────────────────────────────────────────────
@@ -314,7 +342,7 @@ export function Auth(props: AuthProps) {
   }
   const clearSuccess = () => {
     stopSuccessTimer()
-    setSuccessMessage(Option.none())
+    setFlashNote(Option.none())
   }
   // A pane that closes stops the flash's clock with it.
   onCleanup(stopSuccessTimer)
@@ -327,15 +355,16 @@ export function Auth(props: AuthProps) {
   }
   const isCurrent = (captured: number) => captured === version
 
-  const flashSuccess = (message: string) => {
+  /** Shows `note` in the note row for two seconds. */
+  const flash = (note: string) => {
     clearSuccess()
-    setSuccessMessage(Option.some(message))
+    setFlashNote(Option.some(note))
     successTimer = Option.some(
       clientCtx.runtime.fork(
         Effect.sleep("2 seconds").pipe(
           Effect.andThen(
             Effect.sync(() => {
-              setSuccessMessage(Option.none())
+              setFlashNote(Option.none())
               successTimer = Option.none()
             }),
           ),
@@ -343,6 +372,7 @@ export function Auth(props: AuthProps) {
       ),
     )
   }
+  const flashSuccess = (message: string) => flash(`✓ ${message}`)
 
   /** Run `body` only while the action that captured `token` is still current. */
   const whileCurrent = (token: number, body: () => void) =>
@@ -456,7 +486,7 @@ export function Auth(props: AuthProps) {
       clientCtx.client.auth.setKey({ provider, key }).pipe(
         Effect.tap(() =>
           whileCurrent(token, () => {
-            flashSuccess(`API key saved for ${provider}`)
+            flashSuccess(`API key saved for ${label(provider)}`)
             loadAuth(token)
           }),
         ),
@@ -502,7 +532,7 @@ export function Auth(props: AuthProps) {
         .pipe(
           Effect.tap(() =>
             whileCurrent(token, () => {
-              flashSuccess(`Authenticated ${provider} via OAuth`)
+              flashSuccess(`Authenticated ${label(provider)} via OAuth`)
               loadAuth(token)
             }),
           ),
@@ -539,7 +569,7 @@ export function Auth(props: AuthProps) {
             }
             // "done" means the server finished it during `authorize`.
             if (result.value.method === "done") {
-              flashSuccess(`Authenticated ${provider}`)
+              flashSuccess(`Authenticated ${label(provider)}`)
               loadAuth(token)
               return
             }
@@ -600,7 +630,7 @@ export function Auth(props: AuthProps) {
         .pipe(
           Effect.tap(() =>
             whileCurrent(token, () => {
-              flashSuccess(`Authenticated ${screen.provider} via OAuth`)
+              flashSuccess(`Authenticated ${label(screen.provider)} via OAuth`)
               loadAuth(token)
             }),
           ),
@@ -678,11 +708,13 @@ export function Auth(props: AuthProps) {
             when={!Option.contains(armed(), provider.provider)}
             fallback={
               <text style={{ fg: theme.error }}>
-                ctrl+x again to delete {provider.provider} login
+                ctrl+x again to delete {label(provider.provider)} login
               </text>
             }
           >
-            <text style={{ fg: rowForeground(isSelected(), theme.text) }}>{provider.provider}</text>
+            <text style={{ fg: rowForeground(isSelected(), theme.text) }}>
+              {label(provider.provider)}
+            </text>
             <text style={{ fg: rowForeground(isSelected(), statusColor(provider)) }}>
               {" "}
               {authLabel(provider)}
@@ -783,6 +815,27 @@ export function Auth(props: AuthProps) {
   /** Two rules, the title and the key hint, then the text line and the note row. */
   const OAUTH_CHROME_ROWS = 6
 
+  // A wrapped URL runs over several rows, and a mouse drag must start and
+  // end on its exact first and last cells; one key copies it whole, as in
+  // Codex, Claude Code and OpenCode. The code line takes every printing key,
+  // so the copy key is `ctrl+y` (OpenCode's copy binding): it can never be a
+  // letter of a code typed by hand.
+  const isUrlCopyKey = (event: ScopedKeyboardEvent) =>
+    event.name === "y" && event.ctrl === true && event.meta !== true
+  // The note says copied for a copy some route took, and otherwise how to
+  // copy instead. A note for a screen the reader has since left is dropped.
+  const copyUrl = (current: OAuthScreen) => {
+    const token = version
+    copyToClipboard(current.authorization.url, (taken) => {
+      if (!isCurrent(token)) return
+      if (taken) return flashSuccess("URL copied to the clipboard")
+      flash("Could not reach the clipboard — select the URL instead")
+    })
+  }
+  const OAUTH_KEYS = [keyHint("ctrl+y", "copy URL"), KeyHints.submit, KeyHints.back]
+  /** The note row: a copy's note while it shows, else the waiting note. */
+  const oauthNote = (current: OAuthScreen) => Option.orElse(flashNote(), () => waitingNote(current))
+
   /**
    * The OAuth screen inside its frame: the instructions and the URL, then the
    * code line. The rows go in order of need. The note row gives way first,
@@ -830,6 +883,11 @@ export function Auth(props: AuthProps) {
           onEvent={send}
           onSubmit={() => submitOauth(bodyProps.current())}
           onCancel={close}
+          onKey={(event) => {
+            if (!isUrlCopyKey(event)) return false
+            copyUrl(bodyProps.current())
+            return true
+          }}
         />
       </>
     )
@@ -842,7 +900,7 @@ export function Auth(props: AuthProps) {
           title={`Sign in · ${plural(catalog().providers.length, "provider")}`}
           keys={listKeys()}
           error={state().error}
-          detail={Option.map(successMessage(), (message) => `✓ ${message}`)}
+          detail={flashNote()}
         >
           <SelectList
             id="auth-provider"
@@ -873,7 +931,7 @@ export function Auth(props: AuthProps) {
         {(current) => (
           <PickerFrame
             error={Option.none()}
-            title={`Sign in · ${current().provider} · method`}
+            title={`Sign in · ${label(current().provider)} · method`}
             keys={[KeyHints.move, KeyHints.select, KeyHints.back]}
           >
             <SelectList
@@ -896,7 +954,7 @@ export function Auth(props: AuthProps) {
           <PickerFrame
             error={Option.none()}
             height={pickerHeight(1, dimensions().height)}
-            title={`Sign in · ${current().provider} · API key`}
+            title={`Sign in · ${label(current().provider)} · API key`}
             keys={[KeyHints.submit, KeyHints.back]}
           >
             <AuthTextLine
@@ -914,10 +972,10 @@ export function Auth(props: AuthProps) {
         {(current) => (
           <PickerFrame
             height={oauthBodyRows(current()) + OAUTH_CHROME_ROWS}
-            title={`Sign in · ${current().provider} · ${current().method.label}`}
-            keys={[KeyHints.submit, KeyHints.back]}
+            title={`Sign in · ${label(current().provider)} · ${current().method.label}`}
+            keys={OAUTH_KEYS}
             error={state().error}
-            detail={waitingNote(current())}
+            detail={oauthNote(current())}
           >
             <OAuthBody current={current} />
           </PickerFrame>
@@ -944,6 +1002,8 @@ function AuthTextLine(props: {
   readonly onEvent: (event: AuthEvent) => void
   readonly onSubmit: () => void
   readonly onCancel: () => void
+  /** Sees each key before the line does; `true` means the pane took it (the OAuth `ctrl+y` copy). */
+  readonly onKey?: (event: ScopedKeyboardEvent) => boolean
 }) {
   const { theme } = useTheme()
   const { sectionWidth } = usePickerGeometry()
@@ -958,6 +1018,7 @@ function AuthTextLine(props: {
   }
   useScopedKeyboard(
     (event) => {
+      if (Option.exists(Option.fromUndefinedOr(props.onKey), (onKey) => onKey(event))) return true
       if (event.name === "escape") {
         props.onCancel()
         return true

@@ -37,9 +37,11 @@
 - `useKeyboard(handler)` - Key events, check `e.name === "escape"`
 - `useTheme()` - Returns `{ theme, selected, all, mode, setMode, set }`. Theme colors are RGBA from `@opentui/core`.
 
-## Copy on select
+## Clipboard
 
-Who owns the mouse decides who copies. In the split footer (the session view) `renderer.useMouse` is off: the terminal, or a multiplexer such as herdr or tmux, selects and copies itself. The expanded transcript, the palette and every overlay that holds the composer (`overlayHoldsComposer`: the sign-in pane, the model and branch pickers) turn it on, so OpenTUI draws the selection and the terminal never sees the drag. There `useCopyOnSelect` (`terminal.tsx`, mounted once in `AppContent`) copies a finished, non-empty selection with `renderer.copyToClipboardOSC52`: OSC 52, wrapped by OpenTUI for tmux and screen; herdr takes it plain. Do not add a second copy path. A test reads the bytes by rendering with `output: new TerminalOutput()` (`render-harness-boundary.tsx`).
+Every copy goes through `useClipboard` (`terminal.tsx`); do not add a second copy path. It writes OSC 52 with `renderer.copyToClipboardOSC52`: plain, which herdr, mosh (the `c` selector, at most 16 KiB of base64) and a local terminal take, even over ssh; OpenTUI wraps it in DCS for tmux and screen. tmux's defaults drop both forms, so inside tmux (`TMUX` set) it also runs `tmux load-buffer -w -`, as Codex does.
+
+Who owns the mouse decides who copies a selection. In the split footer (the session view) `renderer.useMouse` is off: the terminal, or a multiplexer such as herdr or tmux, selects and copies itself. The expanded transcript, the palette and every overlay that holds the composer (`overlayHoldsComposer`: the sign-in pane, the model and branch pickers) turn it on, so OpenTUI draws the selection and the terminal never sees the drag. There `useCopyOnSelect` (mounted once in `AppContent`) copies a finished, non-empty selection. The sign-in pane also copies its URL whole on `ctrl+y` (a non-printing key, so a code typed by hand keeps every letter); its note row says the URL was copied when OSC 52 was sent or tmux took it, and otherwise "Could not reach the clipboard — select the URL instead". A test reads the bytes by rendering with `output: new TerminalOutput()` (`render-harness-boundary.tsx`).
 
 ## Theme System
 

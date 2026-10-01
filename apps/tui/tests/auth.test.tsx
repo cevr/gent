@@ -1174,3 +1174,52 @@ describe("Auth route", () => {
     }).pipe(Effect.timeout("20 seconds")),
   )
 })
+
+// ── provider names ──────────────────────────────────────────────────────────
+
+describe("Auth provider names", () => {
+  const named = (provider: string, name: string) => ({
+    provider: ProviderId.make(provider),
+    name,
+    hasKey: false,
+    required: false,
+    source: "none" as const,
+    authType: absent,
+  })
+
+  // The server names each provider by its driver. The pane shows the name; a
+  // name two providers share shows each one's id beside it.
+  it.scopedLive("the list and the method screen name each provider by its driver", () =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              named("opencode", "OpenCode Zen"),
+              named("opencode-go", "OpenCode Go"),
+              named("mirror-a", "Mirror"),
+              named("mirror-b", "Mirror"),
+            ]),
+          listMethods: () => Effect.succeed({ "opencode-go": [apiMethodRoute] }),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={SessionId.make("s")} />, {
+        client,
+        runtime: createMockRuntime(),
+      })
+      const list = yield* waitForFrame(setup, (frame) => frame.includes("OpenCode Zen"), "names")
+      expect(list).toContain("OpenCode Go [none]")
+      expect(list).toContain("Mirror (mirror-a) [none]")
+      expect(list).toContain("Mirror (mirror-b) [none]")
+      expect(list).not.toContain("opencode-go")
+
+      setup.mockInput.pressArrow("down")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Sign in · OpenCode Go · method"),
+        "the method screen",
+      )
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+})
