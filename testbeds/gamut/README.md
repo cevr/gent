@@ -10,7 +10,7 @@ sessions, the tools, and the model overrides at once.
 
 ```bash
 bun run gamut list                  # the presets and the models each one pins
-bun run gamut up sol-luna           # fresh scratch run in a new herdr pane
+bun run gamut up sol                # Sol at high effort for orchestration, ordinary work and review
 bun run gamut up mixed --prompt ./my-prompt.md --no-build
 bun run gamut read 80               # the pane tail
 bun run gamut wait                  # block until a turn has run (after a /command: any stored event, or about 15 s of quiet), no session in the run's data.db has an open turn, and the pane shows no busy row
@@ -21,7 +21,12 @@ bun run gamut restart               # quit and resume the same session
 bun run gamut down                  # quit, close the pane, remove the scratch dir
 ```
 
-A preset names model families (`openai/sol`, `openai/luna`, `anthropic/opus`,
+The `sol` preset and fixture use `openai/gpt-6.1-sol` at `high` for ordinary
+work and review. Only repetitive mechanical tasks use `openai/gpt-6-luna`
+at `max`, through an explicit child override. Other presets are explicit
+model comparisons.
+
+A comparison preset names model families (`openai/sol`, `openai/luna`, `anthropic/opus`,
 `anthropic/sonnet`, `anthropic/fable`), not releases. `up` and `list` resolve
 each family to its newest release in the models.dev catalog (falling back to
 gent's `~/.gent/models.json` copy offline), so a new Sol, Luna, Opus, Sonnet or
