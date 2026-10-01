@@ -152,9 +152,8 @@ function OptionList(props: OptionListProps): JSX.Element {
         selections.push(option.value.label)
       }
     }
-    if (selections.length === 0) {
-      selections.push("Other")
-    }
+    // An empty Other row with nothing picked answers nothing; Esc declines.
+    if (selections.length === 0) return
     props.onSubmit(selections)
   }
 

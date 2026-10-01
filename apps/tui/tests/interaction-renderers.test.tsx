@@ -179,6 +179,23 @@ describe("AskUserRenderer answers", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.scopedLive("enter on an empty Other row with nothing picked sends nothing", () =>
+    Effect.gen(function* () {
+      const { setup, results } = yield* ask([color])
+      setup.mockInput.pressArrow("down")
+      setup.mockInput.pressArrow("down")
+      yield* waitForFrame(setup, (f) => f.includes("> Other:"), "the Other row in focus")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([])
+      // The question stays open: a choice still answers it.
+      setup.mockInput.pressArrow("up")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([{ approved: true, notes: '[["Blue"]]' }])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("escape declines the question", () =>
     Effect.gen(function* () {
       const { setup, results } = yield* ask([color])
