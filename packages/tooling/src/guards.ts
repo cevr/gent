@@ -133,15 +133,23 @@ const closesControlHead = (text: string, close: number): boolean => {
   return false
 }
 
+/** A postfix `++` or `--` that ends at `end`: it follows an identifier, a `)` or a `]`. */
+const endsPostfixUpdate = (text: string, end: number): boolean => {
+  const update = text.slice(end - 2, end)
+  if (update !== "++" && update !== "--") return false
+  return /[\w$)\]]/.test(text[end - 3] ?? "")
+}
+
 /**
  * Whether an operand starts at `at`: the token before it, past whitespace
  * and comments, cannot end a value. A `)` ends one unless it closes a
- * control-flow head.
+ * control-flow head; a postfix `++` or `--` ends one.
  */
 const startsOperand = (text: string, at: number): boolean => {
   const end = significantEnd(text, at)
   if (end === 0) return true
   const last = text[end - 1] ?? ""
+  if (endsPostfixUpdate(text, end)) return false
   if (OPERAND_PRECEDERS.includes(last)) return true
   if (last === ")") return closesControlHead(text, end - 1)
   return OPERAND_KEYWORD_BEFORE.test(text.slice(Math.max(0, end - 8), end))
@@ -169,20 +177,33 @@ const regexEnd = (text: string, start: number): number => {
 
 /**
  * A tag name after `<`, and what follows it. A `,`, an `extends` or a `=`
- * after the name, or `>(` right after it, makes the `<` a type parameter
- * list: `.tsx` spells a generic arrow `<A,>(a: A) => a`, with a constraint
- * `<A extends B,>` or a default `<A = B,>`, and a generic function type
- * `<A>(a: A) => A`. No JSX tag name is followed by `=`. Any other name,
- * one letter or more (`<X>it's</X>`), opens an element.
+ * after the name makes the `<` a type parameter list: `.tsx` spells a
+ * generic arrow `<A,>(a: A) => a`, with a constraint `<A extends B,>` or a
+ * default `<A = B,>`. No JSX tag name is followed by `=`. A `>(` right after
+ * the name is a generic function type `<A>(a: A) => A` only when `=>`
+ * follows the parenthesised group; `<b>(it's)</b>` is an element. Any other
+ * name, one letter or more (`<X>it's</X>`), opens an element.
  */
 const JSX_OPENER = /^<(?:>|[A-Za-z_$][\w$.:-]*(\s*(?:,|=|extends\b)|>\()?)/
+
+/** Whether `=>` follows the parenthesised group that opens at `open`. */
+const arrowFollowsGroup = (text: string, open: number): boolean => {
+  let depth = 0
+  for (let at = open; at < text.length; at += 1) {
+    if (text[at] === "(") depth += 1
+    if (text[at] === ")") depth -= 1
+    if (depth === 0) return /^\s*=>/.test(text.slice(at + 1, at + 64))
+  }
+  return false
+}
 
 /** Whether the `<` at `at` opens a JSX element. */
 const opensJsx = (text: string, at: number): boolean => {
   if (!startsOperand(text, at)) return false
   const opener = Option.fromNullishOr(JSX_OPENER.exec(text.slice(at, at + 64)))
   if (Option.isNone(opener)) return false
-  const [, typeParameter] = opener.value
+  const [match, typeParameter] = opener.value
+  if (typeParameter === ">(") return !arrowFollowsGroup(text, at + match.length - 1)
   return Predicate.isUndefined(typeParameter)
 }
 

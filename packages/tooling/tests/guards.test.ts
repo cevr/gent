@@ -157,6 +157,19 @@ describe("blanket eslint disable checker", () => {
     ])
   })
 
+  test("a directive after JSX text in parentheses or after a postfix increment is read", () => {
+    // `<b>(` is an element unless `=>` follows the group, and `i++ / 2`
+    // divides: neither opens a string or a regex that swallows the comment.
+    const jsx = `export const x = <b>(it's fine)</b> /* ${directive} */`
+    const postfix = `const h = i++ / 2 /* ${directive} */`
+    expect([
+      findBlanketEslintDisables("sample.tsx", jsx).length,
+      findBannedEslintDisableBlocks("sample.tsx", jsx).length,
+      findBlanketEslintDisables("sample.ts", postfix).length,
+      findBannedEslintDisableBlocks("sample.ts", postfix).length,
+    ]).toEqual([1, 1, 1, 1])
+  })
+
   test("a directive spelled inside a string or after other comment text is not one", () => {
     const text = [
       `const a = "// ${directive}"`,
@@ -2472,6 +2485,28 @@ describe("the guards' lexer", () => {
         'const f = <Row>(a: Row) => a; const env = { cwd: "/tmp" }',
       ),
     ]).toEqual([1, 1, 1, 1, 1, 1, 1])
+  })
+
+  test("a trailing directive is read after each JSX, regex and division form", () => {
+    const trailing = (file: string, source: string) =>
+      findBlanketEslintDisables(file, `${source} /* ${directive} */`).length
+    const sources: ReadonlyArray<readonly [string, string]> = [
+      ["sample.tsx", "const a = <b>(it's)</b>"],
+      ["sample.tsx", "const a = <b>(it's) (twice)</b>"],
+      ["sample.tsx", "const a = <X>(it's)</X>"],
+      ["sample.tsx", "type F = <A>(a: A) => A; const s = 'it'"],
+      ["sample.tsx", "const f = <A>(a: (b: A) => A) => a; const s = 'it'"],
+      ["sample.tsx", "const n = i++ <a; const s = 'it'"],
+      ["sample.ts", "const r = /it's/"],
+      ["sample.ts", "const r = a + /it's/.source"],
+      ["sample.ts", "const h = (a + b) / 2"],
+      ["sample.ts", "const h = i++ / 2"],
+      ["sample.ts", "const h = i-- / 2"],
+      ["sample.ts", "const h = (i)++ / 2"],
+      ["sample.ts", "const h = xs[0]-- / 2"],
+      ["sample.ts", "const h = ++i / 2"],
+    ]
+    expect(sources.map(([file, source]) => trailing(file, source))).toEqual(sources.map(() => 1))
   })
 
   test("a defaulted type parameter in a .tsx file hides no read after it", () => {
