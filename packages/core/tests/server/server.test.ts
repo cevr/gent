@@ -910,6 +910,38 @@ describe("session command persistence", () => {
     }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
+  it.live("a long name is cut whole: an emoji at the limit and a space before it go", () =>
+    Effect.gen(function* () {
+      const mutations = yield* SessionMutations
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const sessionId = SessionId.make("session-rename-cut")
+      const branchId = BranchId.make("branch-rename-cut")
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now: FIXED_NOW,
+        name: "before",
+      })
+
+      const emojiAtLimit = yield* mutations.renameSession({
+        sessionId,
+        name: `${"a".repeat(79)}😀 tail`,
+      })
+      expect(emojiAtLimit).toEqual({ renamed: true, name: "a".repeat(79) })
+      expect((yield* sessions.getSession(sessionId))?.name).toBe("a".repeat(79))
+
+      const spaceAtLimit = yield* mutations.renameSession({
+        sessionId,
+        name: `${"b".repeat(79)} tail`,
+      })
+      expect(spaceAtLimit).toEqual({ renamed: true, name: "b".repeat(79) })
+      expect((yield* sessions.getSession(sessionId))?.name).toBe("b".repeat(79))
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
+  )
+
   it.live("a rename keeps a model change that lands between its read and its write", () => {
     const sessionId = SessionId.make("session-rename-race")
     const branchId = BranchId.make("branch-rename-race")

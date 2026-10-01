@@ -26,6 +26,7 @@ import {
   type BranchTreeNode,
   copyMessageToBranch,
   DEFAULT_SESSION_NAME,
+  headChars,
   projectMessagesWithToolInteractions,
   Session,
   type SessionAdmission,
@@ -948,7 +949,9 @@ const makeSessionMutationsService: Effect.Effect<
     switchActiveBranch: dedupSwitchActiveBranch,
 
     renameSession: Effect.fn("SessionMutations.renameSession")(function* (input) {
-      const trimmed = input.name.trim().slice(0, 80)
+      // Cut between code points, then trim: a name never ends in half an
+      // emoji or a space.
+      const trimmed = headChars(input.name.trim(), 80).trimEnd()
       if (trimmed.length === 0) return { renamed: false }
       const unchanged: RenameSessionResult = { renamed: false }
       const expectedName = Option.fromUndefinedOr(input.expectedName)

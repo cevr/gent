@@ -6,6 +6,7 @@ import {
   copyMessageToBranch,
   dateFromMillis,
   formatHeadTail,
+  headChars,
   headTail,
   headTailChars,
   latestAssistantText,
@@ -155,6 +156,54 @@ describe("tool summary", () => {
     )
     expect(clipSummary("\n  done\n")).toBe("done")
     expect(clipSummary("y".repeat(150))).toBe(`${"y".repeat(100)}...`)
+  })
+})
+
+describe("code-point-safe cuts", () => {
+  // An emoji at every offset around each bound: a cut that splits it leaves a
+  // lone surrogate, which a provider refuses.
+  const aroundBound = (bound: number): ReadonlyArray<string> =>
+    [-2, -1, 0, 1, 2].map((shift) => `${"a".repeat(bound + shift)}😀 rest ${"b".repeat(bound)}`)
+
+  test("a head cut drops an emoji that straddles the limit and keeps one that fits", () => {
+    expect(headChars(`${"a".repeat(79)}😀`, 80)).toBe("a".repeat(79))
+    expect(headChars(`${"a".repeat(78)}😀`, 80)).toBe(`${"a".repeat(78)}😀`)
+    expect(headChars("short", 80)).toBe("short")
+  })
+
+  test("a tool summary keeps an emoji at its bound whole", () => {
+    for (const text of aroundBound(100)) {
+      const summary = clipSummary(text)
+      expect(LONE_SURROGATE.test(summary)).toBe(false)
+      expect(summary.length).toBeLessThanOrEqual(103)
+    }
+  })
+
+  test("transcript display text keeps an emoji at the tool bound whole", () => {
+    for (const text of aroundBound(500)) {
+      const parts = [
+        Prompt.toolCallPart({
+          id: ToolCallId.make("tc1"),
+          name: "read",
+          params: text,
+          providerExecuted: false,
+        }),
+        Prompt.toolResultPart({
+          id: ToolCallId.make("tc1"),
+          name: "read",
+          isFailure: false,
+          providerExecuted: false,
+          result: text,
+        }),
+      ]
+      expect(LONE_SURROGATE.test(messagePartsDisplayText(parts))).toBe(false)
+    }
+  })
+
+  test("a head and tail cut keeps an emoji at its bound whole", () => {
+    for (const text of aroundBound(200)) {
+      expect(LONE_SURROGATE.test(headTailChars(text, 256).text)).toBe(false)
+    }
   })
 })
 

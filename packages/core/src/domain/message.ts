@@ -91,11 +91,22 @@ export function headTailChars(text: string, maxChars: number = 64_000): HeadTail
 }
 
 /**
+ * The head of `text`, at most `maxChars` UTF-16 units, cut between code
+ * points: a cut never leaves half of a surrogate pair, which a provider
+ * refuses. The one cut for text the model or the store reads; a string's own
+ * `.slice(0, n)` can split a pair.
+ */
+export const headChars = (text: string, maxChars: number): string => {
+  if (text.length <= maxChars) return text
+  return headWithin(text, maxChars, utf16Units)
+}
+
+/**
  * Keep the head of `text` up to `maxChars`. A longer text ends in `marker`.
  */
 function clipChars(text: string, maxChars: number, marker: string = "…"): string {
   if (text.length <= maxChars) return text
-  return text.slice(0, maxChars) + marker
+  return headChars(text, maxChars) + marker
 }
 
 // ── message ─────────────────────────────────────────────────────────────────
