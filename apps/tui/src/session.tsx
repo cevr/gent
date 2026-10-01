@@ -2720,6 +2720,9 @@ const ARMED_CUE = {
   interrupt: "ctrl+c again to exit",
 } satisfies Record<ArmedKey, string>
 
+/** The escape that moves the terminal's cursor up `rows` rows. */
+const cursorUp = (rows: number): string => `${String.fromCharCode(27)}[${rows}A`
+
 /**
  * The one way gent leaves: the session view's exit and the fatal screen's.
  * The session id is the only way back into this conversation, and it is
@@ -2744,7 +2747,15 @@ export const useExit = () => {
         Effect.ensuring(
           Effect.sync(() => {
             shutdownLog("exit.renderer-destroy")
+            // The destroy clears the split region and leaves the cursor under
+            // it. The cursor goes back up by the region's rows, so the shell
+            // prompt follows the transcript with no empty rows between.
+            const regionRows = Option.liftPredicate(
+              renderer.height,
+              () => renderer.screenMode === "split-footer",
+            )
             renderer.destroy()
+            Option.map(regionRows, (rows) => env.writeTerminal(cursorUp(rows)))
             if (env.resumable) env.writeTerminal(`\nto resume: gent resume ${leaving}\n`)
             shutdownLog("exit.shutdown-signal")
             env.shutdown()
