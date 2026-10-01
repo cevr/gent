@@ -11,7 +11,12 @@ import {
 } from "../../src/domain/agent-loop"
 import { AgentDefinition, AgentName, type Model, ModelId } from "../../src/domain/agent"
 import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
-import { ModelRegistry, type ModelResolver } from "../../src/runtime/provider"
+import {
+  Auth,
+  DecisionModelResolver,
+  ModelRegistry,
+  type ModelResolver,
+} from "../../src/runtime/provider"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   ApprovalService,
@@ -322,6 +327,7 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(params.models),
+    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
     GentPlatform.Test(),
     params.overrides ?? Layer.empty,
   )

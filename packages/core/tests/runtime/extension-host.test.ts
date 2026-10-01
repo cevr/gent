@@ -123,7 +123,7 @@ import {
   type ProviderResolution,
 } from "../../src/domain/driver"
 import { Model as AiModel, type LanguageModel } from "effect/ai"
-import { ModelRegistry } from "../../src/runtime/provider"
+import { Auth, DecisionModelResolver, ModelRegistry } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
@@ -4744,6 +4744,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
+    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
     GentPlatform.Test(),
     fixedSessionProfiles(),
     AgentLoopSessionGovernance.Live,

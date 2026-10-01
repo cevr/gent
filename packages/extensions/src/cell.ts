@@ -9,6 +9,7 @@ import {
   type JsonSchema,
   Latch,
   Layer,
+  Match,
   Option,
   Path,
   Predicate,
@@ -51,6 +52,7 @@ import {
   CurrentDispatchingCall,
   CurrentInteractionOwner,
   CurrentToolCall,
+  DecisionModelResolver,
   eraseResourceLayer,
   type EventStore,
   EventStoreError,
@@ -81,6 +83,7 @@ import {
   type TurnInterruptionStatus,
 } from "@gent/core/extensions/branch-tools"
 import { SqlClient } from "effect/sql"
+import { Decision } from "effect/ai"
 import * as Prompt from "effect/ai/Prompt"
 import { canonicalJsonString } from "effect-encore"
 import {
@@ -1776,6 +1779,103 @@ export const handleContextCall = Effect.fn("CellContextHost.call")(function* (pa
   }
 })
 
+// ── models host ─────────────────────────────────────────────────────────────
+
+/** Host calls under this prefix serve the cell's `models` namespace, not a selected tool. */
+const MODELS_CALL_PREFIX = "models."
+
+const isModelsCall = (name: string): boolean => name.startsWith(MODELS_CALL_PREFIX)
+
+/** One decision as the cell's `models.classify`, `models.rate` and `models.probability` build it. */
+const DecisionSpec = Schema.TaggedUnion({
+  Classify: {
+    instructions: Schema.String,
+    criteria: Schema.Record(Schema.String, Schema.String),
+  },
+  Rate: { instructions: Schema.String, criteria: Schema.Array(Schema.String) },
+  Probability: {
+    instructions: Schema.String,
+    criteria: Schema.optional(Schema.Struct({ false: Schema.String, true: Schema.String })),
+  },
+})
+type DecisionSpec = typeof DecisionSpec.Type
+
+const DecideInput = Schema.Struct({
+  input: Schema.Json,
+  decisions: Schema.Record(Schema.String, DecisionSpec),
+  model: Schema.optional(Schema.String),
+})
+
+const ModelsOperation = Schema.Literals(["decide"])
+
+/** Effect's constructor for one decision; it throws on fewer than two labels or a repeated level. */
+const decisionOf = Match.type<DecisionSpec>().pipe(
+  Match.tagsExhaustive({
+    Classify: (spec): Decision.Any => Decision.classify(spec),
+    Rate: (spec): Decision.Any => Decision.rate(spec),
+    Probability: (spec): Decision.Any => Decision.probability(spec),
+  }),
+)
+
+const decodeReplyJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))
+
+/**
+ * Serve one `models.*` host call: `decide` resolves the named classifier
+ * model, or the default one, and answers every decision about the input in
+ * one provider call. Like `context.*`, it is no tool operation: it leaves no
+ * receipt and a recovered cell does not repeat it.
+ */
+const handleModelsCall = Effect.fn("CellModelsHost.call")(function* (params: {
+  readonly name: string
+  readonly input: Schema.Json
+  readonly resolver: Option.Option<typeof DecisionModelResolver.Service>
+}) {
+  yield* Schema.decodeUnknownEffect(ModelsOperation)(
+    params.name.slice(MODELS_CALL_PREFIX.length),
+  ).pipe(Effect.mapError(() => contextHostFailure(`Unknown models operation ${params.name}`)))
+  const request = yield* Schema.decodeUnknownEffect(DecideInput)(params.input).pipe(
+    Effect.mapError((cause) =>
+      contextHostFailure(`models.decide input is invalid: ${cause.message}`),
+    ),
+  )
+  const definition = yield* Effect.try({
+    try: () =>
+      Decision.make({
+        input: Schema.Json,
+        decisions: Object.fromEntries(
+          Object.entries(request.decisions).map(([key, spec]) => [key, decisionOf(spec)]),
+        ),
+      }),
+    catch: (cause) => contextHostFailure(`models.decide input is invalid: ${String(cause)}`),
+  })
+  if (Option.isNone(params.resolver))
+    return yield* contextHostFailure("models.decide is not available in this runtime")
+  const resolved = yield* params.resolver.value
+    .resolve(Option.fromUndefinedOr(request.model))
+    .pipe(Effect.mapError((error) => contextHostFailure(`models.decide: ${error.message}`)))
+  const response = yield* resolved.model
+    .decide(definition, { input: request.input })
+    .pipe(
+      Effect.mapError((error) =>
+        contextHostFailure(`models.decide (${resolved.modelId}) failed: ${error.message}`),
+      ),
+    )
+  // The answers have null prototypes, and a confidence or a token count the
+  // provider left out is undefined: through JSON text they become plain JSON
+  // without those fields. The runtime keeps no spend record for a tool's own
+  // model call, so the usage goes back to the cell.
+  return yield* decodeReplyJson(
+    encodeJson({
+      model: resolved.modelId,
+      answers: response.answers,
+      usage: {
+        inputTokens: response.usage.inputTokens,
+        outputTokens: response.usage.outputTokens,
+      },
+    }),
+  ).pipe(Effect.mapError((cause) => contextHostFailure(`models.decide answers: ${cause.message}`)))
+}, Effect.scoped)
+
 // ── interaction owner ───────────────────────────────────────────────────────
 
 /**
@@ -2124,6 +2224,15 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
  */
 type CellToolHostServices = CellStorage | EventStore | GentPlatform | MessageStorage | ToolRunner
 
+/**
+ * The services a host call reads, and the runtime's classifier models, which
+ * `models.decide` asks; none in a runtime without them.
+ */
+const captureCellHostServices = Effect.all({
+  services: Effect.context<CellToolHostServices>(),
+  decisions: Effect.serviceOption(DecisionModelResolver),
+})
+
 /** One outer cell's host. The turn profile owns every admitted call. */
 export const makeCellToolHost = (
   params: CellToolHostParams &
@@ -2132,7 +2241,7 @@ export const makeCellToolHost = (
       readonly catalog?: CellCatalog
     },
 ): Effect.Effect<typeof CellOperationHost.Service, never, CellToolHostServices> =>
-  Effect.map(Effect.context<CellToolHostServices>(), (services) =>
+  Effect.map(captureCellHostServices, ({ services, decisions }) =>
     CellOperationHost.of({
       catalog: params.catalog,
       call: Effect.fn("CellToolHost.call")((request) =>
@@ -2147,6 +2256,13 @@ export const makeCellToolHost = (
                 name: request.name,
                 input: request.input,
               }).pipe(Effect.provideService(ModelContextLedger, params.ledger))
+            }
+            if (isModelsCall(request.name)) {
+              return yield* handleModelsCall({
+                name: request.name,
+                input: request.input,
+                resolver: decisions,
+              })
             }
             const storage = (yield* CellStorage).operations
             const captured = Option.fromUndefinedOr(params.toolBindings.get(request.name))
@@ -2746,6 +2862,7 @@ export const CellTool = tool({
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
     "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
     "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff at the next step of this turn, focused on the instructions (a turn that ends first drops it). context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
+    "models.decide(input, decisions, { model }) asks a classifier model (Jev) typed questions about any JSON input in one awaited host call. decisions maps a name to models.classify({ instructions, criteria: { label: description } }), models.rate({ instructions, criteria: [lowest, ..., highest] }) or models.probability({ instructions, criteria?: { false, true } }); the reply is { model, answers, usage } with label and probabilities, rating, or probability per name. One call is one small paid request, a fraction of a cent and far less than a model turn, so compose it in code with other tools: check the state between actions, then gate, route or retry on the answer. Without model it uses the first classifier model with a key; model names one, such as typesafe/jev-latest.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
   ],

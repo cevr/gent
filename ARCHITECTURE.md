@@ -631,6 +631,22 @@ Shape:
   network reads and `bun:sqlite` on the data directory's `data.db` for past sessions. No
   `webfetch` or `search_sessions` tool ships; `read_session` stays as the
   parent-to-child output seam.
+- Classifier models (Jev) are one cell primitive, not a feature: the cell's
+  `models.decide(input, decisions, { model })` answers `effect/ai/Decision`
+  questions (`models.classify`, `models.rate`, `models.probability`) about a
+  JSON input in one provider call, and the model composes it with other tools
+  in its own code (gate, route, retry). A driver serves classifiers through the
+  optional `resolveDecisionModel` beside `resolveModel` and lists them with
+  `Model.kind: "classifier"`, so they share its id, auth, env credential and
+  catalog; the TUI picker leaves them out. `DecisionModelResolver`
+  (`runtime/provider.ts`, in the loop's runtime services) picks the named
+  catalog classifier, or the first one whose driver has a stored or env
+  credential, and fails readably naming the variables when none has. The
+  reply carries the provider's token usage: the runtime keeps no spend record
+  for a tool's own model call. Like `context.*`, a decide call leaves no
+  receipt and a recovered cell does not repeat it. Receipts:
+  `packages/extensions/src/cell.ts` (models host),
+  `packages/core/src/domain/driver.ts`.
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in

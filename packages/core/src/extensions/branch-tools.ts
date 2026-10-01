@@ -94,6 +94,9 @@ export { type ProviderError } from "../domain/errors.js"
 export { responseUsage } from "../domain/message.js"
 export { toPrompt } from "../runtime/model-context.js"
 
+// Answering typed decisions with a classifier model between operations.
+export { DecisionModelResolver } from "../runtime/provider.js"
+
 // Interaction ownership: a feature that suspends for an answer owns the request.
 export { CurrentInteractionOwner, type InteractionOwnership } from "../domain/interaction.js"
 export { ApprovalDecisionSchema, InteractionRequestRecord } from "../domain/interaction.js"

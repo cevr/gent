@@ -70,6 +70,7 @@ import {
   textDeltaPart,
   toolCallPart,
   Auth,
+  DecisionModelResolver,
   ModelRegistry,
   ModelResolver,
 } from "../../src/runtime/provider"
@@ -2973,6 +2974,7 @@ const makeRuntimeLayer = (
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
+    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )
