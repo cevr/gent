@@ -956,6 +956,24 @@ interface RelationshipStorageService {
   >
 }
 
+/**
+ * A session and its parent chain, read by id at every step. `UNION` over ids
+ * alone ends on a cycle: a repeated id adds no row. The unary `+` keeps the
+ * planner off the workspace index, which would scan the whole workspace.
+ * Parameters: the session id, then the workspace id three times.
+ */
+export const SESSION_ANCESTORS_SQL = `WITH RECURSIVE ancestors(id) AS (
+  SELECT id FROM sessions WHERE id = ? AND +workspace_id = ?
+  UNION
+  SELECT s.parent_session_id
+  FROM ancestors a
+  JOIN sessions s ON s.id = a.id
+  WHERE +s.workspace_id = ? AND s.parent_session_id IS NOT NULL
+)
+SELECT ${SESSION_COLUMNS}
+FROM sessions
+WHERE id IN (SELECT id FROM ancestors) AND +workspace_id = ?`
+
 export class RelationshipStorage extends Context.Service<
   RelationshipStorage,
   RelationshipStorageService
@@ -969,18 +987,12 @@ export class RelationshipStorage extends Context.Service<
         getSessionAncestors: Effect.fn("RelationshipStorage.getSessionAncestors")(
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
-            // `UNION` over ids alone ends on a cycle: a repeated id adds no row.
-            const rows = yield* sql<SessionRow>`WITH RECURSIVE ancestors(id) AS (
-            SELECT id FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
-            UNION
-            SELECT s.parent_session_id
-            FROM sessions s
-            JOIN ancestors a ON s.id = a.id
-            WHERE s.workspace_id = ${workspaceId} AND s.parent_session_id IS NOT NULL
-          )
-          SELECT ${sql.literal(SESSION_COLUMNS)}
-          FROM sessions
-          WHERE workspace_id = ${workspaceId} AND id IN (SELECT id FROM ancestors)`
+            const rows = yield* sql.unsafe<SessionRow>(SESSION_ANCESTORS_SQL, [
+              sessionId,
+              workspaceId,
+              workspaceId,
+              workspaceId,
+            ])
             const byId = new Map<string, SessionRow>(rows.map((row) => [row.id, row]))
             const chain: SessionRow[] = []
             let next = Option.fromNullishOr(byId.get(sessionId))
