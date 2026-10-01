@@ -67,24 +67,18 @@ const parseAnswers = (
 
 // AskUser Params — the wire question with the limits a new call must keep.
 
-const AskUserQuestionOptionSchema = Schema.Struct({
-  label: Schema.String,
-  description: Schema.optionalKey(Schema.String),
-})
 const AskUserQuestionSchema = Schema.Struct({
-  question: Schema.String,
+  ...AskUserQuestion.fields,
   header: Schema.optionalKey(
     Schema.String.check(Schema.isMaxLength(30)).annotate({
       description: "Short label for the question (max 30 chars)",
     }),
   ),
-  markdown: Schema.optionalKey(Schema.String),
   options: Schema.optionalKey(
-    Schema.Array(AskUserQuestionOptionSchema)
+    Schema.Array(AskUserOption)
       .check(Schema.isMaxLength(4))
       .annotate({ description: "Options for user to choose from" }),
   ),
-  multiple: Schema.optionalKey(Schema.Boolean),
 })
 
 const AskUserParams = Schema.Struct({

@@ -4,6 +4,7 @@ import {
   testAgent,
   ErrorOccurred,
   EventId,
+  ExtensionStatusScope,
   MessageReceived,
   StreamEnded,
   StreamStarted,
@@ -26,7 +27,6 @@ import {
   ProviderId,
   SessionId,
   type SessionSnapshot,
-  ExtensionStatusScope,
   type ReasoningEffort,
   type UpdateSessionSettingsInput,
 } from "@gent/core/protocol"

@@ -4,10 +4,17 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { hostname } from "node:os"
-import { Effect, Exit, Option, Schedule, Schema, Scope } from "effect"
+import { Effect, Exit, Option, Schema, Scope } from "effect"
 import { Gent } from "@gent/sdk"
 import { freePort, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
-import { exitWithin, killProcess, spawnServer, stopProcess } from "../src/server-process-fixture"
+import {
+  exitWithin,
+  killProcess,
+  readReadyUrl,
+  spawnServer,
+  startServer,
+  stopProcess,
+} from "../src/server-process-fixture"
 
 /** What `/_gent/identity` serves. */
 const ServerIdentity = Schema.Struct({
@@ -18,31 +25,25 @@ const ServerIdentity = Schema.Struct({
   buildFingerprint: Schema.String,
 })
 
-/** Whether a server answers the identity route on `port` within `within`. */
-const answersWithin = (port: number, within: `${number} seconds`) =>
-  Effect.tryPromise(() => Bun.fetch(`http://localhost:${port}/_gent/identity`)).pipe(
-    Effect.map((response) => response.ok),
-    Effect.orElseSucceed(() => false),
-    Effect.repeat({ schedule: Schedule.spaced("200 millis"), until: (ok) => ok }),
-    Effect.timeoutOption(within),
-    Effect.map(Option.isSome),
-  )
-
 describe("server lifecycle", () => {
   it.live(
     "a server that misses its ready bound is stopped",
     () =>
       Effect.gen(function* () {
         const port = yield* freePort
-        const spawned = yield* Effect.scoped(
+        const { ready, exited } = yield* Effect.scoped(
           Effect.gen(function* () {
             const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
-            return yield* Effect.exit(spawnServer({ dataDir, port, readyWithin: "1 millis" }))
+            const proc = yield* startServer({ dataDir, port })
+            return {
+              ready: yield* Effect.exit(readReadyUrl(proc, "1 millis")),
+              exited: proc.exited,
+            }
           }),
         )
-        expect(Exit.isFailure(spawned)).toBe(true)
-        // An orphaned server would come up on the port within this window.
-        expect(yield* answersWithin(port, "8 seconds")).toBe(false)
+        expect(Exit.isFailure(ready)).toBe(true)
+        // The scope's close stopped the server, so its exit has already come.
+        expect(Option.isSome(yield* exitWithin(exited, "1 second"))).toBe(true)
       }).pipe(Effect.timeout("12 seconds")),
     15_000,
   )

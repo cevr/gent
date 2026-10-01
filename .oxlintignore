@@ -1,8 +1,8 @@
-# oxlint reads this via --ignore-path=.oxlintignore (set in package.json scripts).
-# The JSON config's `ignorePatterns` field appears to be a no-op with current
-# oxlint version, so all ignore patterns live here. oxlint also skips what
-# `.gitignore` ignores (build output, node_modules), so no row repeats it; the
-# guards fail on a row that matches no file oxlint would lint.
+# oxlint and oxfmt both read this via --ignore-path=.oxlintignore (set in the
+# package.json scripts and lefthook.yml), so one list serves the linter and the
+# formatter; the JSON config's `ignorePatterns` would reach oxlint only. oxlint
+# also skips what `.gitignore` ignores (build output, node_modules), so no row
+# repeats it; the guards fail on a row that matches no file oxlint would lint.
 **/*.d.ts
 packages/tooling/fixtures/
 # `testbeds/gamut/fixture/` is the deliberately broken ledgerline app the

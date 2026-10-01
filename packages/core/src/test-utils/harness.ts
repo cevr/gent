@@ -672,11 +672,6 @@ type E2EExtensionSource =
     }
 
 interface E2ELayerOptions {
-  /**
-   * The branch-tool feature this harness installs. Defaults to
-   * `noBranchTools`; a test exercising a real feature names it.
-   */
-  readonly branchTools?: BranchToolFeature<never>
   /** Language model layer — typically from `LanguageModelLayers.sequence` */
   readonly providerLayer: Layer.Layer<LanguageModel.LanguageModel>
   /** Agents to register in the extension registry */
@@ -710,10 +705,18 @@ interface E2ELayerOptions {
   readonly home?: string
   /** Optional per-cwd profile cache for per-workspace routing tests. */
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
-  /** Extra layers to merge (e.g., additional service overrides) */
+  /**
+   * Services core does not own, merged above the launch profile (a compactor,
+   * a log capture). Core's own services have their own option.
+   */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
   /** `"test"` installs the stub tool runner; default runs the live one. */
   readonly toolRunner?: "test" | "live"
+  /**
+   * The models the registry knows, and no others. Absent, the registry makes
+   * up a model for every id it is asked for.
+   */
+  readonly models?: ReadonlyArray<Model>
   /** The price of every model the test registry makes up. Default: free. */
   readonly modelPricing?: ModelPricing
   /** Auth override. Use for public RPC auth failure-path tests. */
@@ -726,7 +729,15 @@ interface E2ELayerOptions {
   readonly configServiceLayer?: Layer.Layer<ConfigService>
 }
 
-export type E2ELayerConfig = E2ELayerOptions & E2EExtensionSource
+/** Storage services are provided only when the test installs their feature. */
+type E2ELayerWithFeature<A> = E2ELayerOptions &
+  E2EExtensionSource & { readonly branchTools: BranchToolFeature<A> }
+
+export type E2ELayerConfig<A = never> =
+  | E2ELayerWithFeature<A>
+  | ([A] extends [never]
+      ? E2ELayerOptions & E2EExtensionSource & { readonly branchTools?: never }
+      : never)
 
 /** Re-registers one compiled slot; the switch restores the kind/handler correlation. */
 const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.Effect<void> => {
@@ -792,7 +803,13 @@ const extensionInputsForConfig = (
  * reads project extensions, skills and `AGENTS.md` from its cwd. A shared
  * directory would hand one test's files to the next.
  */
-export const createE2ELayer = (config: E2ELayerConfig) =>
+export function createE2ELayer<A>(config: E2ELayerWithFeature<A>): ReturnType<typeof e2eLayer<A>>
+export function createE2ELayer(config: E2ELayerConfig): ReturnType<typeof e2eLayer<never>>
+export function createE2ELayer(config: E2ELayerConfig) {
+  return e2eLayer({ ...config, branchTools: config.branchTools ?? noBranchTools })
+}
+
+const e2eLayer = <A>(config: E2ELayerWithFeature<A>) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const home = yield* Option.match(Option.fromUndefinedOr(config.home), {
@@ -814,24 +831,26 @@ export const createE2ELayer = (config: E2ELayerConfig) =>
     }),
   ).pipe(Layer.provide(BunPlatformLive))
 
-const e2eDependencies = (
-  config: E2ELayerConfig,
+const e2eDependencies = <A>(
+  config: E2ELayerWithFeature<A>,
   directories: { readonly cwd: string; readonly home: string },
-) =>
-  createDependencies({
+) => {
+  const options = {
     ...directories,
     platform: "test",
     state: Option.match(Option.fromUndefinedOr(config.storagePath), {
       onNone: () => StateLocation.cases.Memory.make({}),
       onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
     }),
-    modelResolverOverride: LanguageModelLayers.resolver(config.providerLayer),
     extensions: extensionInputsForConfig(config),
     // A broken extension fails the test with its reason, not a later timeout.
     failOnExtensionFailure: config.allowFailedExtensions !== true,
-    branchTools: config.branchTools ?? noBranchTools,
     overrides: {
-      modelRegistryLayer: ModelRegistry.Test([], Option.fromUndefinedOr(config.modelPricing)),
+      modelRegistryLayer: ModelRegistry.Test(
+        config.models ?? [],
+        Option.fromUndefinedOr(config.modelPricing),
+      ),
+      modelResolverLayer: LanguageModelLayers.resolver(config.providerLayer),
       authLayer: config.authLayer ?? Auth.Test(),
       approvalLayer: config.approvalLayer ?? ApprovalService.Test(),
       configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
@@ -845,17 +864,16 @@ const e2eDependencies = (
       ),
       extraLayers: config.extraLayers,
     },
-  })
+  }
+  return createDependencies<A>({ ...options, branchTools: config.branchTools })
+}
 
 // ── in-process-layer ────────────────────────────────────────────────────────
 
 // In-process integration layer: the E2E root with the stub tool runner and
 // the scripted debug model. Use with `createRpcClient()`.
 
-interface InProcessLayerConfig {
-  readonly agents: ReadonlyArray<AgentDefinition>
-  readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
-}
+type InProcessLayerConfig = Pick<E2ELayerOptions, "agents" | "extraLayers" | "models">
 
 /** Build a complete in-process test layer with a custom language model layer. */
 export const baseLocalLayerWithProvider = (
@@ -867,6 +885,7 @@ export const baseLocalLayerWithProvider = (
     agents: config.agents,
     extensions: [],
     extraLayers: config.extraLayers,
+    models: config.models,
     toolRunner: "test",
   })
 
@@ -894,8 +913,9 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 // caller passes pre-loaded extensions and an agents bucket — the same
 // fragments callers already pass to `createE2ELayer`.
 
-type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner"> &
-  E2EExtensionSource & {
+type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner"> & {
+  readonly branchTools?: BranchToolFeature<never>
+} & E2EExtensionSource & {
     /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
     readonly admission?: SessionAdmission
   }

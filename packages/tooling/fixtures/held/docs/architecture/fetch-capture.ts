@@ -1,6 +1,6 @@
 // @ts-nocheck — held-shapes fixture
 // The capture preload keeps `noGlobals` with `builtins: false`; its members
-// list holds the globals the language service held before (GR-8).
+// list holds the globals the retired language-service rule held.
 export const timer = setTimeout(() => {}, 1) // held-by: effect/noGlobals
 export const poll = setInterval(() => {}, 1) // held-by: effect/noGlobals
 export const coin = Math.random() // held-by: effect/noGlobals

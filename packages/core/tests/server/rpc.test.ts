@@ -105,7 +105,6 @@ import {
   type SessionDeletedInput,
 } from "../../src/domain/extension.js"
 import {
-  CapabilityError,
   defineExtension,
   ExtensionContext,
   type ExtensionContextService,
@@ -113,6 +112,7 @@ import {
   request,
   tool,
 } from "@gent/core/extensions/api"
+import { CapabilityError } from "../../src/domain/capability"
 import {
   ApprovalService,
   buildScopeResources,
@@ -500,6 +500,110 @@ const failingReadAuthStoreLayer = Layer.succeed(
   ),
 )
 const stubModel = AiModel.make("test", "model", LanguageModelLayers.failing)
+
+class ProfileDriverResource extends Context.Service<
+  ProfileDriverResource,
+  { readonly value: string }
+>()("@gent/core/tests/server/rpc.test/ProfileDriverResource") {}
+
+const profileDriverModel = new Model({
+  id: ModelId.make("profile-driver/model"),
+  name: "Profile driver model",
+  provider: ProviderId.make("profile-driver"),
+  contextLength: 128_000,
+})
+
+const profileDriverExtension = defineExtension({
+  id: "test-profile-driver",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "test-profile-driver/resource",
+        scope: "process",
+        layer: Layer.succeed(ProfileDriverResource, ProfileDriverResource.of({ value: "profile" })),
+      }),
+    )
+    yield* host.register("modelDriver", {
+      id: "profile-driver",
+      name: "Profile driver",
+      resolveModel: () => Effect.succeed(stubModel),
+      listModels: () =>
+        Effect.gen(function* () {
+          const resource = yield* Effect.serviceOption(ProfileDriverResource)
+          if (Option.isNone(resource)) {
+            return yield* new ProviderAuthError({ message: "profile resource missing" })
+          }
+          return [profileDriverModel]
+        }),
+      auth: {
+        methods: [AuthMethod.make({ type: "oauth", label: "Profile OAuth" })],
+        authorize: () => Effect.succeedSome({ url: "http://example.com/auth", method: "code" }),
+        callback: () =>
+          Effect.gen(function* () {
+            const resource = yield* Effect.serviceOption(ProfileDriverResource)
+            if (Option.isNone(resource)) {
+              return yield* new ProviderAuthError({ message: "profile resource missing" })
+            }
+          }),
+      },
+    })
+  }),
+})
+
+const profileDriverHarness = () =>
+  createRpcHarness({
+    providerLayer: LanguageModelLayers.debug(),
+    agents: [],
+    extensionInputs: [profileDriverExtension],
+  })
+
+describe("driver callbacks use the selected profile", () => {
+  it.live("model.list provides the session profile's resource services", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* profileDriverHarness()
+        const models = yield* client.model.list({ sessionId })
+        expect(models.map((model) => model.id)).toEqual([profileDriverModel.id])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("extension health provides profile services for an uncached catalog read", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* profileDriverHarness()
+        const status = yield* client.extension.listStatus({
+          scope: { _tag: "Session", id: sessionId },
+        })
+        expect(status._tag).toBe("Healthy")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("a retained auth callback keeps the profile resource services", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* profileDriverHarness()
+        const authorization = yield* client.auth.authorize({
+          sessionId,
+          provider: "profile-driver",
+          method: 0,
+        })
+        if (Predicate.isNull(authorization)) return yield* Effect.die("authorization missing")
+        yield* client.auth.callback({
+          sessionId,
+          provider: "profile-driver",
+          method: 0,
+          authorizationId: authorization.authorizationId,
+          code: "callback-code",
+        })
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+})
+
 const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const pendingCallbacks = new Map<string, (code?: string) => string>()
   const oauthProvider: ModelDriverContribution = {

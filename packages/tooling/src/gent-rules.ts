@@ -9,11 +9,12 @@
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
  * - no-tracked-session-record: a TUI reactive scope tracks the session identity, not the record.
+ * - no-code-unit-padding: terminal columns use display width, with ASCII-only exemptions.
  */
 
 import { existsSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import type { Context, Plugin, Range } from "@oxlint/plugins"
+import type { Context, ESTree, Plugin, Range } from "@oxlint/plugins"
 
 /**
  * The view a structural walk takes of any ESTree node: a `type` tag and the
@@ -438,6 +439,112 @@ const plugin: Plugin = {
     name: "gent",
   },
   rules: {
+    "no-code-unit-padding": {
+      meta: { type: "problem", schema: [] },
+      create(context) {
+        const printableAscii = (node: AstNode | undefined): boolean => {
+          const value = node === undefined ? undefined : getStringField(node, "value")
+          return value !== undefined && /^[\x20-\x7e]*$/.test(value)
+        }
+        const globalName = (node: AstNode, name: string): boolean => {
+          const identifier = (value: AstNode): value is ESTree.IdentifierReference =>
+            value.type === "Identifier"
+          if (!identifier(node) || node.name !== name) return false
+          let scope: ReturnType<typeof context.sourceCode.getScope> | null =
+            context.sourceCode.getScope(node)
+          while (scope !== null) {
+            const variable = scope.set.get(name)
+            if (variable !== undefined && variable.defs.length > 0) return false
+            scope = scope.upper
+          }
+          return true
+        }
+        const numeric = (node: AstNode | undefined): boolean => {
+          if (node === undefined) return false
+          if (node.type === "ParenthesizedExpression")
+            return numeric(getNodeField(node, "expression"))
+          if (node.type === "Literal") return typeof fieldOf(node, "value") === "number"
+          if (node.type === "BinaryExpression") {
+            const operator = getStringField(node, "operator") ?? ""
+            if (["-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>"].includes(operator))
+              return true
+            return (
+              operator === "+" &&
+              numeric(getNodeField(node, "left")) &&
+              numeric(getNodeField(node, "right"))
+            )
+          }
+          if (node.type === "UnaryExpression")
+            return ["+", "-", "~"].includes(getStringField(node, "operator") ?? "")
+          if (node.type !== "CallExpression") return false
+          const callee = getNodeField(node, "callee")
+          if (callee === undefined) return false
+          if (globalName(callee, "Number")) return true
+          if (callee.type !== "MemberExpression" || fieldOf(callee, "computed") === true)
+            return false
+          const object = getNodeField(callee, "object")
+          const property = getNodeField(callee, "property")
+          return (
+            object !== undefined &&
+            property !== undefined &&
+            globalName(object, "Math") &&
+            ["abs", "ceil", "floor", "max", "min", "round", "trunc"].includes(
+              getStringField(property, "name") ?? "",
+            )
+          )
+        }
+        const asciiRendering = (node: AstNode | undefined): boolean => {
+          if (node === undefined) return false
+          if (printableAscii(node)) return true
+          if (node.type === "ParenthesizedExpression")
+            return asciiRendering(getNodeField(node, "expression"))
+          if (node.type !== "CallExpression") return false
+          const callee = getNodeField(node, "callee")
+          if (callee === undefined) return false
+          if (globalName(callee, "String")) {
+            const [value] = callExpressionArgs(node)
+            return numeric(value) || printableAscii(value)
+          }
+          if (callee.type !== "MemberExpression" || fieldOf(callee, "computed") === true)
+            return false
+          const property = getNodeField(callee, "property")
+          return (
+            property !== undefined &&
+            ["toString", "toFixed", "toPrecision", "toExponential"].includes(
+              getStringField(property, "name") ?? "",
+            ) &&
+            numeric(getNodeField(callee, "object"))
+          )
+        }
+        return {
+          MemberExpression(node) {
+            if (!isAstNode(node)) return
+            const property = getNodeField(node, "property")
+            if (property === undefined) return
+            const name = getStringField(
+              property,
+              fieldOf(node, "computed") === true ? "value" : "name",
+            )
+            if (name !== "padStart" && name !== "padEnd") return
+            const call = getNodeField(node, "parent")
+            const args =
+              call?.type === "CallExpression" && getNodeField(call, "callee") === node
+                ? callExpressionArgs(call)
+                : []
+            if (
+              call?.type === "CallExpression" &&
+              asciiRendering(getNodeField(node, "object")) &&
+              (args.length === 1 || (args.length === 2 && printableAscii(args[1])))
+            )
+              return
+            context.report({
+              node,
+              message: `${name} counts UTF-16 code units, not terminal columns; pad by display width. Only proven ASCII text with printable ASCII padding is safe.`,
+            })
+          },
+        }
+      },
+    },
     /**
      * States who may read which `@gent/core` entry point.
      *

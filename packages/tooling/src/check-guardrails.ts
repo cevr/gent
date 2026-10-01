@@ -32,6 +32,7 @@ import {
   findUnmatchedOverrideGlobs,
   findUnmatchedTsconfigOverrides,
   findUnhashedSteeringFiles,
+  findDeadTurboInputs,
   findUnshippedSkillFiles,
   BUNDLED_SKILLS_MODULE,
   findUnusedSuppressionApprovals,
@@ -50,6 +51,7 @@ import {
   TsConfigPluginsSchema,
   TsConfigSchema,
   TurboTypecheckInputsSchema,
+  TurboTaskInputsSchema,
   workspaceManifests,
   workspaceTsconfigs,
 } from "./guards"
@@ -268,7 +270,17 @@ const guideInputFindings = Effect.fn("Tooling.guideInputFindings")(function* (
   indexFiles: ReadonlyArray<string>,
 ) {
   const { value } = yield* readRepoJsonc(texts, GUIDE_CHECK_TURBO, TurboTypecheckInputsSchema)
-  return findUnhashedSteeringFiles(GUIDE_CHECK_TURBO, value.tasks.typecheck.inputs, indexFiles)
+  const otherInputs = yield* Effect.forEach(
+    indexFiles.filter((file) => file.endsWith("/turbo.json") && file !== GUIDE_CHECK_TURBO),
+    Effect.fn("Tooling.taskInputFindings")(function* (file) {
+      const config = yield* readRepoJsonc(texts, file, TurboTaskInputsSchema)
+      return findDeadTurboInputs(file, config.value.tasks, indexFiles)
+    }),
+  )
+  return [
+    ...findUnhashedSteeringFiles(GUIDE_CHECK_TURBO, value.tasks.typecheck.inputs, indexFiles),
+    ...otherInputs.flat(),
+  ]
 })
 
 type FileFinder = (file: string, text: string) => ReadonlyArray<Finding>

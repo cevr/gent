@@ -86,6 +86,11 @@ const FAMILIES: Record<string, { readonly provider: string; readonly pattern: Re
 }
 
 export const PRESETS: Record<string, Preset> = {
+  sol: {
+    orchestrator: slot("openai/gpt-6.1-sol", "high"),
+    worker: slot("openai/gpt-6.1-sol", "high"),
+    reviewer: slot("openai/gpt-6.1-sol", "high"),
+  },
   "sol-luna": {
     orchestrator: slot("openai/sol", "medium"),
     worker: slot("openai/luna", "max"),
@@ -227,8 +232,9 @@ const ROSTER_END = "<!-- /roster -->"
 export const rosterBlock = (preset: Preset): string =>
   [
     ROSTER_START,
-    `- Worker (fix or feature): the \`delegate\` agent, paired in \`.gent/config.json\` as \`${preset.worker.modelId}\` at \`${preset.worker.reasoningEffort}\`. Pass no model override.`,
+    `- Worker (fix or feature): the \`delegate\` agent, paired in \`.gent/config.json\` as \`${preset.worker.modelId}\` at \`${preset.worker.reasoningEffort}\`.`,
     `- Reviewer (second opinion on a diff): \`overrides.modelId\` = \`${preset.reviewer.modelId}\`, \`overrides.reasoningEffort\` = \`${preset.reviewer.reasoningEffort}\``,
+    "- Repetitive mechanical changes following an established pattern only: `overrides.modelId` = `openai/gpt-6-luna`, `overrides.reasoningEffort` = `max`. Include transformation rules, worked examples, and the validation command in the task.",
     ROSTER_END,
   ].join("\n")
 

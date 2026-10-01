@@ -2073,11 +2073,10 @@ const makeMemorySqliteLayer = (
   makeStorageInitLive(featureMigrations).pipe(Layer.provideMerge(memorySqliteClientLayer))
 
 export const SqliteStorage = {
-  // Load-bearing: `deleteSession`'s atomic SELECT+DELETE relies on @effect/sql-sqlite-bun's
-  // single-connection + Semaphore(1) serialization. If this layer is ever swapped for a
-  // pooled/multi-connection driver, the cascade tx must switch to BEGIN IMMEDIATE (or an
-  // equivalent write-lock) to preserve the invariant that no child row is committed between
-  // the recursive SELECT and the DELETE.
+  // Load-bearing: `deleteSession`'s atomic SELECT+DELETE runs in one transaction that
+  // @effect/sql-sqlite-bun opens with BEGIN IMMEDIATE over its one connection, so it holds
+  // the write lock from the start and no child row is committed between the recursive
+  // SELECT and the DELETE.
   LiveWithSql: <A>(
     dbPath: string,
     extra: ExtraRepositories<A>,

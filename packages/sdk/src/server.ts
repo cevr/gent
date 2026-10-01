@@ -134,9 +134,11 @@ export const buildOwnedServer = (
         }),
         extensions: options.extensions ?? BuiltinExtensions,
         branchTools: options.branchTools ?? CellBranchTools,
-        modelResolverOverride: Option.getOrUndefined(
-          Option.map(languageModelLayer, ModelResolver.fromLanguageModel),
-        ),
+        overrides: {
+          modelResolverLayer: Option.getOrUndefined(
+            Option.map(languageModelLayer, ModelResolver.fromLanguageModel),
+          ),
+        },
       }).pipe(Layer.provide(observability)),
       scope,
     ).pipe(

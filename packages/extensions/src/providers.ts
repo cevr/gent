@@ -12,6 +12,7 @@ import {
   Path,
   Predicate,
   Schema,
+  Scope,
   SynchronizedRef,
 } from "effect"
 import {
@@ -38,6 +39,7 @@ import {
 } from "effect/http"
 import { EncodeError, HttpClientError, TransportError } from "effect/http/HttpClientError"
 import { AiError } from "effect/ai"
+import { makeStartedMemo } from "./started-memo.js"
 
 // Test seam: only a test reads modelsDevCatalog, the catalog loader, which it
 // runs against a scratch home.
@@ -322,12 +324,18 @@ export const makeCredentialCache = <C>(
         )
     }
 
-    const getFresh: Effect.Effect<C, CredentialFailure> = SynchronizedRef.modifyEffect(
-      config.cellRef,
-      (cell): Effect.Effect<Step, CredentialFailure> =>
+    // A refresh and the write of its result are one step a caller cannot
+    // stop: the provider spends the token it is sent, so a rotation stopped
+    // before it is stored would leave only the spent token. The step is
+    // uninterruptible from the lock to the cell write, except the store
+    // retry and the source read (`restore`). Request and interruptible IO
+    // timeouts bound those operations. Masked filesystem acquisition and
+    // finalizers can exceed the deadline, so the full step has no absolute bound.
+    const getFresh: Effect.Effect<C, CredentialFailure> = Effect.uninterruptibleMask((restore) =>
+      SynchronizedRef.modifyEffect(config.cellRef, (cell): Effect.Effect<Step, CredentialFailure> =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis
-          const current = yield* settlePending(cell, now)
+          const current = yield* restore(settlePending(cell, now))
           const cached = trusted(current)
 
           if (
@@ -343,7 +351,7 @@ export const makeCredentialCache = <C>(
 
           // Without an external source the cell is the only copy.
           let fromSource = cached
-          if (Option.isSome(config.read)) fromSource = yield* config.read.value(cached)
+          if (Option.isSome(config.read)) fromSource = yield* restore(config.read.value(cached))
           // After a 401 the source may still hold the rejected credential, and
           // its expiry says nothing about a revocation: only a refresh helps.
           const rejected =
@@ -366,6 +374,7 @@ export const makeCredentialCache = <C>(
           const refreshed = yield* config.refresh(held)
           return [Exit.succeed(refreshed), durable(refreshed, now, false)]
         }),
+      ),
     ).pipe(Effect.flatten)
 
     // Compare, then invalidate: a 401 for a credential the cell already
@@ -723,7 +732,7 @@ export const effortAtOrAbove = <Level extends string>(
  * concern, so the fetch, the parse, and the disk cache live here — shared by
  * the anthropic and openai drivers.
  *
- * One load per home directory. `Effect.cached` memoizes it, so several drivers
+ * One load per home directory. `makeStartedMemo` memoizes it, so several drivers
  * listing at once share one read and at most one fetch. There is no background
  * refresh: a cache older than a day, or written in another format, refetches
  * on the next load, and a failed fetch serves whatever the disk still holds. A load that finds neither a
@@ -1096,39 +1105,36 @@ type CatalogEffect = Effect.Effect<ReadonlyArray<Model>, never, CatalogServices>
  * process picks up the fresh catalog once the host is reachable. A memo that
  * resolved to nothing drops its own entry at once, and the next `listModels`
  * loads again.
+ *
+ * The memo starts the load as its own fiber (`makeStartedMemo`). A caller
+ * that is stopped (an Esc during the day's first fetch) only stops waiting:
+ * the load goes on, with a timeout on its fetch, and the next caller joins
+ * it instead of getting the interruption back.
  */
 const CATALOG_MEMO_TTL = Duration.minutes(5)
 
-const catalogsByHome = new Map<string, Effect.Effect<Catalog, never, CatalogServices>>()
+/** A catalog holds for `CATALOG_MEMO_TTL`; an empty one (no cache, no reachable host) is not kept. */
+const catalogMemoTtl = (catalog: Catalog) => {
+  if (catalog.models.length > 0) return CATALOG_MEMO_TTL
+  return Duration.zero
+}
+
+// The memo lives as long as the process, so its loads run in a scope that
+// never closes. Building it only allocates — no IO, no failure — so running
+// it here is allocation, not work. The services come from each `get`.
+const catalogsByHome = Effect.runSync(
+  makeStartedMemo({ load: loadCatalog, keep: catalogMemoTtl }).pipe(
+    Effect.provideService(Scope.Scope, Scope.makeUnsafe()),
+  ),
+)
 
 /**
  * The parsed catalog for `home`, loaded at most once per `CATALOG_MEMO_TTL`
- * while the load produces models.
- *
- * The memo is built the first time a home is asked for and stored before the
- * effect is handed back, so every driver that lists models for the same home
- * shares one read and at most one fetch. `Effect.cachedWithTTL` is a constructor: it
- * allocates the latch and performs no IO, so building the memo here decides
- * nothing about when the catalog loads.
+ * while the load produces models. Every driver that lists models for the same
+ * home shares one read and at most one fetch.
  */
-const catalogFor = (home: string): Effect.Effect<Catalog, never, CatalogServices> => {
-  const existing = Option.fromUndefinedOr(catalogsByHome.get(home))
-  if (Option.isSome(existing)) return existing.value
-  // `Effect.cachedWithTTL` only allocates the memo's latch — no IO, no failure —
-  // so running it here is allocation, not work. The catalog loads when a driver
-  // runs the effect this returns, and the TTL reads that driver's clock.
-  const memo = Effect.runSync(Effect.cachedWithTTL(loadCatalog(home), CATALOG_MEMO_TTL)).pipe(
-    // An empty result means no cache and no reachable host. Forget it, so a
-    // later call retries instead of serving nothing for the whole process.
-    Effect.tap((catalog) =>
-      Effect.sync(() => {
-        if (catalog.models.length === 0) catalogsByHome.delete(home)
-      }),
-    ),
-  )
-  catalogsByHome.set(home, memo)
-  return memo
-}
+const catalogFor = (home: string): Effect.Effect<Catalog, never, CatalogServices> =>
+  catalogsByHome.get(home)
 
 /** The models.dev catalog for `home`: every provider's models. */
 export const modelsDevCatalog = (home: string): CatalogEffect =>

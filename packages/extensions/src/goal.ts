@@ -1,4 +1,4 @@
-import { Crypto, Effect, Option, Predicate, Schema, Struct } from "effect"
+import { Crypto, Effect, Option, Path, Predicate, Schema, Struct } from "effect"
 import {
   BranchId,
   defineExtension,
@@ -8,6 +8,7 @@ import {
   ExtensionId,
   omitUndefined,
   request,
+  resolveDataDir,
   tool,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
@@ -50,6 +51,8 @@ export const GoalState = Schema.Struct({
   finalized: Schema.optional(Schema.Boolean),
   /** Why the harness paused the goal on its own; absent for a pause the person asked for. */
   pausedReason: Schema.optional(Schema.String),
+  /** The turn already in flight at a manual pause is still charged once. */
+  pausedTurnStartedAtMs: Schema.optional(Schema.Int),
   createdAt: Schema.Int,
   updatedAt: Schema.Int,
 })
@@ -149,7 +152,13 @@ export const formatGoalUsage = (goal: GoalState) => {
 const formatGoalStatus = (goal: Option.Option<GoalState>) =>
   Option.match(goal, {
     onNone: () => "No goal on this branch. Start one with /goal <objective>.",
-    onSome: (value) => `${value.objective}\n\n${formatGoalUsage(value)}`,
+    onSome: (value) => {
+      let command = "/goal resume"
+      if (value.status === "active") command = "/goal pause"
+      else if (value.status === "complete") command = "/goal <objective>"
+      else if (Option.contains(remainingTokens(value), 0)) command = "/goal resume --budget N"
+      return `${value.objective}\n\n${formatGoalUsage(value)}\n\n${command} · /goal clear (cancel/stop)`
+    },
   })
 
 // ── store ───────────────────────────────────────────────────────────────────
@@ -173,6 +182,16 @@ const goalOf = (snapshot: GoalSnapshot) => Option.fromUndefinedOr(snapshot.goal)
 const readGoal = Effect.fn("GoalStore.readGoal")(function* () {
   return goalOf(yield* store.read())
 })
+
+/** Keep the persisted state and its queued continuation under one branch permit. */
+const serializeGoal = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const path = yield* Path.Path
+    const directory = yield* resolveDataDir(ctx.home)
+    const controlPath = path.join(directory, "goals", `${ctx.branchId}.control`)
+    return yield* ctx.FileLock.withLock(controlPath, effect)
+  })
 
 /** Serializes read-modify-write cycles on one branch's goal across concurrent hooks. */
 const modifyGoal = <A, E, R>(
@@ -225,6 +244,17 @@ class GoalError extends Schema.TaggedError<GoalError>()("GoalError", {
 // ── State transitions ──
 
 const now = Effect.clockWith((clock) => clock.currentTimeMillis)
+
+const currentTurnStartedAt = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  const loops = yield* ctx.Session.listActiveLoops
+  return Option.flatMap(
+    Option.fromUndefinedOr(
+      loops.find((loop) => loop.sessionId === ctx.sessionId && loop.branchId === ctx.branchId),
+    ),
+    (loop) => loop.runningSince,
+  )
+})
 
 const validateObjective = (value: string) =>
   Effect.gen(function* () {
@@ -322,7 +352,7 @@ const setStatus = (change: StatusChange) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const tokenBudget = yield* validateBudget(change.tokenBudget)
-    const goal = yield* modifyGoal((current) =>
+    const { goal, previous } = yield* modifyGoal((current) =>
       Effect.gen(function* () {
         if (Option.isNone(current))
           return yield* new GoalError({ message: "No goal on this branch" })
@@ -333,32 +363,37 @@ const setStatus = (change: StatusChange) =>
         }
         if (
           change.status === "active" &&
-          current.value.status === "budget_limited" &&
+          Option.contains(remainingTokens(current.value), 0) &&
           Option.isNone(tokenBudget)
         ) {
           return yield* new GoalError({
             message: "The budget is spent; resume with /goal resume --budget <tokens>",
           })
         }
-        if (change.status !== "active") yield* dequeueGoalMessage(current.value)
+        let pausedTurnStartedAtMs = Option.none<number>()
+        if (change.status === "paused" && current.value.status === "active") {
+          pausedTurnStartedAtMs = yield* currentTurnStartedAt
+        }
         // A resume is a continuation: the counter keeps its queued message id unique.
         let continuationsUsed = current.value.continuationsUsed
         if (change.status === "active") continuationsUsed += 1
         // A status the person sets replaces any reason the harness paused for.
         const updated: GoalState = {
-          ...Struct.omit(current.value, ["pausedReason"]),
+          ...Struct.omit(current.value, ["pausedReason", "pausedTurnStartedAtMs"]),
           status: change.status,
           continuationsUsed,
           ...omitUndefined({
+            pausedTurnStartedAtMs: Option.getOrUndefined(pausedTurnStartedAtMs),
             tokenBudget: Option.getOrUndefined(
               Option.map(tokenBudget, (budget) => current.value.tokensUsed + budget),
             ),
           }),
           updatedAt: yield* now,
         }
-        return { next: Option.some(updated), result: updated }
+        return { next: Option.some(updated), result: { goal: updated, previous: current.value } }
       }),
     )
+    if (change.status !== "active") yield* dequeueGoalMessage(previous)
     yield* ctx.State.changed()
     return goal
   })
@@ -374,11 +409,9 @@ const completeGoal = setStatus({
 const clearGoal = Effect.gen(function* () {
   const ctx = yield* ExtensionContext
   const goal = yield* modifyGoal((current) =>
-    Effect.gen(function* () {
-      if (Option.isSome(current)) yield* dequeueGoalMessage(current.value)
-      return { next: Option.none<GoalState>(), result: current }
-    }),
+    Effect.succeed({ next: Option.none<GoalState>(), result: current }),
   )
+  if (Option.isSome(goal)) yield* dequeueGoalMessage(goal.value)
   yield* ctx.State.changed()
   return goal
 })
@@ -440,7 +473,7 @@ const decideAfterTurn = (
     }
   }
   // The person stopped the turn: nothing wakes the branch again.
-  if (input.interrupted) return { next: charged, report: false }
+  if (input.interrupted) return { next: { ...charged, status: "paused" }, report: false }
   // With a budget and a partial count, the remaining budget is unknown.
   // Continuing could overspend it, so the goal waits for the person.
   if (!input.usage.complete && Predicate.isNotUndefined(charged.tokenBudget)) {
@@ -458,9 +491,13 @@ const continueGoal = (input: TurnAfterInput) =>
     // Clients re-read the goal only when this turn end changed it.
     const unchanged = (current: Option.Option<GoalState>) => ({
       next: current,
-      result: { changed: false, decision: Option.none<GoalState>() },
+      result: {
+        changed: false,
+        previous: Option.none<GoalState>(),
+        decision: Option.none<GoalState>(),
+      },
     })
-    const { changed, decision } = yield* modifyGoal((current) =>
+    const { changed, previous, decision } = yield* modifyGoal((current) =>
       Effect.gen(function* () {
         if (Option.isNone(current)) return unchanged(current)
         const goal = current.value
@@ -470,7 +507,24 @@ const continueGoal = (input: TurnAfterInput) =>
           const finalized: GoalState = { ...chargeTurn(goal, input, yield* now), finalized: true }
           return {
             next: Option.some(finalized),
-            result: { changed: true, decision: Option.none<GoalState>() },
+            result: {
+              changed: true,
+              previous: Option.none<GoalState>(),
+              decision: Option.none<GoalState>(),
+            },
+          }
+        }
+        if (goal.status === "paused" && goal.pausedTurnStartedAtMs === input.startedAtMs) {
+          const charged = chargeTurn(goal, input, yield* now)
+          let status: GoalStatus = "paused"
+          if (Option.contains(remainingTokens(charged), 0)) status = "budget_limited"
+          return {
+            next: Option.some({ ...Struct.omit(charged, ["pausedTurnStartedAtMs"]), status }),
+            result: {
+              changed: true,
+              previous: Option.none<GoalState>(),
+              decision: Option.none<GoalState>(),
+            },
           }
         }
         if (goal.status !== "active") return unchanged(current)
@@ -479,11 +533,15 @@ const continueGoal = (input: TurnAfterInput) =>
           next: Option.some(decided.next),
           result: {
             changed: true,
+            previous: Option.some(goal),
             decision: Option.liftPredicate(decided.next, () => decided.report),
           },
         }
       }),
     )
+    // A resume during this turn can already have queued its continuation.
+    // Replace that source before admitting the turn-end continuation.
+    if (Option.isSome(previous)) yield* dequeueGoalMessage(previous.value)
     if (changed) yield* ctx.State.changed()
     if (Option.isNone(decision)) return
     const goal = decision.value
@@ -501,6 +559,7 @@ const continueGoal = (input: TurnAfterInput) =>
     }
     yield* queueGoalMessage(goal, continuationPrompt(goal))
   }).pipe(
+    serializeGoal,
     Effect.catchEager((error) =>
       Effect.logWarning("goal.continue.failed").pipe(Effect.annotateLogs({ error: String(error) })),
     ),
@@ -524,12 +583,14 @@ const parseBudget = (args: string): ParsedGoalArgs =>
 
 const GoalCommand = request({
   id: "goal-command",
-  description: "Set or view a persistent goal; supports status, pause, resume, and clear",
+  description:
+    "Set or view a persistent goal; supports status, pause, resume, clear, cancel, and stop",
+  answersDuringTurn: true,
   slash: {
     trigger: "goal",
     name: "Goal",
     description:
-      "/goal <objective> · /goal [--budget N] <objective> · status · pause · resume · clear",
+      "/goal <objective> · /goal [--budget N] <objective> · status · pause · resume · clear|cancel|stop",
     category: "Session",
   },
   input: Schema.String,
@@ -564,7 +625,9 @@ const GoalCommand = request({
           })
           return yield* present(`Paused.\n\n${formatGoalUsage(goal)}`)
         }
-        case "clear": {
+        case "clear":
+        case "cancel":
+        case "stop": {
           const goal = yield* clearGoal
           return yield* present(
             Option.match(goal, {
@@ -580,7 +643,7 @@ const GoalCommand = request({
           yield* queueGoalMessage(goal, continuationPrompt(goal))
         }
       }
-    }),
+    }).pipe(serializeGoal),
 })
 
 // ── Model-facing tool ──
@@ -639,7 +702,7 @@ export const GoalTool = tool({
         return toolResult(Option.some(goal), `Goal complete. ${formatGoalUsage(goal)}`)
       }
     }
-  }),
+  }, serializeGoal),
 })
 
 export const GoalExtension = defineExtension({
