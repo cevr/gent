@@ -1,6 +1,13 @@
 import type * as BeautifulMermaid from "beautiful-mermaid"
 import { useRenderer } from "@opentui/solid"
-import { type Accessor, createMemo, createSignal } from "solid-js"
+import {
+  type Accessor,
+  createContext,
+  createMemo,
+  createSignal,
+  untrack,
+  useContext,
+} from "solid-js"
 import {
   createMarkdownCodeBlockRenderer,
   type MarkdownCodeBlockRenderer,
@@ -11,7 +18,7 @@ import {
   type TextChunk,
   TextRenderable,
 } from "@opentui/core"
-import { Effect, Option } from "effect"
+import { Cause, Effect, Option, Schema } from "effect"
 
 // ── mermaid diagrams ────────────────────────────────────────────────────────
 
@@ -230,39 +237,87 @@ const drawDiagram = (
 
 type DiagramLibrary = typeof BeautifulMermaid
 
+/** The diagram library did not load. */
+export class DiagramLibraryError extends Schema.TaggedError<DiagramLibraryError>()(
+  "DiagramLibraryError",
+  { cause: Schema.Defect() },
+) {}
+
+/**
+ * The diagram library as the answers see it: loaded, failed, or not yet.
+ * Both readers are reactive.
+ */
+interface DiagramLibraryLoad {
+  /** The library, once it has loaded. */
+  readonly loaded: Accessor<Option.Option<DiagramLibrary>>
+  /** The load failed: every fence draws as its code block. */
+  readonly failed: Accessor<boolean>
+  /** Starts the load, unless one runs, has landed, or has failed. */
+  readonly ask: () => void
+}
+
+/**
+ * The library behind `load`. One load runs at a time. A failed load stays
+ * failed. An interrupted load leaves nothing behind, so the next ask loads
+ * again; the module registry keeps a module that has loaded.
+ */
+export const makeDiagramLibrary = (
+  load: Effect.Effect<DiagramLibrary, DiagramLibraryError>,
+): DiagramLibraryLoad => {
+  const [loaded, setLoaded] = createSignal(Option.none<DiagramLibrary>())
+  const [failed, setFailed] = createSignal(false)
+  let loading = false
+  const ask = () => {
+    if (loading || Option.isSome(untrack(loaded)) || untrack(failed)) return
+    loading = true
+    Effect.runFork(
+      load.pipe(
+        Effect.matchCause({
+          onSuccess: (library) => setLoaded(Option.some(library)),
+          onFailure: (cause) => {
+            if (!Cause.hasInterruptsOnly(cause)) setFailed(true)
+          },
+        }),
+        Effect.ensuring(
+          Effect.sync(() => {
+            loading = false
+          }),
+        ),
+      ),
+    )
+  }
+  return { loaded, failed, ask }
+}
+
 /**
  * beautiful-mermaid loads on the first mermaid fence, not at launch: most
- * sessions draw no diagram. The load runs once; the signal tells every
- * reader when it lands.
+ * sessions draw no diagram. Every answer shares this load; a test provides
+ * its own.
  */
-const [library, setLibrary] = createSignal(Option.none<DiagramLibrary>())
-
-const loadLibrary = Effect.runSync(
-  Effect.cached(
-    // oxlint-disable-next-line effect/noDynamicImports -- the diagram library loads on the first mermaid fence, not at launch
-    Effect.promise(() => import("beautiful-mermaid")).pipe(
-      Effect.tap((loaded) => Effect.sync(() => setLibrary(Option.some(loaded)))),
-    ),
+export const DiagramLibraryContext = createContext(
+  makeDiagramLibrary(
+    Effect.tryPromise({
+      // oxlint-disable-next-line effect/noDynamicImports -- the diagram library loads on the first mermaid fence, not at launch
+      try: () => import("beautiful-mermaid"),
+      catch: (cause) => new DiagramLibraryError({ cause }),
+    }),
   ),
 )
-
-/** The library, once loaded; asking for it starts the load. Reactive. */
-const askLibrary = (): Option.Option<DiagramLibrary> => {
-  const loaded = library()
-  if (Option.isNone(loaded)) Effect.runFork(loadLibrary)
-  return loaded
-}
 
 /** A ```mermaid or ~~~mermaid fence opens on one of the lines. */
 const DIAGRAM_FENCE = /^[ \t]*(?:`{3,}|~{3,})[ \t]*mermaid\b/m
 
 /**
  * Whether `markdown` draws as it will stay: it holds no mermaid fence, or the
- * library its diagrams need has loaded. A fence starts the load. Reactive, so
- * native history can wait for the load before it commits the item.
+ * library its diagrams need has loaded, or has failed and the fences draw as
+ * code. A fence starts the load. Reactive, so native history can wait for
+ * the load before it commits the item.
  */
-export const diagramsDrawable = (markdown: string): boolean =>
-  !DIAGRAM_FENCE.test(markdown) || Option.isSome(askLibrary())
+export const diagramsDrawable = (library: DiagramLibraryLoad, markdown: string): boolean => {
+  if (!DIAGRAM_FENCE.test(markdown)) return true
+  library.ask()
+  return Option.isSome(library.loaded()) || library.failed()
+}
 
 // ── code-block renderer ─────────────────────────────────────────────────────
 
@@ -272,9 +327,26 @@ const DIAGRAM_MAX_WIDTH = 120
 /** A fence is closed once its closing ``` or ~~~ line has arrived. */
 const fenceClosed = (raw: string): boolean => /\n[ \t]*(?:`{3,}|~{3,})[ \t]*\n*$/.test(raw)
 
-/** The statements whose line has ended: the line still being written waits. */
-const completeStatements = (text: string): string =>
-  text.slice(0, Math.max(0, text.lastIndexOf("\n")))
+/**
+ * The statements of an open fence that have ended, read from its raw text:
+ * the lexer's text drops the newline that ends the last line. A statement
+ * ends with its line; in a flowchart a `;` ends it too. The statement still
+ * being written waits.
+ */
+const completeStatements = (raw: string): string => {
+  const opening = raw.indexOf("\n")
+  if (opening === -1) return ""
+  const lines = raw.slice(opening + 1).split("\n")
+  // The last piece is the line still being written: empty once a newline ends the text.
+  const ended = lines.slice(0, -1)
+  const writing = lines.at(-1) ?? ""
+  if (!isFlowchart([...ended, writing])) return ended.join("\n")
+  // A mark after the written text lands in the statement still being
+  // written, or alone after a `;` that ended the last one: either way the
+  // statements before it are done.
+  const done = splitStatements(`${writing}\u0000`).slice(0, -1)
+  return [...ended, ...done].join("\n")
+}
 
 /**
  * The answer's markdown hook for ```mermaid fences, drawing on `ctx` with
@@ -294,6 +366,7 @@ const completeStatements = (text: string): string =>
 const mermaidCodeBlocks = (
   ctx: RenderContext,
   library: Option.Option<DiagramLibrary>,
+  ask: () => void,
   colors: () => DiagramColors,
 ): MarkdownOptions["renderNode"] => {
   const lastDrawn = new Map<string, Diagram>()
@@ -304,12 +377,12 @@ const mermaidCodeBlocks = (
     block: Option.Option<string>,
   ) => {
     if (fenceClosed(raw)) return drawDiagram(loaded, text, colors())
-    return Option.orElse(drawDiagram(loaded, completeStatements(text), colors()), () =>
+    return Option.orElse(drawDiagram(loaded, completeStatements(raw), colors()), () =>
       Option.flatMap(block, (id) => Option.fromUndefinedOr(lastDrawn.get(id))),
     )
   }
   const mermaid: MarkdownCodeBlockRenderer = (token, context) => {
-    if (Option.isNone(library)) askLibrary()
+    if (Option.isNone(library)) ask()
     const block = Option.fromNullishOr(context.defaultRender()?.id)
     const diagram = Option.flatMap(library, (loaded) =>
       shownDiagram(loaded, token.text, token.raw, block),
@@ -342,5 +415,6 @@ export const useDiagramCodeBlocks = (
   colors: () => DiagramColors,
 ): Accessor<MarkdownOptions["renderNode"]> => {
   const ctx = useRenderer()
-  return createMemo(() => mermaidCodeBlocks(ctx, library(), colors))
+  const library = useContext(DiagramLibraryContext)
+  return createMemo(() => mermaidCodeBlocks(ctx, library.loaded(), library.ask, colors))
 }

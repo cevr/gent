@@ -53,6 +53,7 @@ import {
   runWithOwner,
   Show,
   untrack,
+  useContext,
 } from "solid-js"
 import type {
   CliRenderer,
@@ -81,7 +82,7 @@ import {
   lineCount,
   MODEL_CHANGE_MESSAGE_TYPE,
 } from "@gent/core/protocol"
-import { diagramsDrawable, useDiagramCodeBlocks } from "./mermaid"
+import { DiagramLibraryContext, diagramsDrawable, useDiagramCodeBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 
@@ -1247,6 +1248,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const renderer = useRenderer()
   const ext = useExtensionUI()
   const owner = getOwner()
+  const diagramLibrary = useContext(DiagramLibraryContext)
   const dimensions = useTerminalDimensions()
   const [ready, setReady] = createSignal(false)
   const [nativeOutputReady, setNativeOutputReady] = createSignal(false)
@@ -1640,7 +1642,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
           index >= queued &&
           isMessageItem(item) &&
           item.role === "assistant" &&
-          !diagramsDrawable(item.content),
+          !diagramsDrawable(diagramLibrary, item.content),
       ),
     )
     untrack(() => {

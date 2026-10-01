@@ -1,9 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Schedule } from "effect"
+import { Deferred, type Duration, Effect, Option, Schedule } from "effect"
+import * as BeautifulMermaid from "beautiful-mermaid"
 import { type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
-import { MessageList, NativeTranscript } from "../src/message-list"
+import { MessageList, NativeTranscript, type SessionItem } from "../src/message-list"
+import { DiagramLibraryContext, DiagramLibraryError, makeDiagramLibrary } from "../src/mermaid"
 import { renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 
@@ -13,8 +15,11 @@ const syntaxStyle = () => SyntaxStyle.create()
 
 /** The frame of an answer that holds one closed ```mermaid fence. */
 const drawn = (source: string, width = 120) =>
+  drawnAnswer(`\`\`\`mermaid\n${source}\n\`\`\``, width)
+
+/** The frame of an answer, once a diagram draws in it. */
+const drawnAnswer = (content: string, width = 120) =>
   Effect.gen(function* () {
-    const content = `\`\`\`mermaid\n${source}\n\`\`\``
     const setup = yield* renderScoped(
       () => (
         <MessageList
@@ -48,34 +53,47 @@ const diagramRows = (frame: string): ReadonlyArray<string> => {
   return rows.slice(first, last + 1)
 }
 
-// The diagram library loads once a process, on the first fence. This test
-// runs first in its file, so the library has not loaded when the answer
-// is first ready to commit.
-describe("mermaid diagrams in native history", () => {
-  it.scopedLive("an answer with a diagram reaches history as the diagram, not its fence", () =>
-    Effect.gen(function* () {
-      const committed: string[] = []
-      const content = "```mermaid\ngraph LR\n  Alpha-->Beta\n```"
-      const setup = yield* renderScoped(
-        () => {
-          const renderer = useRenderer()
-          renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
-            committed.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
-          })
-          return (
+/** An answer with one diagram, and the answer after it. */
+const diagramThenTail = (): SessionItem[] => {
+  const content = "```mermaid\ngraph LR\n  Alpha-->Beta\n```"
+  return [
+    {
+      _tag: "regular-message",
+      id: "diagram",
+      role: "assistant",
+      content,
+      reasoning: "",
+      images: [],
+      createdAt: 0,
+      segments: [{ _tag: "text", content }],
+    },
+    {
+      _tag: "regular-message",
+      id: "tail",
+      role: "assistant",
+      content: "AFTER-DIAGRAM",
+      reasoning: "",
+      images: [],
+      createdAt: 1,
+      segments: [{ _tag: "text", content: "AFTER-DIAGRAM" }],
+    },
+  ]
+}
+
+/** The text native history receives while `library` serves the diagrams. */
+const historyWith = (library: ReturnType<typeof makeDiagramLibrary>) =>
+  Effect.gen(function* () {
+    const committed: string[] = []
+    const setup = yield* renderScoped(
+      () => {
+        const renderer = useRenderer()
+        renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+          committed.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+        })
+        return (
+          <DiagramLibraryContext.Provider value={library}>
             <NativeTranscript
-              items={[
-                {
-                  _tag: "regular-message",
-                  id: "diagram",
-                  role: "assistant",
-                  content,
-                  reasoning: "",
-                  images: [],
-                  createdAt: 0,
-                  segments: [{ _tag: "text", content }],
-                },
-              ]}
+              items={diagramThenTail()}
               settled
               streaming={false}
               footerHeight={3}
@@ -89,21 +107,80 @@ describe("mermaid diagrams in native history", () => {
             >
               <box />
             </NativeTranscript>
-          )
-        },
-        { width: 60, height: 20 },
-      )
-      yield* Effect.promise(() => setup.flush()).pipe(
+          </DiagramLibraryContext.Provider>
+        )
+      },
+      { width: 60, height: 20 },
+    )
+    /** Draws frames until history holds `text`, or `within` passes. */
+    const flushUntil = (text: string, within: Duration.Input) =>
+      Effect.promise(() => setup.flush()).pipe(
         Effect.repeat({
-          until: () => committed.join("").includes("Alpha"),
+          until: () => committed.join("").includes(text),
           schedule: Schedule.spaced("10 millis"),
         }),
-        Effect.timeout("4 seconds"),
+        Effect.timeout(within),
         Effect.ignore,
       )
-      expect(committed.join("")).toContain("┌")
-      expect(committed.join("")).not.toContain("graph LR")
+    return { history: () => committed.join(""), flushUntil }
+  })
+
+// The diagram library loads on the first fence. Scrollback keeps forever
+// what it is given, so an answer with a diagram waits for the load, and
+// the answers after it wait in order.
+describe("mermaid diagrams in native history", () => {
+  it.scopedLive("an answer with a diagram waits for the library, then lands as the diagram", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>()
+      const { history, flushUntil } = yield* historyWith(
+        makeDiagramLibrary(Deferred.await(gate).pipe(Effect.as(BeautifulMermaid))),
+      )
+      yield* flushUntil("AFTER-DIAGRAM", "400 millis")
+      expect(history()).toBe("")
+      yield* Deferred.succeed(gate, void 0)
+      yield* flushUntil("AFTER-DIAGRAM", "4 seconds")
+      expect(history()).toContain("┌")
+      expect(history()).not.toContain("graph LR")
+      expect(history()).toContain("AFTER-DIAGRAM")
     }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a library that fails to load lets the answer land with its fence as code", () =>
+    Effect.gen(function* () {
+      const { history, flushUntil } = yield* historyWith(
+        makeDiagramLibrary(Effect.fail(new DiagramLibraryError({ cause: "no module" }))),
+      )
+      yield* flushUntil("AFTER-DIAGRAM", "4 seconds")
+      expect(history()).toContain("Alpha-->Beta")
+      expect(history()).toContain("AFTER-DIAGRAM")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.live("an interrupted load is not kept: the next ask loads again", () =>
+    Effect.gen(function* () {
+      let attempts = 0
+      const library = makeDiagramLibrary(
+        Effect.suspend(() => {
+          attempts += 1
+          if (attempts === 1) return Effect.interrupt
+          return Effect.succeed(BeautifulMermaid)
+        }),
+      )
+      library.ask()
+      yield* Effect.yieldNow.pipe(
+        Effect.repeat({ until: () => attempts === 1, schedule: Schedule.spaced("1 millis") }),
+      )
+      expect(library.failed()).toBe(false)
+      expect(Option.isNone(library.loaded())).toBe(true)
+      // Each answer that draws asks again; an ask while the first load winds down does nothing.
+      yield* Effect.sync(library.ask).pipe(
+        Effect.repeat({
+          until: () => Option.isSome(library.loaded()),
+          schedule: Schedule.spaced("1 millis"),
+        }),
+      )
+      expect(attempts).toBe(2)
+    }).pipe(Effect.timeout("4 seconds")),
   )
 })
 
@@ -214,6 +291,26 @@ describe("mermaid diagrams", () => {
         expect(frame).toContain("Alpha")
         expect(frame).toContain("Beta")
         expect(frame).not.toContain(notDrawn)
+      }),
+    )
+  }
+
+  // While the fence streams, a statement is complete once its line ends or
+  // a `;` ends it: the diagram draws it before the next line arrives.
+  const streamed: ReadonlyArray<readonly [string, string, ReadonlyArray<string>]> = [
+    ["a line that has ended", "```mermaid\ngraph LR\n  Alpha-->Beta\n", ["Alpha", "Beta"]],
+    ["one line of statements ended by `;`", "```mermaid\ngraph LR; Alpha-->Beta;", ["Beta"]],
+    [
+      "a `;` after the last statement",
+      "```mermaid\ngraph LR\n  Alpha-->Beta; Beta-->Gamma;",
+      ["Gamma"],
+    ],
+  ]
+  for (const [name, content, nodes] of streamed) {
+    it.scopedLive(`an open fence draws ${name}`, () =>
+      Effect.gen(function* () {
+        const frame = yield* drawnAnswer(content)
+        for (const text of nodes) expect(frame).toContain(text)
       }),
     )
   }
