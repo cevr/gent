@@ -102,12 +102,14 @@ updates this list in the same commit.
     `platform`, and `os.homedir`, `hostname` and `release`, read as a global
     or through an import, and in core and
     shipped-extension source also `process.cwd` and the `os`, `crypto` and
-    `url` modules; `gent/no-host-fact-bypass` holds the `globalThis.Bun`,
-    `globalThis.process` and computed `Bun[...]` spellings. A read through a
-    local alias of `globalThis` or `Reflect.get` is not caught.
-    `effect/noPlatformLayerOutsideEntry` and
-    `gent/no-platform-module-export-alias` keep the Bun platform layers in the
-    platform entry files.
+    `url` modules. `effect/noGlobals` follows each global through
+    `globalThis`, computed members and local aliases, and `effect/noReflectGet`
+    holds `Reflect.get`. `gent/no-hand-rolled-module-path` keeps core and
+    shipped-extension source from reading a file path off
+    `new URL(import.meta.url)`.
+    `effect/noPlatformLayerOutsideEntry` keeps the Bun platform layers in the
+    platform entry files, and reports a platform module or member a file
+    exports.
     The TUI session controller owns screen state, views render and dispatch;
     app-specific UI facets live at the app edge. Receipts:
     `packages/core/src/runtime/gent-platform.ts`,

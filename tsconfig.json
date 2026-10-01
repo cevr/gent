@@ -24,10 +24,9 @@
         // A diagnostic that an oxlint rule holds at every site is off here, so
         // one site takes one suppression: `effect/noAsyncFunction` holds
         // `asyncFunction`, `effect/noNodeBuiltinImport` holds `nodeBuiltinImport`,
-        // and `effect/noGlobals` holds the `global*`, `processEnv` and
-        // `cryptoRandomUUID` diagnostics, through `globalThis` and aliases too.
-        // `newPromise` stays on: `effect/noNewPromise` misses
-        // `new globalThis.Promise` and an alias of `Promise`. Where oxlint turns
+        // `effect/noGlobals` holds the `global*`, `processEnv` and
+        // `cryptoRandomUUID` diagnostics, and `effect/noNewPromise` holds
+        // `newPromise`, through `globalThis` and aliases too. Where oxlint turns
         // `effect/noGlobals` off (the gamut driver, the capture preload), the
         // overrides below turn on each diagnostic for a global the file does
         // not use. The style suggestions are off (`strictBooleanExpressions`,
@@ -85,7 +84,7 @@
           "missingStarInYieldEffectGen": "error",
           "multipleEffectProvide": "error",
           "nestedEffectGenYield": "error",
-          "newPromise": "error",
+          "newPromise": "off",
           "nodeBuiltinImport": "off",
           "nonObjectEffectServiceType": "error",
           "outdatedApi": "error",

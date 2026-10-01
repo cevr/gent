@@ -27,6 +27,7 @@ import {
   findTuiSessionIdentityReads,
   findUnadaptedSeams,
   findUnconsumedExports,
+  enabledLintRules,
   findUnenabledPluginRules,
   findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
@@ -244,13 +245,18 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
     onNone: () => "",
     onSome: (read) => read.text,
   })
-  const rootRules = new Set(Object.keys(config.rules ?? {}))
+  const enabledRules = enabledLintRules(config)
   const pluginText = sourceTexts.get(LINT_PLUGIN) ?? ""
   return [
     ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, indexFiles),
     ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, indexFiles),
     ...findUnmatchedTsconfigOverrides(ROOT_TSCONFIG, tsconfig.text, tsconfig.value, indexFiles),
-    ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, Object.keys(gentRules.rules), rootRules),
+    ...findUnenabledPluginRules(
+      LINT_PLUGIN,
+      pluginText,
+      Object.keys(gentRules.rules),
+      enabledRules,
+    ),
   ]
 })
 
