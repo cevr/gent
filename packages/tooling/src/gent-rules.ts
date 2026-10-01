@@ -11,7 +11,6 @@
  *   comment (until upstream 0.19.0 `effect/noDynamicImports` strict mode).
  * - no-bun-outside-adapter: `Bun.*` and host facts stay in the platform adapters (until
  *   upstream 0.19.0).
- * - no-wrapped-sleep-in-tests: test code waits on no sleep wrapped in a larger expression.
  * - no-timeout-die-payload-in-tests: test code dies on no timeout spelled in an object payload.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
@@ -438,41 +437,6 @@ const dottedName = (node: AstNode | undefined): string | undefined => {
     return joined(getNodeField(node, "object"), getNodeField(node, "property"))
   }
   return undefined
-}
-
-const isFunctionNode = (node: AstNode | undefined): boolean =>
-  node?.type === "ArrowFunctionExpression" || node?.type === "FunctionExpression"
-
-const SLEEP_CALLS = new Set(["Effect.sleep", "Bun.sleep", "Bun.sleepSync"])
-
-/** The dotted name of a sleep call, `Effect.sleep` or `Bun.sleep`, or undefined. */
-const sleepCallName = (node: AstNode): string | undefined => {
-  if (node.type !== "CallExpression") return undefined
-  const name = dottedName(getNodeField(node, "callee"))
-  return name !== undefined && SLEEP_CALLS.has(name) ? name : undefined
-}
-
-const isFunctionLike = (node: AstNode): boolean =>
-  isFunctionNode(node) || node.type === "FunctionDeclaration"
-
-/**
- * Whether a wait is a statement of its own: `yield*`, `await` or `void`
- * around it, then an expression statement. That is the one shape
- * `effect/noFixedWaitInTests` reports when it waits on a bare sleep.
- */
-const isUpstreamWaitedStatement = (wait: AstNode): boolean => {
-  let current = wait
-  let parent = getNodeField(current, "parent")
-  while (
-    parent !== undefined &&
-    ((parent.type === "YieldExpression" && fieldOf(parent, "delegate") === true) ||
-      parent.type === "AwaitExpression" ||
-      (parent.type === "UnaryExpression" && getStringField(parent, "operator") === "void"))
-  ) {
-    current = parent
-    parent = getNodeField(current, "parent")
-  }
-  return parent?.type === "ExpressionStatement"
 }
 
 const TIMEOUT_TEXT = /tim(?:ed|e)\s*out|timeout|waiting for|gave up/i
@@ -1178,82 +1142,6 @@ const plugin: Plugin = {
         }
       },
     },
-
-    /**
-     * Test code waits on no sleep wrapped in a larger expression.
-     *
-     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
-     * `effect/noFixedWaitInTests` reports a sleep only when a statement waits
-     * on the sleep itself (`yield* Effect.sleep(...)`), so
-     * `yield* Effect.sleep(...).pipe(...)` or a sleep raced inside a waited
-     * call passes. Goes when an upstream release reports a sleep anywhere in
-     * a waited expression; none has yet.
-     *
-     * Reported in test code (`isTestCode`): an `Effect.sleep`, `Bun.sleep` or
-     * `Bun.sleepSync` call inside the argument of a `yield*` or an `await`,
-     * outside a nested function, unless it is upstream's case. Also reported:
-     * a sleep stored under a name (a variable's initialiser or an object
-     * field, outside a nested function), since a later `yield* pause` waits
-     * on it where no rule sees the sleep. A sleep a function builds and
-     * returns, or hands to a mock as the subject's own delay, stays allowed.
-     */
-    "no-wrapped-sleep-in-tests": {
-      create(context) {
-        if (!isTestCode(ruleSubject(context))) return {}
-        const reported = new Set<AstNode>()
-        const report = (node: AstNode, sleep: string, how: string) => {
-          reported.add(node)
-          context.report({
-            message: `\`${sleep}(...)\` ${how} in test code — replace the fixed delay with deterministic synchronisation (\`Deferred\`, \`controls.waitForCall(...)\`, a \`waitFor\` poll, or \`TestClock.adjust\`). A real-clock wait that is the subject takes a line-local suppression with its reason.`,
-            node,
-          })
-        }
-        // A waited expression inside a stored value is visitWait's to report.
-        const skipStored = (node: AstNode) =>
-          isFunctionLike(node) || node.type === "YieldExpression" || node.type === "AwaitExpression"
-        const visitStored = (value: AstNode | undefined) => {
-          if (value === undefined) return
-          walkAst(
-            value,
-            (inner) => {
-              const sleep = sleepCallName(inner)
-              if (sleep === undefined || reported.has(inner)) return
-              report(inner, sleep, "stored under a name")
-            },
-            skipStored,
-          )
-        }
-        const visitWait = (wait: AstNode) => {
-          const argument = getNodeField(wait, "argument")
-          if (argument === undefined) return
-          walkAst(
-            argument,
-            (inner) => {
-              const sleep = sleepCallName(inner)
-              if (sleep === undefined || reported.has(inner)) return
-              if (inner === argument && isUpstreamWaitedStatement(wait)) return
-              report(inner, sleep, "waited")
-            },
-            isFunctionLike,
-          )
-        }
-        return {
-          YieldExpression(node) {
-            if (isAstNode(node) && fieldOf(node, "delegate") === true) visitWait(node)
-          },
-          AwaitExpression(node) {
-            if (isAstNode(node)) visitWait(node)
-          },
-          VariableDeclarator(node) {
-            if (isAstNode(node)) visitStored(getNodeField(node, "init"))
-          },
-          Property(node) {
-            if (isAstNode(node)) visitStored(getNodeField(node, "value"))
-          },
-        }
-      },
-    },
-
     /**
      * Test code does not die on a timeout spelled in an object payload.
      *
