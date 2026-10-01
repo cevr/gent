@@ -47,6 +47,7 @@ import {
   refuseResetWhileServing,
   reportFailureOnStderr,
   resetStorage,
+  resolveClientBundle,
   resumableSessions,
   seedDebugSession,
 } from "../src/ops"
@@ -166,6 +167,41 @@ describe("resumable sessions", () => {
     expect(resumableSessions({ connect: server, inMemory: true })).toBe(true)
     expect(resumableSessions({ connect: server, inMemory: false })).toBe(true)
   })
+})
+
+// A scripted model needs no sign-in. Only the server this run starts serves
+// one: a connected server chose its own model, so its sign-in gate stays.
+describe("scripted model", () => {
+  const mockEmpty = (cwd: string) => ({
+    cwd,
+    inMemory: true,
+    debug: false,
+    mock: Option.some({ empty: true }),
+    authDirectory: Option.some(cwd),
+  })
+
+  it.live("--mock-empty on a server this run starts serves a scripted model", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDirectoryScoped("gent-scripted-local-")
+        const bundle = yield* resolveClientBundle({ ...mockEmpty(cwd), connect: Option.none() })
+        expect(bundle.scriptedModel).toBe(true)
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live("--mock-empty with --connect keeps the connected server's model", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDirectoryScoped("gent-scripted-connect-")
+        const bundle = yield* resolveClientBundle({
+          ...mockEmpty(cwd),
+          connect: Option.some("ws://127.0.0.1:9/nonexistent-loop-probe"),
+        })
+        expect(bundle.scriptedModel).toBe(false)
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
 })
 
 describe("startup failure report", () => {

@@ -266,9 +266,6 @@ const runGent = ({
     let mock = Option.none<{ readonly empty: boolean }>()
     if (debug) mock = Option.some({ empty: false })
     if (mockEmpty) mock = Option.some({ empty: true })
-    // A scripted model (`--debug`, `--mock-empty`) needs no sign-in, in
-    // headless and in the TUI alike.
-    const scriptedModel = Option.isSome(mock)
     const bundle = yield* resolveClientBundle({
       cwd,
       connect,
@@ -277,6 +274,9 @@ const runGent = ({
       mock,
       authDirectory: authDirectoryOpt,
     })
+    // A scripted model (`--debug`, `--mock-empty` on the server this run
+    // starts) needs no sign-in, in headless and in the TUI alike.
+    const { scriptedModel } = bundle
     if (headless) {
       // The agent is a session property: the flag shapes a new session only.
       if (Option.isSome(requestedAgent) && Option.isSome(session)) {

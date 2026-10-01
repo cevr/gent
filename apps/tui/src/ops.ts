@@ -734,12 +734,23 @@ const serverOptions = (choice: ServerChoice): Parameters<typeof Gent.server>[0] 
  * `connect` attaches to a server someone else started. Otherwise this starts
  * one in-process, which is what every caller wants when no url is given: the
  * bundle owns its own server for the life of the call.
+ *
+ * `scriptedModel` says whether that server answers with a scripted model,
+ * which needs no sign-in. Only a server this call starts takes the `mock`
+ * choice: a connected server chose its own model.
  */
 export const resolveClientBundle = (
   options: ServerChoice & { readonly connect: Option.Option<string> },
 ) => {
-  if (Option.isSome(options.connect)) return Gent.client(options.connect.value)
-  return Effect.flatMap(Gent.server(serverOptions(options)), Gent.client)
+  if (Option.isSome(options.connect))
+    return Effect.map(Gent.client(options.connect.value), (bundle) => ({
+      ...bundle,
+      scriptedModel: false,
+    }))
+  return Gent.server(serverOptions(options)).pipe(
+    Effect.flatMap(Gent.client),
+    Effect.map((bundle) => ({ ...bundle, scriptedModel: Option.isSome(options.mock) })),
+  )
 }
 
 /**
