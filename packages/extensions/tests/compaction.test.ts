@@ -20,6 +20,7 @@ import {
   toolCallStep,
   waitFor,
   createRpcHarness,
+  systemTextOf,
 } from "@gent/core/test-utils"
 import {
   estimateTextTokens,
@@ -154,24 +155,21 @@ describe("context handoff", () => {
   })
 
   it.scopedLive("instructions reach the system prompt; retained names reach both", () => {
-    let system = Option.none<string>()
+    let system = ""
     let user = ""
     return Effect.gen(function* () {
       const result = yield* compact({
         instructions: "keep the loader decisions",
         retainedBindings: ["rows", "index"],
       })
-      expect(Option.getOrElse(system, () => "")).toContain("keep the loader decisions")
+      expect(system).toContain("keep the loader decisions")
       expect(user).toContain("Names retained on this branch: rows, index")
       expect(result.notice).toContain("Names still bound on this branch: rows, index.")
     }).pipe(
       Effect.provide(
         LanguageModelLayers.testStream((options) => {
           const prompt = Prompt.make(options.prompt)
-          system = Option.fromNullishOr(prompt.content[0]).pipe(
-            Option.filter((message) => message.role === "system"),
-            Option.map((message) => String(message.content)),
-          )
+          system = systemTextOf(prompt)
           user = promptText(prompt)
           return Effect.succeed(
             Stream.fromIterable([textDeltaPart("focused"), finishPart({ finishReason: "stop" })]),
@@ -485,10 +483,7 @@ describe("context handoff", () => {
     let captured = Option.none<Prompt.Prompt>()
     return Effect.gen(function* () {
       yield* compact()
-      const system = Option.getOrThrow(captured).content.find(
-        (message) => message.role === "system",
-      )
-      expect(system?.content).toContain("at most 150 words")
+      expect(systemTextOf(Option.getOrThrow(captured))).toContain("at most 150 words")
     }).pipe(
       Effect.provide(
         summaryProvider("bridge", (prompt) => {

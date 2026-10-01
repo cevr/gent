@@ -43,6 +43,7 @@ import {
   testSqliteStorage,
   ApprovalService,
   turnRequestText,
+  systemTextOf,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/ai/Prompt"
@@ -704,10 +705,7 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
   ...step,
   assertOptions: (options) => {
     expect(options.tools.map((tool) => tool.name)).toEqual(["cell"])
-    const system = options.prompt.content
-      .filter((message) => message.role === "system")
-      .map((message) => message.content)
-      .join("\n")
+    const system = systemTextOf(options.prompt)
     expect(system).toContain("## Host Tools")
     expect(system).toContain("- tools.read(input: { path: string")
     expect(system).toContain("`await tools(id)` returns its full input schema")
@@ -1184,10 +1182,7 @@ describe("branch cell lifetime", () => {
             // The allow list scopes the host tools inside the child's cell; the cell
             // stays the surface and the denied tool leaves the catalog.
             expect(options.tools.map((tool) => tool.name)).toEqual(["cell"])
-            const system = options.prompt.content
-              .filter((message) => message.role === "system")
-              .map((message) => message.content)
-              .join("\n")
+            const system = systemTextOf(options.prompt)
             expect(system).toContain("Report the verified result")
             expect(system).toContain("- tools.read_session(input: { sessionId: string")
             expect(system).not.toContain("- tools.delegate.start(")
@@ -2379,12 +2374,7 @@ describe("host tool catalog budget", () => {
         const recordSystem = (step: SequenceStep): SequenceStep => ({
           ...step,
           assertOptions: (options) => {
-            systems.push(
-              options.prompt.content
-                .filter((message) => message.role === "system")
-                .map((message) => String(message.content))
-                .join("\n"),
-            )
+            systems.push(systemTextOf(options.prompt))
           },
         })
         const code = [

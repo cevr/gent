@@ -23,7 +23,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import type { ProviderOptions } from "effect/ai/LanguageModel"
 import type * as AiError from "effect/ai/AiError"
-import type * as Prompt from "effect/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   type ModelDriverContribution,
   ProviderStopReason,
@@ -346,6 +346,10 @@ export const turnRequestText = (prompt: Prompt.Prompt) => {
     notices: Option.getOrElse(notices, () => ""),
   }
 }
+
+/** The system prompt a step opened with, from the prompt or its raw input. */
+export const systemTextOf = (prompt: Prompt.RawInput): string =>
+  turnRequestText(Prompt.make(prompt)).systemPrompt
 
 // ── language-model ──────────────────────────────────────────────────────────
 

@@ -49,6 +49,27 @@ import * as AiError from "effect/ai/AiError"
  * each ordinary turn until the goal completes or its token budget runs out.
  */
 
+type GoalHarness = Pick<
+  Effect.Success<ReturnType<typeof createRpcHarness>>,
+  "client" | "sessionId" | "branchId"
+>
+
+/** The branch's goal as `goal.get` answers it; none when the branch has none. */
+const goalOn = ({ client, sessionId, branchId }: GoalHarness) =>
+  client.extension
+    .request({
+      sessionId,
+      branchId,
+      extensionId: GOAL_EXTENSION_ID,
+      capabilityId: "goal.get",
+      input: {},
+    })
+    .pipe(
+      Effect.map((snapshot) =>
+        Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
+      ),
+    )
+
 const sampleGoal: GoalState = {
   goalId: "g1",
   branchId: BranchId.make("b1"),
@@ -107,20 +128,7 @@ describe("goals", () => {
               capabilityId: "goal-command",
               input,
             })
-          const readGoal = () =>
-            client.extension
-              .request({
-                sessionId,
-                branchId,
-                extensionId: GOAL_EXTENSION_ID,
-                capabilityId: "goal.get",
-                input: {},
-              })
-              .pipe(
-                Effect.map((snapshot) =>
-                  Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
-                ),
-              )
+          const readGoal = () => goalOn({ client, sessionId, branchId })
 
           yield* command("--budget 15 Write the pelican poem")
           const created = yield* readGoal()
@@ -449,20 +457,7 @@ describe("goal stream failure", () => {
           ...e2ePreset,
           providerLayer,
         })
-        const readGoal = () =>
-          client.extension
-            .request({
-              sessionId,
-              branchId,
-              extensionId: GOAL_EXTENSION_ID,
-              capabilityId: "goal.get",
-              input: {},
-            })
-            .pipe(
-              Effect.map((snapshot) =>
-                Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
-              ),
-            )
+        const readGoal = () => goalOn({ client, sessionId, branchId })
 
         yield* client.extension.request({
           sessionId,
@@ -529,20 +524,7 @@ describe("goal phase failure", () => {
           ...e2ePreset,
           providerLayer,
         })
-        const readGoal = () =>
-          client.extension
-            .request({
-              sessionId,
-              branchId,
-              extensionId: GOAL_EXTENSION_ID,
-              capabilityId: "goal.get",
-              input: {},
-            })
-            .pipe(
-              Effect.map((snapshot) =>
-                Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
-              ),
-            )
+        const readGoal = () => goalOn({ client, sessionId, branchId })
 
         yield* client.extension.request({
           sessionId,
@@ -605,20 +587,7 @@ describe("goal stream failure on a spent budget", () => {
           ...e2ePreset,
           providerLayer,
         })
-        const readGoal = () =>
-          client.extension
-            .request({
-              sessionId,
-              branchId,
-              extensionId: GOAL_EXTENSION_ID,
-              capabilityId: "goal.get",
-              input: {},
-            })
-            .pipe(
-              Effect.map((snapshot) =>
-                Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
-              ),
-            )
+        const readGoal = () => goalOn({ client, sessionId, branchId })
         yield* client.extension.request({
           sessionId,
           branchId,
@@ -691,20 +660,7 @@ describe("goal partial usage", () => {
           ...e2ePreset,
           providerLayer,
         })
-        const readGoal = () =>
-          client.extension
-            .request({
-              sessionId,
-              branchId,
-              extensionId: GOAL_EXTENSION_ID,
-              capabilityId: "goal.get",
-              input: {},
-            })
-            .pipe(
-              Effect.map((snapshot) =>
-                Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
-              ),
-            )
+        const readGoal = () => goalOn({ client, sessionId, branchId })
 
         yield* client.extension.request({
           sessionId,
@@ -784,20 +740,7 @@ const interruptedGoalHarness = (firstStep: ReadonlyArray<StepPart>) =>
     )
     const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
     const { client, sessionId, branchId } = harness
-    const readGoal = () =>
-      client.extension
-        .request({
-          sessionId,
-          branchId,
-          extensionId: GOAL_EXTENSION_ID,
-          capabilityId: "goal.get",
-          input: {},
-        })
-        .pipe(
-          Effect.map((snapshot) =>
-            Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
-          ),
-        )
+    const readGoal = () => goalOn({ client, sessionId, branchId })
     yield* client.extension.request({
       sessionId,
       branchId,
@@ -926,19 +869,7 @@ describe("a goal created mid-turn", () => {
         })
         yield* client.message.send({ sessionId, branchId, content: "set a goal and start" })
         yield* Deferred.await(continuing)
-        const goal = yield* client.extension
-          .request({
-            sessionId,
-            branchId,
-            extensionId: GOAL_EXTENSION_ID,
-            capabilityId: "goal.get",
-            input: {},
-          })
-          .pipe(
-            Effect.map((snapshot) =>
-              Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
-            ),
-          )
+        const goal = yield* goalOn({ client, sessionId, branchId })
         expect(Option.map(goal, (value) => value.status)).toEqual(Option.some("active"))
         expect(Option.map(goal, (value) => value.tokensUsed)).toEqual(Option.some(0))
         expect(Option.map(goal, (value) => value.continuationsUsed)).toEqual(Option.some(1))

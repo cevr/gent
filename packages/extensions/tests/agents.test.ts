@@ -7,11 +7,11 @@ import {
   textDeltaPart,
   waitFor,
   createRpcHarness,
+  systemTextOf,
   testLeafContext,
   testToolContext,
 } from "@gent/core/test-utils"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import * as Prompt from "effect/ai/Prompt"
 import { ExtensionContext } from "@gent/core/extensions/api"
 import {
   basePromptSections,
@@ -25,12 +25,6 @@ import { e2ePreset } from "./helpers/test-preset.js"
  * The agents extension owns the persona sections and reads project
  * instructions from `AGENTS.md` (or `CLAUDE.md`) on every turn.
  */
-
-const systemText = (prompt: Prompt.Prompt): string =>
-  prompt.content
-    .filter((message): message is Prompt.SystemMessage => message.role === "system")
-    .map((message) => message.content)
-    .join("\n")
 
 /** The helpers read home and cwd off the context and files off the platform, as a turn does. */
 const instructionsIn = (home: string, cwd: string) =>
@@ -151,7 +145,7 @@ describe("project instructions", () => {
       yield* writeFile(`${cwd}/AGENTS.md`, "Answer in Latin.")
       const prompts: Array<string> = []
       const providerLayer = LanguageModelLayers.testStream((options) => {
-        prompts.push(systemText(Prompt.make(options.prompt)))
+        prompts.push(systemTextOf(options.prompt))
         return Effect.succeed(
           Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
         )
