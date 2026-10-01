@@ -787,10 +787,12 @@ const DECLARATION_SITE = "packages/core/src/domain/agent.ts"
 /**
  * A provider-qualified model id in a string literal, e.g. `"anthropic/claude-…"`.
  * Deliberately narrow: it matches `<provider>/<model>` inside quotes, which is
- * the shape core would use to call `ModelResolver.resolve`.
+ * the shape core would use to call `ModelResolver.resolve`. The providers are
+ * the shipped model drivers (`anthropic`, `openai`, `opencode`, `opencode-go`,
+ * `typesafe`) and the other catalog vendors.
  */
 const VENDOR_MODEL_PATTERN =
-  /["'`](?:anthropic|openai|google|mistral|xai|groq|deepseek)\/[a-z0-9][a-z0-9.-]*["'`]/i
+  /["'`](?:anthropic|openai|opencode|opencode-go|typesafe|google|mistral|xai|groq|deepseek)\/[a-z0-9][a-z0-9.-]*["'`]/i
 
 /** Report vendor model SKUs pinned in core source. */
 export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArray<Finding> => {

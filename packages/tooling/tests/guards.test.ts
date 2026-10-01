@@ -207,6 +207,21 @@ describe("vendor model pin guard", () => {
     ).toBe(1)
   })
 
+  test("a model id of every shipped driver is reported", () => {
+    const pins = [
+      '"anthropic/claude-x"',
+      '"openai/gpt-x"',
+      '"opencode/jev-1.13"',
+      '"opencode-go/deepseek-v4.1-flash"',
+      '"typesafe/jev-latest"',
+    ]
+    expect(
+      findCoreVendorModelPins("packages/core/src/runtime/turn.ts", pins.join("\n")).map(
+        (finding) => finding.line,
+      ),
+    ).toEqual([1, 2, 3, 4, 5])
+  })
+
   test("the declaration site, other packages and non-vendor paths are not reported", () => {
     const pin = 'const model = "anthropic/claude-haiku-4-5"'
     expect(findCoreVendorModelPins("packages/core/src/domain/agent.ts", pin)).toEqual([])
