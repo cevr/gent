@@ -384,7 +384,10 @@ The production server uses one live profile owner:
   extension's resource services never do. A turn, an extension request and a
   hook read them from their session's profile (for a session with no stored
   cwd, the profile of the host's cwd), the one owner of a turn's services, so
-  a project that disables an extension does not see its resources. Receipt:
+  a project that disables an extension does not see its resources. Driver
+  catalog, auth and health callbacks also run under the selected profile's
+  resource context. A pending login keeps that context with its profile lease
+  until its callbacks finish. Receipt:
   "turn services" in `packages/core/tests/runtime/extension-host.test.ts`.
 - Every session-scoped RPC names its session (owner rule). The contract
   (`packages/core/src/server/rpc.ts`) requires `sessionId` on `auth.setKey`,
@@ -610,7 +613,9 @@ Shape:
   cancellation can stop active work without waiting for that work to finish.
 - `RequestExtension` takes the side-mutation permit unless the request declared
   `answersDuringTurn: true`; such a request answers while the turn runs and
-  must not change the branch's loop state.
+  must not need the branch's side-mutation permit. Reads, extension-owned
+  writes under their own lock, and the Session facade's queued send and
+  `dequeueFollowUp` qualify: the queue owner serializes those verbs separately.
 - Targeted cancellation records `turn.cancel` in the existing workspace-scoped
   durable-operation table before the steering handler starts the branch owner.
   The receipt belongs to the child session/branch and survives until that branch
@@ -1910,3 +1915,7 @@ Principles ship as an ordinary `principles` skill with Markdown reference files.
 Repository research uses the bundled `repositories` skill and supervised native commands. Git and package tools own authentication, fetches, revision reads, and command errors. Gent has no repository service, repository model tool, or native Git dependency. The skill preserves existing caches and requires exact revision receipts.
 
 Saved-result writes use the existing `write` tool with `atomic: true`. The tool calls `writeFileAtomic` under its existing file lock. A symlink at the path is followed to its target, as a plain write follows it: the target is replaced and the link stays. The content is staged in a hidden sibling file beside the target, synced, then renamed over it; the target keeps its mode. Ordinary completion, failure, and scoped interruption remove the sibling file. Abrupt process death can leave that one hidden file, never a directory, and does not expose a partial destination. This does not claim power-loss durability.
+
+An outer Effect deadline waits for acquisition and finalization: the platform's
+file open and close and the writer's staging cleanup cannot be abandoned safely.
+A stalled platform operation there can exceed the caller's deadline.

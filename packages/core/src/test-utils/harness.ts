@@ -671,13 +671,7 @@ type E2EExtensionSource =
       readonly extensionInputs?: never
     }
 
-interface E2ELayerOptions<A = never> {
-  /**
-   * The branch-tool feature this harness installs. Defaults to
-   * `noBranchTools`; a test exercising a real feature names it, and the
-   * layer then provides the feature's storage tags.
-   */
-  readonly branchTools?: BranchToolFeature<A>
+interface E2ELayerOptions {
   /** Language model layer — typically from `LanguageModelLayers.sequence` */
   readonly providerLayer: Layer.Layer<LanguageModel.LanguageModel>
   /** Agents to register in the extension registry */
@@ -735,7 +729,15 @@ interface E2ELayerOptions<A = never> {
   readonly configServiceLayer?: Layer.Layer<ConfigService>
 }
 
-export type E2ELayerConfig<A = never> = E2ELayerOptions<A> & E2EExtensionSource
+/** Storage services are provided only when the test installs their feature. */
+type E2ELayerWithFeature<A> = E2ELayerOptions &
+  E2EExtensionSource & { readonly branchTools: BranchToolFeature<A> }
+
+export type E2ELayerConfig<A = never> =
+  | E2ELayerWithFeature<A>
+  | ([A] extends [never]
+      ? E2ELayerOptions & E2EExtensionSource & { readonly branchTools?: never }
+      : never)
 
 /** Re-registers one compiled slot; the switch restores the kind/handler correlation. */
 const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.Effect<void> => {
@@ -801,7 +803,13 @@ const extensionInputsForConfig = (
  * reads project extensions, skills and `AGENTS.md` from its cwd. A shared
  * directory would hand one test's files to the next.
  */
-export const createE2ELayer = <A = never>(config: E2ELayerConfig<A>) =>
+export function createE2ELayer<A>(config: E2ELayerWithFeature<A>): ReturnType<typeof e2eLayer<A>>
+export function createE2ELayer(config: E2ELayerConfig): ReturnType<typeof e2eLayer<never>>
+export function createE2ELayer(config: E2ELayerConfig) {
+  return e2eLayer({ ...config, branchTools: config.branchTools ?? noBranchTools })
+}
+
+const e2eLayer = <A>(config: E2ELayerWithFeature<A>) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const home = yield* Option.match(Option.fromUndefinedOr(config.home), {
@@ -823,19 +831,11 @@ export const createE2ELayer = <A = never>(config: E2ELayerConfig<A>) =>
     }),
   ).pipe(Layer.provide(BunPlatformLive))
 
-/**
- * The feature a test names, else `noBranchTools`. A config that names none
- * infers `A = never`, so the default provides exactly the tags it claims.
- */
-const branchToolsOf = <A>(config: E2ELayerConfig<A>): BranchToolFeature<A> =>
-  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Absent a feature, `A` is `never`, the tags `noBranchTools` provides.
-  config.branchTools ?? (noBranchTools as BranchToolFeature<A>)
-
 const e2eDependencies = <A>(
-  config: E2ELayerConfig<A>,
+  config: E2ELayerWithFeature<A>,
   directories: { readonly cwd: string; readonly home: string },
-) =>
-  createDependencies<A>({
+) => {
+  const options = {
     ...directories,
     platform: "test",
     state: Option.match(Option.fromUndefinedOr(config.storagePath), {
@@ -845,7 +845,6 @@ const e2eDependencies = <A>(
     extensions: extensionInputsForConfig(config),
     // A broken extension fails the test with its reason, not a later timeout.
     failOnExtensionFailure: config.allowFailedExtensions !== true,
-    branchTools: branchToolsOf(config),
     overrides: {
       modelRegistryLayer: ModelRegistry.Test(
         config.models ?? [],
@@ -865,7 +864,9 @@ const e2eDependencies = <A>(
       ),
       extraLayers: config.extraLayers,
     },
-  })
+  }
+  return createDependencies<A>({ ...options, branchTools: config.branchTools })
+}
 
 // ── in-process-layer ────────────────────────────────────────────────────────
 
@@ -912,8 +913,9 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 // caller passes pre-loaded extensions and an agents bucket — the same
 // fragments callers already pass to `createE2ELayer`.
 
-type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner"> &
-  E2EExtensionSource & {
+type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner"> & {
+  readonly branchTools?: BranchToolFeature<never>
+} & E2EExtensionSource & {
     /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
     readonly admission?: SessionAdmission
   }
