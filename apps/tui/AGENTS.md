@@ -11,7 +11,7 @@
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace.tsx`.
 - **Error boundaries** - A failure travels in the Effect error channel and shows in the status row or the open pane's note row. No try/catch (`effect/noTryCatch`).
-- **Exit pattern** - Use `renderer.destroy()` then `useEnv().shutdown()` for clean exit. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
+- **Exit pattern** - Exit through `useExit()` (`session.tsx`): it commits the live transcript tail (`flushTranscriptForExit`), then runs `renderer.destroy()` and `useEnv().shutdown()`. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
 - **Intrinsic names** - Take the names from the opentui catalogue: some multi-word intrinsics use underscores (`tab_select`, `ascii_font`), `scrollbox` is one word.
 - **Use `<For>`** - Never `.map()` for JSX lists; use `<For each={items}>{item => ...}</For>`.
 
@@ -178,6 +178,26 @@ keep a nested minimum here, and OpenTUI draws a 0-row node as one row, so
 the order is set by hiding whole boxes, not by shrink weights. A pane whose newest row matters
 passes `stickToBottom` to `ChromePanel.Body` and puts its gaps above a row,
 not under it.
+
+The split region holds the footer and the transcript items still in flight;
+every final item goes to the terminal's native history, during a turn too
+(`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits for its
+stored answer, and a message waits while a call of it runs). A commit
+shrinks the region by the item's rows first and then writes them, so the
+rows land where the item was drawn and no row is left empty under the
+status row. Any other shrink (a pane closing) keeps its rows above the
+footer for the live tail to take. Exit commits the live tail first
+(`flushTranscriptForExit`), and the renderer is created with
+`clearOnShutdown: false`, so exit leaves every turn on screen.
+
+Answer markdown draws each top-level block on its own
+(`internalBlockMode="top-level"`), so a heading never shows its `#` marks
+before its highlight lands. A ` ```mermaid ` fence is its own block,
+drawn by `mermaidCodeBlocks` (`mermaid.ts`): compact boxes in theme colors,
+no wrap, no selection, at most 120 columns (a wider diagram is cut). While
+the fence streams it draws its complete statements and keeps its last
+diagram when they do not draw; once closed, a source that does not draw
+shows as its code block.
 
 The transcript pins the reader's last prompt in one row (`↑ <first line>`) above
 the live tail while that prompt's own row is off screen: cut off the top of the
