@@ -36,7 +36,12 @@ import {
 import { runProcess, type GentExtension } from "@gent/core/extensions/api"
 import { BunHttpServer } from "@effect/platform-bun"
 import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/http"
-import { BuiltinExtensionModules, BuiltinExtensions, CellBranchTools } from "@gent/extensions"
+import {
+  BuiltinExtensionModules,
+  BuiltinExtensions,
+  CellBranchTools,
+  isCompiledBuild,
+} from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
 import type { LanguageModel } from "effect/ai"
 import { GentLogLevel, GentObservability } from "./logger.js"
@@ -107,53 +112,59 @@ export const dataPaths = (home: string): Effect.Effect<DataPaths> =>
  * only to a server of its own build.
  */
 
-/** True when execPath is a compiled gent binary, not a generic runtime like bun. */
-const isCompiledBinary = (exe: string): boolean => !exe.endsWith("/bun") && !exe.includes("/.bun/")
+/** The fingerprint of a build that cannot be named. It matches no build, itself included. */
+const UNKNOWN_BUILD = "unknown"
+
+/** Whether two fingerprints name one build. An unknown build is never the same build. */
+const sameBuild = (a: string, b: string): boolean => a === b && a !== UNKNOWN_BUILD
+
+type BuildFingerprintServices =
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | GentPlatform
 
 /**
- * Compute a build fingerprint from local sources (no env).
- * Priority: compiled binary mtime → gent source git hash → "unknown"
+ * Compute a build fingerprint from local sources (no env). A compiled gent,
+ * as `compiled` reports it, names its build by the binary's mtime, wherever
+ * the binary is installed; a source run by the checkout's git hash. A build
+ * neither names is `"unknown"`.
  */
-const computeLocalFingerprintUncached: Effect.Effect<
-  string,
-  never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
-> = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const platform = yield* GentPlatform
-  const exe = yield* platform.execPath
+const computeLocalFingerprintUncached = (
+  compiled: Effect.Effect<boolean>,
+): Effect.Effect<string, never, BuildFingerprintServices> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const platform = yield* GentPlatform
 
-  // 1. Binary mtime (compiled mode only — skip if running via bun runtime)
-  if (isCompiledBinary(exe)) {
-    const info = yield* fs.stat(exe).pipe(Effect.option)
-    if (info._tag === "Some") {
+    if (yield* compiled) {
+      const info = yield* fs.stat(yield* platform.execPath).pipe(Effect.option)
+      if (Option.isNone(info)) return UNKNOWN_BUILD
       const mtime = Option.getOrElse(info.value.mtime, () => dateFromMillis(0))
       return `bin-${mtime.getTime().toString(36)}`
     }
-  }
 
-  // 2. Git hash from gent source root (dev mode)
-  const here = yield* path.fromFileUrl(new URL(import.meta.url)).pipe(Effect.option)
-  if (Option.isNone(here)) return "unknown"
-  const gentRoot = path.resolve(here.value, "../../../..")
-  const result = yield* runProcess("git", ["rev-parse", "--short", "HEAD"], {
-    cwd: gentRoot,
-    stdout: "pipe",
-    stderr: "pipe",
-  }).pipe(
-    Effect.map((r) => {
-      if (r.exitCode === 0) {
-        return r.stdout.trim()
-      }
-      return ""
-    }),
-    Effect.catchTag("ProcessError", () => Effect.succeed("")),
-  )
-  if (result.length > 0) return `src-${result}`
+    const here = yield* path.fromFileUrl(new URL(import.meta.url)).pipe(Effect.option)
+    if (Option.isNone(here)) return UNKNOWN_BUILD
+    const gentRoot = path.resolve(here.value, "../../../..")
+    const result = yield* runProcess("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: gentRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    }).pipe(
+      Effect.map((r) => {
+        if (r.exitCode === 0) {
+          return r.stdout.trim()
+        }
+        return ""
+      }),
+      Effect.catchTag("ProcessError", () => Effect.succeed("")),
+    )
+    if (result.length > 0) return `src-${result}`
 
-  return "unknown"
-})
+    return UNKNOWN_BUILD
+  })
 
 /**
  * The one build fingerprint. The lock entry and the identity endpoint both
@@ -167,22 +178,27 @@ interface BuildFingerprintApi {
 export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFingerprintApi>()(
   "@gent/sdk/src/server/BuildFingerprint",
 ) {
-  static Live: Layer.Layer<
-    BuildFingerprint,
-    never,
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
-  > = Layer.effect(
-    BuildFingerprint,
-    Effect.gen(function* () {
-      const ctx = yield* Effect.context<
-        FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
-      >()
-      const cached = yield* Effect.cachedWithTTL(computeLocalFingerprintUncached, "1 hour")
-      // oxlint-disable-next-line effect/noInlineProvide -- Layer construction captures the services required by the cached computation.
-      const current: Effect.Effect<string> = Effect.provide(cached, ctx)
-      return BuildFingerprint.of({ current })
-    }),
-  )
+  /** The fingerprint of a process whose compiled-ness `compiled` reports. */
+  static layer = (
+    compiled: Effect.Effect<boolean>,
+  ): Layer.Layer<BuildFingerprint, never, BuildFingerprintServices> =>
+    Layer.effect(
+      BuildFingerprint,
+      Effect.gen(function* () {
+        const ctx = yield* Effect.context<BuildFingerprintServices>()
+        const cached = yield* Effect.cachedWithTTL(
+          computeLocalFingerprintUncached(compiled),
+          "1 hour",
+        )
+        // oxlint-disable-next-line effect/noInlineProvide -- Layer construction captures the services required by the cached computation.
+        const current: Effect.Effect<string> = Effect.provide(cached, ctx)
+        return BuildFingerprint.of({ current })
+      }),
+    )
+
+  /** This process's fingerprint: compiled-ness is the build's own define (`isCompiledBuild`). */
+  static Live: Layer.Layer<BuildFingerprint, never, BuildFingerprintServices> =
+    BuildFingerprint.layer(isCompiledBuild)
 }
 
 // ── server-lock ─────────────────────────────────────────────────────────────
@@ -819,8 +835,9 @@ const probeServerLockEntryIdentity = (entry: ServerLockEntry): Effect.Effect<boo
 const HOLDER_WAIT_ATTEMPTS = 300
 
 /**
- * Why a live holder blocks a new server. A holder of another build is never
- * signalled from here: it may be a TUI that is open, with a turn in flight.
+ * Why a live holder blocks a new server. A holder of another build, or of a
+ * build either side cannot name, is never signalled from here: it may be a TUI
+ * that is open, with a turn in flight.
  */
 const holderBlocksMessage = (
   holder: ServerLockEntry,
@@ -828,7 +845,7 @@ const holderBlocksMessage = (
   ownDbPath: string,
 ): string => {
   const held = `PID ${holder.pid} holds ${holder.dbPath}`
-  if (holder.buildFingerprint !== ownBuild) {
+  if (!sameBuild(holder.buildFingerprint, ownBuild)) {
     return `${held} with gent build ${holder.buildFingerprint}, and this is build ${ownBuild}; close that gent first, or run \`gent server stop\`, then retry`
   }
   return `${held} under the lock for ${ownDbPath}; stop it with \`gent server stop\`, then retry`
@@ -873,7 +890,7 @@ const resolveServerInternal = (
           }),
         )
       }
-      if (holder.buildFingerprint === fingerprint && holder.dbPath === dbPath) {
+      if (sameBuild(holder.buildFingerprint, fingerprint) && holder.dbPath === dbPath) {
         return Effect.succeed(
           GentServer.cases.Attached.make({
             url: holder.rpcUrl,
