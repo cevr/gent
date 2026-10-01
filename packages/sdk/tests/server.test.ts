@@ -1,4 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
+import { Database } from "bun:sqlite"
 import {
   ByteSize,
   ConfigProvider,
@@ -9,6 +10,8 @@ import {
   Path,
   Exit,
   Ref,
+  Fiber,
+  Scheduler,
   Schema,
   Scope,
 } from "effect"
@@ -577,6 +580,66 @@ describe("Server Lock Ownership", () => {
         expect((yield* serverLock.status(home))._tag).toBe("None")
         yield* serverLockFile.write(home, makeEntry({ hostname: "alien-host" }))
         expect((yield* serverLock.status(home))._tag).toBe("None")
+      }),
+    ),
+  )
+
+  it.scopedLive("an interrupted status probe releases its temporary kernel lock", () =>
+    provideFs(
+      Effect.gen(function* () {
+        // Interrupt at each scheduler boundary where real SQLite reports the
+        // probe's lock held. The next offset ends once the probe completes;
+        // the test does not depend on how many steps an implementation uses.
+        for (let offset = 1; offset <= 64; offset++) {
+          const home = yield* makeTmpHomeScoped
+          const paths = yield* dataPaths(home)
+          yield* (yield* FileSystem.FileSystem).makeDirectory(paths.dataDir, { recursive: true })
+          const observer = yield* Effect.acquireRelease(
+            Effect.sync(() => new Database(paths.serverKernelLock, { create: true })),
+            (db) => Effect.sync(() => db.close()),
+          )
+          const scheduler = new Scheduler.MixedScheduler()
+          let heldSteps = 0
+          let interrupted = false
+          const cancelOnLock: Scheduler.Scheduler = {
+            executionMode: scheduler.executionMode,
+            makeDispatcher: () => scheduler.makeDispatcher(),
+            shouldYield: (fiber) => {
+              if (!interrupted) {
+                let held = false
+                // oxlint-disable-next-line effect/noTryCatch -- real SQLite lock observation at a synchronous scheduler boundary
+                try {
+                  observer.exec("BEGIN EXCLUSIVE")
+                  observer.exec("ROLLBACK")
+                } catch (error) {
+                  expect(
+                    Schema.is(Schema.Struct({ code: Schema.Literal("SQLITE_BUSY") }))(error),
+                  ).toBe(true)
+                  held = true
+                }
+                if (held && ++heldSteps === offset) {
+                  interrupted = true
+                  // The runtime exposes this hook to synchronous schedulers.
+                  fiber.interruptUnsafe()
+                }
+              }
+              return scheduler.shouldYield(fiber)
+            },
+          }
+          const probe = yield* serverLock
+            .status(home)
+            .pipe(Effect.provideService(Scheduler.Scheduler, cancelOnLock), Effect.forkChild)
+          const outcome = yield* Fiber.await(probe)
+          expect(yield* serverLockFile.hold(home)).toBe(true)
+          if (!interrupted) {
+            expect(Exit.isSuccess(outcome)).toBe(true)
+            return
+          }
+          expect(Exit.isFailure(outcome)).toBe(true)
+        }
+        return yield* Effect.die(
+          new Error("status probe never completed within the scheduler-boundary limit"),
+        )
       }),
     ),
   )

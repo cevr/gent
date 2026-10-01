@@ -278,10 +278,11 @@ const kernelLockHeld = (
     const fs = yield* FileSystem.FileSystem
     const path = (yield* dataPaths(home)).serverKernelLock
     if (!(yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false)))) return false
-    const lock = yield* tryKernelLock(path)
-    if (Option.isNone(lock)) return true
-    yield* releaseKernelLock(lock.value)
-    return false
+    return yield* Effect.acquireUseRelease(
+      tryKernelLock(path),
+      (lock) => Effect.succeed(Option.isNone(lock)),
+      (lock) => Option.match(lock, { onNone: () => Effect.void, onSome: releaseKernelLock }),
+    )
   })
 
 /** What the two lock files say about the server on this database. */
