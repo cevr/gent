@@ -117,22 +117,6 @@ const cmd = (overrides: Partial<Command> & { id: string; slash: string }): Comma
 })
 
 describe("resolveTuiExtensions", () => {
-  test("client contribution constructors enforce slot-specific component contracts", () => {
-    const good = widgetContribution({
-      id: "typed-widget",
-      slot: "below-input",
-      component: widget("typed"),
-    })
-
-    widgetContribution({
-      id: "bad-widget",
-      slot: "below-input",
-      // @ts-expect-error -- widgets receive no props
-      component: (_props: { readonly open: boolean }) => "bad",
-    })
-    expect(good.widgets?.[0]?.id).toBe("typed-widget")
-  })
-
   test("higher scope wins for visible renderer surfaces", () => {
     const resolved = resolveTuiExtensions([
       make("builtin-tools", "builtin", rendererContribution(["bash"], renderer("builtin"))),

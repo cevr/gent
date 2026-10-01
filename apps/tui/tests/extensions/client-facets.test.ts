@@ -7,10 +7,31 @@ import {
   clientContributions,
   defineClientExtension,
   sessionQuery,
+  widgetContribution,
 } from "../../src/extensions/client-facets"
 import { provideClientServices } from "../extension-test-harness-boundary"
 import { renderWithProviders } from "../render-harness-boundary"
 import { waitUntil } from "../helpers-boundary"
+
+// ── contribution constructors ───────────────────────────────────────────────
+
+describe("contribution constructors", () => {
+  test("a widget takes no props: the constructor refuses a component that wants some", () => {
+    const good = widgetContribution({
+      id: "typed-widget",
+      slot: "below-input",
+      component: () => "typed",
+    })
+
+    widgetContribution({
+      id: "bad-widget",
+      slot: "below-input",
+      // @ts-expect-error -- widgets receive no props
+      component: (_props: { readonly open: boolean }) => "bad",
+    })
+    expect(good.widgets?.[0]?.id).toBe("typed-widget")
+  })
+})
 
 // ── extension lifecycle ─────────────────────────────────────────────────────
 

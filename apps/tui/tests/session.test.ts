@@ -378,40 +378,34 @@ describe("resolveModelQuery", () => {
 
 // ── prompt history ──────────────────────────────────────────────────────────
 
-describe("canNavigateAtCursor", () => {
-  test("up at cursor 0 → true", () => {
-    expect(canNavigateAtCursor("up", 0, 10, false)).toBe(true)
-  })
-
-  test("up at cursor 5 → false", () => {
-    expect(canNavigateAtCursor("up", 5, 10, false)).toBe(false)
-  })
-
-  test("down at end → true", () => {
-    expect(canNavigateAtCursor("down", 10, 10, false)).toBe(true)
-  })
-
-  test("down at middle → false", () => {
-    expect(canNavigateAtCursor("down", 5, 10, false)).toBe(false)
-  })
-
-  test("in history: up at either boundary → true", () => {
-    expect(canNavigateAtCursor("up", 0, 10, true)).toBe(true)
-    expect(canNavigateAtCursor("up", 10, 10, true)).toBe(true)
-  })
-
-  test("in history: down at either boundary → true", () => {
-    expect(canNavigateAtCursor("down", 0, 10, true)).toBe(true)
-    expect(canNavigateAtCursor("down", 10, 10, true)).toBe(true)
-  })
-
-  test("in history: middle → false", () => {
-    expect(canNavigateAtCursor("up", 5, 10, true)).toBe(false)
-  })
-
-  test("empty text: always at boundary", () => {
-    expect(canNavigateAtCursor("up", 0, 0, false)).toBe(true)
-    expect(canNavigateAtCursor("down", 0, 0, false)).toBe(true)
+describe("history navigation", () => {
+  test("arrow keys leave the draft for history only at its edge, and move freely inside history", () => {
+    // [key, cursor, text length, in history, leaves for history]
+    const cases: ReadonlyArray<readonly ["up" | "down", number, number, boolean, boolean]> = [
+      // A draft: up only from its start, down only from its end.
+      ["up", 0, 10, false, true],
+      ["up", 5, 10, false, false],
+      ["down", 10, 10, false, true],
+      ["down", 5, 10, false, false],
+      // An empty draft is at both edges.
+      ["up", 0, 0, false, true],
+      ["down", 0, 0, false, true],
+      // In history, either edge moves either way; the middle stays in the entry.
+      ["up", 0, 10, true, true],
+      ["up", 10, 10, true, true],
+      ["down", 0, 10, true, true],
+      ["down", 10, 10, true, true],
+      ["up", 5, 10, true, false],
+    ]
+    for (const [key, cursor, length, inHistory, leaves] of cases) {
+      expect([
+        key,
+        cursor,
+        length,
+        inHistory,
+        canNavigateAtCursor(key, cursor, length, inHistory),
+      ]).toEqual([key, cursor, length, inHistory, leaves])
+    }
   })
 })
 

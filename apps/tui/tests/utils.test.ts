@@ -354,38 +354,38 @@ describe("formatDuration", () => {
 
 // ── format error ────────────────────────────────────────────────────────────
 
-describe("formatError", () => {
-  test("StorageError → prefixed", () => {
+describe("error text", () => {
+  test("a storage failure reads as Storage: and its message", () => {
     const err = new StorageError({ message: "disk full" })
     expect(formatError(err)).toBe("Storage: disk full")
   })
 
-  test("SessionRuntimeError → prefixed", () => {
+  test("a runtime failure reads as Runtime: and its message", () => {
     const err = new SessionRuntimeError({ message: "max turns" })
     expect(formatError(err)).toBe("Runtime: max turns")
   })
 
-  test("ProviderError → model:message", () => {
+  test("a provider failure names the model it came from", () => {
     const err = new ProviderError({ message: "rate limited", model: "gpt-4" })
     expect(formatError(err)).toBe("gpt-4: rate limited")
   })
 
-  test("EventStoreError → prefixed", () => {
+  test("an event store failure reads as Events: and its message", () => {
     const err = new EventStoreError({ message: "replay failed" })
     expect(formatError(err)).toBe("Events: replay failed")
   })
 
-  test("NotFoundError → prefixed", () => {
+  test("a missing record reads as Not found: and what was missing", () => {
     const err = new NotFoundError({ message: "session abc" })
     expect(formatError(err)).toBe("Not found: session abc")
   })
 
-  test("ProviderAuthError → prefixed", () => {
+  test("an auth failure reads as Auth: and its message", () => {
     const err = new ProviderAuthError({ message: "invalid key" })
     expect(formatError(err)).toBe("Auth: invalid key")
   })
 
-  test("DriverError → driver and reason", () => {
+  test("a driver failure names the driver and its reason", () => {
     const err = new DriverError({
       driver: DriverFailureId.make("openai"),
       reason: "catalog filter failed",

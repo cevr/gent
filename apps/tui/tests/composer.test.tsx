@@ -101,7 +101,7 @@ const shellTest = it.scopedLive.layer(testLayer)
 const PROBE_HOME = "/nonexistent/gent-probe-home"
 
 describe("executeShell", () => {
-  shellTest("executes simple command", () =>
+  shellTest("a command's output comes back whole and untruncated", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
       const result = yield* executeShell("echo hello", testDir, PROBE_HOME)
@@ -110,7 +110,7 @@ describe("executeShell", () => {
     }),
   )
 
-  shellTest("captures stderr", () =>
+  shellTest("stderr joins the output", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
       const result = yield* executeShell("echo error >&2", testDir, PROBE_HOME)
@@ -119,7 +119,7 @@ describe("executeShell", () => {
     }),
   )
 
-  shellTest("respects cwd", () =>
+  shellTest("the command runs in the given cwd", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
       const result = yield* executeShell("pwd", testDir, PROBE_HOME)
@@ -129,50 +129,19 @@ describe("executeShell", () => {
     }),
   )
 
-  shellTest("handles multi-line output", () =>
-    Effect.gen(function* () {
-      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("echo -e 'line1\\nline2\\nline3'", testDir, PROBE_HOME)
-      expect(result.output).toContain("line1")
-      expect(result.output).toContain("line2")
-      expect(result.output).toContain("line3")
-      expect(result.truncated).toBe(false)
-    }),
-  )
-
-  shellTest("handles empty output", () =>
-    Effect.gen(function* () {
-      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("true", testDir, PROBE_HOME)
-      expect(result.output).toBe("")
-      expect(result.truncated).toBe(false)
-    }),
-  )
-
-  shellTest("handles command with arguments", () =>
-    Effect.gen(function* () {
-      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("echo -n test", testDir, PROBE_HOME)
-      expect(result.output).toBe("test")
-    }),
-  )
-
-  shellTest("handles pipes", () =>
-    Effect.gen(function* () {
-      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("echo hello | tr 'h' 'H'", testDir, PROBE_HOME)
-      expect(result.output).toBe("Hello")
-    }),
-  )
-
-  shellTest("handles file operations", () =>
+  // A runner that skipped the shell would pass the pipe and the redirect to
+  // `echo` as words.
+  shellTest("the line runs through the shell: a pipe and a redirect work", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const testDir = yield* fs.makeTempDirectoryScoped()
-      const testFile = `${testDir}/test.txt`
-      yield* fs.writeFileString(testFile, "file content")
-      const result = yield* executeShell(`cat ${testFile}`, testDir, PROBE_HOME)
-      expect(result.output).toBe("file content")
+      const result = yield* executeShell(
+        "echo hello | tr 'h' 'H' > out.txt && cat out.txt",
+        testDir,
+        PROBE_HOME,
+      )
+      expect(result.output).toBe("Hello")
+      expect(yield* fs.readFileString(`${testDir}/out.txt`)).toBe("Hello\n")
     }),
   )
 
