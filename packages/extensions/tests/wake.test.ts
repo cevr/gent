@@ -350,33 +350,33 @@ describe("wake", () => {
               })
               .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))
           yield* client.message.send({ sessionId, branchId, content: "remind me" })
-          // The fire leaves a notice; the loop stays idle and no turn or wake row follows.
-          // The fired alarm leaves the file once its notice is in; wait for that settled shape.
-          const noticed = yield* waitFor(
-            list(),
-            (pending) => pending.entries.length === 1 && pending.entries[0]?._tag === "notice",
-            5_000,
-            "the notice is listed alone",
-          )
-          expect(noticed.entries).toMatchObject([{ _tag: "notice", note: "stand up" }])
-          // The alarm can fire while the turn that set it still ends: wait for that end.
-          const idle = yield* waitFor(
+          // Keep the alarm's clock still until the setting turn has answered.
+          // Otherwise that turn's next step can read and clear the notice.
+          yield* eventually(
             client.session.getSnapshot({ sessionId, branchId }),
-            (current) => current.runtime._tag === "Idle",
-            3_000,
+            (current) =>
+              current.runtime._tag === "Idle" && answered(current.messages, "reminder set"),
             "the turn that set the alarm ended",
           )
+          // The fire leaves a notice; the loop stays idle and no turn or wake row follows.
+          yield* advanceUntil(
+            list(),
+            (pending) => pending.entries.length === 1 && pending.entries[0]?._tag === "notice",
+            "the notice is listed alone",
+          )
+          const noticed = yield* list()
+          expect(noticed.entries).toMatchObject([{ _tag: "notice", note: "stand up" }])
+          const idle = yield* client.session.getSnapshot({ sessionId, branchId })
           expect(idle.runtime._tag).toBe("Idle")
           expect(hasWake(idle.messages)).toBe(false)
           // The tool-call step and the reply: nothing after the fire.
           expect(idle.messages.filter((m) => m.role === "assistant").length).toBe(2)
           yield* client.message.send({ sessionId, branchId, content: "what did I miss?" })
-          yield* waitFor(
+          yield* eventually(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
               current.runtime._tag === "Idle" &&
               answered(current.messages, "read the notice with your prompt"),
-            8_000,
             "the next turn ran",
           )
           // The notice reached the model after the conversation and left the list.
@@ -385,7 +385,7 @@ describe("wake", () => {
           expect(requests.at(-1)?.notices).toContain("stand up")
           expect(requests.at(-1)?.systemPrompt).toBe(requests[0]?.systemPrompt)
           expect((yield* list()).entries).toEqual([])
-        }).pipe(Effect.timeout("12 seconds")),
+        }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
       ),
     15_000,
   )
@@ -1359,7 +1359,11 @@ const settled = (
 const wallClock = Clock.Clock.defaultValue()
 
 /** Waits on the wall clock, never the virtual one, for work a `TestClock.adjust` already released. Exhaustion fails loudly. */
-const eventually = <A>(read: Effect.Effect<A>, done: (value: A) => boolean, label: string) =>
+const eventually = <A, E, R>(
+  read: Effect.Effect<A, E, R>,
+  done: (value: A) => boolean,
+  label: string,
+) =>
   Effect.gen(function* () {
     const deadline = wallClock.currentTimeMillisUnsafe() + 5_000
     while (wallClock.currentTimeMillisUnsafe() < deadline) {
@@ -1376,8 +1380,8 @@ const eventually = <A>(read: Effect.Effect<A>, done: (value: A) => boolean, labe
  * two leaves the sleep one whole delay past the new time, and it never wakes.
  * Stepping reaches that timer too. Exhaustion fails loudly.
  */
-const advanceUntil = <A>(
-  read: Effect.Effect<A>,
+const advanceUntil = <A, E, R>(
+  read: Effect.Effect<A, E, R>,
   done: (value: A) => boolean,
   label: string,
   step: Duration.Input = "100 millis",
