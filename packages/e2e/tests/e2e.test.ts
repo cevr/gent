@@ -78,7 +78,7 @@ describe("E2E: Basics", () => {
 
 describe("E2E: Auth", () => {
   it.scopedLive(
-    "missing auth opens auth panel and method picker",
+    "missing auth opens the method picker, and arrows select manual key entry",
     () =>
       Effect.gen(function* () {
         const ctx = yield* spawnNoAuth
@@ -89,17 +89,6 @@ describe("E2E: Auth", () => {
         yield* ptyWaitFor(ctx, "Claude Code", { timeout: 10_000 })
         yield* ptyWaitFor(ctx, "Manually enter API key", { timeout: 10_000 })
         expect(ctx.output).toContain("· method")
-      }),
-    TEST_TIMEOUT,
-  )
-
-  it.scopedLive(
-    "auth panel: arrows select manual key entry",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* spawnNoAuth
-        yield* ptyWaitFor(ctx, "Sign in", { timeout: 10_000 })
-        yield* ptyWaitFor(ctx, "Manually enter API key", { timeout: 10_000 })
         ctx.pty.write(UP)
         // The selection moves in a repaint; Enter goes to the row it lands on.
         yield* settlePty(ctx, REPAINT)
@@ -136,22 +125,7 @@ describe("E2E: Slash Commands", () => {
 // shell output goes to the agent as a turn; `--mock-empty` keeps that turn offline.
 describe("E2E: Shell Mode", () => {
   it.scopedLive(
-    "! runs a shell command and shows its output",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* seedAndSpawn(["--mock-empty"])
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
-        ctx.pty.write("!")
-        yield* ptyWaitFor(ctx, "$", { timeout: 5_000 })
-        ctx.pty.write("echo zigpty-$((1+1))")
-        ctx.pty.write(ENTER)
-        yield* ptyWaitFor(ctx, "zigpty-2", { timeout: 5_000 })
-      }),
-    TEST_TIMEOUT,
-  )
-
-  it.scopedLive(
-    "shell mode: sequential commands",
+    "! runs shell commands one after another and shows each output",
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn(["--mock-empty"])
@@ -202,7 +176,7 @@ const showsSkillsPopup = (visible: ReadonlyArray<string>) =>
 
 describe("E2E: Skill Popup", () => {
   it.scopedLive(
-    "$ trigger shows skills popup",
+    "$ trigger shows the skills popup, and ESC closes it",
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedSkillAndSpawn
@@ -212,20 +186,6 @@ describe("E2E: Skill Popup", () => {
         ctx.pty.write("$t")
         yield* screenWaitFor(ctx, showsSkillsPopup, { timeout: 10_000, label: "the skills popup" })
         yield* ptyWaitFor(ctx, "test-skill", { timeout: 10_000 })
-      }).pipe(Effect.provide(BunServices.layer)),
-    TEST_TIMEOUT,
-  )
-
-  it.scopedLive(
-    "ESC closes skill popup",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* seedSkillAndSpawn
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
-        // oxlint-disable-next-line effect/noFixedWaitInTests -- a `$` typed before the skills are listed opens no popup, and no screen signal marks the listing
-        yield* Effect.sleep(SKILL_DISCOVERY)
-        ctx.pty.write("$t")
-        yield* screenWaitFor(ctx, showsSkillsPopup, { timeout: 10_000, label: "the skills popup" })
         ctx.pty.write(ESC)
         // The output keeps the frames that drew the popup; the screen must not.
         yield* screenWaitFor(ctx, (visible) => !showsSkillsPopup(visible), {
