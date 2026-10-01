@@ -60,7 +60,7 @@ import {
   ReadToolRenderer,
   useToolRenderers,
 } from "../src/tool-renderers"
-import { destroyRenderSetup, renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { destroyRenderSetup, renderFrame, renderScoped } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
@@ -219,7 +219,7 @@ describe("session event labels", () => {
   })
 
   // A pending retry's row is the one row that follows the clock.
-  it.live("a pending retry row counts down to now", () =>
+  it.scopedLive("a pending retry row counts down to now", () =>
     Effect.gen(function* () {
       const event: SessionEvent = {
         _tag: "retrying",
@@ -231,22 +231,19 @@ describe("session event labels", () => {
         createdAt: currentMillis(),
         seq: 1,
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={[event]}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              streaming={true}
-            />
-          ),
-          { width: 80, height: 10 },
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[event]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={true}
+          />
         ),
+        { width: 80, height: 10 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("Retrying in 1s... 1/3"), "countdown")
       yield* waitForFrame(setup, (frame) => frame.includes("Retrying now... 1/3"), "now", 3000)
-      destroyRenderSetup(setup)
     }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -738,9 +735,9 @@ function LoadedMessageList(props: { items: SessionItem[]; fullDetail?: boolean }
 /** Render the loaded transcript and return its first frame past the load. */
 const renderLoaded = (items: SessionItem[], fullDetail?: boolean) =>
   Effect.gen(function* () {
-    const setup = yield* Effect.promise(() =>
-      renderWithProviders(() => <LoadedMessageList items={items} fullDetail={fullDetail} />),
-    )
+    const setup = yield* renderScoped(() => (
+      <LoadedMessageList items={items} fullDetail={fullDetail} />
+    ))
     return yield* waitForFrame(
       setup,
       (frame) => !frame.includes("loading message renderers"),
@@ -844,13 +841,11 @@ const drawnCell = (
   height = 80,
 ) =>
   Effect.gen(function* () {
-    const setup = yield* Effect.promise(() =>
-      renderWithProviders(
-        () => (
-          <RegisteredToolMessageLists items={[assistantToolMessage(messageId, call)]} fullDetail />
-        ),
-        { width: 110, height },
+    const setup = yield* renderScoped(
+      () => (
+        <RegisteredToolMessageLists items={[assistantToolMessage(messageId, call)]} fullDetail />
       ),
+      { width: 110, height },
     )
     const frame = yield* waitForFrame(setup, ready, label)
     destroyRenderSetup(setup)
@@ -858,7 +853,7 @@ const drawnCell = (
   })
 
 describe("transcript message rows", () => {
-  it.live("shows information excluded from model context in the transcript", () =>
+  it.scopedLive("shows information excluded from model context in the transcript", () =>
     Effect.gen(function* () {
       const message: ListMessage = {
         ...compactionMessage(),
@@ -866,21 +861,19 @@ describe("transcript message rows", () => {
         content: "INFORMATION-SHOWN",
         metadata: { customType: "prompt-present", hidden: true },
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={[message]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <MessageList
+          items={[message]}
+          disclosure="collapsed"
+          syntaxStyle={syntaxStyle}
+          streaming={false}
+        />
+      ))
       expect(renderFrame(setup)).toContain("INFORMATION-SHOWN")
     }),
   )
 
-  it.live("renders user rails, images, and pending labels at normal width", () =>
+  it.scopedLive("renders user rails, images, and pending labels at normal width", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
         userMessage("regular-message", "queued-user", "first line\nsecond line", "queued", [
@@ -888,16 +881,14 @@ describe("transcript message rows", () => {
         ]),
         userMessage("interjection-message", "steer-user", "switch now", "steer"),
       ]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={items}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <MessageList
+          items={items}
+          disclosure="collapsed"
+          syntaxStyle={syntaxStyle}
+          streaming={false}
+        />
+      ))
       const frame = renderFrame(setup)
       expect(frame).toContain("┃")
       expect(frame).toContain("[Image: png]")
@@ -910,7 +901,7 @@ describe("transcript message rows", () => {
   )
 
   for (const width of [32, 65]) {
-    it.live(`keeps the user border on every scrollback row at width ${width}`, () =>
+    it.scopedLive(`keeps the user border on every scrollback row at width ${width}`, () =>
       Effect.gen(function* () {
         const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("collapsed")
         const leadingCells: number[] = []
@@ -940,53 +931,51 @@ describe("transcript message rows", () => {
           ),
           answer,
         ]
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => {
-              const renderer = useRenderer()
-              extensionsLoaded = useExtensionUI().loaded
-              // Check native cells: string offsets do not match terminal columns for wide glyphs.
-              const capture = (event: CliRendererExternalOutputEvent) => {
-                const { snapshot } = event
-                savedText.push(new TextDecoder().decode(snapshot.getRealCharBytes(false)))
-                for (let row = 0; row < snapshot.height; row++) {
-                  const cells = snapshot.buffers.char.subarray(
-                    row * snapshot.width,
-                    (row + 1) * snapshot.width,
-                  )
-                  const first = Option.fromUndefinedOr(
-                    cells.find((cell) => cell !== 0 && cell !== 32),
-                  )
-                  if (Option.isSome(first)) leadingCells.push(first.value)
-                }
+        const setup = yield* renderScoped(
+          () => {
+            const renderer = useRenderer()
+            extensionsLoaded = useExtensionUI().loaded
+            // Check native cells: string offsets do not match terminal columns for wide glyphs.
+            const capture = (event: CliRendererExternalOutputEvent) => {
+              const { snapshot } = event
+              savedText.push(new TextDecoder().decode(snapshot.getRealCharBytes(false)))
+              for (let row = 0; row < snapshot.height; row++) {
+                const cells = snapshot.buffers.char.subarray(
+                  row * snapshot.width,
+                  (row + 1) * snapshot.width,
+                )
+                const first = Option.fromUndefinedOr(
+                  cells.find((cell) => cell !== 0 && cell !== 32),
+                )
+                if (Option.isSome(first)) leadingCells.push(first.value)
               }
-              renderer.on("external_output", capture)
-              onCleanup(() => renderer.off("external_output", capture))
-              return (
-                <NativeTranscript
-                  items={items}
-                  settled
-                  streaming={false}
-                  footerHeight={3}
-                  expanded={false}
-                  disclosure={disclosure()}
-                  displayRevision={0}
-                  overlayOpen={false}
-                  renderItems={(visible) => (
-                    <MessageList
-                      items={visible}
-                      disclosure={disclosure()}
-                      syntaxStyle={syntaxStyle}
-                      streaming={false}
-                    />
-                  )}
-                >
-                  <box />
-                </NativeTranscript>
-              )
-            },
-            { width, height: 14 },
-          ),
+            }
+            renderer.on("external_output", capture)
+            onCleanup(() => renderer.off("external_output", capture))
+            return (
+              <NativeTranscript
+                items={items}
+                settled
+                streaming={false}
+                footerHeight={3}
+                expanded={false}
+                disclosure={disclosure()}
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible) => (
+                  <MessageList
+                    items={visible}
+                    disclosure={disclosure()}
+                    syntaxStyle={syntaxStyle}
+                    streaming={false}
+                  />
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width, height: 14 },
         )
         yield* Effect.promise(() => setup.flush()).pipe(
           Effect.repeat({ until: () => extensionsLoaded() }),
@@ -1018,7 +1007,7 @@ describe("transcript message rows", () => {
     )
   }
 
-  it.live("a message from another session names its sender above the text", () =>
+  it.scopedLive("a message from another session names its sender above the text", () =>
     Effect.gen(function* () {
       const sent: ListMessage = {
         ...userMessage(
@@ -1047,28 +1036,30 @@ describe("transcript message rows", () => {
     }),
   )
 
-  it.live("a btw question in a fork opened as the session shows the question, not its frame", () =>
-    Effect.gen(function* () {
-      const asked: ListMessage = {
-        ...userMessage(
-          "regular-message",
-          "btw-1",
-          forkQuestionText(SessionId.make("01a0ca0cb3e7"), "Which README task looks hardest?"),
-          "queued",
-        ),
-        pendingMode: absent,
-        metadata: { customType: BTW_QUESTION_TYPE },
-      }
-      const frame = yield* renderLoaded([asked])
-      expect(frame).toContain("btw · side question")
-      expect(frame).toContain("Which README task looks hardest?")
-      expect(frame).not.toContain("A side question, asked in a fork")
-      const expandedFrame = yield* renderLoaded([asked], true)
-      expect(expandedFrame).toContain("A side question, asked in a fork")
-    }),
+  it.scopedLive(
+    "a btw question in a fork opened as the session shows the question, not its frame",
+    () =>
+      Effect.gen(function* () {
+        const asked: ListMessage = {
+          ...userMessage(
+            "regular-message",
+            "btw-1",
+            forkQuestionText(SessionId.make("01a0ca0cb3e7"), "Which README task looks hardest?"),
+            "queued",
+          ),
+          pendingMode: absent,
+          metadata: { customType: BTW_QUESTION_TYPE },
+        }
+        const frame = yield* renderLoaded([asked])
+        expect(frame).toContain("btw · side question")
+        expect(frame).toContain("Which README task looks hardest?")
+        expect(frame).not.toContain("A side question, asked in a fork")
+        const expandedFrame = yield* renderLoaded([asked], true)
+        expect(expandedFrame).toContain("A side question, asked in a fork")
+      }),
   )
 
-  it.live("a long child name is cut so the id stays on the sender line", () =>
+  it.scopedLive("a long child name is cut so the id stays on the sender line", () =>
     Effect.gen(function* () {
       const from = {
         sessionId: SessionId.make("01a0ca0cb3e7"),
@@ -1096,7 +1087,7 @@ describe("transcript message rows", () => {
     }),
   )
 
-  it.live("a child row stored before the status line still shows only its text", () =>
+  it.scopedLive("a child row stored before the status line still shows only its text", () =>
     Effect.gen(function* () {
       const from = {
         sessionId: SessionId.make("01a0ca0cb3e7"),
@@ -1125,7 +1116,7 @@ describe("transcript message rows", () => {
     }),
   )
 
-  it.live("keeps multiline user text visible in a narrow transcript", () =>
+  it.scopedLive("keeps multiline user text visible in a narrow transcript", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
         userMessage(
@@ -1135,18 +1126,16 @@ describe("transcript message rows", () => {
           "queued",
         ),
       ]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={items}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 32, height: 16 },
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={items}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
         ),
+        { width: 32, height: 16 },
       )
       const frame = renderFrame(setup)
       expect(frame).toContain("┃")
@@ -1156,7 +1145,7 @@ describe("transcript message rows", () => {
     }),
   )
 
-  it.live("shares one resize subscription across transcript event rows", () =>
+  it.scopedLive("shares one resize subscription across transcript event rows", () =>
     Effect.gen(function* () {
       const outcomes: ReadonlyArray<RetryOutcome> = [...Array(11).fill("retried"), "pending"]
       const items: SessionItem[] = outcomes.map((outcome, seq) => ({
@@ -1169,23 +1158,21 @@ describe("transcript message rows", () => {
         createdAt: seq,
         seq,
       }))
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={items}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <MessageList
+          items={items}
+          disclosure="collapsed"
+          syntaxStyle={syntaxStyle}
+          streaming={false}
+        />
+      ))
       expect(setup.renderer.listenerCount("resize")).toBe(1)
     }),
   )
 })
 
 describe("native history before the client extensions load", () => {
-  it.live(
+  it.scopedLive(
     "native history holds rows until client extensions load, then commits them rendered",
     () =>
       Effect.gen(function* () {
@@ -1210,75 +1197,9 @@ describe("native history before the client extensions load", () => {
             ),
           ),
         ]
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => {
-              const renderer = useRenderer()
-              const capture = (event: CliRendererExternalOutputEvent) => {
-                savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
-              }
-              renderer.on("external_output", capture)
-              onCleanup(() => renderer.off("external_output", capture))
-              return (
-                <NativeTranscript
-                  items={items}
-                  settled
-                  streaming={false}
-                  footerHeight={3}
-                  expanded={false}
-                  disclosure="collapsed"
-                  displayRevision={0}
-                  overlayOpen={false}
-                  renderItems={(visible) => (
-                    <MessageList
-                      items={visible}
-                      disclosure="collapsed"
-                      syntaxStyle={syntaxStyle}
-                      streaming={false}
-                    />
-                  )}
-                >
-                  <box />
-                </NativeTranscript>
-              )
-            },
-            { width: 60, height: 14, builtins: [...builtinClientModules, held] },
-          ),
-        )
-        // Held: the live view overflows, but nothing may reach scrollback yet.
-        for (let pass = 0; pass < 20; pass++) {
-          yield* Effect.promise(() => setup.flush())
-          yield* Effect.yieldNow
-        }
-        expect(savedText.join("")).toBe("")
-        yield* Deferred.complete(release, Effect.void)
-        yield* waitForFrame(
-          setup,
-          () => savedText.join("").includes("goal continuation"),
-          "goal row in scrollback",
-        )
-        expect(savedText.join("")).not.toContain("RAW-GOAL-TEXT")
-      }),
-  )
-
-  it.live("native history holds rows while a notice-row source is still deriving", () =>
-    Effect.gen(function* () {
-      const [settled, setSettled] = createSignal(false)
-      let extensionsLoaded = () => false
-      const savedText: string[] = []
-      const items: SessionItem[] = Array.from({ length: 8 }, (_, index) =>
-        userMessage(
-          "regular-message",
-          `unsettled-${index}`,
-          `unsettled ${index}\nsecond line\nthird line`,
-          "queued",
-        ),
-      )
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
+        const setup = yield* renderScoped(
           () => {
             const renderer = useRenderer()
-            extensionsLoaded = useExtensionUI().loaded
             const capture = (event: CliRendererExternalOutputEvent) => {
               savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
             }
@@ -1287,7 +1208,7 @@ describe("native history before the client extensions load", () => {
             return (
               <NativeTranscript
                 items={items}
-                settled={settled()}
+                settled
                 streaming={false}
                 footerHeight={3}
                 expanded={false}
@@ -1307,8 +1228,70 @@ describe("native history before the client extensions load", () => {
               </NativeTranscript>
             )
           },
-          { width: 60, height: 14 },
+          { width: 60, height: 14, builtins: [...builtinClientModules, held] },
+        )
+        // Held: the live view overflows, but nothing may reach scrollback yet.
+        for (let pass = 0; pass < 20; pass++) {
+          yield* Effect.promise(() => setup.flush())
+          yield* Effect.yieldNow
+        }
+        expect(savedText.join("")).toBe("")
+        yield* Deferred.complete(release, Effect.void)
+        yield* waitForFrame(
+          setup,
+          () => savedText.join("").includes("goal continuation"),
+          "goal row in scrollback",
+        )
+        expect(savedText.join("")).not.toContain("RAW-GOAL-TEXT")
+      }),
+  )
+
+  it.scopedLive("native history holds rows while a notice-row source is still deriving", () =>
+    Effect.gen(function* () {
+      const [settled, setSettled] = createSignal(false)
+      let extensionsLoaded = () => false
+      const savedText: string[] = []
+      const items: SessionItem[] = Array.from({ length: 8 }, (_, index) =>
+        userMessage(
+          "regular-message",
+          `unsettled-${index}`,
+          `unsettled ${index}\nsecond line\nthird line`,
+          "queued",
         ),
+      )
+      const setup = yield* renderScoped(
+        () => {
+          const renderer = useRenderer()
+          extensionsLoaded = useExtensionUI().loaded
+          const capture = (event: CliRendererExternalOutputEvent) => {
+            savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+          }
+          renderer.on("external_output", capture)
+          onCleanup(() => renderer.off("external_output", capture))
+          return (
+            <NativeTranscript
+              items={items}
+              settled={settled()}
+              streaming={false}
+              footerHeight={3}
+              expanded={false}
+              disclosure="collapsed"
+              displayRevision={0}
+              overlayOpen={false}
+              renderItems={(visible) => (
+                <MessageList
+                  items={visible}
+                  disclosure="collapsed"
+                  syntaxStyle={syntaxStyle}
+                  streaming={false}
+                />
+              )}
+            >
+              <box />
+            </NativeTranscript>
+          )
+        },
+        { width: 60, height: 14 },
       )
       yield* Effect.promise(() => setup.flush()).pipe(
         Effect.repeat({ until: () => extensionsLoaded() }),
@@ -1331,7 +1314,7 @@ describe("native history before the client extensions load", () => {
 })
 
 describe("rows that fold until full detail is on", () => {
-  it.live("goal continuations collapse to one line until full detail is on", () =>
+  it.scopedLive("goal continuations collapse to one line until full detail is on", () =>
     Effect.gen(function* () {
       const goalMessage: ListMessage = {
         ...userMessage(
@@ -1352,7 +1335,7 @@ describe("rows that fold until full detail is on", () => {
     }),
   )
 
-  it.live("a fired alarm collapses to its note until full detail is on", () =>
+  it.scopedLive("a fired alarm collapses to its note until full detail is on", () =>
     Effect.gen(function* () {
       const wakeMessage: ListMessage = {
         ...userMessage(
@@ -1376,36 +1359,34 @@ describe("rows that fold until full detail is on", () => {
     }),
   )
 
-  it.live("a context handoff folds to one line until full detail is on", () =>
+  it.scopedLive("a context handoff folds to one line until full detail is on", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [compactionMessage()]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <MessageList
-                items={items}
-                disclosure="collapsed"
-                syntaxStyle={syntaxStyle}
-                streaming={false}
-              />
-              <MessageList
-                items={items}
-                disclosure="full"
-                syntaxStyle={syntaxStyle}
-                streaming={false}
-              />
-              <MessageList
-                items={items}
-                disclosure="collapsed"
-                fullDetail={true}
-                syntaxStyle={syntaxStyle}
-                streaming={false}
-              />
-            </>
-          ),
-          { width: 100, height: 20 },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <MessageList
+              items={items}
+              disclosure="collapsed"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+            <MessageList
+              items={items}
+              disclosure="full"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+            <MessageList
+              items={items}
+              disclosure="collapsed"
+              fullDetail={true}
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          </>
         ),
+        { width: 100, height: 20 },
       )
       const frame = renderFrame(setup)
       expect(frame.match(/⇣ context handoff · 3 messages summarized/g)?.length).toBe(2)
@@ -1413,7 +1394,7 @@ describe("rows that fold until full detail is on", () => {
     }),
   )
 
-  it.live("the runtime's model-change notice folds to one line", () =>
+  it.scopedLive("the runtime's model-change notice folds to one line", () =>
     Effect.gen(function* () {
       const notice: ListMessage = {
         ...compactionMessage(),
@@ -1421,18 +1402,16 @@ describe("rows that fold until full detail is on", () => {
         content: "MODEL-NOTICE-BODY",
         metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={[notice]}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 100, height: 10 },
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[notice]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
         ),
+        { width: 100, height: 10 },
       )
       const frame = renderFrame(setup)
       expect(frame).toContain("⇄ model changed")
@@ -1442,10 +1421,11 @@ describe("rows that fold until full detail is on", () => {
 })
 
 describe("tool frame identity", () => {
-  it.live("keeps tool identity and failure status on direct compact and expanded frames", () =>
-    Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
+  it.scopedLive(
+    "keeps tool identity and failure status on direct compact and expanded frames",
+    () =>
+      Effect.gen(function* () {
+        const setup = yield* renderScoped(() => (
           <ToolCallIdentityProvider id="call-direct-7">
             <ToolFrame
               title="read"
@@ -1464,31 +1444,28 @@ describe("tool frame identity", () => {
               <text>expanded failure</text>
             </ToolFrame>
           </ToolCallIdentityProvider>
-        )),
-      )
-      const frame = renderFrame(setup)
-      expect(frame.match(/#call-direct-7/g)?.length).toBe(2)
-      expect(frame.match(/failed/g)?.length).toBeGreaterThanOrEqual(2)
-      expect(frame).toContain("compact failure")
-      expect(frame).toContain("expanded failure")
-    }),
+        ))
+        const frame = renderFrame(setup)
+        expect(frame.match(/#call-direct-7/g)?.length).toBe(2)
+        expect(frame.match(/failed/g)?.length).toBeGreaterThanOrEqual(2)
+        expect(frame).toContain("compact failure")
+        expect(frame).toContain("expanded failure")
+      }),
   )
 
-  it.live("a click toggles a tool frame, and a new expanded from its owner starts over", () =>
+  it.scopedLive("a click toggles a tool frame, and a new expanded from its owner starts over", () =>
     Effect.gen(function* () {
       const [expanded, setExpanded] = createSignal(false)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <ToolFrame
-            title="read"
-            status="completed"
-            expanded={expanded()}
-            collapsedContent={<text>FRAME-CLOSED</text>}
-          >
-            <text>FRAME-OPEN</text>
-          </ToolFrame>
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <ToolFrame
+          title="read"
+          status="completed"
+          expanded={expanded()}
+          collapsedContent={<text>FRAME-CLOSED</text>}
+        >
+          <text>FRAME-OPEN</text>
+        </ToolFrame>
+      ))
       const closed = yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "closed")
       const row = closed.split("\n").findIndex((line) => line.includes("read"))
       yield* Effect.promise(() => setup.mockMouse.click(2, row))
@@ -1500,31 +1477,28 @@ describe("tool frame identity", () => {
       yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "the owner's value")
       setExpanded(true)
       yield* waitForFrame(setup, (next) => next.includes("FRAME-OPEN"), "the owner's new value")
-      destroyRenderSetup(setup)
     }),
   )
 
-  it.live("keeps unknown tool failure identity in both MessageList projections", () =>
+  it.scopedLive("keeps unknown tool failure identity in both MessageList projections", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [unknownFailureMessage("call-unknown-7")]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <>
-            <MessageList
-              items={items}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-            <MessageList
-              items={items}
-              disclosure="preview"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          </>
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <>
+          <MessageList
+            items={items}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+          <MessageList
+            items={items}
+            disclosure="preview"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        </>
+      ))
       const frame = renderFrame(setup)
       expect(frame.match(/#call-unknown-7/g)?.length).toBe(2)
       expect(frame.match(/\[x unknown_fx_tool\]/g)?.length).toBe(2)
@@ -1532,13 +1506,11 @@ describe("tool frame identity", () => {
     }),
   )
 
-  it.live("propagates identity through a registered renderer at narrow width", () =>
+  it.scopedLive("propagates identity through a registered renderer at narrow width", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => <RegisteredToolMessageLists items={[registeredFailureMessage("call-reg-7")]} />,
-          { width: 42, height: 20 },
-        ),
+      const setup = yield* renderScoped(
+        () => <RegisteredToolMessageLists items={[registeredFailureMessage("call-reg-7")]} />,
+        { width: 42, height: 20 },
       )
       const frame = yield* waitForFrame(
         setup,
@@ -1553,7 +1525,7 @@ describe("tool frame identity", () => {
     }),
   )
 
-  it.live("shows worker recovery errors in collapsed, preview, and detail frames", () =>
+  it.scopedLive("shows worker recovery errors in collapsed, preview, and detail frames", () =>
     Effect.gen(function* () {
       const recovered: ToolCall = {
         id: "call-recovered",
@@ -1581,11 +1553,12 @@ describe("tool frame identity", () => {
         }),
       }
       const message: ListMessage = assistantToolMessage("assistant-cell", recovered)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <RegisteredToolMessageLists items={[message]} fullDetail />, {
+      const setup = yield* renderScoped(
+        () => <RegisteredToolMessageLists items={[message]} fullDetail />,
+        {
           width: 110,
           height: 50,
-        }),
+        },
       )
       const frame = yield* waitForFrame(
         setup,
@@ -1598,7 +1571,7 @@ describe("tool frame identity", () => {
 })
 
 describe("reloaded cell ops", () => {
-  it.live("a reloaded cell draws its ops as the live feed drew them", () =>
+  it.scopedLive("a reloaded cell draws its ops as the live feed drew them", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-reloaded-ops")
       const branchId = BranchId.make("branch-reloaded-ops")
@@ -1710,16 +1683,14 @@ describe("reloaded cell ops", () => {
       }
       const drawn = (call: ToolCall, label: string) =>
         Effect.gen(function* () {
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <RegisteredToolMessageLists
-                  items={[assistantToolMessage("assistant-reloaded-cell", call)]}
-                  fullDetail
-                />
-              ),
-              { width: 110, height: 60 },
+          const setup = yield* renderScoped(
+            () => (
+              <RegisteredToolMessageLists
+                items={[assistantToolMessage("assistant-reloaded-cell", call)]}
+                fullDetail
+              />
             ),
+            { width: 110, height: 60 },
           )
           const frame = yield* waitForFrame(
             setup,
@@ -1741,7 +1712,7 @@ describe("reloaded cell ops", () => {
     }),
   )
 
-  it.live("a reloaded op cut to fit counts and numbers lines as in its whole output", () =>
+  it.scopedLive("a reloaded op cut to fit counts and numbers lines as in its whole output", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-cut-ops")
       const branchId = BranchId.make("branch-cut-ops")
@@ -1827,16 +1798,14 @@ describe("reloaded cell ops", () => {
         status: "completed",
         operations: (operations ?? []).map((operation) => ({ ...operation })),
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <RegisteredToolMessageLists
-              items={[assistantToolMessage("assistant-cut-cell", reloaded)]}
-              fullDetail
-            />
-          ),
-          { width: 110, height: 60 },
+      const setup = yield* renderScoped(
+        () => (
+          <RegisteredToolMessageLists
+            items={[assistantToolMessage("assistant-cut-cell", reloaded)]}
+            fullDetail
+          />
         ),
+        { width: 110, height: 60 },
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("long.txt"), "cut cell ops")
       // bash: the whole count, its real last line, and the true number of hidden lines.
@@ -1848,7 +1817,7 @@ describe("reloaded cell ops", () => {
     }),
   )
 
-  it.live("a reloaded grep op and a large edit draw as the live feed drew them", () =>
+  it.scopedLive("a reloaded grep op and a large edit draw as the live feed drew them", () =>
     Effect.gen(function* () {
       const matches = Array.from({ length: 12 }, (_, index) => ({
         file: `src/module-${index % 4}.ts`,
@@ -1892,50 +1861,52 @@ describe("reloaded cell ops", () => {
     }),
   )
 
-  it.live("a reloaded op too large for the snapshot counts what it cut or draws its summary", () =>
-    Effect.gen(function* () {
-      const matches = Array.from({ length: 200 }, (_, index) => ({
-        file: `src/module-${Math.floor(index / 20)}.ts`,
-        line: index + 1,
-        content: `const value${index} = compute(${index})`,
-      }))
-      const editInput = {
-        path: "/workspace/src/huge.ts",
-        oldString: "a\n".repeat(6_000),
-        newString: "b\n".repeat(6_000),
-      }
-      const { reloaded } = yield* cellBeforeAndAfterReload("assistant-large-ops", [
-        {
-          id: "op-grep-large",
-          toolName: "grep",
-          input: { pattern: "value" },
-          summary: "200 matches for value",
-          output: encodeJson({ matches, truncated: false }),
-        },
-        {
-          id: "op-edit-large",
-          toolName: "edit",
-          input: editInput,
-          summary: "/workspace/src/huge.ts · 1 replacement",
-          output: encodeJson({ path: editInput.path, replacements: 1 }),
-        },
-      ])
-      const frame = yield* drawnCell(
-        "assistant-large-ops",
-        reloaded,
-        (next) => next.includes("matches in") && next.includes("1 replacement"),
-        "reloaded large ops",
-      )
-      // Every match and every file counts, the ones between head and tail too.
-      expect(frame).toContain("200 matches in 10 files")
-      expect(frame).toContain("+7 more files")
-      expect(frame).toContain("src/module-0.ts")
-      // The diff strings do not fit, so the edit draws the summary its tool wrote.
-      expect(frame).toContain("/workspace/src/huge.ts · 1 replacement")
-    }),
+  it.scopedLive(
+    "a reloaded op too large for the snapshot counts what it cut or draws its summary",
+    () =>
+      Effect.gen(function* () {
+        const matches = Array.from({ length: 200 }, (_, index) => ({
+          file: `src/module-${Math.floor(index / 20)}.ts`,
+          line: index + 1,
+          content: `const value${index} = compute(${index})`,
+        }))
+        const editInput = {
+          path: "/workspace/src/huge.ts",
+          oldString: "a\n".repeat(6_000),
+          newString: "b\n".repeat(6_000),
+        }
+        const { reloaded } = yield* cellBeforeAndAfterReload("assistant-large-ops", [
+          {
+            id: "op-grep-large",
+            toolName: "grep",
+            input: { pattern: "value" },
+            summary: "200 matches for value",
+            output: encodeJson({ matches, truncated: false }),
+          },
+          {
+            id: "op-edit-large",
+            toolName: "edit",
+            input: editInput,
+            summary: "/workspace/src/huge.ts · 1 replacement",
+            output: encodeJson({ path: editInput.path, replacements: 1 }),
+          },
+        ])
+        const frame = yield* drawnCell(
+          "assistant-large-ops",
+          reloaded,
+          (next) => next.includes("matches in") && next.includes("1 replacement"),
+          "reloaded large ops",
+        )
+        // Every match and every file counts, the ones between head and tail too.
+        expect(frame).toContain("200 matches in 10 files")
+        expect(frame).toContain("+7 more files")
+        expect(frame).toContain("src/module-0.ts")
+        // The diff strings do not fit, so the edit draws the summary its tool wrote.
+        expect(frame).toContain("/workspace/src/huge.ts · 1 replacement")
+      }),
   )
 
-  it.live("a reloaded op cut inside one long line marks the characters it left out", () =>
+  it.scopedLive("a reloaded op cut inside one long line marks the characters it left out", () =>
     Effect.gen(function* () {
       const json = encodeJson({
         rows: Array.from({ length: 800 }, (_, index) => ({ id: index, name: `row-${index}` })),
@@ -1974,7 +1945,7 @@ describe("reloaded cell ops", () => {
     }),
   )
 
-  it.live("a reloaded head or tail that keeps part of a line marks the side it lost", () =>
+  it.scopedLive("a reloaded head or tail that keeps part of a line marks the side it lost", () =>
     Effect.gen(function* () {
       const long = (label: string) => `${label}${"x".repeat(20_000)}`
       const { reloaded } = yield* cellBeforeAndAfterReload("assistant-part-lines", [
@@ -2016,7 +1987,7 @@ describe("reloaded cell ops", () => {
     }),
   )
 
-  it.live(
+  it.scopedLive(
     "a blocked command an earlier version stored reads as declined and a background one as running on, not as exits",
     () =>
       Effect.gen(function* () {
@@ -2062,13 +2033,11 @@ describe("reloaded cell ops", () => {
 })
 
 describe("cell rows", () => {
-  it.live("shows cell operation receipts in tree and detail frames", () =>
+  it.scopedLive("shows cell operation receipts in tree and detail frames", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => <RegisteredToolMessageLists items={[cellMessage("call-cell-7")]} fullDetail />,
-          { width: 100, height: 40 },
-        ),
+      const setup = yield* renderScoped(
+        () => <RegisteredToolMessageLists items={[cellMessage("call-cell-7")]} fullDetail />,
+        { width: 100, height: 40 },
       )
       const frame = yield* waitForFrame(
         setup,
@@ -2089,21 +2058,19 @@ describe("cell rows", () => {
     }),
   )
 
-  it.live("a cell result names the bindings it bound and counts them all", () =>
+  it.scopedLive("a cell result names the bindings it bound and counts them all", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <RegisteredToolMessageLists
-              items={[
-                cellBindingsMessage("call-cell-bound", ["note"], 3),
-                cellBindingsMessage("call-cell-kept", [], 1),
-              ]}
-              fullDetail
-            />
-          ),
-          { width: 100, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <RegisteredToolMessageLists
+            items={[
+              cellBindingsMessage("call-cell-bound", ["note"], 3),
+              cellBindingsMessage("call-cell-kept", [], 1),
+            ]}
+            fullDetail
+          />
         ),
+        { width: 100, height: 40 },
       )
       const frame = yield* waitForFrame(
         setup,
@@ -2116,21 +2083,19 @@ describe("cell rows", () => {
     }),
   )
 
-  it.live("preview shows the head of the last output and names the rest", () =>
+  it.scopedLive("preview shows the head of the last output and names the rest", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [bashMessage("call-bash-7", 25)]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={items}
-              disclosure="preview"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 80, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={items}
+            disclosure="preview"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
         ),
+        { width: 80, height: 40 },
       )
       const frame = renderFrame(setup)
       expect(frame).toContain("└ bash seq 25 · ↓ 25 lines")
@@ -2141,17 +2106,18 @@ describe("cell rows", () => {
     }),
   )
 
-  it.live("keeps the cell row across disclosure changes and renders transcript output once", () =>
-    Effect.gen(function* () {
-      const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("preview")
-      const [fullDetail, setFullDetail] = createSignal(false)
-      const output = Array.from(
-        { length: 25 },
-        (_, index) => `CELL-OUTPUT-${String(index + 1).padStart(3, "0")}`,
-      ).join("\n")
-      const items = [cellMessage("call-stable", output)]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
+  it.scopedLive(
+    "keeps the cell row across disclosure changes and renders transcript output once",
+    () =>
+      Effect.gen(function* () {
+        const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("preview")
+        const [fullDetail, setFullDetail] = createSignal(false)
+        const output = Array.from(
+          { length: 25 },
+          (_, index) => `CELL-OUTPUT-${String(index + 1).padStart(3, "0")}`,
+        ).join("\n")
+        const items = [cellMessage("call-stable", output)]
+        const setup = yield* renderScoped(
           () => {
             const renderers = useToolRenderers()
             return (
@@ -2167,63 +2133,60 @@ describe("cell rows", () => {
             )
           },
           { width: 110, height: 55 },
-        ),
-      )
-      const preview = yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("… +5 lines (ctrl+o)"),
-        "cell preview",
-      )
-      const row = Option.getOrThrow(
-        Option.fromUndefinedOr(preview.split("\n").find((line) => line.includes("└ cell"))),
-      ).trim()
-      expect(row).toContain("↑ 2 ↓ 25 lines")
-      // The preview row names no call id; the open rows add it at the end of the same words.
-      expect(row).not.toContain("#call-stable")
-      const isOpenRow = (line: string) =>
-        line.trim().startsWith(row) && line.trim().endsWith("#call-stable")
-      yield* Effect.sync(() => setDisclosure("full"))
-      const full = yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("CELL-OUTPUT-025") && frame.includes("note.content"),
-        "full cell output",
-      )
-      expect(full.split("\n").some(isOpenRow)).toBe(true)
-      expect(full.match(/#call-stable/g)).toHaveLength(1)
-      expect(full).not.toContain("… +5 lines")
-      yield* Effect.sync(() => {
-        setDisclosure("preview")
-        setFullDetail(true)
-      })
-      const transcript = yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("1 cell ·"),
-        "full transcript from preview",
-      )
-      expect(transcript.split("\n").some(isOpenRow)).toBe(true)
-      expect(transcript).not.toContain("… +5 lines")
-      for (let line = 1; line <= 25; line++) {
-        const text = `CELL-OUTPUT-${String(line).padStart(3, "0")}`
-        expect(transcript.split("\n").filter((value) => value.trim() === text)).toHaveLength(1)
-      }
-    }),
+        )
+        const preview = yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("… +5 lines (ctrl+o)"),
+          "cell preview",
+        )
+        const row = Option.getOrThrow(
+          Option.fromUndefinedOr(preview.split("\n").find((line) => line.includes("└ cell"))),
+        ).trim()
+        expect(row).toContain("↑ 2 ↓ 25 lines")
+        // The preview row names no call id; the open rows add it at the end of the same words.
+        expect(row).not.toContain("#call-stable")
+        const isOpenRow = (line: string) =>
+          line.trim().startsWith(row) && line.trim().endsWith("#call-stable")
+        yield* Effect.sync(() => setDisclosure("full"))
+        const full = yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("CELL-OUTPUT-025") && frame.includes("note.content"),
+          "full cell output",
+        )
+        expect(full.split("\n").some(isOpenRow)).toBe(true)
+        expect(full.match(/#call-stable/g)).toHaveLength(1)
+        expect(full).not.toContain("… +5 lines")
+        yield* Effect.sync(() => {
+          setDisclosure("preview")
+          setFullDetail(true)
+        })
+        const transcript = yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("1 cell ·"),
+          "full transcript from preview",
+        )
+        expect(transcript.split("\n").some(isOpenRow)).toBe(true)
+        expect(transcript).not.toContain("… +5 lines")
+        for (let line = 1; line <= 25; line++) {
+          const text = `CELL-OUTPUT-${String(line).padStart(3, "0")}`
+          expect(transcript.split("\n").filter((value) => value.trim() === text)).toHaveLength(1)
+        }
+      }),
   )
 
-  it.live("collapsed keeps the group header and hides finished rows and output", () =>
+  it.scopedLive("collapsed keeps the group header and hides finished rows and output", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={items}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 80, height: 20 },
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={items}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
         ),
+        { width: 80, height: 20 },
       )
       const frame = renderFrame(setup)
       expect(frame).toContain("1 tool call · 1 bash")
@@ -2234,7 +2197,7 @@ describe("cell rows", () => {
 })
 
 describe("bash row line counts", () => {
-  it.live("a bash row counts lines as its body does: a final newline ends a line", () =>
+  it.scopedLive("a bash row counts lines as its body does: a final newline ends a line", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
         bashOutputMessage("call-one-line", { stdout: "hello\n", stderr: "" }),
@@ -2250,18 +2213,16 @@ describe("bash row line counts", () => {
           status: "background",
         }),
       ]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={items}
-              disclosure="preview"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 80, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={items}
+            disclosure="preview"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
         ),
+        { width: 80, height: 40 },
       )
       const rows = renderFrame(setup)
         .split("\n")
@@ -2276,31 +2237,30 @@ describe("bash row line counts", () => {
     }),
   )
 
-  it.live("a cut bash row counts the whole output, as its body does", () =>
+  it.scopedLive("a cut bash row counts the whole output, as its body does", () =>
     Effect.gen(function* () {
-      const list = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={[assistantToolMessage("assistant-cut", cutBashCall)]}
-              disclosure="preview"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 80, height: 20 },
+      const list = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[assistantToolMessage("assistant-cut", cutBashCall)]}
+            disclosure="preview"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
         ),
+        { width: 80, height: 20 },
       )
       const row = renderFrame(list)
         .split("\n")
         .find((line) => line.includes("└ bash"))
       expect(row?.trim().split(/\s{2,}/)[0]).toBe("└ bash seq 1 1000 · ↓ 1000 lines")
       const BashToolRenderer = builtinRenderer("bash")
-      const body = yield* Effect.promise(() =>
-        renderWithProviders(() => <BashToolRenderer expanded={true} toolCall={cutBashCall} />, {
+      const body = yield* renderScoped(
+        () => <BashToolRenderer expanded={true} toolCall={cutBashCall} />,
+        {
           width: 80,
           height: 20,
-        }),
+        },
       )
       expect(renderFrame(body)).toContain("1000 lines")
     }),
@@ -2309,52 +2269,47 @@ describe("bash row line counts", () => {
 
 describe("compact file tool bodies", () => {
   // One owner spells the "more lines" footer, in the preview rows and in a closed frame.
-  it.live("a closed generic frame names its hidden lines as the preview does", () =>
+  it.scopedLive("a closed generic frame names its hidden lines as the preview does", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <GenericToolRenderer
-              expanded={false}
-              toolCall={{
-                id: "call-generic-footer",
-                toolName: "unknown_fx_tool",
-                status: "completed",
-                input: absent,
-                summary: "first line",
-                output: "first line\nsecond line\nthird line",
-              }}
-            />
-          ),
-          { width: 80, height: 10 },
+      const setup = yield* renderScoped(
+        () => (
+          <GenericToolRenderer
+            expanded={false}
+            toolCall={{
+              id: "call-generic-footer",
+              toolName: "unknown_fx_tool",
+              status: "completed",
+              input: absent,
+              summary: "first line",
+              output: "first line\nsecond line\nthird line",
+            }}
+          />
         ),
+        { width: 80, height: 10 },
       )
       expect(renderFrame(setup)).toContain("… +2 lines (ctrl+o)")
-      destroyRenderSetup(setup)
     }),
   )
-  it.live("keeps the first and last read lines with the omitted count", () =>
+  it.scopedLive("keeps the first and last read lines with the omitted count", () =>
     Effect.gen(function* () {
       const lines = Array.from({ length: 10 }, (_, i) => `read-line-${i + 1}`)
       const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
         content: lines.join("\n"),
         lineCount: 10,
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <ReadToolRenderer
-            expanded={false}
-            toolCall={{
-              id: "read-excerpt",
-              toolName: "read",
-              status: "completed",
-              input: { path: "/tmp/excerpt.txt" },
-              summary: absent,
-              output,
-            }}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <ReadToolRenderer
+          expanded={false}
+          toolCall={{
+            id: "read-excerpt",
+            toolName: "read",
+            status: "completed",
+            input: { path: "/tmp/excerpt.txt" },
+            summary: absent,
+            output,
+          }}
+        />
+      ))
       const frame = renderFrame(setup)
       expect(frame).toContain("read-line-1")
       expect(frame).toContain("read-line-3")
@@ -2366,25 +2321,23 @@ describe("compact file tool bodies", () => {
     }),
   )
 
-  it.live("keeps the end of a long edit with an omitted-lines marker", () =>
+  it.scopedLive("keeps the end of a long edit with an omitted-lines marker", () =>
     Effect.gen(function* () {
       const oldString = Array.from({ length: 10 }, (_, i) => `old-line-${i + 1}`).join("\n")
       const newString = Array.from({ length: 10 }, (_, i) => `new-line-${i + 1}`).join("\n")
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <EditToolRenderer
-            expanded={false}
-            toolCall={{
-              id: "edit-excerpt",
-              toolName: "edit",
-              status: "completed",
-              input: { path: "/tmp/excerpt.txt", oldString, newString },
-              summary: absent,
-              output: absent,
-            }}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <EditToolRenderer
+          expanded={false}
+          toolCall={{
+            id: "edit-excerpt",
+            toolName: "edit",
+            status: "completed",
+            input: { path: "/tmp/excerpt.txt", oldString, newString },
+            summary: absent,
+            output: absent,
+          }}
+        />
+      ))
       const frame = renderFrame(setup)
       expect(frame).toContain("new-line-10")
       expect(frame).toContain("more lines")
@@ -2417,30 +2370,28 @@ const builtinRenderer = (tool: string) =>
   )
 
 describe("cell frame header", () => {
-  it.live("names the ops that ran once there are any, not the verbs its source spells", () =>
+  it.scopedLive("names the ops that ran once there are any, not the verbs its source spells", () =>
     Effect.gen(function* () {
       const CellToolRenderer = builtinRenderer("cell")
       const code =
         "const [a, b] = await Promise.all([tools.bash({command: 'sleep 2'}), tools.bash({command: 'git checkout HEAD -- a'})])"
       const header = (operations: ReadonlyArray<ToolCall>) =>
-        Effect.promise(() =>
-          renderWithProviders(
-            () => (
-              <CellToolRenderer
-                expanded={false}
-                toolCall={{
-                  id: "cell-header",
-                  toolName: "cell",
-                  status: "running",
-                  input: { code },
-                  summary: absent,
-                  output: absent,
-                  operations: [...operations],
-                }}
-              />
-            ),
-            { width: 100, height: 12 },
+        renderScoped(
+          () => (
+            <CellToolRenderer
+              expanded={false}
+              toolCall={{
+                id: "cell-header",
+                toolName: "cell",
+                status: "running",
+                input: { code },
+                summary: absent,
+                output: absent,
+                operations: [...operations],
+              }}
+            />
           ),
+          { width: 100, height: 12 },
         ).pipe(Effect.map((setup) => renderFrame(setup).split("\n")[0] ?? ""))
       // No op has run: the source's verbs.
       expect(yield* header([])).toContain("cell bash ×2")
@@ -2519,23 +2470,21 @@ describe("transcript block spacing", () => {
     { disclosure: "collapsed", fullDetail: true },
   ]
   for (const view of views) {
-    it.live(
+    it.scopedLive(
       `one blank line separates each block at ${view.disclosure}, full detail ${view.fullDetail}`,
       () =>
         Effect.gen(function* () {
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <MessageList
-                  items={items}
-                  disclosure={view.disclosure}
-                  fullDetail={view.fullDetail}
-                  syntaxStyle={syntaxStyle}
-                  streaming={false}
-                />
-              ),
-              { width: 100, height: 80 },
+          const setup = yield* renderScoped(
+            () => (
+              <MessageList
+                items={items}
+                disclosure={view.disclosure}
+                fullDetail={view.fullDetail}
+                syntaxStyle={syntaxStyle}
+                streaming={false}
+              />
             ),
+            { width: 100, height: 80 },
           )
           const lines = renderFrame(setup)
             .split("\n")
@@ -2587,20 +2536,18 @@ describe("transcript block spacing", () => {
       ),
     )
   for (const expanded of [false, true]) {
-    it.live(
+    it.scopedLive(
       `ops inside one cell and its shown text are one blank line apart, expanded ${expanded}`,
       () =>
         Effect.gen(function* () {
           const CellToolRenderer = builtinRenderer("cell")
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <ToolRenderersProvider value={builtinRenderers}>
-                  <CellToolRenderer expanded={expanded} toolCall={twoOpCell} />
-                </ToolRenderersProvider>
-              ),
-              { width: 100, height: 40 },
+          const setup = yield* renderScoped(
+            () => (
+              <ToolRenderersProvider value={builtinRenderers}>
+                <CellToolRenderer expanded={expanded} toolCall={twoOpCell} />
+              </ToolRenderersProvider>
             ),
+            { width: 100, height: 40 },
           )
           const lines = renderFrame(setup)
             .split("\n")
@@ -2623,17 +2570,18 @@ describe("transcript block spacing", () => {
     )
   }
 
-  it.live("native history keeps one blank line between committed blocks in full disclosure", () =>
-    Effect.gen(function* () {
-      const savedText: string[] = []
-      const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("collapsed")
-      let extensionsLoaded = () => false
-      const history: SessionItem[] = [
-        userMessage("regular-message", "cells-prompt", "run three steps", "queued"),
-        ...items,
-      ]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
+  it.scopedLive(
+    "native history keeps one blank line between committed blocks in full disclosure",
+    () =>
+      Effect.gen(function* () {
+        const savedText: string[] = []
+        const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("collapsed")
+        let extensionsLoaded = () => false
+        const history: SessionItem[] = [
+          userMessage("regular-message", "cells-prompt", "run three steps", "queued"),
+          ...items,
+        ]
+        const setup = yield* renderScoped(
           () => {
             const renderer = useRenderer()
             extensionsLoaded = useExtensionUI().loaded
@@ -2666,35 +2614,34 @@ describe("transcript block spacing", () => {
             )
           },
           { width: 100, height: 20 },
-        ),
-      )
-      yield* Effect.promise(() => setup.flush()).pipe(
-        Effect.repeat({ until: () => extensionsLoaded() }),
-        Effect.timeout("3 seconds"),
-      )
-      // Each level change replays the whole history; the last replay is the one on screen.
-      const levels: ReadonlyArray<DisclosureLevel> = ["preview", "full"]
-      for (const level of levels) {
-        savedText.splice(0)
-        setDisclosure(level)
-        yield* Effect.promise(() => setup.flush())
-        yield* Effect.promise(() => setup.flush())
-      }
-      const lines = (savedText.join("") + renderFrame(setup))
-        .split("\n")
-        .map((line) => line.trimEnd())
-      const body = lines.slice(0, lines.findLastIndex((line) => line.length > 0) + 1)
-      const blankRuns = body
-        .join("\n")
-        .split(/[^\n]+/)
-        .map((run) => Math.max(0, run.length - 1))
-        .filter((run) => run > 0)
-      expect(body.some((line) => line.includes("git log --oneline -1"))).toBe(true)
-      // One blank line between blocks, and inside each open cell one between
-      // its code, its op and its shown text.
-      const cells = items.length - 1
-      expect(blankRuns).toEqual(Array.from({ length: history.length - 1 + 2 * cells }, () => 1))
-    }),
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({ until: () => extensionsLoaded() }),
+          Effect.timeout("3 seconds"),
+        )
+        // Each level change replays the whole history; the last replay is the one on screen.
+        const levels: ReadonlyArray<DisclosureLevel> = ["preview", "full"]
+        for (const level of levels) {
+          savedText.splice(0)
+          setDisclosure(level)
+          yield* Effect.promise(() => setup.flush())
+          yield* Effect.promise(() => setup.flush())
+        }
+        const lines = (savedText.join("") + renderFrame(setup))
+          .split("\n")
+          .map((line) => line.trimEnd())
+        const body = lines.slice(0, lines.findLastIndex((line) => line.length > 0) + 1)
+        const blankRuns = body
+          .join("\n")
+          .split(/[^\n]+/)
+          .map((run) => Math.max(0, run.length - 1))
+          .filter((run) => run > 0)
+        expect(body.some((line) => line.includes("git log --oneline -1"))).toBe(true)
+        // One blank line between blocks, and inside each open cell one between
+        // its code, its op and its shown text.
+        const cells = items.length - 1
+        expect(blankRuns).toEqual(Array.from({ length: history.length - 1 + 2 * cells }, () => 1))
+      }),
   )
 })
 
@@ -2705,7 +2652,7 @@ const GrepToolRenderer = Option.getOrThrow(
 )
 
 describe("expanded grep body", () => {
-  it.live("a cut result draws its total and a gap between head and tail matches", () =>
+  it.scopedLive("a cut result draws its total and a gap between head and tail matches", () =>
     Effect.gen(function* () {
       const matches = [
         { file: "src/a.ts", line: 1, content: "head one" },
@@ -2717,31 +2664,29 @@ describe("expanded grep body", () => {
         matches,
         truncated: false,
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <GrepToolRenderer
-              expanded={true}
-              toolCall={{
-                id: "grep-cut",
-                toolName: "grep",
-                status: "completed",
-                input: { pattern: "one" },
-                summary: "50 matches for one",
-                output,
-                cuts: [
-                  OutputCut.cases.Items.make({
-                    field: "matches",
-                    items: 50,
-                    tailItem: 49,
-                    files: 7,
-                  }),
-                ],
-              }}
-            />
-          ),
-          { width: 80, height: 30 },
+      const setup = yield* renderScoped(
+        () => (
+          <GrepToolRenderer
+            expanded={true}
+            toolCall={{
+              id: "grep-cut",
+              toolName: "grep",
+              status: "completed",
+              input: { pattern: "one" },
+              summary: "50 matches for one",
+              output,
+              cuts: [
+                OutputCut.cases.Items.make({
+                  field: "matches",
+                  items: 50,
+                  tailItem: 49,
+                  files: 7,
+                }),
+              ],
+            }}
+          />
         ),
+        { width: 80, height: 30 },
       )
       const lines = renderFrame(setup)
         .split("\n")
@@ -2759,32 +2704,30 @@ describe("expanded grep body", () => {
     }),
   )
 
-  it.live("a result with no body draws the summary expanded as it does collapsed", () =>
+  it.scopedLive("a result with no body draws the summary expanded as it does collapsed", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <GrepToolRenderer
-              expanded={true}
-              toolCall={{
-                id: "grep-no-body",
-                toolName: "grep",
-                status: "completed",
-                input: { pattern: "one" },
-                summary: "900 matches for one",
-                output: absent,
-              }}
-            />
-          ),
-          { width: 80, height: 20 },
+      const setup = yield* renderScoped(
+        () => (
+          <GrepToolRenderer
+            expanded={true}
+            toolCall={{
+              id: "grep-no-body",
+              toolName: "grep",
+              status: "completed",
+              input: { pattern: "one" },
+              summary: "900 matches for one",
+              output: absent,
+            }}
+          />
         ),
+        { width: 80, height: 20 },
       )
       expect(renderFrame(setup)).toContain("900 matches for one")
     }),
   )
 
   // Grep reports absolute paths; the body names each file from the cwd, as the group row does.
-  it.live("file headings read from the cwd, collapsed and expanded", () =>
+  it.scopedLive("file headings read from the cwd, collapsed and expanded", () =>
     Effect.gen(function* () {
       const cwd = "/work/proj"
       const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
@@ -2793,23 +2736,21 @@ describe("expanded grep body", () => {
       })
       const frames = yield* Effect.forEach([false, true], (expanded) =>
         Effect.gen(function* () {
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <GrepToolRenderer
-                  expanded={expanded}
-                  toolCall={{
-                    id: "grep-abs",
-                    toolName: "grep",
-                    status: "completed",
-                    input: { pattern: "match" },
-                    summary: absent,
-                    output,
-                  }}
-                />
-              ),
-              { width: 100, height: 20, cwd },
+          const setup = yield* renderScoped(
+            () => (
+              <GrepToolRenderer
+                expanded={expanded}
+                toolCall={{
+                  id: "grep-abs",
+                  toolName: "grep",
+                  status: "completed",
+                  input: { pattern: "match" },
+                  summary: absent,
+                  output,
+                }}
+              />
             ),
+            { width: 100, height: 20, cwd },
           )
           const frame = renderFrame(setup)
           destroyRenderSetup(setup)
@@ -2826,7 +2767,7 @@ describe("expanded grep body", () => {
 
 describe("write body", () => {
   // The header names the file, so the open body says only what the write did.
-  it.live("an open write frame draws no raw path under its header", () =>
+  it.scopedLive("an open write frame draws no raw path under its header", () =>
     Effect.gen(function* () {
       const cwd = "/work/proj"
       const path = `${cwd}/apps/tui/src/ops.ts`
@@ -2835,23 +2776,21 @@ describe("write body", () => {
         bytesWritten: 7373,
       })
       const WriteToolRenderer = builtinRenderer("write")
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <WriteToolRenderer
-              expanded={true}
-              toolCall={{
-                id: "write-abs",
-                toolName: "write",
-                status: "completed",
-                input: { path, content: "x" },
-                summary: absent,
-                output,
-              }}
-            />
-          ),
-          { width: 100, height: 10, cwd },
+      const setup = yield* renderScoped(
+        () => (
+          <WriteToolRenderer
+            expanded={true}
+            toolCall={{
+              id: "write-abs",
+              toolName: "write",
+              status: "completed",
+              input: { path, content: "x" },
+              summary: absent,
+              output,
+            }}
+          />
         ),
+        { width: 100, height: 10, cwd },
       )
       const frame = renderFrame(setup)
       expect(frame).toContain("write apps/tui/src/ops.ts")
@@ -2862,7 +2801,7 @@ describe("write body", () => {
 })
 
 describe("read_session row", () => {
-  it.live("draws the counts the result carries", () =>
+  it.scopedLive("draws the counts the result carries", () =>
     Effect.gen(function* () {
       const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
         sessionId: "session-read-1234",
@@ -2880,18 +2819,16 @@ describe("read_session row", () => {
           output,
         }),
       ]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={items}
-              disclosure="full"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 100, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={items}
+            disclosure="full"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
         ),
+        { width: 100, height: 40 },
       )
       const frame = yield* waitForFrame(
         setup,
@@ -2904,7 +2841,7 @@ describe("read_session row", () => {
 
   // A cell draws each op as a collapsed sub-row. A click on the row's header
   // opens it, and the open row shows what the read returned.
-  it.live("a read_session op opened by a click shows the session it read", () =>
+  it.scopedLive("a read_session op opened by a click shows the session it read", () =>
     Effect.gen(function* () {
       const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
         sessionId: "session-read-1234",
@@ -2930,18 +2867,16 @@ describe("read_session row", () => {
           },
         ],
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={[assistantToolMessage("assistant-cell-read", cell)]}
-              disclosure="full"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 100, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[assistantToolMessage("assistant-cell-read", cell)]}
+            disclosure="full"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
         ),
+        { width: 100, height: 40 },
       )
       const closed = yield* waitForFrame(
         setup,
@@ -2961,14 +2896,13 @@ describe("read_session row", () => {
         "the opened read_session op",
       )
       expect(open).toContain("✓ 4 messages, 2 branches")
-      destroyRenderSetup(setup)
     }),
   )
 })
 
 describe("write row", () => {
   // The path is the call's input, so the header names the file before the write lands.
-  it.live("a running write op names its file", () =>
+  it.scopedLive("a running write op names its file", () =>
     Effect.gen(function* () {
       const cell: ToolCall = {
         id: "call-cell-write",
@@ -2988,18 +2922,16 @@ describe("write row", () => {
           },
         ],
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={[assistantToolMessage("assistant-cell-write", cell)]}
-              disclosure="full"
-              syntaxStyle={syntaxStyle}
-              streaming={true}
-            />
-          ),
-          { width: 100, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[assistantToolMessage("assistant-cell-write", cell)]}
+            disclosure="full"
+            syntaxStyle={syntaxStyle}
+            streaming={true}
+          />
         ),
+        { width: 100, height: 40 },
       )
       // The op's own header row, apart from the cell row that also names the file.
       const opRow = (next: string) =>
@@ -3010,7 +2942,6 @@ describe("write row", () => {
         "the running write op header",
       )
       expect(opRow(frame)).toContain("fresh-file.ts")
-      destroyRenderSetup(setup)
     }),
   )
 })
@@ -3029,7 +2960,7 @@ const assistant = (id: string, content: string): ListMessage => ({
 })
 
 describe("native transcript markdown", () => {
-  it.live("a message enters native history with its markdown concealed", () =>
+  it.scopedLive("a message enters native history with its markdown concealed", () =>
     Effect.gen(function* () {
       const savedText: string[] = []
       const firstCommit = yield* Deferred.make<void>()
@@ -3040,41 +2971,39 @@ describe("native transcript markdown", () => {
         assistant("first", `## Known, pre-existing\n${body}\n\nsee \`money.test.ts\` for the rest`),
         assistant("second", "ANSWER-END"),
       ]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => {
-            const renderer = useRenderer()
-            const capture = (event: CliRendererExternalOutputEvent) => {
-              savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
-              Deferred.doneUnsafe(firstCommit, Effect.void)
-            }
-            renderer.on("external_output", capture)
-            onCleanup(() => renderer.off("external_output", capture))
-            return (
-              <NativeTranscript
-                items={items}
-                settled
-                streaming={false}
-                footerHeight={3}
-                expanded={false}
-                disclosure="collapsed"
-                displayRevision={0}
-                overlayOpen={false}
-                renderItems={(visible) => (
-                  <MessageList
-                    items={visible}
-                    disclosure="collapsed"
-                    syntaxStyle={syntaxStyle}
-                    streaming={false}
-                  />
-                )}
-              >
-                <box />
-              </NativeTranscript>
-            )
-          },
-          { width: 60, height: 14 },
-        ),
+      const setup = yield* renderScoped(
+        () => {
+          const renderer = useRenderer()
+          const capture = (event: CliRendererExternalOutputEvent) => {
+            savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+            Deferred.doneUnsafe(firstCommit, Effect.void)
+          }
+          renderer.on("external_output", capture)
+          onCleanup(() => renderer.off("external_output", capture))
+          return (
+            <NativeTranscript
+              items={items}
+              settled
+              streaming={false}
+              footerHeight={3}
+              expanded={false}
+              disclosure="collapsed"
+              displayRevision={0}
+              overlayOpen={false}
+              renderItems={(visible) => (
+                <MessageList
+                  items={visible}
+                  disclosure="collapsed"
+                  syntaxStyle={syntaxStyle}
+                  streaming={false}
+                />
+              )}
+            >
+              <box />
+            </NativeTranscript>
+          )
+        },
+        { width: 60, height: 14 },
       )
       yield* Effect.promise(() => setup.flush())
       yield* Deferred.await(firstCommit)
@@ -3143,57 +3072,55 @@ const longHistory = (): SessionItem[] => {
 }
 
 describe("native transcript footer room", () => {
-  it.live(
+  it.scopedLive(
     "a long session leaves the status line and the tray on screen",
     () =>
       Effect.gen(function* () {
         const firstCommit = yield* Deferred.make<void>()
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => {
-              const renderer = useRenderer()
-              const capture = () => Deferred.doneUnsafe(firstCommit, Effect.void)
-              renderer.on("external_output", capture)
-              onCleanup(() => renderer.off("external_output", capture))
-              const [footer, setFooter] = createSignal(4)
-              return (
-                <box flexDirection="column" flexGrow={1}>
-                  <NativeTranscript
-                    items={longHistory()}
-                    settled
-                    streaming={false}
-                    footerHeight={footer()}
-                    expanded={false}
-                    disclosure="collapsed"
-                    displayRevision={0}
-                    overlayOpen={false}
-                    renderItems={(visible) => (
-                      <MessageList
-                        items={visible}
-                        disclosure="collapsed"
-                        syntaxStyle={syntaxStyle}
-                        streaming={false}
-                      />
-                    )}
-                  >
-                    <box />
-                  </NativeTranscript>
-                  <box
-                    flexDirection="column"
-                    flexShrink={0}
-                    onSizeChange={function () {
-                      setFooter(this.height)
-                    }}
-                  >
-                    <text>COMPOSER</text>
-                    <text>STATUS-LINE</text>
-                    <text>TRAY-ROW</text>
-                  </box>
+        const setup = yield* renderScoped(
+          () => {
+            const renderer = useRenderer()
+            const capture = () => Deferred.doneUnsafe(firstCommit, Effect.void)
+            renderer.on("external_output", capture)
+            onCleanup(() => renderer.off("external_output", capture))
+            const [footer, setFooter] = createSignal(4)
+            return (
+              <box flexDirection="column" flexGrow={1}>
+                <NativeTranscript
+                  items={longHistory()}
+                  settled
+                  streaming={false}
+                  footerHeight={footer()}
+                  expanded={false}
+                  disclosure="collapsed"
+                  displayRevision={0}
+                  overlayOpen={false}
+                  renderItems={(visible) => (
+                    <MessageList
+                      items={visible}
+                      disclosure="collapsed"
+                      syntaxStyle={syntaxStyle}
+                      streaming={false}
+                    />
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+                <box
+                  flexDirection="column"
+                  flexShrink={0}
+                  onSizeChange={function () {
+                    setFooter(this.height)
+                  }}
+                >
+                  <text>COMPOSER</text>
+                  <text>STATUS-LINE</text>
+                  <text>TRAY-ROW</text>
                 </box>
-              )
-            },
-            { width: 107, height: 26 },
-          ),
+              </box>
+            )
+          },
+          { width: 107, height: 26 },
         )
         yield* Deferred.await(firstCommit)
         // The footer region is the terminal less the rows kept for scrollback:
@@ -3212,11 +3139,12 @@ describe("native transcript footer room", () => {
 // ── native transcript mouse ─────────────────────────────────────────────────
 
 describe("native transcript mouse tracking", () => {
-  it.live("native history leaves the wheel to the terminal; the expanded view takes it back", () =>
-    Effect.gen(function* () {
-      const [expanded, setExpanded] = createSignal(false)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
+  it.scopedLive(
+    "native history leaves the wheel to the terminal; the expanded view takes it back",
+    () =>
+      Effect.gen(function* () {
+        const [expanded, setExpanded] = createSignal(false)
+        const setup = yield* renderScoped(() => (
           <NativeTranscript
             items={[]}
             settled
@@ -3230,17 +3158,16 @@ describe("native transcript mouse tracking", () => {
           >
             <box />
           </NativeTranscript>
-        )),
-      )
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(setup.renderer.useMouse).toBe(false)
-      setExpanded(true)
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(setup.renderer.useMouse).toBe(true)
-      setExpanded(false)
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(setup.renderer.useMouse).toBe(false)
-    }),
+        ))
+        yield* Effect.promise(() => setup.renderOnce())
+        expect(setup.renderer.useMouse).toBe(false)
+        setExpanded(true)
+        yield* Effect.promise(() => setup.renderOnce())
+        expect(setup.renderer.useMouse).toBe(true)
+        setExpanded(false)
+        yield* Effect.promise(() => setup.renderOnce())
+        expect(setup.renderer.useMouse).toBe(false)
+      }),
   )
 })
 
@@ -3358,7 +3285,7 @@ const transcript = (options: {
 }
 
 describe("native transcript rebuild", () => {
-  it.live(
+  it.scopedLive(
     "a message rebuilt in the other key order does not replay scrollback",
     () =>
       Effect.gen(function* () {
@@ -3369,22 +3296,20 @@ describe("native transcript rebuild", () => {
           streamedMessage("second", "TAIL"),
         ])
 
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () =>
-              transcript({
-                items,
-                onRenderer: (renderer) => {
-                  hold.applyTo(renderer)
-                  renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
-                    committedText.push(
-                      new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
-                    )
-                  })
-                },
-              }),
-            { width: 60, height: 14 },
-          ),
+        const setup = yield* renderScoped(
+          () =>
+            transcript({
+              items,
+              onRenderer: (renderer) => {
+                hold.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
         )
         yield* Effect.promise(() => setup.flush())
         yield* hold.held
@@ -3461,7 +3386,7 @@ const transcriptCommit = (options: {
 }
 
 describe("native transcript commit handover", () => {
-  it.live(
+  it.scopedLive(
     "an overlay that takes the screen mid-commit leaves the item in the live view",
     () =>
       Effect.gen(function* () {
@@ -3470,24 +3395,22 @@ describe("native transcript commit handover", () => {
         const [overlayOpen, setOverlayOpen] = createSignal(false)
         const committedText: string[] = []
 
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () =>
-              transcriptCommit({
-                items,
-                displayRevision: () => 0,
-                overlayOpen,
-                onRenderer: (renderer) => {
-                  hold.applyTo(renderer)
-                  renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
-                    committedText.push(
-                      new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
-                    )
-                  })
-                },
-              }),
-            { width: 60, height: 14 },
-          ),
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen,
+              onRenderer: (renderer) => {
+                hold.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
         )
         yield* Effect.promise(() => setup.flush())
         yield* hold.held
@@ -3522,7 +3445,7 @@ describe("native transcript commit handover", () => {
     15_000,
   )
 
-  it.live(
+  it.scopedLive(
     "a display clear cancels a commit that is still settling",
     () =>
       Effect.gen(function* () {
@@ -3531,24 +3454,22 @@ describe("native transcript commit handover", () => {
         const committedText: string[] = []
         const items = [assistant("first", longBody("CLEARED-ITEM")), assistant("second", "TAIL")]
 
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () =>
-              transcriptCommit({
-                items,
-                displayRevision,
-                overlayOpen: () => false,
-                onRenderer: (renderer) => {
-                  hold.applyTo(renderer)
-                  renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
-                    committedText.push(
-                      new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
-                    )
-                  })
-                },
-              }),
-            { width: 60, height: 14 },
-          ),
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                hold.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
         )
         yield* Effect.promise(() => setup.flush())
         yield* hold.held
@@ -3575,7 +3496,7 @@ describe("native transcript commit handover", () => {
    * `ESC[nS` and drops the rows instead of scrolling them away. Both reported
    * success to the component while the terminal kept no history at all.
    */
-  it.live(
+  it.scopedLive(
     "a tall live view still leaves the terminal rows to scroll",
     () =>
       Effect.gen(function* () {
@@ -3588,27 +3509,25 @@ describe("native transcript commit handover", () => {
         const footerHeights: number[] = []
         let committedFooterHeights: number[] = []
 
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () =>
-              transcriptCommit({
-                items,
-                displayRevision: () => 0,
-                overlayOpen: () => false,
-                onRenderer: (renderer) => {
-                  // Record the footer height the renderer actually holds at the
-                  // moment rows are handed to scrollback, and on every frame,
-                  // so a height that only exists mid-commit is still seen.
-                  renderer.on("external_output", () => {
-                    committedFooterHeights.push(renderer.footerHeight)
-                  })
-                  renderer.on("frame", () => {
-                    footerHeights.push(renderer.footerHeight)
-                  })
-                },
-              }),
-            { width: 60, height: screenHeight },
-          ),
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                // Record the footer height the renderer actually holds at the
+                // moment rows are handed to scrollback, and on every frame,
+                // so a height that only exists mid-commit is still seen.
+                renderer.on("external_output", () => {
+                  committedFooterHeights.push(renderer.footerHeight)
+                })
+                renderer.on("frame", () => {
+                  footerHeights.push(renderer.footerHeight)
+                })
+              },
+            }),
+          { width: 60, height: screenHeight },
         )
         for (let pass = 0; pass < 6; pass++) {
           yield* Effect.promise(() => setup.flush())
@@ -3629,7 +3548,7 @@ describe("native transcript commit handover", () => {
     15_000,
   )
 
-  it.live(
+  it.scopedLive(
     "items reach scrollback in transcript order while an earlier commit still settles",
     () =>
       Effect.gen(function* () {
@@ -3641,24 +3560,22 @@ describe("native transcript commit handover", () => {
         ]
         const committedText: string[] = []
 
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () =>
-              transcriptCommit({
-                items,
-                displayRevision: () => 0,
-                overlayOpen: () => false,
-                onRenderer: (renderer) => {
-                  hold.applyTo(renderer)
-                  renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
-                    committedText.push(
-                      new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
-                    )
-                  })
-                },
-              }),
-            { width: 60, height: 14 },
-          ),
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                hold.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
         )
         yield* Effect.promise(() => setup.flush())
         // The first item's commit waits in `settle`; the second is asked for
@@ -3723,35 +3640,33 @@ describe("sticky last prompt", () => {
   ) =>
     Effect.gen(function* () {
       let extensionsLoaded = () => false
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => {
-            extensionsLoaded = useExtensionUI().loaded
-            return (
-              <NativeTranscript
-                items={items()}
-                settled
-                streaming={options.streaming === true}
-                footerHeight={options.footer ?? 3}
-                expanded={false}
-                disclosure="collapsed"
-                displayRevision={0}
-                overlayOpen={false}
-                renderItems={(visible, streaming) => (
-                  <MessageList
-                    items={visible}
-                    disclosure="collapsed"
-                    syntaxStyle={syntaxStyle}
-                    streaming={streaming}
-                  />
-                )}
-              >
-                <box />
-              </NativeTranscript>
-            )
-          },
-          { width: 50, height: options.height ?? 16 },
-        ),
+      const setup = yield* renderScoped(
+        () => {
+          extensionsLoaded = useExtensionUI().loaded
+          return (
+            <NativeTranscript
+              items={items()}
+              settled
+              streaming={options.streaming === true}
+              footerHeight={options.footer ?? 3}
+              expanded={false}
+              disclosure="collapsed"
+              displayRevision={0}
+              overlayOpen={false}
+              renderItems={(visible, streaming) => (
+                <MessageList
+                  items={visible}
+                  disclosure="collapsed"
+                  syntaxStyle={syntaxStyle}
+                  streaming={streaming}
+                />
+              )}
+            >
+              <box />
+            </NativeTranscript>
+          )
+        },
+        { width: 50, height: options.height ?? 16 },
       )
       yield* Effect.promise(() => setup.flush()).pipe(
         Effect.repeat({ until: () => extensionsLoaded() }),
@@ -3761,7 +3676,7 @@ describe("sticky last prompt", () => {
       return setup
     })
 
-  it.live("no pinned row while the prompt is on screen", () =>
+  it.scopedLive("no pinned row while the prompt is on screen", () =>
     Effect.gen(function* () {
       const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 1)], {})
       expect(count(renderFrame(setup), "ASK-ONE")).toBe(1)
@@ -3769,7 +3684,7 @@ describe("sticky last prompt", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a streaming reply that pushes the prompt out above pins it in one row", () =>
+  it.scopedLive("a streaming reply that pushes the prompt out above pins it in one row", () =>
     Effect.gen(function* () {
       const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 20)], {
         streaming: true,
@@ -3782,7 +3697,7 @@ describe("sticky last prompt", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a prompt committed far into native history stays pinned, cut to the width", () =>
+  it.scopedLive("a prompt committed far into native history stays pinned, cut to the width", () =>
     Effect.gen(function* () {
       const long = `ASK-LONG ${"word ".repeat(40)}`
       const setup = yield* mountTranscript(() => [prompt("p1", long), reply("r1", 20)], {})
@@ -3793,44 +3708,48 @@ describe("sticky last prompt", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("the pinned row follows the branch in view, and a queued follow-up is not posted", () =>
-    Effect.gen(function* () {
-      const [items, setItems] = createSignal<SessionItem[]>([
-        prompt("p1", "ASK-ONE"),
-        reply("r1", 20),
-        // Waiting in the queue: the reader has not seen it run.
-        userMessage("regular-message", "q1", "QUEUED-ASK", "queued"),
-      ])
-      const setup = yield* mountTranscript(items, { streaming: true })
-      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
-      expect(frame).not.toContain("↑ QUEUED-ASK")
-      // Another branch: its own last prompt, derived from its own messages.
-      setItems([prompt("p2", "ASK-TWO"), reply("r2", 20)])
-      yield* waitForFrame(
-        setup,
-        (next) => next.includes("↑ ASK-TWO") && !next.includes("ASK-ONE"),
-        "pinned on the other branch",
-      )
-    }).pipe(Effect.timeout("10 seconds")),
-  )
-
-  it.live("a message another agent sent after the reader's prompt leaves that prompt pinned", () =>
-    Effect.gen(function* () {
-      const setup = yield* mountTranscript(
-        () => [
+  it.scopedLive(
+    "the pinned row follows the branch in view, and a queued follow-up is not posted",
+    () =>
+      Effect.gen(function* () {
+        const [items, setItems] = createSignal<SessionItem[]>([
           prompt("p1", "ASK-ONE"),
           reply("r1", 20),
-          extensionSent("w1", "PARENT-SAYS"),
-          reply("r2", 20),
-        ],
-        { streaming: true },
-      )
-      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
-      expect(frame).not.toContain("↑ PARENT-SAYS")
-    }).pipe(Effect.timeout("10 seconds")),
+          // Waiting in the queue: the reader has not seen it run.
+          userMessage("regular-message", "q1", "QUEUED-ASK", "queued"),
+        ])
+        const setup = yield* mountTranscript(items, { streaming: true })
+        const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+        expect(frame).not.toContain("↑ QUEUED-ASK")
+        // Another branch: its own last prompt, derived from its own messages.
+        setItems([prompt("p2", "ASK-TWO"), reply("r2", 20)])
+        yield* waitForFrame(
+          setup,
+          (next) => next.includes("↑ ASK-TWO") && !next.includes("ASK-ONE"),
+          "pinned on the other branch",
+        )
+      }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a steer the reader typed that joined the running turn is the pinned prompt", () =>
+  it.scopedLive(
+    "a message another agent sent after the reader's prompt leaves that prompt pinned",
+    () =>
+      Effect.gen(function* () {
+        const setup = yield* mountTranscript(
+          () => [
+            prompt("p1", "ASK-ONE"),
+            reply("r1", 20),
+            extensionSent("w1", "PARENT-SAYS"),
+            reply("r2", 20),
+          ],
+          { streaming: true },
+        )
+        const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+        expect(frame).not.toContain("↑ PARENT-SAYS")
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a steer the reader typed that joined the running turn is the pinned prompt", () =>
     Effect.gen(function* () {
       const steer: ListMessage = {
         ...userMessage("interjection-message", "s1", "STEER-NOW", "steer"),
@@ -3845,25 +3764,27 @@ describe("sticky last prompt", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("in a /btw fork the fork's question is the pinned prompt, as the reader asked it", () =>
-    Effect.gen(function* () {
-      const asked: ListMessage = {
-        ...userMessage(
-          "regular-message",
-          "btw-1",
-          forkQuestionText(SessionId.make("01a0ca0cb3e7"), "WHY-THIS"),
-          "queued",
-        ),
-        pendingMode: absent,
-        metadata: { customType: BTW_QUESTION_TYPE, extensionId: "@gent/btw" },
-      }
-      const setup = yield* mountTranscript(() => [asked, reply("r1", 20)], { streaming: true })
-      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ WHY-THIS"), "pinned")
-      expect(frame).not.toContain("↑ A side question")
-    }).pipe(Effect.timeout("10 seconds")),
+  it.scopedLive(
+    "in a /btw fork the fork's question is the pinned prompt, as the reader asked it",
+    () =>
+      Effect.gen(function* () {
+        const asked: ListMessage = {
+          ...userMessage(
+            "regular-message",
+            "btw-1",
+            forkQuestionText(SessionId.make("01a0ca0cb3e7"), "WHY-THIS"),
+            "queued",
+          ),
+          pendingMode: absent,
+          metadata: { customType: BTW_QUESTION_TYPE, extensionId: "@gent/btw" },
+        }
+        const setup = yield* mountTranscript(() => [asked, reply("r1", 20)], { streaming: true })
+        const frame = yield* waitForFrame(setup, (next) => next.includes("↑ WHY-THIS"), "pinned")
+        expect(frame).not.toContain("↑ A side question")
+      }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live(
+  it.scopedLive(
     "a streaming reply's growth reads no history item: the pin work per frame is flat in history length",
     () =>
       Effect.gen(function* () {
@@ -3888,32 +3809,30 @@ describe("sticky last prompt", () => {
         const tail = history.at(-1)
         const [grown, setGrown] = createSignal(1)
         let extensionsLoaded = () => false
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => {
-              extensionsLoaded = useExtensionUI().loaded
-              return (
-                <NativeTranscript
-                  items={history}
-                  settled
-                  streaming
-                  footerHeight={3}
-                  expanded={false}
-                  disclosure="collapsed"
-                  displayRevision={0}
-                  overlayOpen={false}
-                  renderItems={(visible) => (
-                    <Show when={visible[0] === tail} fallback={<text>row</text>}>
-                      <text>{Array.from({ length: grown() }, () => "GROW").join("\n")}</text>
-                    </Show>
-                  )}
-                >
-                  <box />
-                </NativeTranscript>
-              )
-            },
-            { width: 50, height: 16 },
-          ),
+        const setup = yield* renderScoped(
+          () => {
+            extensionsLoaded = useExtensionUI().loaded
+            return (
+              <NativeTranscript
+                items={history}
+                settled
+                streaming
+                footerHeight={3}
+                expanded={false}
+                disclosure="collapsed"
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible) => (
+                  <Show when={visible[0] === tail} fallback={<text>row</text>}>
+                    <text>{Array.from({ length: grown() }, () => "GROW").join("\n")}</text>
+                  </Show>
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width: 50, height: 16 },
         )
         yield* Effect.promise(() => setup.flush()).pipe(
           Effect.repeat({ until: () => extensionsLoaded() }),
@@ -3931,7 +3850,7 @@ describe("sticky last prompt", () => {
     25_000,
   )
 
-  it.live("a terminal too short for the row keeps the live tail and pins nothing", () =>
+  it.scopedLive("a terminal too short for the row keeps the live tail and pins nothing", () =>
     Effect.gen(function* () {
       // Two rows left for the transcript: the live tail keeps them both.
       const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 20)], {
@@ -3957,39 +3876,37 @@ describe("sticky last prompt", () => {
     Effect.gen(function* () {
       let extensionsLoaded = () => false
       const committed: string[] = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => {
-            extensionsLoaded = useExtensionUI().loaded
-            useRenderer().on("external_output", (event: CliRendererExternalOutputEvent) => {
-              committed.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
-            })
-            return (
-              <NativeTranscript
-                items={rows.map((row) => row.item)}
-                settled
-                streaming={false}
-                footerHeight={3}
-                expanded={false}
-                disclosure="collapsed"
-                displayRevision={0}
-                overlayOpen={false}
-                renderItems={(visible) => {
-                  const row = rows.find((candidate) => candidate.item === visible[0])
-                  const name = row?.name ?? ""
-                  const text = Array.from({ length: row?.lines ?? 1 }, (_, index) => {
-                    if (index === 0) return `${name.toUpperCase()}-TOP`
-                    return `${name}-${index}`
-                  }).join("\n")
-                  return <text>{text}</text>
-                }}
-              >
-                <box />
-              </NativeTranscript>
-            )
-          },
-          { width: 50, height: 16 },
-        ),
+      const setup = yield* renderScoped(
+        () => {
+          extensionsLoaded = useExtensionUI().loaded
+          useRenderer().on("external_output", (event: CliRendererExternalOutputEvent) => {
+            committed.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+          })
+          return (
+            <NativeTranscript
+              items={rows.map((row) => row.item)}
+              settled
+              streaming={false}
+              footerHeight={3}
+              expanded={false}
+              disclosure="collapsed"
+              displayRevision={0}
+              overlayOpen={false}
+              renderItems={(visible) => {
+                const row = rows.find((candidate) => candidate.item === visible[0])
+                const name = row?.name ?? ""
+                const text = Array.from({ length: row?.lines ?? 1 }, (_, index) => {
+                  if (index === 0) return `${name.toUpperCase()}-TOP`
+                  return `${name}-${index}`
+                }).join("\n")
+                return <text>{text}</text>
+              }}
+            >
+              <box />
+            </NativeTranscript>
+          )
+        },
+        { width: 50, height: 16 },
       )
       yield* Effect.promise(() => setup.flush()).pipe(
         Effect.repeat({ until: () => extensionsLoaded() }),
@@ -3999,7 +3916,7 @@ describe("sticky last prompt", () => {
       return { setup, committed }
     })
 
-  it.live("under the pinned row every line of the live tail stays in view", () =>
+  it.scopedLive("under the pinned row every line of the live tail stays in view", () =>
     Effect.gen(function* () {
       // The tail's 11 rows fill the live rows exactly; the pinned row takes one.
       const { setup, committed } = yield* mountExact([
@@ -4159,23 +4076,21 @@ describe("tool group rows", () => {
   })
   // The session in view runs where the TUI launched unless a test says otherwise.
   const groupRows = (items: SessionItem[], width: number, sessionCwd = cwd) =>
-    Effect.promise(() =>
-      renderWithProviders(
-        () => (
-          <MessageList
-            items={items}
-            disclosure="preview"
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        ),
-        {
-          width,
-          height: 20,
-          cwd,
-          ...sessionAt(sessionCwd),
-        },
+    renderScoped(
+      () => (
+        <MessageList
+          items={items}
+          disclosure="preview"
+          syntaxStyle={syntaxStyle}
+          streaming={false}
+        />
       ),
+      {
+        width,
+        height: 20,
+        cwd,
+        ...sessionAt(sessionCwd),
+      },
     ).pipe(
       Effect.map((setup) =>
         renderFrame(setup)
@@ -4190,18 +4105,19 @@ describe("tool group rows", () => {
       .map((line) => line.trim().split(/\s{2,}/)[0])
       .toArray()
 
-  it.live("the group row and the read frame name the file from the cwd", () =>
+  it.scopedLive("the group row and the read frame name the file from the cwd", () =>
     Effect.gen(function* () {
       const call = readCall("call-read-path", `${cwd}/apps/tui/src/app.tsx`)
       const rows = yield* groupRows([assistantToolMessage("assistant-read-path", call)], 80)
       expect(callLabels(rows)).toEqual(["└ read apps/tui/src/app.tsx"])
       const ReadToolRenderer = builtinRenderer("read")
-      const frame = yield* Effect.promise(() =>
-        renderWithProviders(() => <ReadToolRenderer expanded={false} toolCall={call} />, {
+      const frame = yield* renderScoped(
+        () => <ReadToolRenderer expanded={false} toolCall={call} />,
+        {
           width: 80,
           height: 10,
           cwd,
-        }),
+        },
       )
       const header = renderFrame(frame).split("\n")[0] ?? ""
       expect(header).toContain("read apps/tui/src/app.tsx")
@@ -4209,7 +4125,7 @@ describe("tool group rows", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("paths read from the cwd of the session in view, not the launch cwd", () =>
+  it.scopedLive("paths read from the cwd of the session in view, not the launch cwd", () =>
     Effect.gen(function* () {
       const inLaunch = readCall("call-read-launch", `${cwd}/config.ts`)
       const inSession = readCall("call-read-session", "/work/other/src/app.tsx")
@@ -4223,19 +4139,20 @@ describe("tool group rows", () => {
       )
       expect(callLabels(rows)).toEqual([`└ read ${cwd}/config.ts`, "└ read src/app.tsx"])
       const ReadToolRenderer = builtinRenderer("read")
-      const frame = yield* Effect.promise(() =>
-        renderWithProviders(() => <ReadToolRenderer expanded={false} toolCall={inSession} />, {
+      const frame = yield* renderScoped(
+        () => <ReadToolRenderer expanded={false} toolCall={inSession} />,
+        {
           width: 80,
           height: 10,
           cwd,
           ...sessionAt("/work/other"),
-        }),
+        },
       )
       expect(renderFrame(frame).split("\n")[0]).toContain("read src/app.tsx")
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a path outside the cwd keeps its full spelling", () =>
+  it.scopedLive("a path outside the cwd keeps its full spelling", () =>
     Effect.gen(function* () {
       const call = readCall("call-read-outside", "/etc/hosts")
       const rows = yield* groupRows([assistantToolMessage("assistant-read-outside", call)], 80)
@@ -4243,15 +4160,13 @@ describe("tool group rows", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a frame header with a long path keeps one line", () =>
+  it.scopedLive("a frame header with a long path keeps one line", () =>
     Effect.gen(function* () {
       const path = "/var/lib/very/long/path/that/does/not/fit/in/forty/columns/app.tsx"
       const ReadToolRenderer = builtinRenderer("read")
-      const frame = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => <ReadToolRenderer expanded={false} toolCall={readCall("call-long", path)} />,
-          { width: 40, height: 10, cwd },
-        ),
+      const frame = yield* renderScoped(
+        () => <ReadToolRenderer expanded={false} toolCall={readCall("call-long", path)} />,
+        { width: 40, height: 10, cwd },
       )
       const lines = renderFrame(frame).split("\n")
       expect(lines[0]).toContain("read")
@@ -4260,7 +4175,7 @@ describe("tool group rows", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a long row keeps one line and names no call id near 60 columns", () =>
+  it.scopedLive("a long row keeps one line and names no call id near 60 columns", () =>
     Effect.gen(function* () {
       const call: ToolCall = {
         id: "dbg-review",

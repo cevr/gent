@@ -6,7 +6,7 @@ import type { TextareaRenderable } from "@opentui/core"
 import { BranchId, SessionId } from "@gent/core/extensions/api"
 import type { ForkViewType } from "@gent/extensions/client"
 import btwExtension, { ForkPane, makeForkPane } from "../../src/extensions/btw.client"
-import { createMockClient, renderFrame, renderWithProviders } from "../render-harness-boundary"
+import { createMockClient, renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 import {
   makeClientExtensionRuntime,
@@ -81,11 +81,9 @@ describe("fork pane", () => {
           shell: { cast: queue.cast },
         })
         yield* queue.drain
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(() => (
-            <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
-          )),
-        )
+        const setup = yield* renderScoped(() => (
+          <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+        ))
         expect(renderFrame(setup)).toContain("btw · fork")
         controller.ask("why?")
         expect(Option.isSome(controller.pending())).toBe(true)
@@ -228,11 +226,9 @@ describe("fork pane", () => {
         shell: { cast: queue.cast },
       })
       yield* queue.drain
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+      ))
       yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
       yield* Effect.promise(() => setup.mockInput.typeText("and then?"))
       yield* waitForFrame(setup, (frame) => frame.includes("ask › and then?"), "draft")
@@ -253,14 +249,12 @@ describe("fork pane", () => {
       })
       yield* queue.drain
       let composer = Option.none<TextareaRenderable>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <box flexDirection="column">
-            <textarea focused ref={(node: TextareaRenderable) => (composer = Option.some(node))} />
-            <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
-          </box>
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <box flexDirection="column">
+          <textarea focused ref={(node: TextareaRenderable) => (composer = Option.some(node))} />
+          <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+        </box>
+      ))
       yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText("pasted\nquestion"))
       yield* waitForFrame(setup, (frame) => frame.includes("ask › pasted question"), "draft")
@@ -283,11 +277,9 @@ describe("fork pane", () => {
         { ...onSession, shell: { cast: queue.cast } },
       )
       yield* queue.drain
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+      ))
       controller.ask("why?")
       yield* queue.drain
       yield* waitForFrame(setup, (frame) => frame.includes("model unavailable"), "error")
@@ -329,7 +321,7 @@ describe("fork pane", () => {
 })
 
 describe("fork pane across a session switch", () => {
-  it.live(
+  it.scopedLive(
     "a fork reply that lands after the shell moved never becomes the new session's fork",
     () =>
       Effect.gen(function* () {
@@ -370,7 +362,7 @@ describe("fork pane across a session switch", () => {
         )
         const slash = Option.getOrThrow(Option.fromUndefinedOr(btw.onSlash))
         const pane = Option.getOrThrow(Option.fromUndefinedOr(contributions.widgets?.[0]))
-        const setup = yield* Effect.promise(() => renderWithProviders(() => pane.component()))
+        const setup = yield* renderScoped(() => pane.component())
 
         slash("why?")
         yield* Deferred.await(progressAsked).pipe(Effect.timeout("2 seconds"))

@@ -6,7 +6,7 @@ import { WAKE_EXTENSION_ID, type WakePendingType } from "@gent/extensions/client
 import { BranchId, SessionId } from "@gent/core/extensions/api"
 import wakeExtension, { WakeTray, wakeTrayLines } from "../../src/extensions/wake.client"
 import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
-import { renderFrame, renderWithProviders } from "../render-harness-boundary"
+import { renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 
 // ── wake tray ───────────────────────────────────────────────────────────────
@@ -131,12 +131,10 @@ describe("Wake tray", () => {
     }),
   )
 
-  it.live("shows pending entries and hides once none remain", () =>
+  it.scopedLive("shows pending entries and hides once none remain", () =>
     Effect.gen(function* () {
       const [value, setValue] = createSignal<Option.Option<WakePendingType>>(Option.some(pending))
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <WakeTray pending={value} now={() => 1_000_000} />),
-      )
+      const setup = yield* renderScoped(() => <WakeTray pending={value} now={() => 1_000_000} />)
       yield* waitForFrame(setup, () => renderFrame(setup).includes("alarm in"), "tray")
       const frame = renderFrame(setup)
       expect(frame).toContain("◷ alarm in 1m 35s · check the deploy")

@@ -22,9 +22,8 @@ import {
   createMockClient,
   createMockRuntime,
   destroyRenderSetup,
-  renderScoped,
-  renderWithProviders,
   renderFrame,
+  renderScoped,
 } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import { onMount } from "solid-js"
@@ -256,7 +255,7 @@ describe("Auth route", () => {
   )
   // The success flash clears itself after a while. A pane that closes first
   // stops that clock with it, so nothing writes to the closed pane later.
-  it.live("closing the pane stops its success flash", () =>
+  it.scopedLive("closing the pane stops its success flash", () =>
     Effect.gen(function* () {
       const forked: Array<Fiber.Fiber<unknown, unknown>> = []
       const base = createMockRuntime()
@@ -284,9 +283,10 @@ describe("Auth route", () => {
           setKey: () => Effect.void,
         },
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, { client, runtime }),
-      )
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime,
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())

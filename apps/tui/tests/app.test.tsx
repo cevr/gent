@@ -59,13 +59,12 @@ import {
   resolveInteractiveBootstrap,
 } from "../src/app"
 import {
+  applySnapshotAgent,
   createMockClient,
   createMockRuntime,
   createMutableRuntime,
   renderFrame,
   renderScoped,
-  renderWithProviders,
-  applySnapshotAgent,
   TerminalOutput,
 } from "./render-harness-boundary"
 import { LinkOpener, LinkOpenerError } from "../src/os"
@@ -546,28 +545,26 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
       },
     })
     let ctx = Option.none<ClientContextValue>()
-    const setup = yield* Effect.promise(() =>
-      renderWithProviders(
-        () => (
-          <>
-            <App />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          runtime: createMockRuntime(),
-          builtins: [...builtinClientModules, activityProbe, ...extensions],
-          height,
-          initialSession: {
-            id: sessionId,
-            activeBranchId: branchId,
-            name: "Running",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        },
+    const setup = yield* renderScoped(
+      () => (
+        <>
+          <App />
+          <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+        </>
       ),
+      {
+        client,
+        runtime: createMockRuntime(),
+        builtins: [...builtinClientModules, activityProbe, ...extensions],
+        height,
+        initialSession: {
+          id: sessionId,
+          activeBranchId: branchId,
+          name: "Running",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      },
     )
     setup.renderer.destroy = () => {
       shutdowns += 1
@@ -589,7 +586,7 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
     }
   })
 
-type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
+type TestSetup = Effect.Success<ReturnType<typeof renderScoped>>
 
 const ESC_CUE = "esc again to clear"
 const CTRL_C_CUE = "ctrl+c again to exit"
@@ -623,20 +620,18 @@ const mountIdleSession = (
       branch: { getTree: () => Effect.succeed([]) },
       message: recordSends(sent),
     })
-    const setup = yield* Effect.promise(() =>
-      renderWithProviders(() => <App />, {
-        client,
-        runtime,
-        ...terminal,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
-      }),
-    )
+    const setup = yield* renderScoped(() => <App />, {
+      client,
+      runtime,
+      ...terminal,
+      initialSession: {
+        id: SessionId.make("session-a"),
+        activeBranchId: BranchId.make("branch-a"),
+        name: "Session A",
+        createdAt: dateFromMillis(0),
+        updatedAt: dateFromMillis(0),
+      },
+    })
     yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
     // `useEnv().shutdown` is a no-op in the harness, so count the renderer
     // teardown the controller performs alongside it.
@@ -961,26 +956,24 @@ describe("notice rows", () => {
 })
 
 describe("App auth gate", () => {
-  it.live("shares one terminal resize source across App and cleans it up", () =>
+  it.scopedLive("shares one terminal resize source across App and cleans it up", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <App />
-              <TerminalDimensionsProbe />
-            </>
-          ),
-          {
-            initialSession: {
-              id: SessionId.make("session-resize"),
-              activeBranchId: BranchId.make("branch-resize"),
-              name: "Resize",
-              createdAt: dateFromMillis(0),
-              updatedAt: dateFromMillis(0),
-            },
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <App />
+            <TerminalDimensionsProbe />
+          </>
         ),
+        {
+          initialSession: {
+            id: SessionId.make("session-resize"),
+            activeBranchId: BranchId.make("branch-resize"),
+            name: "Resize",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
       )
       expect(setup.renderer.listenerCount("resize")).toBe(1)
       expect(renderFrame(setup)).toContain("80x24")
@@ -1400,7 +1393,7 @@ describe("App auth gate", () => {
   )
   // Mermaid draws inline in the transcript. No key opens a full-screen
   // viewer over the session: panes dock, and the composer keeps the keys.
-  it.live("ctrl+shift+m keeps the session view and its composer", () =>
+  it.scopedLive("ctrl+shift+m keeps the session view and its composer", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
       view.setup.mockInput.pressKey("m", { ctrl: true, shift: true })
@@ -1418,7 +1411,7 @@ describe("App auth gate", () => {
   // A render throw replaces the whole view. The screen it leaves names a way
   // out, ctrl+c takes it and prints the way back, and the client log keeps
   // the error.
-  it.live("the fatal screen logs the error and exits on ctrl+c with the resume hint", () =>
+  it.scopedLive("the fatal screen logs the error and exits on ctrl+c with the resume hint", () =>
     Effect.gen(function* () {
       const [broken, setBroken] = createSignal(false)
       // A widget whose render throws once `broken` turns true: its decode fails.
@@ -1440,24 +1433,22 @@ describe("App auth gate", () => {
       const record = (msg: string) => logged.push(msg)
       const written: Array<string> = []
       let shutdowns = 0
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App />, {
-          client: createMockClient({
-            auth: { listProviders: () => Effect.succeed([]) },
-            branch: { getTree: () => Effect.succeed([]) },
-          }),
-          builtins: [...builtinClientModules, extension],
-          log: { debug: () => {}, info: () => {}, warn: () => {}, error: record },
-          writeTerminal: (text) => written.push(text),
-          initialSession: {
-            id: SessionId.make("session-fatal"),
-            activeBranchId: BranchId.make("branch-fatal"),
-            name: "Fatal",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
+      const setup = yield* renderScoped(() => <App />, {
+        client: createMockClient({
+          auth: { listProviders: () => Effect.succeed([]) },
+          branch: { getTree: () => Effect.succeed([]) },
         }),
-      )
+        builtins: [...builtinClientModules, extension],
+        log: { debug: () => {}, info: () => {}, warn: () => {}, error: record },
+        writeTerminal: (text) => written.push(text),
+        initialSession: {
+          id: SessionId.make("session-fatal"),
+          activeBranchId: BranchId.make("branch-fatal"),
+          name: "Fatal",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       const unmount = setup.renderer.destroy.bind(setup.renderer)
       setup.renderer.destroy = () => {
@@ -1531,7 +1522,7 @@ describe("App auth gate", () => {
   )
   // Esc never quits: on a draft the first press arms and says so, and the
   // second clears the draft.
-  it.live("Esc Esc on a draft clears it and never quits", () =>
+  it.scopedLive("Esc Esc on a draft clears it and never quits", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
       yield* Effect.promise(() => view.setup.mockInput.typeText("keep me"))
@@ -1555,7 +1546,7 @@ describe("App auth gate", () => {
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("a keybind between two escapes disarms the clear", () =>
+  it.scopedLive("a keybind between two escapes disarms the clear", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
       yield* Effect.promise(() => view.setup.mockInput.typeText("keep me"))
@@ -1575,7 +1566,7 @@ describe("App auth gate", () => {
       expect(frame).toContain("keep me")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("one ctrl+c on an idle empty composer draws the cue and does not quit", () =>
+  it.scopedLive("one ctrl+c on an idle empty composer draws the cue and does not quit", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
       view.setup.mockInput.pressKey("c", { ctrl: true })
@@ -1585,7 +1576,7 @@ describe("App auth gate", () => {
       yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("ctrl+c on a draft clears it and never quits over it", () =>
+  it.scopedLive("ctrl+c on a draft clears it and never quits over it", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
       yield* Effect.promise(() => view.setup.mockInput.typeText("keep me"))
@@ -1673,7 +1664,7 @@ describe("App auth gate", () => {
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("Esc on a shell draft arms its clear; Esc on an empty shell draft leaves", () =>
+  it.scopedLive("Esc on a shell draft arms its clear; Esc on an empty shell draft leaves", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
       yield* Effect.promise(() => view.setup.mockInput.typeText("!ls -la"))
@@ -1695,7 +1686,7 @@ describe("App auth gate", () => {
   // The `!` is not in the draft: Backspace leaves shell mode only at the
   // draft's start, where it stands for deleting the `!`. Anywhere else it
   // deletes a character of the command.
-  it.live("Backspace in shell mode edits the command and leaves only at its start", () =>
+  it.scopedLive("Backspace in shell mode edits the command and leaves only at its start", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
       yield* Effect.promise(() => view.setup.mockInput.typeText("!l"))
@@ -1716,7 +1707,7 @@ describe("App auth gate", () => {
   // A `!cmd` has no time limit, so ctrl+c is how the reader ends one. While
   // it runs the activity row names it; the press stops it, sends nothing, and
   // arms no exit.
-  it.live("ctrl+c stops a running !cmd, and its output is not sent", () =>
+  it.scopedLive("ctrl+c stops a running !cmd, and its output is not sent", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
       yield* Effect.promise(() => view.setup.mockInput.typeText("!sleep 30"))
@@ -1738,7 +1729,7 @@ describe("App auth gate", () => {
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("ctrl+d on an empty composer exits; on a draft it does not", () =>
+  it.scopedLive("ctrl+d on an empty composer exits; on a draft it does not", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
       yield* Effect.promise(() => view.setup.mockInput.typeText("x"))
@@ -1754,7 +1745,7 @@ describe("App auth gate", () => {
   )
   // The expanded transcript is a layer, as for Esc and ctrl+c: ctrl+d over it
   // does not exit. Once it collapses, ctrl+d on the empty composer does.
-  it.live("ctrl+d over the expanded transcript does not exit", () =>
+  it.scopedLive("ctrl+d over the expanded transcript does not exit", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
       view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
@@ -1769,7 +1760,7 @@ describe("App auth gate", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   // Every hint row spells a key the same way: lowercase key, one verb.
-  it.live("the empty state and the transcript label use the hint spelling", () =>
+  it.scopedLive("the empty state and the transcript label use the hint spelling", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
       yield* waitForFrame(view.setup, (frame) => frame.includes("gent · ctrl+p commands"), "empty")
@@ -1781,7 +1772,7 @@ describe("App auth gate", () => {
       )
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("ctrl+j starts a new line under the kitty keyboard protocol", () =>
+  it.scopedLive("ctrl+j starts a new line under the kitty keyboard protocol", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
       yield* Effect.promise(() => view.setup.mockInput.typeText("second"))
@@ -1797,7 +1788,7 @@ describe("App auth gate", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   for (const resumable of [true, false]) {
-    it.live(
+    it.scopedLive(
       `exit names the way back only when the session outlives the process (${resumable})`,
       () =>
         Effect.gen(function* () {
@@ -1848,7 +1839,7 @@ describe("App auth gate", () => {
       expect(frame).toContain("$0.002")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("an error shown during a running turn leaves the turn running", () =>
+  it.scopedLive("an error shown during a running turn leaves the turn running", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
       expect(view.client.isStreaming()).toBe(true)
@@ -1856,7 +1847,7 @@ describe("App auth gate", () => {
       expect(view.activity()).toBe("working")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("escape cancels a running turn while an error shows, and never quits", () =>
+  it.scopedLive("escape cancels a running turn while an error shows, and never quits", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
       view.setup.mockInput.pressEscape()
@@ -1867,7 +1858,7 @@ describe("App auth gate", () => {
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("ctrl+c with an empty draft cancels a running turn while an error shows", () =>
+  it.scopedLive("ctrl+c with an empty draft cancels a running turn while an error shows", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
       view.setup.mockInput.pressKey("c", { ctrl: true })
@@ -1879,7 +1870,7 @@ describe("App auth gate", () => {
   // Keybinds run before the ctrl+c ladder: an extension that bound ctrl+c
   // would take the turn cancel and the quit. The loader refuses the keybind,
   // so ctrl+c cancels the turn and the command keeps its palette row.
-  it.live("an extension keybind on ctrl+c is refused, and ctrl+c cancels the turn", () =>
+  it.scopedLive("an extension keybind on ctrl+c is refused, and ctrl+c cancels the turn", () =>
     Effect.gen(function* () {
       let fired = 0
       const grabber = defineClientExtension("@test/ctrl-c-grabber", {
@@ -1908,7 +1899,7 @@ describe("App auth gate", () => {
   )
   // Children that keep waking the parent start a new turn after each cancel;
   // the second ctrl+c in the quit window still leaves.
-  it.live("a second ctrl+c after one that cancelled a turn quits while a turn runs", () =>
+  it.scopedLive("a second ctrl+c after one that cancelled a turn quits while a turn runs", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
       view.setup.mockInput.pressKey("c", { ctrl: true })
@@ -1921,7 +1912,7 @@ describe("App auth gate", () => {
   )
   // A docked pane leaves ctrl+c to the session: the btw ask line reads keys,
   // and a turn runs behind it.
-  it.live("a second ctrl+c quits while the btw pane is open and a turn runs", () =>
+  it.scopedLive("a second ctrl+c quits while the btw pane is open and a turn runs", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
       yield* Effect.promise(() => view.setup.mockInput.typeText("/btw"))
@@ -1953,7 +1944,7 @@ describe("App auth gate", () => {
     },
   ]
   for (const pane of heldPanes) {
-    it.live(`ctrl+c closes the ${pane.name} pane before it cancels the turn`, () =>
+    it.scopedLive(`ctrl+c closes the ${pane.name} pane before it cancels the turn`, () =>
       Effect.gen(function* () {
         const view = yield* mountRunningTurn()
         if (Option.isSome(pane.draft)) {
@@ -1986,7 +1977,7 @@ describe("App auth gate", () => {
   // in its history.
   // Prompt search holds the composer: a paste while it previews an entry
   // does not land in the draft behind it.
-  it.live("a paste during prompt search does not reach the composer", () =>
+  it.scopedLive("a paste during prompt search does not reach the composer", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       for (const prompt of ["first prompt", "second prompt"]) {
@@ -2012,7 +2003,7 @@ describe("App auth gate", () => {
       expect(frame).not.toContain("PASTED-ZQ")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("a render starts with an empty prompt history", () =>
+  it.scopedLive("a render starts with an empty prompt history", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressKey("r", { ctrl: true })
@@ -2026,39 +2017,43 @@ describe("App auth gate", () => {
   )
   // A key the btw ask line takes never reaches the session scope, and it is
   // still another gesture: the second ctrl+c cancels the next turn.
-  it.live("a key the btw ask line takes between two ctrl+c presses makes the second cancel", () =>
-    Effect.gen(function* () {
-      const view = yield* mountRunningTurnWithError
-      yield* Effect.promise(() => view.setup.mockInput.typeText("/btw"))
-      view.setup.mockInput.pressEnter()
-      yield* waitForFrame(view.setup, (frame) => frame.includes("btw · fork"), "btw pane")
-      view.setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
-      yield* Effect.promise(() => view.setup.mockInput.typeText("w"))
-      view.setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
-      expect(view.shutdowns()).toBe(0)
-    }).pipe(Effect.timeout("10 seconds")),
+  it.scopedLive(
+    "a key the btw ask line takes between two ctrl+c presses makes the second cancel",
+    () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurnWithError
+        yield* Effect.promise(() => view.setup.mockInput.typeText("/btw"))
+        view.setup.mockInput.pressEnter()
+        yield* waitForFrame(view.setup, (frame) => frame.includes("btw · fork"), "btw pane")
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+        yield* Effect.promise(() => view.setup.mockInput.typeText("w"))
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
+        expect(view.shutdowns()).toBe(0)
+      }).pipe(Effect.timeout("10 seconds")),
   )
   // A paste the btw ask line takes is another gesture too.
-  it.live("a paste the btw ask line takes between two ctrl+c presses makes the second cancel", () =>
-    Effect.gen(function* () {
-      const view = yield* mountRunningTurnWithError
-      yield* Effect.promise(() => view.setup.mockInput.typeText("/btw"))
-      view.setup.mockInput.pressEnter()
-      yield* waitForFrame(view.setup, (frame) => frame.includes("btw · fork"), "btw pane")
-      view.setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
-      yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText("why"))
-      view.setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
-      expect(view.shutdowns()).toBe(0)
-    }).pipe(Effect.timeout("10 seconds")),
+  it.scopedLive(
+    "a paste the btw ask line takes between two ctrl+c presses makes the second cancel",
+    () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurnWithError
+        yield* Effect.promise(() => view.setup.mockInput.typeText("/btw"))
+        view.setup.mockInput.pressEnter()
+        yield* waitForFrame(view.setup, (frame) => frame.includes("btw · fork"), "btw pane")
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+        yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText("why"))
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
+        expect(view.shutdowns()).toBe(0)
+      }).pipe(Effect.timeout("10 seconds")),
   )
   // The quit window is for a press that follows the cancel; a draft made in
   // between is nearer, so the next ctrl+c clears it and never quits over it.
   // A paste reaches the composer without a key event, so no key disarms it.
-  it.live("a ctrl+c after a cancel and a new draft clears the draft, and does not quit", () =>
+  it.scopedLive("a ctrl+c after a cancel and a new draft clears the draft, and does not quit", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
       view.setup.mockInput.pressKey("c", { ctrl: true })
@@ -2072,7 +2067,7 @@ describe("App auth gate", () => {
   )
   // A transcript toggle between two ctrl+c presses is another gesture: the
   // second press collapses the transcript and never quits.
-  it.live("a transcript toggle between two ctrl+c presses disarms the quit", () =>
+  it.scopedLive("a transcript toggle between two ctrl+c presses disarms the quit", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
       view.setup.mockInput.pressKey("c", { ctrl: true })
@@ -2088,18 +2083,20 @@ describe("App auth gate", () => {
   )
   // ctrl+o changes only how tool groups draw, so nothing nearer is left for
   // the next press to undo: the key itself has to disarm the quit.
-  it.live("a disclosure key between two ctrl+c presses makes the second cancel, not quit", () =>
-    Effect.gen(function* () {
-      const view = yield* mountRunningTurnWithError
-      view.setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
-      view.setup.mockInput.pressKey("o", { ctrl: true })
-      // gent/no-sleep: allow the key must be parsed and handled before the next press
-      yield* Effect.sleep("50 millis")
-      view.setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
-      expect(view.shutdowns()).toBe(0)
-    }).pipe(Effect.timeout("10 seconds")),
+  it.scopedLive(
+    "a disclosure key between two ctrl+c presses makes the second cancel, not quit",
+    () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurnWithError
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+        view.setup.mockInput.pressKey("o", { ctrl: true })
+        // gent/no-sleep: allow the key must be parsed and handled before the next press
+        yield* Effect.sleep("50 millis")
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
+        expect(view.shutdowns()).toBe(0)
+      }).pipe(Effect.timeout("10 seconds")),
   )
   // The quit arm is per key: a ctrl+c that cancelled a turn, then an escape
   // on the idle session, is two gestures and does not quit.
@@ -2879,7 +2876,7 @@ describe("App auth gate", () => {
       .split("\n")
       .every((line) => (!line.includes("─") || /^─+$/.test(line.trim())) && rowClean(line))
   for (const pane of shortPanes) {
-    it.live(`the ${pane.name} overdraws nothing from 10 rows down to 5`, () =>
+    it.scopedLive(`the ${pane.name} overdraws nothing from 10 rows down to 5`, () =>
       Effect.gen(function* () {
         const view = yield* mountRunningTurn()
         yield* pane.open(view)
@@ -2902,43 +2899,45 @@ describe("App auth gate", () => {
   // With a turn running, the footer's three blank rows (above the activity
   // row, above the input, above the status row) give way before a pane loses
   // its cursor row: the reasoning picker keeps "● default" down to 6 rows.
-  it.live("the blank footer rows give way so a pane keeps its cursor row down to 6 rows", () =>
-    Effect.gen(function* () {
-      const view = yield* mountRunningTurn()
-      yield* typeCommand("/think")(view.setup)
-      yield* waitForFrame(view.setup, (frame) => frame.includes("● default"), "the pane")
-      const width = view.setup.renderer.terminalWidth
-      for (const height of [8, 7, 6]) {
-        view.setup.resize(width, height)
+  it.scopedLive(
+    "the blank footer rows give way so a pane keeps its cursor row down to 6 rows",
+    () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurn()
+        yield* typeCommand("/think")(view.setup)
+        yield* waitForFrame(view.setup, (frame) => frame.includes("● default"), "the pane")
+        const width = view.setup.renderer.terminalWidth
+        for (const height of [8, 7, 6]) {
+          view.setup.resize(width, height)
+          yield* waitForFrame(
+            view.setup,
+            (frame) =>
+              view.setup.renderer.terminalHeight === height &&
+              frame.includes("● default") &&
+              frame.includes("┃") &&
+              // The activity row is whole: the transcript tail, left no row,
+              // draws nothing over it.
+              frame.split("\n").some((line) => line.startsWith("  Generating")),
+            `the cursor row at ${height} rows`,
+          )
+        }
+        // Grown back, the blank rows return: a blank row sits above the input.
+        view.setup.resize(width, 24)
         yield* waitForFrame(
           view.setup,
-          (frame) =>
-            view.setup.renderer.terminalHeight === height &&
-            frame.includes("● default") &&
-            frame.includes("┃") &&
-            // The activity row is whole: the transcript tail, left no row,
-            // draws nothing over it.
-            frame.split("\n").some((line) => line.startsWith("  Generating")),
-          `the cursor row at ${height} rows`,
+          (current) => {
+            const lines = current.split("\n")
+            const input = lines.findIndex((line) => line.startsWith("┃"))
+            return (
+              view.setup.renderer.terminalHeight === 24 &&
+              current.includes("● default") &&
+              input > 0 &&
+              lines[input - 1]?.trim() === ""
+            )
+          },
+          "the blank rows back on the full terminal",
         )
-      }
-      // Grown back, the blank rows return: a blank row sits above the input.
-      view.setup.resize(width, 24)
-      yield* waitForFrame(
-        view.setup,
-        (current) => {
-          const lines = current.split("\n")
-          const input = lines.findIndex((line) => line.startsWith("┃"))
-          return (
-            view.setup.renderer.terminalHeight === 24 &&
-            current.includes("● default") &&
-            input > 0 &&
-            lines[input - 1]?.trim() === ""
-          )
-        },
-        "the blank rows back on the full terminal",
-      )
-    }).pipe(Effect.timeout("10 seconds")),
+      }).pipe(Effect.timeout("10 seconds")),
   )
   // The give-way is reckoned as if the blank rows were drawn, so a pane that
   // fits once they give way does not bring them back and lose its rows again:
@@ -2951,7 +2950,7 @@ describe("App auth gate", () => {
     return generating >= 0 && lines[generating + 1]?.startsWith("┃") === true
   }
   for (const height of [12, 11, 10]) {
-    it.live(`the footer holds still at ${height} rows with a pane open`, () =>
+    it.scopedLive(`the footer holds still at ${height} rows with a pane open`, () =>
       Effect.gen(function* () {
         const view = yield* mountRunningTurn()
         yield* typeCommand("/think")(view.setup)
@@ -2980,7 +2979,7 @@ describe("App auth gate", () => {
   // The ghost line offers what the popup's cursor row already shows, so it
   // gives way with the blank rows: at 11 rows the popup keeps its key hint,
   // no ghost line draws, and the frame holds still across draws.
-  it.live("the ghost line gives way with the blank rows for a squeezed popup", () =>
+  it.scopedLive("the ghost line gives way with the blank rows for a squeezed popup", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.resize(view.setup.renderer.terminalWidth, 11)
@@ -3007,7 +3006,7 @@ describe("App auth gate", () => {
   )
   // A pane with no row on screen takes no keys: the reader cannot see what a
   // key would do there. Typing goes past the agents pane to the composer.
-  it.live("typing reaches the composer past an agents pane that has no row", () =>
+  it.scopedLive("typing reaches the composer past an agents pane that has no row", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
@@ -3024,7 +3023,7 @@ describe("App auth gate", () => {
   )
   // A held pane with no row takes no keys, yet Esc still closes it, as the
   // pane's own Esc does, and the turn runs on.
-  it.live("esc closes a held pane that has no row and leaves the turn running", () =>
+  it.scopedLive("esc closes a held pane that has no row and leaves the turn running", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       yield* typeCommand("/think")(view.setup)
@@ -3056,7 +3055,7 @@ describe("App auth gate", () => {
   )
   // An extension pane with no row takes no keys either, and Esc closes it the
   // same way: the turn runs on, and the pane is gone when the terminal grows.
-  it.live("esc closes an extension pane that has no row and leaves the turn running", () =>
+  it.scopedLive("esc closes an extension pane that has no row and leaves the turn running", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
@@ -3159,7 +3158,7 @@ describe("App auth gate", () => {
       }
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("an interjection steers a running turn while an error shows", () =>
+  it.scopedLive("an interjection steers a running turn while an error shows", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
       yield* Effect.promise(() => view.setup.mockInput.typeText("steer this"))
@@ -4516,7 +4515,7 @@ describe("agents view on the left arrow", () => {
 describe("TUI renderer surfaces", () => {
   // A text too wide for its column is cut once, at its end, by gent; the
   // renderer's own cut (`...` in the middle) never shows.
-  it.live("at 40 columns the slash popup and the palette cut a text once, at its end", () =>
+  it.scopedLive("at 40 columns the slash popup and the palette cut a text once, at its end", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession(createMockRuntime(), { width: 40 })
       yield* Effect.promise(() => view.setup.mockInput.typeText("/frec"))
@@ -4545,7 +4544,7 @@ describe("TUI renderer surfaces", () => {
   )
   // One dock slot: the status row stays under the input, and the slash popup,
   // the palette and the panes all dock under it.
-  it.live("every docked pane, the slash popup included, docks under the status row", () =>
+  it.scopedLive("every docked pane, the slash popup included, docks under the status row", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
       const statusRowAbove = (frame: string, title: string) => {
@@ -4616,7 +4615,7 @@ describe("TUI renderer surfaces", () => {
       expect(renderFrame(setup)).not.toContain("ready ·")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("MessageList renders user labels and assistant reasoning", () =>
+  it.scopedLive("MessageList renders user labels and assistant reasoning", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
         {
@@ -4646,16 +4645,14 @@ describe("TUI renderer surfaces", () => {
           ],
         } satisfies Message,
       ]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={items}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <MessageList
+          items={items}
+          disclosure="collapsed"
+          syntaxStyle={syntaxStyle}
+          streaming={false}
+        />
+      ))
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
       expect(frame).toContain("[steer]")
@@ -4663,7 +4660,7 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("Considering current todo state")
     }),
   )
-  it.live("QueueWidget renders steer and queued summaries", () =>
+  it.scopedLive("QueueWidget renders steer and queued summaries", () =>
     Effect.gen(function* () {
       const steerMessages: QueueEntryInfo[] = [
         {
@@ -4681,56 +4678,52 @@ describe("TUI renderer surfaces", () => {
           createdAt: 0,
         },
       ]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <QueueWidget queuedMessages={queuedMessages} steerMessages={steerMessages} />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <QueueWidget queuedMessages={queuedMessages} steerMessages={steerMessages} />
+      ))
       const frame = renderFrame(setup)
       expect(frame).toContain("[steer 1] switch to secondary")
       expect(frame).toContain("[queued 1] line one +2 lines")
       expect(frame).toContain("cmd+up restore")
     }),
   )
-  it.live("ConnectionWidget renders nothing when no connection issue", () =>
+  it.scopedLive("ConnectionWidget renders nothing when no connection issue", () =>
     Effect.gen(function* () {
       // ConnectionWidget now self-sources from useClient() — no props.
       // Default mock client has no connection issues, so widget renders nothing.
-      const setup = yield* Effect.promise(() => renderWithProviders(() => <ConnectionWidget />))
+      const setup = yield* renderScoped(() => <ConnectionWidget />)
       const frame = renderFrame(setup)
       expect(frame).not.toContain("connection")
     }),
   )
-  it.live("ConnectionWidget surfaces failed extension activation", () =>
+  it.scopedLive("ConnectionWidget surfaces failed extension activation", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ConnectionWidget />, {
-          client: createMockClient({
-            extension: {
-              listStatus: () =>
-                Effect.succeed({
-                  _tag: "Degraded",
-                  healthyExtensions: [],
-                  degradedExtensions: [
-                    {
-                      manifest: { id: "@gent/memory" },
-                      scope: "builtin",
-                      sourcePath: "builtin",
-                      _tag: "Degraded",
-                      issues: [
-                        {
-                          _tag: "ActivationFailed",
-                          phase: "startup",
-                          error: "startup boom",
-                        },
-                      ],
-                    },
-                  ],
-                }),
-            },
-          }),
+      const setup = yield* renderScoped(() => <ConnectionWidget />, {
+        client: createMockClient({
+          extension: {
+            listStatus: () =>
+              Effect.succeed({
+                _tag: "Degraded",
+                healthyExtensions: [],
+                degradedExtensions: [
+                  {
+                    manifest: { id: "@gent/memory" },
+                    scope: "builtin",
+                    sourcePath: "builtin",
+                    _tag: "Degraded",
+                    issues: [
+                      {
+                        _tag: "ActivationFailed",
+                        phase: "startup",
+                        error: "startup boom",
+                      },
+                    ],
+                  },
+                ],
+              }),
+          },
         }),
-      )
+      })
       const frame = renderFrame(setup)
       expect(frame).toContain("connection")
       expect(frame).toContain("failed extensions")
@@ -4738,75 +4731,71 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("@gent/memory: startup boom")
     }),
   )
-  it.live("ConnectionWidget names a model catalog that did not load", () =>
+  it.scopedLive("ConnectionWidget names a model catalog that did not load", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ConnectionWidget />, {
-          client: createMockClient({
-            extension: {
-              listStatus: () =>
-                Effect.succeed({
-                  _tag: "Degraded",
-                  healthyExtensions: [],
-                  degradedExtensions: [
-                    {
-                      manifest: { id: "@user/local-models" },
-                      scope: "user",
-                      sourcePath: "/home/.gent/extensions/local-models.ts",
-                      _tag: "Degraded",
-                      issues: [
-                        {
-                          _tag: "ModelCatalogFailed",
-                          driverId: "ollama",
-                          error: "connect ECONNREFUSED",
-                        },
-                      ],
-                    },
-                  ],
-                }),
-            },
-          }),
+      const setup = yield* renderScoped(() => <ConnectionWidget />, {
+        client: createMockClient({
+          extension: {
+            listStatus: () =>
+              Effect.succeed({
+                _tag: "Degraded",
+                healthyExtensions: [],
+                degradedExtensions: [
+                  {
+                    manifest: { id: "@user/local-models" },
+                    scope: "user",
+                    sourcePath: "/home/.gent/extensions/local-models.ts",
+                    _tag: "Degraded",
+                    issues: [
+                      {
+                        _tag: "ModelCatalogFailed",
+                        driverId: "ollama",
+                        error: "connect ECONNREFUSED",
+                      },
+                    ],
+                  },
+                ],
+              }),
+          },
         }),
-      )
+      })
       const frame = renderFrame(setup)
       expect(frame).toContain("some models unavailable")
       expect(frame).toContain("ollama: connect ECONNREFUSED")
       expect(frame).not.toContain("failed extensions")
     }),
   )
-  it.live("ConnectionWidget surfaces failed extensions for the active session", () =>
+  it.scopedLive("ConnectionWidget surfaces failed extensions for the active session", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ConnectionWidget />, {
-          initialSession: testSession,
-          client: createMockClient({
-            extension: {
-              listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
-                expect(sessionId).toBe(testSession.id)
-                return Effect.succeed({
-                  _tag: "Degraded",
-                  healthyExtensions: [],
-                  degradedExtensions: [
-                    {
-                      manifest: { id: "@gent/plan" },
-                      scope: "builtin",
-                      sourcePath: "builtin",
-                      _tag: "Degraded",
-                      issues: [
-                        {
-                          _tag: "ActivationFailed",
-                          phase: "startup",
-                          error: "launchd boom",
-                        },
-                      ],
-                    },
-                  ],
-                })
-              },
+      const setup = yield* renderScoped(() => <ConnectionWidget />, {
+        initialSession: testSession,
+        client: createMockClient({
+          extension: {
+            listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
+              expect(sessionId).toBe(testSession.id)
+              return Effect.succeed({
+                _tag: "Degraded",
+                healthyExtensions: [],
+                degradedExtensions: [
+                  {
+                    manifest: { id: "@gent/plan" },
+                    scope: "builtin",
+                    sourcePath: "builtin",
+                    _tag: "Degraded",
+                    issues: [
+                      {
+                        _tag: "ActivationFailed",
+                        phase: "startup",
+                        error: "launchd boom",
+                      },
+                    ],
+                  },
+                ],
+              })
             },
-          }),
+          },
         }),
-      )
+      })
       const frame = renderFrame(setup)
       expect(frame).toContain("connection")
       expect(frame).toContain("failed extensions")
@@ -4815,7 +4804,7 @@ describe("TUI renderer surfaces", () => {
   )
   // The status row and the activity report read `isReconnecting`, so both
   // wire states that mean "not connected yet" have to answer true.
-  it.live("isReconnecting follows the connecting and reconnecting states", () =>
+  it.scopedLive("isReconnecting follows the connecting and reconnecting states", () =>
     Effect.gen(function* () {
       const lifecycle = createMutableRuntime(
         ConnectionState.cases.Connected.make({ generation: 0 }),
@@ -4824,9 +4813,7 @@ describe("TUI renderer surfaces", () => {
         const client = useClient()
         return <text>{`reconnecting:${String(client.isReconnecting())}`}</text>
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ReconnectProbe />, { runtime: lifecycle.runtime }),
-      )
+      const setup = yield* renderScoped(() => <ReconnectProbe />, { runtime: lifecycle.runtime })
       yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "connected")
       lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
       yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "reconnecting")
@@ -4836,33 +4823,34 @@ describe("TUI renderer surfaces", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "connecting")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("ConnectionWidget refreshes extension status after reconnect generation changes", () =>
-    Effect.gen(function* () {
-      const lifecycle = createMutableRuntime(
-        ConnectionState.cases.Connected.make({ generation: 0 }),
-      )
-      let callCount = 0
-      let currentHealth: ExtensionHealthSnapshot = {
-        _tag: "Degraded",
-        healthyExtensions: [],
-        degradedExtensions: [
-          {
-            manifest: { id: "@gent/plan" },
-            scope: "builtin",
-            sourcePath: "builtin",
-            _tag: "Degraded",
-            issues: [
-              {
-                _tag: "ActivationFailed",
-                phase: "startup",
-                error: "launchd boom",
-              },
-            ],
-          },
-        ],
-      }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ConnectionWidget />, {
+  it.scopedLive(
+    "ConnectionWidget refreshes extension status after reconnect generation changes",
+    () =>
+      Effect.gen(function* () {
+        const lifecycle = createMutableRuntime(
+          ConnectionState.cases.Connected.make({ generation: 0 }),
+        )
+        let callCount = 0
+        let currentHealth: ExtensionHealthSnapshot = {
+          _tag: "Degraded",
+          healthyExtensions: [],
+          degradedExtensions: [
+            {
+              manifest: { id: "@gent/plan" },
+              scope: "builtin",
+              sourcePath: "builtin",
+              _tag: "Degraded",
+              issues: [
+                {
+                  _tag: "ActivationFailed",
+                  phase: "startup",
+                  error: "launchd boom",
+                },
+              ],
+            },
+          ],
+        }
+        const setup = yield* renderScoped(() => <ConnectionWidget />, {
           initialSession: testSession,
           runtime: lifecycle.runtime,
           client: createMockClient({
@@ -4874,55 +4862,52 @@ describe("TUI renderer surfaces", () => {
               },
             },
           }),
-        }),
-      )
-      expect(renderFrame(setup)).toContain("failed extensions")
-      expect(callCount).toBe(1)
-      currentHealth = {
-        _tag: "Healthy",
-        extensions: [],
-      }
-      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
-      yield* Effect.yieldNow
-      yield* Effect.promise(() => setup.renderOnce())
-      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
-      yield* Effect.yieldNow
-      yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.yieldNow
-      yield* Effect.promise(() => setup.renderOnce())
-      const frame = renderFrame(setup)
-      expect(callCount).toBe(2)
-      expect(frame).not.toContain("failed extensions")
-      expect(frame).not.toContain("@gent/plan")
-    }),
+        })
+        expect(renderFrame(setup)).toContain("failed extensions")
+        expect(callCount).toBe(1)
+        currentHealth = {
+          _tag: "Healthy",
+          extensions: [],
+        }
+        lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
+        yield* Effect.yieldNow
+        yield* Effect.promise(() => setup.renderOnce())
+        lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
+        yield* Effect.yieldNow
+        yield* Effect.promise(() => setup.renderOnce())
+        yield* Effect.yieldNow
+        yield* Effect.promise(() => setup.renderOnce())
+        const frame = renderFrame(setup)
+        expect(callCount).toBe(2)
+        expect(frame).not.toContain("failed extensions")
+        expect(frame).not.toContain("@gent/plan")
+      }),
   )
-  it.live("ConnectionWidget clears stale extension status when switching sessions", () =>
+  it.scopedLive("ConnectionWidget clears stale extension status when switching sessions", () =>
     Effect.gen(function* () {
       let controls = Option.none<{
         switchSession: () => void
       }>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ConnectionWidget />
-              <HealthControlsProbe expose={(next) => (controls = Option.some(next))} />
-            </>
-          ),
-          {
-            initialSession: testSession,
-            client: createMockClient({
-              extension: {
-                listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
-                  if (sessionId === testSession.id) {
-                    return Effect.succeed(scheduledFailureHealth("@gent/plan", "launchd boom"))
-                  }
-                  return Effect.succeed(healthyHealth)
-                },
-              },
-            }),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ConnectionWidget />
+            <HealthControlsProbe expose={(next) => (controls = Option.some(next))} />
+          </>
         ),
+        {
+          initialSession: testSession,
+          client: createMockClient({
+            extension: {
+              listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
+                if (sessionId === testSession.id) {
+                  return Effect.succeed(scheduledFailureHealth("@gent/plan", "launchd boom"))
+                }
+                return Effect.succeed(healthyHealth)
+              },
+            },
+          }),
+        },
       )
       expect(renderFrame(setup)).toContain("@gent/plan")
       if (Option.isNone(controls)) return yield* Effect.die("health controls not ready")
@@ -4936,34 +4921,32 @@ describe("TUI renderer surfaces", () => {
       expect(frame).not.toContain("@gent/plan")
     }),
   )
-  it.live("same-session branch switches preserve session-scoped extension health", () =>
+  it.scopedLive("same-session branch switches preserve session-scoped extension health", () =>
     Effect.gen(function* () {
       let controls = Option.none<{
         switchSession: () => void
         switchBranchSameSession: () => void
       }>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <HealthControlsProbe expose={(value) => (controls = Option.some(value))} />
-              <ConnectionWidget />
-            </>
-          ),
-          {
-            initialSession: testSession,
-            client: createMockClient({
-              extension: {
-                listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
-                  if (sessionId === testSession.id) {
-                    return Effect.succeed(scheduledFailureHealth("@gent/plan", "launchd boom"))
-                  }
-                  return Effect.succeed(healthyHealth)
-                },
-              },
-            }),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <HealthControlsProbe expose={(value) => (controls = Option.some(value))} />
+            <ConnectionWidget />
+          </>
         ),
+        {
+          initialSession: testSession,
+          client: createMockClient({
+            extension: {
+              listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
+                if (sessionId === testSession.id) {
+                  return Effect.succeed(scheduledFailureHealth("@gent/plan", "launchd boom"))
+                }
+                return Effect.succeed(healthyHealth)
+              },
+            },
+          }),
+        },
       )
       expect(renderFrame(setup)).toContain("@gent/plan")
       if (Option.isNone(controls)) return yield* Effect.die("health controls not ready")
@@ -4991,23 +4974,21 @@ describe("TUI renderer surfaces", () => {
             ),
           )
         const statusRow = Effect.gen(function* () {
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(() => <App />, {
-              client: createMockClient({
-                auth: { listProviders: () => Effect.succeed([]) },
-                branch: { getTree: () => Effect.succeed([]) },
-              }),
-              runtime: createMockRuntime(),
-              initialSession: {
-                id: SessionId.make("session-a"),
-                activeBranchId: BranchId.make("branch-a"),
-                name: "Session A",
-                createdAt: dateFromMillis(0),
-                updatedAt: dateFromMillis(0),
-              },
-              cwd,
+          const setup = yield* renderScoped(() => <App />, {
+            client: createMockClient({
+              auth: { listProviders: () => Effect.succeed([]) },
+              branch: { getTree: () => Effect.succeed([]) },
             }),
-          )
+            runtime: createMockRuntime(),
+            initialSession: {
+              id: SessionId.make("session-a"),
+              activeBranchId: BranchId.make("branch-a"),
+              name: "Session A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+            cwd,
+          })
           const frame = yield* waitForFrame(setup, (next) => /\(.+\)/.test(next), "the branch")
           setup.renderer.destroy()
           return frame.split("\n").find((line) => line.startsWith("ready ·")) ?? ""
@@ -5090,16 +5071,14 @@ describe("debug playground", () => {
           const { client, runtime } = yield* Gent.client(server, { cwd })
           const [session] = yield* client.session.list()
           const initialSession = yield* Effect.fromNullishOr(session)
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(() => <App />, {
-              client,
-              runtime,
-              initialSession,
-              cwd,
-              width: 120,
-              height: 40,
-            }),
-          )
+          const setup = yield* renderScoped(() => <App />, {
+            client,
+            runtime,
+            initialSession,
+            cwd,
+            width: 120,
+            height: 40,
+          })
           const frame = yield* waitForFrame(
             setup,
             (text) => text.includes("Review the TUI renderer cleanup"),

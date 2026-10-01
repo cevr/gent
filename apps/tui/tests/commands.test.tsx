@@ -13,12 +13,7 @@ import { BranchId, dateFromMillis, GentRpcError, SessionId } from "@gent/core/pr
 import { type ClientContextValue, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
 import type { AgentRowEntry } from "@gent/extensions/client"
-import {
-  createMockClient,
-  renderFrame,
-  renderScoped,
-  renderWithProviders,
-} from "./render-harness-boundary"
+import { createMockClient, renderFrame, renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import { makePaneSlot } from "./extension-test-harness-boundary"
 
@@ -222,14 +217,12 @@ const storedSessionsClient = () =>
   })
 
 describe("CommandPalette renderer", () => {
-  it.live("opens the theme submenu through keyboard navigation and activation", () =>
+  it.scopedLive("opens the theme submenu through keyboard navigation and activation", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <OpenPaletteOnMount />, {
-          width: 90,
-          height: 28,
-        }),
-      )
+      const setup = yield* renderScoped(() => <OpenPaletteOnMount />, {
+        width: 90,
+        height: 28,
+      })
       expect(renderFrame(setup)).toContain("Commands")
       // Theme is the first row.
       setup.mockInput.pressKey("RETURN")
@@ -242,11 +235,9 @@ describe("CommandPalette renderer", () => {
     }),
   )
 
-  it.live("a submenu's escape steps back to the root, where escape closes", () =>
+  it.scopedLive("a submenu's escape steps back to the root, where escape closes", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <OpenPaletteOnMount />, { width: 90, height: 28 }),
-      )
+      const setup = yield* renderScoped(() => <OpenPaletteOnMount />, { width: 90, height: 28 })
       yield* waitForFrame(
         setup,
         (frame) => frame.includes("Commands") && frame.includes("Branches"),
@@ -302,20 +293,18 @@ describe("CommandPalette renderer", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("the palette Sessions item opens the agents pane and a row switches to it", () =>
+  it.scopedLive("the palette Sessions item opens the agents pane and a row switches to it", () =>
     Effect.gen(function* () {
       let ctx: Option.Option<ClientContextValue> = Option.none()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <OpenPaletteOnMount />
-              <AgentsPaneWidget />
-              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-            </>
-          ),
-          { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <OpenPaletteOnMount />
+            <AgentsPaneWidget />
+            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+          </>
         ),
+        { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
       )
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
       yield* waitForFrame(
@@ -350,19 +339,17 @@ describe("CommandPalette renderer", () => {
     }),
   )
 
-  it.live("/sessions opens the agents pane over stored sessions and marks side threads", () =>
+  it.scopedLive("/sessions opens the agents pane over stored sessions and marks side threads", () =>
     Effect.gen(function* () {
       let ext: Option.Option<ReturnType<typeof useExtensionUI>> = Option.none()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <AgentsPaneWidget />
-              <ExtensionProbe onReady={(value) => (ext = Option.some(value))} />
-            </>
-          ),
-          { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <AgentsPaneWidget />
+            <ExtensionProbe onReady={(value) => (ext = Option.some(value))} />
+          </>
         ),
+        { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
       )
       if (Option.isNone(ext)) return yield* Effect.die("extension context not ready")
       const commands = () =>

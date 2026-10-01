@@ -6,7 +6,7 @@ import { Effect, Option } from "effect"
 import type { TerminalColors } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { CommandPalette, useCommand } from "../src/commands"
-import { answerPalette, renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { answerPalette, renderFrame, renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 
 // ── theme view ──────────────────────────────────────────────────────────────
@@ -29,32 +29,34 @@ const expectViewToMirror = (view: Theme, theme: Theme) => {
 
 describe("theme view", () => {
   // The provider hands out one theme object; each key reads the theme in force.
-  it.live("every theme key is a getter on one object, and a mode switch shows through it", () =>
-    Effect.gen(function* () {
-      let ctx = Option.none<ReturnType<typeof useTheme>>()
-      const Probe = () => {
-        ctx = Option.some(useTheme())
-        return <text>probe</text>
-      }
-      yield* Effect.promise(() => renderWithProviders(() => <Probe />))
-      const context = yield* Effect.fromOption(ctx)
-      context.set("fx")
-      context.setMode("dark")
-      const view = context.theme
-      expect(keysOf(view)).toEqual(keysOf(dark))
-      for (const key of Object.keys(view)) {
-        const descriptor = Object.getOwnPropertyDescriptor(view, key)
-        expect(descriptor).toBeDefined()
-        // A data-property descriptor carries no `get` key at all.
-        expect("get" in descriptor!).toBe(true)
-        expect(descriptor!.enumerable).toBe(true)
-      }
-      expectViewToMirror(view, dark)
-      expect(dark.background).not.toBe(light.background)
-      context.setMode("light")
-      expect(context.theme).toBe(view)
-      expectViewToMirror(view, light)
-    }).pipe(Effect.timeout("10 seconds")),
+  it.scopedLive(
+    "every theme key is a getter on one object, and a mode switch shows through it",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ReturnType<typeof useTheme>>()
+        const Probe = () => {
+          ctx = Option.some(useTheme())
+          return <text>probe</text>
+        }
+        yield* renderScoped(() => <Probe />)
+        const context = yield* Effect.fromOption(ctx)
+        context.set("fx")
+        context.setMode("dark")
+        const view = context.theme
+        expect(keysOf(view)).toEqual(keysOf(dark))
+        for (const key of Object.keys(view)) {
+          const descriptor = Object.getOwnPropertyDescriptor(view, key)
+          expect(descriptor).toBeDefined()
+          // A data-property descriptor carries no `get` key at all.
+          expect("get" in descriptor!).toBe(true)
+          expect(descriptor!.enumerable).toBe(true)
+        }
+        expectViewToMirror(view, dark)
+        expect(dark.background).not.toBe(light.background)
+        context.setMode("light")
+        expect(context.theme).toBe(view)
+        expectViewToMirror(view, light)
+      }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -63,7 +65,7 @@ describe("theme view", () => {
 describe("system theme", () => {
   // The terminal's palette is read once; the theme drawn from it is the one
   // for the mode in force, so a mode switch redraws it for that mode.
-  it.live("the terminal-derived theme follows a mode switch", () =>
+  it.scopedLive("the terminal-derived theme follows a mode switch", () =>
     Effect.gen(function* () {
       const palette = Array.from(
         { length: 16 },
@@ -88,7 +90,7 @@ describe("system theme", () => {
         ctx = Option.some(useTheme())
         return <text>probe</text>
       }
-      const setup = yield* Effect.promise(() => renderWithProviders(() => <Probe />))
+      const setup = yield* renderScoped(() => <Probe />)
       const theme = yield* Effect.fromOption(ctx)
       // The palette read on SIGUSR2 is the one a terminal with this palette answers.
       process.emit("SIGUSR2")
@@ -190,11 +192,9 @@ describe("bundled theme catalog", () => {
 })
 
 describe("palette theme level", () => {
-  it.live("lists every registered theme, not just a dark/light pair", () =>
+  it.scopedLive("lists every registered theme, not just a dark/light pair", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <OpenPaletteOnMount />, { width: 90, height: 40 }),
-      )
+      const setup = yield* renderScoped(() => <OpenPaletteOnMount />, { width: 90, height: 40 })
       yield* waitForFrame(
         setup,
         (frame) => frame.includes("Commands") && frame.includes("Theme"),
@@ -217,11 +217,9 @@ describe("palette theme level", () => {
     }).pipe(Effect.timeout("20 seconds")),
   )
 
-  it.live("keeps Dark and Light on a separate Mode level", () =>
+  it.scopedLive("keeps Dark and Light on a separate Mode level", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <OpenPaletteOnMount />, { width: 90, height: 40 }),
-      )
+      const setup = yield* renderScoped(() => <OpenPaletteOnMount />, { width: 90, height: 40 })
       yield* waitForFrame(
         setup,
         (frame) => frame.includes("Commands") && frame.includes("Mode"),

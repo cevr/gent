@@ -19,6 +19,7 @@ import {
   Option,
   Schedule,
   Schema,
+  type Scope,
 } from "effect"
 import { runProcess } from "@gent/core/extensions/api"
 import {
@@ -47,7 +48,6 @@ import {
   createMockClient,
   renderFrame,
   renderScoped as renderScopedHarness,
-  renderWithProviders as renderHarness,
 } from "./render-harness-boundary"
 import { createSignal, ErrorBoundary, type JSX, onMount, Show } from "solid-js"
 import { PromptSearchState } from "../src/pickers"
@@ -75,8 +75,6 @@ const draftSession = {
   branchId: BranchId.make("draft-branch"),
   name: "Draft",
 }
-const renderWithProviders: typeof renderHarness = (ui, options) =>
-  renderHarness(ui, { initialSession: draftSession, ...options })
 const renderScoped: typeof renderScopedHarness = (ui, options) =>
   renderScopedHarness(ui, { initialSession: draftSession, ...options })
 
@@ -363,18 +361,19 @@ const labels: StatusRowLabel[] = [
 
 const frameText = (width: number, rightLabels: number) =>
   Effect.gen(function* () {
-    const setup = yield* Effect.promise(() =>
-      renderWithProviders(() => <StatusRow labels={labels} rightLabels={rightLabels} />, {
+    const setup = yield* renderScoped(
+      () => <StatusRow labels={labels} rightLabels={rightLabels} />,
+      {
         width,
         height: 10,
-      }),
+      },
     )
     yield* Effect.promise(() => setup.flush())
     return setup.captureCharFrame()
   })
 
 describe("the status row anchors its right-hand labels", () => {
-  it.live("keeps the running total when the row cannot fit everything", () =>
+  it.scopedLive("keeps the running total when the row cannot fit everything", () =>
     Effect.gen(function* () {
       const text = yield* frameText(60, 2)
       // The two anchored labels survive a width that cannot hold the row.
@@ -383,7 +382,7 @@ describe("the status row anchors its right-hand labels", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("drops the anchored labels when nothing reserves them", () =>
+  it.scopedLive("drops the anchored labels when nothing reserves them", () =>
     Effect.gen(function* () {
       // Without a reservation the old behaviour returns: the last labels are
       // pushed off the end by everything before them.
@@ -392,7 +391,7 @@ describe("the status row anchors its right-hand labels", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("shows every label when the row is wide enough", () =>
+  it.scopedLive("shows every label when the row is wide enough", () =>
     Effect.gen(function* () {
       const text = yield* frameText(140, 2)
       expect(text).toContain("idle")
@@ -525,27 +524,28 @@ const PASTE = "x".repeat(200)
 describe("Composer renderer", () => {
   // Two extensions may contribute rows under one prefix. The row the reader
   // picks inserts and records through the extension that offered it.
-  it.live("a pick from the second contribution on a prefix uses that contribution's hooks", () =>
-    Effect.gen(function* () {
-      const picks: Array<string> = []
-      const source = (name: string, id: string) =>
-        defineClientExtension(`@test/pick-${name}`, {
-          setup: Effect.succeed(
-            clientContributions(
-              autocompleteContribution({
-                prefix: "%",
-                title: `Source ${name}`,
-                items: () => [{ id, label: `%${id}` }],
-                formatInsertion: (picked) => `<${name}:${picked}> `,
-                onSelect: (picked) => {
-                  picks.push(`${name}:${picked}`)
-                },
-              }),
+  it.scopedLive(
+    "a pick from the second contribution on a prefix uses that contribution's hooks",
+    () =>
+      Effect.gen(function* () {
+        const picks: Array<string> = []
+        const source = (name: string, id: string) =>
+          defineClientExtension(`@test/pick-${name}`, {
+            setup: Effect.succeed(
+              clientContributions(
+                autocompleteContribution({
+                  prefix: "%",
+                  title: `Source ${name}`,
+                  items: () => [{ id, label: `%${id}` }],
+                  formatInsertion: (picked) => `<${name}:${picked}> `,
+                  onSelect: (picked) => {
+                    picks.push(`${name}:${picked}`)
+                  },
+                }),
+              ),
             ),
-          ),
-        })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
+          })
+        const setup = yield* renderScoped(
           () => (
             <TestComposer onSubmit={() => {}}>
               <Composer.Autocomplete />
@@ -555,24 +555,27 @@ describe("Composer renderer", () => {
           {
             builtins: [...builtinClientModules, source("first", "alpha"), source("second", "beta")],
           },
-        ),
-      )
-      yield* waitForFrame(setup, (frame) => frame.includes("sources loaded"), "both sources")
-      yield* Effect.promise(() => setup.mockInput.typeText("%"))
-      yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("%alpha") && frame.includes("%beta"),
-        "rows from both sources",
-      )
-      setup.mockInput.pressArrow("down")
-      yield* Effect.promise(() => setup.renderOnce())
-      setup.mockInput.pressKey("RETURN")
-      const frame = yield* waitForFrame(setup, (next) => next.includes("┃ <"), "the inserted pick")
-      expect(frame).toContain("┃ <second:beta>")
-      expect(picks).toEqual(["second:beta"])
-    }).pipe(Effect.timeout("10 seconds")),
+        )
+        yield* waitForFrame(setup, (frame) => frame.includes("sources loaded"), "both sources")
+        yield* Effect.promise(() => setup.mockInput.typeText("%"))
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("%alpha") && frame.includes("%beta"),
+          "rows from both sources",
+        )
+        setup.mockInput.pressArrow("down")
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressKey("RETURN")
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => next.includes("┃ <"),
+          "the inserted pick",
+        )
+        expect(frame).toContain("┃ <second:beta>")
+        expect(picks).toEqual(["second:beta"])
+      }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("a pending interaction waits for client extensions instead of being denied", () =>
+  it.scopedLive("a pending interaction waits for client extensions instead of being denied", () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>()
       const held = defineClientExtension("@test/held-load", {
@@ -587,19 +590,17 @@ describe("Composer renderer", () => {
         text: "Ship the release?",
         metadata: { type: "ask-user", questions: [{ question: "Ship the release?" }] },
       } satisfies ActiveInteraction
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <TestComposer
-              onSubmit={() => {}}
-              composerState={() => ({ _tag: "interaction", interaction })}
-              dispatchComposer={(event) => {
-                dispatched.push(event._tag)
-              }}
-            />
-          ),
-          { builtins: [...builtinClientModules, held] },
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposer
+            onSubmit={() => {}}
+            composerState={() => ({ _tag: "interaction", interaction })}
+            dispatchComposer={(event) => {
+              dispatched.push(event._tag)
+            }}
+          />
         ),
+        { builtins: [...builtinClientModules, held] },
       )
       yield* Effect.promise(() => setup.renderOnce())
       expect(dispatched).toEqual([])
@@ -611,21 +612,19 @@ describe("Composer renderer", () => {
       expect(dispatched).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("plain enter submits and clears the composer", () =>
+  it.scopedLive("plain enter submits and clears the composer", () =>
     Effect.gen(function* () {
       const submitted: Array<{
         content: string
         mode?: "queue" | "interject"
       }> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <TestComposer
-            onSubmit={(content, mode) => {
-              submitted.push({ content, mode })
-            }}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer
+          onSubmit={(content, mode) => {
+            submitted.push({ content, mode })
+          }}
+        />
+      ))
       setup.mockInput.pressKeys(["h", "i"])
       yield* Effect.promise(() => setup.renderOnce())
       expect(renderFrame(setup)).toContain("┃ hi")
@@ -638,12 +637,12 @@ describe("Composer renderer", () => {
   // A large paste becomes a placeholder where the caret is. The draft around
   // it stays whole, so submit sends the text before the caret, the paste, and
   // the text after the caret, in that order.
-  it.live("a large paste in the middle of the draft sends the exact text", () =>
+  it.scopedLive("a large paste in the middle of the draft sends the exact text", () =>
     Effect.gen(function* () {
       const submitted: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <TestComposer onSubmit={(content) => submitted.push(content)} />),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer onSubmit={(content) => submitted.push(content)} />
+      ))
       const pasted = "one\ntwo\nthree\nfour\nfive"
       yield* Effect.promise(() => setup.mockInput.typeText("hello world"))
       for (let i = 0; i < 5; i++) setup.mockInput.pressArrow("left")
@@ -655,12 +654,12 @@ describe("Composer renderer", () => {
       expect(submitted).toEqual([`hello ${pasted}world`])
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("a large paste over a selection replaces it and sends the exact text", () =>
+  it.scopedLive("a large paste over a selection replaces it and sends the exact text", () =>
     Effect.gen(function* () {
       const submitted: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <TestComposer onSubmit={(content) => submitted.push(content)} />),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer onSubmit={(content) => submitted.push(content)} />
+      ))
       const pasted = "one\ntwo\nthree\nfour\nfive"
       yield* Effect.promise(() => setup.mockInput.typeText("hello world"))
       for (let i = 0; i < 5; i++) setup.mockInput.pressArrow("left", { shift: true })
@@ -674,22 +673,20 @@ describe("Composer renderer", () => {
   // A terminal that sends Enter as CR pastes CR-separated lines. The paste is
   // the one place raw terminal bytes reach the draft, so the lines, the chip's
   // count, what the model reads and the ↑ recall all see `\n`.
-  it.live("a large paste with CR line breaks sends real lines and recalls with ↑", () =>
+  it.scopedLive("a large paste with CR line breaks sends real lines and recalls with ↑", () =>
     Effect.gen(function* () {
       const submitted: Array<string> = []
       const thrown: Array<unknown> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <ErrorBoundary
-            fallback={(error) => {
-              thrown.push(error)
-              return <text>render threw</text>
-            }}
-          >
-            <TestComposer onSubmit={(content) => submitted.push(content)} />
-          </ErrorBoundary>
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <ErrorBoundary
+          fallback={(error) => {
+            thrown.push(error)
+            return <text>render threw</text>
+          }}
+        >
+          <TestComposer onSubmit={(content) => submitted.push(content)} />
+        </ErrorBoundary>
+      ))
       const lines = Array.from(
         { length: 10 },
         (_, i) => `pasted line ${i + 1} from a terminal that sends CR`,
@@ -709,11 +706,9 @@ describe("Composer renderer", () => {
   // Up and down walk the prompts sent before, newest first; a prompt sent
   // twice in a row is one entry. Down past the newest gives back the draft
   // the walk started from.
-  it.live("up recalls earlier prompts and down gives back the draft", () =>
+  it.scopedLive("up recalls earlier prompts and down gives back the draft", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <TestComposer onSubmit={() => {}} />),
-      )
+      const setup = yield* renderScoped(() => <TestComposer onSubmit={() => {}} />)
       const send = (text: string) =>
         Effect.gen(function* () {
           yield* Effect.promise(() => setup.mockInput.typeText(text))
@@ -748,12 +743,12 @@ describe("Composer renderer", () => {
   )
   // A chip is one unit: a delete at its end takes the whole chip and its
   // stored text, so no fragment of it reaches the model.
-  it.live("backspace or ctrl+w at a paste chip's end removes the whole chip", () =>
+  it.scopedLive("backspace or ctrl+w at a paste chip's end removes the whole chip", () =>
     Effect.gen(function* () {
       const submitted: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <TestComposer onSubmit={(content) => submitted.push(content)} />),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer onSubmit={(content) => submitted.push(content)} />
+      ))
       const chip = "x".repeat(200)
       yield* Effect.promise(() => setup.mockInput.typeText("keep "))
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText(chip))
@@ -990,19 +985,17 @@ describe("Composer renderer", () => {
         expect(yield* fs.readFileString(seen)).toBe(`keep ${PASTE}`)
       }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("suspended composer blocks enter submission", () =>
+  it.scopedLive("suspended composer blocks enter submission", () =>
     Effect.gen(function* () {
       const submitted: string[] = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <TestComposer
-            suspended
-            onSubmit={(content) => {
-              submitted.push(content)
-            }}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer
+          suspended
+          onSubmit={(content) => {
+            submitted.push(content)
+          }}
+        />
+      ))
       setup.mockInput.pressKeys(["h", "i"])
       setup.mockInput.pressKey("RETURN")
       yield* Effect.promise(() => setup.renderOnce())
@@ -1077,21 +1070,19 @@ describe("Composer submit", () => {
       const submitted: Array<string> = []
       // The session is reached by id alone, so its record names no cwd and the
       // composer reads it from the server.
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
-          {
-            cwd: launchDir,
-            client: createMockClient({
-              session: { get: () => Effect.succeed(storedSessionIn(sessionDir)) },
-            }),
-            initialSession: {
-              sessionId: SessionId.make("session-elsewhere"),
-              branchId: BranchId.make("branch-elsewhere"),
-              name: "Elsewhere",
-            },
+      const setup = yield* renderScoped(
+        () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+        {
+          cwd: launchDir,
+          client: createMockClient({
+            session: { get: () => Effect.succeed(storedSessionIn(sessionDir)) },
+          }),
+          initialSession: {
+            sessionId: SessionId.make("session-elsewhere"),
+            branchId: BranchId.make("branch-elsewhere"),
+            name: "Elsewhere",
           },
-        ),
+        },
       )
       yield* Effect.promise(() => setup.mockInput.typeText("see @notes.md"))
       yield* Effect.promise(() => setup.renderOnce())
@@ -1118,22 +1109,20 @@ describe("Composer submit", () => {
           client = Option.some(useClient())
           return <box />
         }
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => (
-              <TestComposer onSubmit={(content, _mode, target) => sent.push({ content, target })}>
-                <CaptureClient />
-              </TestComposer>
-            ),
-            {
-              cwd: dir,
-              client: createMockClient({
-                session: {
-                  get: () => Deferred.await(gate).pipe(Effect.as(storedSessionIn(dir))),
-                },
-              }),
-            },
+        const setup = yield* renderScoped(
+          () => (
+            <TestComposer onSubmit={(content, _mode, target) => sent.push({ content, target })}>
+              <CaptureClient />
+            </TestComposer>
           ),
+          {
+            cwd: dir,
+            client: createMockClient({
+              session: {
+                get: () => Deferred.await(gate).pipe(Effect.as(storedSessionIn(dir))),
+              },
+            }),
+          },
         )
         yield* Effect.promise(() => setup.mockInput.typeText("see @notes.md"))
         yield* Effect.promise(() => setup.renderOnce())
@@ -1158,19 +1147,17 @@ describe("Composer submit", () => {
       const sessionDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${sessionDir}/marker-session.txt`, "")
       const submitted: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
-          {
-            cwd: launchDir,
-            initialSession: {
-              sessionId: SessionId.make("session-elsewhere"),
-              branchId: BranchId.make("branch-elsewhere"),
-              name: "Elsewhere",
-              cwd: sessionDir,
-            },
+      const setup = yield* renderScoped(
+        () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+        {
+          cwd: launchDir,
+          initialSession: {
+            sessionId: SessionId.make("session-elsewhere"),
+            branchId: BranchId.make("branch-elsewhere"),
+            name: "Elsewhere",
+            cwd: sessionDir,
           },
-        ),
+        },
       )
       yield* Effect.promise(() => setup.mockInput.typeText("!"))
       yield* Effect.promise(() => setup.mockInput.typeText("ls"))
@@ -1226,23 +1213,21 @@ describe("Composer submit", () => {
         client = Option.some(useClient())
         return <box />
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <TestComposer onSubmit={(content) => submitted.push(content)}>
-              <CaptureClient />
-            </TestComposer>
-          ),
-          {
-            cwd: launchDir,
-            initialSession: {
-              sessionId: SessionId.make("session-gone"),
-              branchId: BranchId.make("branch-gone"),
-              name: "Gone",
-              cwd: "/nonexistent/gent-probe-x",
-            },
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposer onSubmit={(content) => submitted.push(content)}>
+            <CaptureClient />
+          </TestComposer>
         ),
+        {
+          cwd: launchDir,
+          initialSession: {
+            sessionId: SessionId.make("session-gone"),
+            branchId: BranchId.make("branch-gone"),
+            name: "Gone",
+            cwd: "/nonexistent/gent-probe-x",
+          },
+        },
       )
       yield* Effect.promise(() => setup.mockInput.typeText("!"))
       yield* Effect.promise(() => setup.mockInput.typeText("echo hi"))
@@ -1269,23 +1254,21 @@ describe("Composer submit", () => {
         client = Option.some(useClient())
         return <box />
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <TestComposer onSubmit={() => {}}>
-              <CaptureClient />
-            </TestComposer>
-          ),
-          {
-            cwd: launchDir,
-            initialSession: {
-              sessionId: SessionId.make("session-gone-long"),
-              branchId: BranchId.make("branch-gone-long"),
-              name: "Gone",
-              cwd: "/nonexistent/gent-probe-x",
-            },
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposer onSubmit={() => {}}>
+            <CaptureClient />
+          </TestComposer>
         ),
+        {
+          cwd: launchDir,
+          initialSession: {
+            sessionId: SessionId.make("session-gone-long"),
+            branchId: BranchId.make("branch-gone-long"),
+            name: "Gone",
+            cwd: "/nonexistent/gent-probe-x",
+          },
+        },
       )
       yield* Effect.promise(() => setup.mockInput.typeText("!"))
       yield* Effect.promise(() => setup.mockInput.typeText(`echo ${"z".repeat(160)}`))
@@ -1313,13 +1296,11 @@ describe("Composer submit", () => {
       // second Enter arrives. The finalizer opens the gate on every exit.
       yield* Effect.addFinalizer(() => Effect.ignore(fs.writeFileString(`${dir}/go`, "")))
       const submitted: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
-          {
-            cwd: dir,
-          },
-        ),
+      const setup = yield* renderScoped(
+        () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+        {
+          cwd: dir,
+        },
       )
       yield* Effect.promise(() => setup.mockInput.typeText("!"))
       yield* Effect.promise(() =>
@@ -1358,15 +1339,13 @@ describe("Composer submit", () => {
         client = Option.some(useClient())
         return <box />
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <TestComposer onSubmit={(content) => submitted.push(content)} sendResult={sendResult}>
-              <CaptureClient />
-            </TestComposer>
-          ),
-          { cwd: dir },
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposer onSubmit={(content) => submitted.push(content)} sendResult={sendResult}>
+            <CaptureClient />
+          </TestComposer>
         ),
+        { cwd: dir },
       )
       yield* Effect.promise(() => setup.mockInput.typeText("!"))
       yield* Effect.promise(() => setup.mockInput.typeText("echo ran >> count; printf tu1-out"))
@@ -1400,21 +1379,19 @@ describe("Composer submit", () => {
         client = Option.some(useClient())
         return <box />
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <TestComposer
-            onSubmit={() => {}}
-            sendResult={Effect.fail(
-              Schema.decodeSync(GentRpcError)({
-                _tag: "InvalidStateError",
-                message: "send refused",
-              }),
-            )}
-          >
-            <CaptureClient />
-          </TestComposer>
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer
+          onSubmit={() => {}}
+          sendResult={Effect.fail(
+            Schema.decodeSync(GentRpcError)({
+              _tag: "InvalidStateError",
+              message: "send refused",
+            }),
+          )}
+        >
+          <CaptureClient />
+        </TestComposer>
+      ))
       yield* Effect.promise(() => setup.mockInput.typeText("keep me"))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
@@ -1440,11 +1417,9 @@ describe("Composer submit", () => {
         if (sends === 1) return Deferred.await(reply).pipe(Effect.andThen(Effect.fail(refusedSend)))
         return Effect.void
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <TestComposer onSubmit={(content) => submitted.push(content)} sendResult={sendResult} />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer onSubmit={(content) => submitted.push(content)} sendResult={sendResult} />
+      ))
       yield* Effect.promise(() => setup.mockInput.typeText("first send"))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
@@ -1479,18 +1454,16 @@ describe("Composer submit", () => {
         if (sends === 1) return Effect.fail(lost)
         return Effect.void
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <TestComposer
-            onSubmit={(content, _mode, _target, requestId) => {
-              ids.push(requestId)
-              // The server's dedup: one message per request id.
-              if (!admitted.has(requestId)) admitted.set(requestId, content)
-            }}
-            sendResult={sendResult}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer
+          onSubmit={(content, _mode, _target, requestId) => {
+            ids.push(requestId)
+            // The server's dedup: one message per request id.
+            if (!admitted.has(requestId)) admitted.set(requestId, content)
+          }}
+          sendResult={sendResult}
+        />
+      ))
       yield* Effect.promise(() => setup.mockInput.typeText("send once"))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
@@ -1513,14 +1486,12 @@ describe("Composer submit", () => {
         if (sends === 1) return Effect.fail(lost)
         return Effect.void
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <TestComposer
-            onSubmit={(_content, _mode, _target, requestId) => ids.push(requestId)}
-            sendResult={sendResult}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer
+          onSubmit={(_content, _mode, _target, requestId) => ids.push(requestId)}
+          sendResult={sendResult}
+        />
+      ))
       yield* Effect.promise(() => setup.mockInput.typeText("send once"))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
@@ -1543,14 +1514,12 @@ describe("Composer submit", () => {
         if (sends === 1) return Effect.fail(refusedSend)
         return Effect.void
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <TestComposer
-            onSubmit={(_content, _mode, _target, requestId) => ids.push(requestId)}
-            sendResult={sendResult}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer
+          onSubmit={(_content, _mode, _target, requestId) => ids.push(requestId)}
+          sendResult={sendResult}
+        />
+      ))
       yield* Effect.promise(() => setup.mockInput.typeText("send again"))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
@@ -1576,9 +1545,9 @@ describe("Composer submit", () => {
         if (Option.isNone(reply)) return Effect.fail(refused)
         return Deferred.await(reply.value).pipe(Effect.andThen(Effect.fail(refused)))
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <TestComposer onSubmit={() => {}} sendResult={sendResult} />),
-      )
+      const setup = yield* renderScoped(() => (
+        <TestComposer onSubmit={() => {}} sendResult={sendResult} />
+      ))
       yield* Effect.promise(() => setup.mockInput.typeText("first send"))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
@@ -1605,13 +1574,11 @@ describe("Composer submit", () => {
       const dir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${dir}/notes.md`, "notes body")
       const submitted: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
-          {
-            cwd: dir,
-          },
-        ),
+      const setup = yield* renderScoped(
+        () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+        {
+          cwd: dir,
+        },
       )
       yield* Effect.promise(() => setup.mockInput.typeText("see @notes.md"))
       yield* Effect.promise(() => setup.renderOnce())
@@ -1668,40 +1635,38 @@ function KeyProbe(props: { readonly onKey: (name: string) => void }) {
 }
 
 describe("AutocompletePopup renderer", () => {
-  it.live("each open tells the source once, before its first fetch", () =>
+  it.scopedLive("each open tells the source once, before its first fetch", () =>
     Effect.gen(function* () {
       const seen: Array<string> = []
       const [open, setOpen] = createSignal(true)
       const [filter, setFilter] = createSignal("src/")
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => {
-            const ui = useExtensionUI()
-            ui.setDynamicAutocomplete([
-              {
-                prefix: "@",
-                title: "Files",
-                onOpen: () => seen.push("open"),
-                items: (typed) => {
-                  seen.push(`items ${typed}`)
-                  return [{ id: `${typed}x`, label: `@${typed}x` }]
-                },
+      const setup = yield* renderScoped(
+        () => {
+          const ui = useExtensionUI()
+          ui.setDynamicAutocomplete([
+            {
+              prefix: "@",
+              title: "Files",
+              onOpen: () => seen.push("open"),
+              items: (typed) => {
+                seen.push(`items ${typed}`)
+                return [{ id: `${typed}x`, label: `@${typed}x` }]
               },
-            ])
-            return (
-              <Show when={open()}>
-                <AutocompletePopup
-                  state={{ type: "@", filter: filter(), triggerPos: 0 }}
-                  onSelect={() => {}}
-                  onComplete={() => {}}
-                  onClose={() => {}}
-                  onGhostChange={() => {}}
-                />
-              </Show>
-            )
-          },
-          { width: 80, height: 24 },
-        ),
+            },
+          ])
+          return (
+            <Show when={open()}>
+              <AutocompletePopup
+                state={{ type: "@", filter: filter(), triggerPos: 0 }}
+                onSelect={() => {}}
+                onComplete={() => {}}
+                onClose={() => {}}
+                onGhostChange={() => {}}
+              />
+            </Show>
+          )
+        },
+        { width: 80, height: 24 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("@src/x"), "first open")
       setFilter("src/a")
@@ -1714,26 +1679,24 @@ describe("AutocompletePopup renderer", () => {
     }),
   )
 
-  it.live("enter picks the row under the cursor and tab completes it", () =>
+  it.scopedLive("enter picks the row under the cursor and tab completes it", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []
       const completed: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ContributePopup items={slashItems} />
-              <AutocompletePopup
-                state={{ type: "/", filter: "", triggerPos: 0 }}
-                onSelect={(pick) => picked.push(pick.item.id)}
-                onComplete={(pick) => completed.push(pick.item.id)}
-                onClose={() => {}}
-                onGhostChange={() => {}}
-              />
-            </>
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ContributePopup items={slashItems} />
+            <AutocompletePopup
+              state={{ type: "/", filter: "", triggerPos: 0 }}
+              onSelect={(pick) => picked.push(pick.item.id)}
+              onComplete={(pick) => completed.push(pick.item.id)}
+              onClose={() => {}}
+              onGhostChange={() => {}}
+            />
+          </>
         ),
+        { width: 80, height: 24 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("/gamma"), "items")
       // Tab acts on the row enter would, and reports through the completion prop.
@@ -1747,7 +1710,7 @@ describe("AutocompletePopup renderer", () => {
     }),
   )
 
-  it.live("the ghost names the row tab completes after the cursor moves", () =>
+  it.scopedLive("the ghost names the row tab completes after the cursor moves", () =>
     Effect.gen(function* () {
       const items: ReadonlyArray<AutocompleteItem> = [
         { id: "model", label: "/model" },
@@ -1755,22 +1718,20 @@ describe("AutocompletePopup renderer", () => {
       ]
       const ghosts: Array<string> = []
       const completed: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ContributePopup items={items} />
-              <AutocompletePopup
-                state={{ type: "/", filter: "mo", triggerPos: 0 }}
-                onSelect={() => {}}
-                onComplete={(pick) => completed.push(pick.item.id)}
-                onClose={() => {}}
-                onGhostChange={(ghost) => ghosts.push(Option.getOrElse(ghost, () => ""))}
-              />
-            </>
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ContributePopup items={items} />
+            <AutocompletePopup
+              state={{ type: "/", filter: "mo", triggerPos: 0 }}
+              onSelect={() => {}}
+              onComplete={(pick) => completed.push(pick.item.id)}
+              onClose={() => {}}
+              onGhostChange={(ghost) => ghosts.push(Option.getOrElse(ghost, () => ""))}
+            />
+          </>
         ),
+        { width: 80, height: 24 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("/monitor"), "items")
       expect(ghosts.at(-1)).toBe("model")
@@ -1781,39 +1742,37 @@ describe("AutocompletePopup renderer", () => {
       expect(ghosts.at(-1)).toBe("monitor")
     }),
   )
-  it.live("a query typed in the composer after the cursor moved selects the top match", () =>
+  it.scopedLive("a query typed in the composer after the cursor moved selects the top match", () =>
     Effect.gen(function* () {
       const names = ["agents", "branch", "btw", "model", "mermaid", "new"]
       const [filter, setFilter] = createSignal("")
       const picked: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => {
-            const ui = useExtensionUI()
-            ui.setDynamicAutocomplete([
-              {
-                prefix: "/",
-                title: "Commands",
-                items: (typed) =>
-                  names
-                    .values()
-                    .filter((name) => name.startsWith(typed))
-                    .map((name) => ({ id: name, label: `/${name}` }))
-                    .toArray(),
-              },
-            ])
-            return (
-              <AutocompletePopup
-                state={{ type: "/", filter: filter(), triggerPos: 0 }}
-                onSelect={(pick) => picked.push(pick.item.id)}
-                onComplete={() => {}}
-                onClose={() => {}}
-                onGhostChange={() => {}}
-              />
-            )
-          },
-          { width: 80, height: 24 },
-        ),
+      const setup = yield* renderScoped(
+        () => {
+          const ui = useExtensionUI()
+          ui.setDynamicAutocomplete([
+            {
+              prefix: "/",
+              title: "Commands",
+              items: (typed) =>
+                names
+                  .values()
+                  .filter((name) => name.startsWith(typed))
+                  .map((name) => ({ id: name, label: `/${name}` }))
+                  .toArray(),
+            },
+          ])
+          return (
+            <AutocompletePopup
+              state={{ type: "/", filter: filter(), triggerPos: 0 }}
+              onSelect={(pick) => picked.push(pick.item.id)}
+              onComplete={() => {}}
+              onClose={() => {}}
+              onGhostChange={() => {}}
+            />
+          )
+        },
+        { width: 80, height: 24 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("/new"), "items")
       for (let press = 0; press < 5; press++) setup.mockInput.pressArrow("down")
@@ -1827,30 +1786,28 @@ describe("AutocompletePopup renderer", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("leaves every key to the composer while it has nothing to select", () =>
+  it.scopedLive("leaves every key to the composer while it has nothing to select", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []
       const seen: Array<string> = []
       let closed = 0
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <KeyProbe onKey={(name) => seen.push(name)} />
-              <ContributePopup items={[]} />
-              <AutocompletePopup
-                state={{ type: "/", filter: "zzz", triggerPos: 0 }}
-                onSelect={(pick) => picked.push(pick.item.id)}
-                onComplete={(pick) => picked.push(pick.item.id)}
-                onClose={() => {
-                  closed += 1
-                }}
-                onGhostChange={() => {}}
-              />
-            </>
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <KeyProbe onKey={(name) => seen.push(name)} />
+            <ContributePopup items={[]} />
+            <AutocompletePopup
+              state={{ type: "/", filter: "zzz", triggerPos: 0 }}
+              onSelect={(pick) => picked.push(pick.item.id)}
+              onComplete={(pick) => picked.push(pick.item.id)}
+              onClose={() => {
+                closed += 1
+              }}
+              onGhostChange={() => {}}
+            />
+          </>
         ),
+        { width: 80, height: 24 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("No matches"), "empty")
       setup.mockInput.pressEnter()
@@ -1973,23 +1930,21 @@ function TestComposerGhost(props: {
 }
 
 const mount = (submitted: Array<string>) =>
-  Effect.promise(() =>
-    renderWithProviders(
-      () => (
-        <TestComposerGhost
-          onSubmit={(text) => {
-            submitted.push(text)
-          }}
-        >
-          <Composer.Autocomplete />
-        </TestComposerGhost>
-      ),
-      { width: 80, height: 24 },
+  renderScoped(
+    () => (
+      <TestComposerGhost
+        onSubmit={(text) => {
+          submitted.push(text)
+        }}
+      >
+        <Composer.Autocomplete />
+      </TestComposerGhost>
     ),
+    { width: 80, height: 24 },
   )
 
 describe("Composer ghost line", () => {
-  it.live("offers the top-ranked completion for a partial name", () =>
+  it.scopedLive("offers the top-ranked completion for a partial name", () =>
     Effect.gen(function* () {
       const submitted: Array<string> = []
       const setup = yield* mount(submitted)
@@ -2000,7 +1955,7 @@ describe("Composer ghost line", () => {
     }),
   )
 
-  it.live("withdraws the ghost when the filter matches nothing", () =>
+  it.scopedLive("withdraws the ghost when the filter matches nothing", () =>
     Effect.gen(function* () {
       const submitted: Array<string> = []
       const setup = yield* mount(submitted)
@@ -2012,7 +1967,7 @@ describe("Composer ghost line", () => {
     }),
   )
 
-  it.live("shows no ghost once the name is fully typed", () =>
+  it.scopedLive("shows no ghost once the name is fully typed", () =>
     Effect.gen(function* () {
       const submitted: Array<string> = []
       const setup = yield* mount(submitted)
@@ -2023,7 +1978,7 @@ describe("Composer ghost line", () => {
     }),
   )
 
-  it.live("never submits the ghost as text", () =>
+  it.scopedLive("never submits the ghost as text", () =>
     Effect.gen(function* () {
       const submitted: Array<string> = []
       const setup = yield* mount(submitted)
@@ -2227,21 +2182,23 @@ const typeThenEnter = (
   dispatched: Array<Dispatched>,
   text: string,
   expected: string,
-): Effect.Effect<Awaited<ReturnType<typeof renderWithProviders>>, RenderWaitTimeoutError> =>
+): Effect.Effect<
+  Effect.Success<ReturnType<typeof renderScoped>>,
+  RenderWaitTimeoutError,
+  Scope.Scope
+> =>
   Effect.gen(function* () {
-    const setup = yield* Effect.promise(() =>
-      renderWithProviders(
-        () => (
-          <TestComposerSlashEnter
-            onSlashCommand={(cmd, args) => {
-              dispatched.push({ cmd, args })
-            }}
-          >
-            <Composer.Autocomplete />
-          </TestComposerSlashEnter>
-        ),
-        { width: 80, height: 24 },
+    const setup = yield* renderScoped(
+      () => (
+        <TestComposerSlashEnter
+          onSlashCommand={(cmd, args) => {
+            dispatched.push({ cmd, args })
+          }}
+        >
+          <Composer.Autocomplete />
+        </TestComposerSlashEnter>
       ),
+      { width: 80, height: 24 },
     )
     yield* Effect.promise(() => setup.mockInput.typeText(text))
     yield* waitForFrame(setup, (frame) => frame.includes(expected), expected)
@@ -2255,10 +2212,62 @@ const typeThenTab = (
   dispatched: Array<Dispatched>,
   text: string,
   expected: string,
-): Effect.Effect<Awaited<ReturnType<typeof renderWithProviders>>, RenderWaitTimeoutError> =>
+): Effect.Effect<
+  Effect.Success<ReturnType<typeof renderScoped>>,
+  RenderWaitTimeoutError,
+  Scope.Scope
+> =>
   Effect.gen(function* () {
-    const setup = yield* Effect.promise(() =>
-      renderWithProviders(
+    const setup = yield* renderScoped(
+      () => (
+        <TestComposerSlashEnter
+          onSlashCommand={(cmd, args) => {
+            dispatched.push({ cmd, args })
+          }}
+        >
+          <Composer.Autocomplete />
+        </TestComposerSlashEnter>
+      ),
+      { width: 80, height: 24 },
+    )
+    yield* Effect.promise(() => setup.mockInput.typeText(text))
+    yield* waitForFrame(setup, (frame) => frame.includes(expected), expected)
+    setup.mockInput.pressTab()
+    yield* Effect.promise(() => setup.renderOnce())
+    return setup
+  })
+
+describe("Composer slash Enter", () => {
+  it.scopedLive("runs a zero-argument command on the first Enter", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      const setup = yield* typeThenEnter(dispatched, "/agents", "/agents")
+      expect(dispatched).toEqual([{ cmd: "agents", args: "" }])
+      // No trailing-space leftover parked in the composer.
+      expect(renderFrame(setup)).not.toContain("/agents ")
+    }),
+  )
+
+  it.scopedLive("opens a bare optional-argument command on the first Enter", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      yield* typeThenEnter(dispatched, "/model", "/model")
+      expect(dispatched).toEqual([{ cmd: "model", args: "" }])
+    }),
+  )
+
+  it.scopedLive("opens bare /think on the first Enter", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      yield* typeThenEnter(dispatched, "/think", "/think")
+      expect(dispatched).toEqual([{ cmd: "think", args: "" }])
+    }),
+  )
+
+  it.scopedLive("passes a typed argument through on submit", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      const setup = yield* renderScoped(
         () => (
           <TestComposerSlashEnter
             onSlashCommand={(cmd, args) => {
@@ -2269,58 +2278,6 @@ const typeThenTab = (
           </TestComposerSlashEnter>
         ),
         { width: 80, height: 24 },
-      ),
-    )
-    yield* Effect.promise(() => setup.mockInput.typeText(text))
-    yield* waitForFrame(setup, (frame) => frame.includes(expected), expected)
-    setup.mockInput.pressTab()
-    yield* Effect.promise(() => setup.renderOnce())
-    return setup
-  })
-
-describe("Composer slash Enter", () => {
-  it.live("runs a zero-argument command on the first Enter", () =>
-    Effect.gen(function* () {
-      const dispatched: Array<Dispatched> = []
-      const setup = yield* typeThenEnter(dispatched, "/agents", "/agents")
-      expect(dispatched).toEqual([{ cmd: "agents", args: "" }])
-      // No trailing-space leftover parked in the composer.
-      expect(renderFrame(setup)).not.toContain("/agents ")
-    }),
-  )
-
-  it.live("opens a bare optional-argument command on the first Enter", () =>
-    Effect.gen(function* () {
-      const dispatched: Array<Dispatched> = []
-      yield* typeThenEnter(dispatched, "/model", "/model")
-      expect(dispatched).toEqual([{ cmd: "model", args: "" }])
-    }),
-  )
-
-  it.live("opens bare /think on the first Enter", () =>
-    Effect.gen(function* () {
-      const dispatched: Array<Dispatched> = []
-      yield* typeThenEnter(dispatched, "/think", "/think")
-      expect(dispatched).toEqual([{ cmd: "think", args: "" }])
-    }),
-  )
-
-  it.live("passes a typed argument through on submit", () =>
-    Effect.gen(function* () {
-      const dispatched: Array<Dispatched> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <TestComposerSlashEnter
-              onSlashCommand={(cmd, args) => {
-                dispatched.push({ cmd, args })
-              }}
-            >
-              <Composer.Autocomplete />
-            </TestComposerSlashEnter>
-          ),
-          { width: 80, height: 24 },
-        ),
       )
       // The space closes the slash popup, so Enter submits the whole line.
       yield* Effect.promise(() => setup.mockInput.typeText("/model sonnet"))
@@ -2331,22 +2288,20 @@ describe("Composer slash Enter", () => {
     }),
   )
 
-  it.live("keeps the trailing space for a file reference", () =>
+  it.scopedLive("keeps the trailing space for a file reference", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <TestComposerSlashEnter
-              onSlashCommand={(cmd, args) => {
-                dispatched.push({ cmd, args })
-              }}
-            >
-              <Composer.Autocomplete />
-            </TestComposerSlashEnter>
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposerSlashEnter
+            onSlashCommand={(cmd, args) => {
+              dispatched.push({ cmd, args })
+            }}
+          >
+            <Composer.Autocomplete />
+          </TestComposerSlashEnter>
         ),
+        { width: 80, height: 24 },
       )
       yield* Effect.promise(() => setup.mockInput.typeText("@notes"))
       yield* waitForFrame(setup, (frame) => frame.includes("notes.ts"), "file row")
@@ -2358,7 +2313,7 @@ describe("Composer slash Enter", () => {
     }),
   )
 
-  it.live("a directory row completes into the directory and keeps the popup open", () =>
+  it.scopedLive("a directory row completes into the directory and keeps the popup open", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
       const setup = yield* typeThenEnter(dispatched, "@src", "src/")
@@ -2423,7 +2378,7 @@ describe("Composer slash Enter", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("selects a row instead of submitting while the popup has one", () =>
+  it.scopedLive("selects a row instead of submitting while the popup has one", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
       // `/mod` matches `/model`, so a row exists. Enter must select that row,
@@ -2433,7 +2388,7 @@ describe("Composer slash Enter", () => {
     }),
   )
 
-  it.live("completes a command name on Tab without running it", () =>
+  it.scopedLive("completes a command name on Tab without running it", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
       const setup = yield* typeThenTab(dispatched, "/agents", "/agents")
@@ -2444,7 +2399,7 @@ describe("Composer slash Enter", () => {
     }),
   )
 
-  it.live("completes the selected row, not the first match, on Tab", () =>
+  it.scopedLive("completes the selected row, not the first match, on Tab", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
       // The regression: `/ag` matches `/fork` and `/auth` by title before it
@@ -2458,7 +2413,7 @@ describe("Composer slash Enter", () => {
     }),
   )
 
-  it.live("leaves an argument typeable after Tab completes the name", () =>
+  it.scopedLive("leaves an argument typeable after Tab completes the name", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
       // The affordance Tab exists for: complete `/model`, then type `sonnet`,
@@ -2473,7 +2428,7 @@ describe("Composer slash Enter", () => {
     }),
   )
 
-  it.live("inserts a file reference on Tab", () =>
+  it.scopedLive("inserts a file reference on Tab", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
       // The `@` path never dispatched and must not start now.

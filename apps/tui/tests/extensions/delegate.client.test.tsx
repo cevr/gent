@@ -15,7 +15,7 @@ import {
 } from "../../src/message-list"
 import type { Session } from "../../src/client"
 import { useExtensionUI } from "../../src/extensions/host"
-import { createMockClient, renderWithProviders } from "../render-harness-boundary"
+import { createMockClient, renderScoped } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 import { delegateSubtitle } from "../../src/extensions/delegate.client"
 
@@ -110,18 +110,16 @@ const fullDetails = {
 }
 
 const renderList = (items: ReadonlyArray<SessionItem>, height = 40) =>
-  Effect.promise(() =>
-    renderWithProviders(
-      () => (
-        <MessageList
-          items={[...items]}
-          disclosure="full"
-          syntaxStyle={syntaxStyle}
-          streaming={false}
-        />
-      ),
-      { initialSession: parentSession, width: 100, height },
+  renderScoped(
+    () => (
+      <MessageList
+        items={[...items]}
+        disclosure="full"
+        syntaxStyle={syntaxStyle}
+        streaming={false}
+      />
     ),
+    { initialSession: parentSession, width: 100, height },
   )
 
 /** A frame once the delegate client has loaded: its start row draws only then. */
@@ -136,7 +134,7 @@ const loadedFrame = (items: ReadonlyArray<SessionItem>, height = 40) =>
   })
 
 describe("delegate rows in native scrollback", () => {
-  it.live(
+  it.scopedLive(
     "the child's calls reach scrollback with its completion row",
     () =>
       Effect.gen(function* () {
@@ -149,40 +147,38 @@ describe("delegate rows in native scrollback", () => {
         ]
         const saved: string[] = []
         let loaded = () => false
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => {
-              const renderer = useRenderer()
-              loaded = useExtensionUI().loaded
-              const capture = (event: CliRendererExternalOutputEvent) =>
-                saved.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(true)))
-              renderer.on("external_output", capture)
-              onCleanup(() => renderer.off("external_output", capture))
-              return (
-                <NativeTranscript
-                  items={items}
-                  settled
-                  streaming={false}
-                  footerHeight={3}
-                  expanded={false}
-                  disclosure="full"
-                  displayRevision={0}
-                  overlayOpen={false}
-                  renderItems={(visible) => (
-                    <MessageList
-                      items={visible}
-                      disclosure="full"
-                      syntaxStyle={syntaxStyle}
-                      streaming={false}
-                    />
-                  )}
-                >
-                  <box />
-                </NativeTranscript>
-              )
-            },
-            { client: createMockClient(), initialSession: parentSession, width: 70, height: 20 },
-          ),
+        const setup = yield* renderScoped(
+          () => {
+            const renderer = useRenderer()
+            loaded = useExtensionUI().loaded
+            const capture = (event: CliRendererExternalOutputEvent) =>
+              saved.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(true)))
+            renderer.on("external_output", capture)
+            onCleanup(() => renderer.off("external_output", capture))
+            return (
+              <NativeTranscript
+                items={items}
+                settled
+                streaming={false}
+                footerHeight={3}
+                expanded={false}
+                disclosure="full"
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible) => (
+                  <MessageList
+                    items={visible}
+                    disclosure="full"
+                    syntaxStyle={syntaxStyle}
+                    streaming={false}
+                  />
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { client: createMockClient(), initialSession: parentSession, width: 70, height: 20 },
         )
         yield* Effect.promise(() => setup.flush()).pipe(
           Effect.repeat({ until: () => loaded() }),
@@ -207,7 +203,7 @@ describe("delegate rows in native scrollback", () => {
 })
 
 describe("child-completion row", () => {
-  it.live("draws the agent, usage, calls, and answer, not the model's envelope", () =>
+  it.scopedLive("draws the agent, usage, calls, and answer, not the model's envelope", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([completion(fullDetails)])
       expect(frame).toContain("delegate completed")
@@ -221,7 +217,7 @@ describe("child-completion row", () => {
     }),
   )
 
-  it.live("siblings started together show ids that tell them apart", () =>
+  it.scopedLive("siblings started together show ids that tell them apart", () =>
     Effect.gen(function* () {
       // UUIDv7 ids of children started in the same millisecond share their head.
       const first = "01a0ce0a-b3e7-7000-8000-00000000aaaa"
@@ -243,7 +239,7 @@ describe("child-completion row", () => {
     }),
   )
 
-  it.live("a long call summary keeps to one row", () =>
+  it.scopedLive("a long call summary keeps to one row", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([
         completion({
@@ -257,7 +253,7 @@ describe("child-completion row", () => {
     }),
   )
 
-  it.live("names how the child's turn ended badly", () =>
+  it.scopedLive("names how the child's turn ended badly", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([
         completion({ ...fullDetails, outcome: { interrupted: true } }),
@@ -266,7 +262,7 @@ describe("child-completion row", () => {
     }),
   )
 
-  it.live("draws the error a failed child ended on", () =>
+  it.scopedLive("draws the error a failed child ended on", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([
         completion({
@@ -287,7 +283,7 @@ describe("child-completion row", () => {
     branchId: "branch-child",
   }
 
-  it.live("a row saved before the details grew reads its status from the envelope", () =>
+  it.scopedLive("a row saved before the details grew reads its status from the envelope", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([completion(oldDetails)])
       expect(frame).toContain("✓ delegate completed · ess-1234")
@@ -296,7 +292,7 @@ describe("child-completion row", () => {
     }),
   )
 
-  it.live("an older row for an interrupted child never draws a success mark", () =>
+  it.scopedLive("an older row for an interrupted child never draws a success mark", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([
         completion(oldDetails, envelope("CHILD-ANSWER: partial", "ended (interrupted)")),
@@ -306,7 +302,7 @@ describe("child-completion row", () => {
     }),
   )
 
-  it.live("an older row for a failed child never draws a success mark", () =>
+  it.scopedLive("an older row for a failed child never draws a success mark", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([
         completion(oldDetails, envelope("CHILD-ANSWER: none", "ended (model stream failed)")),
@@ -315,7 +311,7 @@ describe("child-completion row", () => {
     }),
   )
 
-  it.live("an older row whose envelope does not parse draws a neutral mark", () =>
+  it.scopedLive("an older row whose envelope does not parse draws a neutral mark", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([completion(oldDetails, "CHILD-ANSWER: bare text")])
       expect(frame).toContain("· child finished · ess-1234")
@@ -323,7 +319,7 @@ describe("child-completion row", () => {
     }),
   )
 
-  it.live("details that do not decode draw the plain row", () =>
+  it.scopedLive("details that do not decode draw the plain row", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([completion({ unrelated: true })])
       expect(frame).toContain("Completion is a turn receipt")
@@ -332,7 +328,7 @@ describe("child-completion row", () => {
 })
 
 describe("delegate.start row", () => {
-  it.live("draws the task and the child handle", () =>
+  it.scopedLive("draws the task and the child handle", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([])
       expect(frame).toContain("review the loader")
@@ -340,7 +336,7 @@ describe("delegate.start row", () => {
     }),
   )
 
-  it.live("a cell's ops draw through the renderers registered for their tools", () =>
+  it.scopedLive("a cell's ops draw through the renderers registered for their tools", () =>
     Effect.gen(function* () {
       const cell = cellWith([
         startOp,

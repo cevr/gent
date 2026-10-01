@@ -42,7 +42,6 @@ import {
   createMutableRuntime,
   defaultTestSession,
   renderScoped,
-  renderWithProviders,
 } from "./render-harness-boundary"
 import { inRuntime, waitForFrame, waitUntil } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
@@ -184,16 +183,16 @@ function Probe(props: { readonly onReady: (client: ClientContextValue) => void }
   return <box />
 }
 
-const settle = (setup: Awaited<ReturnType<typeof renderWithProviders>>) =>
+const settle = (setup: Effect.Success<ReturnType<typeof renderScoped>>) =>
   Effect.promise(() => setup.renderOnce())
 
 describe("ClientProvider contract", () => {
-  it.live("a value held across a write reports the write, never the merge", () =>
+  it.scopedLive("a value held across a write reports the write, never the merge", () =>
     Effect.gen(function* () {
       let held = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Probe onReady={(value) => (held = Option.some(value))} />),
-      )
+      const setup = yield* renderScoped(() => (
+        <Probe onReady={(value) => (held = Option.some(value))} />
+      ))
       yield* settle(setup)
 
       // Captured before the write. The old split let this object keep the
@@ -214,12 +213,12 @@ describe("ClientProvider contract", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a session switch clears the error, the stream and the cost", () =>
+  it.scopedLive("a session switch clears the error, the stream and the cost", () =>
     Effect.gen(function* () {
       let held = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Probe onReady={(value) => (held = Option.some(value))} />),
-      )
+      const setup = yield* renderScoped(() => (
+        <Probe onReady={(value) => (held = Option.some(value))} />
+      ))
       yield* settle(setup)
 
       const client = yield* requireValue(held, "consumer never mounted")
@@ -247,12 +246,12 @@ describe("ClientProvider contract", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a late session-event subscriber first receives what the feed delivered", () =>
+  it.scopedLive("a late session-event subscriber first receives what the feed delivered", () =>
     Effect.gen(function* () {
       let held = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Probe onReady={(value) => (held = Option.some(value))} />),
-      )
+      const setup = yield* renderScoped(() => (
+        <Probe onReady={(value) => (held = Option.some(value))} />
+      ))
       yield* settle(setup)
       const client = yield* requireValue(held, "consumer never mounted")
       const envelope = (id: number) =>
@@ -647,7 +646,7 @@ const requireClientSessionState = (
   return Effect.succeed(context.value)
 }
 describe("ClientProvider session lifecycle", () => {
-  it.live("a new session carries the workspace cwd and becomes the active one", () =>
+  it.scopedLive("a new session carries the workspace cwd and becomes the active one", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const createdSessionId = SessionId.make("session-created")
@@ -663,11 +662,12 @@ describe("ClientProvider session lifecycle", () => {
             }),
         },
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+        {
           client,
           cwd: workspaceCwd,
-        }),
+        },
       )
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
       const active = ctx.value
@@ -746,57 +746,60 @@ describe("ClientProvider session lifecycle", () => {
       expect(active.session().cwd).toEqual("/work/parent")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("a new session takes its agent from its snapshot, never from the session before it", () =>
-    Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
-      const client = createMockClient({
-        session: {
-          create: () =>
-            Effect.succeed({
-              sessionId: SessionId.make("session-new"),
-              branchId: BranchId.make("branch-new"),
-              name: "New",
-            }),
-        },
-      })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          client,
-          initialSession: {
-            id: SessionId.make("session-resumed"),
-            activeBranchId: BranchId.make("branch-resumed"),
-            name: "Resumed",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+  it.scopedLive(
+    "a new session takes its agent from its snapshot, never from the session before it",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        const client = createMockClient({
+          session: {
+            create: () =>
+              Effect.succeed({
+                sessionId: SessionId.make("session-new"),
+                branchId: BranchId.make("branch-new"),
+                name: "New",
+              }),
           },
-          initialAgent: AgentName.make("secondary"),
-        }),
-      )
-      if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
-      const active = ctx.value
-      expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
-      active.createSession()
-      yield* waitForFrame(
-        setup,
-        () => active.session().sessionId === SessionId.make("session-new"),
-        "new session active",
-      )
-      // No guess before the snapshot: a handoff inherits its parent's agent,
-      // so assuming the default would flicker.
-      expect(active.agent()).toEqual(Option.none())
-      active.applySessionSnapshot({
-        sessionId: SessionId.make("session-new"),
-        branchId: BranchId.make("branch-new"),
-        messages: [],
-        lastEventId: 1,
-        reasoningLevel: absent,
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("secondary"),
-        runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
-        metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-      })
-      expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
-    }),
+        })
+        const setup = yield* renderScoped(
+          () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+          {
+            client,
+            initialSession: {
+              id: SessionId.make("session-resumed"),
+              activeBranchId: BranchId.make("branch-resumed"),
+              name: "Resumed",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+            initialAgent: AgentName.make("secondary"),
+          },
+        )
+        if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
+        const active = ctx.value
+        expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
+        active.createSession()
+        yield* waitForFrame(
+          setup,
+          () => active.session().sessionId === SessionId.make("session-new"),
+          "new session active",
+        )
+        // No guess before the snapshot: a handoff inherits its parent's agent,
+        // so assuming the default would flicker.
+        expect(active.agent()).toEqual(Option.none())
+        active.applySessionSnapshot({
+          sessionId: SessionId.make("session-new"),
+          branchId: BranchId.make("branch-new"),
+          messages: [],
+          lastEventId: 1,
+          reasoningLevel: absent,
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("secondary"),
+          runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+          metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+        })
+        expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
+      }),
   )
   // A create answers late. Only the latest navigation may take the view: a
   // create that a later /new or session switch has overtaken is dropped.
@@ -895,20 +898,18 @@ describe("ClientProvider session lifecycle", () => {
       expect(active.error()).toEqual(Option.none())
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("choosing the session already in view keeps its settings, status and metrics", () =>
+  it.scopedLive("choosing the session already in view keeps its settings, status and metrics", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: FIRST.sessionId,
-            activeBranchId: FIRST.branchId,
-            name: "First",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        initialSession: {
+          id: FIRST.sessionId,
+          activeBranchId: FIRST.branchId,
+          name: "First",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const client = yield* requireClientSessionState(ctx)
       const model = ModelId.make("openai/gpt-5.6-luna")
       client.applySessionSnapshot({
@@ -927,25 +928,20 @@ describe("ClientProvider session lifecycle", () => {
       expect(Option.isSome(client.sessionMetrics().context)).toBe(true)
     }),
   )
-  it.live(
+  it.scopedLive(
     "a branch switch event moves to the new branch with the old branch's metrics dropped",
     () =>
       Effect.gen(function* () {
         let ctx = Option.none<ClientContextValue>()
-        yield* Effect.promise(() =>
-          renderWithProviders(
-            () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
-            {
-              initialSession: {
-                id: FIRST.sessionId,
-                activeBranchId: FIRST.branchId,
-                name: "First",
-                createdAt: dateFromMillis(0),
-                updatedAt: dateFromMillis(0),
-              },
-            },
-          ),
-        )
+        yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        })
         const client = yield* requireClientSessionState(ctx)
         client.applySessionSnapshot({
           ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
@@ -970,7 +966,7 @@ describe("ClientProvider session lifecycle", () => {
         expect(Option.isNone(client.sessionMetrics().context)).toBe(true)
       }),
   )
-  it.live("a settings change sends only the field it names", () =>
+  it.scopedLive("a settings change sends only the field it names", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const sent: Array<UpdateSessionSettingsInput> = []
@@ -984,18 +980,16 @@ describe("ClientProvider session lifecycle", () => {
             }),
         },
       })
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          client,
-          initialSession: {
-            id: FIRST.sessionId,
-            activeBranchId: FIRST.branchId,
-            name: "First",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        client,
+        initialSession: {
+          id: FIRST.sessionId,
+          activeBranchId: FIRST.branchId,
+          name: "First",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const active = yield* requireClientSessionState(ctx)
       // Just switched: the session's model is not known here yet.
       active.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
@@ -1004,22 +998,20 @@ describe("ClientProvider session lifecycle", () => {
       expect(active.session().modelId).toEqual(ModelId.make("openai/gpt-5.6-luna"))
     }),
   )
-  it.live("runtime idle clears finishing activity only for the current branch", () =>
+  it.scopedLive("runtime idle clears finishing activity only for the current branch", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const sessionId = SessionId.make("session-runtime-idle")
       const branchId = BranchId.make("branch-runtime-idle")
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: sessionId,
-            activeBranchId: branchId,
-            name: "Runtime",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        initialSession: {
+          id: sessionId,
+          activeBranchId: branchId,
+          name: "Runtime",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const client = yield* requireClientSessionState(ctx)
       client.applySessionSnapshot({
         sessionId,
@@ -1048,7 +1040,7 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.isStreaming()).toBe(false)
     }),
   )
-  it.live("an extension notice keeps the running turn and the standing error", () =>
+  it.scopedLive("an extension notice keeps the running turn and the standing error", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       let runtime = Option.none<ClientRuntime>()
@@ -1063,17 +1055,15 @@ describe("ClientProvider session lifecycle", () => {
         })
         return <box />
       }
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <NoticeProbe />, {
-          initialSession: {
-            id: sessionId,
-            activeBranchId: branchId,
-            name: "Notice",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <NoticeProbe />, {
+        initialSession: {
+          id: sessionId,
+          activeBranchId: branchId,
+          name: "Notice",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const client = yield* requireClientSessionState(ctx)
       const clientRuntime = yield* requireValue(runtime, "extension runtime never mounted")
       const notify = (message: string) =>
@@ -1108,7 +1098,7 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.notice()).toEqual(Option.some('Unknown driver "nope".'))
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("model list failures surface as agent errors", () =>
+  it.scopedLive("model list failures surface as agent errors", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const mockClient = createMockClient({
@@ -1121,17 +1111,18 @@ describe("ClientProvider session lifecycle", () => {
             }),
         },
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+        {
           client: mockClient,
-        }),
+        },
       )
       const client = yield* requireClientSessionState(ctx)
       yield* waitForFrame(setup, () => Option.isSome(client.error()), "agent error")
       expect(client.error()).toEqual(Option.some("Driver openai: catalog filter failed"))
     }),
   )
-  it.live("a model catalog that failed to load is read again after a reconnect", () =>
+  it.scopedLive("a model catalog that failed to load is read again after a reconnect", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       let listings = 0
@@ -1150,12 +1141,10 @@ describe("ClientProvider session lifecycle", () => {
             }),
         },
       })
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          client: mockClient,
-          runtime: lifecycle.runtime,
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        client: mockClient,
+        runtime: lifecycle.runtime,
+      })
       const client = yield* requireClientSessionState(ctx)
       yield* waitUntil(() => Option.isSome(client.error()), "the failed load")
       lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
@@ -1164,7 +1153,7 @@ describe("ClientProvider session lifecycle", () => {
       expect(listings).toBe(2)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live(
+  it.scopedLive(
     "extension health reads again on a settings change or an extension pulse, not a rename",
     () =>
       Effect.gen(function* () {
@@ -1186,21 +1175,16 @@ describe("ClientProvider session lifecycle", () => {
               }),
           },
         })
-        yield* Effect.promise(() =>
-          renderWithProviders(
-            () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
-            {
-              client: mockClient,
-              initialSession: {
-                id: FIRST.sessionId,
-                activeBranchId: FIRST.branchId,
-                name: "First",
-                createdAt: dateFromMillis(0),
-                updatedAt: dateFromMillis(0),
-              },
-            },
-          ),
-        )
+        yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client: mockClient,
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        })
         const client = yield* requireClientSessionState(ctx)
         yield* waitUntil(() => healthReads.length === 1, "the mount read")
         const pulse = (id: number, event: EventEnvelope["event"]) =>
@@ -1239,16 +1223,17 @@ describe("ClientProvider session lifecycle", () => {
         ])
       }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("a failing RPC through surfaceError lands the formatted text in the error line", () =>
-    Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
-      const mockClient = createMockClient({
-        branch: {
-          create: () => Effect.fail({ _tag: "NotFoundError", message: "branch gone" }),
-        },
-      })
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+  it.scopedLive(
+    "a failing RPC through surfaceError lands the formatted text in the error line",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        const mockClient = createMockClient({
+          branch: {
+            create: () => Effect.fail({ _tag: "NotFoundError", message: "branch gone" }),
+          },
+        })
+        yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
           client: mockClient,
           initialSession: {
             id: SessionId.make("session-surface"),
@@ -1257,34 +1242,28 @@ describe("ClientProvider session lifecycle", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-        }),
-      )
-      const client = yield* requireClientSessionState(ctx)
-      expect(client.error()).toEqual(Option.none())
-      yield* client.surfaceError(client.createBranch)
-      expect(client.error()).toEqual(Option.some("Not found: branch gone"))
-      expect(client.isError()).toBe(true)
-    }),
+        })
+        const client = yield* requireClientSessionState(ctx)
+        expect(client.error()).toEqual(Option.none())
+        yield* client.surfaceError(client.createBranch)
+        expect(client.error()).toEqual(Option.some("Not found: branch gone"))
+        expect(client.isError()).toBe(true)
+      }),
   )
-  it.live(
+  it.scopedLive(
     "switchSession activates the target session at once; its agent waits for the snapshot",
     () =>
       Effect.gen(function* () {
         let ctx = Option.none<ClientContextValue>()
-        yield* Effect.promise(() =>
-          renderWithProviders(
-            () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
-            {
-              initialSession: {
-                id: SessionId.make("session-a"),
-                activeBranchId: BranchId.make("branch-a"),
-                name: "A",
-                createdAt: dateFromMillis(0),
-                updatedAt: dateFromMillis(0),
-              },
-            },
-          ),
-        )
+        yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        })
         const client = yield* requireClientSessionState(ctx)
         client.switchSession(SessionId.make("session-b"), BranchId.make("branch-b"), "B")
         expect(client.session()).toEqual({
@@ -1298,11 +1277,12 @@ describe("ClientProvider session lifecycle", () => {
         expect(client.agent()).toEqual(Option.none())
       }),
   )
-  it.live("the model and agent shown are the ones the snapshot resolved", () =>
+  it.scopedLive("the model and agent shown are the ones the snapshot resolved", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+        {
           initialSession: {
             id: SessionId.make("session-model"),
             activeBranchId: BranchId.make("branch-model"),
@@ -1310,7 +1290,7 @@ describe("ClientProvider session lifecycle", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-        }),
+        },
       )
       const client = yield* requireClientSessionState(ctx)
       client.applySessionSnapshot({
@@ -1342,11 +1322,12 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.agent()).toEqual(Option.some(AgentName.make("primary")))
     }),
   )
-  it.live("a snapshot for the session in view refreshes its name and reasoning level", () =>
+  it.scopedLive("a snapshot for the session in view refreshes its name and reasoning level", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+        {
           initialSession: {
             id: SessionId.make("session-refresh"),
             activeBranchId: BranchId.make("branch-refresh"),
@@ -1354,7 +1335,7 @@ describe("ClientProvider session lifecycle", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-        }),
+        },
       )
       const client = yield* requireClientSessionState(ctx)
       client.applySessionSnapshot({
@@ -1392,20 +1373,18 @@ describe("ClientProvider session lifecycle", () => {
       })
     }),
   )
-  it.live("a snapshot for a session the reader left changes nothing", () =>
+  it.scopedLive("a snapshot for a session the reader left changes nothing", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: SessionId.make("session-source"),
-            activeBranchId: BranchId.make("branch-source"),
-            name: "Source",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        initialSession: {
+          id: SessionId.make("session-source"),
+          activeBranchId: BranchId.make("branch-source"),
+          name: "Source",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const client = yield* requireClientSessionState(ctx)
       client.switchSession(
         SessionId.make("session-target"),
@@ -1447,11 +1426,12 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.sessionMetrics().latestInputTokens).toBe(0)
     }),
   )
-  it.live("a snapshot for a branch the reader left changes nothing", () =>
+  it.scopedLive("a snapshot for a branch the reader left changes nothing", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+        {
           initialSession: {
             id: SessionId.make("session-branch-race"),
             activeBranchId: BranchId.make("branch-old"),
@@ -1459,7 +1439,7 @@ describe("ClientProvider session lifecycle", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-        }),
+        },
       )
       const client = yield* requireClientSessionState(ctx)
       client.switchSession(
@@ -1506,48 +1486,51 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.sessionMetrics().latestInputTokens).toBe(0)
     }),
   )
-  it.live("a session switch drops the previous session's model before its snapshot lands", () =>
-    Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: SessionId.make("session-prev"),
-            activeBranchId: BranchId.make("branch-prev"),
-            name: "P",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+  it.scopedLive(
+    "a session switch drops the previous session's model before its snapshot lands",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        const setup = yield* renderScoped(
+          () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+          {
+            initialSession: {
+              id: SessionId.make("session-prev"),
+              activeBranchId: BranchId.make("branch-prev"),
+              name: "P",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
           },
-        }),
-      )
-      const client = yield* requireClientSessionState(ctx)
-      client.applySessionSnapshot({
-        sessionId: SessionId.make("session-prev"),
-        branchId: BranchId.make("branch-prev"),
-        messages: [],
-        lastEventId: nullValue,
-        reasoningLevel: absent,
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("primary"),
-        runtime: {
-          _tag: "Idle",
-          queue: emptyQueueSnapshot(),
-        },
-        metrics: {
-          turns: 1,
-          durationMs: 0,
-          costUsd: 0,
-          lastInputTokens: 0,
-        },
-      })
-      yield* waitForFrame(
-        setup,
-        () => client.model() === "anthropic/claude-haiku-4-5-20251001",
-        "session state",
-      )
-      client.switchSession(SessionId.make("session-next"), BranchId.make("branch-next"), "N")
-      expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
-    }),
+        )
+        const client = yield* requireClientSessionState(ctx)
+        client.applySessionSnapshot({
+          sessionId: SessionId.make("session-prev"),
+          branchId: BranchId.make("branch-prev"),
+          messages: [],
+          lastEventId: nullValue,
+          reasoningLevel: absent,
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("primary"),
+          runtime: {
+            _tag: "Idle",
+            queue: emptyQueueSnapshot(),
+          },
+          metrics: {
+            turns: 1,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          },
+        })
+        yield* waitForFrame(
+          setup,
+          () => client.model() === "anthropic/claude-haiku-4-5-20251001",
+          "session state",
+        )
+        client.switchSession(SessionId.make("session-next"), BranchId.make("branch-next"), "N")
+        expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
+      }),
   )
 })
 
@@ -1583,17 +1566,15 @@ describe("ClientProvider send", () => {
           return Effect.void
         })
       let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          client: createMockClient({
-            message: { send: attempt },
-            steer: {
-              command: (input: { readonly command: { readonly requestId?: string } }) =>
-                attempt(input.command),
-            },
-          }),
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        client: createMockClient({
+          message: { send: attempt },
+          steer: {
+            command: (input: { readonly command: { readonly requestId?: string } }) =>
+              attempt(input.command),
+          },
         }),
-      )
+      })
       return { client: yield* requireClient(ctx), requestIds }
     })
   const verbs = {
@@ -1617,7 +1598,7 @@ describe("ClientProvider send", () => {
 
   for (const [verb, run] of Object.entries(verbs)) {
     for (const [name, failure] of Object.entries(lost)) {
-      it.live(`${verb}: ${name} retries under the first request id`, () =>
+      it.scopedLive(`${verb}: ${name} retries under the first request id`, () =>
         Effect.gen(function* () {
           const { client, requestIds } = yield* mountFailingOnce(failure)
           yield* run(client)
@@ -1629,7 +1610,7 @@ describe("ClientProvider send", () => {
     }
     // Not a lost connection: another try gets the same answer.
     for (const [name, failure] of Object.entries(answered)) {
-      it.live(`${verb}: ${name} is final at once`, () =>
+      it.scopedLive(`${verb}: ${name} is final at once`, () =>
         Effect.gen(function* () {
           const { client, requestIds } = yield* mountFailingOnce(failure)
           const exit = yield* Effect.exit(run(client))
@@ -1692,11 +1673,12 @@ describe("useRuntime call", () => {
  * snapshot, as one for a session the reader left does.
  */
 describe("ClientProvider errors", () => {
-  it.live("an error set after a switch, before the snapshot lands, survives the snapshot", () =>
-    Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+  it.scopedLive(
+    "an error set after a switch, before the snapshot lands, survives the snapshot",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
           initialSession: {
             id: FIRST.sessionId,
             activeBranchId: FIRST.branchId,
@@ -1704,21 +1686,21 @@ describe("ClientProvider errors", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-        }),
-      )
-      const client = yield* requireClient(ctx)
-      client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
-      client.setErrorIn(SECOND, "send refused")
-      client.applySessionSnapshot(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0 }))
-      expect(client.error()).toEqual(Option.some("send refused"))
-    }),
+        })
+        const client = yield* requireClient(ctx)
+        client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
+        client.setErrorIn(SECOND, "send refused")
+        client.applySessionSnapshot(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0 }))
+        expect(client.error()).toEqual(Option.some("send refused"))
+      }),
   )
 
-  it.live("an error cleared on screen does not come back after a switch to the same session", () =>
-    Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+  it.scopedLive(
+    "an error cleared on screen does not come back after a switch to the same session",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
           initialSession: {
             id: FIRST.sessionId,
             activeBranchId: FIRST.branchId,
@@ -1726,42 +1708,39 @@ describe("ClientProvider errors", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-        }),
-      )
-      const client = yield* requireClient(ctx)
-      client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
-      client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
-      client.setErrorIn(FIRST, "send refused")
-      expect(client.error()).toEqual(Option.some("send refused"))
-      // A later turn replaces the error on screen.
-      client.applySessionEvent(
-        makeEnvelope(
-          1,
-          StreamStarted.make({ sessionId: FIRST.sessionId, branchId: FIRST.branchId }),
-        ),
-      )
-      expect(client.isStreaming()).toBe(true)
-      client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
-      client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
-      client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
-      expect(client.error()).toEqual(Option.none())
-    }),
+        })
+        const client = yield* requireClient(ctx)
+        client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
+        client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
+        client.setErrorIn(FIRST, "send refused")
+        expect(client.error()).toEqual(Option.some("send refused"))
+        // A later turn replaces the error on screen.
+        client.applySessionEvent(
+          makeEnvelope(
+            1,
+            StreamStarted.make({ sessionId: FIRST.sessionId, branchId: FIRST.branchId }),
+          ),
+        )
+        expect(client.isStreaming()).toBe(true)
+        client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
+        client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
+        client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
+        expect(client.error()).toEqual(Option.none())
+      }),
   )
 
-  it.live("a refetched snapshot keeps the error on screen", () =>
+  it.scopedLive("a refetched snapshot keeps the error on screen", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: FIRST.sessionId,
-            activeBranchId: FIRST.branchId,
-            name: "First",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        initialSession: {
+          id: FIRST.sessionId,
+          activeBranchId: FIRST.branchId,
+          name: "First",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const client = yield* requireClient(ctx)
       client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
       client.setErrorIn(FIRST, "send refused")
@@ -1771,20 +1750,18 @@ describe("ClientProvider errors", () => {
     }),
   )
 
-  it.live("an error a later turn replaced does not come back with a snapshot", () =>
+  it.scopedLive("an error a later turn replaced does not come back with a snapshot", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: FIRST.sessionId,
-            activeBranchId: FIRST.branchId,
-            name: "First",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        initialSession: {
+          id: FIRST.sessionId,
+          activeBranchId: FIRST.branchId,
+          name: "First",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const client = yield* requireClient(ctx)
       client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
       client.setErrorIn(SECOND, "send refused")
@@ -1801,20 +1778,18 @@ describe("ClientProvider errors", () => {
     }),
   )
 
-  it.live("an error set once the snapshot is in shows at once", () =>
+  it.scopedLive("an error set once the snapshot is in shows at once", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: FIRST.sessionId,
-            activeBranchId: FIRST.branchId,
-            name: "First",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        initialSession: {
+          id: FIRST.sessionId,
+          activeBranchId: FIRST.branchId,
+          name: "First",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const client = yield* requireClient(ctx)
       client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
       client.setErrorIn(FIRST, "send refused")
@@ -1825,20 +1800,18 @@ describe("ClientProvider errors", () => {
   // The feed skips the lifecycle events a snapshot covers, so a turn that
   // started while the connection was down reaches the client only inside the
   // snapshot. It is still a turn start, and it clears the error.
-  it.live("a turn that started during a disconnect drops the held error", () =>
+  it.scopedLive("a turn that started during a disconnect drops the held error", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: FIRST.sessionId,
-            activeBranchId: FIRST.branchId,
-            name: "First",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        initialSession: {
+          id: FIRST.sessionId,
+          activeBranchId: FIRST.branchId,
+          name: "First",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const client = yield* requireClient(ctx)
       const idle = snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 })
       client.applySessionSnapshot(idle)
@@ -1855,20 +1828,18 @@ describe("ClientProvider errors", () => {
     }),
   )
 
-  it.live("a snapshot of the turn the error was shown in keeps the error", () =>
+  it.scopedLive("a snapshot of the turn the error was shown in keeps the error", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: FIRST.sessionId,
-            activeBranchId: FIRST.branchId,
-            name: "First",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        initialSession: {
+          id: FIRST.sessionId,
+          activeBranchId: FIRST.branchId,
+          name: "First",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const client = yield* requireClient(ctx)
       const running: SessionSnapshot["runtime"] = {
         _tag: "Running",
@@ -1891,20 +1862,18 @@ describe("ClientProvider errors", () => {
     }),
   )
 
-  it.live("an error leaves the turn running; the next turn start clears it", () =>
+  it.scopedLive("an error leaves the turn running; the next turn start clears it", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: FIRST.sessionId,
-            activeBranchId: FIRST.branchId,
-            name: "First",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        initialSession: {
+          id: FIRST.sessionId,
+          activeBranchId: FIRST.branchId,
+          name: "First",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       const client = yield* requireClient(ctx)
       const running: SessionSnapshot["runtime"] = {
         _tag: "Running",

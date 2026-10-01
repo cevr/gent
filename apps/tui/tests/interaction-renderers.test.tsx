@@ -10,12 +10,7 @@ import {
 } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { AskUserRenderer, HandoffRenderer, PromptRenderer } from "../src/interaction-renderers"
-import {
-  createMockClient,
-  destroyRenderSetup,
-  renderFrame,
-  renderWithProviders,
-} from "./render-harness-boundary"
+import { createMockClient, renderFrame, renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import { BunFileSystem } from "@effect/platform-bun"
 import { EnvProvider } from "../src/workspace"
@@ -32,33 +27,31 @@ const interaction = (text: string) =>
   }) satisfies ActiveInteraction
 
 describe("AskUserRenderer", () => {
-  it.live("renders structured questions", () =>
+  it.scopedLive("renders structured questions", () =>
     Effect.gen(function* () {
       const results: ApprovalResult[] = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <AskUserRenderer
-              event={
-                {
-                  ...interaction("fallback question"),
-                  metadata: {
-                    type: "ask-user",
-                    questions: [
-                      {
-                        header: "Pick a color",
-                        question: "Choose your favorite",
-                        options: [{ label: "Red" }, { label: "Blue" }],
-                      },
-                    ],
-                  },
-                } satisfies ActiveInteraction
-              }
-              resolve={(r) => results.push(r)}
-            />
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <AskUserRenderer
+            event={
+              {
+                ...interaction("fallback question"),
+                metadata: {
+                  type: "ask-user",
+                  questions: [
+                    {
+                      header: "Pick a color",
+                      question: "Choose your favorite",
+                      options: [{ label: "Red" }, { label: "Blue" }],
+                    },
+                  ],
+                },
+              } satisfies ActiveInteraction
+            }
+            resolve={(r) => results.push(r)}
+          />
         ),
+        { width: 80, height: 24 },
       )
       const frame = yield* waitForFrame(
         setup,
@@ -69,23 +62,20 @@ describe("AskUserRenderer", () => {
       expect(frame).toContain("Choose your favorite")
       expect(frame).toContain("Red")
       expect(frame).toContain("Blue")
-      destroyRenderSetup(setup)
     }),
   )
 
-  it.live("falls back to yes/no without structured metadata", () =>
+  it.scopedLive("falls back to yes/no without structured metadata", () =>
     Effect.gen(function* () {
       const results: ApprovalResult[] = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <AskUserRenderer
-              event={interaction("Do you want to proceed?")}
-              resolve={(r) => results.push(r)}
-            />
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <AskUserRenderer
+            event={interaction("Do you want to proceed?")}
+            resolve={(r) => results.push(r)}
+          />
         ),
+        { width: 80, height: 24 },
       )
       const frame = yield* waitForFrame(
         setup,
@@ -99,7 +89,6 @@ describe("AskUserRenderer", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       expect(results).toEqual([{ approved: false }])
-      destroyRenderSetup(setup)
     }),
   )
 })
@@ -118,38 +107,35 @@ describe("AskUserRenderer answers", () => {
   const ask = (questions: ReadonlyArray<typeof color & { multiple?: boolean }>) =>
     Effect.gen(function* () {
       const results: ApprovalResult[] = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <AskUserRenderer
-              event={
-                {
-                  ...interaction("fallback question"),
-                  metadata: { type: "ask-user", questions },
-                } satisfies ActiveInteraction
-              }
-              resolve={(r) => results.push(r)}
-            />
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <AskUserRenderer
+            event={
+              {
+                ...interaction("fallback question"),
+                metadata: { type: "ask-user", questions },
+              } satisfies ActiveInteraction
+            }
+            resolve={(r) => results.push(r)}
+          />
         ),
+        { width: 80, height: 24 },
       )
       yield* waitForFrame(setup, (f) => f.includes("Pick a color"), "the question")
       return { setup, results }
     })
 
-  it.live("enter on a single choice sends that choice", () =>
+  it.scopedLive("enter on a single choice sends that choice", () =>
     Effect.gen(function* () {
       const { setup, results } = yield* ask([color])
       setup.mockInput.pressArrow("down")
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       expect(results).toEqual([{ approved: true, notes: '[["Blue"]]' }])
-      destroyRenderSetup(setup)
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("space toggles each choice of a multiple choice and enter sends them", () =>
+  it.scopedLive("space toggles each choice of a multiple choice and enter sends them", () =>
     Effect.gen(function* () {
       const { setup, results } = yield* ask([{ ...color, multiple: true }])
       setup.mockInput.pressKey(" ")
@@ -158,11 +144,10 @@ describe("AskUserRenderer answers", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       expect(results).toEqual([{ approved: true, notes: '[["Red","Blue"]]' }])
-      destroyRenderSetup(setup)
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a typed answer past the choices is sent as the answer", () =>
+  it.scopedLive("a typed answer past the choices is sent as the answer", () =>
     Effect.gen(function* () {
       const { setup, results } = yield* ask([color])
       setup.mockInput.pressArrow("down")
@@ -172,11 +157,10 @@ describe("AskUserRenderer answers", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       expect(results).toEqual([{ approved: true, notes: '[["Green"]]' }])
-      destroyRenderSetup(setup)
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("several questions send one array of picks per question", () =>
+  it.scopedLive("several questions send one array of picks per question", () =>
     Effect.gen(function* () {
       const size = {
         header: "Pick a size",
@@ -192,18 +176,16 @@ describe("AskUserRenderer answers", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       expect(results).toEqual([{ approved: true, notes: '[["Red"],["Large"]]' }])
-      destroyRenderSetup(setup)
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("escape declines the question", () =>
+  it.scopedLive("escape declines the question", () =>
     Effect.gen(function* () {
       const { setup, results } = yield* ask([color])
       setup.mockInput.pressEscape()
       // A lone escape byte is told from an escape sequence after a short wait.
       yield* waitForFrame(setup, () => results.length > 0, "the decline")
       expect(results).toEqual([{ approved: false }])
-      destroyRenderSetup(setup)
     }).pipe(Effect.timeout("10 seconds")),
   )
 })
@@ -211,30 +193,27 @@ describe("AskUserRenderer answers", () => {
 // ── handoff ─────────────────────────────────────────────────────────────────
 
 describe("HandoffRenderer", () => {
-  it.live("renders confirmation with summary", () =>
+  it.scopedLive("renders confirmation with summary", () =>
     Effect.gen(function* () {
       const results: ApprovalResult[] = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <HandoffRenderer
-              event={interaction("Todo complete. Ready to hand off to the user.")}
-              resolve={(r) => results.push(r)}
-            />
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <HandoffRenderer
+            event={interaction("Todo complete. Ready to hand off to the user.")}
+            resolve={(r) => results.push(r)}
+          />
         ),
+        { width: 80, height: 24 },
       )
       const frame = yield* waitForFrame(setup, (f) => f.includes("Handoff"), "handoff renderer")
       expect(frame).toContain("Handoff")
       expect(frame).toContain("Ready to hand off")
       expect(frame).toContain("Yes")
       expect(frame).toContain("No")
-      destroyRenderSetup(setup)
     }),
   )
 
-  it.live("confirming opens a linked session seeded with the summary", () =>
+  it.scopedLive("confirming opens a linked session seeded with the summary", () =>
     Effect.gen(function* () {
       const results: ApprovalResult[] = []
       const created: CreateSessionInput[] = []
@@ -250,25 +229,23 @@ describe("HandoffRenderer", () => {
           },
         },
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <HandoffRenderer
-              event={interaction("Carry over: rows and marker.")}
-              resolve={(r) => results.push(r)}
-            />
-          ),
-          {
-            width: 80,
-            height: 24,
-            client,
-            initialSession: {
-              sessionId: SessionId.make("parent-session"),
-              branchId: BranchId.make("parent-branch"),
-              name: "Parent",
-            },
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <HandoffRenderer
+            event={interaction("Carry over: rows and marker.")}
+            resolve={(r) => results.push(r)}
+          />
         ),
+        {
+          width: 80,
+          height: 24,
+          client,
+          initialSession: {
+            sessionId: SessionId.make("parent-session"),
+            branchId: BranchId.make("parent-branch"),
+            name: "Parent",
+          },
+        },
       )
       yield* waitForFrame(setup, (f) => f.includes("Handoff"), "handoff renderer")
       setup.mockInput.pressEnter()
@@ -279,7 +256,6 @@ describe("HandoffRenderer", () => {
         parentBranchId: "parent-branch",
         initialPrompt: "Carry over: rows and marker.",
       })
-      destroyRenderSetup(setup)
     }),
   )
 })
@@ -299,27 +275,25 @@ describe("PromptRenderer", () => {
           'await Bun.write(process.argv.at(-1), "Edited review from the editor\\n");',
         )
         const results: ApprovalResult[] = []
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(() => (
-            <EnvProvider
-              env={{
-                visual: Option.some(`bun ${editorPath}`),
-                editor: Option.none(),
-                shutdown: () => {},
-                resumable: true,
-                writeTerminal: () => {},
+        const setup = yield* renderScoped(() => (
+          <EnvProvider
+            env={{
+              visual: Option.some(`bun ${editorPath}`),
+              editor: Option.none(),
+              shutdown: () => {},
+              resumable: true,
+              writeTerminal: () => {},
+            }}
+          >
+            <PromptRenderer
+              event={{
+                ...interaction("Original review"),
+                metadata: { type: "prompt", mode: "review", title: "Edit review" },
               }}
-            >
-              <PromptRenderer
-                event={{
-                  ...interaction("Original review"),
-                  metadata: { type: "prompt", mode: "review", title: "Edit review" },
-                }}
-                resolve={(result) => results.push(result)}
-              />
-            </EnvProvider>
-          )),
-        )
+              resolve={(result) => results.push(result)}
+            />
+          </EnvProvider>
+        ))
         setup.mockInput.pressArrow("down")
         setup.mockInput.pressArrow("down")
         setup.mockInput.pressEnter()
@@ -329,39 +303,35 @@ describe("PromptRenderer", () => {
         expect(results).toEqual([
           { approved: true, notes: "edit", editedContent: "Edited review from the editor\n" },
         ])
-        destroyRenderSetup(setup)
       }),
   )
 
-  it.live("renders review content with yes/no", () =>
+  it.scopedLive("renders review content with yes/no", () =>
     Effect.gen(function* () {
       const results: ApprovalResult[] = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <PromptRenderer
-              event={
-                {
-                  ...interaction("Here is the generated code"),
-                  metadata: {
-                    type: "prompt",
-                    mode: "confirm",
-                    title: "Code Review",
-                  },
-                } satisfies ActiveInteraction
-              }
-              resolve={(r) => results.push(r)}
-            />
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <PromptRenderer
+            event={
+              {
+                ...interaction("Here is the generated code"),
+                metadata: {
+                  type: "prompt",
+                  mode: "confirm",
+                  title: "Code Review",
+                },
+              } satisfies ActiveInteraction
+            }
+            resolve={(r) => results.push(r)}
+          />
         ),
+        { width: 80, height: 24 },
       )
       const frame = yield* waitForFrame(setup, (f) => f.includes("Code Review"), "prompt renderer")
       expect(frame).toContain("Code Review")
       expect(frame).toContain("Here is the generated code")
       expect(frame).toContain("Yes")
       expect(frame).toContain("No")
-      destroyRenderSetup(setup)
     }),
   )
 })

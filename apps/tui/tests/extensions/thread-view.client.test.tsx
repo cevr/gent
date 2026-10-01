@@ -22,7 +22,7 @@ import {
   windowsOf,
 } from "../../src/extensions/thread-view.client"
 import { childTaskText } from "@gent/extensions/client"
-import { renderFrame, renderWithProviders } from "../render-harness-boundary"
+import { renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 import { provideClientServices } from "../extension-test-harness-boundary"
 
@@ -184,7 +184,7 @@ describe("windows on a branch", () => {
 })
 
 describe("thread pane", () => {
-  it.live("opens on the live window, moves with the keyboard, and closes with Escape", () =>
+  it.scopedLive("opens on the live window, moves with the keyboard, and closes with Escape", () =>
     Effect.gen(function* () {
       const base: ThreadWindow = {
         sessionId,
@@ -212,26 +212,24 @@ describe("thread pane", () => {
       }
       let selected = Option.none<ThreadWindow>()
       const [open, setOpen] = createSignal(true)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <ThreadPane
-            open={open()}
-            controller={{
-              windows: () => [base, second],
-              sessions: () => 1,
-              current: () => Option.some({ sessionId, branchId }),
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: () => {},
-              open: () => true,
-            }}
-            onSelect={(value) => {
-              selected = Option.some(value)
-            }}
-            onClose={() => setOpen(false)}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <ThreadPane
+          open={open()}
+          controller={{
+            windows: () => [base, second],
+            sessions: () => 1,
+            current: () => Option.some({ sessionId, branchId }),
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            open: () => true,
+          }}
+          onSelect={(value) => {
+            selected = Option.some(value)
+          }}
+          onClose={() => setOpen(false)}
+        />
+      ))
 
       yield* waitForFrame(setup, () => renderFrame(setup).includes("2 windows"), "thread pane")
       expect(renderFrame(setup)).toContain("what happened before")

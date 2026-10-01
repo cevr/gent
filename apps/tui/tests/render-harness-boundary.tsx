@@ -503,6 +503,9 @@ export const renderScoped = (...args: Parameters<typeof renderWithProviders>) =>
     (setup) => Effect.sync(() => destroyRenderSetup(setup)),
   )
 
+// Every caller renders through `renderScoped` except
+// `tests/extensions/cache.client.test.tsx`, which another batch owns; this hook
+// tears its renders down until it moves, and then goes.
 // eslint-disable-next-line effect/noTestLifecycleHooks -- OpenTUI renderers require synchronous per-test teardown at this shared test boundary.
 afterEach(() => {
   if (Option.isSome(currentSetup)) destroyRenderSetup(currentSetup.value)

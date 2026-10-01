@@ -4,7 +4,7 @@ import { Effect, Option } from "effect"
 import { onMount } from "solid-js"
 import { App, resolveInteractiveState, resolveInteractiveBootstrap } from "../src/app"
 import { type ClientContextValue, useClient } from "../src/client"
-import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
+import { renderScoped } from "../tests/render-harness-boundary"
 import {
   baseLocalLayer,
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
@@ -91,26 +91,23 @@ describe("session lifecycle", () => {
           })
           expect(bootstrap.initialSession).toBeDefined()
           expect(Option.isNone(bootstrap.initialBranches)).toBe(true)
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <>
-                  <StateProbe onReady={(c) => (ctx = Option.some(c))} />
-                  <App />
-                </>
-              ),
-              {
-                client,
-                runtime,
-                initialPrompt: bootstrap.initialPrompt,
-                initialSession: bootstrap.initialSession,
-                cwd: repoRoot,
-                width: 100,
-                height: 32,
-              },
+          const setup = yield* renderScoped(
+            () => (
+              <>
+                <StateProbe onReady={(c) => (ctx = Option.some(c))} />
+                <App />
+              </>
             ),
+            {
+              client,
+              runtime,
+              initialPrompt: bootstrap.initialPrompt,
+              initialSession: bootstrap.initialSession,
+              cwd: repoRoot,
+              width: 100,
+              height: 32,
+            },
           )
-          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
           // Route should already be session
           expect(Option.isSome(ctx)).toBe(true)
           if (Option.isNone(ctx)) return
@@ -146,26 +143,23 @@ describe("session lifecycle", () => {
             cwd: repoRoot,
             continue_: false,
           })
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <>
-                  <StateProbe onReady={(c) => (ctx = Option.some(c))} />
-                  <App />
-                </>
-              ),
-              {
-                client,
-                runtime,
-                initialPrompt: bootstrap.initialPrompt,
-                initialSession: bootstrap.initialSession,
-                cwd: repoRoot,
-                width: 100,
-                height: 32,
-              },
+          const setup = yield* renderScoped(
+            () => (
+              <>
+                <StateProbe onReady={(c) => (ctx = Option.some(c))} />
+                <App />
+              </>
             ),
+            {
+              client,
+              runtime,
+              initialPrompt: bootstrap.initialPrompt,
+              initialSession: bootstrap.initialSession,
+              cwd: repoRoot,
+              width: 100,
+              height: 32,
+            },
           )
-          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
           yield* waitForFrame(
             setup,
             (frame) => frame.includes("ready") || frame.includes("idle") || frame.includes("❯"),
