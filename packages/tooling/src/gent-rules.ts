@@ -11,7 +11,6 @@
  *   comment (until upstream 0.19.0 `effect/noDynamicImports` strict mode).
  * - no-bun-outside-adapter: `Bun.*` and host facts stay in the platform adapters (until
  *   upstream 0.19.0).
- * - no-with-wrapper-helper-in-test-code: test code outside a `tests/` tree has no `withX` helper.
  * - no-wrapped-sleep-in-tests: test code waits on no sleep wrapped in a larger expression.
  * - no-timeout-die-payload-in-tests: test code dies on no timeout spelled in an object payload.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
@@ -413,21 +412,6 @@ const hostMemberMessage = (member: {
   return `\`${member.object}${suffix}\` is not allowed here. Route host process and OS facts through \`GentPlatform\` or an adapter-local Effect service.`
 }
 
-const wrapperFunctionName = (node: AstNode | undefined): string | undefined => {
-  if (node === undefined) return undefined
-  if (node.type === "Identifier") {
-    const name = getStringField(node, "name")
-    return name !== undefined && /^with[A-Z]/.test(name) ? name : undefined
-  }
-  if (node.type === "MemberExpression") {
-    const prop = getNodeField(node, "property")
-    if (prop?.type !== "Identifier") return undefined
-    const name = getStringField(prop, "name")
-    return name !== undefined && /^with[A-Z]/.test(name) ? name : undefined
-  }
-  return undefined
-}
-
 const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
   const args = fieldOf(node, "arguments")
   if (!Array.isArray(args)) return []
@@ -456,120 +440,8 @@ const dottedName = (node: AstNode | undefined): string | undefined => {
   return undefined
 }
 
-const unaryCallExpressionArg = (node: AstNode): AstNode | undefined => {
-  const args = callExpressionArgs(node)
-  if (args.length !== 1) return undefined
-  const [arg] = args
-  return arg?.type === "CallExpression" ? arg : undefined
-}
-
 const isFunctionNode = (node: AstNode | undefined): boolean =>
   node?.type === "ArrowFunctionExpression" || node?.type === "FunctionExpression"
-
-/** True when `node` is a direct argument of a `.pipe(...)` call: an adapter factory, not a wrapper. */
-const isPipeArgument = (node: AstNode): boolean => {
-  const parent = getNodeField(node, "parent")
-  if (parent?.type !== "CallExpression") return false
-  const callee = getNodeField(parent, "callee")
-  if (callee?.type !== "MemberExpression") return false
-  const prop = getNodeField(callee, "property")
-  return prop?.type === "Identifier" && getStringField(prop, "name") === "pipe"
-}
-
-type WrapperCallKind = "invocation" | "callback"
-
-/**
- * The wrapper kind of a `withX` call: `withX(innerCall(), ...)` and
- * `withX(...)(innerCall())` wrap an invocation; `withX(..., callback)` wraps a
- * callback. `withWideEvent(boundary(...))` and any `withX(...)` passed straight
- * to `.pipe(...)` are adapter factories, not wrappers.
- */
-const withWrapperCall = (
-  node: AstNode,
-): { readonly name: string; readonly kind: WrapperCallKind } | undefined => {
-  if (node.type !== "CallExpression" || isPipeArgument(node)) return undefined
-  const callee = getNodeField(node, "callee")
-  const args = callExpressionArgs(node)
-  const directName = wrapperFunctionName(callee)
-  if (directName !== undefined && directName !== "withWideEvent") {
-    if (args[0]?.type === "CallExpression") return { name: directName, kind: "invocation" }
-    if (callee?.type === "Identifier" && args.some(isFunctionNode)) {
-      return { name: directName, kind: "callback" }
-    }
-  }
-  if (callee?.type !== "CallExpression") return undefined
-  const higherOrderName = wrapperFunctionName(getNodeField(callee, "callee"))
-  if (higherOrderName !== undefined && unaryCallExpressionArg(node)) {
-    return { name: higherOrderName, kind: "invocation" }
-  }
-  return undefined
-}
-
-const isEffectTypeAnnotation = (annotation: AstNode | undefined): boolean => {
-  const type = annotation === undefined ? undefined : getNodeField(annotation, "typeAnnotation")
-  if (type?.type !== "TSTypeReference") return false
-  const typeName = getNodeField(type, "typeName")
-  if (typeName?.type !== "TSQualifiedName") return false
-  const left = getNodeField(typeName, "left")
-  const right = getNodeField(typeName, "right")
-  return (
-    getStringField(left ?? typeName, "name") === "Effect" &&
-    getStringField(right ?? typeName, "name") === "Effect"
-  )
-}
-
-const isCallbackTypeAnnotation = (annotation: AstNode | undefined): boolean => {
-  const type = annotation === undefined ? undefined : getNodeField(annotation, "typeAnnotation")
-  return type?.type === "TSFunctionType"
-}
-
-/** The parameters of a function and of every function its body returns directly (curried form). */
-const curriedParams = (fn: AstNode | undefined): ReadonlyArray<ReadonlyArray<AstNode>> => {
-  const levels: Array<ReadonlyArray<AstNode>> = []
-  let current = fn
-  while (current !== undefined && isFunctionNode(current)) {
-    levels.push(getNodeArrayField(current, "params") ?? [])
-    current = getNodeField(current, "body")
-  }
-  return levels
-}
-
-const EFFECT_FN_NAMES = new Set(["fn", "fnUntraced"])
-
-const isEffectFnCallee = (callee: AstNode | undefined): boolean => {
-  if (callee?.type !== "MemberExpression") return false
-  const object = getNodeField(callee, "object")
-  const property = getNodeField(callee, "property")
-  return (
-    object?.type === "Identifier" &&
-    getStringField(object, "name") === "Effect" &&
-    EFFECT_FN_NAMES.has(getStringField(property ?? callee, "name") ?? "")
-  )
-}
-
-/**
- * The function a definition runs. `Effect.fn(body)`, `Effect.fn("name")(body)`,
- * and the `fnUntraced` forms yield their generator body; anything else yields itself.
- */
-const definitionFunction = (init: AstNode | undefined): AstNode | undefined => {
-  if (init?.type !== "CallExpression") return init
-  const callee = getNodeField(init, "callee")
-  const traced =
-    isEffectFnCallee(callee) ||
-    (callee?.type === "CallExpression" && isEffectFnCallee(getNodeField(callee, "callee")))
-  if (!traced) return init
-  return callExpressionArgs(init).find(isFunctionNode)
-}
-
-/** Why a `withX` definition is a wrapper helper, or undefined when it is not one. */
-const withWrapperDefinitionKind = (fn: AstNode | undefined): "effect" | "callback" | undefined => {
-  const levels = curriedParams(definitionFunction(fn))
-  const annotations = (params: ReadonlyArray<AstNode>) =>
-    params.map((param) => getNodeField(param, "typeAnnotation"))
-  if (levels.some((params) => annotations(params).some(isEffectTypeAnnotation))) return "effect"
-  if (annotations(levels[0] ?? []).some(isCallbackTypeAnnotation)) return "callback"
-  return undefined
-}
 
 const SLEEP_CALLS = new Set(["Effect.sleep", "Bun.sleep", "Bun.sleepSync"])
 
@@ -1302,60 +1174,6 @@ const plugin: Plugin = {
             if (platformBoundaryFilename(filename)) return
             const message = hostMemberMessage(member)
             if (message !== undefined) context.report({ message, node })
-          },
-        }
-      },
-    },
-
-    /**
-     * Test code outside a `tests/` tree holds no `withX` callback wrapper.
-     *
-     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
-     * `effect/noWithWrapperCall` skips its callback and definition checks in
-     * every test module, while gent allows a local `withX` fixture helper only
-     * in a `tests/` tree. The harness (`@gent/e2e`, core's `test-utils`), the
-     * `integration/` trees and test files elsewhere stay held to them. Goes
-     * when an upstream release lets a project narrow that exemption; none has
-     * yet.
-     *
-     * Reported there: a `withX(callback)` call, and a `withX` definition that
-     * takes an `Effect.Effect` (at any curried level, inside `Effect.fn` too)
-     * or a callback parameter. `withWideEvent` is the wide-event adapter.
-     */
-    "no-with-wrapper-helper-in-test-code": {
-      create(context) {
-        if (!isTestCode(ruleSubject(context)) || inTestsTree(context)) return {}
-        const reportDefinition = (
-          name: string | undefined,
-          fn: AstNode | undefined,
-          node: AstNode,
-        ) => {
-          if (name === undefined || !/^with[A-Z]/.test(name)) return
-          const kind = withWrapperDefinitionKind(fn)
-          if (kind === undefined) return
-          context.report({
-            message: `\`${name}(${kind}, ...)\` wrapper helpers are banned outside a \`tests/\` tree; expose a pipeable provider or an Effect value and continue with \`.pipe(...)\`.`,
-            node,
-          })
-        }
-        return {
-          CallExpression(node) {
-            const call = withWrapperCall(node)
-            if (call?.kind !== "callback") return
-            context.report({
-              message: `Avoid \`${call.name}(callback)\` wrapper style. Expose an Effect value or provider and continue with \`.pipe(...)\`.`,
-              node,
-            })
-          },
-          VariableDeclarator(node) {
-            const id = getNodeField(node, "id")
-            const name = id?.type === "Identifier" ? getStringField(id, "name") : undefined
-            reportDefinition(name, getNodeField(node, "init"), node)
-          },
-          FunctionDeclaration(node) {
-            const id = getNodeField(node, "id")
-            const name = id === undefined ? undefined : getStringField(id, "name")
-            reportDefinition(name, { ...node, type: "FunctionExpression" }, node)
           },
         }
       },

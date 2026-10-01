@@ -333,14 +333,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 16,
   },
   {
-    // Upstream skips these checks in every test module; gent only in tests/.
-    rule: "gent/no-with-wrapper-helper-in-test-code",
-    invalid: "apps/tui/integration/no-with-wrapper-helper-in-test-code.invalid.test.ts",
-    valid: ["packages/core/tests/no-with-wrapper-helper-in-test-code.valid.ts"],
-    // two callback calls; an Effect, a callback and an Effect.fn definition
-    expectedCount: 5,
-  },
-  {
     // Upstream reports a sleep only when a statement waits on it alone.
     rule: "gent/no-wrapped-sleep-in-tests",
     invalid: "packages/core/src/test-utils/no-wrapped-sleep-in-tests.invalid.ts",
