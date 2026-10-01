@@ -33,7 +33,14 @@ import {
   usePickerGeometry,
 } from "./ui"
 import { formatError, plural, type UiError } from "./utils"
-import { pastedLine, typedText, useScopedKeyboard, useTerminalDimensions } from "./terminal"
+import {
+  pastedLine,
+  type ScopedKeyboardEvent,
+  typedText,
+  useClipboard,
+  useScopedKeyboard,
+  useTerminalDimensions,
+} from "./terminal"
 
 // ── auth state ──────────────────────────────────────────────────────────────
 
@@ -294,6 +301,7 @@ export function Auth(props: AuthProps) {
   const dimensions = useTerminalDimensions()
   const { sectionWidth } = usePickerGeometry()
   const { cast } = useRuntime()
+  const copyToClipboard = useClipboard()
 
   const [state, setState] = createSignal(AuthState.initial())
   const send = (event: AuthEvent) => setState((current) => transitionAuth(current, event))
@@ -783,6 +791,27 @@ export function Auth(props: AuthProps) {
   /** Two rules, the title and the key hint, then the text line and the note row. */
   const OAUTH_CHROME_ROWS = 6
 
+  // A wrapped URL runs over several rows, and a mouse drag must start and
+  // end on its exact first and last cells; one key copies it whole, as in
+  // Codex, Claude Code and OpenCode. The code line takes typed text too, so
+  // `c` copies only while the code is empty; once it has text, `c` is a
+  // letter of the code.
+  const urlCopyKeyLive = (current: OAuthScreen) => current.code.length === 0
+  const copyUrl = (current: OAuthScreen) => {
+    copyToClipboard(current.authorization.url)
+    flashSuccess("URL copied to the clipboard")
+  }
+  const oauthKeys = (current: OAuthScreen) => {
+    if (urlCopyKeyLive(current)) return [keyHint("c", "copy URL"), KeyHints.submit, KeyHints.back]
+    return [KeyHints.submit, KeyHints.back]
+  }
+  /** The note row: a copy's confirmation while it shows, else the waiting note. */
+  const oauthNote = (current: OAuthScreen) =>
+    Option.orElse(
+      Option.map(successMessage(), (message) => `✓ ${message}`),
+      () => waitingNote(current),
+    )
+
   /**
    * The OAuth screen inside its frame: the instructions and the URL, then the
    * code line. The rows go in order of need. The note row gives way first,
@@ -830,6 +859,12 @@ export function Auth(props: AuthProps) {
           onEvent={send}
           onSubmit={() => submitOauth(bodyProps.current())}
           onCancel={close}
+          onKey={(event) => {
+            if (event.name !== "c" || event.ctrl === true || event.meta === true) return false
+            if (!urlCopyKeyLive(bodyProps.current())) return false
+            copyUrl(bodyProps.current())
+            return true
+          }}
         />
       </>
     )
@@ -915,9 +950,9 @@ export function Auth(props: AuthProps) {
           <PickerFrame
             height={oauthBodyRows(current()) + OAUTH_CHROME_ROWS}
             title={`Sign in · ${current().provider} · ${current().method.label}`}
-            keys={[KeyHints.submit, KeyHints.back]}
+            keys={oauthKeys(current())}
             error={state().error}
-            detail={waitingNote(current())}
+            detail={oauthNote(current())}
           >
             <OAuthBody current={current} />
           </PickerFrame>
@@ -944,6 +979,8 @@ function AuthTextLine(props: {
   readonly onEvent: (event: AuthEvent) => void
   readonly onSubmit: () => void
   readonly onCancel: () => void
+  /** Sees each key before the line does; `true` means the pane took it (the OAuth `c` copy). */
+  readonly onKey?: (event: ScopedKeyboardEvent) => boolean
 }) {
   const { theme } = useTheme()
   const { sectionWidth } = usePickerGeometry()
@@ -958,6 +995,7 @@ function AuthTextLine(props: {
   }
   useScopedKeyboard(
     (event) => {
+      if (Option.exists(Option.fromUndefinedOr(props.onKey), (onKey) => onKey(event))) return true
       if (event.name === "escape") {
         props.onCancel()
         return true

@@ -3,6 +3,7 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
   Clock,
+  ConfigProvider,
   Context,
   Deferred,
   Duration,
@@ -4347,24 +4348,64 @@ const HealthControlsProbe = (props: {
   return <text>{failedActivation().join(",")}</text>
 }
 
-// ── copy on select ──────────────────────────────────────────────────────────
+// ── clipboard ───────────────────────────────────────────────────────────────
 
-describe("App copy on select", () => {
+describe("App clipboard", () => {
   const deviceUrl = "https://auth.openai.com/codex/device"
 
-  /** Services whose link opener fails as on a box with no browser, so the URL stays on screen. */
-  const noBrowserServices = Effect.gen(function* () {
-    const built = yield* Layer.build(
-      Layer.merge(
-        BunServices.layer,
-        LinkOpener.Test({
-          open: (url) => Effect.fail(new LinkOpenerError({ message: `no browser for ${url}` })),
+  /**
+   * Services whose link opener fails as on a box with no browser, so the URL
+   * stays on screen. `host` adds to them: an environment, a process spawner.
+   */
+  const noBrowserServices = (host: Layer.Layer<never> = Layer.empty) =>
+    Effect.gen(function* () {
+      const built = yield* Layer.build(
+        Layer.mergeAll(
+          BunServices.layer,
+          LinkOpener.Test({
+            open: (url) => Effect.fail(new LinkOpenerError({ message: `no browser for ${url}` })),
+          }),
+          host,
+        ),
+      )
+      const scope = yield* Scope.Scope
+      return Context.makeUnsafe<unknown>(Context.add(built, Scope.Scope, scope).mapUnsafe)
+    })
+
+  /** A host inside tmux, by its environment. */
+  const tmuxEnv = { TMUX: "/nonexistent/gent-probe-tmux,1,0" }
+
+  /**
+   * A host with the environment `env` whose `tmux` runs nowhere: each run's
+   * arguments and stdin land in `runs`. Every other command runs for real.
+   */
+  const recordedTmux = (
+    runs: Array<{ args: ReadonlyArray<string>; stdin: string }>,
+    env: Record<string, string>,
+  ) =>
+    Layer.mergeAll(
+      ConfigProvider.layer(ConfigProvider.fromEnvRecord(env)),
+      Layer.effect(
+        ChildProcessSpawner.ChildProcessSpawner,
+        Effect.gen(function* () {
+          const real = yield* ChildProcessSpawner.ChildProcessSpawner
+          return ChildProcessSpawner.make((command) => {
+            if (!ChildProcess.isStandardCommand(command) || command.command !== "tmux")
+              return real.spawn(command)
+            const input = command.options.stdin
+            return Effect.gen(function* () {
+              let stdin = ""
+              if (Stream.isStream(input)) {
+                const chunks = yield* Stream.runCollect(input)
+                stdin = new TextDecoder().decode(Buffer.concat(chunks))
+              }
+              runs.push({ args: command.args, stdin })
+              return yield* real.spawn(ChildProcess.make("true", []))
+            }).pipe(Effect.orDie)
+          })
         }),
-      ),
+      ).pipe(Layer.provide(BunServices.layer)),
     )
-    const scope = yield* Scope.Scope
-    return Context.makeUnsafe<unknown>(Context.add(built, Scope.Scope, scope).mapUnsafe)
-  })
 
   /** The bytes an OSC 52 copy of `text` to the clipboard sends the terminal. */
   const osc52 = (text: string) => `\u001b]52;c;${Base64.encode(text)}\u001b\\`
@@ -4374,7 +4415,7 @@ describe("App copy on select", () => {
    * on a terminal that keeps what the renderer writes. The sign-in pane is an
    * overlay, so OpenTUI tracks the mouse: the terminal sees no drag.
    */
-  const mountOAuthScreen = (url: string) =>
+  const mountOAuthScreen = (url: string, host: Layer.Layer<never> = Layer.empty) =>
     Effect.gen(function* () {
       const output = new TerminalOutput()
       const client = createMockClient({
@@ -4402,7 +4443,7 @@ describe("App copy on select", () => {
           callback: () => Effect.never,
         },
       })
-      const services = yield* noBrowserServices
+      const services = yield* noBrowserServices(host)
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime: createMockRuntime(),
@@ -4489,6 +4530,60 @@ describe("App copy on select", () => {
       yield* Effect.promise(() => setup.mockMouse.click(span.column + 3, span.top))
       yield* waitForFrame(setup, () => true)
       expect(output.written()).not.toContain("\u001b]52;")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  // A wrapped sign-in URL runs over several rows: a drag must start and end
+  // on its exact first and last cells. One key copies it whole, as Codex,
+  // Claude Code and OpenCode offer.
+  it.scopedLive("c on the sign-in pane copies the whole URL and says it did", () =>
+    Effect.gen(function* () {
+      const longUrl = `https://auth.example.com/oauth/authorize?client_id=gent&scope=${"x".repeat(150)}&state=end`
+      const { setup, output } = yield* mountOAuthScreen(longUrl)
+      expect(renderFrame(setup)).toContain("c copy URL")
+
+      yield* Effect.promise(() => setup.mockInput.typeText("c"))
+      yield* waitUntil(() => output.written().includes(osc52(longUrl)), "the OSC 52 copy")
+      yield* waitForFrame(setup, (frame) => frame.includes("URL copied"), "the copied note")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("once a code has text, c types into it and copies nothing", () =>
+    Effect.gen(function* () {
+      const { setup, output } = yield* mountOAuthScreen(deviceUrl)
+      yield* Effect.promise(() => setup.mockInput.typeText("ab"))
+      yield* waitForFrame(setup, (frame) => frame.includes("optional): ab"), "the typed code")
+      expect(renderFrame(setup)).not.toContain("c copy URL")
+
+      yield* Effect.promise(() => setup.mockInput.typeText("c"))
+      yield* waitForFrame(setup, (frame) => frame.includes("optional): abc"), "c in the code")
+      expect(output.written()).not.toContain("\u001b]52;")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  // tmux drops an application's OSC 52 under its defaults: the DCS wrap needs
+  // `allow-passthrough on`, a plain write `set-clipboard on`. `load-buffer -w`
+  // reaches the outer terminal under the default `set-clipboard external`.
+  it.scopedLive("inside tmux a copy also loads the text into tmux's clipboard", () =>
+    Effect.gen(function* () {
+      const runs: Array<{ args: ReadonlyArray<string>; stdin: string }> = []
+      const { setup, output } = yield* mountOAuthScreen(deviceUrl, recordedTmux(runs, tmuxEnv))
+
+      yield* Effect.promise(() => setup.mockInput.typeText("c"))
+      yield* waitUntil(() => runs.length > 0, "the tmux run")
+      expect(runs).toEqual([{ args: ["load-buffer", "-w", "-"], stdin: deviceUrl }])
+      expect(output.written()).toContain(Base64.encode(deviceUrl))
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("outside tmux a copy runs no tmux", () =>
+    Effect.gen(function* () {
+      const runs: Array<{ args: ReadonlyArray<string>; stdin: string }> = []
+      const { setup, output } = yield* mountOAuthScreen(deviceUrl, recordedTmux(runs, {}))
+
+      yield* Effect.promise(() => setup.mockInput.typeText("c"))
+      yield* waitUntil(() => output.written().includes(osc52(deviceUrl)), "the OSC 52 copy")
+      expect(runs).toEqual([])
     }).pipe(Effect.timeout("8 seconds")),
   )
 })

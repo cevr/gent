@@ -6,7 +6,8 @@ import {
   useSelectionHandler,
   useTerminalDimensions as useRendererTerminalDimensions,
 } from "@opentui/solid"
-import { Option } from "effect"
+import { Config, Effect, Option, Stream } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import {
   type Accessor,
   createContext,
@@ -16,6 +17,7 @@ import {
   type ParentProps,
   useContext,
 } from "solid-js"
+import { useRuntime } from "./client"
 import { useRequiredContext } from "./utils"
 
 // ── terminal dimensions ─────────────────────────────────────────────────────
@@ -46,29 +48,64 @@ export function TerminalDimensionsProvider(props: ParentProps) {
 export const useTerminalDimensions = (): Accessor<TerminalDimensions> =>
   Option.getOrThrow(useContext(TerminalDimensionsContext))
 
-// ── copy on select ──────────────────────────────────────────────────────────
+// ── clipboard ───────────────────────────────────────────────────────────────
+
+/**
+ * Inside tmux, hands `text` to tmux itself: `load-buffer -w` keeps it as a
+ * paste buffer and forwards it to the attached client's terminal clipboard.
+ * tmux's defaults drop an application's own OSC 52 (a plain write needs
+ * `set-clipboard on`, the DCS-wrapped one OpenTUI sends needs
+ * `allow-passthrough on`), while `-w` works under the default
+ * `set-clipboard external`; Codex takes the same route. Outside tmux it
+ * runs nothing. A tmux that fails (too old for `-w`, `set-clipboard off`)
+ * leaves the OSC 52 write as the one copy.
+ */
+const loadTmuxBuffer = (text: string) =>
+  Effect.gen(function* () {
+    const tmux = yield* Config.option(Config.String("TMUX"))
+    if (!Option.exists(tmux, (value) => value.length > 0)) return
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    yield* spawner.exitCode(
+      ChildProcess.make("tmux", ["load-buffer", "-w", "-"], {
+        stdin: Stream.make(new TextEncoder().encode(text)),
+        stdout: "ignore",
+        stderr: "ignore",
+      }),
+    )
+  }).pipe(Effect.timeout("2 seconds"), Effect.ignore)
+
+/**
+ * Puts text on the reader's clipboard, the one copy path. It writes OSC 52
+ * through the renderer: plain, which herdr, mosh (the `c` selector, up to
+ * 16 KiB of base64) and a local terminal forward to the reader's own
+ * clipboard, even over ssh; OpenTUI wraps it in DCS for tmux and screen.
+ * Inside tmux it also loads the text into tmux (`loadTmuxBuffer`). Empty text
+ * copies nothing: an empty OSC 52 write would clear the clipboard.
+ */
+export function useClipboard(): (text: string) => void {
+  const renderer = useRenderer()
+  const { cast } = useRuntime()
+  return (text) => {
+    if (text.length === 0) return
+    renderer.copyToClipboardOSC52(text)
+    cast(loadTmuxBuffer(text))
+  }
+}
 
 /**
  * A mouse selection copies its text when the drag ends, as Claude Code and
  * Codex do. While OpenTUI tracks the mouse (the expanded transcript, an
  * overlay such as the sign-in pane, the command palette) the terminal never
  * sees the drag, so neither it nor a multiplexer around it (herdr, tmux) can
- * copy; the renderer owns the selection and sends the copy itself as an OSC 52
- * write. OpenTUI wraps it for tmux and screen, and a terminal or multiplexer
- * that takes OSC 52 puts it on the clipboard. In the split footer the mouse is
- * the terminal's, and its own selection copies.
+ * copy; the renderer owns the selection, and `useClipboard` copies it. In the
+ * split footer the mouse is the terminal's, and its own selection copies.
  *
- * A click selects nothing, and an empty OSC 52 write would clear the
- * clipboard, so it copies nothing. The selection stays on screen after the
- * copy.
+ * A click selects nothing, so it copies nothing. The selection stays on
+ * screen after the copy.
  */
 export function useCopyOnSelect() {
-  const renderer = useRenderer()
-  useSelectionHandler((selection) => {
-    const text = selection.getSelectedText()
-    if (text.length === 0) return
-    renderer.copyToClipboardOSC52(text)
-  })
+  const copy = useClipboard()
+  useSelectionHandler((selection) => copy(selection.getSelectedText()))
 }
 
 // ── keyboard provider ───────────────────────────────────────────────────────
