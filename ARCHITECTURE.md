@@ -379,6 +379,22 @@ The production server uses one live profile owner:
   names a session reads that session's profile; one shared lookup
   (`loadSession`) fails it with `NotFoundError` when the session does not
   exist, so no call answers from the launch profile instead.
+- Every session-scoped RPC names its session (owner rule). The contract
+  (`packages/core/src/server/rpc.ts`) requires `sessionId` on `auth.setKey`,
+  `auth.deleteKey`, `auth.listMethods`, `auth.listProviders`, `driver.set`,
+  `driver.list` and `model.list`, so a payload that leaves it out is a type
+  error at the call site and a decode failure on the wire; no handler has a
+  launch-profile branch for a missing session. `extension.listStatus` takes an
+  explicit `scope` (`ExtensionStatusScope`: `Session { id }` or `Launch`);
+  only `gent doctor`, which has no session, asks for `Launch`. Its tags carry
+  no constructor default (plain `Schema.Literal`, not `TaggedStruct`): the RPC
+  client builds each payload with the schema's constructor, so a defaulted tag
+  would read `{ scope: {} }` as `Launch`. A session that
+  stored no cwd runs in the host's cwd, so it reads the launch profile as its
+  loop does. `driver.clear` writes the user config and reads no profile, so
+  it names no session. Receipt: the `@ts-expect-error` payloads in
+  `packages/core/tests/server/rpc.test.ts` ("a session-scoped payload that
+  names no session is a type error").
 
 Turn profiles carry the process identity that built them. A process-local tool
 binding names that process and is valid only inside it.

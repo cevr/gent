@@ -74,6 +74,7 @@ import {
   ExtensionHealthSnapshot,
   ExtensionProtocolError,
   type ExtensionRpcRequestInput,
+  ExtensionStatusScope,
   type ForkBranchInput,
   GentRpcs,
   type GetSessionSnapshotInput,
@@ -1204,7 +1205,7 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
 // Each helper yields its Tags; no service bag is threaded through.
 
 type BranchPayload = { readonly branchId: BranchId }
-type OptionalSessionPayload = { readonly sessionId?: SessionId }
+type ExtensionStatusPayload = { readonly scope: ExtensionStatusScope }
 type SessionIdPayload = { readonly sessionId: SessionId }
 
 const watchRuntimeStream = ({ sessionId, branchId }: QueueTarget) =>
@@ -1330,36 +1331,33 @@ const RpcHandlers = GentRpcs.toLayer(
     // The one owner of "a named session must exist". A session id that names
     // no session, or a storage failure, fails the call: an answer from the
     // launch profile would be another profile's models, drivers or commands.
-    // None only when the caller names no session.
+    // Every session-scoped payload names its session (the contract requires
+    // `sessionId`), so no call reaches here without one.
     const loadSession = (
-      sessionId: Option.Option<SessionId>,
-    ): Effect.Effect<Option.Option<Session>, StorageError | NotFoundError> =>
-      Option.match(sessionId, {
-        onNone: () => Effect.succeedNone,
-        onSome: (id) =>
-          sessionStorage.getSession(id).pipe(
-            Effect.flatMap((session) =>
-              Option.match(Option.fromUndefinedOr(session), {
-                onNone: () => Effect.fail(new NotFoundError({ message: "Session not found" })),
-                onSome: Effect.succeedSome,
-              }),
+      sessionId: SessionId,
+    ): Effect.Effect<Session, StorageError | NotFoundError> =>
+      sessionStorage
+        .getSession(sessionId)
+        .pipe(
+          Effect.flatMap((session) =>
+            Effect.fromOption(Option.fromUndefinedOr(session)).pipe(
+              Effect.mapError(() => new NotFoundError({ message: "Session not found" })),
             ),
           ),
-      })
+        )
 
-    const cwdOf = (session: Option.Option<Session>) =>
-      Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
+    /** The stored cwd of a session; none for a session that stored no cwd,
+     *  which runs in the host's cwd, as its loop does. */
+    const cwdOf = (session: Session) => Option.fromUndefinedOr(session.cwd)
 
-    /** The stored cwd of a session; none without a session or a stored cwd. */
-    const sessionCwd = (sessionId: Option.Option<SessionId>) =>
-      loadSession(sessionId).pipe(Effect.map(cwdOf))
+    const sessionCwd = (sessionId: SessionId) => loadSession(sessionId).pipe(Effect.map(cwdOf))
 
     // The caller's scope holds the profile's lease while it reads the registry.
     const registryForCwd = (cwd: Option.Option<string>) =>
       resolveRegistryForCwd(cwd).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry))
 
     const resolveSessionRegistry = (
-      sessionId: Option.Option<SessionId>,
+      sessionId: SessionId,
     ): Effect.Effect<ExtensionRegistryService, StorageError | NotFoundError, Scope.Scope> =>
       sessionCwd(sessionId).pipe(Effect.flatMap(registryForCwd))
 
@@ -1375,7 +1373,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
     /** Provider login runs against the drivers of the session's own profile. */
     const inSessionProfile = <A, E>(
-      sessionId: Option.Option<SessionId>,
+      sessionId: SessionId,
       effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
     ) =>
       resolveSessionRegistry(sessionId).pipe(
@@ -1404,9 +1402,7 @@ const RpcHandlers = GentRpcs.toLayer(
       Effect.gen(function* () {
         const scope = yield* Scope.fork(handlersScope)
         const authorized = yield* Effect.gen(function* () {
-          const registry = yield* resolveSessionRegistry(Option.some(input.sessionId)).pipe(
-            Scope.provide(scope),
-          )
+          const registry = yield* resolveSessionRegistry(input.sessionId).pipe(Scope.provide(scope))
           const authorization = yield* underRegistry(
             registry,
             authorizeProvider(input.sessionId, input.provider, input.method),
@@ -1448,7 +1444,7 @@ const RpcHandlers = GentRpcs.toLayer(
         input.code,
       )
       const held = Option.fromNullishOr(loginLeases.get(input.authorizationId))
-      if (Option.isNone(held)) return inSessionProfile(Option.some(input.sessionId), run)
+      if (Option.isNone(held)) return inSessionProfile(input.sessionId, run)
       const lease = held.value
       return Effect.acquireUseRelease(
         Effect.sync(() => {
@@ -1599,9 +1595,9 @@ const RpcHandlers = GentRpcs.toLayer(
       // ----------------------------------------------------------------------
       // The catalog and the drivers are the requesting session's profile:
       // its project drivers count, its disabled extensions do not.
-      "model.list": ({ sessionId }: OptionalSessionPayload) =>
+      "model.list": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
-          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
+          const registry = yield* resolveSessionRegistry(sessionId)
           const catalog = yield* modelCatalog().pipe(
             Effect.provideService(ExtensionRegistry, registry),
             Effect.provideService(Auth, authStore),
@@ -1610,9 +1606,9 @@ const RpcHandlers = GentRpcs.toLayer(
           return catalog.models
         }).pipe(Effect.scoped),
 
-      "driver.list": ({ sessionId }: OptionalSessionPayload) =>
+      "driver.list": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
-          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
+          const registry = yield* resolveSessionRegistry(sessionId)
           const resolved = registry.getResolved()
           const agents = [...resolved.agents.values()]
           const drivers = [...resolved.modelDrivers.values()].map((driver) =>
@@ -1623,7 +1619,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "driver.set": ({ agentName, driver, sessionId }: SetDriverOverrideInput) =>
         Effect.gen(function* () {
-          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
+          const registry = yield* resolveSessionRegistry(sessionId)
           const resolved = registry.getResolved()
           if (!resolved.modelDrivers.has(driver.id)) {
             return yield* new NotFoundError({
@@ -1638,7 +1634,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {
-          const session = yield* loadSession(Option.fromUndefinedOr(sessionId))
+          const session = yield* loadSession(sessionId)
           // The models a turn in this session would run: the session's
           // registry and config, then its model override, as the turn does.
           const cwd = cwdOf(session)
@@ -1648,16 +1644,9 @@ const RpcHandlers = GentRpcs.toLayer(
           // The driver a turn routes through: the agent's driver, else the
           // config override, else the model id's provider segment.
           const driverFor = (admission: Option.Option<SessionAdmission>) =>
-            resolveSessionRoute({
-              agents,
-              admission,
-              config,
-              session: Option.getOrElse(session, () => ({})),
-            }).modelDriver.driverId
+            resolveSessionRoute({ agents, admission, config, session }).modelDriver.driverId
           // The session's own agent, then an agent the caller asks about.
-          const admissions = [
-            Option.flatMap(session, (found) => Option.fromUndefinedOr(found.admission)),
-          ]
+          const admissions = [Option.fromUndefinedOr(session.admission)]
           if (!Predicate.isUndefined(agentName)) admissions.push(Option.some({ agent: agentName }))
           const driverIds = admissions.flatMap((admission) => Option.toArray(driverFor(admission)))
           return yield* listAuthProviders(driverIds).pipe(
@@ -1670,7 +1659,7 @@ const RpcHandlers = GentRpcs.toLayer(
       // A key typed for a driver that shares a sign-in is the owner's key.
       "auth.setKey": ({ provider, key, sessionId }: SetAuthKeyInput) =>
         inSessionProfile(
-          Option.fromUndefinedOr(sessionId),
+          sessionId,
           storeSignIn(provider, AuthApi.make({ type: "api", key })).pipe(
             Effect.mapError((error) => authPersistenceError("set", provider, error)),
           ),
@@ -1679,16 +1668,14 @@ const RpcHandlers = GentRpcs.toLayer(
       // A sign-in other drivers share removes every credential it reads.
       "auth.deleteKey": ({ provider, sessionId }: DeleteAuthKeyInput) =>
         inSessionProfile(
-          Option.fromUndefinedOr(sessionId),
+          sessionId,
           removeSignIn(provider).pipe(
             Effect.mapError((error) => authPersistenceError("delete", provider, error)),
           ),
         ),
 
-      "auth.listMethods": (input: ListAuthMethodsInput) => {
-        if (!Predicate.isObject(input)) return inSessionProfile(Option.none(), listAuthMethods())
-        return inSessionProfile(Option.fromUndefinedOr(input.sessionId), listAuthMethods())
-      },
+      "auth.listMethods": ({ sessionId }: ListAuthMethodsInput) =>
+        inSessionProfile(sessionId, listAuthMethods()),
 
       "auth.authorize": (input: AuthorizeAuthInput) =>
         authorizeLogin(input).pipe(Effect.map(Option.getOrNull)),
@@ -1698,9 +1685,14 @@ const RpcHandlers = GentRpcs.toLayer(
       // ----------------------------------------------------------------------
       // Extension transport
       // ----------------------------------------------------------------------
-      "extension.listStatus": ({ sessionId }: OptionalSessionPayload) =>
+      // A session's health is its profile's; `Launch` (the doctor, which has
+      // no session) reads the profile the server started in.
+      "extension.listStatus": ({ scope }: ExtensionStatusPayload) =>
         Effect.gen(function* () {
-          const cwd = yield* sessionCwd(Option.fromUndefinedOr(sessionId))
+          const cwd = yield* ExtensionStatusScope.match(scope, {
+            Session: ({ id }) => sessionCwd(id),
+            Launch: () => Effect.succeedNone,
+          })
           const registry = yield* registryForCwd(cwd)
           const resolved = registry.getResolved()
           // Config files are read on each call, so a fixed file clears here
@@ -1757,7 +1749,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
-          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
+          const registry = yield* resolveSessionRegistry(sessionId)
           return registry.getResolved().slashCommands.map(
             (command) =>
               new SlashCommandInfo({

@@ -874,13 +874,13 @@ describe("OpenCode Zen classifiers", () => {
     Effect.gen(function* () {
       const home = yield* fixtureHome
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-      const { client } = yield* createRpcHarness({
+      const { client, sessionId } = yield* createRpcHarness({
         agents: [],
         home,
         extensionInputs: BuiltinExtensions,
         providerLayer,
       })
-      const classifiers = (yield* client.model.list({}))
+      const classifiers = (yield* client.model.list({ sessionId }))
         .filter((model) => model.kind === "classifier")
         .map((model) => model.id)
       expect(classifiers.toSorted()).toEqual([
@@ -941,13 +941,13 @@ describe("OpenCode catalog", () => {
     Effect.gen(function* () {
       const home = yield* fixtureHome
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-      const { client } = yield* createRpcHarness({
+      const { client, sessionId } = yield* createRpcHarness({
         agents: [],
         home,
         extensionInputs: [OpenCodeExtension],
         providerLayer,
       })
-      const ids = (yield* client.model.list({})).map((model) => model.id)
+      const ids = (yield* client.model.list({ sessionId })).map((model) => model.id)
       expect(ids).toContain(ModelId.make("opencode-go/minimax-m3"))
       expect(ids).toContain(ModelId.make("opencode/gpt-5.4"))
       expect(ids).not.toContain(ModelId.make("opencode/gemini-3.6-flash"))
@@ -983,27 +983,27 @@ const signInHarness = (extension: Parameters<typeof createRpcHarness>[0]["extens
   Effect.gen(function* () {
     const home = yield* fixtureHome
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-    const { client } = yield* createRpcHarness({
+    const { client, sessionId } = yield* createRpcHarness({
       agents: [],
       home,
       extensionInputs: extension ?? [],
       providerLayer,
     })
     const rows = client.auth
-      .listProviders({})
+      .listProviders({ sessionId })
       .pipe(
         Effect.map((providers) =>
           providers.map((row) => [String(row.provider), row.name, row.source ?? "none"]),
         ),
       )
     const methods = client.auth
-      .listMethods({})
+      .listMethods({ sessionId })
       .pipe(
         Effect.map((listed) =>
           Object.entries(listed).map(([id, entries]) => [id, entries.map((entry) => entry.label)]),
         ),
       )
-    return { client, rows, methods }
+    return { client, rows, methods, sessionId }
   })
 
 describe("OpenCode sign-in", () => {
@@ -1040,19 +1040,19 @@ describe("OpenCode sign-in", () => {
 
   it.live("/auth lists one OpenCode sign-in, and signing out removes the key it shows", () =>
     Effect.gen(function* () {
-      const { client, rows, methods } = yield* signInHarness([OpenCodeExtension])
+      const { client, rows, methods, sessionId } = yield* signInHarness([OpenCodeExtension])
       expect(yield* rows).toEqual([["opencode", "OpenCode", "none"]])
       expect(yield* methods).toEqual([["opencode", ["OpenCode API key — Zen, Go and Go Plus"]]])
 
       // A key typed for Go is the OpenCode key.
-      yield* client.auth.setKey({ provider: "opencode-go", key: "oc-go-key" })
+      yield* client.auth.setKey({ provider: "opencode-go", key: "oc-go-key", sessionId })
       expect(yield* rows).toEqual([["opencode", "OpenCode", "stored"]])
-      yield* client.auth.deleteKey({ provider: "opencode" })
+      yield* client.auth.deleteKey({ provider: "opencode", sessionId })
       expect(yield* rows).toEqual([["opencode", "OpenCode", "none"]])
 
-      yield* client.auth.setKey({ provider: "opencode", key: API_KEY })
+      yield* client.auth.setKey({ provider: "opencode", key: API_KEY, sessionId })
       expect(yield* rows).toEqual([["opencode", "OpenCode", "stored"]])
-      yield* client.auth.deleteKey({ provider: "opencode" })
+      yield* client.auth.deleteKey({ provider: "opencode", sessionId })
       expect(yield* rows).toEqual([["opencode", "OpenCode", "none"]])
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
@@ -1066,10 +1066,10 @@ describe("OpenCode sign-in", () => {
           yield* (yield* ExtensionHost).register("modelDriver", go)
         }),
       })
-      const { client, rows, methods } = yield* signInHarness([goOnly])
+      const { client, rows, methods, sessionId } = yield* signInHarness([goOnly])
       expect(yield* rows).toEqual([["opencode-go", "OpenCode Go", "none"]])
       expect(yield* methods).toEqual([["opencode-go", ["OpenCode Go / Go Plus API key"]]])
-      yield* client.auth.setKey({ provider: "opencode-go", key: "oc-go-key" })
+      yield* client.auth.setKey({ provider: "opencode-go", key: "oc-go-key", sessionId })
       expect(yield* rows).toEqual([["opencode-go", "OpenCode Go", "stored"]])
       const state = makeFakeFetchState()
       const model = storedCredentialModel({

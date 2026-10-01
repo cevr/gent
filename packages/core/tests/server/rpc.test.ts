@@ -54,6 +54,7 @@ import {
   AuthError,
   serializeAuthStore,
   AuthApi,
+  ListAuthProvidersPayload,
 } from "../../src/runtime/provider"
 import {
   LanguageModelLayers,
@@ -87,7 +88,13 @@ import {
   type ModelDriverContribution,
   ProviderAuthError,
 } from "../../src/domain/driver.js"
-import { type ExtensionHealthSnapshot, SetDriverOverrideInput } from "../../src/server/rpc.js"
+import {
+  DeleteAuthKeyInput,
+  type ExtensionHealthSnapshot,
+  ExtensionStatusScope,
+  SetAuthKeyInput,
+  SetDriverOverrideInput,
+} from "../../src/server/rpc.js"
 import {
   defineResource,
   ExtensionLoadError,
@@ -200,14 +207,15 @@ describe("ExtensionRpcs", () => {
     const driverOverrides = Context.get(configContext, ConfigService)
       .get()
       .pipe(Effect.map((config) => config.driverOverrides ?? {}))
-    return { client, driverOverrides }
+    const { sessionId } = yield* client.session.create({})
+    return { client, driverOverrides, sessionId }
   })
 
   it.live("driver.list returns the registered drivers and agents", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client } = yield* clientWithConfig
-        const before = yield* client.driver.list({})
+        const { client, sessionId } = yield* clientWithConfig
+        const before = yield* client.driver.list({ sessionId })
         expect(before).toBeInstanceOf(DriverListResult)
         // Built-in agents extension contributes the "anthropic" model driver
         // (and friends); the registered list is non-empty.
@@ -220,14 +228,15 @@ describe("ExtensionRpcs", () => {
   it.live("driver.set persists an override in the config", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client, driverOverrides } = yield* clientWithConfig
-        const someModel = (yield* client.driver.list({})).drivers[0]
+        const { client, driverOverrides, sessionId } = yield* clientWithConfig
+        const someModel = (yield* client.driver.list({ sessionId })).drivers[0]
         if (Predicate.isUndefined(someModel)) {
           return yield* Effect.die(new Error("no model driver registered in test layer"))
         }
         yield* client.driver.set({
           agentName: DEFAULT_AGENT_NAME,
           driver: { id: someModel.id },
+          sessionId,
         })
         expect((yield* driverOverrides)[DEFAULT_AGENT_NAME]?.id).toBe(someModel.id)
       }).pipe(Effect.timeout("4 seconds")),
@@ -236,20 +245,22 @@ describe("ExtensionRpcs", () => {
 
   test("driver.set names a driver; a ref with no id is not a second way to clear", () => {
     const decode = Schema.decodeUnknownExit(SetDriverOverrideInput)
-    expect(Exit.isFailure(decode({ agentName: "main", driver: { _tag: "Model" } }))).toBe(true)
-    expect(
-      Exit.isSuccess(decode({ agentName: "main", driver: { _tag: "Model", id: "anthropic" } })),
-    ).toBe(true)
+    const named = { agentName: "main", sessionId: "session-a" }
+    expect(Exit.isFailure(decode({ ...named, driver: { _tag: "Model" } }))).toBe(true)
+    expect(Exit.isSuccess(decode({ ...named, driver: { _tag: "Model", id: "anthropic" } }))).toBe(
+      true,
+    )
   })
 
   it.live("driver.set rejects unknown driver id with NotFoundError", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client } = yield* clientWithConfig
+        const { client, sessionId } = yield* clientWithConfig
         const result = yield* client.driver
           .set({
             agentName: DEFAULT_AGENT_NAME,
             driver: { id: "definitely-not-registered" },
+            sessionId,
           })
           .pipe(Effect.flip)
         expect(result._tag).toBe("NotFoundError")
@@ -260,14 +271,15 @@ describe("ExtensionRpcs", () => {
   it.live("driver.clear removes an existing override", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client, driverOverrides } = yield* clientWithConfig
-        const someModel = (yield* client.driver.list({})).drivers[0]
+        const { client, driverOverrides, sessionId } = yield* clientWithConfig
+        const someModel = (yield* client.driver.list({ sessionId })).drivers[0]
         if (Predicate.isUndefined(someModel)) {
           return yield* Effect.die(new Error("no model driver registered in test layer"))
         }
         yield* client.driver.set({
           agentName: DEFAULT_AGENT_NAME,
           driver: { id: someModel.id },
+          sessionId,
         })
         yield* client.driver.clear({ agentName: DEFAULT_AGENT_NAME })
         expect(yield* driverOverrides).toEqual({})
@@ -584,8 +596,6 @@ describe("auth.listProviders", () => {
         expect(
           required(yield* client.auth.listProviders({ sessionId: session.sessionId })),
         ).toEqual(["otherprov"])
-        // Without a session the launch default still decides.
-        expect(required(yield* client.auth.listProviders({}))).toEqual(["anthropic"])
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -606,9 +616,12 @@ describe("auth.listProviders", () => {
             .filter((entry) => entry.required)
             .map((entry) => entry.provider)
             .toArray()
-        expect(required(yield* client.auth.listProviders({}))).toEqual(["anthropic"])
+        const { sessionId } = yield* client.session.create({})
+        expect(required(yield* client.auth.listProviders({ sessionId }))).toEqual(["anthropic"])
         expect(
-          required(yield* client.auth.listProviders({ agentName: AgentName.make("helper") })),
+          required(
+            yield* client.auth.listProviders({ agentName: AgentName.make("helper"), sessionId }),
+          ),
         ).toEqual(["anthropic", "otherprov"])
       }).pipe(Effect.timeout("4 seconds")),
     ),
@@ -628,9 +641,14 @@ describe("auth.listProviders", () => {
         )
         const session = yield* client.session.create({ cwd: process.cwd() })
         // The model stays `anthropic/…`; the turn routes through `otherprov`.
-        yield* client.driver.set({ agentName: DEFAULT_AGENT_NAME, driver: { id: "otherprov" } })
-        yield* client.auth.setKey({ provider: "otherprov", key: "sk-other" })
-        const providers = yield* client.auth.listProviders({ sessionId: session.sessionId })
+        const { sessionId } = session
+        yield* client.driver.set({
+          agentName: DEFAULT_AGENT_NAME,
+          driver: { id: "otherprov" },
+          sessionId,
+        })
+        yield* client.auth.setKey({ provider: "otherprov", key: "sk-other", sessionId })
+        const providers = yield* client.auth.listProviders({ sessionId })
         expect(
           providers.filter((entry) => entry.required).map((entry) => String(entry.provider)),
         ).toEqual(["otherprov"])
@@ -675,7 +693,8 @@ describe("auth.listProviders", () => {
             extensions: [envDrivers],
           }).pipe(Layer.provide(envLayer)),
         )
-        const providers = yield* client.auth.listProviders({})
+        const { sessionId } = yield* client.session.create({})
+        const providers = yield* client.auth.listProviders({ sessionId })
         const anthropic = providers.find((entry) => entry.provider === "anthropic")
         expect(anthropic?.hasKey).toBe(true)
         expect(anthropic?.source).toBe("env")
@@ -685,29 +704,24 @@ describe("auth.listProviders", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
-  it.live("returns launch-cwd providers without sessionId", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const providers = yield* client.auth.listProviders({})
-        expect(providers.length).toBeGreaterThan(0)
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
   it.live("signing out for a deleted session fails and keeps the key", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const kept = yield* client.session.create({})
         const session = yield* client.session.create({})
         yield* client.session.delete({ sessionId: session.sessionId })
-        yield* client.auth.setKey({ provider: "anthropic", key: "sk-kept" })
+        yield* client.auth.setKey({
+          provider: "anthropic",
+          key: "sk-kept",
+          sessionId: kept.sessionId,
+        })
         const error = yield* Effect.flip(
           client.auth.deleteKey({ provider: "anthropic", sessionId: session.sessionId }),
         )
         expect(error._tag).toBe("NotFoundError")
-        const providers = yield* client.auth.listProviders({})
+        const providers = yield* client.auth.listProviders({ sessionId: kept.sessionId })
         const anthropic = providers.find((entry) => entry.provider === "anthropic")
         expect(anthropic?.source).toBe("stored")
       }).pipe(Effect.timeout("4 seconds")),
@@ -726,7 +740,8 @@ describe("auth persistence RPC failures", () => {
             authLayer: failingReadAuthStoreLayer,
           }),
         )
-        const exit = yield* Effect.exit(client.auth.listProviders({}))
+        const { sessionId } = yield* client.session.create({})
+        const exit = yield* Effect.exit(client.auth.listProviders({ sessionId }))
         expect(exit._tag).toBe("Failure")
         if (exit._tag === "Failure") {
           expect(exit.cause.toString()).toContain("read failed")
@@ -745,7 +760,10 @@ describe("auth persistence RPC failures", () => {
             authLayer: failingAuthStoreLayer,
           }),
         )
-        const exit = yield* Effect.exit(client.auth.setKey({ provider: "openai", key: "sk-test" }))
+        const { sessionId } = yield* client.session.create({})
+        const exit = yield* Effect.exit(
+          client.auth.setKey({ provider: "openai", key: "sk-test", sessionId }),
+        )
         expect(exit._tag).toBe("Failure")
         if (exit._tag === "Failure") {
           expect(exit.cause.toString()).toContain("Failed to set auth")
@@ -764,7 +782,8 @@ describe("auth persistence RPC failures", () => {
             authLayer: failingAuthStoreLayer,
           }),
         )
-        const exit = yield* Effect.exit(client.auth.deleteKey({ provider: "openai" }))
+        const { sessionId } = yield* client.session.create({})
+        const exit = yield* Effect.exit(client.auth.deleteKey({ provider: "openai", sessionId }))
         expect(exit._tag).toBe("Failure")
         if (exit._tag === "Failure") {
           expect(exit.cause.toString()).toContain("Failed to delete auth")
@@ -882,10 +901,10 @@ describe("provider login", () => {
           }),
         )
 
-        yield* client.auth.setKey({ provider: "gate-plus", key: "sk-set" })
+        const { sessionId } = yield* client.session.create({})
+        yield* client.auth.setKey({ provider: "gate-plus", key: "sk-set", sessionId })
         expect(yield* stored).toEqual(["sk-set", "none"])
 
-        const { sessionId } = yield* client.session.create({})
         yield* client.auth.authorize({ sessionId, provider: "gate-plus", method: 0 })
         expect(yield* stored).toEqual(["sk-login", "none"])
 
@@ -961,7 +980,12 @@ describe("provider login", () => {
         const { sessionId } = yield* client.session.create({ cwd: profileCwd })
         yield* client.auth.setKey({ provider: "gate", key: "sk-own", sessionId })
         expect(yield* stored).toEqual(["sk-own", "none"])
-        yield* client.auth.setKey({ provider: "gate", key: "sk-launch" })
+        const launchSession = yield* client.session.create({ cwd: launchCwd })
+        yield* client.auth.setKey({
+          provider: "gate",
+          key: "sk-launch",
+          sessionId: launchSession.sessionId,
+        })
         expect(yield* stored).toEqual(["sk-own", "sk-launch"])
       }).pipe(Effect.timeout("4 seconds")),
     ),
@@ -1006,7 +1030,10 @@ describe("provider login", () => {
         expect(Object.keys(yield* client.auth.listMethods({ sessionId }))).toEqual([
           "project-oauth",
         ])
-        expect(Object.keys(yield* client.auth.listMethods())).toEqual([])
+        const launchSession = yield* client.session.create({})
+        expect(
+          Object.keys(yield* client.auth.listMethods({ sessionId: launchSession.sessionId })),
+        ).toEqual([])
         const authorization = yield* client.auth.authorize({
           sessionId,
           provider: "project-oauth",
@@ -4345,7 +4372,9 @@ describe("extension health", () => {
             // This test is about the failure report, so the load must survive it.
             allowFailedExtensions: true,
           })
-          const status = yield* client.extension.listStatus({ sessionId })
+          const status = yield* client.extension.listStatus({
+            scope: { _tag: "Session", id: sessionId },
+          })
           expect(status._tag).toBe("Degraded")
           if (status._tag !== "Degraded") return
           expect(status.healthyExtensions).toEqual([])
@@ -4392,14 +4421,20 @@ describe("extension health", () => {
           allowFailedExtensions: true,
           cwd: project,
         })
-        const broken = configIssues(yield* client.extension.listStatus({ sessionId }))
+        const broken = configIssues(
+          yield* client.extension.listStatus({ scope: { _tag: "Session", id: sessionId } }),
+        )
         expect(broken).toHaveLength(1)
         expect(broken[0]).toMatchObject({ _tag: "ActivationFailed", phase: "load" })
         expect(broken[0]?.error).toContain(projectConfig)
 
         // Fixed on disk, same server: the next read has no config issue.
         yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"] }')
-        expect(configIssues(yield* client.extension.listStatus({ sessionId }))).toEqual([])
+        expect(
+          configIssues(
+            yield* client.extension.listStatus({ scope: { _tag: "Session", id: sessionId } }),
+          ),
+        ).toEqual([])
       }).pipe(Effect.timeout("4 seconds"))
     }).pipe(Effect.scoped, Effect.provide(BunPlatformLive)),
   )
@@ -4444,9 +4479,12 @@ describe("extension health", () => {
               extensions: [catalogDrivers],
             }),
           )
-          const models = yield* client.model.list({})
+          const { sessionId } = yield* client.session.create({})
+          const models = yield* client.model.list({ sessionId })
           expect(models.map((model) => model.id)).toContain(ModelId.make("working/one"))
-          const status = yield* client.extension.listStatus({})
+          const status = yield* client.extension.listStatus({
+            scope: { _tag: "Session", id: sessionId },
+          })
           expect(status._tag).toBe("Degraded")
           if (status._tag !== "Degraded") return
           const degraded = status.degradedExtensions.find(
@@ -4499,12 +4537,13 @@ describe("extension health", () => {
             }),
           )
           // No run yet: health runs the catalog once, then reads that record.
-          const first = yield* client.extension.listStatus({})
-          const second = yield* client.extension.listStatus({})
+          const first = yield* client.extension.listStatus({ scope: { _tag: "Launch" } })
+          const second = yield* client.extension.listStatus({ scope: { _tag: "Launch" } })
           expect(localCalls).toBe(1)
-          yield* client.model.list({})
+          const { sessionId } = yield* client.session.create({})
+          yield* client.model.list({ sessionId })
           expect(localCalls).toBe(2)
-          const third = yield* client.extension.listStatus({})
+          const third = yield* client.extension.listStatus({ scope: { _tag: "Launch" } })
           expect(localCalls).toBe(2)
           for (const status of [first, second, third]) {
             expect(status._tag).toBe("Degraded")
@@ -5466,7 +5505,9 @@ describe("session profile lookup", () => {
           const tags = [
             (yield* Effect.flip(client.model.list({ sessionId })))._tag,
             (yield* Effect.flip(client.driver.list({ sessionId })))._tag,
-            (yield* Effect.flip(client.extension.listStatus({ sessionId })))._tag,
+            (yield* Effect.flip(
+              client.extension.listStatus({ scope: { _tag: "Session", id: sessionId } }),
+            ))._tag,
             (yield* Effect.flip(client.extension.listSlashCommands({ sessionId })))._tag,
           ]
           expect(tags).toEqual(["StorageError", "StorageError", "StorageError", "StorageError"])
@@ -5479,9 +5520,9 @@ describe("session profile lookup", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const { drivers } = yield* client.driver.list({})
-        const driver = { _tag: "Model" as const, id: drivers[0]?.id ?? "none" }
         const { sessionId } = yield* client.session.create({})
+        const { drivers } = yield* client.driver.list({ sessionId })
+        const driver = { _tag: "Model" as const, id: drivers[0]?.id ?? "none" }
         yield* client.session.delete({ sessionId })
         const tagOf = <A, E extends { readonly _tag: string }, R>(call: Effect.Effect<A, E, R>) =>
           Effect.match(call, { onFailure: (error) => error._tag, onSuccess: () => "answered" })
@@ -5500,7 +5541,9 @@ describe("session profile lookup", () => {
           ),
           "auth.setKey": tagOf(client.auth.setKey({ provider: driver.id, key: "sk", sessionId })),
           "auth.deleteKey": tagOf(client.auth.deleteKey({ provider: driver.id, sessionId })),
-          "extension.listStatus": tagOf(client.extension.listStatus({ sessionId })),
+          "extension.listStatus": tagOf(
+            client.extension.listStatus({ scope: { _tag: "Session", id: sessionId } }),
+          ),
           "extension.listSlashCommands": tagOf(client.extension.listSlashCommands({ sessionId })),
         }
         const tags = yield* Effect.all(calls)
@@ -5508,6 +5551,144 @@ describe("session profile lookup", () => {
         expect(Object.entries(tags).filter(([, tag]) => tag !== "NotFoundError")).toEqual([])
       }).pipe(Effect.timeout("4 seconds")),
     ),
+  )
+
+  test("a session-scoped payload that names no session is a type error", () => {
+    type Client = GentNamespacedClient
+    const provider = "anthropic"
+    // @ts-expect-error -- auth.setKey names its session
+    const setKey: Parameters<Client["auth"]["setKey"]>[0] = { provider, key: "sk" }
+    // @ts-expect-error -- auth.deleteKey names its session
+    const deleteKey: Parameters<Client["auth"]["deleteKey"]>[0] = { provider }
+    // @ts-expect-error -- auth.listMethods names its session
+    const listMethods: Parameters<Client["auth"]["listMethods"]>[0] = {}
+    // @ts-expect-error -- auth.listProviders names its session
+    const listProviders: Parameters<Client["auth"]["listProviders"]>[0] = {
+      agentName: DEFAULT_AGENT_NAME,
+    }
+    // @ts-expect-error -- driver.set names its session
+    const setDriver: Parameters<Client["driver"]["set"]>[0] = {
+      agentName: DEFAULT_AGENT_NAME,
+      driver: { _tag: "Model", id: provider },
+    }
+    // @ts-expect-error -- driver.list names its session
+    const listDrivers: Parameters<Client["driver"]["list"]>[0] = {}
+    // @ts-expect-error -- model.list names its session
+    const listModels: Parameters<Client["model"]["list"]>[0] = {}
+    // @ts-expect-error -- extension.listStatus names its scope
+    const listStatus: Parameters<Client["extension"]["listStatus"]>[0] = {}
+    const payloads = [setKey, deleteKey, listMethods, listProviders, setDriver, listDrivers]
+    expect([...payloads, listModels, listStatus]).toHaveLength(8)
+  })
+
+  // The client builds each payload with its schema's constructor, so a tag
+  // the constructor filled in would turn an empty scope into `Launch`.
+  it.live("a health read whose scope names neither a session nor the launch is refused", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client } = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        const exit = yield* Effect.exit(
+          // @ts-expect-error -- a scope names its tag; no constructor default picks `Launch`
+          client.extension.listStatus({ scope: {} }),
+        )
+        expect(Exit.isFailure(exit)).toBe(true)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  test("a session-scoped payload that names no session does not decode", () => {
+    const statusPayload = Schema.Struct({ scope: ExtensionStatusScope })
+    const driver = { _tag: "Model", id: "anthropic" }
+    const exits: ReadonlyArray<Exit.Exit<unknown, Schema.SchemaError>> = [
+      Schema.decodeUnknownExit(SetAuthKeyInput)({ provider: "anthropic", key: "sk" }),
+      Schema.decodeUnknownExit(DeleteAuthKeyInput)({ provider: "anthropic" }),
+      Schema.decodeUnknownExit(ListAuthProvidersPayload)({}),
+      Schema.decodeUnknownExit(SetDriverOverrideInput)({ agentName: "main", driver }),
+      Schema.decodeUnknownExit(statusPayload)({}),
+    ]
+    expect(exits.map((exit) => Exit.isFailure(exit))).toEqual([true, true, true, true, true])
+    expect(Exit.isSuccess(Schema.decodeExit(statusPayload)({ scope: { _tag: "Launch" } }))).toBe(
+      true,
+    )
+  })
+
+  // `/auth` and `/model` name the session, so a project's own driver serves them.
+  it.live(
+    "/auth and /model in a project session with a project driver answer from the project profile",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const profileCwd = yield* makeTempDirectoryScoped("gent-project-driver-")
+          const projectDriver: LoadedExtension = {
+            manifest: { id: ExtensionId.make("@test/project-models") },
+            scope: "project",
+            sourcePath: "test",
+            contributions: {
+              agents: [...e2ePreset.agents],
+              modelDrivers: [
+                {
+                  id: "project-models",
+                  name: "Project models",
+                  resolveModel: () => Effect.succeed(stubModel),
+                  listModels: () =>
+                    Effect.succeed([
+                      Model.make({
+                        id: ModelId.make("project-models/one"),
+                        name: "One",
+                        provider: ProviderId.make("project-models"),
+                      }),
+                    ]),
+                  auth: { methods: [AuthMethod.make({ type: "api", label: "Project key" })] },
+                },
+              ],
+            },
+          }
+          const profile = yield* makeProfile(profileCwd, [projectDriver])
+          const auth = yield* Effect.provide(Effect.service(Auth), Auth.Test({}))
+          const configContext = yield* Layer.build(ConfigService.Test())
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              agents: e2ePreset.agents,
+              providerLayer,
+              extensions: [],
+              authLayer: Layer.succeed(Auth, auth),
+              configServiceLayer: Layer.succeedContext(configContext),
+              sessionProfileCacheLayer: fixedSessionProfiles(new Map([[profileCwd, profile]])),
+            }),
+          )
+          const { sessionId } = yield* client.session.create({ cwd: profileCwd })
+          const projectSignIn = client.auth
+            .listProviders({ sessionId })
+            .pipe(
+              Effect.map((providers) =>
+                providers.find((entry) => entry.provider === "project-models"),
+              ),
+            )
+
+          // /model: the catalog and the drivers are the project's.
+          const models = yield* client.model.list({ sessionId })
+          expect(models.map((model) => model.id)).toEqual([ModelId.make("project-models/one")])
+          const { drivers } = yield* client.driver.list({ sessionId })
+          expect(drivers.map((driver) => driver.id)).toEqual(["project-models"])
+          yield* client.driver.set({
+            agentName: DEFAULT_AGENT_NAME,
+            driver: { _tag: "Model", id: "project-models" },
+            sessionId,
+          })
+
+          // /auth: the project driver is the sign-in the session needs.
+          expect(Object.keys(yield* client.auth.listMethods({ sessionId }))).toEqual([
+            "project-models",
+          ])
+          expect(yield* projectSignIn).toMatchObject({ required: true, hasKey: false })
+          yield* client.auth.setKey({ provider: "project-models", key: "sk-project", sessionId })
+          expect(yield* projectSignIn).toMatchObject({ required: true, hasKey: true })
+          yield* client.auth.deleteKey({ provider: "project-models", sessionId })
+          expect(yield* projectSignIn).toMatchObject({ required: true, hasKey: false })
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
   )
 
   // A client of the launch cwd works in the launch workspace, so its
@@ -5526,7 +5707,7 @@ describe("session profile lookup", () => {
           extensionInputs: [...e2ePreset.extensionInputs, counted],
           providerLayer,
         })
-        yield* client.extension.listStatus({ sessionId })
+        yield* client.extension.listStatus({ scope: { _tag: "Session", id: sessionId } })
         expect(yield* Ref.get(setups)).toBe(1)
       }).pipe(Effect.timeout("4 seconds")),
     ),
