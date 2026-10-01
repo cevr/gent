@@ -116,7 +116,7 @@ const renderList = (items: ReadonlyArray<SessionItem>, height = 40) =>
         items={[...items]}
         disclosure="full"
         syntaxStyle={syntaxStyle}
-        streaming={false}
+        openAnswer={Option.none()}
       />
     ),
     { initialSession: parentSession, width: 100, height },
@@ -170,7 +170,7 @@ describe("delegate rows in native scrollback", () => {
                     items={visible}
                     disclosure="full"
                     syntaxStyle={syntaxStyle}
-                    streaming={false}
+                    openAnswer={Option.none()}
                   />
                 )}
               >

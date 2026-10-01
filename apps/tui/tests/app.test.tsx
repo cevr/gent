@@ -38,6 +38,7 @@ import {
   Message as StoredMessage,
   Session,
   SessionId,
+  ToolCallId,
   ConnectionState,
   AgentEvent,
   EventEnvelope,
@@ -4848,6 +4849,101 @@ describe("agents view on the left arrow", () => {
 })
 
 describe("TUI renderer surfaces", () => {
+  // The answer in progress is the one the feed holds open, not the row that
+  // sorts last. A step's answer is stored before its tools run; through the
+  // tool run the turn is still running, and the stored answer draws its
+  // diagram.
+  it.scopedLive("a stored answer draws its diagram while its tool runs", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-diagram")
+      const branchId = BranchId.make("branch-diagram")
+      const envelope = (id: number, event: EventEnvelope["event"]) =>
+        EventEnvelope.make({ id: EventId.make(id), createdAt: id, event })
+      const answerId = MessageId.make("answer-diagram")
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+        session: {
+          events: () =>
+            Stream.concat(
+              Stream.make(
+                envelope(
+                  0,
+                  AgentEvent.cases.StreamSynchronized.make({
+                    sessionId,
+                    branchId,
+                    lastEventId: EventId.make(0),
+                  }),
+                ),
+                envelope(
+                  1,
+                  AgentEvent.cases.MessageReceived.make({
+                    message: StoredMessage.cases.regular.make({
+                      id: MessageId.make("ask-diagram"),
+                      sessionId,
+                      branchId,
+                      role: "user",
+                      parts: [Prompt.textPart({ text: "draw it" })],
+                      createdAt: dateFromMillis(1),
+                    }),
+                  }),
+                ),
+                envelope(
+                  2,
+                  AgentEvent.cases.MessageReceived.make({
+                    message: StoredMessage.cases.regular.make({
+                      id: answerId,
+                      sessionId,
+                      branchId,
+                      role: "assistant",
+                      parts: [
+                        Prompt.textPart({
+                          text: "```mermaid\ngraph LR\n  Alpha-->Beta\n```",
+                        }),
+                      ],
+                      createdAt: dateFromMillis(2),
+                    }),
+                  }),
+                ),
+                envelope(
+                  3,
+                  AgentEvent.cases.ToolCallStarted.make({
+                    sessionId,
+                    branchId,
+                    toolCallId: ToolCallId.make("call-diagram"),
+                    toolName: "bash",
+                    input: { command: "sleep 20" },
+                    assistantMessageId: answerId,
+                  }),
+                ),
+              ),
+              Stream.never,
+            ),
+        },
+      })
+      const setup = yield* renderScoped(() => <App />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 80,
+        height: 30,
+        initialSession: {
+          id: sessionId,
+          activeBranchId: branchId,
+          name: "Diagram",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Alpha") && next.includes("sleep 20"),
+        "the answer and its running tool",
+      )
+      // Drawn: the box's edge, and no raw edge statement.
+      expect(frame).not.toContain("Alpha-->Beta")
+      expect(frame).toContain("┌")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   // A text too wide for its column is cut once, at its end, by gent; the
   // renderer's own cut (`...` in the middle) never shows.
   it.scopedLive("at 40 columns the slash popup and the palette cut a text once, at its end", () =>
@@ -4985,7 +5081,7 @@ describe("TUI renderer surfaces", () => {
           items={items}
           disclosure="collapsed"
           syntaxStyle={syntaxStyle}
-          streaming={false}
+          openAnswer={Option.none()}
         />
       ))
       yield* Effect.promise(() => setup.renderOnce())

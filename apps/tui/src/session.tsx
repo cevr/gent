@@ -1614,6 +1614,8 @@ type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCa
 interface SessionFeed {
   items: () => SessionItem[]
   messages: () => Message[]
+  /** The answer the step in flight streams into; none between steps. */
+  openAnswer: () => Option.Option<string>
   /** The label of the tool that runs now; none between tools. */
   activeTool: () => Option.Option<string>
 }
@@ -2095,7 +2097,10 @@ export function useSessionFeed(
   })
   const [runningCalls, setRunningCalls] = createSignal<ReadonlyArray<RunningCall>>([])
   const [streamReady, setStreamReady] = createSignal(false)
-  let streamMessageId = Option.none<string>()
+  // The answer the step in flight streams into: the one row drawn as streaming.
+  const [openAnswer, setOpenAnswer] = createSignal(Option.none<string>(), {
+    equals: Option.makeEquivalence<string>((left, right) => left === right),
+  })
   // When the open answer's request went out: its row, drawn with the first chunk, sorts there.
   let answerStartedAt = 0
   let eventSeq = 0
@@ -2126,7 +2131,7 @@ export function useSessionFeed(
         return
 
       case "StreamEnded":
-        streamMessageId = Option.none()
+        setOpenAnswer(Option.none())
         // A cut stream ends a retry that had not answered; a settled one means it ran.
         if (event.interrupted === true) settleRetryingEvents(setStore, "cancelled")
         else settleRetryingEvents(setStore, "retried")
@@ -2134,7 +2139,7 @@ export function useSessionFeed(
         return
 
       case "TurnCompleted":
-        streamMessageId = Option.none()
+        setOpenAnswer(Option.none())
         // A cancel ends a retry that had not answered; any other end means it ran.
         if (event.interrupted === true)
           settleRetryingEvents(setStore, "cancelled", ["pending", "stopped"])
@@ -2233,8 +2238,8 @@ export function useSessionFeed(
   const applySnapshotMessages = (messages: ReadonlyArray<ProjectedMessage>) => {
     snapshotAnswers = new Set(messages.map((message) => String(message.id)))
     const next = buildMessages(messages)
-    streamMessageId = Option.filter(streamMessageId, (id) => !snapshotAnswers.has(id))
-    const inProgress = Option.flatMap(streamMessageId, (id) =>
+    setOpenAnswer(Option.filter(openAnswer(), (id) => !snapshotAnswers.has(id)))
+    const inProgress = Option.flatMap(openAnswer(), (id) =>
       Option.fromNullishOr(store.messages.find((message) => message.id === id)),
     )
     if (Option.isSome(inProgress)) next.push(unwrap(inProgress.value))
@@ -2261,12 +2266,11 @@ export function useSessionFeed(
       )
       answerStartedAt = stampedAt
       if (!live) {
-        streamMessageId = Option.filter(durable, (id) => !snapshotAnswers.has(id))
+        setOpenAnswer(Option.filter(durable, (id) => !snapshotAnswers.has(id)))
         return
       }
-      streamMessageId = Option.some(
-        yield* Option.match(durable, { onNone: () => randomId, onSome: Effect.succeed }),
-      )
+      const id = yield* Option.match(durable, { onNone: () => randomId, onSome: Effect.succeed })
+      setOpenAnswer(Option.some(id))
     })
 
   /**
@@ -2281,13 +2285,14 @@ export function useSessionFeed(
     live: boolean,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
-      if (!live && Option.isNone(streamMessageId)) return
-      if (Option.isNone(streamMessageId)) answerStartedAt = stampedAt
-      const id = yield* Option.match(streamMessageId, {
+      const open = openAnswer()
+      if (!live && Option.isNone(open)) return
+      if (Option.isNone(open)) answerStartedAt = stampedAt
+      const id = yield* Option.match(open, {
         onNone: () => randomId,
         onSome: Effect.succeed,
       })
-      streamMessageId = Option.some(id)
+      setOpenAnswer(Option.some(id))
       ensureAssistantMessage(setStore, chunk, id, answerStartedAt)
     })
 
@@ -2297,8 +2302,9 @@ export function useSessionFeed(
    * already drawn, or a call for another answer, draws nothing.
    */
   const drawOpenAnswer = (named: Option.Option<string>) => {
-    if (Option.isNone(streamMessageId)) return
-    const id = streamMessageId.value
+    const open = openAnswer()
+    if (Option.isNone(open)) return
+    const id = open.value
     if (Option.isSome(named) && named.value !== id) return
     if (store.messages.some((message) => message.id === id)) return
     ensureAssistantMessage(setStore, "", id, answerStartedAt)
@@ -2617,6 +2623,7 @@ export function useSessionFeed(
   return {
     items,
     messages: () => store.messages,
+    openAnswer,
     activeTool: () => runningLabel(runningCalls()),
   }
 }
@@ -2648,6 +2655,8 @@ export interface SessionController {
    */
   itemsSettled: () => boolean
   messages: () => Message[]
+  /** The answer the step in flight streams into: the one row drawn as streaming. */
+  openAnswer: () => Option.Option<string>
   forkMessages: () => readonly DurableMessage[]
   queueState: () => QueueState
   composerState: () => ComposerState
@@ -3494,6 +3503,7 @@ export function createSessionController(props: {
     items,
     itemsSettled: noticeRowsSettled,
     messages: feed.messages,
+    openAnswer: feed.openAnswer,
     forkMessages: () => {
       const overlay = uiState().overlay
       if (overlay._tag !== "fork") return []

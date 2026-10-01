@@ -744,7 +744,8 @@ interface MessageListProps {
   disclosure: DisclosureLevel
   fullDetail?: boolean
   syntaxStyle: () => SyntaxStyle
-  streaming: boolean
+  /** The answer the step in flight streams into: it draws as text, its diagrams once it settles. */
+  openAnswer: Option.Option<string>
 }
 
 export function MessageList(props: MessageListProps) {
@@ -753,7 +754,7 @@ export function MessageList(props: MessageListProps) {
   return (
     <box flexDirection="column">
       <For each={props.items}>
-        {(item, index) =>
+        {(item) =>
           (() => {
             if (!isMessageItem(item)) {
               return <SessionEventIndicator event={item} />
@@ -770,7 +771,7 @@ export function MessageList(props: MessageListProps) {
                     disclosure={props.disclosure}
                     fullDetail={props.fullDetail === true}
                     syntaxStyle={props.syntaxStyle}
-                    streaming={props.streaming && index() === props.items.length - 1}
+                    streaming={Option.contains(props.openAnswer, item.id)}
                     dimensions={dimensions}
                   />
                 }
@@ -1118,7 +1119,7 @@ interface NativeTranscriptProps {
   disclosure: DisclosureLevel
   displayRevision: number
   overlayOpen: boolean
-  renderItems: (items: SessionItem[], streaming: boolean) => JSX.Element
+  renderItems: (items: SessionItem[]) => JSX.Element
   children: JSX.Element
 }
 
@@ -1270,7 +1271,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
           createRoot((dispose) => {
             insert(surface.root, () => (
               <RendererContext.Provider value={surfaceRenderer}>
-                {props.renderItems(items, false)}
+                {props.renderItems(items)}
               </RendererContext.Provider>
             ))
             return dispose
@@ -1586,7 +1587,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
           }}
         >
           <For each={liveItems()}>
-            {(item, index) => (
+            {(item) => (
               <box
                 flexDirection="column"
                 flexShrink={0}
@@ -1596,7 +1597,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
                   setMeasurementVersion((version) => version + 1)
                 }}
               >
-                {props.renderItems([item], props.streaming && index() === liveItems().length - 1)}
+                {props.renderItems([item])}
               </box>
             )}
           </For>

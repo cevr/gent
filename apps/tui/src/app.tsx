@@ -665,13 +665,13 @@ export function Session(props: SessionProps) {
             overlayOpen={
               command.paletteOpen() || overlayHoldsComposer(controller.uiState().overlay)
             }
-            renderItems={(items, streaming) => (
+            renderItems={(items) => (
               <MessageList
                 items={items}
                 disclosure={controller.uiState().disclosure}
                 fullDetail={controller.uiState().transcriptExpanded}
                 syntaxStyle={syntaxStyle}
-                streaming={streaming}
+                openAnswer={controller.openAnswer()}
               />
             )}
           >

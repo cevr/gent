@@ -237,7 +237,7 @@ describe("session event labels", () => {
             items={[event]}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
-            streaming={true}
+            openAnswer={Option.none()}
           />
         ),
         { width: 80, height: 10 },
@@ -692,13 +692,13 @@ function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: 
         items={props.items}
         disclosure="collapsed"
         syntaxStyle={syntaxStyle}
-        streaming={false}
+        openAnswer={Option.none()}
       />
       <MessageList
         items={props.items}
         disclosure="preview"
         syntaxStyle={syntaxStyle}
-        streaming={false}
+        openAnswer={Option.none()}
       />
       <Show when={props.fullDetail}>
         <MessageList
@@ -706,7 +706,7 @@ function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: 
           disclosure="preview"
           fullDetail
           syntaxStyle={syntaxStyle}
-          streaming={false}
+          openAnswer={Option.none()}
         />
       </Show>
     </Show>
@@ -726,7 +726,7 @@ function LoadedMessageList(props: { items: SessionItem[]; fullDetail?: boolean }
         disclosure="collapsed"
         fullDetail={props.fullDetail}
         syntaxStyle={syntaxStyle}
-        streaming={false}
+        openAnswer={Option.none()}
       />
     </Show>
   )
@@ -866,7 +866,7 @@ describe("transcript message rows", () => {
           items={[message]}
           disclosure="collapsed"
           syntaxStyle={syntaxStyle}
-          streaming={false}
+          openAnswer={Option.none()}
         />
       ))
       expect(renderFrame(setup)).toContain("INFORMATION-SHOWN")
@@ -886,7 +886,7 @@ describe("transcript message rows", () => {
           items={items}
           disclosure="collapsed"
           syntaxStyle={syntaxStyle}
-          streaming={false}
+          openAnswer={Option.none()}
         />
       ))
       const frame = renderFrame(setup)
@@ -967,7 +967,7 @@ describe("transcript message rows", () => {
                     items={visible}
                     disclosure={disclosure()}
                     syntaxStyle={syntaxStyle}
-                    streaming={false}
+                    openAnswer={Option.none()}
                   />
                 )}
               >
@@ -1132,7 +1132,7 @@ describe("transcript message rows", () => {
             items={items}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
         ),
         { width: 32, height: 16 },
@@ -1163,7 +1163,7 @@ describe("transcript message rows", () => {
           items={items}
           disclosure="collapsed"
           syntaxStyle={syntaxStyle}
-          streaming={false}
+          openAnswer={Option.none()}
         />
       ))
       expect(setup.renderer.listenerCount("resize")).toBe(1)
@@ -1220,7 +1220,7 @@ describe("native history before the client extensions load", () => {
                     items={visible}
                     disclosure="collapsed"
                     syntaxStyle={syntaxStyle}
-                    streaming={false}
+                    openAnswer={Option.none()}
                   />
                 )}
               >
@@ -1283,7 +1283,7 @@ describe("native history before the client extensions load", () => {
                   items={visible}
                   disclosure="collapsed"
                   syntaxStyle={syntaxStyle}
-                  streaming={false}
+                  openAnswer={Option.none()}
                 />
               )}
             >
@@ -1369,20 +1369,20 @@ describe("rows that fold until full detail is on", () => {
               items={items}
               disclosure="collapsed"
               syntaxStyle={syntaxStyle}
-              streaming={false}
+              openAnswer={Option.none()}
             />
             <MessageList
               items={items}
               disclosure="full"
               syntaxStyle={syntaxStyle}
-              streaming={false}
+              openAnswer={Option.none()}
             />
             <MessageList
               items={items}
               disclosure="collapsed"
               fullDetail={true}
               syntaxStyle={syntaxStyle}
-              streaming={false}
+              openAnswer={Option.none()}
             />
           </>
         ),
@@ -1408,7 +1408,7 @@ describe("rows that fold until full detail is on", () => {
             items={[notice]}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
         ),
         { width: 100, height: 10 },
@@ -1489,13 +1489,13 @@ describe("tool frame identity", () => {
             items={items}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
           <MessageList
             items={items}
             disclosure="preview"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
         </>
       ))
@@ -2092,7 +2092,7 @@ describe("cell rows", () => {
             items={items}
             disclosure="preview"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
         ),
         { width: 80, height: 40 },
@@ -2127,7 +2127,7 @@ describe("cell rows", () => {
                   disclosure={disclosure()}
                   fullDetail={fullDetail()}
                   syntaxStyle={syntaxStyle}
-                  streaming={false}
+                  openAnswer={Option.none()}
                 />
               </Show>
             )
@@ -2183,7 +2183,7 @@ describe("cell rows", () => {
             items={items}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
         ),
         { width: 80, height: 20 },
@@ -2219,7 +2219,7 @@ describe("bash row line counts", () => {
             items={items}
             disclosure="preview"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
         ),
         { width: 80, height: 40 },
@@ -2245,7 +2245,7 @@ describe("bash row line counts", () => {
             items={[assistantToolMessage("assistant-cut", cutBashCall)]}
             disclosure="preview"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
         ),
         { width: 80, height: 20 },
@@ -2481,7 +2481,7 @@ describe("transcript block spacing", () => {
                 disclosure={view.disclosure}
                 fullDetail={view.fullDetail}
                 syntaxStyle={syntaxStyle}
-                streaming={false}
+                openAnswer={Option.none()}
               />
             ),
             { width: 100, height: 80 },
@@ -2605,7 +2605,7 @@ describe("transcript block spacing", () => {
                     items={visible}
                     disclosure={disclosure()}
                     syntaxStyle={syntaxStyle}
-                    streaming={false}
+                    openAnswer={Option.none()}
                   />
                 )}
               >
@@ -2825,7 +2825,7 @@ describe("read_session row", () => {
             items={items}
             disclosure="full"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
         ),
         { width: 100, height: 40 },
@@ -2873,7 +2873,7 @@ describe("read_session row", () => {
             items={[assistantToolMessage("assistant-cell-read", cell)]}
             disclosure="full"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
         ),
         { width: 100, height: 40 },
@@ -2928,7 +2928,7 @@ describe("write row", () => {
             items={[assistantToolMessage("assistant-cell-write", cell)]}
             disclosure="full"
             syntaxStyle={syntaxStyle}
-            streaming={true}
+            openAnswer={Option.some("assistant-cell-write")}
           />
         ),
         { width: 100, height: 40 },
@@ -2971,7 +2971,7 @@ describe("native transcript markdown", () => {
             items={[assistant("diagram", diagram)]}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
-            streaming={false}
+            openAnswer={Option.none()}
           />
         ),
         { width: 48, height: 30 },
@@ -2982,6 +2982,29 @@ describe("native transcript markdown", () => {
       )
       expect(labelRow).toContain("Gamma")
       expect(labelRow.trimEnd().endsWith("│")).toBe(true)
+    }),
+  )
+
+  // The open answer streams wherever it sorts: a row dated after it does not
+  // settle it, so its half-written diagram stays text.
+  it.scopedLive("the open answer stays text with a row after it", () =>
+    Effect.gen(function* () {
+      const diagram = "```mermaid\ngraph LR\n  Alpha-->Beta\n```"
+      const notice: SessionEvent = { _tag: "interruption", createdAt: 1, seq: 1 }
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[assistant("open", diagram), notice]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            openAnswer={Option.some("open")}
+          />
+        ),
+        { width: 60, height: 20 },
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("Alpha"), "the answer")
+      expect(frame).toContain("Alpha-->Beta")
+      expect(frame).not.toContain("┌")
     }),
   )
 
@@ -3020,7 +3043,7 @@ describe("native transcript markdown", () => {
                   items={visible}
                   disclosure="collapsed"
                   syntaxStyle={syntaxStyle}
-                  streaming={false}
+                  openAnswer={Option.none()}
                 />
               )}
             >
@@ -3125,7 +3148,7 @@ describe("native transcript footer room", () => {
                       items={visible}
                       disclosure="collapsed"
                       syntaxStyle={syntaxStyle}
-                      streaming={false}
+                      openAnswer={Option.none()}
                     />
                   )}
                 >
@@ -3300,7 +3323,7 @@ const transcript = (options: {
           items={visible}
           disclosure="collapsed"
           syntaxStyle={syntaxStyle}
-          streaming={false}
+          openAnswer={Option.none()}
         />
       )}
     >
@@ -3401,7 +3424,7 @@ const transcriptCommit = (options: {
           items={visible}
           disclosure="collapsed"
           syntaxStyle={syntaxStyle}
-          streaming={false}
+          openAnswer={Option.none()}
         />
       )}
     >
@@ -3678,12 +3701,12 @@ describe("sticky last prompt", () => {
               disclosure="collapsed"
               displayRevision={0}
               overlayOpen={false}
-              renderItems={(visible, streaming) => (
+              renderItems={(visible) => (
                 <MessageList
                   items={visible}
                   disclosure="collapsed"
                   syntaxStyle={syntaxStyle}
-                  streaming={streaming}
+                  openAnswer={Option.none()}
                 />
               )}
             >
@@ -4107,7 +4130,7 @@ describe("tool group rows", () => {
           items={items}
           disclosure="preview"
           syntaxStyle={syntaxStyle}
-          streaming={false}
+          openAnswer={Option.none()}
         />
       ),
       {
