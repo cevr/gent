@@ -186,6 +186,28 @@ describe("auth-state", () => {
       Option.some([provider]),
     )
   })
+
+  // "esc back" goes one step: a sign-in screen to its provider's methods,
+  // the methods to the provider list.
+  test("back from a sign-in screen opens its provider's methods", () => {
+    const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic" })
+    const oauth = transitionAuth(openOAuth(autoAuthorization), {
+      _tag: "OAuthAutoFailed",
+      error: "callback failed",
+    })
+
+    for (const state of [key, oauth]) {
+      const back = transitionAuth(state, { _tag: "Back" })
+      expect(back.screen).toEqual({ _tag: "Method", provider: "anthropic" })
+      expect(back.error).toEqual(Option.none())
+    }
+  })
+
+  test("back from the methods opens the provider list", () => {
+    const method = transitionAuth(loaded(), { _tag: "OpenMethod", provider: "anthropic" })
+
+    expect(transitionAuth(method, { _tag: "Back" }).screen).toEqual({ _tag: "List" })
+  })
 })
 
 // ── auth route ──────────────────────────────────────────────────────────────
@@ -1169,6 +1191,8 @@ describe("Auth route", () => {
       )
       expect(frame).toContain("anthropic")
       expect(frame).not.toContain("open failed")
+      // "esc back" lands on the provider's methods, one step back.
+      expect(frame).toContain("· method")
       expect(authorizeCalls).toEqual([
         { provider: "anthropic", method: 0, sessionId: activeSessionId },
       ])

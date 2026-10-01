@@ -162,8 +162,13 @@ export const AuthEvent = Schema.TaggedUnion({
    * so the flow keeps its screen and keeps waiting; the reader opens the URL.
    */
   BrowserUnavailable: {},
-  /** Escape, or an action that finished: back to the list, error cleared. */
+  /** An action that finished: back to the list, error cleared. */
   Close: {},
+  /**
+   * Escape, one step: a sign-in screen goes to its provider's methods, the
+   * methods go to the list. The error clears.
+   */
+  Back: {},
 })
 export type AuthEvent = Schema.Schema.Type<typeof AuthEvent>
 
@@ -171,6 +176,12 @@ const list = (state: AuthState, error: Option.Option<string>): AuthState => ({
   catalog: state.catalog,
   screen: AuthScreen.cases.List.make({}),
   error,
+})
+
+const methods = (state: AuthState, provider: string): AuthState => ({
+  ...state,
+  screen: AuthScreen.cases.Method.make({ provider }),
+  error: Option.none(),
 })
 
 /** Typing and backspace apply to whichever screen holds text. */
@@ -199,11 +210,7 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
         error: Option.none(),
       }),
       Failed: (event) => list(state, Option.some(event.error)),
-      OpenMethod: (event) => ({
-        ...state,
-        screen: AuthScreen.cases.Method.make({ provider: event.provider }),
-        error: Option.none(),
-      }),
+      OpenMethod: (event) => methods(state, event.provider),
       OpenKey: (event) => ({
         ...state,
         screen: AuthScreen.cases.Key.make({ provider: event.provider, value: "" }),
@@ -240,6 +247,14 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
         }
       },
       Close: () => list(state, Option.none()),
+      Back: () =>
+        Match.value(state.screen).pipe(
+          Match.tags({
+            Key: (screen) => methods(state, screen.provider),
+            OAuth: (screen) => methods(state, screen.provider),
+          }),
+          Match.orElse(() => list(state, Option.none())),
+        ),
     }),
   )
   return apply(event)
@@ -665,9 +680,10 @@ export function Auth(props: AuthProps) {
     )
   }
 
-  const close = () => {
+  // Esc: one step back. A reply in flight for the screen left behind is dropped.
+  const back = () => {
     begin()
-    send(AuthEvent.cases.Close.make({}))
+    send(AuthEvent.cases.Back.make({}))
   }
 
   // ── Screens ───────────────────────────────────────────────────────
@@ -914,7 +930,7 @@ export function Auth(props: AuthProps) {
           shown={codeLineShown()}
           onEvent={send}
           onSubmit={() => submitOauth(bodyProps.current())}
-          onCancel={close}
+          onCancel={back}
           onKey={(event) => {
             if (!isUrlCopyKey(event)) return false
             copyUrl(bodyProps.current())
@@ -978,7 +994,7 @@ export function Auth(props: AuthProps) {
                   startMethod(provider.provider, choice.index, choice.method),
                 )
               }
-              onDismiss={close}
+              onDismiss={back}
             />
           </PickerFrame>
         )}
@@ -996,7 +1012,7 @@ export function Auth(props: AuthProps) {
               text={keyMask(current().value)}
               onEvent={send}
               onSubmit={() => submitKey(current().provider, current().value)}
-              onCancel={close}
+              onCancel={back}
             />
           </PickerFrame>
         )}
