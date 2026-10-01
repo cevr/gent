@@ -291,7 +291,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   // instead of the `OperationHandle.execute(payload)` form (which would
   // re-introduce the actor client requirement at each call site).
   const actorClientFactory = yield* AgentLoopActor.Context
-  const actorControl = yield* AgentLoopActor.Control
   const actorState = yield* AgentLoopActor.State
   const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
     Effect.gen(function* () {
@@ -363,12 +362,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       { concurrency: SESSION_TERMINATION_CONCURRENCY, discard: true },
     )
   })
-
-  const redeliverPendingActorMessages = (target: SessionRuntimeTarget) =>
-    Effect.gen(function* () {
-      const workspaceId = yield* CurrentWorkspaceId
-      yield* actorControl.redeliver(entityIdOf(workspaceId, target.sessionId, target.branchId))
-    }).pipe(Effect.ignore)
 
   /** One actor command: check the target, address the loop, run, wrap any failure. */
   const actorCommand = <A, E, R>(
@@ -447,9 +440,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 
     getQueuedMessages: (input) =>
       actorCommand("getQueuedMessages", input, (ref, ids) =>
-        redeliverPendingActorMessages(input).pipe(
-          Effect.andThen(ref.execute(AgentLoopActor.GetQueue.make({ ...input, ...ids }))),
-        ),
+        ref.execute(AgentLoopActor.GetQueue.make({ ...input, ...ids })),
       ),
 
     getState: (input) =>

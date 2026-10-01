@@ -59,8 +59,7 @@ import {
   createRpcHarness,
   emptyQueueSnapshot,
   ensureStorageParents,
-  RecordingEventStore,
-  SequenceRecorder,
+  recordingEventStore,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
 import {
@@ -125,10 +124,8 @@ import {
   makeExtRegistry,
   makeLayer,
   makeLayerWithEventStore,
-  makeCountingEventStore,
   makeLayerWithEvents,
   makeMessage,
-  makeRecordingLayer,
   respondAgentLoopInteraction,
   runAgentLoop,
   steerAgentLoop,
@@ -138,7 +135,7 @@ import {
 } from "../helpers/agent-loop"
 import * as Prompt from "effect/ai/Prompt"
 import {
-  AgentEvent,
+  type AgentEvent,
   EventEnvelope,
   EventId,
   EventStore,
@@ -1247,7 +1244,7 @@ describe("model resolution failure", () => {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const layer = actorTestRoot({
         registry: ExtensionRegistry.fromResolved(resolved),
-        eventStore: makeCountingEventStore(eventsRef),
+        eventStore: recordingEventStore(eventsRef),
         models: [
           Model.make({
             id: modelId,
@@ -1328,7 +1325,7 @@ const refusesClassifier = (params: {
     const eventsRef = yield* Ref.make<AgentEvent[]>([])
     const layer = actorTestRoot({
       registry: ExtensionRegistry.fromResolved(resolved),
-      eventStore: makeCountingEventStore(eventsRef),
+      eventStore: recordingEventStore(eventsRef),
       // A context window does not make a classifier a chat model.
       models: [
         Model.make({
@@ -3053,8 +3050,7 @@ const makeRuntimeLayer = (
   requests: ReadonlyArray<RequestCapability> = [],
 ) => {
   const resolvedExtensions = makeTestExtensions(tools, requests)
-  const recorderLayer = SequenceRecorder.Live
-  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const eventStoreLayer = EventStore.Memory
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   let toolRunnerLayer = ToolRunner.Test()
   if (tools.length > 0) toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(BunServices.layer))
@@ -3065,7 +3061,6 @@ const makeRuntimeLayer = (
     ModelResolver.fromLanguageModel(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     eventStoreLayer,
-    recorderLayer,
     toolRunnerLayer,
     RuntimeEnvironment.Live({
       cwd: "/nonexistent/gent-test-cwd",
@@ -4581,28 +4576,24 @@ describe("interaction", () => {
   }
   const makeInteractionRecordingLayer = (
     tools: ReadonlyArray<ToolCapability>,
-    providerLayer?: Layer.Layer<LanguageModel.LanguageModel>,
-  ) => {
-    const resolvedProviderLayer = providerLayer ?? makeInteractionProviderLayer()
-    const recorderLayer = SequenceRecorder.Live
-    return actorTestRoot({
-      provider: resolvedProviderLayer,
+    events: Ref.Ref<AgentEvent[]>,
+  ) =>
+    actorTestRoot({
+      provider: makeInteractionProviderLayer(),
       registry: makeExtRegistry(tools),
-      eventStore: RecordingEventStore.pipe(Layer.provide(recorderLayer)),
-      overrides: recorderLayer,
+      eventStore: recordingEventStore(events),
       toolRunner: ToolRunner.Live,
     })
-  }
   it.live("tool triggers InteractionPendingError and machine parks", () =>
     Effect.gen(function* () {
       const callCount = yield* Ref.make(0)
       const resolution = yield* Deferred.make<void>()
       const tool = makeInteractionTool(callCount, resolution)
-      const layer = makeInteractionRecordingLayer([tool])
+      const events = yield* Ref.make<AgentEvent[]>([])
+      const layer = makeInteractionRecordingLayer([tool], events)
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const recorder = yield* SequenceRecorder
           const fiber = yield* Effect.forkChild(
             runAgentLoop(agentLoop, makeIntMessage("trigger interaction")),
           )
@@ -4613,10 +4604,7 @@ describe("interaction", () => {
           )
           expect(state._tag).toBe("WaitingForInteraction")
           expect(yield* Ref.get(callCount)).toBe(1)
-          const calls = yield* recorder.getCalls
-          const eventTags = calls
-            .filter((c) => c.service === "EventStore" && c.method === "append")
-            .map((c) => Schema.decodeUnknownSync(AgentEvent)(c.args)._tag)
+          const eventTags = (yield* Ref.get(events)).map((event) => event._tag)
           expect(eventTags).toContain("ToolCallStarted")
           yield* respondAgentLoopInteraction({
             sessionId: intSessionId,
@@ -4635,7 +4623,7 @@ describe("interaction", () => {
       const callCount = yield* Ref.make(0)
       const resolution = yield* Deferred.make<void>()
       const tool = makeInteractionTool(callCount, resolution)
-      const layer = makeInteractionRecordingLayer([tool])
+      const layer = makeInteractionRecordingLayer([tool], yield* Ref.make<AgentEvent[]>([]))
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
@@ -4919,7 +4907,7 @@ describe("interaction", () => {
         )
       })
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      const layer = makeLiveToolLayer(provider, [tool], [], makeCountingEventStore(eventsRef))
+      const layer = makeLiveToolLayer(provider, [tool], [], recordingEventStore(eventsRef))
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
@@ -5840,21 +5828,16 @@ describe("a failed turn", () => {
           Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
         ),
       )
-      const layer = makeRecordingLayer(providerLayer)
+      const events = yield* Ref.make<AgentEvent[]>([])
+      const layer = makeLayerWithEvents(providerLayer, events)
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const recorder = yield* SequenceRecorder
           yield* runAgentLoop(
             agentLoop,
             makeMessage(SessionId.make("s1"), BranchId.make("b1"), "inspect me"),
           )
-          const calls = yield* recorder.getCalls
-          const publishedEvents = calls
-            .filter((call) => call.service === "EventStore" && call.method === "append")
-            .map((call) => Schema.decodeUnknownOption(AgentEvent)(call.args))
-            .filter(Option.isSome)
-            .map(({ value }) => value._tag)
+          const publishedEvents = (yield* Ref.get(events)).map((event) => event._tag)
           expect(publishedEvents).toContain("StreamStarted")
           expect(publishedEvents).toContain("TurnCompleted")
         }).pipe(Effect.provide(layer)),

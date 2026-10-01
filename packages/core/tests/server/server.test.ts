@@ -975,43 +975,43 @@ describe("session command persistence", () => {
     )
   })
 
-  it.live(
-    "a rename that expects the default name keeps a name set between its read and its write",
-    () => {
-      const sessionId = SessionId.make("session-rename-expected")
-      const branchId = BranchId.make("branch-rename-expected")
-      return Effect.gen(function* () {
-        const mutations = yield* SessionMutations
-        const sessions = yield* SessionStorage
-        const branches = yield* BranchStorage
-        yield* createActiveSessionFixture({
-          sessions,
-          branches,
-          sessionId,
-          branchId,
-          now: FIXED_NOW,
-          name: DEFAULT_SESSION_NAME,
-        })
+  it.live("a rename that expects the default name keeps a name the user set first", () =>
+    Effect.gen(function* () {
+      const mutations = yield* SessionMutations
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const named = SessionId.make("session-rename-expected")
+      const unnamed = SessionId.make("session-rename-default")
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId: named,
+        branchId: BranchId.make("branch-rename-expected"),
+        now: FIXED_NOW,
+        name: "asked for by the user",
+      })
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId: unnamed,
+        branchId: BranchId.make("branch-rename-default"),
+        now: FIXED_NOW,
+        name: DEFAULT_SESSION_NAME,
+      })
+      const fromFirstMessage = {
+        name: "from the first message",
+        expectedName: DEFAULT_SESSION_NAME,
+      }
 
-        const result = yield* mutations.renameSession({
-          sessionId,
-          name: "from the first message",
-          expectedName: DEFAULT_SESSION_NAME,
-        })
-
-        expect(result).toEqual({ renamed: false })
-        expect((yield* sessions.getSession(sessionId))?.name).toBe("asked for by the user")
-      }).pipe(
-        Effect.provide(
-          interleavedSessionMutationsLayer({
-            sessionId,
-            racingWrite: (sql) =>
-              sql`UPDATE sessions SET name = ${"asked for by the user"} WHERE id = ${sessionId}`,
-          }),
-        ),
-        Effect.timeout("4 seconds"),
-      )
-    },
+      expect(yield* mutations.renameSession({ sessionId: named, ...fromFirstMessage })).toEqual({
+        renamed: false,
+      })
+      expect((yield* sessions.getSession(named))?.name).toBe("asked for by the user")
+      expect(yield* mutations.renameSession({ sessionId: unnamed, ...fromFirstMessage })).toEqual({
+        renamed: true,
+        name: "from the first message",
+      })
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("a settings change keeps a rename that lands between its read and its write", () => {
@@ -1709,14 +1709,11 @@ describe("session.delete", () => {
  * replay-to-live handoff are not dropped.
  */
 
-// `retries: false` turns off the debug model's synthetic 429s, which fire on
-// a hash of the user text; without it a message's own wording decides whether
-// the turn retries.
 const makeDebugClient = () =>
   createRpcClient(
     createE2ELayer({
       ...e2ePreset,
-      providerLayer: LanguageModelLayers.debug({ retries: false }),
+      providerLayer: LanguageModelLayers.debug(),
     }),
   )
 
@@ -2157,9 +2154,7 @@ describe("session queue and runtime watch", () => {
  */
 
 // The debug model answers every turn, so a test may send more than one
-// message without scripting a step per send. `retries: false` turns off its
-// synthetic 429s, which fire on a hash of the user text and would otherwise
-// make a message's own wording decide whether the turn retries.
+// message without scripting a step per send.
 describe("session transport contract", () => {
   it.live(
     "a created session appears in list and get with an empty snapshot and queue",

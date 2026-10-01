@@ -531,12 +531,13 @@ Shape:
 - A session takes its name from its first user message: at a turn end,
   `@gent/session-tools` renames a session that still has
   `DEFAULT_SESSION_NAME` to the first line of its branch's first user
-  message (the rename trims it to 80 characters), as a delegate child takes
+  message (the rename cuts a name to 80 characters between code points and
+  trims it), as a delegate child takes
   its task. No prompt text asks the model to name a session; `rename_session`
   stays for a rename the user asks for, and a name it gave first wins: the
-  automatic rename passes `expectedName`, and the storage write renames only
-  while the stored name is still the default (`renameCurrent`,
-  `SessionStorage.renameSession`). A session whose first message has no text
+  automatic rename passes `expectedName`, and the rename's write transaction
+  renames only while the stored name is still the default (`renameCurrent`,
+  `SessionMutations.renameSession`). A session whose first message has no text
   keeps the default; its history is read once per process, not every turn.
 - `Interject` steering never interrupts an open stream. The item is admitted to
   the durable steering queue; a running turn delivers it at its next safe step
@@ -1796,8 +1797,9 @@ One test file per source file. No god tests. Names match source owners.
 
 ### Important files
 
-- `packages/core/src/test-utils/index.ts` — `SequenceRecorder` and the
-  recording layers; `baseLocalLayer`, a production-root preset over
+- `packages/core/src/test-utils/harness.ts` — `recordingEventStore`, the
+  in-memory event store that keeps each appended event in a `Ref`;
+  `baseLocalLayer`, a production-root preset over
   `createDependencies` with in-memory SQLite, storage-backed events, debug
   providers, and test service overrides; `createE2ELayer`, a preset that keeps
   real `ToolRunner.Live`, extension setup/resource startup, event publishing,

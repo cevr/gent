@@ -1,6 +1,6 @@
 import type { LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Clock, Duration, Effect, Layer, Option, type Ref, Schema } from "effect"
 import * as Prompt from "effect/ai/Prompt"
 import {
   AgentLoop as AgentLoopActor,
@@ -37,13 +37,12 @@ import {
 import { testAgents } from "./test-preset"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../src/domain/extension"
-import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
+import { type AgentEvent, EventStore } from "../../src/domain/event"
 import { BranchStorage, SessionStorage } from "../../src/storage/storage"
 import type { StorageError } from "../../src/domain/errors"
 import {
-  RecordingEventStore,
-  SequenceRecorder,
   ensureStorageParents,
+  recordingEventStore,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
 import {
@@ -344,37 +343,6 @@ export const makeLayer = (
   tools: ReadonlyArray<ToolCapability> = [],
   resources: AnyResourceContribution[] = [],
 ) => actorTestRoot({ provider: providerLayer, registry: makeExtRegistry(tools, resources) })
-export const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
-  const recorderLayer = SequenceRecorder.Live
-  return actorTestRoot({
-    provider: providerLayer,
-    eventStore: RecordingEventStore.pipe(Layer.provide(recorderLayer)),
-    overrides: recorderLayer,
-  })
-}
-export const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
-  Layer.effect(
-    EventStore,
-    Effect.gen(function* () {
-      const idRef = yield* Ref.make(0)
-      return EventStore.of({
-        append: (event: AgentEvent) =>
-          Effect.gen(function* () {
-            const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
-            yield* Ref.update(eventsRef, (events) => [...events, event])
-            return EventEnvelope.make({
-              id: EventId.make(id),
-              event,
-              createdAt: yield* Clock.currentTimeMillis,
-            })
-          }),
-        deliver: () => Effect.void,
-        publish: (event: AgentEvent) => Ref.update(eventsRef, (events) => [...events, event]),
-        subscribe: () => Stream.empty,
-        removeSession: () => Effect.void,
-      })
-    }),
-  )
 export const makeLayerWithEvents = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   eventsRef: Ref.Ref<AgentEvent[]>,
@@ -383,7 +351,7 @@ export const makeLayerWithEvents = (
   actorTestRoot({
     provider: providerLayer,
     registry: makeExtRegistry(tools),
-    eventStore: makeCountingEventStore(eventsRef),
+    eventStore: recordingEventStore(eventsRef),
   })
 /** The actor root over a substitute event store, for a test about a failing append or delivery. */
 export const makeLayerWithEventStore = (

@@ -795,8 +795,8 @@ export interface ExtensionSessionService {
   >
   /**
    * Rename the current session. With `expectedName` it renames only while
-   * the stored name is still that one, checked by the write itself, so a
-   * rename that lands in between wins.
+   * the stored name is still that one, checked in the transaction that
+   * writes it, so a name another rename set first wins.
    */
   readonly renameCurrent: (
     name: string,
@@ -1309,7 +1309,7 @@ export interface SessionMutationsService {
   readonly renameSession: (input: {
     readonly sessionId: SessionId
     readonly name: string
-    /** Rename only while the stored name is this one, checked by the write itself. */
+    /** Rename only while the stored name is this one, checked in the write transaction. */
     readonly expectedName?: string
   }) => Effect.Effect<{ renamed: boolean; name?: string }, SessionMutationError>
   readonly createSessionBranch: (

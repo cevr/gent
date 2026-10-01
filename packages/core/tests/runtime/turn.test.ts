@@ -73,7 +73,7 @@ import {
   ModelResolver,
 } from "../../src/runtime/provider"
 import {
-  AgentEvent,
+  type AgentEvent,
   EventEnvelope,
   EventId,
   EventStore,
@@ -107,7 +107,7 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
-  SequenceRecorder,
+  recordingEventStore,
 } from "../../src/test-utils/harness"
 import {
   LanguageModelLayers,
@@ -129,11 +129,9 @@ import {
   actorTestRoot,
   helperAgent,
   makeAgentLoopService,
-  makeCountingEventStore,
   makeLayer,
   makeLayerWithEvents,
   makeMessage,
-  makeRecordingLayer,
   runAgentLoop,
   steerAgentLoop,
   stopAgentLoopMessage,
@@ -1572,25 +1570,21 @@ describe("empty final step", () => {
         emptyStep(),
         emptyStep(),
       ])
+      const events = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const recorder = yield* SequenceRecorder
           yield* runAgentLoop(agentLoop, userMessage("do the thing"))
 
-          const calls = yield* recorder.getCalls
-          const turnCompleted = calls
-            .filter((call) => call.service === "EventStore" && call.method === "append")
-            .map((call) => Schema.decodeUnknownOption(AgentEvent)(call.args))
-            .filter(Option.isSome)
-            .map(({ value }) => value)
-            .filter((event) => event._tag === "TurnCompleted")
+          const turnCompleted = (yield* Ref.get(events)).filter(
+            (event) => event._tag === "TurnCompleted",
+          )
 
           expect(turnCompleted.length).toBeGreaterThan(0)
           // Without the flag every field here reads exactly like a successful
           // turn, and the caller cannot tell "gave up" from "replied".
           expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
-        }).pipe(Effect.provide(makeRecordingLayer(providerLayer))),
+        }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, events))),
       )
     }),
   )
@@ -1602,23 +1596,18 @@ describe("empty final step", () => {
       // MAX_CONTINUATIONS_PER_TURN times rather than stopping at the first
       // empty step, and it must stop rather than looping forever.
       const providerLayer = LanguageModelLayers.empty
+      const events = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const recorder = yield* SequenceRecorder
           yield* runAgentLoop(agentLoop, userMessage("do the thing"))
 
-          const calls = yield* recorder.getCalls
-          const events = calls
-            .filter((call) => call.service === "EventStore" && call.method === "append")
-            .map((call) => Schema.decodeUnknownOption(AgentEvent)(call.args))
-            .filter(Option.isSome)
-            .map(({ value }) => value)
-
-          const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
+          const turnCompleted = (yield* Ref.get(events)).filter(
+            (event) => event._tag === "TurnCompleted",
+          )
           expect(turnCompleted.length).toBeGreaterThan(0)
           expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
-        }).pipe(Effect.provide(makeRecordingLayer(providerLayer))),
+        }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, events))),
       )
     }),
   )
@@ -2139,7 +2128,7 @@ describe("native model compaction integration", () => {
     const events = Ref.makeUnsafe<Array<AgentEvent>>([])
     const layer = actorTestRoot({
       resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
-      eventStore: makeCountingEventStore(events),
+      eventStore: recordingEventStore(events),
       registry: ExtensionRegistry.fromResolved(
         resolveExtensions([
           {

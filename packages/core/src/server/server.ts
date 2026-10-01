@@ -957,19 +957,18 @@ const makeSessionMutationsService: Effect.Effect<
       const expectedName = Option.fromUndefinedOr(input.expectedName)
       return yield* transactWithEvents(
         Effect.gen(function* () {
+          // The read and the write share one write transaction (one
+          // connection, `BEGIN IMMEDIATE`), so no rename lands between them:
+          // the expected name is checked on this read.
           const session = yield* sessionStorage.getSession(input.sessionId)
-          if (Predicate.isUndefined(session) || session.name === trimmed) {
+          if (
+            Predicate.isUndefined(session) ||
+            session.name === trimmed ||
+            Option.exists(expectedName, (expected) => session.name !== expected)
+          ) {
             return { result: unchanged, events: [] }
           }
-          // The write itself checks the expected name, so a rename that lands
-          // after the read above still wins.
-          const written = yield* sessionStorage.renameSession(
-            input.sessionId,
-            trimmed,
-            yield* DateTime.nowAsDate,
-            expectedName,
-          )
-          if (!written) return { result: unchanged, events: [] }
+          yield* sessionStorage.renameSession(input.sessionId, trimmed, yield* DateTime.nowAsDate)
           return {
             result: { renamed: true, name: trimmed },
             events: [SessionNameUpdated.make({ sessionId: input.sessionId, name: trimmed })],
