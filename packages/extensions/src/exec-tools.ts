@@ -585,6 +585,9 @@ const targetStillExists = (target: BackgroundBashTarget) =>
     return branches.some((branch) => branch.id === target.branchId)
   })
 
+/** `metadata.customType` on a settled job's message: a notice, not something the user wrote. */
+const BACKGROUND_BASH_MESSAGE_TYPE = "background-bash"
+
 /**
  * Queues a settled job's message; false when the send was refused (a full
  * follow-up queue, for one), so the caller keeps the result for a notice. A
@@ -601,6 +604,7 @@ const queueBackgroundFollowUp = (params: {
       delivery: "queue",
       sourceId: params.sourceId,
       content: params.content,
+      metadata: { customType: BACKGROUND_BASH_MESSAGE_TYPE },
     }).pipe(
       Effect.as(true),
       Effect.catchEager((error) =>

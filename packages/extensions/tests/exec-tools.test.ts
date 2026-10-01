@@ -225,7 +225,12 @@ describe("background shell through a cell", () => {
           })
           yield* Fiber.join(completed)
           yield* fs.writeFileString(release, "go")
-          expect(Array.from(yield* Fiber.join(notice))).toHaveLength(1)
+          // The notice names its kind, so a reader tells it from what the user wrote.
+          const delivered = Array.from(yield* Fiber.join(notice)).flatMap(({ event }) => {
+            if (event._tag !== "MessageReceived") return []
+            return [event.message.metadata?.customType]
+          })
+          expect(delivered).toEqual(["background-bash"])
           yield* fs.remove(release)
         }
         // A deadlock bound only: each wait above is an event. Two harnesses
