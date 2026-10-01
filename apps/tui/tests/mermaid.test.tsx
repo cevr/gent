@@ -53,9 +53,13 @@ const diagramRows = (frame: string): ReadonlyArray<string> => {
   return rows.slice(first, last + 1)
 }
 
-/** An answer with one diagram, and the answer after it. */
+/**
+ * An answer with one diagram, the answer after it, and a long answer that
+ * pushes both above the live tail, so both move to history.
+ */
 const diagramThenTail = (): SessionItem[] => {
   const content = "```mermaid\ngraph LR\n  Alpha-->Beta\n```"
+  const filler = Array.from({ length: 20 }, (_, index) => `filler line ${index + 1}`).join("\n\n")
   return [
     {
       _tag: "regular-message",
@@ -77,6 +81,16 @@ const diagramThenTail = (): SessionItem[] => {
       createdAt: 1,
       segments: [{ _tag: "text", content: "AFTER-DIAGRAM" }],
     },
+    {
+      _tag: "regular-message",
+      id: "filler",
+      role: "assistant",
+      content: filler,
+      reasoning: "",
+      images: [],
+      createdAt: 2,
+      segments: [{ _tag: "text", content: filler }],
+    },
   ]
 }
 
@@ -97,6 +111,7 @@ const historyWith = (library: ReturnType<typeof makeDiagramLibrary>) =>
               settled
               streaming={false}
               footerHeight={3}
+              paneOpen={false}
               expanded={false}
               disclosure="collapsed"
               displayRevision={0}

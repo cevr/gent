@@ -367,6 +367,16 @@ export function DockProvider(props: { children: JSX.Element }) {
 }
 
 /**
+ * Whether a docked pane is open. Read by the transcript: a pane covers the
+ * live tail's last rows, so the footer's rows while one is open are not its
+ * base. Outside a dock no pane is counted.
+ */
+export const useDockPaneOpen = (): (() => boolean) => {
+  const dock = useContext(DockContext)
+  return () => Option.exists(dock, (current) => current.paneOpen())
+}
+
+/**
  * The footer column the panes dock in: at most `maxHeight` rows, never
  * shrunk. It reads its laid-out rows before each draw and tells the dock the
  * rows left under its cap, which is when the spacers come back.
@@ -723,8 +733,7 @@ export function PickerFrame(
  * while a docked pane is open, so the pane the reader opened gets the rows.
  */
 export function TrayFrame(props: { children: JSX.Element }) {
-  const dock = useContext(DockContext)
-  const paneOpen = () => Option.exists(dock, (current) => current.paneOpen())
+  const paneOpen = useDockPaneOpen()
   return (
     <Show when={!paneOpen()}>
       <box flexDirection="column" flexShrink={0} paddingLeft={1} paddingRight={1}>

@@ -34,6 +34,7 @@ import {
   keyHint,
   KeyHints,
   keyHintsLine,
+  useDockPaneOpen,
   useDockSpacer,
 } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
@@ -529,6 +530,7 @@ export function Session(props: SessionProps) {
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
   const [footerHeight, setFooterHeight] = createSignal(4)
+  const paneOpen = useDockPaneOpen()
   // The sign-in docks in the footer like every pane. It stays mounted while
   // its overlay is open, so the flow it is in survives other UI updates.
   const authOverlay = () => {
@@ -660,6 +662,7 @@ export function Session(props: SessionProps) {
           settled={controller.itemsSettled()}
           streaming={client.isStreaming()}
           footerHeight={footerHeight()}
+          paneOpen={paneOpen()}
           expanded={controller.uiState().transcriptExpanded}
           disclosure={controller.uiState().disclosure}
           displayRevision={controller.uiState().displayRevision}
