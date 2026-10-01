@@ -1988,3 +1988,72 @@ describe("shared sign-in", () => {
     }),
   )
 })
+
+describe("classifier availability", () => {
+  /** A classifier driver that lists `classifiers`, counting its catalog runs. */
+  const classifierDriver = (
+    id: string,
+    classifiers: ReadonlyArray<string>,
+    listed: Array<string>,
+  ): ModelDriverContribution => ({
+    id,
+    name: id,
+    resolveModel: () => Effect.succeed(fakeResolution()),
+    listModels: () =>
+      Effect.sync(() => {
+        listed.push(id)
+        return classifiers.map((name) =>
+          Model.make({ ...catalogModel(`${id}/${name}`), kind: "classifier" }),
+        )
+      }),
+    resolveDecisionModel: () => Effect.fail(new ProviderAuthError({ message: "unused" })),
+  })
+
+  const available = (
+    drivers: ReadonlyArray<ModelDriverContribution>,
+    stored: Record<string, string>,
+    checks: number,
+  ) =>
+    Effect.gen(function* () {
+      const seed = Object.fromEntries(
+        Object.entries(stored).map(([id, key]) => [id, AuthApi.make({ type: "api", key })]),
+      )
+      const registry = ExtensionRegistry.fromResolved(
+        resolveExtensions([makeExt("classifiers", [...drivers])]),
+      )
+      return yield* Effect.gen(function* () {
+        const resolver = yield* DecisionModelResolver
+        const answers: Array<boolean> = []
+        for (let index = 0; index < checks; index++) {
+          answers.push(yield* (yield* resolver.profile).hasCredential)
+        }
+        return answers
+      }).pipe(
+        Effect.provide(
+          DecisionModelResolver.Live.pipe(
+            Layer.provideMerge(Layer.merge(Auth.Test(seed), registry)),
+          ),
+        ),
+      )
+    })
+
+  it.live("a credentialed driver that lists no classifier has none to offer", () =>
+    Effect.gen(function* () {
+      const listed: Array<string> = []
+      const hollow = classifierDriver("hollow", [], listed)
+      expect(yield* available([hollow], { hollow: "sk-hollow" }, 1)).toEqual([false])
+      const judge = classifierDriver("judge", ["jev-1"], listed)
+      expect(yield* available([hollow, judge], { hollow: "sk-hollow" }, 1)).toEqual([false])
+      expect(yield* available([hollow, judge], { judge: "sk-judge" }, 1)).toEqual([true])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("the catalog of one profile is read once, however many turns ask", () =>
+    Effect.gen(function* () {
+      const listed: Array<string> = []
+      const judge = classifierDriver("judge", ["jev-1"], listed)
+      expect(yield* available([judge], { judge: "sk-judge" }, 3)).toEqual([true, true, true])
+      expect(listed).toEqual(["judge"])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+})
