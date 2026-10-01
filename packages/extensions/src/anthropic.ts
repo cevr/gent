@@ -2515,7 +2515,11 @@ export const buildAnthropicModelDriver = (
   envCredential: "ANTHROPIC_API_KEY",
   // The lifetimes the markers ask for, a root's and a child's, and the write price; see `PromptCacheTtl`.
   listModels: () =>
-    driverListModels(catalog, "anthropic", PROMPT_CACHE_LIFETIME[promptCacheTtl])().pipe(
+    driverListModels(
+      catalog,
+      "anthropic",
+      Option.some(PROMPT_CACHE_LIFETIME[promptCacheTtl]),
+    )().pipe(
       Effect.map(withDocumentedWindows),
       Effect.map(withChildPromptCacheLifetime(promptCacheTtl)),
       Effect.map(withPromptCacheWritePrice(promptCacheTtl)),

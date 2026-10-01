@@ -34,7 +34,9 @@ import {
   type ReasoningOption,
   readOptionalEnv,
   rewriteJsonBody,
+  RESPONSES_PROMPT_CACHE_TTL,
   withEncryptedReasoning,
+  withPromptCacheTtl,
 } from "./providers.js"
 
 // Test seam: only tests read OPENCODE_GATEWAYS and buildOpenCodeModelDriver,
@@ -109,12 +111,6 @@ export const OPENCODE_GATEWAYS = {
 
 /** models.dev names this variable for both gateways. */
 const ENV_CREDENTIAL = "OPENCODE_API_KEY"
-
-/**
- * How long a prompt stays cached. The gateways do not say, and the upstreams
- * differ; 5 minutes is the shortest of them (an Anthropic `ephemeral` entry).
- */
-const PROMPT_CACHE_TTL = Duration.minutes(5)
 
 // ── headers ─────────────────────────────────────────────────────────────────
 
@@ -613,18 +609,39 @@ const modelLayer = (format: WireFormat, resolution: Resolution) => {
 }
 
 /**
+ * How long a prompt stays cached, by wire format. The gateways do not say, so
+ * each format takes its upstream's rule: Responses the OpenAI driver's
+ * lifetime, Messages 5 minutes (the `ephemeral` markers it sends). Chat
+ * Completions upstreams cache implicitly with no write price, so a model on
+ * that format has no lifetime and never goes cold: a cold handoff there would
+ * cost more than the warm resend it replaces, and lose detail.
+ */
+const PROMPT_CACHE_TTL: Record<WireFormat, Option.Option<Duration.Duration>> = {
+  responses: Option.some(RESPONSES_PROMPT_CACHE_TTL),
+  messages: Option.some(Duration.minutes(5)),
+  "chat-completions": Option.none(),
+}
+
+/**
  * The models the driver lists: the gateway's catalog entries in a wire format
- * it speaks, then its classifier models.
+ * it speaks, each with its format's cache lifetime, then its classifier models.
  */
 const listGatewayModels = (gateway: Gateway, catalog: CatalogSource) =>
-  driverListModels(catalog, gateway.id, PROMPT_CACHE_TTL)().pipe(
+  driverListModels(catalog, gateway.id, Option.none())().pipe(
     Effect.flatMap((models) =>
-      Effect.filter(models, (model) =>
+      Effect.forEach(models, (model) =>
         driverModelWire(catalog, model.id).pipe(
-          Effect.map((wire) => Option.isSome(wireFormatOf(wire))),
+          Effect.map((wire) =>
+            Option.toArray(
+              Option.map(wireFormatOf(wire), (format) =>
+                withPromptCacheTtl(model, PROMPT_CACHE_TTL[format]),
+              ),
+            ),
+          ),
         ),
       ),
     ),
+    Effect.map((listed) => listed.flat()),
     Effect.map((models) => [
       ...models,
       ...gateway.classifiers.map((entry) => classifierModel(gateway.id, entry)),

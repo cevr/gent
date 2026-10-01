@@ -290,7 +290,11 @@ describe("models.dev catalog", () => {
       )
       const source = yield* catalogSource(home)
 
-      const models = yield* driverListModels(source, "anthropic", Duration.minutes(5))()
+      const models = yield* driverListModels(
+        source,
+        "anthropic",
+        Option.some(Duration.minutes(5)),
+      )()
 
       expect(models.map((model) => model.promptCacheTtlMs)).toEqual([5 * 60_000])
     }).pipe(Effect.provide(platformLayer)),

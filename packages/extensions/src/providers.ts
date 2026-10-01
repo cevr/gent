@@ -596,6 +596,17 @@ export const rewriteJsonBody =
 // ── responses requests ──────────────────────────────────────────────────────
 
 /**
+ * How long OpenAI keeps a Responses prompt cached. OpenAI documents 5 to 10
+ * minutes of inactivity for in-memory prompt caching, but a cache lives
+ * longer in practice: in the owner's Codex transcripts 238 of 244 requests
+ * after a 5-10 minute gap, and 108 of 110 after a 10-30 minute gap, still read
+ * the cache. At 5 minutes about 45% of the turn starts a cold handoff would
+ * compact had a warm cache. The OpenAI driver and the OpenCode gateways'
+ * Responses models use it.
+ */
+export const RESPONSES_PROMPT_CACHE_TTL = Duration.minutes(30)
+
+/**
  * A Responses request with `store: false` keeps no reasoning on the server,
  * so a reasoning item can go back to the model only with its
  * `encrypted_content`, and a reply carries that only when `include` asks for
@@ -1133,21 +1144,28 @@ export const catalogSource = Effect.fn("ModelsDev.catalogSource")(function* (hom
  * A driver's `listModels`: its own models.dev entries, with the platform
  * services and the HTTP client provided from what setup captured. Each entry
  * carries `promptCacheTtl`, how long the driver's provider keeps a request's
- * prompt cached; models.dev does not say.
+ * prompt cached; models.dev does not say. A driver whose models differ passes
+ * none and stamps each model with `withPromptCacheTtl`.
  */
 export const driverListModels =
-  (source: CatalogSource, providerId: string, promptCacheTtl: Duration.Duration) =>
+  (source: CatalogSource, providerId: string, promptCacheTtl: Option.Option<Duration.Duration>) =>
   (): Effect.Effect<ReadonlyArray<Model>> =>
     readCatalog(
       source,
       driverCatalog(source.home, providerId).pipe(
-        Effect.map((models) =>
-          models.map((model) =>
-            Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(promptCacheTtl) }),
-          ),
-        ),
+        Effect.map((models) => models.map((model) => withPromptCacheTtl(model, promptCacheTtl))),
       ),
     )
+
+/** The model with `promptCacheTtl` as its cache lifetime; a model with none never goes cold. */
+export const withPromptCacheTtl = (
+  model: Model,
+  promptCacheTtl: Option.Option<Duration.Duration>,
+): Model =>
+  Option.match(promptCacheTtl, {
+    onNone: () => model,
+    onSome: (ttl) => Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(ttl) }),
+  })
 
 /**
  * The wire facts of one model of the catalog, for a driver's `resolveModel`:

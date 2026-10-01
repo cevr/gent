@@ -828,19 +828,26 @@ describe("OpenCode Zen classifiers", () => {
 // ── catalog ─────────────────────────────────────────────────────────────────
 
 describe("OpenCode catalog", () => {
-  it.live("each gateway lists its own models, deprecated ones too, with a 5 minute cache", () =>
-    Effect.gen(function* () {
-      const { go } = yield* fixtureDrivers
-      const listModels = Option.getOrThrow(Option.fromUndefinedOr(go.listModels))
-      const models = yield* listModels()
-      expect(models.map((model) => model.id).toSorted()).toEqual([
-        ModelId.make("opencode-go/glm-5.3"),
-        ModelId.make("opencode-go/gpt-5.6-luna"),
-        ModelId.make("opencode-go/kimi-k2.6"),
-        ModelId.make("opencode-go/minimax-m3"),
-      ])
-      expect(models.every((model) => model.promptCacheTtlMs === 300_000)).toBe(true)
-    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  // A model with no cache lifetime never goes cold: Chat Completions caches
+  // implicitly, with no write price, so a cold handoff would only lose detail.
+  it.live(
+    "each gateway lists its own models, deprecated ones too, with the cache lifetime of their wire format",
+    () =>
+      Effect.gen(function* () {
+        const { go } = yield* fixtureDrivers
+        const listModels = Option.getOrThrow(Option.fromUndefinedOr(go.listModels))
+        const models = yield* listModels()
+        expect(
+          models
+            .map((model) => [model.id, Option.fromUndefinedOr(model.promptCacheTtlMs)] as const)
+            .toSorted(([left], [right]) => left.localeCompare(right)),
+        ).toEqual([
+          [ModelId.make("opencode-go/glm-5.3"), Option.none()],
+          [ModelId.make("opencode-go/gpt-5.6-luna"), Option.some(1_800_000)],
+          [ModelId.make("opencode-go/kimi-k2.6"), Option.none()],
+          [ModelId.make("opencode-go/minimax-m3"), Option.some(300_000)],
+        ])
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
   it.live("a Zen model on the Google format is not listed, and resolving it names the format", () =>
