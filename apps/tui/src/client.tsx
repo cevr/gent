@@ -932,7 +932,7 @@ export function ClientProvider(props: ClientProviderProps) {
           return
         }
 
-        const request = { sessionId }
+        const request = { scope: { _tag: "Session" as const, id: sessionId } }
         cast(
           client.extension.listStatus(request).pipe(
             Effect.tap((nextHealth) =>

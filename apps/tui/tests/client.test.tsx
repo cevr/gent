@@ -26,6 +26,7 @@ import {
   ProviderId,
   SessionId,
   type SessionSnapshot,
+  ExtensionStatusScope,
   type ReasoningEffort,
   type UpdateSessionSettingsInput,
 } from "@gent/core/protocol"
@@ -1338,9 +1339,14 @@ describe("ClientProvider session lifecycle", () => {
               }),
           },
           extension: {
-            listStatus: (input: { readonly sessionId?: SessionId }) =>
+            listStatus: ({ scope }: { readonly scope: ExtensionStatusScope }) =>
               Effect.sync(() => {
-                healthReads.push(Option.fromUndefinedOr(input.sessionId))
+                healthReads.push(
+                  ExtensionStatusScope.match(scope, {
+                    Session: ({ id }) => Option.some(id),
+                    Launch: () => Option.none(),
+                  }),
+                )
                 return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
               }),
           },

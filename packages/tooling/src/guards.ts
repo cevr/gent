@@ -2408,6 +2408,11 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "strictEffectProvide:off -- device endpoints at extension boundary",
   },
   {
+    file: "packages/core/src/server/rpc.ts",
+    text: "schemaStructWithTag:off -- the RPC client builds the payload with make, and a defaulted tag would read { scope: {} } as Launch.",
+    count: 2,
+  },
+  {
     file: "packages/extensions/src/anthropic.ts",
     text: "strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.",
   },

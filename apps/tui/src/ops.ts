@@ -982,7 +982,10 @@ export const readDoctorExtensionHealth = (
       Effect.gen(function* () {
         const bundle = yield* Gent.client(entry.rpcUrl, { cwd: process.cwd() })
         yield* bundle.runtime.lifecycle.waitForReady
-        const snapshot = yield* bundle.client.extension.listStatus({})
+        // The doctor has no session: it reads the profile the server started in.
+        const snapshot = yield* bundle.client.extension.listStatus({
+          scope: { _tag: "Launch" },
+        })
         return extensionHealthFromSnapshot(snapshot)
       }),
     ).pipe(

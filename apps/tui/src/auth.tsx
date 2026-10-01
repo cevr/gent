@@ -419,10 +419,10 @@ export function Auth(props: AuthProps) {
 
   const loadAuth = (token: ReplyWriter) => {
     clientCtx.log.info("auth:load-start")
-    const request = omitUndefined({
-      agentName: Option.getOrUndefined(clientCtx.agent()),
+    const request = {
+      ...omitUndefined({ agentName: Option.getOrUndefined(clientCtx.agent()) }),
       sessionId,
-    })
+    }
     cast(
       Effect.all([
         clientCtx.client.auth.listProviders(request),
