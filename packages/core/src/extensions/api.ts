@@ -127,15 +127,8 @@ export {
   type ToolInput,
   type ToolCapability,
 } from "../domain/capability.js"
-export {
-  defineRequests,
-  ref,
-  request,
-  type RequestCapability,
-  type RequestInput,
-} from "../domain/capability.js"
+export { defineRequests, ref, request, type RequestInput } from "../domain/capability.js"
 export type { CapabilityRef } from "../domain/capability.js"
-export { CapabilityError } from "../domain/capability.js"
 export { ToolResultFailure } from "../domain/message.js"
 export {
   ExtensionContext,

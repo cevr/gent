@@ -105,7 +105,6 @@ import {
   type SessionDeletedInput,
 } from "../../src/domain/extension.js"
 import {
-  CapabilityError,
   defineExtension,
   ExtensionContext,
   type ExtensionContextService,
@@ -113,6 +112,7 @@ import {
   request,
   tool,
 } from "@gent/core/extensions/api"
+import { CapabilityError } from "../../src/domain/capability"
 import {
   ApprovalService,
   buildScopeResources,

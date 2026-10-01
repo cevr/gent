@@ -48,7 +48,6 @@ import {
   type GentExtension,
   getToolId,
   request,
-  type RequestCapability,
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
@@ -135,6 +134,7 @@ import * as AiTool from "effect/ai/Tool"
 import {
   bindRequestCapabilityExtension,
   CapabilityError,
+  type RequestCapability,
   CapabilityNotFoundError,
   GentToolMetadataTag,
   getToolMetadata,

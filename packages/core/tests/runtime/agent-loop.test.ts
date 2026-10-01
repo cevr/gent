@@ -103,11 +103,11 @@ import {
   ExtensionHost,
   getToolId,
   request,
-  type RequestCapability,
   tool,
   type ToolCapability,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
+import type { RequestCapability } from "../../src/domain/capability"
 import {
   AgentLoopQueueStorage,
   BranchStorage,

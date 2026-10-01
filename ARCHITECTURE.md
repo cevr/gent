@@ -1664,8 +1664,10 @@ host-owned design. It should expose:
   platform facts such as OS info, executable path, and home directory;
 - `runProcess` / `ProcessError`: the one command helper over the Effect
   `ChildProcessSpawner`;
-- author-facing errors: capability, provider-auth, agent-run, and typed
-  transition errors that extension code can intentionally return or inspect.
+- author-facing errors: load, driver, provider-auth, service, process and
+  interaction errors that extension code can intentionally return or inspect;
+  an error only tests read (the capability errors) stays in core, where core
+  tests import it by relative path.
 
 Everything else is builtin/internal:
 
