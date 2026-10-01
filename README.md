@@ -22,6 +22,22 @@ a standalone server in the foreground; its flags (`--port`, `--isolate`, `--mock
 are the one way to choose how it launches. `GENT_DATA_DIR` names the directory that
 holds `data.db` (default `~/.gent`).
 
+## Goals
+
+`/goal <objective>` starts a persistent goal on the current branch. Add
+`--budget N` before the objective to limit its token usage.
+
+- `/goal status` shows the objective and usage.
+- `/goal pause` keeps the objective and usage, removes its pending continuation,
+  and lets work already in flight finish. That work is charged once.
+- `/goal resume` continues the same goal. A spent budget requires
+  `/goal resume --budget N`, which gives it a fresh N-token allowance beyond usage so far.
+- `/goal clear`, `/goal cancel`, and `/goal stop` remove the goal and its pending
+  continuation. Work already in flight finishes; these commands do not mark the goal complete.
+
+Interrupting a turn pauses its goal. Unrelated turns leave a paused goal paused.
+Only the goal tool's completion action marks it achieved.
+
 ## Where to Read Next
 
 - [AGENTS.md](./AGENTS.md) — commands, CLI usage, gotchas, code style, and test conventions.
