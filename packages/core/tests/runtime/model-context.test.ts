@@ -25,6 +25,7 @@ import {
   Branch,
   dateFromMillis,
   Message,
+  type MessageMetadata,
   type MessagePart,
   normalizeResponseParts,
   projectResponsePartsToMessageParts,
@@ -91,12 +92,7 @@ import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/d
 import * as Response from "effect/ai/Response"
 
 interface TestMessageOptional {
-  metadata?: {
-    readonly customType?: string
-    readonly extensionId?: string
-    readonly hidden?: boolean
-    readonly details?: unknown
-  }
+  metadata?: MessageMetadata
 }
 
 const sessionId = SessionId.make("session")
@@ -167,6 +163,51 @@ const ids = (projection: ModelContextProjectionValue): ReadonlyArray<string> =>
   projection.messages.map((item) => item.id)
 
 describe("projectModelContext", () => {
+  // A line the runtime writes inside a turn: a joined steer, a continuation,
+  // a model-change notice, the max-steps instruction.
+  const runtimeLines: ReadonlyArray<readonly [string, TestMessageOptional["metadata"]]> = [
+    ["joined steer", { customType: "wake", joinedTurn: true }],
+    ["continuation", { customType: "continuation" }],
+    ["model change", { customType: "model-change" }],
+    ["max steps", { customType: "max-steps" }],
+  ]
+
+  for (const [label, metadata] of runtimeLines) {
+    test(`a turn that outgrows the window after a ${label} line overflows; the prompt is never cut`, () => {
+      const messages = [
+        message("prompt", "user", [text("p".repeat(400))]),
+        message("a1", "assistant", [text("a".repeat(4_000))]),
+        message("line", "user", [text("l".repeat(40))], metadata),
+        message("a2", "assistant", [text("b".repeat(400))]),
+      ]
+      const error = failure(projectModelContext(messages, budget(400)))
+      expect(error._tag).toBe("BudgetExceeded")
+    })
+  }
+
+  test("history before the prompt leaves first, the runtime lines after it stay", () => {
+    const messages = [
+      message("old", "assistant", [text("o".repeat(4_000))]),
+      message("prompt", "user", [text("p".repeat(40))]),
+      message("a1", "assistant", [text("a".repeat(40))]),
+      message("line", "user", [text("l".repeat(40))], { customType: "continuation" }),
+      message("a2", "assistant", [text("b".repeat(40))]),
+    ]
+    const projection = success(projectModelContext(messages, budget(400)))
+    expect(ids(projection)).toEqual(["prompt", "a1", "line", "a2"])
+    expect(projection.omittedMessageIds).toEqual([MessageId.make("old")])
+  })
+
+  test("a window with no prompt left anchors on its newest handoff marker", () => {
+    const messages = [
+      message("marker", "user", [text("m".repeat(40))], { customType: "context-window" }),
+      message("a1", "assistant", [text("a".repeat(4_000))]),
+      message("line", "user", [text("l".repeat(40))], { customType: "continuation" }),
+      message("a2", "assistant", [text("b".repeat(400))]),
+    ]
+    expect(failure(projectModelContext(messages, budget(400)))._tag).toBe("BudgetExceeded")
+  })
+
   test("selects a newest suffix and reports separate reservations", () => {
     const messages = [
       message("old", "assistant", [text("old!")]),
@@ -2086,6 +2127,98 @@ describe("turn window projection", () => {
         ),
       ).toBe(true)
       expect(yield* Ref.get(publisher.published)).toEqual([])
+    }),
+  )
+
+  it.scopedLive("a turn that overflows after a steer joined it hands off inside the turn", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("steered-turn-session")
+      const branchId = BranchId.make("steered-turn-branch")
+      const at = (ordinal: number) => dateFromMillis(createdAt.getTime() + ordinal)
+      const user = (id: string, ordinal: number) =>
+        Message.cases.regular.make({
+          id: MessageId.make(id),
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: id })],
+          createdAt: at(ordinal),
+        })
+      // One step of ~700 tokens: a call and its result.
+      const step = (index: number) => {
+        const id = ToolCallId.make(`steered-call-${index}`)
+        return [
+          Message.cases.regular.make({
+            id: MessageId.make(`steered-call-${index}`),
+            sessionId,
+            branchId,
+            role: "assistant",
+            parts: [Prompt.toolCallPart({ id, name: "read", params: {}, providerExecuted: false })],
+            createdAt: at(index * 10 + 1),
+          }),
+          Message.cases.regular.make({
+            id: MessageId.make(`steered-result-${index}`),
+            sessionId,
+            branchId,
+            role: "tool",
+            parts: [
+              Prompt.toolResultPart({
+                id,
+                name: "read",
+                isFailure: false,
+                providerExecuted: false,
+                result: { value: "x".repeat(2_800) },
+              }),
+            ],
+            createdAt: at(index * 10 + 2),
+          }),
+        ]
+      }
+      const prompt = user("steered-prompt", 0)
+      const steer = Message.cases.regular.make({
+        ...user("steered-line", 25),
+        metadata: { customType: "wake", joinedTurn: true },
+      })
+      const messages = [prompt, ...step(1), ...step(2), steer, ...step(3), ...step(4)]
+      // A 6k window minus the output reserve: the steer and the two steps
+      // after it fit, the whole turn does not.
+      const budget = ModelContextBudget.make({
+        contextLimitTokens: 6_000,
+        reservedSystemTokens: 0,
+        reservedToolTokens: 0,
+        reservedOutputTokens: 4_096,
+      })
+      const compactor = Layer.succeed(
+        ModelContextCompactor,
+        ModelContextCompactor.of({
+          compact: () => Effect.succeed({ notice: "steered summary", modelId: modelIdTurnWindow }),
+        }),
+      )
+      const publisher = yield* recordingPublisher
+
+      const { durableMessages, compacted } = yield* projectContextWindow({
+        sessionId,
+        branchId,
+        modelId: modelIdTurnWindow,
+        messages,
+        budget,
+        directive: Option.none(),
+        measure: Option.none(),
+        overflowed: false,
+        turnStart: false,
+        promptCache: Option.none(),
+        persist: (message) => Effect.succeed(message),
+        summaryModel,
+      }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
+
+      expect(compacted).toBe(true)
+      const marker = durableMessages.find(
+        (message) => message.metadata?.customType === "context-window",
+      )
+      if (Predicate.isUndefined(marker)) return yield* Effect.die("marker missing")
+      const details = Option.getOrThrow(windowDetails(marker))
+      expect(details.keepFromMessageId).toBe(MessageId.make("steered-call-4"))
+      expect(details.summarized?.firstMessageId).toBe(prompt.id)
     }),
   )
 
