@@ -55,7 +55,7 @@ import {
   type SessionMessageDetails,
   sessionMessageText,
 } from "@gent/extensions/client"
-import { createSignal, onCleanup, Show } from "solid-js"
+import { batch, createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
@@ -67,7 +67,12 @@ import {
   ReadToolRenderer,
   useToolRenderers,
 } from "../src/tool-renderers"
-import { destroyRenderSetup, renderFrame, renderScoped } from "./render-harness-boundary"
+import {
+  destroyRenderSetup,
+  renderFrame,
+  renderScoped,
+  terminalText,
+} from "./render-harness-boundary"
 import {
   highlightOutage,
   makeSettleHold,
@@ -826,7 +831,7 @@ describe("transcript message rows", () => {
               const { snapshot } = event
               const text = new TextDecoder().decode(snapshot.getRealCharBytes(false))
               savedText.push(text)
-              // The answer commits on its own, after the user rows: it has no border.
+              // The answer has no border: only the user rows are checked.
               if (text.includes("ANSWER-END")) return
               for (let row = 0; row < snapshot.height; row++) {
                 const cells = snapshot.buffers.char.subarray(
@@ -847,6 +852,7 @@ describe("transcript message rows", () => {
                 settled
                 streaming={false}
                 footerHeight={3}
+                paneOpen={false}
                 expanded={false}
                 disclosure={disclosure()}
                 displayRevision={0}
@@ -882,12 +888,19 @@ describe("transcript message rows", () => {
         for (const view of views) {
           setDisclosure(view.disclosure)
           if (setup.renderer.terminalWidth !== view.width) setup.resize(view.width, 14)
-          // Both items are final, so each view commits them all; the answer lands last.
+          // Each view lays the transcript out again: the rows above the live
+          // tail move to history, and every row shows in one place.
+          const whole = () => {
+            const transcript = savedText.join("") + renderFrame(setup)
+            return (
+              transcript.split("ANSWER-END").length === 2 &&
+              Array.from({ length: 24 }, (_, index) => `line ${index + 1}:`).every(
+                (line) => transcript.split(line).length === 2,
+              )
+            )
+          }
           yield* Effect.promise(() => setup.flush()).pipe(
-            Effect.repeat({
-              until: () => savedText.join("").includes("ANSWER-END"),
-              schedule: Schedule.spaced("10 millis"),
-            }),
+            Effect.repeat({ until: whole, schedule: Schedule.spaced("10 millis") }),
             Effect.timeout("4 seconds"),
             Effect.ignore,
           )
@@ -1097,6 +1110,7 @@ describe("native history before the client extensions load", () => {
                 settled
                 streaming={false}
                 footerHeight={3}
+                paneOpen={false}
                 expanded={false}
                 disclosure="collapsed"
                 displayRevision={0}
@@ -1155,6 +1169,7 @@ describe("native history before the client extensions load", () => {
               settled={settled()}
               streaming={false}
               footerHeight={3}
+              paneOpen={false}
               expanded={false}
               disclosure="collapsed"
               displayRevision={0}
@@ -2414,26 +2429,31 @@ describe("transcript block spacing", () => {
             }
             renderer.on("external_output", capture)
             onCleanup(() => renderer.off("external_output", capture))
+            // The footer under the transcript is as tall as the transcript is told.
             return (
-              <NativeTranscript
-                items={history}
-                settled
-                streaming={false}
-                footerHeight={3}
-                expanded={false}
-                disclosure={disclosure()}
-                displayRevision={0}
-                overlayOpen={false}
-                renderItems={(visible) => (
-                  <MessageList
-                    items={visible}
-                    disclosure={disclosure()}
-                    syntaxStyle={syntaxStyle}
-                  />
-                )}
-              >
-                <box />
-              </NativeTranscript>
+              <box flexDirection="column" flexGrow={1}>
+                <NativeTranscript
+                  items={history}
+                  settled
+                  streaming={false}
+                  footerHeight={3}
+                  paneOpen={false}
+                  expanded={false}
+                  disclosure={disclosure()}
+                  displayRevision={0}
+                  overlayOpen={false}
+                  renderItems={(visible) => (
+                    <MessageList
+                      items={visible}
+                      disclosure={disclosure()}
+                      syntaxStyle={syntaxStyle}
+                    />
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+                <box height={3} flexShrink={0} />
+              </box>
             )
           },
           { width: 100, height: 20 },
@@ -2447,11 +2467,18 @@ describe("transcript block spacing", () => {
         for (const level of levels) {
           savedText.splice(0)
           setDisclosure(level)
-          // Every item is final, so the replay commits each one: one snapshot apiece.
+          // The replay moves the rows above the live tail to history; it is done
+          // once history and the frame show the first prompt, once, and hold.
+          let last = ""
           yield* Effect.promise(() => setup.flush()).pipe(
             Effect.repeat({
-              until: () => savedText.length >= history.length,
-              schedule: Schedule.spaced("10 millis"),
+              until: () => {
+                const next = savedText.join("") + renderFrame(setup)
+                const done = next === last && next.split("run three steps").length === 2
+                last = next
+                return done
+              },
+              schedule: Schedule.spaced("100 millis"),
             }),
             Effect.timeout("4 seconds"),
             Effect.ignore,
@@ -2910,6 +2937,8 @@ describe("native transcript markdown", () => {
       )
       const items = [
         assistant("first", `## Known, pre-existing\n${body}\n\nsee \`money.test.ts\` for the rest`),
+        // A later answer pushes the first above the live tail, so it commits.
+        assistant("later", longBody("LATER")),
         assistant("second", "ANSWER-END"),
       ]
       const setup = yield* renderScoped(
@@ -2927,6 +2956,7 @@ describe("native transcript markdown", () => {
               settled
               streaming={false}
               footerHeight={3}
+              paneOpen={false}
               expanded={false}
               disclosure="collapsed"
               displayRevision={0}
@@ -3020,7 +3050,12 @@ describe("native transcript markdown", () => {
             "> QUOTE_BODY quoted",
             "- LIST_ITEM one",
           ].join("\n\n")
-          const items = [assistant("first", answer), assistant("second", "TAIL")]
+          // A later answer pushes the first above the live tail, so it commits.
+          const items = [
+            assistant("first", answer),
+            assistant("later", longBody("LATER")),
+            assistant("second", "TAIL"),
+          ]
           yield* renderScoped(
             () =>
               transcriptCommit({
@@ -3041,7 +3076,7 @@ describe("native transcript markdown", () => {
             Effect.tap((setup) =>
               Effect.promise(() => setup.flush()).pipe(
                 Effect.repeat({
-                  until: () => committedText.join("").includes("TAIL"),
+                  until: () => committedText.join("").includes("LIST_ITEM"),
                   schedule: Schedule.spaced("10 millis"),
                 }),
                 Effect.timeout("6 seconds"),
@@ -3085,6 +3120,7 @@ describe("native transcript markdown", () => {
                 settled
                 streaming={false}
                 footerHeight={3}
+                paneOpen={false}
                 expanded={false}
                 disclosure="collapsed"
                 displayRevision={0}
@@ -3222,6 +3258,7 @@ describe("native transcript footer room", () => {
                   settled
                   streaming={false}
                   footerHeight={footer()}
+                  paneOpen={false}
                   expanded={false}
                   disclosure="collapsed"
                   displayRevision={0}
@@ -3288,6 +3325,7 @@ const roomTranscript = (options: RoomSetup) => {
       settled
       streaming={options.streaming()}
       footerHeight={options.footer()}
+      paneOpen={false}
       expanded={false}
       disclosure="collapsed"
       displayRevision={0}
@@ -3369,64 +3407,14 @@ describe("native transcript rows in history", () => {
 })
 
 describe("native transcript rows under the footer", () => {
-  it.scopedLive(
-    "a docked pane that closes leaves no empty row under the footer",
-    () =>
-      Effect.gen(function* () {
-        const [footer, setFooter] = createSignal(3)
-        const committedText: string[] = []
-        let screen = Option.none<CliRenderer>()
-        const items = [
-          ...Array.from({ length: 3 }, (_, index) =>
-            assistant(`item-${index}`, longBody(`ITEM-${index}`)),
-          ),
-          assistant("tail", "TAIL"),
-        ]
-        const setup = yield* renderScoped(
-          () =>
-            roomTranscript({
-              items: () => items,
-              streaming: () => false,
-              footer,
-              onRenderer: (renderer) => {
-                screen = Option.some(renderer)
-                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
-                  committedText.push(committedTextOf(event))
-                })
-              },
-            }),
-          { width: 60, height: 14 },
-        )
-        yield* Effect.promise(() => setup.flush()).pipe(
-          Effect.repeat({
-            until: () => committedText.join("").includes("ITEM-2 line 12"),
-            schedule: Schedule.spaced("10 millis"),
-          }),
-          Effect.timeout("6 seconds"),
-          Effect.ignore,
-        )
-        const renderer = Option.getOrThrow(screen)
-        // A pane docks in the footer, then closes.
-        setFooter(9)
-        yield* Effect.promise(() => setup.flush())
-        yield* Effect.promise(() => setup.flush())
-        setFooter(3)
-        yield* Effect.promise(() => setup.flush())
-        yield* Effect.promise(() => setup.flush())
-        expect(rowsUnderRegion(renderer)).toBe(0)
-      }).pipe(Effect.timeout("10 seconds")),
-    15_000,
-  )
-
   // A short session's region sits under the shell's last line, with the
-  // terminal's own empty rows under it. A pane that closes there gives its
-  // rows back: the region shrinks, and no empty row stays above the composer.
+  // terminal's own empty rows under it. A pane grows the region into them,
+  // and closing it gives them back: no empty row stays above the composer.
   it.scopedLive(
     "a docked pane that closes in a short session leaves no empty row above the composer",
     () =>
       Effect.gen(function* () {
         const [footer, setFooter] = createSignal(3)
-        const committedText: string[] = []
         let screen = Option.none<CliRenderer>()
         const setup = yield* renderScoped(
           () =>
@@ -3436,21 +3424,11 @@ describe("native transcript rows under the footer", () => {
               footer,
               onRenderer: (renderer) => {
                 screen = Option.some(renderer)
-                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
-                  committedText.push(committedTextOf(event))
-                })
               },
             }),
           { width: 60, height: 30 },
         )
-        yield* Effect.promise(() => setup.flush()).pipe(
-          Effect.repeat({
-            until: () => committedText.join("").includes("SHORT-ANSWER"),
-            schedule: Schedule.spaced("10 millis"),
-          }),
-          Effect.timeout("4 seconds"),
-          Effect.ignore,
-        )
+        yield* waitForFrame(setup, (next) => next.includes("TAIL"), "the live tail")
         const renderer = Option.getOrThrow(screen)
         yield* Effect.promise(() => setup.flush())
         const regionRows = renderer.footerHeight
@@ -3470,11 +3448,12 @@ describe("native transcript rows under the footer", () => {
   )
 
   it.scopedLive(
-    "a turn's final items reach history while it runs, and leave no empty row behind",
+    "a turn's final items reach history while it runs, once the tail holds more than the region shows",
     () =>
       Effect.gen(function* () {
         const [items, setItems] = createSignal<ListMessage[]>([
           assistant("earlier", longBody("EARLIER")),
+          { ...assistant("answer", longBody("STEP-ONE")), draft: true },
         ])
         const [streaming, setStreaming] = createSignal(true)
         const committedText: string[] = []
@@ -3503,37 +3482,357 @@ describe("native transcript rows under the footer", () => {
             Effect.timeout("4 seconds"),
             Effect.ignore,
           )
+        // The earlier answer is final and taller than the live tail's rows:
+        // it moves to history whole while the turn runs; the draft stays.
         yield* flushUntil("EARLIER line 12")
-        // The answer streams: a draft stays in the live view.
-        setItems([
-          assistant("earlier", longBody("EARLIER")),
-          { ...assistant("answer", "STEP-ONE draft"), draft: true },
-        ])
-        yield* Effect.promise(() => setup.flush())
-        yield* Effect.promise(() => setup.flush())
+        expect(committedText.join("")).toContain("EARLIER line 12")
         expect(committedText.join("")).not.toContain("STEP-ONE")
-        // The stored answer replaces the draft while the turn still runs.
+        // The stored answer replaces the draft, and the next step streams
+        // under it: the answer moves to history once the step pushes it above.
         setItems([
           assistant("earlier", longBody("EARLIER")),
           assistant("answer", "STEP-ONE stored"),
-          { ...assistant("next", "STEP-TWO draft"), draft: true },
+          { ...assistant("next", longBody("STEP-TWO")), draft: true },
         ])
         yield* flushUntil("STEP-ONE stored")
-        expect(committedText.join("")).toContain("EARLIER line 12")
         expect(committedText.join("")).toContain("STEP-ONE stored")
         expect(committedText.join("")).not.toContain("STEP-TWO")
-        // The turn ends: what is left commits, and its rows leave none behind.
+        // The turn ends: the step's top rows move to history, and its last
+        // rows stay on screen, so every row is in one place.
         setStreaming(false)
-        yield* flushUntil("STEP-TWO draft")
-        yield* Effect.promise(() => setup.flush())
-        expect(committedText.join("")).toContain("STEP-TWO draft")
+        yield* flushUntil("STEP-TWO line 1")
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => next.includes("STEP-TWO line 12"),
+          "tail",
+        )
+        expect(committedText.join("")).not.toContain("STEP-TWO line 12")
+        expect(frame).not.toMatch(/STEP-TWO line 1 *$/m)
         const renderer = Option.getOrThrow(screen)
         expect(rowsUnderRegion(renderer)).toBe(0)
-        // Each commit took its own rows out of the region: what is left is the
-        // footer and the empty live tail's one row.
-        expect(renderer.height).toBe(4)
+        expect(renderer.footerHeight).toBe(splitFooterHeight(14, 14))
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
+  )
+})
+
+// ── native transcript region at the terminal's bottom ───────────────────────
+
+/**
+ * A long session: the split region sits on the terminal's last rows, and
+ * rows it pushes up go to the terminal's scrollback for good. Growing UI
+ * (a docked pane, the suggestions) covers the transcript's last rows; it
+ * never grows the region. The footer here is a stand-in: the composer row,
+ * then the pane's row while one is open.
+ */
+
+interface BottomSetup {
+  readonly items: () => ListMessage[]
+  readonly streaming: () => boolean
+  readonly footer: () => number
+  readonly paneOpen: () => boolean
+  readonly overlayOpen: () => boolean
+}
+
+const bottomTranscript = (
+  options: BottomSetup & { readonly onRenderer: (renderer: CliRenderer) => void },
+) => {
+  const renderer = useRenderer()
+  options.onRenderer(renderer)
+  return (
+    <box flexDirection="column" flexGrow={1}>
+      <NativeTranscript
+        items={options.items()}
+        settled
+        streaming={options.streaming()}
+        footerHeight={options.footer()}
+        paneOpen={options.paneOpen()}
+        expanded={false}
+        disclosure="collapsed"
+        displayRevision={0}
+        overlayOpen={options.overlayOpen()}
+        renderItems={(visible) => (
+          <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+        )}
+      >
+        <box />
+      </NativeTranscript>
+      <box height={options.footer()} flexShrink={0} flexDirection="column">
+        <text>COMPOSER</text>
+        <Show when={options.paneOpen()}>
+          <text>PANE</text>
+        </Show>
+      </box>
+    </box>
+  )
+}
+
+/** The blank rows right above the composer row of `frame`. */
+const blankRowsAboveComposer = (frame: string): number => {
+  const rows = frame.split("\n")
+  const composer = rows.findIndex((row) => row.includes("COMPOSER"))
+  expect(composer).toBeGreaterThanOrEqual(0)
+  let blank = 0
+  while (composer - blank - 1 >= 0 && rows[composer - blank - 1]?.trim() === "") blank++
+  return blank
+}
+
+/** How many times each `<label> line <n>` row shows in `text`, by row. */
+const bodyRowCounts = (text: string): Map<string, number> => {
+  const counts = new Map<string, number>()
+  for (const match of text.matchAll(/[A-Z]+-\d+ line \d+/g)) {
+    counts.set(match[0], (counts.get(match[0]) ?? 0) + 1)
+  }
+  return counts
+}
+
+const longSession = (): ListMessage[] =>
+  Array.from({ length: 6 }, (_, index) => assistant(`item-${index}`, longBody(`ITEM-${index}`)))
+
+describe("native transcript region at the terminal's bottom", () => {
+  const height = 40
+  const regionRows = splitFooterHeight(height, height)
+
+  /** Renders until two looks in a row show the same frame and history. */
+  const waitForStableFrame = (setup: Parameters<typeof renderFrame>[0]) =>
+    Effect.gen(function* () {
+      let last = ""
+      yield* waitForFrame(
+        setup,
+        () => {
+          const next = terminalText(setup)
+          const same = next === last
+          last = next
+          return same
+        },
+        "a stable frame",
+        6_000,
+      )
+      return renderFrame(setup)
+    })
+
+  /** Renders a long session over the footer stand-in and waits for it to settle at the bottom. */
+  const settledLongSession = (options: BottomSetup) =>
+    Effect.gen(function* () {
+      let screen = Option.none<CliRenderer>()
+      const setup = yield* renderScoped(
+        () =>
+          bottomTranscript({
+            ...options,
+            onRenderer: (renderer) => {
+              screen = Option.some(renderer)
+            },
+          }),
+        { width: 60, height },
+      )
+      const renderer = Option.getOrThrow(screen)
+      yield* waitForFrame(
+        setup,
+        () =>
+          rowsUnderRegion(renderer) === 0 &&
+          renderer.footerHeight === regionRows &&
+          bodyRowCounts(terminalText(setup)).has("ITEM-0 line 1"),
+        "the long session at the terminal's bottom",
+        6_000,
+      ).pipe(Effect.ignore)
+      const settled = yield* waitForStableFrame(setup)
+      return { setup, renderer, settled }
+    })
+
+  it.scopedLive(
+    "a docked pane covers the transcript's last rows and gives them back on close",
+    () =>
+      Effect.gen(function* () {
+        const [footer, setFooter] = createSignal(3)
+        const [paneOpen, setPaneOpen] = createSignal(false)
+        const { setup, renderer, settled } = yield* settledLongSession({
+          items: () => [...longSession(), assistant("tail", "TAIL")],
+          streaming: () => false,
+          footer,
+          paneOpen,
+          overlayOpen: () => false,
+        })
+        expect(blankRowsAboveComposer(settled)).toBe(0)
+        const historyRows = terminalText(setup).length - settled.length
+
+        // The pane docks: the region keeps its rows, and the transcript rows
+        // above the pane stay where they were.
+        batch(() => {
+          setPaneOpen(true)
+          setFooter(15)
+        })
+        const open = yield* waitForStableFrame(setup)
+        expect(renderer.footerHeight).toBe(regionRows)
+        expect(rowsUnderRegion(renderer)).toBe(0)
+        expect(open).toContain("PANE")
+        const kept = regionRows - 15
+        expect(open.split("\n").slice(0, kept)).toEqual(settled.split("\n").slice(0, kept))
+        expect(terminalText(setup).length - open.length).toBe(historyRows)
+
+        // The pane closes: the rows it covered come back, none blank.
+        batch(() => {
+          setPaneOpen(false)
+          setFooter(3)
+        })
+        const closed = yield* waitForStableFrame(setup)
+        expect(closed).toBe(settled)
+        expect(blankRowsAboveComposer(closed)).toBe(0)
+        expect(renderer.footerHeight).toBe(regionRows)
+        expect(rowsUnderRegion(renderer)).toBe(0)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // A short session's region grows into the empty rows under it while a
+  // tall pane is open, and gives them back on close: the empty rows are
+  // under the composer, as in a fresh terminal.
+  it.scopedLive(
+    "a tall pane in a short session gives its rows back under the composer",
+    () =>
+      Effect.gen(function* () {
+        const [footer, setFooter] = createSignal(3)
+        const [paneOpen, setPaneOpen] = createSignal(false)
+        let screen = Option.none<CliRenderer>()
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items: () => [assistant("short", longBody("SHORT")), assistant("tail", "TAIL")],
+              streaming: () => false,
+              footer,
+              paneOpen,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+              },
+            }),
+          { width: 60, height },
+        )
+        const renderer = Option.getOrThrow(screen)
+        const settled = yield* waitForStableFrame(setup)
+        const regionBefore = renderer.footerHeight
+        expect(rowsUnderRegion(renderer)).toBeGreaterThan(0)
+        expect(blankRowsAboveComposer(settled)).toBe(0)
+        batch(() => {
+          setPaneOpen(true)
+          setFooter(regionRows - 2)
+        })
+        yield* waitForStableFrame(setup)
+        batch(() => {
+          setPaneOpen(false)
+          setFooter(3)
+        })
+        const closed = yield* waitForStableFrame(setup)
+        expect(blankRowsAboveComposer(closed)).toBe(0)
+        expect(closed).toBe(settled)
+        expect(renderer.footerHeight).toBe(regionBefore)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // A footer row that goes (an activity row a resumed turn drew, a status
+  // row) leaves the region a row the tail does not fill. The row sits above
+  // the tail, under history: the tail and the composer stay together.
+  it.scopedLive(
+    "a footer that shrinks below its first height leaves its row above the tail",
+    () =>
+      Effect.gen(function* () {
+        const [footer, setFooter] = createSignal(3)
+        const { setup, renderer, settled } = yield* settledLongSession({
+          items: () => [...longSession(), assistant("tail", "TAIL")],
+          streaming: () => false,
+          footer,
+          paneOpen: () => false,
+          overlayOpen: () => false,
+        })
+        expect(blankRowsAboveComposer(settled)).toBe(0)
+        setFooter(1)
+        const shrunk = yield* waitForStableFrame(setup)
+        expect(blankRowsAboveComposer(shrunk)).toBe(0)
+        expect(renderer.footerHeight).toBe(regionRows)
+        expect(rowsUnderRegion(renderer)).toBe(0)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "every transcript row is in history or on screen, once",
+    () =>
+      Effect.gen(function* () {
+        const { setup } = yield* settledLongSession({
+          items: () => [...longSession(), assistant("tail", "TAIL")],
+          streaming: () => false,
+          footer: () => 3,
+          paneOpen: () => false,
+          overlayOpen: () => false,
+        })
+        const counts = bodyRowCounts(terminalText(setup))
+        for (const item of longSession().keys()) {
+          for (let line = 1; line <= 12; line++) {
+            const row = `ITEM-${item} line ${line}`
+            expect([row, counts.get(row)]).toEqual([row, 1])
+          }
+        }
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a turn that ends leaves no blank row above the composer",
+    () =>
+      Effect.gen(function* () {
+        const [items, setItems] = createSignal<ListMessage[]>([
+          ...longSession(),
+          { ...assistant("answer", longBody("ANSWER-0")), draft: true },
+        ])
+        const [streaming, setStreaming] = createSignal(true)
+        // The activity row and its spacer sit in the footer while the turn runs.
+        const [footer, setFooter] = createSignal(5)
+        const { setup, renderer } = yield* settledLongSession({
+          items,
+          streaming,
+          footer,
+          paneOpen: () => false,
+          overlayOpen: () => false,
+        })
+        batch(() => {
+          setItems([...longSession(), assistant("answer", longBody("ANSWER-0"))])
+          setStreaming(false)
+          setFooter(3)
+        })
+        const idle = yield* waitForStableFrame(setup)
+        expect(blankRowsAboveComposer(idle)).toBe(0)
+        expect(idle.split("\n")[0]?.trim()).not.toBe("")
+        expect(renderer.footerHeight).toBe(regionRows)
+        expect(rowsUnderRegion(renderer)).toBe(0)
+        const counts = bodyRowCounts(terminalText(setup))
+        for (const [row, count] of counts) expect([row, count]).toEqual([row, 1])
+        expect(counts.get("ANSWER-0 line 1")).toBe(1)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a picker on the alternate screen gives the region back as it was",
+    () =>
+      Effect.gen(function* () {
+        const [overlayOpen, setOverlayOpen] = createSignal(false)
+        const { setup, renderer, settled } = yield* settledLongSession({
+          items: () => [...longSession(), assistant("tail", "TAIL")],
+          streaming: () => false,
+          footer: () => 3,
+          paneOpen: () => false,
+          overlayOpen,
+        })
+        setOverlayOpen(true)
+        yield* waitForStableFrame(setup)
+        setOverlayOpen(false)
+        const back = yield* waitForStableFrame(setup)
+        expect(back).toBe(settled)
+        expect(blankRowsAboveComposer(back)).toBe(0)
+        expect(renderer.footerHeight).toBe(regionRows)
+        expect(rowsUnderRegion(renderer)).toBe(0)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
   )
 })
 
@@ -3565,19 +3864,18 @@ describe("native transcript exit", () => {
             }),
           { width: 60, height: 14 },
         )
-        yield* Effect.promise(() => setup.flush()).pipe(
-          Effect.repeat({
-            until: () => committedText.join("").includes("EARLIER-ANSWER"),
-            schedule: Schedule.spaced("10 millis"),
-          }),
-          Effect.timeout("4 seconds"),
-          Effect.ignore,
+        // A short session: the live tail holds both, and nothing is in history.
+        yield* waitForFrame(
+          setup,
+          (next) => next.includes("EARLIER-ANSWER") && next.includes("IN-FLIGHT-DRAFT"),
+          "the live tail",
         )
-        // The draft waits for its stored answer: the turn has not ended.
-        expect(committedText.join("")).toContain("EARLIER-ANSWER")
-        expect(committedText.join("")).not.toContain("IN-FLIGHT-DRAFT")
+        expect(committedText.join("")).toBe("")
         yield* flushTranscriptForExit(Option.getOrThrow(screen))
-        expect(committedText.join("")).toContain("IN-FLIGHT-DRAFT")
+        const history = committedText.join("")
+        expect(history).toContain("EARLIER-ANSWER")
+        expect(history).toContain("IN-FLIGHT-DRAFT")
+        expect(history.indexOf("EARLIER-ANSWER")).toBeLessThan(history.indexOf("IN-FLIGHT-DRAFT"))
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
@@ -3610,14 +3908,7 @@ describe("native transcript exit", () => {
             }),
           { width: 60, height: 14 },
         )
-        yield* Effect.promise(() => setup.flush()).pipe(
-          Effect.repeat({
-            until: () => committedText.join("").includes("EARLIER-ANSWER"),
-            schedule: Schedule.spaced("10 millis"),
-          }),
-          Effect.timeout("4 seconds"),
-          Effect.ignore,
-        )
+        yield* waitForFrame(setup, (next) => next.includes("SIGNALLED-DRAFT"), "the live tail")
         const renderer = Option.getOrThrow(screen)
         const hold = yield* Effect.forkChild(
           holdUntilRendererDestroyed(renderer, (text) => written.push(text)),
@@ -3643,8 +3934,10 @@ describe("native transcript exit", () => {
         const hold = yield* makeSettleHold
         const committedText: string[] = []
         let screen = Option.none<CliRenderer>()
+        // A later answer pushes the first above the live tail, so it commits.
         const items: ListMessage[] = [
           assistant("earlier", "## SLOW-ANSWER\n\nbody"),
+          assistant("later", longBody("LATER")),
           { ...assistant("open", "IN-FLIGHT-DRAFT"), draft: true },
         ]
         const setup = yield* renderScoped(
@@ -3690,6 +3983,7 @@ describe("native transcript mouse tracking", () => {
             settled
             streaming={false}
             footerHeight={3}
+            paneOpen={false}
             expanded={expanded()}
             disclosure="collapsed"
             displayRevision={0}
@@ -3806,6 +4100,7 @@ const transcript = (options: {
       settled
       streaming={false}
       footerHeight={3}
+      paneOpen={false}
       expanded={false}
       disclosure="collapsed"
       displayRevision={0}
@@ -3883,10 +4178,10 @@ describe("native transcript rebuild", () => {
  * Native history hands a completed item to scrollback and only then drops it
  * from the live view. Two things can interrupt that handover: an overlay that
  * takes the screen back while the surface settles, and a display clear that
- * lands between the settle and the commit. Both are held open here.
+ * lands between the settle and the commit. Both are held open here. An item
+ * commits once the rows after it fill the live tail, so a test that needs
+ * the whole item in history puts a long answer after it.
  */
-
-/** Long enough that the transcriptCommit wants to move the leading item to history. */
 
 const transcriptCommit = (options: {
   readonly items: ListMessage[]
@@ -3902,6 +4197,7 @@ const transcriptCommit = (options: {
       settled
       streaming={false}
       footerHeight={3}
+      paneOpen={false}
       expanded={false}
       disclosure="collapsed"
       displayRevision={options.displayRevision()}
@@ -3982,7 +4278,11 @@ describe("native transcript commit handover", () => {
     "closing an overlay keeps history as it is, with no replay",
     () =>
       Effect.gen(function* () {
-        const items = [assistant("first", longBody("KEPT-ITEM")), assistant("second", "TAIL")]
+        const items = [
+          assistant("first", longBody("KEPT-ITEM")),
+          assistant("later", longBody("LATER")),
+          assistant("second", "TAIL"),
+        ]
         const [overlayOpen, setOverlayOpen] = createSignal(false)
         const committedText: string[] = []
         const resets: string[] = []
@@ -4044,7 +4344,11 @@ describe("native transcript commit handover", () => {
     () =>
       Effect.gen(function* () {
         const hold = yield* makeSettleHold
-        const items = [assistant("first", longBody("RESIZED-ITEM")), assistant("second", "TAIL")]
+        const items = [
+          assistant("first", longBody("RESIZED-ITEM")),
+          assistant("later", longBody("LATER")),
+          assistant("second", "TAIL"),
+        ]
         const committedText: string[] = []
 
         const setup = yield* renderScoped(
@@ -4090,7 +4394,11 @@ describe("native transcript commit handover", () => {
     "a write scrollback refuses keeps the item and writes it on the next pass",
     () =>
       Effect.gen(function* () {
-        const items = [assistant("first", longBody("REFUSED-ITEM")), assistant("second", "TAIL")]
+        const items = [
+          assistant("first", longBody("REFUSED-ITEM")),
+          assistant("later", longBody("LATER")),
+          assistant("second", "TAIL"),
+        ]
         const committedText: string[] = []
         const setup = yield* renderScoped(
           () =>
@@ -4328,6 +4636,7 @@ describe("sticky last prompt", () => {
               settled
               streaming={options.streaming === true}
               footerHeight={options.footer ?? 3}
+              paneOpen={false}
               expanded={false}
               disclosure="collapsed"
               displayRevision={0}
@@ -4353,11 +4662,12 @@ describe("sticky last prompt", () => {
   it.scopedLive("no pinned row while the prompt is on screen", () =>
     Effect.gen(function* () {
       const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 1)], {})
-      // Both items are final and move to history; the terminal shows the prompt once.
+      // A short session: both items fit the live tail, and the terminal shows
+      // the prompt once.
       const text = yield* waitForTerminal(
         setup,
-        (next) => next.includes("ASK-ONE") && !renderFrame(setup).includes("ASK-ONE"),
-        "the prompt in history",
+        (next) => next.includes("ASK-ONE") && next.includes("r1 line 1"),
+        "the prompt on screen",
       )
       expect(count(text, "ASK-ONE")).toBe(1)
       expect(text).not.toContain("↑ ASK-ONE")
@@ -4366,9 +4676,10 @@ describe("sticky last prompt", () => {
 
   it.scopedLive("a streaming reply that pushes the prompt out above pins it in one row", () =>
     Effect.gen(function* () {
-      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 20)], {
-        streaming: true,
-      })
+      const setup = yield* mountTranscript(
+        () => [prompt("p1", "ASK-ONE"), reply("r1", 20), { ...reply("r2", 20), draft: true }],
+        { streaming: true },
+      )
       const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
       // The original is scrolled out, so the reader sees it once, pinned.
       expect(count(frame, "ASK-ONE")).toBe(1)
@@ -4395,6 +4706,7 @@ describe("sticky last prompt", () => {
         const [items, setItems] = createSignal<SessionItem[]>([
           prompt("p1", "ASK-ONE"),
           reply("r1", 20),
+          { ...reply("d1", 20), draft: true },
           // Waiting in the queue: the reader has not seen it run.
           userMessage("regular-message", "q1", "QUEUED-ASK", "queued"),
         ])
@@ -4402,7 +4714,7 @@ describe("sticky last prompt", () => {
         const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
         expect(frame).not.toContain("↑ QUEUED-ASK")
         // Another branch: its own last prompt, derived from its own messages.
-        setItems([prompt("p2", "ASK-TWO"), reply("r2", 20)])
+        setItems([prompt("p2", "ASK-TWO"), reply("r2", 20), { ...reply("d2", 20), draft: true }])
         yield* waitForFrame(
           setup,
           (next) => next.includes("↑ ASK-TWO") && !next.includes("ASK-ONE"),
@@ -4437,7 +4749,13 @@ describe("sticky last prompt", () => {
         metadata: { fromClient: true },
       }
       const setup = yield* mountTranscript(
-        () => [prompt("p1", "ASK-ONE"), reply("r1", 4), steer, reply("r2", 20)],
+        () => [
+          prompt("p1", "ASK-ONE"),
+          reply("r1", 4),
+          steer,
+          reply("r2", 20),
+          { ...reply("r3", 20), draft: true },
+        ],
         { streaming: true },
       )
       yield* waitForFrame(setup, (next) => next.includes("↑ STEER-NOW"), "pinned steer")
@@ -4504,6 +4822,7 @@ describe("sticky last prompt", () => {
                 settled
                 streaming
                 footerHeight={3}
+                paneOpen={false}
                 expanded={false}
                 disclosure="collapsed"
                 displayRevision={0}
@@ -4574,6 +4893,7 @@ describe("sticky last prompt", () => {
               settled
               streaming={false}
               footerHeight={3}
+              paneOpen={false}
               expanded={false}
               disclosure="collapsed"
               displayRevision={0}

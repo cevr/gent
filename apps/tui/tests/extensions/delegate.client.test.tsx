@@ -154,6 +154,7 @@ describe("delegate rows in native scrollback", () => {
                 settled
                 streaming={false}
                 footerHeight={3}
+                paneOpen={false}
                 expanded={false}
                 disclosure="full"
                 displayRevision={0}

@@ -501,8 +501,9 @@ const snapshotText = (snapshot: CliRendererExternalOutputEvent["snapshot"]) =>
 
 /**
  * What the terminal holds: the rows committed to native history, then the
- * split region's frame. A final transcript item moves to history as soon as
- * it settles, so a row the reader sees may be in either.
+ * split region's frame. The live tail keeps the transcript's last rows and
+ * the rows above it move to history, so a row the reader sees is in one of
+ * them, never both.
  */
 export const terminalText = (setup: TestRenderSetup) =>
   [...(histories.get(setup.renderer) ?? []), renderFrame(setup)].join("\n")
