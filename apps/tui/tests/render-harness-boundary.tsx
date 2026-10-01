@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 
-import { afterEach } from "bun:test"
 import { Writable } from "node:stream" // eslint-disable-line effect/noNodeBuiltinImport -- the renderer writes to a Node stream; a test terminal must be one.
 import { BunServices } from "@effect/platform-bun"
 import { Config, Context, Effect, FileSystem, Layer, Option, Path, Scope, Stream } from "effect"
@@ -40,8 +39,6 @@ const noop = () => {}
 const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
 
 type TestRenderSetup = Awaited<ReturnType<typeof createTestRenderer>>
-
-let currentSetup: Option.Option<TestRenderSetup> = Option.none()
 
 // ── temp homes ──────────────────────────────────────────────────────────────
 
@@ -417,7 +414,6 @@ export const renderWithProviders = (
           ...output,
         }),
       )
-      currentSetup = Option.some(setup)
       // Exercise terminal lifecycle operations against OpenTUI's in-memory streams.
       yield* Effect.promise(() => setup.renderer.setupTerminal())
       yield* Effect.promise(() =>
@@ -492,7 +488,6 @@ export const answerPalette = (renderer: CliRenderer, colors: TerminalColors) => 
 }
 
 export const destroyRenderSetup = (setup: TestRenderSetup) => {
-  if (Option.isSome(currentSetup) && currentSetup.value === setup) currentSetup = Option.none()
   setup.renderer.destroy()
 }
 
@@ -502,15 +497,6 @@ export const renderScoped = (...args: Parameters<typeof renderWithProviders>) =>
     Effect.promise(() => renderWithProviders(...args)),
     (setup) => Effect.sync(() => destroyRenderSetup(setup)),
   )
-
-// Every caller renders through `renderScoped` except
-// `tests/extensions/cache.client.test.tsx`, which another batch owns; this hook
-// tears its renders down until it moves, and then goes.
-// eslint-disable-next-line effect/noTestLifecycleHooks -- OpenTUI renderers require synchronous per-test teardown at this shared test boundary.
-afterEach(() => {
-  if (Option.isSome(currentSetup)) destroyRenderSetup(currentSetup.value)
-  currentSetup = Option.none()
-})
 
 /**
  * The agent a session runs as reaches the UI only through its snapshot. A

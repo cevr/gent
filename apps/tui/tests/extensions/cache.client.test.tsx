@@ -33,11 +33,7 @@ import cacheExtension, {
 import type { AnyExtensionClientModule, NoticeRow } from "../../src/extensions/client-facets"
 import { App } from "../../src/app"
 import { provideClientServices } from "../extension-test-harness-boundary"
-import {
-  createMockClient,
-  createMockRuntime,
-  renderWithProviders,
-} from "../render-harness-boundary"
+import { createMockClient, createMockRuntime, renderScoped } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 
 // ── history builder ─────────────────────────────────────────────────────────
@@ -1031,7 +1027,7 @@ describe("cache client extension", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
-  it.live("a resumed session draws the miss row in the transcript", () =>
+  it.scopedLive("a resumed session draws the miss row in the transcript", () =>
     Effect.gen(function* () {
       const setup = yield* renderResumed({
         catalog: Effect.succeed(models),
@@ -1046,7 +1042,7 @@ describe("cache client extension", () => {
     }).pipe(Effect.timeout("8 seconds")),
   )
 
-  it.live("an extension that loads after the feed opened still draws the resumed rows", () =>
+  it.scopedLive("an extension that loads after the feed opened still draws the resumed rows", () =>
     Effect.gen(function* () {
       const loaded = yield* Deferred.make<void>()
       const late = {
@@ -1066,7 +1062,7 @@ describe("cache client extension", () => {
     }).pipe(Effect.timeout("8 seconds")),
   )
 
-  it.live("a catalog that lands after the feed shows the row once, already priced", () =>
+  it.scopedLive("a catalog that lands after the feed shows the row once, already priced", () =>
     Effect.gen(function* () {
       const catalogReady = yield* Deferred.make<void>()
       const setup = yield* renderResumed({
@@ -1139,21 +1135,20 @@ const renderResumed = (opts: {
         },
       },
     })
-    const rendered = yield* Effect.promise(() =>
-      renderWithProviders(() => <App />, {
-        client,
-        runtime: createMockRuntime(),
-        builtins: [opts.extension],
-        width: 100,
-        height: 30,
-        initialSession: {
-          id: sessionId,
-          activeBranchId: branchId,
-          name: "Cache",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
-      }),
-    )
+    // The render closes with the test's scope.
+    const rendered = yield* renderScoped(() => <App />, {
+      client,
+      runtime: createMockRuntime(),
+      builtins: [opts.extension],
+      width: 100,
+      height: 30,
+      initialSession: {
+        id: sessionId,
+        activeBranchId: branchId,
+        name: "Cache",
+        createdAt: dateFromMillis(0),
+        updatedAt: dateFromMillis(0),
+      },
+    })
     return { rendered, feedOpened: () => opened }
   })
