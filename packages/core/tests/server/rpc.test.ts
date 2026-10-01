@@ -920,6 +920,71 @@ describe("provider login", () => {
     ),
   )
 
+  // A driver may share a sign-in in one profile and own its own in another.
+  it.live("a key typed in a session goes to the owner its profile names, not the launch one", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const auth = yield* Effect.provide(Effect.service(Auth), Auth.Test({}))
+        const driver = (id: string, credentialFrom: Option.Option<string>) => {
+          const base: ModelDriverContribution = {
+            id,
+            name: id,
+            resolveModel: () => Effect.succeed(stubModel),
+            auth: { methods: [AuthMethod.make({ type: "api", label: `${id} key` })] },
+          }
+          return Option.match(credentialFrom, {
+            onNone: () => base,
+            onSome: (owner) => ({ ...base, credentialFrom: owner }),
+          })
+        }
+        const loaded = (id: string, drivers: ReadonlyArray<ModelDriverContribution>) =>
+          ({
+            manifest: { id: ExtensionId.make(id) },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { modelDrivers: [...drivers] },
+          }) satisfies LoadedExtension
+        const launch = loaded("@test/launch-sharing", [
+          driver("other", Option.none()),
+          driver("gate", Option.some("other")),
+        ])
+        const launchCwd = yield* makeTempDirectoryScoped("gent-key-launch-")
+        const launchProfile = yield* makeProfile(launchCwd, [launch])
+        const profileCwd = yield* makeTempDirectoryScoped("gent-key-owner-")
+        const profile = yield* makeProfile(profileCwd, [
+          loaded("@test/session-own", [driver("gate", Option.none())]),
+        ])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensions: [],
+            cwd: launchCwd,
+            authLayer: Layer.succeed(Auth, auth),
+            sessionProfileCacheLayer: fixedSessionProfiles(
+              new Map([
+                [launchCwd, launchProfile],
+                [profileCwd, profile],
+              ]),
+            ),
+          }),
+        )
+        const stored = Effect.forEach(["gate", "other"], (id) =>
+          Effect.map(auth.get(id), (info) => {
+            if (Predicate.isUndefined(info) || info.type !== "api") return "none"
+            return info.key
+          }),
+        )
+        const { sessionId } = yield* client.session.create({ cwd: profileCwd })
+        yield* client.auth.setKey({ provider: "gate", key: "sk-own", sessionId })
+        expect(yield* stored).toEqual(["sk-own", "none"])
+        yield* client.auth.setKey({ provider: "gate", key: "sk-launch" })
+        expect(yield* stored).toEqual(["sk-own", "sk-launch"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   it.live("a session logs in through the drivers of its own profile, not the launch profile", () =>
     Effect.scoped(
       Effect.gen(function* () {
