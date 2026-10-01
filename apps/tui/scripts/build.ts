@@ -36,6 +36,10 @@ const build = Effect.gen(function* () {
     Bun.build({
       entrypoints: [path.join(rootDir, "src/main.tsx")],
       target: "bun",
+      // Bytecode spares every launch the parse of the embedded bundle. It
+      // needs ESM output: OpenTUI awaits at module top level.
+      format: "esm",
+      bytecode: true,
       plugins: [solidTransformPlugin],
       minify: false,
       define: {

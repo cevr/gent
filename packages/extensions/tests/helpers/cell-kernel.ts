@@ -78,6 +78,8 @@ export const buildCellExecutable = Effect.gen(function* () {
       "build",
       sourcePath,
       "--compile",
+      "--bytecode",
+      "--format=esm",
       "--no-compile-autoload-bunfig",
       "--no-compile-autoload-dotenv",
       "--no-compile-autoload-tsconfig",

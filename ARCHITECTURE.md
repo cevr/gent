@@ -975,7 +975,10 @@ Turbo builds that declared dependency before the TUI copies the worker into
 `bin/gent-cell` beside `bin/gent`. `@gent/extensions` owns the worker build; the TUI only
 packages it. The worker embeds Bun and needs no external Bun executable. Its
 compile options disable automatic dotenv, bunfig, tsconfig, and package.json
-loading. The process launcher uses this artifact as both its runtime
+loading. Both binaries compile to ESM bytecode, so a start does not parse
+the embedded bundle (`bin/gent` 0.41 s to 0.05 s before its first module
+runs; the worker 36 ms to 18 ms to its `Ready` frame); the bytecode belongs to
+the Bun each binary embeds. The process launcher uses this artifact as both its runtime
 and worker path. Turbo caches core's `dist` output and both TUI binaries. The
 TUI task hashes its build script. Run the root build for dependency ordering.
 This is a packaged worker, not a daemon or a new session owner.
