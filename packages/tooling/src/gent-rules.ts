@@ -6,7 +6,6 @@
  *
  * - core-entry-boundary: extensions read only the authoring entries of `@gent/core`.
  * - declared-workspace-imports: a package imports only the workspace packages it declares.
- * - no-hand-rolled-module-path: no file path read off `new URL(import.meta.url)` in core.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
  * - no-tracked-session-record: a TUI reactive scope tracks the session identity, not the record.
@@ -214,15 +213,6 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
   return literal === undefined ? undefined : getStringField(literal, "value")
 }
 
-/**
- * Core and shipped-extension source, outside the test harness: the code that
- * also takes its working directory and host modules through Effect services.
- * The TUI, the SDK and the server launcher are process hosts; they read their
- * own working directory.
- */
-const protectedHostFactFilename = (subject: string): boolean =>
-  /^packages\/(?:core|extensions)\/src\//.test(subject) && !/\/test-utils\//.test(subject)
-
 /** The module a `require("x")` or `module.require("x")` call names. */
 const requireSourceOf = (node: AstNode): string | undefined => {
   let callee = getNodeField(node, "callee")
@@ -232,32 +222,6 @@ const requireSourceOf = (node: AstNode): string | undefined => {
   const [arg] = getNodeArrayField(node, "arguments") ?? []
   if (arg === undefined) return undefined
   return getStringField(arg, "value")
-}
-
-/** Whether `node` reads `import.meta.<field>` for one of `fields`. */
-const readsImportMeta = (node: AstNode | undefined, fields: ReadonlySet<string>): boolean => {
-  if (node?.type !== "MemberExpression") return false
-  if (getNodeField(node, "object")?.type !== "MetaProperty") return false
-  const property = getNodeField(node, "property")
-  return property !== undefined && fields.has(getStringField(property, "name") ?? "")
-}
-
-const IMPORT_META_URL: ReadonlySet<string> = new Set(["url"])
-
-/** Bun's and Node's file path facts on `import.meta`. */
-const IMPORT_META_PATH_FACTS: ReadonlySet<string> = new Set(["dir", "dirname", "filename", "path"])
-
-/**
- * `new URL(import.meta.url)` or `new URL("./x.ts", import.meta.url)`: the
- * operand a hand-rolled file path reads `.pathname` from.
- */
-const isImportMetaUrlConstruction = (node: AstNode | undefined): boolean => {
-  if (node?.type !== "NewExpression") return false
-  const callee = getNodeField(node, "callee")
-  if (callee?.type !== "Identifier" || getStringField(callee, "name") !== "URL") return false
-  return (getNodeArrayField(node, "arguments") ?? []).some((arg) =>
-    readsImportMeta(arg, IMPORT_META_URL),
-  )
 }
 
 const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
@@ -625,44 +589,6 @@ const plugin: Plugin = {
           ImportExpression: reportSource,
           TSImportType: (node) => report(node, importTypeSourceOf(node)),
           CallExpression: (node) => report(node, requireSourceOf(node)),
-        }
-      },
-    },
-
-    /**
-     * No module path hand-rolled off its own URL.
-     *
-     * In core and shipped-extension source outside `test-utils/`, a member
-     * read off `new URL(import.meta.url)` or `new URL("./x.ts", import.meta.url)`,
-     * as `.pathname`, builds a file path by hand, and `import.meta.dir`,
-     * `.dirname`, `.filename` and `.path` are the host's own path facts;
-     * Effect `Path.fromFileUrl` reads the URL. The upstream
-     * `effect/noModulePathFacts` (oxlint-plugin-effect) retires this rule
-     * once it ships. The TUI, the SDK and the server launcher are process
-     * hosts and read their own paths. `effect/noGlobals` holds the host
-     * globals themselves, through `globalThis` and computed members too.
-     */
-    "no-hand-rolled-module-path": {
-      create(context) {
-        if (!protectedHostFactFilename(ruleSubject(context))) return {}
-        return {
-          MemberExpression(node) {
-            if (!isAstNode(node)) return
-            if (readsImportMeta(node, IMPORT_META_PATH_FACTS)) {
-              context.report({
-                message:
-                  "`import.meta` path facts are the host's; read the module's path with Effect `Path.fromFileUrl(new URL(import.meta.url))`.",
-                node,
-              })
-              return
-            }
-            if (!isImportMetaUrlConstruction(getNodeField(node, "object"))) return
-            context.report({
-              message:
-                "`new URL(…, import.meta.url)` read as a path is hand-rolled; use Effect `Path.fromFileUrl`.",
-              node,
-            })
-          },
         }
       },
     },

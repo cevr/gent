@@ -103,11 +103,11 @@ updates this list in the same commit.
     also `process.cwd` and the `os` and `url` modules. `effect/noGlobals`
     follows each global through
     `globalThis`, computed members and local aliases, and `effect/noReflectGet`
-    holds `Reflect.get`. `gent/no-hand-rolled-module-path` keeps core and
-    shipped-extension source from reading a file path off
-    `new URL(import.meta.url)` or `new URL("./x.ts", import.meta.url)`, or
-    off the host's `import.meta` path facts (`dir`, `dirname`, `filename`,
-    `path`).
+    holds `Reflect.get`. `effect/noModulePathFacts` keeps every file, tests
+    included, from reading a file path off the host's `import.meta` path
+    facts (`dir`, `dirname`, `filename`, `path`), off the `.pathname` of a
+    `new URL(…, import.meta.url)`, or off a cut of the module URL; Effect
+    `Path.fromFileUrl` reads the URL.
     `effect/noPlatformLayerOutsideEntry` keeps the Bun platform layers in the
     platform entry files, and reports a platform module or member a file
     exports.
