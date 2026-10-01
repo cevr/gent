@@ -3867,11 +3867,11 @@ describe("native transcript region at the terminal's bottom", () => {
     25_000,
   )
 
-  // An answer whose highlight never settles commits plain, and the plain
-  // layout has other rows than the live view: its top rows never go alone,
-  // so no row reaches history twice or shows in history and on screen.
+  // An answer whose highlight never settles still commits on its last try.
+  // Its top rows go as drawn, the layout the live view shows, so every row
+  // is in history or on screen, once: none is lost above the region.
   it.scopedLive(
-    "an answer that never settles goes to history whole, no row twice",
+    "an answer that never settles still reaches history, every row once",
     () =>
       Effect.gen(function* () {
         const timeouts = makeSettleTimeouts(Number.MAX_SAFE_INTEGER)
@@ -3901,7 +3901,133 @@ describe("native transcript region at the terminal's bottom", () => {
         )
         yield* waitForStableFrame(setup)
         const counts = bodyRowCounts(history.join("") + renderFrame(setup))
-        for (const [row, count] of counts) expect([row, count]).toEqual([row, 1])
+        for (const item of longSession().keys()) {
+          for (let line = 1; line <= 12; line++) {
+            const row = `ITEM-${item} line ${line}`
+            expect([row, counts.get(row)]).toEqual([row, 1])
+          }
+        }
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // History is immutable. An item whose top rows it holds and that changes
+  // after (its text replaced, a call's result in) replays the transcript:
+  // history holds the new rows, once, and no old row.
+  it.scopedLive(
+    "an answer that changes after its top rows reached history replays them",
+    () =>
+      Effect.gen(function* () {
+        const body = (label: string) =>
+          Array.from({ length: 30 }, (_, index) => `${label} line ${index + 1}`).join("\n\n")
+        const [items, setItems] = createSignal<ListMessage[]>([assistant("only", body("OLD-0"))])
+        const history: string[] = []
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items,
+              streaming: () => false,
+              footer: () => 3,
+              paneOpen: () => false,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                const reset = renderer.resetSplitFooterForReplay.bind(renderer)
+                Object.defineProperty(renderer, "resetSplitFooterForReplay", {
+                  configurable: true,
+                  value: (options?: { readonly clearSavedLines?: boolean }) => {
+                    // A replay starts history again: only what follows is on screen.
+                    history.splice(0)
+                    reset(options)
+                  },
+                })
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  history.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height },
+        )
+        yield* waitForFrame(
+          setup,
+          () => bodyRowCounts(history.join("")).has("OLD-0 line 1"),
+          "the old top rows in history",
+          6_000,
+        )
+        setItems([assistant("only", body("NEW-0"))])
+        yield* waitForFrame(
+          setup,
+          () => bodyRowCounts(history.join("")).has("NEW-0 line 1"),
+          "the new rows in history",
+          6_000,
+        ).pipe(Effect.ignore)
+        yield* waitForStableFrame(setup)
+        const counts = bodyRowCounts(history.join("") + renderFrame(setup))
+        for (let line = 1; line <= 30; line++) {
+          const old = `OLD-0 line ${line}`
+          const fresh = `NEW-0 line ${line}`
+          expect([old, counts.has(old)]).toEqual([old, false])
+          expect([fresh, counts.get(fresh)]).toEqual([fresh, 1])
+        }
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // A change to an item while its top rows wait in `settle` makes the held
+  // rows stale: they never land, and the changed item is offered again.
+  it.scopedLive(
+    "an answer that changes while its top rows settle commits only the new rows",
+    () =>
+      Effect.gen(function* () {
+        const hold = yield* makeSettleHold
+        const body = (label: string) =>
+          Array.from({ length: 30 }, (_, index) => `${label} line ${index + 1}`).join("\n\n")
+        const [items, setItems] = createSignal<ListMessage[]>([assistant("only", body("OLD-0"))])
+        const history: string[] = []
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items,
+              streaming: () => false,
+              footer: () => 3,
+              paneOpen: () => false,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                hold.applyTo(renderer)
+                const reset = renderer.resetSplitFooterForReplay.bind(renderer)
+                Object.defineProperty(renderer, "resetSplitFooterForReplay", {
+                  configurable: true,
+                  value: (options?: { readonly clearSavedLines?: boolean }) => {
+                    // A replay starts history again: only what follows is on screen.
+                    history.splice(0)
+                    reset(options)
+                  },
+                })
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  history.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height },
+        )
+        yield* hold.held
+        // The top rows wait in `settle`; the answer is rewritten meanwhile.
+        setItems([assistant("only", body("NEW-0"))])
+        yield* Effect.promise(() => setup.flush())
+        yield* hold.release
+        yield* waitForFrame(
+          setup,
+          () => bodyRowCounts(history.join("")).has("NEW-0 line 1"),
+          "the new rows in history",
+          6_000,
+        ).pipe(Effect.ignore)
+        yield* waitForStableFrame(setup)
+        const counts = bodyRowCounts(history.join("") + renderFrame(setup))
+        for (let line = 1; line <= 30; line++) {
+          const old = `OLD-0 line ${line}`
+          const fresh = `NEW-0 line ${line}`
+          expect([old, counts.has(old)]).toEqual([old, false])
+          expect([fresh, counts.get(fresh)]).toEqual([fresh, 1])
+        }
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
   )

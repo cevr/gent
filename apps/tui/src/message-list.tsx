@@ -1597,6 +1597,12 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * base that shrinks back (a turn that ends) shows kept rows, never blank ones.
    */
   let footerFloor = Option.none<number>()
+  /**
+   * The fingerprints history was last checked against as a prefix. A commit
+   * lands only while the item it drew still has the fingerprint these hold at
+   * its place (`stillOffered`), so a landed commit keeps the proof true.
+   */
+  let prefixCheckedFor: ReadonlyArray<string> = []
   /** The tries each item's highlights missed, by fingerprint, until it lands. */
   const unsettledTries = new Map<string, number>()
   let displayRevision = 0
@@ -1790,13 +1796,19 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     epoch: number,
     lastTry: boolean,
     handOver: (rows: number) => () => void,
+    stillOffered: () => boolean,
   ): Effect.Effect<CommitOutcome> =>
     Effect.suspend(() => {
       // An item queued behind one that came back waits for the next pass.
       if (commitEpoch !== epoch) return Effect.succeed("stale")
       const generation = displayGeneration
+      // The item may also have changed while it settled (its text replaced, a
+      // call's result in): rows drawn from the old item never land.
       const stillCurrent = () =>
-        displayGeneration === generation && commitEpoch === epoch && canCommitNatively()
+        displayGeneration === generation &&
+        commitEpoch === epoch &&
+        canCommitNatively() &&
+        stillOffered()
       if (!stillCurrent()) return Effect.succeed("refused")
       // Settling is asynchronous. The screen may have changed hands and the
       // reader may have cleared the display while it ran, so both are
@@ -1822,11 +1834,12 @@ export function NativeTranscript(props: NativeTranscriptProps) {
             ),
           )
         })
-      // The rows an earlier commit took from this item were drawn, and the
-      // plain layout has other rows: the rest comes from the drawn layout, so
-      // it starts at the row the live view shows first. It waits no longer
-      // than a plain draw.
-      const plain = rows.from === 0
+      // The plain layout has other rows than the live view, so only a whole
+      // item draws plain. Rows of an item the live view shows in part (its
+      // top rows, or the rest once history holds them) come from the drawn
+      // layout, so they start and end at the rows the live view cuts. They
+      // wait no longer than a plain draw.
+      const plain = rows.from === 0 && Option.isNone(rows.to)
       const commitLast = Effect.scoped(
         Effect.gen(function* () {
           const surface = yield* drawSurface(items, plain)
@@ -1912,7 +1925,15 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       }
     }
     enqueueNative(
-      commitItems([item], range, epoch, tries + 1 >= SETTLE_TRIES, handOver).pipe(
+      commitItems(
+        [item],
+        range,
+        epoch,
+        tries + 1 >= SETTLE_TRIES,
+        handOver,
+        // Commits land in transcript order, so this item is the next after history.
+        () => untrack(fingerprints)[committed.length] === fingerprintValue,
+      ).pipe(
         Effect.andThen((outcome) =>
           Effect.sync(() => {
             if (outcome === "stale") return
@@ -2103,8 +2124,6 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       ),
     )
   })
-  /** The fingerprints the committed prefix was last checked against. */
-  let prefixCheckedFor: ReadonlyArray<string> = []
   createEffect(() => {
     if (!ext.loaded() || !props.settled) return
     if (!nativeOutputReady() || props.expanded || props.overlayOpen) return
@@ -2189,9 +2208,6 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         continue
       }
       if (plan.turnRunning) return
-      // An item on its last try commits plain, and the plain layout has other
-      // rows than the live view: it waits to go whole.
-      if ((unsettledTries.get(value) ?? 0) + 1 >= SETTLE_TRIES) return
       offer(item, value, Option.some(queuedRows + excess))
       return
     }

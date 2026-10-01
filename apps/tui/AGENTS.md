@@ -195,13 +195,16 @@ for its stored answer, and a message waits while a call of it runs); at idle
 an item's top rows too (`partialRows`; the live view cuts them off), so each
 row is in history or on screen, once. A commit shrinks the region by its rows
 first and then writes them, so they land where they were drawn; a write
-OpenTUI refuses gives the rows back to the live view. A region above the
+OpenTUI refuses, or rows drawn from an item that changed while they settled
+(`stillOffered`), give the rows back to the live view; an item that changes
+after history took its top rows replays the transcript. A region above the
 bottom (a short session) shrinks to what it wants. A test that needs an item
 in history puts a long answer after it. Transcript rows keep the terminal's
 last column free (`FREE_LAST_COLUMN`): OpenTUI erases to the line's end after
 a committed row, which takes a full-width row's last cell (a table's right
-border). An item whose highlight does not settle, and every item at exit,
-commits as plain text (`PlainHistoryContext`). Closing the palette or a
+border). A whole item whose highlight does not settle, and every whole item
+at exit, commits as plain text (`PlainHistoryContext`); the plain layout has
+other rows, so rows of an item the live view shows in part commit as drawn. Closing the palette or a
 picker replays nothing, and no replay clears the terminal's saved lines.
 Exit commits the live tail first (`leaveTerminal`), and the renderer is
 created with `clearOnShutdown: false`, so exit leaves every turn on screen.
