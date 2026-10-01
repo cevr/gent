@@ -758,6 +758,55 @@ describe("models.dev catalog", () => {
       expect(online.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
     }).pipe(Effect.provide(platformLayer)),
   )
+
+  it.scopedLive(
+    "a read stopped during the first fetch stops only its wait; the next read gets that fetch's catalog",
+    () =>
+      Effect.gen(function* () {
+        // The stop lands at every point around the scheduler's yield budget
+        // (2048 steps), where a waiter can be counted before its cleanup is in place.
+        for (let steps = 1990; steps < 2060; steps++) {
+          const home = yield* freshHome("stopped")
+          const calls = yield* Ref.make(0)
+          const reached = yield* Deferred.make<void>()
+          const answer = yield* Deferred.make<void>()
+          // The host answers only once the test lets it: the first read is still
+          // waiting in the fetch when its caller stops, as an Esc during the
+          // day's first turn does.
+          const host = Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Effect.gen(function* () {
+                yield* Ref.update(calls, (n) => n + 1)
+                yield* Deferred.succeed(reached, void 0)
+                yield* Deferred.await(answer)
+                return HttpClientResponse.fromWeb(
+                  request,
+                  new Response(encodeAnyJson(remotePayload), { status: 200 }),
+                )
+              }),
+            ),
+          )
+          const busy = Effect.forEach(Array.from({ length: steps }), () => Effect.void, {
+            discard: true,
+          })
+          const first = yield* Effect.forkChild(
+            busy.pipe(Effect.andThen(modelsDevCatalog(home)), Effect.provide(host)),
+          )
+          yield* Deferred.await(reached)
+          yield* Fiber.interrupt(first)
+
+          const next = yield* Effect.forkChild(modelsDevCatalog(home).pipe(Effect.provide(host)))
+          yield* Deferred.succeed(answer, void 0)
+          const models = yield* Fiber.join(next)
+
+          expect(models.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
+          // The stopped read's fetch went on and served the next read.
+          expect(yield* Ref.get(calls)).toBe(1)
+        }
+      }).pipe(Effect.timeout(10_000), Effect.provide(platformLayer)),
+    15_000,
+  )
 })
 
 describe("freshEnoughAt", () => {
@@ -974,6 +1023,48 @@ for (const kind of SOURCES) {
           yield* cache.invalidate(seed)
           expect((yield* cache.getFresh).access).toBe("fresh-access")
           expect(refreshes).toBe(1)
+        }),
+      ),
+    )
+
+    it.live("a caller stopped after the provider rotated the token still stores the rotation", () =>
+      onTestClock(
+        Effect.gen(function* () {
+          const used: Array<string> = []
+          const rotated = yield* Deferred.make<void>()
+          const answered = yield* Deferred.make<void>()
+          const answers = [
+            credentialsNamed("rotated", EXPIRING_SOON_MS),
+            credentialsNamed("third", FAR_FUTURE_MS),
+          ]
+          const { cache } = yield* sourcedCache(
+            kind,
+            credentialsNamed("seed", EXPIRING_SOON_MS),
+            (held) =>
+              Effect.gen(function* () {
+                used.push(Option.match(held, { onNone: () => "", onSome: (h) => h.refresh }))
+                const answer = Option.fromUndefinedOr(answers[used.length - 1])
+                if (Option.isNone(answer))
+                  return yield* Effect.die(new Error("one refresh too many"))
+                if (used.length > 1) return answer.value
+                // The provider spent the token it was sent; its answer is on the way back.
+                yield* Deferred.succeed(rotated, void 0)
+                yield* Deferred.await(answered)
+                return answer.value
+              }),
+          )
+          const first = yield* Effect.forkChild(cache.getFresh)
+          yield* Deferred.await(rotated)
+          // Stop the caller (an Esc during the model build) while the answer is in flight.
+          const stopping = yield* Effect.forkChild(Fiber.interrupt(first), {
+            startImmediately: true,
+          })
+          yield* Deferred.succeed(answered, void 0)
+          yield* Fiber.join(stopping)
+
+          // The rotation was stored, so the next refresh sends the rotated token, not the spent one.
+          expect((yield* cache.getFresh).access).toBe("third-access")
+          expect(used).toEqual(["seed-refresh", "rotated-refresh"])
         }),
       ),
     )

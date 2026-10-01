@@ -12,6 +12,7 @@ import {
   Path,
   Predicate,
   Queue,
+  Ref,
   Schema,
   Stream,
 } from "effect"
@@ -24,6 +25,7 @@ import {
   HttpServerResponse,
 } from "effect/http"
 import type * as Prompt from "effect/ai/Prompt"
+import { Base64 } from "effect/encoding"
 import {
   BunGentPlatformLive,
   collectTestContributions,
@@ -37,7 +39,13 @@ import {
 } from "@gent/core/test-utils"
 import { ExtensionId, getToolId, type ToolCapability } from "@gent/core/extensions/api"
 import { messagePartsText } from "@gent/core/protocol"
-import { HostEnvironment, McpExtension, McpServers, projectCallResult } from "../src/mcp.js"
+import {
+  HostEnvironment,
+  makeBlobStore,
+  McpExtension,
+  McpServers,
+  projectCallResult,
+} from "../src/mcp.js"
 import { shippedPreset } from "./helpers/test-preset.js"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -296,16 +304,21 @@ const toolIds = (contributions: { readonly tools?: ReadonlyArray<ToolCapability>
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 /**
- * An environment whose data directory is a fixed scratch path, so a test that
- * cannot name the harness's home still shares its catalog cache.
+ * Runs `self` with a fixed scratch data directory, so a test that cannot name
+ * the harness's home still shares its catalog cache. The directory belongs to
+ * the test's own scope and is acquired before the harness, so it is removed
+ * after the harness and its relist fibers stop writing to it.
  */
-const withDataDir = Layer.unwrap(
+const withDataDir = <A, E, R>(self: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-data-" })
-    return ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: directory }))
-  }),
-)
+    return yield* self.pipe(
+      Effect.provide(
+        ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: directory })),
+      ),
+    )
+  })
 
 /** An environment with `GENT_MCP_VALUE` set to `value`. */
 const withVariable = (value: string) =>
@@ -2141,6 +2154,57 @@ describe("mcp binary content", () => {
       }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
     45_000,
   )
+
+  it.scopedLive(
+    "a save stopped during the first prune stops only its wait; the prune runs once",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-blobs-" })
+        const blobs = path.join(home, "mcp-blobs")
+        // One file past the prune age, which only a finished prune removes.
+        yield* fs.makeDirectory(blobs, { recursive: true })
+        const stale = path.join(blobs, "stale.png")
+        yield* fs.writeFileString(stale, "old")
+        const fifteenDaysAgo = ((yield* Clock.currentTimeMillis) - 15 * 24 * 60 * 60 * 1000) / 1000
+        yield* fs.utimes(stale, fifteenDaysAgo, fifteenDaysAgo)
+        const reached = yield* Deferred.make<void>()
+        const listed = yield* Deferred.make<void>()
+        const listings = yield* Ref.make(0)
+        // The prune lists the directory only once the test lets it: the first
+        // save is already waiting on it when its caller stops, as a cell
+        // stopped by Esc during its first binary result is. The listing yields
+        // once before it signals, so the stop lands after that wait began.
+        const heldListing: FileSystem.FileSystem = {
+          ...fs,
+          readDirectory: (directory, options) =>
+            Effect.gen(function* () {
+              yield* Ref.update(listings, (n) => n + 1)
+              yield* Effect.yieldNow
+              yield* Deferred.succeed(reached, void 0)
+              yield* Deferred.await(listed)
+              return yield* fs.readDirectory(directory, options)
+            }),
+        }
+        const store = yield* makeBlobStore(blobs).pipe(
+          Effect.provideService(FileSystem.FileSystem, heldListing),
+        )
+        const block = { type: "image", data: Base64.encode("PNGDATA"), mimeType: "image/png" }
+        const first = yield* Effect.forkChild(store.save([block]))
+        yield* Deferred.await(reached)
+        yield* Fiber.interrupt(first)
+
+        const next = yield* Effect.forkChild(store.save([block]))
+        yield* Deferred.succeed(listed, void 0)
+        const saved = (yield* Fiber.join(next))[0] ?? Option.none<string>()
+        expect(Option.isSome(saved)).toBe(true)
+        expect(yield* fs.readFileString(Option.getOrElse(saved, () => ""))).toBe("PNGDATA")
+        // The stopped save's prune went on to its end, and the next save joined it.
+        expect(yield* fs.exists(stale)).toBe(false)
+        expect(yield* Ref.get(listings)).toBe(1)
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(platformLayer)),
+  )
 })
 
 // ── results ─────────────────────────────────────────────────────────────────
@@ -2253,10 +2317,7 @@ describe("mcp tools in the cell", () => {
             display: encodeJson({ echoed: "hi", id: "mcp.fixture.bulk_599", schema: 2000 }),
           },
         })
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )
 
@@ -2429,10 +2490,7 @@ describe("mcp tools in the cell", () => {
         expect(toolIds(next)).not.toContain("mcp.fixture.count")
         expect(toolIds(next)).toContain("mcp.fixture.echo")
         expect(yield* fixture.starts).toBe(2)
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )
 
@@ -2471,10 +2529,7 @@ describe("mcp tools in the cell", () => {
         })
         expect(toolIds(next)).toHaveLength(5)
         expect(yield* fixture.starts).toBe(2)
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )
 
@@ -2514,10 +2569,7 @@ describe("mcp tools in the cell", () => {
         expect(next).toContain("mcp.fixture.echo")
         // The open connection relisted; no server started for it.
         expect(yield* fixture.starts).toBe(2)
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )
 
@@ -2566,10 +2618,7 @@ describe("mcp tools in the cell", () => {
           "list",
           "listed",
         ])
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )
 
@@ -2617,10 +2666,7 @@ describe("mcp tools in the cell", () => {
             10_000,
             "the cache drops count",
           )
-        }).pipe(
-          Effect.timeout("25 seconds"),
-          Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
-        ),
+        }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
       30_000,
     )
   }
