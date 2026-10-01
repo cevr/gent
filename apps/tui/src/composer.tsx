@@ -200,11 +200,17 @@ const saveFullOutput = (
     ),
   )
 
-/** One streaming decoder across the chunks: a character split between two chunks decodes whole. */
-const decodeUtf8 = (chunks: ReadonlyArray<Uint8Array>): string => {
+/**
+ * One streaming decoder across the chunks: a character split between two
+ * chunks decodes whole. Output the read cap cut short can end inside a
+ * character whose last bytes were never read; `cut` drops those first bytes
+ * instead of flushing them as `�`.
+ */
+const decodeUtf8 = (chunks: ReadonlyArray<Uint8Array>, cut: boolean): string => {
   const decoder = new TextDecoder()
   let out = ""
   for (const chunk of chunks) out += decoder.decode(chunk, { stream: true })
+  if (cut) return out
   return out + decoder.decode()
 }
 
@@ -253,7 +259,7 @@ const runCommand = (
       const ended = bytes >= SHELL_READ_CAP_BYTES
       // Both streams closed: the command is done, or about to be.
       if (!ended) yield* handle.exitCode
-      return { stdout: decodeUtf8(stdout), stderr: decodeUtf8(stderr), ended }
+      return { stdout: decodeUtf8(stdout, ended), stderr: decodeUtf8(stderr, ended), ended }
     }),
   ).pipe(
     Effect.mapError(

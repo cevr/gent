@@ -212,6 +212,24 @@ describe("executeShell", () => {
     }).pipe(Effect.timeout("20 seconds")),
   )
 
+  // The cap cuts the output where reading stopped, which can split a
+  // character: the cut drops its first bytes instead of drawing `�`.
+  shellTest("a character split by the read cap is dropped, not drawn as a replacement", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* fs.makeTempDirectoryScoped()
+      // The cap's last byte is the first byte of `é`; its second byte waits.
+      const command = `head -c ${SHELL_READ_CAP_BYTES - 1} /dev/zero | tr '\\0' a; printf '\\303'; sleep 3; printf '\\251'`
+      const result = yield* executeShell(command, testDir, PROBE_HOME)
+      expect(result.ended).toBe(true)
+      const savedPath = yield* Effect.fromOption(result.savedPath)
+      const saved = yield* fs.readFileString(savedPath)
+      // The tail alone: a failure prints it, not the whole capped output.
+      expect(saved.slice(-4)).toBe("aaaa")
+      yield* fs.remove(savedPath)
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
   // An interrupt closes the command's scope, and the process goes with it.
   shellTest("an interrupted command ends its process", () =>
     Effect.gen(function* () {
