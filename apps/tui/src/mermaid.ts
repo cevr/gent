@@ -1,13 +1,6 @@
 import type * as BeautifulMermaid from "beautiful-mermaid"
 import { useRenderer } from "@opentui/solid"
-import {
-  type Accessor,
-  createContext,
-  createMemo,
-  createSignal,
-  untrack,
-  useContext,
-} from "solid-js"
+import { type Accessor, createContext, createMemo, createSignal, useContext } from "solid-js"
 import {
   createMarkdownCodeBlockRenderer,
   type MarkdownCodeBlockRenderer,
@@ -18,7 +11,7 @@ import {
   type TextChunk,
   TextRenderable,
 } from "@opentui/core"
-import { Cause, Effect, Option, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 
 // ── mermaid diagrams ────────────────────────────────────────────────────────
 
@@ -286,37 +279,29 @@ interface DiagramLibraryLoad {
   readonly loaded: Accessor<Option.Option<DiagramLibrary>>
   /** The load failed: every fence draws as its code block. */
   readonly failed: Accessor<boolean>
-  /** Starts the load, unless one runs, has landed, or has failed. */
+  /** Starts the one load on the first ask; a later ask does nothing. */
   readonly ask: () => void
 }
 
 /**
- * The library behind `load`. One load runs at a time. A failed load stays
- * failed. An interrupted load leaves nothing behind, so the next ask loads
- * again; the module registry keeps a module that has loaded.
+ * The library behind `load`. The first ask starts the one load, which lands
+ * as loaded or as failed; a failed load stays failed.
  */
 export const makeDiagramLibrary = (
   load: Effect.Effect<DiagramLibrary, DiagramLibraryError>,
 ): DiagramLibraryLoad => {
   const [loaded, setLoaded] = createSignal(Option.none<DiagramLibrary>())
   const [failed, setFailed] = createSignal(false)
-  let loading = false
+  let asked = false
   const ask = () => {
-    if (loading || Option.isSome(untrack(loaded)) || untrack(failed)) return
-    loading = true
+    if (asked) return
+    asked = true
     Effect.runFork(
       load.pipe(
         Effect.matchCause({
           onSuccess: (library) => setLoaded(Option.some(library)),
-          onFailure: (cause) => {
-            if (!Cause.hasInterruptsOnly(cause)) setFailed(true)
-          },
+          onFailure: () => setFailed(true),
         }),
-        Effect.ensuring(
-          Effect.sync(() => {
-            loading = false
-          }),
-        ),
       ),
     )
   }

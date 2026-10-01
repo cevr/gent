@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, type Duration, Effect, Option, Schedule } from "effect"
+import { Deferred, type Duration, Effect, Schedule } from "effect"
 import * as BeautifulMermaid from "beautiful-mermaid"
 import { type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
@@ -169,33 +169,6 @@ describe("mermaid diagrams in native history", () => {
       expect(history()).toContain("Alpha-->Beta")
       expect(history()).toContain("AFTER-DIAGRAM")
     }).pipe(Effect.timeout("8 seconds")),
-  )
-
-  it.live("an interrupted load is not kept: the next ask loads again", () =>
-    Effect.gen(function* () {
-      let attempts = 0
-      const library = makeDiagramLibrary(
-        Effect.suspend(() => {
-          attempts += 1
-          if (attempts === 1) return Effect.interrupt
-          return Effect.succeed(BeautifulMermaid)
-        }),
-      )
-      library.ask()
-      yield* Effect.yieldNow.pipe(
-        Effect.repeat({ until: () => attempts === 1, schedule: Schedule.spaced("1 millis") }),
-      )
-      expect(library.failed()).toBe(false)
-      expect(Option.isNone(library.loaded())).toBe(true)
-      // Each answer that draws asks again; an ask while the first load winds down does nothing.
-      yield* Effect.sync(library.ask).pipe(
-        Effect.repeat({
-          until: () => Option.isSome(library.loaded()),
-          schedule: Schedule.spaced("1 millis"),
-        }),
-      )
-      expect(attempts).toBe(2)
-    }).pipe(Effect.timeout("4 seconds")),
   )
 })
 
