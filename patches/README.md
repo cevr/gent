@@ -36,9 +36,10 @@ The patch keeps the first system group in `system` and sends a later one,
 in place, as a user message whose text blocks read
 `<host-context-update>\n…\n</host-context-update>`, with `&`, `<` and `>`
 escaped so the text cannot close the wrapper. The opening is
-`HOST_CONTEXT_UPDATE_OPEN` in `packages/extensions/src/providers.ts`. The
-Anthropic extension (`packages/extensions/src/anthropic.ts`) reads it through
-`isHostContextUpdateText` to keep the cache marker off these blocks.
+`HOST_CONTEXT_UPDATE_OPEN` in `packages/extensions/src/providers.ts`. Both
+Messages drivers (`anthropic.ts`, and `opencode.ts` for its Messages models)
+read it through `isHostContextUpdate` there to keep the cache marker off
+these blocks.
 
 Remove this patch when the SDK keeps a later system message in place.
 Rechecked on 2026-10-01: 4.0.0 still replaces `system`, so the patch was

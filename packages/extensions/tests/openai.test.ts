@@ -2090,6 +2090,11 @@ const ReadTool = Tool.make("read", {
   success: Schema.String,
 })
 
+/** A request's `include`; none when the body leaves it out or sends null. */
+const IncludeBody = Schema.fromJsonString(
+  Schema.Struct({ include: Schema.OptionFromOptionalNullOr(Schema.Array(Schema.String)) }),
+)
+
 const ReplayedInput = Schema.fromJsonString(
   Schema.Struct({
     input: Schema.Array(
@@ -2177,6 +2182,59 @@ describe("OpenAI reasoning replay", () => {
         expect(types.indexOf("function_call")).toBe(types.indexOf("reasoning") + 1)
       }
     }),
+  )
+
+  // `@effect/ai-openai` asks for `reasoning.encrypted_content` only for the
+  // model prefixes it knows (o1, o3, o4-mini, codex-mini, gpt-5). Without it a
+  // `store: false` request gets reasoning it cannot send back.
+  it.live("a request that reasons without store asks for encrypted reasoning on both paths", () =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+        makeDurableCell({
+          access: "include-token",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        }),
+      )
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+        yield* hostCrypto,
+      )
+      const included = (authInfo: ProviderAuthInfo, hints: ProviderHints) =>
+        Effect.gen(function* () {
+          const model = yield* driver.resolveModel("gpt-6-sol", authInfo, hints)
+          const state = makeFakeFetchState()
+          yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
+            Effect.provide(
+              Layer.provideMerge(model, fakeFetchLayer(state, openaiResponsesHappyResponse)),
+            ),
+            Effect.scoped,
+            Effect.orDie,
+          )
+          const sent = yield* Schema.decodeEffect(IncludeBody)(
+            Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)?.body)),
+          )
+          return sent.include
+        })
+      for (const authInfo of [makeApiAuthInfo("sk-include"), makeOAuthInfo()]) {
+        expect(yield* included(authInfo, { reasoning: "high" })).toEqual(
+          Option.some(["reasoning.encrypted_content"]),
+        )
+        // With no effort named the model still reasons, at its default effort.
+        expect(yield* included(authInfo, { supportsReasoning: true })).toEqual(
+          Option.some(["reasoning.encrypted_content"]),
+        )
+        expect(yield* included(authInfo, {})).toEqual(Option.some(["reasoning.encrypted_content"]))
+        // A model the catalog says does not reason sends no reasoning to keep.
+        expect(yield* included(authInfo, { reasoning: "high", supportsReasoning: false })).toEqual(
+          Option.none(),
+        )
+      }
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   // Encrypted reasoning is bound to the model and to the organization that

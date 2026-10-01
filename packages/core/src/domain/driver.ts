@@ -22,7 +22,7 @@ import {
   type Model as AiModel,
   type Response,
 } from "effect/ai"
-import type { CacheWriteByLifetime, Model } from "./agent.js"
+import type { CacheWriteByLifetime, Model, ReasoningEffort } from "./agent.js"
 import type { SessionId } from "./ids.js"
 
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
@@ -96,7 +96,7 @@ export type ProviderResolution = Layer.Layer<
 /** Hints passed from the agent loop into `resolveModel`. Drivers bake these
  *  into their provider Config layer (e.g. `AnthropicLanguageModel.Config.max_tokens`). */
 export interface ProviderHints {
-  readonly reasoning?: string
+  readonly reasoning?: ReasoningEffort
   readonly maxTokens?: number
   readonly temperature?: number
   /**

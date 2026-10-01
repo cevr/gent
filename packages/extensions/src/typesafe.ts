@@ -81,8 +81,9 @@ const API_URL = "https://api.typesafe.ai/v1"
 
 /**
  * The model ids `@effect/ai-typesafe` names (`TypeSafeDecisionModel.Model`),
- * as the TypeSafe docs list them. `jev-latest` comes first, so a cell that
- * names no model and has a TypeSafe key gets it.
+ * as the TypeSafe docs list them. A cell that names no model and has a
+ * TypeSafe key gets `jev-latest`: core's default picks a `-latest` model in
+ * any position.
  */
 const CLASSIFIERS: ReadonlyArray<ClassifierEntry> = [
   { name: "jev-latest", label: "Jev (latest)" },

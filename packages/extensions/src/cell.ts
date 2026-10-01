@@ -116,6 +116,7 @@ import {
   type SnapshotBinding,
   toolDetailsOf,
   toolPath,
+  namespaceCallName,
 } from "./cell-protocol.js"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import * as AiTool from "effect/ai/Tool"
@@ -1581,7 +1582,7 @@ const buildCellCatalog = Effect.fn("CellCatalog.build")(function* (
 // ── context host ────────────────────────────────────────────────────────────
 
 /** Host calls under this prefix serve the cell's `context` namespace, not a selected tool. */
-const CONTEXT_CALL_PREFIX = "context."
+const CONTEXT_CALL_PREFIX = namespaceCallName("context", "")
 
 const isContextCall = (name: string): boolean => name.startsWith(CONTEXT_CALL_PREFIX)
 
@@ -1783,7 +1784,7 @@ export const handleContextCall = Effect.fn("CellContextHost.call")(function* (pa
 // ── models host ─────────────────────────────────────────────────────────────
 
 /** Host calls under this prefix serve the cell's `models` namespace, not a selected tool. */
-const MODELS_CALL_PREFIX = "models."
+const MODELS_CALL_PREFIX = namespaceCallName("models", "")
 
 const isModelsCall = (name: string): boolean => name.startsWith(MODELS_CALL_PREFIX)
 
@@ -1866,7 +1867,7 @@ const handleModelsCall = Effect.fn("CellModelsHost.call")(function* (params: {
   })
   const named = Option.getOrElse(Option.fromUndefinedOr(request.model), () => "default classifier")
   const { resolved, response } = yield* Effect.gen(function* () {
-    const resolved = yield* resolver
+    const resolved = yield* (yield* resolver.profile)
       .resolve(Option.fromUndefinedOr(request.model))
       .pipe(Effect.mapError((error) => contextHostFailure(`models.decide: ${error.message}`)))
     const response = yield* resolved.model
@@ -2888,7 +2889,6 @@ export const CellTool = tool({
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
     "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
     "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff at the next step of this turn, focused on the instructions (a turn that ends first drops it). context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
-    "models.decide(input, decisions, { model, timeoutMs }) asks a classifier model (Jev) typed questions about any JSON input in one awaited host call. decisions maps a name to models.classify({ instructions, criteria: { label: description } }), models.rate({ instructions, criteria: [lowest, ..., highest] }) or models.probability({ instructions, criteria?: { false, true } }); the reply is { model, answers, usage } with label and probabilities, rating, or probability per name. One call is one small paid request, a fraction of a cent and far less than a model turn, so compose it in code with other tools: check the state between actions, then gate, route or retry on the answer. Without model it uses a classifier model with a key, a -latest one first; model names one, such as typesafe/jev-latest or opencode/jev-1.13. A call that gets no answer within timeoutMs (at most and by default 60000) rejects.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
   ],
@@ -3199,15 +3199,19 @@ export const CellExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", CellTool)
-    yield* host.on("turnProjection", ({ agent }) => {
-      if (agent.deniedTools?.includes("cell") === true) {
-        return Effect.succeed({})
-      }
-      return Effect.succeed({
-        toolPolicy: { include: ["cell"], modelSet: ["cell"] },
-        promptSections: [CELL_WORK_SECTION],
-      })
-    })
+    yield* host.on("turnProjection", ({ agent }) =>
+      Effect.gen(function* () {
+        if (agent.deniedTools?.includes("cell") === true) return {}
+        // `models.decide` is listed only when a call that names no model can
+        // resolve one; without a credential it can only reject.
+        const classifiers = yield* Effect.serviceOption(DecisionModelResolver)
+        const decides =
+          Option.isSome(classifiers) && (yield* (yield* classifiers.value.profile).hasCredential)
+        let promptSections = [CELL_WORK_SECTION]
+        if (decides) promptSections = [CELL_WORK_SECTION, CELL_MODELS_SECTION]
+        return { toolPolicy: { include: ["cell"], modelSet: ["cell"] }, promptSections }
+      }),
+    )
     // The host tool list differs by agent, so it follows the shared prompt.
     yield* host.on("systemPrompt", (input) =>
       Effect.gen(function* () {
@@ -3251,6 +3255,22 @@ const CELL_WORK_SECTION = {
   id: "cell-work",
   priority: AGENT_PROMPT_PRIORITY + 6,
   content: CELL_WORK,
+}
+
+/**
+ * The `models` namespace guide, listed while some classifier driver has a
+ * credential. It names no model and no price: the catalog owns both.
+ */
+const CELL_MODELS = `# Classifier models in the cell
+
+- models.decide(input, decisions, { model, timeoutMs }) asks a classifier model typed questions about any JSON input in one awaited host call. decisions maps a name to models.classify({ instructions, criteria: { label: description } }), models.rate({ instructions, criteria: [lowest, ..., highest] }) or models.probability({ instructions, criteria?: { false, true } }); the reply is { model, answers, usage } with label and probabilities, rating, or probability per name.
+- One call is one small paid request, far less than a model turn, so compose it in code with other tools: check the state between actions, then gate, route or retry on the answer.
+- Without model it uses a classifier model with a key, a -latest one first; model names one by its provider/model id, and an unknown id rejects with the list of classifier models. A call that gets no answer within timeoutMs (at most and by default 60000) rejects.`
+
+const CELL_MODELS_SECTION = {
+  id: "cell-models",
+  priority: AGENT_PROMPT_PRIORITY + 7,
+  content: CELL_MODELS,
 }
 
 // ── host tool catalog ───────────────────────────────────────────────────────

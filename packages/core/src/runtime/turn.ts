@@ -2238,9 +2238,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
     /**
      * The turn's only write path: change the fields `change` names and carry
-     * the rest forward. A field a writer does not mention keeps its value
-     * instead of being restated, so a forgotten restatement can no longer
-     * reset a turn's position.
+     * the rest forward. A field a writer does not name keeps its value, so a
+     * writer never restates a field to keep it, and cannot reset one by leaving
+     * it out.
      *
      * `onFailure` says what a storage failure does. `"log"`: the turn goes
      * on, and a read failure writes over the empty record (the probe fallback

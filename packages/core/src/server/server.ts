@@ -127,6 +127,7 @@ import {
   listAuthMethods,
   listAuthProviders,
   removeSignIn,
+  storeSignIn,
   ModelCatalogRecord,
   ModelRegistry,
   ModelResolver,
@@ -1360,6 +1361,18 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.scoped,
       )
 
+    /** `inSessionProfile`, but a session that does not exist fails and runs nothing. */
+    const inLiveSessionProfile = <A, E>(
+      sessionId: Option.Option<SessionId>,
+      effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
+    ) =>
+      Effect.gen(function* () {
+        if (Option.isSome(sessionId) && Option.isNone(yield* loadSession(sessionId))) {
+          return yield* new NotFoundError({ message: "Session not found" })
+        }
+        return yield* inSessionProfile(sessionId, effect)
+      })
+
     // ── login leases ──
     // A login's pending state lives on the driver instance that authorized
     // it. The login holds that instance's profile until its callback
@@ -1648,25 +1661,23 @@ const RpcHandlers = GentRpcs.toLayer(
           )
         }).pipe(Effect.scoped),
 
-      "auth.setKey": ({ provider, key }: SetAuthKeyInput) =>
-        authStore
-          .set(provider, AuthApi.make({ type: "api", key }))
-          .pipe(Effect.mapError((error) => authPersistenceError("set", provider, error))),
+      // A key typed for a driver that shares a sign-in is the owner's key.
+      "auth.setKey": ({ provider, key, sessionId }: SetAuthKeyInput) =>
+        inLiveSessionProfile(
+          Option.fromUndefinedOr(sessionId),
+          storeSignIn(provider, AuthApi.make({ type: "api", key })).pipe(
+            Effect.mapError((error) => authPersistenceError("set", provider, error)),
+          ),
+        ),
 
       // A sign-in other drivers share removes every credential it reads.
       "auth.deleteKey": ({ provider, sessionId }: DeleteAuthKeyInput) =>
-        Effect.gen(function* () {
-          const requested = Option.fromUndefinedOr(sessionId)
-          if (Option.isSome(requested) && Option.isNone(yield* loadSession(requested))) {
-            return yield* new NotFoundError({ message: "Session not found" })
-          }
-          yield* inSessionProfile(
-            requested,
-            removeSignIn(provider).pipe(
-              Effect.mapError((error) => authPersistenceError("delete", provider, error)),
-            ),
-          )
-        }),
+        inLiveSessionProfile(
+          Option.fromUndefinedOr(sessionId),
+          removeSignIn(provider).pipe(
+            Effect.mapError((error) => authPersistenceError("delete", provider, error)),
+          ),
+        ),
 
       "auth.listMethods": (input: ListAuthMethodsInput) => {
         if (!Predicate.isObject(input)) return inSessionProfile(Option.none(), listAuthMethods())

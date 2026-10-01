@@ -56,6 +56,7 @@ export {
   AgentDefinition,
   AgentName,
   makeRunSpec,
+  ReasoningEffort,
   type RunSpec,
   RunSpecSchema,
 } from "../domain/agent.js"
