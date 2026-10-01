@@ -550,7 +550,7 @@ describe("cell worker kernel", () => {
         // Host operations own their bounds: a slow one outlives the compute deadline.
         const host = CellOperationHost.of({
           catalog: hostCatalog("slow"),
-          // gent/no-sleep: allow real-clock host operation that outlives the kernel deadline
+          // Real-clock host operation that outlives the kernel deadline
           call: () => Effect.sleep("900 millis").pipe(Effect.as(5)),
         })
         const slow = yield* kernel

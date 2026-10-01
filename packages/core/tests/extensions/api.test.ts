@@ -929,7 +929,6 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("extension hooks and resource layers reject Promise values", () => {
-    // gent/no-sleep: allow source a `Promise<void>` value purely for type-level assignability check below
     const promiseVoid = Bun.sleep(0) // oxlint-disable-line effect/noGlobals -- This host call creates a Promise solely for the compile-time rejection lock.
     defineExtension({
       id: "purity-hook",

@@ -53,7 +53,7 @@ describe("E2E: Basics", () => {
         const ctx = yield* seedAndSpawn()
         yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write(ESC)
-        // gent/no-sleep: allow a lone ESC counts as a key only after the escape-sequence timeout, and nothing on screen marks it
+        // oxlint-disable-next-line effect/noFixedWaitInTests -- a lone ESC counts as a key only after the escape-sequence timeout, and nothing on screen marks it
         yield* Effect.sleep(`${ESC_KEY_DECODE_MS} millis`)
         ctx.pty.write(CTRL_C)
         yield* ptyWaitFor(ctx, "ctrl+c again to exit", { timeout: 5_000 })
@@ -207,7 +207,7 @@ describe("E2E: Skill Popup", () => {
       Effect.gen(function* () {
         const ctx = yield* seedSkillAndSpawn
         yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
-        // gent/no-sleep: allow a `$` typed before the skills are listed opens no popup, and no screen signal marks the listing
+        // oxlint-disable-next-line effect/noFixedWaitInTests -- a `$` typed before the skills are listed opens no popup, and no screen signal marks the listing
         yield* Effect.sleep(SKILL_DISCOVERY)
         ctx.pty.write("$t")
         yield* screenWaitFor(ctx, showsSkillsPopup, { timeout: 10_000, label: "the skills popup" })
@@ -222,7 +222,7 @@ describe("E2E: Skill Popup", () => {
       Effect.gen(function* () {
         const ctx = yield* seedSkillAndSpawn
         yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
-        // gent/no-sleep: allow a `$` typed before the skills are listed opens no popup, and no screen signal marks the listing
+        // oxlint-disable-next-line effect/noFixedWaitInTests -- a `$` typed before the skills are listed opens no popup, and no screen signal marks the listing
         yield* Effect.sleep(SKILL_DISCOVERY)
         ctx.pty.write("$t")
         yield* screenWaitFor(ctx, showsSkillsPopup, { timeout: 10_000, label: "the skills popup" })

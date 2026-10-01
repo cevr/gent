@@ -34,7 +34,7 @@ const pollUntil = (
 ): Effect.Effect<void, RenderWaitTimeoutError> => {
   const poll: Effect.Effect<void> = Effect.gen(function* () {
     if (yield* observe) return
-    // gent/no-sleep: allow render-poll primitive — state must settle between observations
+    // oxlint-disable-next-line effect/noFixedWaitInTests -- render-poll primitive — state must settle between observations
     yield* Effect.sleep("10 millis")
     return yield* poll
   })

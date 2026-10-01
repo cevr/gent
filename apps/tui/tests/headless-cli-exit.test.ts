@@ -7,7 +7,7 @@ const makeTempDir = Effect.gen(function* () {
   return yield* fs.makeTempDirectoryScoped({ prefix: "gent-headless-exit-" })
 })
 const waitForExit = (proc: Bun.Subprocess, timeoutMs: number) => {
-  // gent/no-sleep: allow real-clock timeout fence that kills a wedged subprocess
+  // Real-clock timeout fence that kills a wedged subprocess
   const timeout = Effect.sleep(timeoutMs).pipe(
     Effect.tap(() => Effect.sync(() => proc.kill())),
     Effect.as(-1),

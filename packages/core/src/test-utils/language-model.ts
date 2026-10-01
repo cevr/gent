@@ -141,7 +141,7 @@ const makeFakeFetch =
     }
     state.captured.push(captured)
 
-    // oxlint-disable-next-line gent/no-runpromise-outside-boundary, effect/noEffectRunInTests -- This adapter implements the Promise-based Fetch interface.
+    // oxlint-disable-next-line effect/noEffectRunInTests -- This adapter implements the Promise-based Fetch interface.
     return Effect.runPromise(
       Effect.map(
         asEffect(responder(captured)),
@@ -270,7 +270,7 @@ export const waitFor = <A, R = never>(
         }
         return yield* new WaitForError({ message: errorMessage })
       }
-      // gent/no-sleep: allow the poll interval of waitFor, the helper the rule points tests to
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- the poll interval of waitFor, the helper the rule points tests to
       yield* Effect.sleep("5 millis")
       return yield* loop
     })

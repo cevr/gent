@@ -32,7 +32,7 @@ describe("app bootstrap", () => {
         Effect.gen(function* () {
           const { client } = yield* Gent.test(localLayer())
           const first = yield* client.session.create({ cwd: repoRoot })
-          // gent/no-sleep: allow real-clock gap so the second session's createdAt sorts strictly after the first
+          // oxlint-disable-next-line effect/noFixedWaitInTests -- real-clock gap so the second session's createdAt sorts strictly after the first
           yield* Effect.sleep("5 millis")
           const second = yield* client.session.create({ cwd: repoRoot })
           const state = yield* resolveInteractiveState({

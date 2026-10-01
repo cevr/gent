@@ -418,7 +418,7 @@ export const waitFor = <A, E, R>(
           timeoutMs: Duration.toMillis(timeout),
         })
       }
-      // gent/no-sleep: allow polling primitive — this IS the waitFor helper other tests use instead of sleep
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- polling primitive — this IS the waitFor helper other tests use instead of sleep
       yield* Effect.sleep("1 millis")
     }
   })
