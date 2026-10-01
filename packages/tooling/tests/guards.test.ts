@@ -15,8 +15,10 @@ import {
   findPackageSurfaceFindings,
   findReadersWithoutWriters,
   findWritersWithoutReaders,
+  findUnpairedBuildDefines,
   findRetiredSurfaces,
   findSteeringFilePaths,
+  findStaleSteeringReceipts,
   findSuppressionInventoryFindings,
   findTestLaneDefaults,
   findTuiSessionIdentityReads,
@@ -1579,6 +1581,49 @@ describe("a set variable must have a reader", () => {
   })
 })
 
+describe("a build define and its reader come in pairs", () => {
+  const BUILD = "apps/tui/scripts/build.ts"
+  const buildText = (keys: ReadonlyArray<string>) =>
+    [
+      "await Bun.build({",
+      "  define: {",
+      ...keys.map((key) => `    ${key}: "true",`),
+      "  },",
+      "})",
+    ].join("\n")
+  const reader = (name: string) => `declare const ${name}: unknown\nexport const on = ${name}\n`
+  const linesOf = (texts: ReadonlyArray<readonly [string, string]>) =>
+    findUnpairedBuildDefines(new Map(texts)).map((finding) => `${finding.file}:${finding.line}`)
+
+  test("a define read by a declare const passes", () => {
+    expect(
+      linesOf([
+        [BUILD, buildText(["__GENT_COMPILED__"])],
+        ["packages/extensions/src/cell.ts", reader("__GENT_COMPILED__")],
+      ]),
+    ).toEqual([])
+  })
+
+  test("a misspelled define is reported at both ends", () => {
+    expect(
+      linesOf([
+        [BUILD, buildText(["__GENT_COMPILD__"])],
+        ["packages/extensions/src/cell.ts", reader("__GENT_COMPILED__")],
+      ]),
+    ).toEqual([`${BUILD}:3`, "packages/extensions/src/cell.ts:1"])
+  })
+
+  test("a commented-out define sets nothing, and a reader in test support needs no define", () => {
+    expect(
+      linesOf([
+        [BUILD, buildText(["// __GENT_COMPILED__"])],
+        ["packages/extensions/src/cell.ts", reader("__GENT_COMPILED__")],
+        ["packages/extensions/tests/cell.test.ts", reader("__GENT_PROBE__")],
+      ]),
+    ).toEqual(["packages/extensions/src/cell.ts:1"])
+  })
+})
+
 describe("the guard entry routes each tracked file to its finders", () => {
   const gentNames = (files: ReadonlyArray<{ readonly file: string; readonly text: string }>) =>
     scanTrackedTexts(files, [])
@@ -2009,6 +2054,53 @@ describe("steering file paths", () => {
   })
 })
 
+describe("steering receipts", () => {
+  const sources = new Map([
+    ["packages/core/src/runtime/turn.ts", "const readKnownSteps = 1\nexport const runTurn = 2"],
+    ["packages/core/src/domain/tool.ts", "export class ToolSpec {}"],
+    ["packages/tooling/tests/fixtures/runtime/turn.ts", "export const lastKnownModel = 0"],
+  ])
+  const linesOfReceipts = (text: string, file = "ARCHITECTURE.md"): ReadonlyArray<number> =>
+    findStaleSteeringReceipts(new Map([...sources, [file, text]]), [...sources.keys(), file]).map(
+      (finding) => finding.line,
+    )
+
+  test("a receipt whose file no longer holds the name is reported at its line", () => {
+    const text = ["# Turn", "Receipt: `lastKnownModel` in", "`packages/core/src/runtime/turn.ts`."]
+    expect(linesOfReceipts(text.join("\n"))).toEqual([2])
+  })
+
+  test("a receipt whose file holds the name passes", () => {
+    expect(linesOfReceipts("`readKnownSteps` in `packages/core/src/runtime/turn.ts`")).toEqual([])
+  })
+
+  test("each name of a list is checked, and a dotted name or a call by its last segment", () => {
+    const text = [
+      "`readKnownSteps`, `gone` and `runTurn()` in `packages/core/src/runtime/turn.ts`",
+      "`Tools.ToolSpec` or `Tools.Missing` in `packages/core/src/domain/tool.ts`",
+    ].join("\n")
+    expect(linesOfReceipts(text)).toEqual([1, 2])
+  })
+
+  test("a short path resolves by suffix outside fixtures, and one that ends no file is reported", () => {
+    expect(linesOfReceipts("`lastKnownModel` in `runtime/turn.ts`")).toEqual([1])
+    expect(linesOfReceipts("`readKnownSteps` in `runtime/turn.ts`")).toEqual([])
+    expect(linesOfReceipts("`readKnownSteps` in `runtime/gone.ts`")).toEqual([1])
+  })
+
+  test("a full path that names no file is left to the path check", () => {
+    expect(linesOfReceipts("`readKnownSteps` in `packages/core/src/runtime/gone.ts`")).toEqual([])
+  })
+
+  test("a fenced block and a file outside the steering prose are not read", () => {
+    const fenced = ["```ts", "`gone` in `packages/core/src/runtime/turn.ts`", "```"].join("\n")
+    expect(linesOfReceipts(fenced)).toEqual([])
+    expect(
+      linesOfReceipts("`gone` in `packages/core/src/runtime/turn.ts`", "plans/ledger.md"),
+    ).toEqual([])
+  })
+})
+
 describe("steering file links", () => {
   const skill = "packages/extensions/src/skills/bundled/principles/SKILL.md"
   const tracked = [
@@ -2303,6 +2395,33 @@ describe("suppression inventory guard", () => {
     expect(findSuppressionInventoryFindings(membraneFile, membraneComment)).toEqual([])
   })
 
+  test("a file-scope directive is banned, in a reviewed file too", () => {
+    const fileScope = nextLine.replace("-next-line", "")
+    expect(
+      findSuppressionInventoryFindings(membraneFile, `${fileScope} anyUnknownInErrorContext:off`),
+    ).toMatchObject([{ file: membraneFile, line: 1, message: expect.stringContaining("banned") }])
+  })
+
+  test("a directive in a string literal is read, since the language service honors it", () => {
+    const marker = nextLine.replace("// ", "")
+    expect(
+      findSuppressionInventoryFindings(
+        "sample.ts",
+        `const s = "${marker} newPromise:off"\nconst p = new Promise(() => {})`,
+      ),
+    ).toMatchObject([{ file: "sample.ts", line: 1 }])
+  })
+
+  test("the marker without a rule flag after it is prose, not a directive", () => {
+    const marker = nextLine.replace("// ", "")
+    expect(
+      findSuppressionInventoryFindings(
+        "sample.ts",
+        [`// the \`${marker}\` comment`, `// a ${marker} comment, newPromise:off`].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
   test("flags a different rule in a reviewed file", () => {
     expect(
       findSuppressionInventoryFindings(membraneFile, `${nextLine} strictEffectProvide:off`),
@@ -2314,8 +2433,8 @@ describe("suppression inventory guard", () => {
     const findings = findUnusedSuppressionApprovals(
       new Map([[membraneFile, `${nextLine} ${text}\n`]]),
       [
-        { file: membraneFile, scope: "next-line", text },
-        { file: membraneFile, scope: "next-line", text },
+        { file: membraneFile, text },
+        { file: membraneFile, text },
       ],
     )
     expect(messages(findings)).toEqual([expect.stringContaining("is listed twice")])
@@ -2334,16 +2453,14 @@ describe("suppression inventory guard", () => {
   test("approved entry with a matching comment is not reported", () => {
     const findings = findUnusedSuppressionApprovals(
       new Map([[membraneFile, `const x = 1\n  ${nextLine} probeRule:off\nconst y = 2\n`]]),
-      [{ file: membraneFile, scope: "next-line", text: "probeRule:off" }],
+      [{ file: membraneFile, text: "probeRule:off" }],
     )
     expect(findings).toEqual([])
   })
 
   describe("an entry counts its identical comments", () => {
     const comment = `${nextLine} probeRule:off`
-    const counted: Entries = [
-      { file: membraneFile, scope: "next-line", text: "probeRule:off", count: 2 },
-    ]
+    const counted: Entries = [{ file: membraneFile, text: "probeRule:off", count: 2 }]
     const holding = (sites: number) => Array.from({ length: sites }, () => comment).join("\n")
 
     test("the approved count of sites passes both directions", () => {
@@ -2366,7 +2483,7 @@ describe("suppression inventory guard", () => {
     })
 
     test("absent count means one site", () => {
-      const single: Entries = [{ file: membraneFile, scope: "next-line", text: "probeRule:off" }]
+      const single: Entries = [{ file: membraneFile, text: "probeRule:off" }]
       expect(findSuppressionInventoryFindings(membraneFile, holding(2), single)).toHaveLength(1)
     })
   })

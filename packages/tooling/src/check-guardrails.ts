@@ -17,9 +17,11 @@ import {
   findPackageSurfaceFindings,
   findReadersWithoutWriters,
   findWritersWithoutReaders,
+  findUnpairedBuildDefines,
   isManifest,
   findRetiredSurfaces,
   findSteeringFilePaths,
+  findStaleSteeringReceipts,
   findSuppressionInventoryFindings,
   findTestLaneDefaults,
   findTuiSessionIdentityReads,
@@ -490,6 +492,10 @@ export const scanTrackedTexts = (
     ...findReadersWithoutWriters(variableTexts),
     // A GENT_* variable whose reader left: its setter configures nothing.
     ...findWritersWithoutReaders(variableTexts),
+    // A build define with no reader, or a reader no define sets.
+    ...findUnpairedBuildDefines(sourceTexts),
+    // A steering receipt whose file no longer holds the name it cites.
+    ...findStaleSteeringReceipts(new Map(files.map(({ file, text }) => [file, text])), indexFiles),
     // A bundled skill file the skills module does not import never ships.
     ...findUnshippedSkillFiles(sourceTexts.get(BUNDLED_SKILLS_MODULE) ?? "", indexFiles),
   )
