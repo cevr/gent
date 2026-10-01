@@ -1,73 +1,33 @@
-import { renderMermaidASCII } from "beautiful-mermaid"
-import { Effect, Option, Schema } from "effect"
-import { createContext, useContext } from "solid-js"
-import { textWidth } from "./bun-adapter"
+import type * as BeautifulMermaid from "beautiful-mermaid"
+import { useRenderer } from "@opentui/solid"
+import {
+  type Accessor,
+  createContext,
+  createMemo,
+  createSignal,
+  untrack,
+  useContext,
+} from "solid-js"
+import {
+  createMarkdownCodeBlockRenderer,
+  type MarkdownCodeBlockRenderer,
+  type MarkdownOptions,
+  type RenderContext,
+  type RGBA,
+  StyledText,
+  type TextChunk,
+  TextRenderable,
+} from "@opentui/core"
+import { Cause, Effect, Option, Schema } from "effect"
 
-// ── mermaid rendering ───────────────────────────────────────────────────────
+// ── mermaid diagrams ────────────────────────────────────────────────────────
 
 /**
- * Mermaid diagram extraction and ASCII rendering.
- *
- * Detects ```mermaid fenced blocks in markdown and renders them to ASCII art
- * via beautiful-mermaid. A session view holds one cache for its renders.
+ * A ```mermaid fence in an answer draws as a diagram: a code-block renderer
+ * that the answer's markdown calls for each mermaid fence, with
+ * beautiful-mermaid behind it, as opencode v2 draws its diagrams. The
+ * diagram is its own block, so markdown never reads its box art as text.
  */
-
-interface MermaidBlock {
-  /** Original mermaid source code */
-  source: string
-  /** Start index in the original text */
-  startIndex: number
-  /** End index in the original text */
-  endIndex: number
-}
-
-/**
- * Extract mermaid fenced code blocks from markdown text.
- * Looks for ```mermaid ... ``` patterns.
- */
-export function extractMermaidBlocks(text: string): MermaidBlock[] {
-  const blocks: MermaidBlock[] = []
-  const regex = /```mermaid\s*\n([\s\S]*?)```/g
-  let match = Option.fromNullishOr(regex.exec(text))
-
-  while (Option.isSome(match)) {
-    const result = match.value
-    const source = Option.map(Option.fromNullishOr(result[1]), (value) => value.trim())
-    if (Option.isSome(source) && source.value.length > 0) {
-      blocks.push({
-        source: source.value,
-        startIndex: result.index,
-        endIndex: result.index + result[0].length,
-      })
-    }
-    match = Option.fromNullishOr(regex.exec(text))
-  }
-
-  return blocks
-}
-
-// Adaptive density presets — from roomy to tightest
-
-interface Preset {
-  paddingX: number
-  paddingY: number
-  boxBorderPadding: number
-}
-
-const PRESETS: readonly Preset[] = [
-  { paddingX: 8, paddingY: 5, boxBorderPadding: 2 },
-  { paddingX: 5, paddingY: 3, boxBorderPadding: 1 },
-  { paddingX: 3, paddingY: 2, boxBorderPadding: 1 },
-  { paddingX: 2, paddingY: 1, boxBorderPadding: 1 },
-  { paddingX: 1, paddingY: 1, boxBorderPadding: 0 },
-]
-
-/** The widest line in terminal columns: a CJK label takes two a character. */
-function getMaxLineWidth(text: string): number {
-  let max = 0
-  for (const line of text.split("\n")) max = Math.max(max, textWidth(line))
-  return max
-}
 
 // ── edge arrows ─────────────────────────────────────────────────────────────
 
@@ -169,113 +129,292 @@ const spaceEdgeArrows = (source: string): string => {
   return lines.flatMap(splitStatements).map(spaceLineArrows).join("\n")
 }
 
+// ── drawing ─────────────────────────────────────────────────────────────────
+
+/** The theme colors a diagram draws in, one for each part of the drawing. */
+interface DiagramColors {
+  /** Node and edge labels. */
+  readonly text: RGBA
+  /** Node and subgraph boxes. */
+  readonly border: RGBA
+  /** The lines between nodes. */
+  readonly line: RGBA
+  /** Arrowheads. */
+  readonly arrow: RGBA
+}
+
+type DiagramPart = keyof DiagramColors
+
 /**
- * beautiful-mermaid colors its drawing with ANSI escapes when stdout is a
- * color terminal, as the TUI's is. The transcript draws its text as written,
- * so the escapes would print as text and wrap the diagram: draw it plain.
+ * The compact spacing: no padding inside a node box, and one column and one
+ * row between nodes. A row gap of 0 draws the edges through the boxes, so
+ * one row is the shortest edge beautiful-mermaid draws whole.
  */
-const renderWith = (source: string, preset: Preset): Option.Option<string> =>
+const COMPACT = { paddingX: 1, paddingY: 1, boxBorderPadding: 0 } as const
+
+/**
+ * beautiful-mermaid colors each cell of its drawing by the part it draws.
+ * Each part gets a marker color whose blue channel names it; the drawing's
+ * escapes are then read back into the theme's colors.
+ */
+const PART_MARKS = {
+  fg: "#000001",
+  border: "#000002",
+  junction: "#000002",
+  line: "#000003",
+  corner: "#000003",
+  arrow: "#000004",
+} as const
+
+const PART_OF_MARK: ReadonlyMap<string, DiagramPart> = new Map([
+  ["38;2;0;0;1", "text"],
+  ["38;2;0;0;2", "border"],
+  ["38;2;0;0;3", "line"],
+  ["38;2;0;0;4", "arrow"],
+])
+
+/** One SGR escape: its parameters are the captured group. */
+const SGR = new RegExp(`${String.fromCharCode(27)}\\[([0-9;]*)m`)
+
+/**
+ * The drawing's escapes read as styled chunks: a run in a marker color takes
+ * its part's theme color, and a run in any other color draws as a box.
+ */
+const styledDiagram = (drawn: string, colors: DiagramColors): StyledText => {
+  const chunks: Array<TextChunk> = []
+  let part = Option.none<DiagramPart>()
+  // The split puts each escape's parameters at an odd index.
+  drawn.split(SGR).forEach((piece, index) => {
+    if (index % 2 === 1) {
+      part = Option.none()
+      if (piece === "" || piece === "0" || piece === "39") return
+      part = Option.some(PART_OF_MARK.get(piece) ?? "border")
+      return
+    }
+    if (piece.length === 0) return
+    chunks.push(
+      Option.match(part, {
+        onNone: () => ({ __isChunk: true, text: piece }),
+        onSome: (current) => ({ __isChunk: true, text: piece, fg: colors[current] }),
+      }),
+    )
+  })
+  return new StyledText(chunks)
+}
+
+/** A drawn diagram and the rows it takes. */
+interface Diagram {
+  readonly text: StyledText
+  readonly height: number
+}
+
+/** The diagram of `source`, or none when beautiful-mermaid cannot read it. */
+const drawDiagram = (
+  library: DiagramLibrary,
+  source: string,
+  colors: DiagramColors,
+): Option.Option<Diagram> =>
   Effect.runSync(
-    Effect.option(Effect.try(() => renderMermaidASCII(source, { ...preset, colorMode: "none" }))),
+    Effect.option(
+      Effect.try(() =>
+        library.renderMermaidASCII(spaceEdgeArrows(source), {
+          ...COMPACT,
+          colorMode: "truecolor",
+          theme: PART_MARKS,
+        }),
+      ),
+    ),
   ).pipe(
-    Option.flatMap(Option.fromNullishOr),
-    Option.filter((ascii) => ascii.length > 0),
+    Option.map((drawn) => drawn.replace(/\n+$/, "")),
+    Option.filter((drawn) => drawn.trim().length > 0),
+    Option.map((drawn) => ({
+      text: styledDiagram(drawn, colors),
+      height: drawn.split("\n").length,
+    })),
   )
 
+// ── library ─────────────────────────────────────────────────────────────────
+
+type DiagramLibrary = typeof BeautifulMermaid
+
+/** The diagram library did not load. */
+export class DiagramLibraryError extends Schema.TaggedError<DiagramLibraryError>()(
+  "DiagramLibraryError",
+  { cause: Schema.Defect() },
+) {}
+
 /**
- * Render with each preset from roomy to tightest, once each, and keep the
- * first render that fits `maxWidth`. When none fits, keep the tightest render
- * that succeeded.
+ * The diagram library as the answers see it: loaded, failed, or not yet.
+ * Both readers are reactive.
  */
-function renderMermaidToAscii(written: string, maxWidth: number): Option.Option<string> {
-  const source = spaceEdgeArrows(written)
-  let tightest = Option.none<string>()
-  for (const preset of PRESETS) {
-    const rendered = renderWith(source, preset)
-    if (Option.isNone(rendered)) continue
-    if (getMaxLineWidth(rendered.value) <= maxWidth) return rendered
-    tightest = rendered
+interface DiagramLibraryLoad {
+  /** The library, once it has loaded. */
+  readonly loaded: Accessor<Option.Option<DiagramLibrary>>
+  /** The load failed: every fence draws as its code block. */
+  readonly failed: Accessor<boolean>
+  /** Starts the load, unless one runs, has landed, or has failed. */
+  readonly ask: () => void
+}
+
+/**
+ * The library behind `load`. One load runs at a time. A failed load stays
+ * failed. An interrupted load leaves nothing behind, so the next ask loads
+ * again; the module registry keeps a module that has loaded.
+ */
+export const makeDiagramLibrary = (
+  load: Effect.Effect<DiagramLibrary, DiagramLibraryError>,
+): DiagramLibraryLoad => {
+  const [loaded, setLoaded] = createSignal(Option.none<DiagramLibrary>())
+  const [failed, setFailed] = createSignal(false)
+  let loading = false
+  const ask = () => {
+    if (loading || Option.isSome(untrack(loaded)) || untrack(failed)) return
+    loading = true
+    Effect.runFork(
+      load.pipe(
+        Effect.matchCause({
+          onSuccess: (library) => setLoaded(Option.some(library)),
+          onFailure: (cause) => {
+            if (!Cause.hasInterruptsOnly(cause)) setFailed(true)
+          },
+        }),
+        Effect.ensuring(
+          Effect.sync(() => {
+            loading = false
+          }),
+        ),
+      ),
+    )
   }
-  return tightest
+  return { loaded, failed, ask }
 }
-
-// ── render cache ────────────────────────────────────────────────────────────
 
 /**
- * The renders of one session view, keyed by source and width. A diagram is
- * drawn in the live transcript and again when it commits to scrollback; the
- * cache makes the second draw free. It is bounded by `CACHE_MAX`, least
- * recently used first out, and the key is structured JSON so a source that
- * ends in a width cannot collide with another (source, width) pair.
+ * beautiful-mermaid loads on the first mermaid fence, not at launch: most
+ * sessions draw no diagram. Every answer shares this load; a test provides
+ * its own.
  */
-interface MermaidCache {
-  readonly renders: Map<string, string>
-}
-
-const CACHE_MAX = 20
-
-export const createMermaidCache = (): MermaidCache => ({ renders: new Map() })
-
-/** The session view's cache; outside one, each render runs uncached. */
-export const MermaidCacheContext = createContext<Option.Option<MermaidCache>>(Option.none())
-
-const cacheKey = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Struct({ source: Schema.String, maxWidth: Schema.Finite })),
+export const DiagramLibraryContext = createContext(
+  makeDiagramLibrary(
+    Effect.tryPromise({
+      // oxlint-disable-next-line effect/noDynamicImports -- the diagram library loads on the first mermaid fence, not at launch
+      try: () => import("beautiful-mermaid"),
+      catch: (cause) => new DiagramLibraryError({ cause }),
+    }),
+  ),
 )
 
-const cachedRender = (
-  cache: MermaidCache,
-  source: string,
-  maxWidth: number,
-): Option.Option<string> => {
-  const key = cacheKey({ source, maxWidth })
-  const cached = Option.fromNullishOr(cache.renders.get(key))
-  if (Option.isSome(cached)) {
-    // Move to end for LRU
-    cache.renders.delete(key)
-    cache.renders.set(key, cached.value)
-    return cached
-  }
-  const ascii = renderMermaidToAscii(source, maxWidth)
-  if (Option.isNone(ascii)) return ascii
-  if (cache.renders.size >= CACHE_MAX) {
-    const oldest = cache.renders.keys().next()
-    if (!oldest.done) cache.renders.delete(oldest.value)
-  }
-  cache.renders.set(key, ascii.value)
-  return ascii
+/** A ```mermaid or ~~~mermaid fence opens on one of the lines. */
+const DIAGRAM_FENCE = /^[ \t]*(?:`{3,}|~{3,})[ \t]*mermaid\b/m
+
+/**
+ * Whether `markdown` draws as it will stay: it holds no mermaid fence, or the
+ * library its diagrams need has loaded, or has failed and the fences draw as
+ * code. A fence starts the load. Reactive, so native history can wait for
+ * the load before it commits the item.
+ */
+export const diagramsDrawable = (library: DiagramLibraryLoad, markdown: string): boolean => {
+  if (!DIAGRAM_FENCE.test(markdown)) return true
+  library.ask()
+  return Option.isSome(library.loaded()) || library.failed()
+}
+
+// ── code-block renderer ─────────────────────────────────────────────────────
+
+/** The widest a diagram draws, as opencode's: a wider one is cut at the right. */
+const DIAGRAM_MAX_WIDTH = 120
+
+/** A fence is closed once its closing ``` or ~~~ line has arrived. */
+const fenceClosed = (raw: string): boolean => /\n[ \t]*(?:`{3,}|~{3,})[ \t]*\n*$/.test(raw)
+
+/**
+ * The statements of an open fence that have ended, read from its raw text:
+ * the lexer's text drops the newline that ends the last line. A statement
+ * ends with its line; in a flowchart a `;` ends it too. The statement still
+ * being written waits.
+ */
+const completeStatements = (raw: string): string => {
+  const opening = raw.indexOf("\n")
+  if (opening === -1) return ""
+  const lines = raw.slice(opening + 1).split("\n")
+  // The last piece is the line still being written: empty once a newline ends the text.
+  const ended = lines.slice(0, -1)
+  const writing = lines.at(-1) ?? ""
+  if (!isFlowchart([...ended, writing])) return ended.join("\n")
+  // A mark after the written text lands in the statement still being
+  // written, or alone after a `;` that ended the last one: either way the
+  // statements before it are done.
+  const done = splitStatements(`${writing}\u0000`).slice(0, -1)
+  return [...ended, ...done].join("\n")
 }
 
 /**
- * Replace mermaid blocks in text with rendered ASCII art, through the session
- * view's cache when there is one. A block that fails to render stays as its
- * code block.
+ * The answer's markdown hook for ```mermaid fences, drawing on `ctx` with
+ * `library`.
+ *
+ * - Before the library loads, a fence asks for it and draws as its code block.
+ * - While the fence streams, the diagram draws its complete statements and
+ *   redraws as each line ends. When the statements so far do not draw, the
+ *   fence keeps its last diagram, keyed by the block's stable id as opencode
+ *   keys it.
+ * - Once the fence closes, a source that does not draw shows as the fenced
+ *   code block (the hook returns nothing, so markdown draws its default).
+ * - The diagram does not wrap and cannot be selected. It takes at most
+ *   `DIAGRAM_MAX_WIDTH` columns of the answer; a wider one is cut at the
+ *   right. The native transcript has no mouse, so it does not scroll sideways.
  */
-export const replaceMermaidBlocks = (
-  cache: Option.Option<MermaidCache>,
-): ((text: string, maxWidth: number) => string) => {
-  const render = (source: string, maxWidth: number): Option.Option<string> =>
-    Option.match(cache, {
-      onNone: () => renderMermaidToAscii(source, maxWidth),
-      onSome: (owned) => cachedRender(owned, source, maxWidth),
-    })
-  return (text, maxWidth) => {
-    const blocks = extractMermaidBlocks(text)
-    if (blocks.length === 0) return text
-
-    let result = ""
-    let lastEnd = 0
-    for (const block of blocks) {
-      result += text.slice(lastEnd, block.startIndex)
-      result += Option.getOrElse(render(block.source, maxWidth), () =>
-        text.slice(block.startIndex, block.endIndex),
-      )
-      lastEnd = block.endIndex
-    }
-    return result + text.slice(lastEnd)
+const mermaidCodeBlocks = (
+  ctx: RenderContext,
+  library: Option.Option<DiagramLibrary>,
+  ask: () => void,
+  colors: () => DiagramColors,
+): MarkdownOptions["renderNode"] => {
+  const lastDrawn = new Map<string, Diagram>()
+  const shownDiagram = (
+    loaded: DiagramLibrary,
+    text: string,
+    raw: string,
+    block: Option.Option<string>,
+  ) => {
+    if (fenceClosed(raw)) return drawDiagram(loaded, text, colors())
+    return Option.orElse(drawDiagram(loaded, completeStatements(raw), colors()), () =>
+      Option.flatMap(block, (id) => Option.fromUndefinedOr(lastDrawn.get(id))),
+    )
   }
+  const mermaid: MarkdownCodeBlockRenderer = (token, context) => {
+    if (Option.isNone(library)) ask()
+    const block = Option.fromNullishOr(context.defaultRender()?.id)
+    const diagram = Option.flatMap(library, (loaded) =>
+      shownDiagram(loaded, token.text, token.raw, block),
+    )
+    const shown = Option.map(diagram, (diagram) => {
+      Option.map(block, (id) => lastDrawn.set(id, diagram))
+      return new TextRenderable(ctx, {
+        content: diagram.text,
+        width: "100%",
+        maxWidth: DIAGRAM_MAX_WIDTH,
+        height: diagram.height,
+        wrapMode: "none",
+        selectable: false,
+        // The blank row before the diagram, as before any other block.
+        marginTop: 1,
+      })
+    })
+    // Nothing shown: markdown draws the fence as its code block.
+    return Option.getOrUndefined(shown)
+  }
+  return createMarkdownCodeBlockRenderer({ mermaid })
 }
 
-/** {@link replaceMermaidBlocks} through the session view's cache. */
-export const useMermaidBlocks = (): ((text: string, maxWidth: number) => string) =>
-  replaceMermaidBlocks(useContext(MermaidCacheContext))
+/**
+ * The markdown hook of one answer, for the renderer it draws on. It is one
+ * value until the library loads, then one more: a new hook rebuilds every
+ * block of the answer, so its fences draw as diagrams.
+ */
+export const useDiagramCodeBlocks = (
+  colors: () => DiagramColors,
+): Accessor<MarkdownOptions["renderNode"]> => {
+  const ctx = useRenderer()
+  const library = useContext(DiagramLibraryContext)
+  return createMemo(() => mermaidCodeBlocks(ctx, library.loaded(), library.ask, colors))
+}

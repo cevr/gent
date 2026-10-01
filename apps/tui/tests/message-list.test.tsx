@@ -1,11 +1,18 @@
 /** @jsxImportSource @opentui/solid */
-import { Deferred, Effect, Option, Schedule, Schema } from "effect"
-import { type CliRenderer, type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
+import { Deferred, Effect, Fiber, Option, Schedule, Schema } from "effect"
+import {
+  type CliRenderer,
+  type CliRendererExternalOutputEvent,
+  SyntaxStyle,
+  TextAttributes,
+} from "@opentui/core"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   addStep,
   currentMillis,
   emptyTurnSteps,
+  flushTranscriptForExit,
+  holdUntilRendererDestroyed,
   getSessionEventLabel,
   type Message as ListMessage,
   MessageList,
@@ -61,8 +68,13 @@ import {
   useToolRenderers,
 } from "../src/tool-renderers"
 import { destroyRenderSetup, renderFrame, renderScoped } from "./render-harness-boundary"
-import { makeSettleHold } from "./scrollback-hold-boundary"
-import { waitForFrame } from "./helpers-boundary"
+import {
+  highlightOutage,
+  makeSettleHold,
+  makeSettleTimeouts,
+  refuseCommits,
+} from "./scrollback-hold-boundary"
+import { waitForFrame, waitForTerminal } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { clientContributions, defineClientExtension } from "../src/extensions/client-facets"
@@ -237,14 +249,7 @@ describe("session event labels", () => {
         seq: 1,
       }
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={[event]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={[event]} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
         { width: 80, height: 10 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("Retrying in 1s... 1/3"), "countdown")
@@ -266,14 +271,7 @@ describe("session event labels", () => {
         seq: 1,
       }
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={[event]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={[event]} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
         { width: 40, height: 10 },
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("Retried 1/3"), "the row")
@@ -598,25 +596,14 @@ function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: 
   const renderers = useToolRenderers()
   return (
     <Show when={renderers().size > 0} fallback={<text>loading renderers</text>}>
-      <MessageList
-        items={props.items}
-        disclosure="collapsed"
-        syntaxStyle={syntaxStyle}
-        openAnswer={Option.none()}
-      />
-      <MessageList
-        items={props.items}
-        disclosure="preview"
-        syntaxStyle={syntaxStyle}
-        openAnswer={Option.none()}
-      />
+      <MessageList items={props.items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+      <MessageList items={props.items} disclosure="preview" syntaxStyle={syntaxStyle} />
       <Show when={props.fullDetail}>
         <MessageList
           items={props.items}
           disclosure="preview"
           fullDetail
           syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
         />
       </Show>
     </Show>
@@ -636,7 +623,6 @@ function LoadedMessageList(props: { items: SessionItem[]; fullDetail?: boolean }
         disclosure="collapsed"
         fullDetail={props.fullDetail}
         syntaxStyle={syntaxStyle}
-        openAnswer={Option.none()}
       />
     </Show>
   )
@@ -772,12 +758,7 @@ describe("transcript message rows", () => {
         metadata: { customType: "prompt-present", hidden: true },
       }
       const setup = yield* renderScoped(() => (
-        <MessageList
-          items={[message]}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={[message]} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       ))
       expect(renderFrame(setup)).toContain("INFORMATION-SHOWN")
     }),
@@ -792,12 +773,7 @@ describe("transcript message rows", () => {
         userMessage("interjection-message", "steer-user", "switch now", "steer"),
       ]
       const setup = yield* renderScoped(() => (
-        <MessageList
-          items={items}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       ))
       const frame = renderFrame(setup)
       expect(frame).toContain("┃")
@@ -848,7 +824,10 @@ describe("transcript message rows", () => {
             // Check native cells: string offsets do not match terminal columns for wide glyphs.
             const capture = (event: CliRendererExternalOutputEvent) => {
               const { snapshot } = event
-              savedText.push(new TextDecoder().decode(snapshot.getRealCharBytes(false)))
+              const text = new TextDecoder().decode(snapshot.getRealCharBytes(false))
+              savedText.push(text)
+              // The answer commits on its own, after the user rows: it has no border.
+              if (text.includes("ANSWER-END")) return
               for (let row = 0; row < snapshot.height; row++) {
                 const cells = snapshot.buffers.char.subarray(
                   row * snapshot.width,
@@ -877,7 +856,6 @@ describe("transcript message rows", () => {
                     items={visible}
                     disclosure={disclosure()}
                     syntaxStyle={syntaxStyle}
-                    openAnswer={Option.none()}
                   />
                 )}
               >
@@ -904,7 +882,17 @@ describe("transcript message rows", () => {
         for (const view of views) {
           setDisclosure(view.disclosure)
           if (setup.renderer.terminalWidth !== view.width) setup.resize(view.width, 14)
-          yield* Effect.promise(() => setup.flush())
+          // Both items are final, so each view commits them all; the answer lands last.
+          yield* Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({
+              until: () => savedText.join("").includes("ANSWER-END"),
+              schedule: Schedule.spaced("10 millis"),
+            }),
+            Effect.timeout("4 seconds"),
+            Effect.ignore,
+          )
+          // The frame drawn after the last commit: a committed row leaves it.
+          yield* Effect.promise(() => setup.renderOnce())
           const cells = leadingCells.splice(0)
           expect(cells.length).toBeGreaterThan(10)
           expect(cells.filter((cell) => cell !== 0x2503)).toEqual([])
@@ -1037,14 +1025,7 @@ describe("transcript message rows", () => {
         ),
       ]
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={items}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
         { width: 32, height: 16 },
       )
       const frame = renderFrame(setup)
@@ -1069,12 +1050,7 @@ describe("transcript message rows", () => {
         seq,
       }))
       const setup = yield* renderScoped(() => (
-        <MessageList
-          items={items}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       ))
       expect(setup.renderer.listenerCount("resize")).toBe(1)
     }),
@@ -1126,12 +1102,7 @@ describe("native history before the client extensions load", () => {
                 displayRevision={0}
                 overlayOpen={false}
                 renderItems={(visible) => (
-                  <MessageList
-                    items={visible}
-                    disclosure="collapsed"
-                    syntaxStyle={syntaxStyle}
-                    openAnswer={Option.none()}
-                  />
+                  <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
                 )}
               >
                 <box />
@@ -1189,12 +1160,7 @@ describe("native history before the client extensions load", () => {
               displayRevision={0}
               overlayOpen={false}
               renderItems={(visible) => (
-                <MessageList
-                  items={visible}
-                  disclosure="collapsed"
-                  syntaxStyle={syntaxStyle}
-                  openAnswer={Option.none()}
-                />
+                <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
               )}
             >
               <box />
@@ -1275,24 +1241,13 @@ describe("rows that fold until full detail is on", () => {
       const setup = yield* renderScoped(
         () => (
           <>
-            <MessageList
-              items={items}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              openAnswer={Option.none()}
-            />
-            <MessageList
-              items={items}
-              disclosure="full"
-              syntaxStyle={syntaxStyle}
-              openAnswer={Option.none()}
-            />
+            <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+            <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />
             <MessageList
               items={items}
               disclosure="collapsed"
               fullDetail={true}
               syntaxStyle={syntaxStyle}
-              openAnswer={Option.none()}
             />
           </>
         ),
@@ -1313,14 +1268,7 @@ describe("rows that fold until full detail is on", () => {
         metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
       }
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={[notice]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={[notice]} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
         { width: 100, height: 10 },
       )
       const frame = renderFrame(setup)
@@ -1395,18 +1343,8 @@ describe("tool frame identity", () => {
       const items: SessionItem[] = [unknownFailureMessage("call-unknown-7")]
       const setup = yield* renderScoped(() => (
         <>
-          <MessageList
-            items={items}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-          <MessageList
-            items={items}
-            disclosure="preview"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
+          <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+          <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
         </>
       ))
       const frame = renderFrame(setup)
@@ -1997,14 +1935,7 @@ describe("cell rows", () => {
     Effect.gen(function* () {
       const items: SessionItem[] = [bashMessage("call-bash-7", 25)]
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={items}
-            disclosure="preview"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
         { width: 80, height: 40 },
       )
       const frame = renderFrame(setup)
@@ -2037,7 +1968,6 @@ describe("cell rows", () => {
                   disclosure={disclosure()}
                   fullDetail={fullDetail()}
                   syntaxStyle={syntaxStyle}
-                  openAnswer={Option.none()}
                 />
               </Show>
             )
@@ -2088,14 +2018,7 @@ describe("cell rows", () => {
     Effect.gen(function* () {
       const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={items}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
         { width: 80, height: 20 },
       )
       const frame = renderFrame(setup)
@@ -2124,14 +2047,7 @@ describe("bash row line counts", () => {
         }),
       ]
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={items}
-            disclosure="preview"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
         { width: 80, height: 40 },
       )
       const rows = renderFrame(setup)
@@ -2155,7 +2071,6 @@ describe("bash row line counts", () => {
             items={[assistantToolMessage("assistant-cut", cutBashCall)]}
             disclosure="preview"
             syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
           />
         ),
         { width: 80, height: 20 },
@@ -2391,7 +2306,6 @@ describe("transcript block spacing", () => {
                 disclosure={view.disclosure}
                 fullDetail={view.fullDetail}
                 syntaxStyle={syntaxStyle}
-                openAnswer={Option.none()}
               />
             ),
             { width: 100, height: 80 },
@@ -2515,7 +2429,6 @@ describe("transcript block spacing", () => {
                     items={visible}
                     disclosure={disclosure()}
                     syntaxStyle={syntaxStyle}
-                    openAnswer={Option.none()}
                   />
                 )}
               >
@@ -2534,8 +2447,16 @@ describe("transcript block spacing", () => {
         for (const level of levels) {
           savedText.splice(0)
           setDisclosure(level)
-          yield* Effect.promise(() => setup.flush())
-          yield* Effect.promise(() => setup.flush())
+          // Every item is final, so the replay commits each one: one snapshot apiece.
+          yield* Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({
+              until: () => savedText.length >= history.length,
+              schedule: Schedule.spaced("10 millis"),
+            }),
+            Effect.timeout("4 seconds"),
+            Effect.ignore,
+          )
+          yield* Effect.promise(() => setup.renderOnce())
         }
         const lines = (savedText.join("") + renderFrame(setup))
           .split("\n")
@@ -2701,12 +2622,7 @@ describe("write body", () => {
           const renderers = useToolRenderers()
           return (
             <Show when={renderers().size > 0}>
-              <MessageList
-                items={items}
-                disclosure="preview"
-                syntaxStyle={syntaxStyle}
-                openAnswer={Option.none()}
-              />
+              <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
             </Show>
           )
         },
@@ -2778,14 +2694,7 @@ describe("read_session row", () => {
           }),
         ]
         const setup = yield* renderScoped(
-          () => (
-            <MessageList
-              items={items}
-              disclosure="full"
-              syntaxStyle={syntaxStyle}
-              openAnswer={Option.none()}
-            />
-          ),
+          () => <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />,
           { width: 100, height: 40 },
         )
         const frame = yield* waitForFrame(setup, (text) => text.includes(shown), "read_session row")
@@ -2829,7 +2738,6 @@ describe("read_session row", () => {
             items={[assistantToolMessage("assistant-cell-read", cell)]}
             disclosure="full"
             syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
           />
         ),
         { width: 100, height: 40 },
@@ -2884,7 +2792,6 @@ describe("write row", () => {
             items={[assistantToolMessage("assistant-cell-write", cell)]}
             disclosure="full"
             syntaxStyle={syntaxStyle}
-            openAnswer={Option.some("assistant-cell-write")}
           />
         ),
         { width: 100, height: 40 },
@@ -2927,12 +2834,12 @@ describe("native transcript markdown", () => {
             items={[assistant("diagram", diagram)]}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
           />
         ),
         { width: 48, height: 30 },
       )
-      const rows = renderFrame(setup).split("\n")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("┌"), "the diagram")
+      const rows = frame.split("\n")
       const labelRow = Option.getOrThrow(
         Option.fromUndefinedOr(rows.find((row) => row.includes("Alpha"))),
       )
@@ -2941,26 +2848,56 @@ describe("native transcript markdown", () => {
     }),
   )
 
-  // The open answer streams wherever it sorts: a row dated after it does not
-  // settle it, so its half-written diagram stays text.
-  it.scopedLive("the open answer stays text with a row after it", () =>
+  // The diagram builds while its fence streams: each complete statement
+  // draws, and the statement still being written waits for its line to end.
+  it.scopedLive("a diagram draws while its fence streams, one complete statement at a time", () =>
     Effect.gen(function* () {
-      const diagram = "```mermaid\ngraph LR\n  Alpha-->Beta\n```"
       const notice: SessionEvent = { _tag: "interruption", createdAt: 1, seq: 1 }
       const setup = yield* renderScoped(
         () => (
           <MessageList
-            items={[assistant("open", diagram), notice]}
+            items={[
+              assistant("open", "```mermaid\ngraph LR\n  Alpha-->Beta\n  Beta-->Gam"),
+              notice,
+            ]}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
-            openAnswer={Option.some("open")}
           />
         ),
         { width: 60, height: 20 },
       )
-      const frame = yield* waitForFrame(setup, (next) => next.includes("Alpha"), "the answer")
-      expect(frame).toContain("Alpha-->Beta")
-      expect(frame).not.toContain("┌")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("┌"), "the diagram")
+      expect(frame).toContain("┌")
+      expect(frame).toContain("Beta")
+      expect(frame).not.toContain("Alpha-->Beta")
+      expect(frame).not.toContain("Gam")
+    }),
+  )
+
+  // A source the diagram library cannot read keeps its fence: the reader
+  // sees the code as written, not an empty block. The diagram before it
+  // shows the library has loaded.
+  it.scopedLive("a diagram that does not parse shows its source as a code block", () =>
+    Effect.gen(function* () {
+      const content =
+        "```mermaid\ngraph LR\n  Alpha-->Beta\n```\n\n```mermaid\nnot a diagram {{{\n```"
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[assistant("broken", content)]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+          />
+        ),
+        { width: 60, height: 20 },
+      )
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("┌") && next.includes("not a diagram {{{"),
+        "the diagram and the source after it",
+      )
+      expect(frame).toContain("not a diagram {{{")
+      expect(frame).not.toContain("Alpha-->Beta")
     }),
   )
 
@@ -2995,12 +2932,7 @@ describe("native transcript markdown", () => {
               displayRevision={0}
               overlayOpen={false}
               renderItems={(visible) => (
-                <MessageList
-                  items={visible}
-                  disclosure="collapsed"
-                  syntaxStyle={syntaxStyle}
-                  openAnswer={Option.none()}
-                />
+                <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
               )}
             >
               <box />
@@ -3019,7 +2951,202 @@ describe("native transcript markdown", () => {
       expect(history).not.toContain("`")
     }).pipe(Effect.timeout("10 seconds")),
   )
+
+  // Scrollback is immutable, so a row that reaches it without its highlight
+  // keeps that look for good. A highlight can miss its budget (a cold
+  // tree-sitter worker, a loaded machine) or never land (a dead worker).
+  it.scopedLive(
+    "headings reach history without their marks when no highlight ever lands",
+    () =>
+      Effect.gen(function* () {
+        const timeouts = makeSettleTimeouts(Number.MAX_SAFE_INTEGER)
+        const committedText: string[] = []
+        const sections = Array.from(
+          { length: 8 },
+          (_, index) => `## Section ${index + 1}\n\nbody ${index + 1}`,
+        )
+        const items = [assistant("first", sections.join("\n\n")), assistant("second", "TAIL")]
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                timeouts.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("Section 8"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("8 seconds"),
+          Effect.ignore,
+        )
+        const history = committedText.join("")
+        for (const section of sections.keys()) {
+          expect(history).toContain(`Section ${section + 1}`)
+        }
+        expect(history).not.toContain("#")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // A highlight that never lands leaves a code block and a quote with no
+  // text to draw, and one that fails puts back the raw markdown, marks and
+  // all. Past its last try an answer commits as plain text the transcript
+  // draws itself: the heading without its marks, the code and the quote as
+  // their text.
+  for (const outage of ["stalled", "failing"] as const) {
+    it.scopedLive(
+      `an answer whose highlight is ${outage} reaches history readable`,
+      () =>
+        Effect.gen(function* () {
+          yield* highlightOutage(outage)
+          const timeouts = makeSettleTimeouts(Number.MAX_SAFE_INTEGER)
+          const committedText: string[] = []
+          const answer = [
+            "## HEADING-MARKS",
+            "Some **bold** words.",
+            "```ts\nconst CODE_BODY = 1\n```",
+            "> QUOTE_BODY quoted",
+            "- LIST_ITEM one",
+          ].join("\n\n")
+          const items = [assistant("first", answer), assistant("second", "TAIL")]
+          yield* renderScoped(
+            () =>
+              transcriptCommit({
+                items,
+                displayRevision: () => 0,
+                overlayOpen: () => false,
+                onRenderer: (renderer) => {
+                  timeouts.applyTo(renderer)
+                  renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                    committedText.push(
+                      new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                    )
+                  })
+                },
+              }),
+            { width: 60, height: 14 },
+          ).pipe(
+            Effect.tap((setup) =>
+              Effect.promise(() => setup.flush()).pipe(
+                Effect.repeat({
+                  until: () => committedText.join("").includes("TAIL"),
+                  schedule: Schedule.spaced("10 millis"),
+                }),
+                Effect.timeout("6 seconds"),
+                Effect.ignore,
+              ),
+            ),
+          )
+          const history = committedText.join("")
+          for (const text of ["HEADING-MARKS", "bold", "CODE_BODY", "QUOTE_BODY", "LIST_ITEM"])
+            expect(history).toContain(text)
+          expect(history).not.toContain("#")
+          expect(history).not.toContain("**")
+          expect(history).not.toContain("```")
+        }).pipe(Effect.timeout("10 seconds")),
+      15_000,
+    )
+  }
+
+  it.scopedLive(
+    "a settle that times out is tried again, so history keeps the highlight",
+    () =>
+      Effect.gen(function* () {
+        const timeouts = makeSettleTimeouts(1)
+        // The snapshot is freed once the event returns, so its cells are read in the handler.
+        const committed: Option.Option<ReadonlyArray<number>>[] = []
+        const items = [
+          assistant("first", `## Highlighted heading\n\n${longBody("BODY")}`),
+          assistant("second", "TAIL"),
+        ]
+        const setup = yield* renderScoped(
+          () => {
+            const renderer = useRenderer()
+            timeouts.applyTo(renderer)
+            const capture = (event: CliRendererExternalOutputEvent) =>
+              committed.push(cellsOf(event, "Highlighted heading"))
+            renderer.on("external_output", capture)
+            onCleanup(() => renderer.off("external_output", capture))
+            return (
+              <NativeTranscript
+                items={items}
+                settled
+                streaming={false}
+                footerHeight={3}
+                expanded={false}
+                disclosure="collapsed"
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible) => (
+                  <MessageList items={visible} disclosure="collapsed" syntaxStyle={boldHeadings} />
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committed.length > 0,
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("8 seconds"),
+          Effect.ignore,
+        )
+        const heading = Option.getOrThrow(Option.firstSomeOf(committed))
+        // The first settle timed out before the highlight; the commit waited for a second.
+        expect(timeouts.calls()).toBeGreaterThanOrEqual(2)
+        expect(heading.every((attributes) => (attributes & TextAttributes.BOLD) !== 0)).toBe(true)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
 })
+
+/** Headings draw bold once highlighted; the draft before the highlight is plain. */
+const boldHeadings = () =>
+  SyntaxStyle.fromTheme([
+    {
+      scope: ["markup.heading", "markup.heading.1", "markup.heading.2"],
+      style: { bold: true },
+    },
+  ])
+
+/** The attributes of each cell of `text` in a committed snapshot, or `None` when it is not there. */
+const cellsOf = (
+  event: CliRendererExternalOutputEvent,
+  text: string,
+): Option.Option<ReadonlyArray<number>> => {
+  const { snapshot } = event
+  const { char, attributes } = snapshot.buffers
+  for (let row = 0; row < snapshot.height; row++) {
+    const line = Array.from({ length: snapshot.width }, (_, column) =>
+      String.fromCodePoint(char[row * snapshot.width + column] ?? 32),
+    ).join("")
+    const at = line.indexOf(text)
+    if (at === -1) continue
+    return Option.some(
+      Array.from(
+        { length: text.length },
+        (_, offset) => attributes[row * snapshot.width + at + offset] ?? 0,
+      ),
+    )
+  }
+  return Option.none()
+}
 
 // ── native transcript footer room ───────────────────────────────────────────
 
@@ -3100,12 +3227,7 @@ describe("native transcript footer room", () => {
                   displayRevision={0}
                   overlayOpen={false}
                   renderItems={(visible) => (
-                    <MessageList
-                      items={visible}
-                      disclosure="collapsed"
-                      syntaxStyle={syntaxStyle}
-                      openAnswer={Option.none()}
-                    />
+                    <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
                   )}
                 >
                   <box />
@@ -3135,6 +3257,364 @@ describe("native transcript footer room", () => {
           "footer on screen",
         )
         expect(frame).toContain("STATUS-LINE")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+})
+
+// ── native transcript rows under the footer ─────────────────────────────────
+
+/**
+ * The split region sits on the terminal's last rows. OpenTUI keeps the
+ * region's top row when it shrinks, so a shrink that no commit fills leaves
+ * the freed rows empty under the status row. These tests read the region's
+ * place from the renderer: its top offset plus its height is the terminal's
+ * height when no row is left under it.
+ */
+
+interface RoomSetup {
+  readonly items: () => ListMessage[]
+  readonly streaming: () => boolean
+  readonly footer: () => number
+  readonly onRenderer: (renderer: CliRenderer) => void
+}
+
+const roomTranscript = (options: RoomSetup) => {
+  const renderer = useRenderer()
+  options.onRenderer(renderer)
+  return (
+    <NativeTranscript
+      items={options.items()}
+      settled
+      streaming={options.streaming()}
+      footerHeight={options.footer()}
+      expanded={false}
+      disclosure="collapsed"
+      displayRevision={0}
+      overlayOpen={false}
+      renderItems={(visible) => (
+        <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+      )}
+    >
+      <box />
+    </NativeTranscript>
+  )
+}
+
+/** The renderer's region offset: the terminal rows above the split region. OpenTUI keeps it private. */
+const RegionPlace = Schema.Struct({ renderOffset: Schema.Finite })
+
+/** The rows between the split region's last row and the terminal's last row. */
+const rowsUnderRegion = (renderer: CliRenderer): number =>
+  renderer.terminalHeight -
+  (Schema.decodeUnknownSync(RegionPlace)(renderer).renderOffset + renderer.height)
+
+const committedTextOf = (event: CliRendererExternalOutputEvent) =>
+  new TextDecoder().decode(event.snapshot.getRealCharBytes(false))
+
+describe("native transcript rows under the footer", () => {
+  it.scopedLive(
+    "a docked pane that closes leaves no empty row under the footer",
+    () =>
+      Effect.gen(function* () {
+        const [footer, setFooter] = createSignal(3)
+        const committedText: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const items = [
+          ...Array.from({ length: 3 }, (_, index) =>
+            assistant(`item-${index}`, longBody(`ITEM-${index}`)),
+          ),
+          assistant("tail", "TAIL"),
+        ]
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => items,
+              streaming: () => false,
+              footer,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("ITEM-2 line 12"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("6 seconds"),
+          Effect.ignore,
+        )
+        const renderer = Option.getOrThrow(screen)
+        // A pane docks in the footer, then closes.
+        setFooter(9)
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+        setFooter(3)
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+        expect(rowsUnderRegion(renderer)).toBe(0)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // A short session's region sits under the shell's last line, with the
+  // terminal's own empty rows under it. A pane that closes there gives its
+  // rows back: the region shrinks, and no empty row stays above the composer.
+  it.scopedLive(
+    "a docked pane that closes in a short session leaves no empty row above the composer",
+    () =>
+      Effect.gen(function* () {
+        const [footer, setFooter] = createSignal(3)
+        const committedText: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => [assistant("short", "SHORT-ANSWER"), assistant("tail", "TAIL")],
+              streaming: () => false,
+              footer,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 30 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("SHORT-ANSWER"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+        const renderer = Option.getOrThrow(screen)
+        yield* Effect.promise(() => setup.flush())
+        const regionRows = renderer.footerHeight
+        // The region is not at the terminal's bottom: the session is short.
+        expect(rowsUnderRegion(renderer)).toBeGreaterThan(0)
+        // A pane docks in the footer, then closes.
+        setFooter(9)
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+        expect(renderer.footerHeight).toBe(regionRows + 6)
+        setFooter(3)
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+        expect(renderer.footerHeight).toBe(regionRows)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a turn's final items reach history while it runs, and leave no empty row behind",
+    () =>
+      Effect.gen(function* () {
+        const [items, setItems] = createSignal<ListMessage[]>([
+          assistant("earlier", longBody("EARLIER")),
+        ])
+        const [streaming, setStreaming] = createSignal(true)
+        const committedText: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items,
+              streaming,
+              footer: () => 3,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        const flushUntil = (marker: string) =>
+          Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({
+              until: () => committedText.join("").includes(marker),
+              schedule: Schedule.spaced("10 millis"),
+            }),
+            Effect.timeout("4 seconds"),
+            Effect.ignore,
+          )
+        yield* flushUntil("EARLIER line 12")
+        // The answer streams: a draft stays in the live view.
+        setItems([
+          assistant("earlier", longBody("EARLIER")),
+          { ...assistant("answer", "STEP-ONE draft"), draft: true },
+        ])
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+        expect(committedText.join("")).not.toContain("STEP-ONE")
+        // The stored answer replaces the draft while the turn still runs.
+        setItems([
+          assistant("earlier", longBody("EARLIER")),
+          assistant("answer", "STEP-ONE stored"),
+          { ...assistant("next", "STEP-TWO draft"), draft: true },
+        ])
+        yield* flushUntil("STEP-ONE stored")
+        expect(committedText.join("")).toContain("EARLIER line 12")
+        expect(committedText.join("")).toContain("STEP-ONE stored")
+        expect(committedText.join("")).not.toContain("STEP-TWO")
+        // The turn ends: what is left commits, and its rows leave none behind.
+        setStreaming(false)
+        yield* flushUntil("STEP-TWO draft")
+        yield* Effect.promise(() => setup.flush())
+        expect(committedText.join("")).toContain("STEP-TWO draft")
+        const renderer = Option.getOrThrow(screen)
+        expect(rowsUnderRegion(renderer)).toBe(0)
+        // Each commit took its own rows out of the region: what is left is the
+        // footer and the empty live tail's one row.
+        expect(renderer.height).toBe(4)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+})
+
+// ── native transcript exit ──────────────────────────────────────────────────
+
+describe("native transcript exit", () => {
+  it.scopedLive(
+    "exit moves a turn still in flight into history before the renderer goes",
+    () =>
+      Effect.gen(function* () {
+        const committedText: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const items: ListMessage[] = [
+          assistant("earlier", "EARLIER-ANSWER"),
+          { ...assistant("open", "IN-FLIGHT-DRAFT"), draft: true },
+        ]
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => items,
+              streaming: () => true,
+              footer: () => 3,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("EARLIER-ANSWER"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+        // The draft waits for its stored answer: the turn has not ended.
+        expect(committedText.join("")).toContain("EARLIER-ANSWER")
+        expect(committedText.join("")).not.toContain("IN-FLIGHT-DRAFT")
+        yield* flushTranscriptForExit(Option.getOrThrow(screen))
+        expect(committedText.join("")).toContain("IN-FLIGHT-DRAFT")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // A signal interrupts the fiber that holds the process open. It leaves the
+  // terminal as the reader's exit does: history first, then the renderer.
+  it.scopedLive(
+    "a signal moves a turn still in flight into history before the renderer goes",
+    () =>
+      Effect.gen(function* () {
+        const committedText: string[] = []
+        const written: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const items: ListMessage[] = [
+          assistant("earlier", "EARLIER-ANSWER"),
+          { ...assistant("open", "SIGNALLED-DRAFT"), draft: true },
+        ]
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => items,
+              streaming: () => true,
+              footer: () => 3,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("EARLIER-ANSWER"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+        const renderer = Option.getOrThrow(screen)
+        const hold = yield* Effect.forkChild(
+          holdUntilRendererDestroyed(renderer, (text) => written.push(text)),
+        )
+        // The hold has started: it waits on the renderer, as the process entry does.
+        yield* Effect.yieldNow
+        yield* Fiber.interrupt(hold)
+        expect(committedText.join("")).toContain("SIGNALLED-DRAFT")
+        expect(renderer.isDestroyed).toBe(true)
+        // The cursor goes back over the cleared region, under the transcript.
+        expect(written).toHaveLength(1)
+        expect(written[0]).toMatch(new RegExp(`^${String.fromCharCode(27)}\\[[1-9][0-9]*A$`))
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // A highlight can hold a commit for its whole budget. Exit does not wait
+  // for it: what the live view holds commits at once as plain text.
+  it.scopedLive(
+    "exit during a slow highlight still moves the live view into history",
+    () =>
+      Effect.gen(function* () {
+        const hold = yield* makeSettleHold
+        const committedText: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const items: ListMessage[] = [
+          assistant("earlier", "## SLOW-ANSWER\n\nbody"),
+          { ...assistant("open", "IN-FLIGHT-DRAFT"), draft: true },
+        ]
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => items,
+              streaming: () => true,
+              footer: () => 3,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                hold.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush())
+        // The first answer's commit waits inside its settle, and never comes out.
+        yield* hold.held
+        yield* flushTranscriptForExit(Option.getOrThrow(screen))
+        const history = committedText.join("")
+        expect(history).toContain("SLOW-ANSWER")
+        expect(history).not.toContain("#")
+        expect(history).toContain("IN-FLIGHT-DRAFT")
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
@@ -3275,12 +3755,7 @@ const transcript = (options: {
       displayRevision={0}
       overlayOpen={false}
       renderItems={(visible) => (
-        <MessageList
-          items={visible}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       )}
     >
       <box />
@@ -3376,12 +3851,7 @@ const transcriptCommit = (options: {
       displayRevision={options.displayRevision()}
       overlayOpen={options.overlayOpen()}
       renderItems={(visible) => (
-        <MessageList
-          items={visible}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       )}
     >
       <box />
@@ -3445,6 +3915,155 @@ describe("native transcript commit handover", () => {
           }),
         )
         expect(committedText.join("")).toContain("FIRST-ITEM line 1")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // The terminal keeps its own screen under the alternate screen, so a
+  // return finds history where it was. A replay would clear the screen and
+  // the reader's own saved lines, then write history a second time.
+  it.scopedLive(
+    "closing an overlay keeps history as it is, with no replay",
+    () =>
+      Effect.gen(function* () {
+        const items = [assistant("first", longBody("KEPT-ITEM")), assistant("second", "TAIL")]
+        const [overlayOpen, setOverlayOpen] = createSignal(false)
+        const committedText: string[] = []
+        const resets: string[] = []
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen,
+              onRenderer: (renderer) => {
+                const reset = renderer.resetSplitFooterForReplay.bind(renderer)
+                Object.defineProperty(renderer, "resetSplitFooterForReplay", {
+                  configurable: true,
+                  value: (options?: { readonly clearSavedLines?: boolean }) => {
+                    resets.push(`clearSavedLines=${String(options?.clearSavedLines === true)}`)
+                    reset(options)
+                  },
+                })
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        const flushUntil = (done: () => boolean) =>
+          Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({ until: done, schedule: Schedule.spaced("10 millis") }),
+            Effect.timeout("3 seconds"),
+            Effect.ignore,
+          )
+        yield* flushUntil(() => committedText.join("").includes("KEPT-ITEM line 12"))
+        expect(committedText.join("")).toContain("KEPT-ITEM line 12")
+        // The launch replays once; only what the overlay does counts here.
+        resets.splice(0)
+
+        setOverlayOpen(true)
+        yield* Effect.promise(() => setup.flush())
+        setOverlayOpen(false)
+        // A replay would write the item again within these frames.
+        yield* flushUntil(() => committedText.join("").split("KEPT-ITEM line 12").length > 2).pipe(
+          Effect.timeout("1 second"),
+          Effect.ignore,
+        )
+        expect(committedText.join("").split("KEPT-ITEM line 12").length - 1).toBe(1)
+        expect(resets).toEqual([])
+        expect(setup.renderer.screenMode).toBe("split-footer")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // A resize while the surface settles makes its rows the wrong width, and
+  // the replay the resize asks for writes history again from the top. The
+  // item must reach history once that replay runs, not vanish between them.
+  it.scopedLive(
+    "a resize mid-commit loses no item",
+    () =>
+      Effect.gen(function* () {
+        const hold = yield* makeSettleHold
+        const items = [assistant("first", longBody("RESIZED-ITEM")), assistant("second", "TAIL")]
+        const committedText: string[] = []
+
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                hold.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush())
+        yield* hold.held
+        setup.resize(50, 14)
+        yield* Effect.promise(() => setup.flush())
+        yield* hold.release
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("RESIZED-ITEM line 1"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+        expect(committedText.join("")).toContain("RESIZED-ITEM line 1")
+        // Written once, by the replay: the commit drawn for the old width wrote nothing.
+        expect(committedText.join("").split("RESIZED-ITEM line 12").length - 1).toBe(1)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // The item leaves the live view only once scrollback has taken its rows:
+  // a write scrollback refuses keeps it, and the next pass writes it.
+  it.scopedLive(
+    "a write scrollback refuses keeps the item and writes it on the next pass",
+    () =>
+      Effect.gen(function* () {
+        const items = [assistant("first", longBody("REFUSED-ITEM")), assistant("second", "TAIL")]
+        const committedText: string[] = []
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                refuseCommits(1)(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("REFUSED-ITEM line 1"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+        const history = committedText.join("")
+        expect(history).toContain("REFUSED-ITEM line 1")
+        expect(history.split("REFUSED-ITEM line 12").length - 1).toBe(1)
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
@@ -3658,12 +4277,7 @@ describe("sticky last prompt", () => {
               displayRevision={0}
               overlayOpen={false}
               renderItems={(visible) => (
-                <MessageList
-                  items={visible}
-                  disclosure="collapsed"
-                  syntaxStyle={syntaxStyle}
-                  openAnswer={Option.none()}
-                />
+                <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
               )}
             >
               <box />
@@ -3683,8 +4297,14 @@ describe("sticky last prompt", () => {
   it.scopedLive("no pinned row while the prompt is on screen", () =>
     Effect.gen(function* () {
       const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 1)], {})
-      expect(count(renderFrame(setup), "ASK-ONE")).toBe(1)
-      expect(renderFrame(setup)).not.toContain("↑ ASK-ONE")
+      // Both items are final and move to history; the terminal shows the prompt once.
+      const text = yield* waitForTerminal(
+        setup,
+        (next) => next.includes("ASK-ONE") && !renderFrame(setup).includes("ASK-ONE"),
+        "the prompt in history",
+      )
+      expect(count(text, "ASK-ONE")).toBe(1)
+      expect(text).not.toContain("↑ ASK-ONE")
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -3794,9 +4414,13 @@ describe("sticky last prompt", () => {
       Effect.gen(function* () {
         const HISTORY = 2_000
         let roleReads = 0
-        /** An assistant row that counts every read of its role: a scan of history reads it. */
+        /**
+         * An assistant row that counts every read of its role: a scan of history
+         * reads it. Each is a draft, so none commits while the turn runs and the
+         * whole history stays in the live view, the largest view the pin reads.
+         */
         const counted = (id: string): SessionItem => {
-          const item = reply(id, 1)
+          const item: ListMessage = { ...reply(id, 1), draft: true }
           const { role } = item
           Object.defineProperty(item, "role", {
             get: () => {
@@ -3807,6 +4431,8 @@ describe("sticky last prompt", () => {
           return item
         }
         const history: SessionItem[] = [
+          // A draft ahead of the prompt keeps the prompt in the live view too.
+          { ...reply("d0", 1), draft: true },
           prompt("p0", "ASK-ONE"),
           ...Array.from({ length: HISTORY }, (_, index) => counted(`h${index}`)),
         ]
@@ -4081,14 +4707,7 @@ describe("tool group rows", () => {
   // The session in view runs where the TUI launched unless a test says otherwise.
   const groupRows = (items: SessionItem[], width: number, sessionCwd = cwd) =>
     renderScoped(
-      () => (
-        <MessageList
-          items={items}
-          disclosure="preview"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
-      ),
+      () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
       {
         width,
         height: 20,
@@ -4232,12 +4851,7 @@ describe("message rows", () => {
         } satisfies ListMessage,
       ]
       const setup = yield* renderScoped(() => (
-        <MessageList
-          items={items}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       ))
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)

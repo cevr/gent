@@ -111,14 +111,7 @@ const fullDetails = {
 
 const renderList = (items: ReadonlyArray<SessionItem>, height = 40) =>
   renderScoped(
-    () => (
-      <MessageList
-        items={[...items]}
-        disclosure="full"
-        syntaxStyle={syntaxStyle}
-        openAnswer={Option.none()}
-      />
-    ),
+    () => <MessageList items={[...items]} disclosure="full" syntaxStyle={syntaxStyle} />,
     { initialSession: parentSession, width: 100, height },
   )
 
@@ -166,12 +159,7 @@ describe("delegate rows in native scrollback", () => {
                 displayRevision={0}
                 overlayOpen={false}
                 renderItems={(visible) => (
-                  <MessageList
-                    items={visible}
-                    disclosure="full"
-                    syntaxStyle={syntaxStyle}
-                    openAnswer={Option.none()}
-                  />
+                  <MessageList items={visible} disclosure="full" syntaxStyle={syntaxStyle} />
                 )}
               >
                 <box />

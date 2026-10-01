@@ -19,7 +19,9 @@ import {
 import {
   type Cause,
   DateTime,
+  Deferred,
   Effect,
+  Exit,
   Match,
   Option,
   Predicate,
@@ -38,8 +40,8 @@ import {
   useSpinnerClock,
 } from "./ui"
 import {
-  type Accessor,
   batch,
+  createContext,
   createEffect,
   createMemo,
   createRoot,
@@ -52,8 +54,22 @@ import {
   runWithOwner,
   Show,
   untrack,
+  useContext,
 } from "solid-js"
-import type { ScrollBoxRenderable, ScrollbackSurface, SyntaxStyle } from "@opentui/core"
+import {
+  BoxRenderable,
+  type CliRenderer,
+  type MarkdownOptions,
+  type Renderable,
+  type RenderContext,
+  type RGBA,
+  type ScrollBoxRenderable,
+  type ScrollbackSurface,
+  StyledText,
+  type SyntaxStyle,
+  TextAttributes,
+  TextRenderable,
+} from "@opentui/core"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import {
   bashOutputRows,
@@ -75,7 +91,7 @@ import {
   lineCount,
   MODEL_CHANGE_MESSAGE_TYPE,
 } from "@gent/core/protocol"
-import { useMermaidBlocks } from "./mermaid"
+import { DiagramLibraryContext, diagramsDrawable, useDiagramCodeBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 
@@ -428,6 +444,8 @@ interface MessageBase {
   /** Ordered parts for interleaved rendering; the one owner of the message's tool calls. */
   segments?: AssistantSegment[]
   metadata?: MessageMetadataInfo
+  /** An answer built from streamed chunks: the step's stored answer replaces it. */
+  draft?: true
 }
 
 interface RegularMessage extends MessageBase {
@@ -450,8 +468,6 @@ export const messageToolCalls = (message: Pick<MessageBase, "segments">): Readon
     },
   )
 export type SessionItem = Message | SessionEvent
-
-type TerminalDimensions = { readonly width: number; readonly height: number }
 
 /** A transcript item that is a message, not a session event row. */
 export const isMessageItem = Predicate.or(
@@ -509,6 +525,161 @@ function UserMessage(props: MessageRowProps & { customType?: string; fullDetail:
 /** The columns an answer is indented by; its text is fitted to the rest. */
 const ANSWER_INDENT = 2
 
+// ── plain answers ───────────────────────────────────────────────────────────
+
+/**
+ * True while the rows drawn are an item's last try at native history: its
+ * highlight could not settle, or the reader is leaving. Answers then draw
+ * their markdown as plain text the transcript makes itself, with nothing
+ * to highlight. A highlight that never lands leaves a code block or a quote
+ * with no text, and one that fails puts back the raw markdown, marks and
+ * all; scrollback would keep either for good.
+ */
+const PlainHistoryContext = createContext(false)
+
+type MarkdownHook = NonNullable<MarkdownOptions["renderNode"]>
+type MarkdownToken = Parameters<MarkdownHook>[0]
+
+const childTokens = (token: MarkdownToken): ReadonlyArray<MarkdownToken> => {
+  if ("tokens" in token && Array.isArray(token.tokens)) return token.tokens
+  return []
+}
+
+const tokenText = (token: MarkdownToken): string => {
+  if ("text" in token && Predicate.isString(token.text)) return token.text
+  return token.raw
+}
+
+/** Inline markdown as the words it reads: emphasis, code spans and links lose their marks. */
+const plainInline = (tokens: ReadonlyArray<MarkdownToken>): string =>
+  tokens
+    .map((token) => {
+      if (token.type === "br") return "\n"
+      if (token.type === "codespan" || token.type === "escape") return tokenText(token)
+      const children = childTokens(token)
+      if (children.length > 0) return plainInline(children)
+      return tokenText(token)
+    })
+    .join("")
+
+/** The items of a list token, each with the blocks it holds. */
+const listItems = (token: MarkdownToken): ReadonlyArray<MarkdownToken> => {
+  if ("items" in token && Array.isArray(token.items)) return token.items
+  return []
+}
+
+/** The marker of a list's item at `index`: `-`, or its number. */
+const listMarker = (token: MarkdownToken, index: number): string => {
+  if (!("ordered" in token) || token.ordered !== true) return "-"
+  if ("start" in token && Predicate.isNumber(token.start)) return `${token.start + index}.`
+  return `${1 + index}.`
+}
+
+/** Block markdown as the lines it reads, with no mark a highlight would hide. */
+const plainLines = (tokens: ReadonlyArray<MarkdownToken>): ReadonlyArray<string> =>
+  tokens.flatMap((token): ReadonlyArray<string> => {
+    if (token.type === "space") return []
+    if (token.type === "code") return tokenText(token).split("\n")
+    if (token.type === "blockquote")
+      return plainLines(childTokens(token)).map((line) => `│ ${line}`)
+    if (token.type === "hr") return ["───"]
+    if (token.type === "list")
+      return listItems(token).flatMap((item, index) => {
+        const marker = listMarker(token, index)
+        const pad = " ".repeat(marker.length + 1)
+        return plainLines(childTokens(item)).map((line, at) => {
+          if (at === 0) return `${marker} ${line}`
+          return `${pad}${line}`
+        })
+      })
+    const children = childTokens(token)
+    if (children.length > 0) return plainInline(children).split("\n")
+    return tokenText(token).replace(/\n+$/, "").split("\n")
+  })
+
+/**
+ * The answer's markdown hook for its last try at history. A diagram still
+ * draws through `diagrams`; a table and a rule draw as markdown draws them,
+ * with nothing to highlight; every other block is plain text.
+ */
+const plainBlocks =
+  (
+    ctx: RenderContext,
+    colors: { readonly text: RGBA; readonly quote: RGBA },
+    diagrams: Option.Option<MarkdownHook>,
+  ): MarkdownHook =>
+  (token, context) =>
+    Option.getOrUndefined(
+      Option.orElse(
+        Option.flatMap(
+          Option.filter(diagrams, () => token.type === "code"),
+          (hook) => Option.fromNullishOr(hook(token, context)),
+        ),
+        () => plainBlock(ctx, colors, token, context),
+      ),
+    )
+
+/** One block drawn plain, or none where markdown's own drawing has nothing to highlight. */
+const plainBlock = (
+  ctx: RenderContext,
+  colors: { readonly text: RGBA; readonly quote: RGBA },
+  token: MarkdownToken,
+  context: Parameters<MarkdownHook>[1],
+): Option.Option<Renderable> => {
+  if (token.type === "table" || token.type === "hr" || token.type === "space") return Option.none()
+  return Option.some(plainRenderable(ctx, colors, token, context))
+}
+
+const plainRenderable = (
+  ctx: RenderContext,
+  colors: { readonly text: RGBA; readonly quote: RGBA },
+  token: MarkdownToken,
+  context: Parameters<MarkdownHook>[1],
+): Renderable => {
+  if (token.type === "blockquote") {
+    const quote = new BoxRenderable(ctx, {
+      width: "100%",
+      border: ["left"],
+      borderColor: colors.quote,
+      paddingLeft: 1,
+      flexShrink: 0,
+    })
+    quote.add(
+      new TextRenderable(ctx, {
+        content: plainLines(childTokens(token)).join("\n"),
+        fg: colors.text,
+        width: "100%",
+      }),
+    )
+    return quote
+  }
+  const text = plainLines([token]).join("\n")
+  if (token.type !== "heading")
+    return new TextRenderable(ctx, { content: text, fg: colors.text, width: "100%" })
+  const heading = Option.fromUndefinedOr(context.syntaxStyle.getStyle("markup.heading")?.fg)
+  return new TextRenderable(ctx, {
+    content: new StyledText([
+      {
+        __isChunk: true,
+        text,
+        fg: Option.getOrElse(heading, () => colors.text),
+        attributes: TextAttributes.BOLD,
+      },
+    ]),
+    width: "100%",
+  })
+}
+
+/**
+ * How answers and reasoning draw their markdown. Each top-level block (a
+ * heading, a paragraph, a list) is its own block, so the text a block draws
+ * before its highlight lands comes from its inline tokens: a heading never
+ * shows its `#` marks, in the live view or in a row that reaches history
+ * without its highlight. Tables keep their grid, which the top-level mode
+ * would otherwise trade for borderless columns.
+ */
+const ANSWER_TABLE = { style: "grid" } as const
+
 function AssistantMessage(props: {
   content: string
   reasoning: string
@@ -517,11 +688,32 @@ function AssistantMessage(props: {
   disclosure: DisclosureLevel
   fullDetail: boolean
   syntaxStyle: () => SyntaxStyle
-  streaming: boolean
-  dimensions: Accessor<TerminalDimensions>
 }) {
   const { theme } = useTheme()
-  const replaceMermaidBlocks = useMermaidBlocks()
+  const ctx = useRenderer()
+  const plain = useContext(PlainHistoryContext)
+  // The hook changes once, when the diagram library loads: a new hook rebuilds every block.
+  const diagrams = useDiagramCodeBlocks(() => ({
+    text: theme.text,
+    border: theme.textMuted,
+    line: theme.textMuted,
+    arrow: theme.text,
+  }))
+  const answerBlocks = (): MarkdownOptions["renderNode"] => {
+    if (!plain) return diagrams()
+    return plainBlocks(
+      ctx,
+      { text: theme.text, quote: theme.textMuted },
+      Option.fromUndefinedOr(diagrams()),
+    )
+  }
+  // Reasoning draws as markdown draws it, but on the last try: then plain too.
+  const reasoningBlocks = (): MarkdownOptions["renderNode"] =>
+    Option.getOrUndefined(
+      Option.map(Option.liftPredicate(plain, Boolean), () =>
+        plainBlocks(ctx, { text: theme.textMuted, quote: theme.textMuted }, Option.none()),
+      ),
+    )
 
   const hasContent = () => {
     if (props.content.length > 0) return true
@@ -566,6 +758,9 @@ function AssistantMessage(props: {
                     <markdown
                       syntaxStyle={props.syntaxStyle()}
                       streaming
+                      internalBlockMode="top-level"
+                      tableOptions={ANSWER_TABLE}
+                      renderNode={reasoningBlocks()}
                       content={reasoningMarkdown(segment.content)}
                       fg={theme.textMuted}
                       conceal
@@ -584,24 +779,17 @@ function AssistantMessage(props: {
                     fullDetail={props.fullDetail}
                   />
                 ),
-                text: (segment) => {
-                  // Mermaid blocks draw as ASCII art once the text settles.
-                  const renderContent = () => {
-                    if (props.streaming) return segment.content
-                    return replaceMermaidBlocks(
-                      segment.content,
-                      props.dimensions().width - ANSWER_INDENT,
-                    )
-                  }
-                  return (
-                    <markdown
-                      syntaxStyle={props.syntaxStyle()}
-                      streaming
-                      content={renderContent()}
-                      conceal
-                    />
-                  )
-                },
+                text: (segment) => (
+                  <markdown
+                    syntaxStyle={props.syntaxStyle()}
+                    streaming
+                    internalBlockMode="top-level"
+                    tableOptions={ANSWER_TABLE}
+                    renderNode={answerBlocks()}
+                    content={segment.content}
+                    conceal
+                  />
+                ),
               }),
             )
           }
@@ -797,13 +985,9 @@ interface MessageListProps {
   disclosure: DisclosureLevel
   fullDetail?: boolean
   syntaxStyle: () => SyntaxStyle
-  /** The answer the step in flight streams into: it draws as text, its diagrams once it settles. */
-  openAnswer: Option.Option<string>
 }
 
 export function MessageList(props: MessageListProps) {
-  const dimensions = useTerminalDimensions()
-
   return (
     <box flexDirection="column">
       <For each={props.items}>
@@ -824,8 +1008,6 @@ export function MessageList(props: MessageListProps) {
                     disclosure={props.disclosure}
                     fullDetail={props.fullDetail === true}
                     syntaxStyle={props.syntaxStyle}
-                    streaming={Option.contains(props.openAnswer, item.id)}
-                    dimensions={dimensions}
                   />
                 }
               >
@@ -929,6 +1111,30 @@ export const transcriptFingerprint = (item: SessionItem): string => {
       item.reason,
     ])
   return encodeFingerprint([item._tag, item.createdAt, item.seq])
+}
+
+/** A call still running, a cell's inner operation included. */
+const isRunningCall = (call: ToolCall): boolean =>
+  call.status === "running" || (call.operations ?? []).some(isRunningCall)
+
+/**
+ * Whether an item draws its last look, which is all history may take. While
+ * a turn runs, a streamed answer waits for the stored answer that replaces
+ * it, a queued follow-up has not run, a pending retry counts down, and a
+ * running call has rows still to change. Once no turn runs, every item is
+ * final: nothing is left to change them, and a row that does change later
+ * is replayed.
+ */
+const isFinalItem = (item: SessionItem, turnRunning: boolean): boolean => {
+  if (!turnRunning) return true
+  if (isMessageItem(item))
+    return (
+      item.draft !== true &&
+      Predicate.isUndefined(item.pendingMode) &&
+      !messageToolCalls(item).some(isRunningCall)
+    )
+  if (item._tag === "retrying") return item.outcome !== "pending"
+  return true
 }
 
 // ── transcript display ──────────────────────────────────────────────────────
@@ -1162,6 +1368,127 @@ function StickyPrompt(props: { readonly text: string; readonly width: number }) 
 
 // ── native scrollback transcript ────────────────────────────────────────────
 
+/** How long one commit waits for its highlights before it is tried again. */
+const SETTLE_BUDGET_MS = 2000
+
+/**
+ * How many times an item waits for its highlights. The last try draws the
+ * item as plain text (`PlainHistoryContext`), so a dead highlight worker
+ * neither holds history back for good nor leaves its marks or blanks there.
+ */
+const SETTLE_TRIES = 3
+
+/**
+ * How long a plain draw waits for what still highlights in it (a tool's
+ * code), before its rows commit as drawn: such text shows unstyled.
+ */
+const PLAIN_SETTLE_MS = 100
+
+/**
+ * How one commit ended: its rows reached history (`landed`); the screen
+ * changed hands or the display was cleared (`refused`); its highlights missed
+ * the budget (`unsettled`); or an item before it came back, so it waits for
+ * the next pass (`stale`).
+ */
+type CommitOutcome = "landed" | "refused" | "unsettled" | "stale"
+
+/** How long exit waits for the live view's last commits. */
+const EXIT_FLUSH_MS = 1500
+
+/**
+ * Where the split region sat as the alternate screen took over: the
+ * terminal rows above it (`top`) and its height (`rows`).
+ */
+interface RegionPlace {
+  readonly top: number
+  readonly rows: number
+}
+
+/**
+ * The region's place on the terminal. opentui keeps the rows above the
+ * region in a field it does not publish; a renderer without it reads as a
+ * region at the bottom of the terminal.
+ */
+const RegionOffset = Schema.Struct({ renderOffset: Schema.Finite })
+const regionPlace = (renderer: CliRenderer): RegionPlace => {
+  const rows = renderer.footerHeight
+  return Schema.decodeUnknownOption(RegionOffset)(renderer).pipe(
+    Option.match({
+      onSome: ({ renderOffset }) => ({ top: renderOffset, rows }),
+      onNone: () => ({ top: Math.max(0, renderer.terminalHeight - rows), rows }),
+    }),
+  )
+}
+
+/** The last commits of each live transcript, by the renderer it draws on. */
+const exitFlushes = new WeakMap<CliRenderer, Effect.Effect<void>>()
+
+/**
+ * Moves what the live view still holds into native history, so exit loses
+ * no turn: destroying the renderer clears the split region. A turn still in
+ * flight commits as drawn. Waits at most `EXIT_FLUSH_MS`, then lets go.
+ */
+export const flushTranscriptForExit = (renderer: CliRenderer): Effect.Effect<void> =>
+  Option.getOrElse(Option.fromUndefinedOr(exitFlushes.get(renderer)), () => Effect.void)
+
+/** The escape that moves the terminal's cursor up `rows` rows. */
+const cursorUp = (rows: number): string => `${String.fromCharCode(27)}[${rows}A`
+
+/**
+ * Every way gent leaves the terminal: the reader's exit, a signal, a fatal
+ * error. The live view's last items reach native history first
+ * (`flushTranscriptForExit`, bounded), then the renderer goes. Its destroy
+ * clears the split region and leaves the cursor under it, so the cursor
+ * goes back up by the region's rows: what the shell writes next follows the
+ * transcript with no empty rows between.
+ */
+export const leaveTerminal = (
+  renderer: CliRenderer,
+  writeTerminal: (text: string) => void,
+): Effect.Effect<void> =>
+  flushTranscriptForExit(renderer).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        if (renderer.isDestroyed) return
+        const regionRows = Option.liftPredicate(
+          renderer.height,
+          () => renderer.screenMode === "split-footer",
+        )
+        renderer.destroy()
+        Option.map(regionRows, (rows) => writeTerminal(cursorUp(rows)))
+      }),
+    ),
+  )
+
+/**
+ * Holds the process until the renderer is destroyed: OpenTUI mounts
+ * synchronously, and a bare suspended fiber does not keep Bun alive.
+ * Interrupted (a signal, the session's shutdown), it leaves the terminal as
+ * the reader's exit does.
+ */
+export const holdUntilRendererDestroyed = (
+  renderer: CliRenderer,
+  writeTerminal: (text: string) => void,
+): Effect.Effect<void> =>
+  Effect.callback<void>((resume) => {
+    let settled = false
+    const keepAlive = setInterval(() => {}, 60_000) // eslint-disable-line effect/noGlobals -- OpenTUI needs a process-lifetime handle until renderer destruction.
+    const onDestroy = () => {
+      if (settled) return
+      settled = true
+      clearInterval(keepAlive)
+      resume(Effect.void)
+    }
+    renderer.once("destroy", onDestroy)
+    return Effect.suspend(() => {
+      if (settled) return Effect.void
+      settled = true
+      clearInterval(keepAlive)
+      renderer.off("destroy", onDestroy)
+      return leaveTerminal(renderer, writeTerminal)
+    })
+  })
+
 interface NativeTranscriptProps {
   items: SessionItem[]
   /** The items are final: no source still derives rows that would land among them. */
@@ -1181,6 +1508,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const renderer = useRenderer()
   const ext = useExtensionUI()
   const owner = getOwner()
+  const diagramLibrary = useContext(DiagramLibraryContext)
   const dimensions = useTerminalDimensions()
   const [ready, setReady] = createSignal(false)
   const [nativeOutputReady, setNativeOutputReady] = createSignal(false)
@@ -1207,11 +1535,21 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * drops its rows instead of writing history the reader already dismissed.
    */
   let displayGeneration = 0
+  /**
+   * Bumped when an item comes back to the live view, so the items queued
+   * behind it do not land before it.
+   */
+  let commitEpoch = 0
+  /** Rows commits moved into history since the region was last sized. */
+  let releasedRows = 0
+  /** The tries each item's highlights missed, by fingerprint, until it lands. */
+  const unsettledTries = new Map<string, number>()
   let displayRevision = 0
   const [displayBoundary, setDisplayBoundary] = createSignal(captureTranscriptDisplay([]))
   const displayedItems = createMemo(() => projectTranscriptDisplay(props.items, displayBoundary()))
   let viewport = Option.none<ScrollBoxRenderable>()
   let settlingNative = false
+  let leftRegion = Option.none<RegionPlace>()
   const [replayPending, setReplayPending] = createSignal(false)
   let measuredDimensions = dimensions()
   let measuredDisclosure = props.disclosure
@@ -1236,6 +1574,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const requestReplay = () => {
     renderer.off("frame", finishNativeReturn)
     settlingNative = false
+    // A commit still settling was drawn for the screen the replay clears:
+    // it comes back, and the replay offers its item again.
+    commitEpoch += 1
     batch(() => {
       setNativeOutputReady(false)
       setReplayPending(true)
@@ -1295,91 +1636,175 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     renderer.screenMode === "split-footer" && renderer.externalOutputMode === "capture-stdout"
 
   /**
+   * Set once the reader leaves. A commit still settling stops waiting for
+   * its highlight, and every commit from then on draws plain: exit cannot
+   * wait out a highlight's budget.
+   */
+  const leaving = Deferred.makeUnsafe<void>()
+  const isLeaving = () => Deferred.isDoneUnsafe(leaving)
+
+  /**
+   * Draws `items` on a new scrollback surface, plain or highlighted. The
+   * surface and the rows drawn on it go together once the commit ends.
+   */
+  const drawSurface = (items: SessionItem[], plain: boolean) =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        const surface: ScrollbackSurface = renderer.createScrollbackSurface()
+        const surfaceRenderer = Object.create(surface.renderContext)
+        Object.defineProperties(surfaceRenderer, {
+          root: { get: () => surface.root, enumerable: true },
+          width: { get: () => surface.width, enumerable: true },
+          height: { get: () => surface.height, enumerable: true },
+        })
+        const dispose = Option.fromNullishOr(
+          runWithOwner(owner, () =>
+            createRoot((dispose) => {
+              insert(surface.root, () => (
+                <RendererContext.Provider value={surfaceRenderer}>
+                  <PlainHistoryContext.Provider value={plain}>
+                    {props.renderItems(items)}
+                  </PlainHistoryContext.Provider>
+                </RendererContext.Provider>
+              ))
+              return dispose
+            }),
+          ),
+        )
+        return { surface, dispose }
+      }),
+      ({ surface, dispose }) =>
+        Effect.sync(() => {
+          if (Option.isSome(dispose)) dispose.value()
+          if (!surface.isDestroyed) surface.destroy()
+        }),
+    ).pipe(Effect.map(({ surface }) => surface))
+
+  /**
    * Renders one item onto a scrollback surface, settles it, and commits its
    * rows. Reports whether the rows reached scrollback: an overlay that opens
    * while the surface settles takes the screen back, and scrollback rejects a
    * commit from the alternate screen. An item that did not commit stays in the
    * live view, so closing the overlay still shows it.
    *
-   * The footer is left exactly as it is. Changing it here would run OpenTUI's
-   * `applyScreenMode` in the middle of the commit, and that path rewrites the
-   * screen with `ESC[nS`, which drops the rows instead of scrolling them into
-   * scrollback. `splitFooterHeight` keeps the output region large enough
-   * instead, so the commit needs no footer of its own.
+   * A highlight that misses its budget is tried again: scrollback keeps
+   * forever what it is given. The last try, and every commit once the
+   * reader leaves, draws the item plain.
+   *
+   * The rows move in place. `handOver` takes the item out of the live view
+   * and shrinks the split region by its rows before the rows are queued, so
+   * the region's top stays where it was and the commit writes the rows into
+   * the space the item left, moving the region back down to the last row.
+   * In the other order the commit would scroll the screen first and the
+   * shrink would then leave the item's rows empty under the status row.
+   * A write that scrollback refuses gives it all back (`handOver`'s undo).
    */
-  const commitItems = (items: SessionItem[]): Effect.Effect<boolean> =>
+  const commitItems = (
+    items: SessionItem[],
+    epoch: number,
+    lastTry: boolean,
+    handOver: (rows: number) => () => void,
+  ): Effect.Effect<CommitOutcome> =>
     Effect.suspend(() => {
+      // An item queued behind one that came back waits for the next pass.
+      if (commitEpoch !== epoch) return Effect.succeed("stale")
       const generation = displayGeneration
-      const stillCurrent = () => displayGeneration === generation && canCommitNatively()
-      if (!stillCurrent()) return Effect.succeed(false)
-      const surface: ScrollbackSurface = renderer.createScrollbackSurface()
-      const surfaceRenderer = Object.create(surface.renderContext)
-      Object.defineProperties(surfaceRenderer, {
-        root: { get: () => surface.root, enumerable: true },
-        width: { get: () => surface.width, enumerable: true },
-        height: { get: () => surface.height, enumerable: true },
-      })
-      const disposeSnapshot = Option.fromNullishOr(
-        runWithOwner(owner, () =>
-          createRoot((dispose) => {
-            insert(surface.root, () => (
-              <RendererContext.Provider value={surfaceRenderer}>
-                {props.renderItems(items)}
-              </RendererContext.Provider>
-            ))
-            return dispose
-          }),
-        ),
+      const stillCurrent = () =>
+        displayGeneration === generation && commitEpoch === epoch && canCommitNatively()
+      if (!stillCurrent()) return Effect.succeed("refused")
+      // Settling is asynchronous. The screen may have changed hands and the
+      // reader may have cleared the display while it ran, so both are
+      // checked again before the rows are handed over.
+      const commitDrawn = (surface: ScrollbackSurface): Effect.Effect<CommitOutcome> =>
+        Effect.suspend(() => {
+          if (surface.isDestroyed || !stillCurrent()) return Effect.succeed("refused")
+          // Drawn at the screen's size now: the rows commit at the width they show.
+          surface.render()
+          const undo = handOver(surface.height)
+          return Effect.try(() => surface.commitRows(0, surface.height)).pipe(
+            Effect.as<CommitOutcome>("landed"),
+            Effect.catch(() =>
+              Effect.sync((): CommitOutcome => {
+                undo()
+                return "refused"
+              }),
+            ),
+          )
+        })
+      const commitPlain = Effect.scoped(
+        Effect.gen(function* () {
+          const surface = yield* drawSurface(items, true)
+          yield* Effect.tryPromise(() => surface.settle(PLAIN_SETTLE_MS)).pipe(Effect.ignore)
+          return yield* commitDrawn(surface)
+        }),
       )
-      return Effect.tryPromise(() => surface.settle(2000)).pipe(
-        // A highlight that never lands still commits; the row text is complete.
-        // A surface the renderer already tore down has nothing left to draw.
-        Effect.catch(() =>
-          Effect.suspend(() => {
-            if (surface.isDestroyed) return Effect.void
-            return Effect.sync(() => surface.render())
-          }),
-        ),
-        // Settling is asynchronous. The screen may have changed hands and the
-        // reader may have cleared the display while it ran, so both are
-        // checked again before the rows are handed over.
-        Effect.andThen(
-          Effect.suspend(() => {
-            if (surface.isDestroyed || !stillCurrent()) return Effect.succeed(false)
-            return Effect.sync(() => {
-              surface.commitRows(0, surface.height)
-              return true
-            })
-          }),
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (Option.isSome(disposeSnapshot)) disposeSnapshot.value()
-            if (!surface.isDestroyed) surface.destroy()
-          }),
-        ),
+      if (lastTry || isLeaving()) return commitPlain
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const surface = yield* drawSurface(items, false)
+          const settled = yield* Effect.tryPromise(() => surface.settle(SETTLE_BUDGET_MS)).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+            Effect.raceFirst(Deferred.await(leaving).pipe(Effect.as(false))),
+          )
+          if (settled) return yield* commitDrawn(surface)
+          if (isLeaving()) return yield* commitPlain
+          return "unsettled"
+        }),
       )
     })
 
-  /** The screen changed hands: give the item back to the live view. */
+  /**
+   * Give the item back to the live view, and every item queued behind it:
+   * history is written in transcript order, so none of them may land before
+   * it. A later pass offers them again.
+   */
   const rewind = () => {
+    commitEpoch += 1
     queued = committed.length
     setRetryVersion((version) => version + 1)
   }
 
   /**
-   * Hands one item to native history and, only once its rows land, drops it
+   * Hands one item to native history and, only as its rows land, drops it
    * from the live view. A commit that could not happen leaves the counters
    * untouched, so the item stays visible and a later pass retries it.
    */
   const write = (item: SessionItem, fingerprintValue: string) => {
+    const tries = unsettledTries.get(fingerprintValue) ?? 0
+    const epoch = commitEpoch
+    // The live tail gives up the item's rows in the same update that drops
+    // it, so the region shrinks before the rows are queued, not a layout later.
+    const handOver = (rows: number) => {
+      const liveRowsOfItem = itemHeights.get(item) ?? rows
+      releasedRows += rows
+      batch(() => {
+        committed = [...committed, fingerprintValue]
+        setCommittedCount(committed.length)
+        setLiveHeight((height) => Math.max(0, height - liveRowsOfItem))
+      })
+      // Sized here as well as by the effect: the commit is queued next, and
+      // a commit queued before the shrink would scroll the screen first.
+      untrack(() => sizeRegion(false))
+      // The write did not happen: the item, its rows and the region come back.
+      return () => {
+        releasedRows = Math.max(0, releasedRows - rows)
+        batch(() => {
+          committed = committed.filter((value) => value !== fingerprintValue)
+          setCommittedCount(committed.length)
+          setLiveHeight((height) => height + liveRowsOfItem)
+        })
+        untrack(() => sizeRegion(false))
+      }
+    }
     enqueueNative(
-      commitItems([item]).pipe(
-        Effect.andThen((landed) =>
+      commitItems([item], epoch, tries + 1 >= SETTLE_TRIES, handOver).pipe(
+        Effect.andThen((outcome) =>
           Effect.sync(() => {
-            if (!landed) return rewind()
-            committed = [...committed, fingerprintValue]
-            setCommittedCount(committed.length)
+            if (outcome === "stale") return
+            if (outcome === "unsettled") unsettledTries.set(fingerprintValue, tries + 1)
+            if (outcome !== "landed") return rewind()
+            unsettledTries.delete(fingerprintValue)
           }),
         ),
         Effect.onError(() => Effect.sync(rewind)),
@@ -1387,9 +1812,34 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     )
   }
 
+  // At exit every item the live view still holds commits, final or not,
+  // plain; a commit still settling stops waiting. The queue's order makes
+  // the drain wait for all of them.
+  const flushForExit = Effect.suspend(() => {
+    Deferred.doneUnsafe(leaving, Exit.void)
+    if (disposed || !canCommitNatively() || props.expanded || props.overlayOpen) return Effect.void
+    const items = displayedItems()
+    const next = items.map((item) => transcriptFingerprint(item))
+    if (!committed.every((value, index) => next[index] === value)) return Effect.void
+    for (; queued < items.length; queued++) {
+      const item = items[queued]
+      const value = next[queued]
+      if (!item || !Predicate.isString(value)) break
+      write(item, value)
+    }
+    return Effect.gen(function* () {
+      const drained = yield* Deferred.make<void>()
+      enqueueNative(Deferred.done(drained, Exit.void))
+      yield* Deferred.await(drained).pipe(Effect.timeout(EXIT_FLUSH_MS), Effect.ignore)
+    })
+  })
+  exitFlushes.set(renderer, flushForExit)
+
   onMount(() => {
     renderer.footerHeight = props.footerHeight
-    renderer.screenMode = "split-footer"
+    // The first transcript finds the renderer made in this mode; a later one
+    // (another session) finds the alternate screen the last one left.
+    if (renderer.screenMode !== "split-footer") renderer.screenMode = "split-footer"
     renderer.externalOutputMode = "capture-stdout"
     // Native history scrolls in the terminal. Mouse tracking would swallow the wheel.
     renderer.useMouse = false
@@ -1400,6 +1850,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
 
   onCleanup(() => {
     disposed = true
+    if (exitFlushes.get(renderer) === flushForExit) exitFlushes.delete(renderer)
     Queue.endUnsafe(nativeTasks)
     renderer.off("frame", finishNativeReturn)
     if (renderer.isDestroyed) return
@@ -1426,29 +1877,39 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     if (!ready()) return
     if (props.expanded || props.overlayOpen) {
       setNativeOutputReady(false)
+      if (renderer.screenMode === "split-footer") leftRegion = Option.some(regionPlace(renderer))
       renderer.externalOutputMode = "passthrough"
       renderer.screenMode = "alternate-screen"
       // The expanded transcript owns scrolling, so the wheel must reach the scrollbox.
       renderer.useMouse = true
       return
     }
-    const returning = renderer.screenMode === "alternate-screen"
-    renderer.footerHeight = splitFooterHeight(
-      dimensions().height,
-      props.footerHeight + stickyRows() + Math.max(1, liveHeight()),
-    )
+    // A return from the alternate screen (the palette, a picker, the
+    // expanded transcript) finds the terminal's own screen as it was:
+    // history above, and the region's rows, cleared, under it. Nothing
+    // replays: the region takes the rows it left, and the items the live
+    // view kept commit as they would have. The footer's size is still the
+    // overlay's here, so the region takes the rows it had, and the footer's
+    // next measure sizes it from there.
+    const returning = Option.filter(leftRegion, () => renderer.screenMode === "alternate-screen")
+    leftRegion = Option.none()
+    if (Option.isSome(returning) && !replayPending()) renderer.footerHeight = returning.value.rows
+    else sizeRegion(replayPending())
     renderer.screenMode = "split-footer"
+    // The region starts under the cursor row the output mode reads.
+    Option.map(returning, (place) => renderer.setCursorPosition(1, place.top, false))
     renderer.externalOutputMode = "capture-stdout"
     renderer.useMouse = false
-    if ((returning || replayPending()) && !settlingNative) {
+    if (replayPending() && !settlingNative) {
       settlingNative = true
       renderer.once("frame", finishNativeReturn)
-      // Layout and content changes invalidate saved snapshots.
-      // Clear before the layout frame; replay only after its measurements arrive.
-      const clearSavedLines = replayPending()
+      // A resize or a disclosure change replays all of history: the reset
+      // clears the screen, not the terminal's saved lines, which hold the
+      // reader's own shell. Clear before the layout frame; replay only after
+      // its measurements arrive.
       enqueueNative(
         Effect.sync(() => {
-          renderer.resetSplitFooterForReplay({ clearSavedLines })
+          renderer.resetSplitFooterForReplay()
           renderer.requestRender()
         }),
       )
@@ -1483,37 +1944,44 @@ export function NativeTranscript(props: NativeTranscriptProps) {
 
   // Scrollback is immutable, so nothing commits until every client renderer
   // has loaded and every notice-row source has answered; the live view draws
-  // the rows it has meanwhile.
+  // the rows it has meanwhile. Each item commits once it is final, in
+  // transcript order, during a turn too: the split region holds the footer
+  // and the items still in flight only, and an item leaves it by moving into
+  // history in place, never by a shrink that leaves its rows empty under the
+  // status row.
   createEffect(() => {
     if (!ext.loaded() || !props.settled) return
-    if (!nativeOutputReady() || props.streaming || props.expanded || props.overlayOpen) return
+    if (!nativeOutputReady() || props.expanded || props.overlayOpen) return
     const items = displayedItems()
     const next = items.map((item) => transcriptFingerprint(item))
-    measurementVersion()
+    const turnRunning = props.streaming
     retryVersion()
-    // The rows the live tail really has: the pinned prompt takes one.
-    const available = liveRows() - stickyRows()
+    // An answer with a diagram commits once the diagram library has loaded,
+    // so history never keeps its fence as code. Read here, outside `untrack`,
+    // so the load runs this again.
+    const undrawn = new Set(
+      items.filter(
+        (item, index) =>
+          index >= queued &&
+          isMessageItem(item) &&
+          item.role === "assistant" &&
+          !diagramsDrawable(diagramLibrary, item.content),
+      ),
+    )
     untrack(() => {
       const prefixMatches = committed.every((value, index) => next[index] === value)
       if (!prefixMatches) {
         requestReplay()
         return
       }
-      let remainingHeight = 0
-      for (const item of items.slice(queued)) {
-        remainingHeight += itemHeights.get(item) ?? 0
-      }
-      while (queued < items.length && remainingHeight > available) {
+      while (queued < items.length) {
         const item = items[queued]
-        if (!item) break
-        const height = Option.fromNullishOr(itemHeights.get(item))
-        if (Option.isNone(height)) break
+        if (!item || !isFinalItem(item, turnRunning) || undrawn.has(item)) break
         const value = next[queued]
         if (!Predicate.isString(value)) break
         // A completed item has one owner: native history or the live view. The
         // live view keeps it until the queued commit reports that it landed.
         write(item, value)
-        remainingHeight -= height.value
         queued++
       }
       const currentItems = new Set(items)
@@ -1591,6 +2059,31 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     return Math.min(Math.max(1, liveHeight()), liveRows() - stickyRows())
   }
 
+  /**
+   * Sizes the split region. It shrinks only by the rows a commit moved into
+   * history (`releasedRows`), which the commit then writes into the space
+   * the region left. Any other shrink (a docked pane or the suggestions
+   * closing, the composer losing lines) would leave its rows empty under
+   * the status row, so the region keeps them above the live tail, and the
+   * next rows the tail grows take them. That holds only for a region at the
+   * terminal's bottom, whose rows above went to the terminal's scrollback
+   * and cannot come back. A region above the bottom (a short session) has
+   * the terminal's own empty rows under it, so it shrinks to what it wants.
+   * A replay clears the screen and starts from the rows the region wants.
+   */
+  function sizeRegion(replaying: boolean) {
+    const height = dimensions().height
+    const wanted = splitFooterHeight(
+      height,
+      props.footerHeight + stickyRows() + Math.max(1, liveHeight()),
+    )
+    let held = Math.min(splitFooterHeight(height, height), renderer.footerHeight - releasedRows)
+    const place = regionPlace(renderer)
+    if (replaying || place.top + place.rows < renderer.terminalHeight) held = wanted
+    releasedRows = 0
+    renderer.footerHeight = Math.max(wanted, held)
+  }
+
   // A footer that takes the whole split region (a docked pane, its blank rows
   // given way) leaves the live tail no row. The scrollbox keeps its set height
   // and would draw its last row over the footer's first, so the tail reads its
@@ -1602,6 +2095,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     <box
       flexDirection="column"
       flexShrink={1}
+      // Rows the region holds beyond the tail's own sit under it, above the
+      // footer, never under the status row.
+      flexGrow={1}
       minHeight={0}
       // A basis, not the content's height: hidden rows must not end the measure.
       flexBasis={stickyRows() + viewportHeight()}

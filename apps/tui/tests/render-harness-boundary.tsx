@@ -3,7 +3,7 @@
 import { Writable } from "node:stream" // eslint-disable-line effect/noNodeBuiltinImport -- the renderer writes to a Node stream; a test terminal must be one.
 import { BunServices } from "@effect/platform-bun"
 import { Config, Context, Effect, FileSystem, Layer, Option, Path, Scope, Stream } from "effect"
-import type { CliRenderer, TerminalColors } from "@opentui/core"
+import type { CliRenderer, CliRendererExternalOutputEvent, TerminalColors } from "@opentui/core"
 import { render } from "@opentui/solid"
 import { createTestRenderer, type TestRendererOptions } from "@opentui/core/testing"
 import type { JSX } from "solid-js"
@@ -424,6 +424,11 @@ export const renderWithProviders = (
       )
       // Exercise terminal lifecycle operations against OpenTUI's in-memory streams.
       yield* Effect.promise(() => setup.renderer.setupTerminal())
+      const history: Array<string> = []
+      setup.renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+        history.push(snapshotText(event.snapshot))
+      })
+      histories.set(setup.renderer, history)
       yield* Effect.promise(() =>
         render(
           () => (
@@ -483,6 +488,24 @@ export const renderWithProviders = (
 
 export const renderFrame = (setup: TestRenderSetup) =>
   setup.captureCharFrame().replaceAll("\u00a0", " ")
+
+/** The rows each render committed to native history, in commit order. */
+const histories = new WeakMap<CliRenderer, Array<string>>()
+
+const snapshotText = (snapshot: CliRendererExternalOutputEvent["snapshot"]) =>
+  new TextDecoder()
+    .decode(snapshot.getRealCharBytes(true))
+    .split("\n")
+    .map((row) => row.trimEnd())
+    .join("\n")
+
+/**
+ * What the terminal holds: the rows committed to native history, then the
+ * split region's frame. A final transcript item moves to history as soon as
+ * it settles, so a row the reader sees may be in either.
+ */
+export const terminalText = (setup: TestRenderSetup) =>
+  [...(histories.get(setup.renderer) ?? []), renderFrame(setup)].join("\n")
 
 /** The terminal answers the palette query with `colors`, as a terminal with that palette does. */
 export const answerPalette = (renderer: CliRenderer, colors: TerminalColors) => {

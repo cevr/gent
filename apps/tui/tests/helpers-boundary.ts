@@ -1,7 +1,7 @@
-import { renderFrame, type renderWithProviders } from "./render-harness-boundary"
+import { renderFrame, terminalText, type renderWithProviders } from "./render-harness-boundary"
 import { Effect, type ManagedRuntime, Schema } from "effect"
 
-export { renderFrame }
+export { renderFrame, terminalText }
 
 type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
@@ -72,6 +72,21 @@ export const waitForFrame = (
     timeoutMs,
   ).pipe(Effect.map(() => lastFrame))
 }
+
+/**
+ * Render until `check` holds for what the terminal shows, native history
+ * included, then return it. For transcript rows: a final item leaves the
+ * frame for history as soon as it settles.
+ */
+export const waitForTerminal = (
+  setup: TestSetup,
+  check: (text: string) => boolean,
+  label = "condition",
+  timeoutMs = 2_000,
+): Effect.Effect<string, RenderWaitTimeoutError> =>
+  waitForFrame(setup, () => check(terminalText(setup)), label, timeoutMs).pipe(
+    Effect.map(() => terminalText(setup)),
+  )
 
 /**
  * Wait until `check` holds, running `advance` before each look: for work

@@ -26,7 +26,6 @@ import {
 } from "./terminal"
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
-import { createMermaidCache, MermaidCacheContext } from "./mermaid"
 import { Composer, ComposerFrame, StatusRow } from "./composer"
 import {
   DockFooter,
@@ -654,157 +653,152 @@ export function Session(props: SessionProps) {
 
   return (
     <SessionControllerContext.Provider value={controller}>
-      <MermaidCacheContext.Provider value={Option.some(createMermaidCache())}>
-        <box flexDirection="column" flexGrow={1}>
-          {/* Messages */}
-          <NativeTranscript
-            items={controller.items()}
-            settled={controller.itemsSettled()}
-            streaming={client.isStreaming()}
-            footerHeight={footerHeight()}
-            expanded={controller.uiState().transcriptExpanded}
-            disclosure={controller.uiState().disclosure}
-            displayRevision={controller.uiState().displayRevision}
-            overlayOpen={
-              command.paletteOpen() || overlayHoldsComposer(controller.uiState().overlay)
-            }
-            renderItems={(items) => (
-              <MessageList
-                items={items}
-                disclosure={controller.uiState().disclosure}
-                fullDetail={controller.uiState().transcriptExpanded}
-                syntaxStyle={syntaxStyle}
-                openAnswer={controller.openAnswer()}
+      <box flexDirection="column" flexGrow={1}>
+        {/* Messages */}
+        <NativeTranscript
+          items={controller.items()}
+          settled={controller.itemsSettled()}
+          streaming={client.isStreaming()}
+          footerHeight={footerHeight()}
+          expanded={controller.uiState().transcriptExpanded}
+          disclosure={controller.uiState().disclosure}
+          displayRevision={controller.uiState().displayRevision}
+          overlayOpen={command.paletteOpen() || overlayHoldsComposer(controller.uiState().overlay)}
+          renderItems={(items) => (
+            <MessageList
+              items={items}
+              disclosure={controller.uiState().disclosure}
+              fullDetail={controller.uiState().transcriptExpanded}
+              syntaxStyle={syntaxStyle}
+            />
+          )}
+        >
+          <Show when={controller.items().length === 0}>
+            <box height={1} flexShrink={0}>
+              <text>
+                <span style={{ fg: theme.primary, bold: true }}>gent</span>
+                <span style={{ fg: theme.textMuted }}>
+                  {" "}
+                  · {keyHintsLine([keyHint("ctrl+p", "commands")], 80)}
+                </span>
+              </text>
+            </box>
+          </Show>
+          <ConnectionWidget />
+          <ExtensionWidgets slot="below-messages" />
+          {/* QueueWidget stays hardwired because its data comes from session controller
+            state that is not exposed through the extension context. */}
+          <QueueWidget
+            queuedMessages={controller.queueState().followUp}
+            steerMessages={controller.queueState().steering}
+          />
+        </NativeTranscript>
+
+        {/* The footer never outgrows the split-footer region: past it, the
+          last rows (a docked pane's newest lines, its ask line) fall below
+          the terminal. While a docked pane is open the trays hide
+          (`TrayFrame`), the blank rows give way (`useDockSpacer`), and the
+          pane gives way in whole rows (`PickerFrame`); the composer keeps
+          its rows. */}
+        <DockFooter
+          maxHeight={splitFooterHeight(dimensions().height, dimensions().height)}
+          onSizeChange={setFooterHeight}
+        >
+          <ExtensionWidgets slot="above-input" />
+
+          <Show when={controller.activity().phase !== "idle"}>
+            <ActivityRow>
+              <text wrapMode="none" style={{ fg: theme.textMuted }}>
+                {(() => {
+                  const label = controller.phaseLabel()
+                  let elapsed = ""
+                  if (controller.elapsed() >= 1000)
+                    elapsed = ` (${formatDuration(controller.elapsed(), "compact")})`
+                  return activityLine(label, elapsed, Math.max(1, dimensions().width - 2))
+                })()}
+              </text>
+            </ActivityRow>
+          </Show>
+
+          {/* One dock slot: every pane (the popup and the palette inside the
+            composer, the panes after it) docks under the status row. */}
+          <ComposerFrame>
+            <Composer
+              statusRow={
+                <StatusRow
+                  labels={[
+                    ...phaseLabels(),
+                    ...connectionLabels(),
+                    ...modelLabels(),
+                    ...extensionLabels(),
+                    ...rightAnchoredLabels(),
+                  ]}
+                  rightLabels={rightAnchoredLabels().length}
+                />
+              }
+            >
+              <Composer.Autocomplete />
+              <CommandPalette />
+            </Composer>
+          </ComposerFrame>
+          <SettingsPicker
+            open={controller.uiState().overlay._tag === "model"}
+            title="Model"
+            rows={modelRows(client.models())}
+            current={Option.some(client.model())}
+            onSelect={(id) => controller.onModelSelect(ModelId.make(id))}
+            onClose={controller.closeOverlay}
+          />
+          <SettingsPicker
+            open={controller.uiState().overlay._tag === "reasoning"}
+            title="Reasoning"
+            rows={reasoningRows(client.resolvedReasoningLevel())}
+            current={Option.some(
+              Option.getOrElse(
+                Option.fromUndefinedOr(client.session().reasoningLevel),
+                () => DEFAULT_ROW_ID,
+              ),
+            )}
+            onSelect={(id) => controller.onReasoningSelect(parseReasoningRow(id))}
+            onClose={controller.closeOverlay}
+          />
+          {(() => {
+            const overlay = controller.uiState().overlay
+            if (overlay._tag !== "branches") return <></>
+            return (
+              <BranchPicker
+                open={true}
+                sessionId={props.sessionId}
+                sessionName={controller.currentSessionName()}
+                branches={overlay.branches}
+                onSelect={controller.onBranchPickerSelect}
+              />
+            )
+          })()}
+          <MessagePicker
+            open={controller.uiState().overlay._tag === "fork"}
+            messages={controller.forkMessages()}
+            onSelect={controller.onForkSelect}
+            onClose={controller.closeOverlay}
+          />
+          <PromptSearchPalette
+            state={controller.promptSearch.state()}
+            entries={controller.promptSearch.entries()}
+            onEvent={controller.promptSearch.onEvent}
+          />
+          <Show when={Option.getOrUndefined(authOverlay())}>
+            {(overlay) => (
+              <Auth
+                sessionId={props.sessionId}
+                enforceAuth={overlay().enforceAuth}
+                onResolved={controller.resolveAuthGate}
+                onClose={controller.closeOverlay}
               />
             )}
-          >
-            <Show when={controller.items().length === 0}>
-              <box height={1} flexShrink={0}>
-                <text>
-                  <span style={{ fg: theme.primary, bold: true }}>gent</span>
-                  <span style={{ fg: theme.textMuted }}>
-                    {" "}
-                    · {keyHintsLine([keyHint("ctrl+p", "commands")], 80)}
-                  </span>
-                </text>
-              </box>
-            </Show>
-            <ConnectionWidget />
-            <ExtensionWidgets slot="below-messages" />
-            {/* QueueWidget stays hardwired because its data comes from session controller
-              state that is not exposed through the extension context. */}
-            <QueueWidget
-              queuedMessages={controller.queueState().followUp}
-              steerMessages={controller.queueState().steering}
-            />
-          </NativeTranscript>
-
-          {/* The footer never outgrows the split-footer region: past it, the
-            last rows (a docked pane's newest lines, its ask line) fall below
-            the terminal. While a docked pane is open the trays hide
-            (`TrayFrame`), the blank rows give way (`useDockSpacer`), and the
-            pane gives way in whole rows (`PickerFrame`); the composer keeps
-            its rows. */}
-          <DockFooter
-            maxHeight={splitFooterHeight(dimensions().height, dimensions().height)}
-            onSizeChange={setFooterHeight}
-          >
-            <ExtensionWidgets slot="above-input" />
-
-            <Show when={controller.activity().phase !== "idle"}>
-              <ActivityRow>
-                <text wrapMode="none" style={{ fg: theme.textMuted }}>
-                  {(() => {
-                    const label = controller.phaseLabel()
-                    let elapsed = ""
-                    if (controller.elapsed() >= 1000)
-                      elapsed = ` (${formatDuration(controller.elapsed(), "compact")})`
-                    return activityLine(label, elapsed, Math.max(1, dimensions().width - 2))
-                  })()}
-                </text>
-              </ActivityRow>
-            </Show>
-
-            {/* One dock slot: every pane (the popup and the palette inside the
-              composer, the panes after it) docks under the status row. */}
-            <ComposerFrame>
-              <Composer
-                statusRow={
-                  <StatusRow
-                    labels={[
-                      ...phaseLabels(),
-                      ...connectionLabels(),
-                      ...modelLabels(),
-                      ...extensionLabels(),
-                      ...rightAnchoredLabels(),
-                    ]}
-                    rightLabels={rightAnchoredLabels().length}
-                  />
-                }
-              >
-                <Composer.Autocomplete />
-                <CommandPalette />
-              </Composer>
-            </ComposerFrame>
-            <SettingsPicker
-              open={controller.uiState().overlay._tag === "model"}
-              title="Model"
-              rows={modelRows(client.models())}
-              current={Option.some(client.model())}
-              onSelect={(id) => controller.onModelSelect(ModelId.make(id))}
-              onClose={controller.closeOverlay}
-            />
-            <SettingsPicker
-              open={controller.uiState().overlay._tag === "reasoning"}
-              title="Reasoning"
-              rows={reasoningRows(client.resolvedReasoningLevel())}
-              current={Option.some(
-                Option.getOrElse(
-                  Option.fromUndefinedOr(client.session().reasoningLevel),
-                  () => DEFAULT_ROW_ID,
-                ),
-              )}
-              onSelect={(id) => controller.onReasoningSelect(parseReasoningRow(id))}
-              onClose={controller.closeOverlay}
-            />
-            {(() => {
-              const overlay = controller.uiState().overlay
-              if (overlay._tag !== "branches") return <></>
-              return (
-                <BranchPicker
-                  open={true}
-                  sessionId={props.sessionId}
-                  sessionName={controller.currentSessionName()}
-                  branches={overlay.branches}
-                  onSelect={controller.onBranchPickerSelect}
-                />
-              )
-            })()}
-            <MessagePicker
-              open={controller.uiState().overlay._tag === "fork"}
-              messages={controller.forkMessages()}
-              onSelect={controller.onForkSelect}
-              onClose={controller.closeOverlay}
-            />
-            <PromptSearchPalette
-              state={controller.promptSearch.state()}
-              entries={controller.promptSearch.entries()}
-              onEvent={controller.promptSearch.onEvent}
-            />
-            <Show when={Option.getOrUndefined(authOverlay())}>
-              {(overlay) => (
-                <Auth
-                  sessionId={props.sessionId}
-                  enforceAuth={overlay().enforceAuth}
-                  onResolved={controller.resolveAuthGate}
-                  onClose={controller.closeOverlay}
-                />
-              )}
-            </Show>
-            <ExtensionWidgets slot="below-input" />
-          </DockFooter>
-        </box>
-      </MermaidCacheContext.Provider>
+          </Show>
+          <ExtensionWidgets slot="below-input" />
+        </DockFooter>
+      </box>
     </SessionControllerContext.Provider>
   )
 }

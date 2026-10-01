@@ -11,7 +11,7 @@
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace.tsx`.
 - **Error boundaries** - A failure travels in the Effect error channel and shows in the status row or the open pane's note row. No try/catch (`effect/noTryCatch`).
-- **Exit pattern** - Use `renderer.destroy()` then `useEnv().shutdown()` for clean exit. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
+- **Exit pattern** - Exit through `useExit()` (`session.tsx`): it leaves the terminal through `leaveTerminal` (`message-list.tsx`: commit the live transcript tail with `flushTranscriptForExit`, then `renderer.destroy()`), then runs `useEnv().shutdown()`. A signal takes the same path: the entry's hold on the renderer (`holdUntilRendererDestroyed`) runs `leaveTerminal` when it is interrupted. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
 - **Intrinsic names** - Take the names from the opentui catalogue: some multi-word intrinsics use underscores (`tab_select`, `ascii_font`), `scrollbox` is one word.
 - **Use `<For>`** - Never `.map()` for JSX lists; use `<For each={items}>{item => ...}</For>`.
 
@@ -178,6 +178,33 @@ keep a nested minimum here, and OpenTUI draws a 0-row node as one row, so
 the order is set by hiding whole boxes, not by shrink weights. A pane whose newest row matters
 passes `stickToBottom` to `ChromePanel.Body` and puts its gaps above a row,
 not under it.
+
+The split region holds the footer and the transcript items still in flight;
+every final item goes to the terminal's native history, during a turn too
+(`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits for its
+stored answer, and a message waits while a call of it runs). A commit
+shrinks the region by the item's rows first and then writes them, so the
+rows land where the item was drawn and no row is left empty under the
+status row; a write OpenTUI refuses gives the item back to the live view.
+At the terminal's bottom, any other shrink (a pane closing) keeps its rows
+above the footer for the live tail to take; a region above the bottom
+shrinks. An item whose highlight does not settle, and every item at exit,
+commits as plain text (`PlainHistoryContext`). Closing the palette or a
+picker replays nothing, and no replay clears the terminal's saved lines.
+Exit commits the live tail first (`leaveTerminal`), and the renderer is
+created with `clearOnShutdown: false`, so exit leaves every turn on screen.
+
+Answer markdown draws each top-level block on its own
+(`internalBlockMode="top-level"`), so a heading never shows its `#` marks
+before its highlight lands. A ` ```mermaid ` fence is its own block,
+drawn by `useDiagramCodeBlocks` (`mermaid.ts`; beautiful-mermaid loads on
+the first fence, and history waits for the load to end; a failed load
+shows the fence as code): compact boxes in theme colors, no wrap, no
+selection, at most 120 columns (a wider diagram is cut). While the fence
+streams it draws each statement once it ends (a newline, or a `;` outside a
+label) and keeps its last diagram when they do not draw; once closed, a
+source that does not draw shows as its code block. Tests give their own
+library through `DiagramLibraryContext`.
 
 The transcript pins the reader's last prompt in one row (`↑ <first line>`) above
 the live tail while that prompt's own row is off screen: cut off the top of the
