@@ -793,18 +793,16 @@ export function Auth(props: AuthProps) {
 
   // A wrapped URL runs over several rows, and a mouse drag must start and
   // end on its exact first and last cells; one key copies it whole, as in
-  // Codex, Claude Code and OpenCode. The code line takes typed text too, so
-  // `c` copies only while the code is empty; once it has text, `c` is a
-  // letter of the code.
-  const urlCopyKeyLive = (current: OAuthScreen) => current.code.length === 0
+  // Codex, Claude Code and OpenCode. The code line takes every printing key,
+  // so the copy key is `ctrl+y` (OpenCode's copy binding): it can never be a
+  // letter of a code typed by hand.
+  const isUrlCopyKey = (event: ScopedKeyboardEvent) =>
+    event.name === "y" && event.ctrl === true && event.meta !== true
   const copyUrl = (current: OAuthScreen) => {
     copyToClipboard(current.authorization.url)
     flashSuccess("URL copied to the clipboard")
   }
-  const oauthKeys = (current: OAuthScreen) => {
-    if (urlCopyKeyLive(current)) return [keyHint("c", "copy URL"), KeyHints.submit, KeyHints.back]
-    return [KeyHints.submit, KeyHints.back]
-  }
+  const OAUTH_KEYS = [keyHint("ctrl+y", "copy URL"), KeyHints.submit, KeyHints.back]
   /** The note row: a copy's confirmation while it shows, else the waiting note. */
   const oauthNote = (current: OAuthScreen) =>
     Option.orElse(
@@ -860,8 +858,7 @@ export function Auth(props: AuthProps) {
           onSubmit={() => submitOauth(bodyProps.current())}
           onCancel={close}
           onKey={(event) => {
-            if (event.name !== "c" || event.ctrl === true || event.meta === true) return false
-            if (!urlCopyKeyLive(bodyProps.current())) return false
+            if (!isUrlCopyKey(event)) return false
             copyUrl(bodyProps.current())
             return true
           }}
@@ -950,7 +947,7 @@ export function Auth(props: AuthProps) {
           <PickerFrame
             height={oauthBodyRows(current()) + OAUTH_CHROME_ROWS}
             title={`Sign in · ${current().provider} · ${current().method.label}`}
-            keys={oauthKeys(current())}
+            keys={OAUTH_KEYS}
             error={state().error}
             detail={oauthNote(current())}
           >
@@ -979,7 +976,7 @@ function AuthTextLine(props: {
   readonly onEvent: (event: AuthEvent) => void
   readonly onSubmit: () => void
   readonly onCancel: () => void
-  /** Sees each key before the line does; `true` means the pane took it (the OAuth `c` copy). */
+  /** Sees each key before the line does; `true` means the pane took it (the OAuth `ctrl+y` copy). */
   readonly onKey?: (event: ScopedKeyboardEvent) => boolean
 }) {
   const { theme } = useTheme()

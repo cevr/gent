@@ -4536,27 +4536,33 @@ describe("App clipboard", () => {
   // A wrapped sign-in URL runs over several rows: a drag must start and end
   // on its exact first and last cells. One key copies it whole, as Codex,
   // Claude Code and OpenCode offer.
-  it.scopedLive("c on the sign-in pane copies the whole URL and says it did", () =>
+  it.scopedLive("ctrl+y on the sign-in pane copies the whole URL and says it did", () =>
     Effect.gen(function* () {
       const longUrl = `https://auth.example.com/oauth/authorize?client_id=gent&scope=${"x".repeat(150)}&state=end`
       const { setup, output } = yield* mountOAuthScreen(longUrl)
-      expect(renderFrame(setup)).toContain("c copy URL")
+      expect(renderFrame(setup)).toContain("ctrl+y copy URL")
 
-      yield* Effect.promise(() => setup.mockInput.typeText("c"))
+      setup.mockInput.pressKey("y", { ctrl: true })
       yield* waitUntil(() => output.written().includes(osc52(longUrl)), "the OSC 52 copy")
       yield* waitForFrame(setup, (frame) => frame.includes("URL copied"), "the copied note")
     }).pipe(Effect.timeout("8 seconds")),
   )
 
-  it.scopedLive("once a code has text, c types into it and copies nothing", () =>
+  // The copy key prints nothing, so every letter of a code typed by hand
+  // reaches the code line, a first `c` or `C` too.
+  it.scopedLive("a code typed by hand keeps every letter and copies nothing", () =>
     Effect.gen(function* () {
       const { setup, output } = yield* mountOAuthScreen(deviceUrl)
-      yield* Effect.promise(() => setup.mockInput.typeText("ab"))
-      yield* waitForFrame(setup, (frame) => frame.includes("optional): ab"), "the typed code")
-      expect(renderFrame(setup)).not.toContain("c copy URL")
-
-      yield* Effect.promise(() => setup.mockInput.typeText("c"))
-      yield* waitForFrame(setup, (frame) => frame.includes("optional): abc"), "c in the code")
+      yield* Effect.promise(() => setup.mockInput.typeText("cat"))
+      yield* waitForFrame(setup, (frame) => frame.includes("optional): cat"), "the typed code")
+      for (const _ of "cat") setup.mockInput.pressBackspace()
+      yield* Effect.promise(() => setup.mockInput.typeText("Cat"))
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("optional): Cat"),
+        "the capital code",
+      )
+      expect(frame).toContain("ctrl+y copy URL")
       expect(output.written()).not.toContain("\u001b]52;")
     }).pipe(Effect.timeout("8 seconds")),
   )
@@ -4569,7 +4575,7 @@ describe("App clipboard", () => {
       const runs: Array<{ args: ReadonlyArray<string>; stdin: string }> = []
       const { setup, output } = yield* mountOAuthScreen(deviceUrl, recordedTmux(runs, tmuxEnv))
 
-      yield* Effect.promise(() => setup.mockInput.typeText("c"))
+      setup.mockInput.pressKey("y", { ctrl: true })
       yield* waitUntil(() => runs.length > 0, "the tmux run")
       expect(runs).toEqual([{ args: ["load-buffer", "-w", "-"], stdin: deviceUrl }])
       expect(output.written()).toContain(Base64.encode(deviceUrl))
@@ -4581,7 +4587,7 @@ describe("App clipboard", () => {
       const runs: Array<{ args: ReadonlyArray<string>; stdin: string }> = []
       const { setup, output } = yield* mountOAuthScreen(deviceUrl, recordedTmux(runs, {}))
 
-      yield* Effect.promise(() => setup.mockInput.typeText("c"))
+      setup.mockInput.pressKey("y", { ctrl: true })
       yield* waitUntil(() => output.written().includes(osc52(deviceUrl)), "the OSC 52 copy")
       expect(runs).toEqual([])
     }).pipe(Effect.timeout("8 seconds")),
