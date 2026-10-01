@@ -95,6 +95,7 @@
       "dependencies": {
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
+        "@effect/ai-openai-compat": "catalog:",
         "@gent/core": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.31.0",
         "effect-encore": "catalog:",
@@ -132,16 +133,19 @@
   "patchedDependencies": {
     "@opentui/core@0.5.11": "patches/@opentui%2Fcore@0.5.11.patch",
     "@effect/ai-anthropic@4.0.0-rc.118": "patches/@effect%2Fai-anthropic@4.0.0-rc.118.patch",
+    "@effect/ai-openai-compat@4.0.0-rc.118": "patches/@effect%2Fai-openai-compat@4.0.0-rc.118.patch",
   },
   "overrides": {
     "@effect/ai-anthropic": "4.0.0-rc.118",
     "@effect/ai-openai": "4.0.0-rc.118",
+    "@effect/ai-openai-compat": "4.0.0-rc.118",
     "@effect/platform-node-shared": "4.0.0-rc.118",
     "effect": "4.0.0-rc.118",
   },
   "catalog": {
     "@effect/ai-anthropic": "4.0.0-rc.118",
     "@effect/ai-openai": "4.0.0-rc.118",
+    "@effect/ai-openai-compat": "4.0.0-rc.118",
     "@effect/opentelemetry": "4.0.0-rc.118",
     "@effect/platform-bun": "4.0.0-rc.118",
     "@effect/sql-sqlite-bun": "4.0.0-rc.118",
@@ -218,6 +222,8 @@
     "@effect/ai-anthropic": ["@effect/ai-anthropic@4.0.0-rc.118", "", { "peerDependencies": { "effect": "^4.0.0-rc.118" } }, "sha512-75a5I0nU/CnKXBstDKCtMVWazzGnmxETRtO1EXXtFJfYRGIp2MjJeB5bIfBReqrT6aXA3LE+D4S1K/9bqfOTHg=="],
 
     "@effect/ai-openai": ["@effect/ai-openai@4.0.0-rc.118", "", { "peerDependencies": { "effect": "^4.0.0-rc.118" } }, "sha512-VEhcR8L77hurJ5bHjxrrDe3KAIFZYf3xB1qwycbI5sfXrO6OdH6SMqqWQuOT71bBaUdGLbFc48Cmjl44XTozzg=="],
+
+    "@effect/ai-openai-compat": ["@effect/ai-openai-compat@4.0.0-rc.118", "", { "peerDependencies": { "effect": "^4.0.0-rc.118" } }, "sha512-VqjUIq1HDcluCx6Xoqg+nDY4UC2FQUnfihNitg0y3rj/gHOps70k1PCgyPzBXNNi6GWzfakjNp69d2PfTryyOA=="],
 
     "@effect/opentelemetry": ["@effect/opentelemetry@4.0.0-rc.118", "", { "peerDependencies": { "@opentelemetry/api": ">=1.9.0 <2.0.0", "@opentelemetry/api-logs": ">=0.203.0 <0.300.0", "@opentelemetry/resources": ">=2.0.0 <3.0.0", "@opentelemetry/sdk-logs": ">=0.203.0 <0.300.0", "@opentelemetry/sdk-metrics": ">=2.0.0 <3.0.0", "@opentelemetry/sdk-trace-base": ">=2.0.0 <3.0.0", "@opentelemetry/sdk-trace-node": ">=2.0.0 <3.0.0", "@opentelemetry/sdk-trace-web": ">=2.0.0 <3.0.0", "@opentelemetry/semantic-conventions": ">=1.33.0 <2.0.0", "effect": "^4.0.0-rc.118" }, "optionalPeers": ["@opentelemetry/api", "@opentelemetry/api-logs", "@opentelemetry/resources", "@opentelemetry/sdk-logs", "@opentelemetry/sdk-metrics", "@opentelemetry/sdk-trace-base", "@opentelemetry/sdk-trace-node", "@opentelemetry/sdk-trace-web"] }, "sha512-N5dvEeCj1W/9zgBvyyp/GucOKOEJdV7QNirWp+4g/axFKTB/cfV2gx/ZhMDUb69HzlyRmOelNvKEmB3RA0PdVw=="],
 

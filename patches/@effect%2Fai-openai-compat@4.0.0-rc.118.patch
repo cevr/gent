@@ -1,0 +1,169 @@
+diff --git a/node_modules/@effect/ai-openai-compat/.bun-tag-49e28114bd1e9eff b/.bun-tag-49e28114bd1e9eff
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@effect/ai-openai-compat/.bun-tag-65b143343c3ce065 b/.bun-tag-65b143343c3ce065
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@effect/ai-openai-compat/.bun-tag-db8e45df92885e0a b/.bun-tag-db8e45df92885e0a
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@effect/ai-openai-compat/.bun-tag-edbdab4f5bc6a53b b/.bun-tag-edbdab4f5bc6a53b
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/OpenAiLanguageModel.d.ts b/dist/OpenAiLanguageModel.d.ts
+index bf77c3c6e9ddb535e3e5b502030959187d17a04d..8d6aec50661a61de8f1130ee02630d5a87b88d2b 100644
+--- a/dist/OpenAiLanguageModel.d.ts
++++ b/dist/OpenAiLanguageModel.d.ts
+@@ -38,6 +38,13 @@ type ConfigOptions = Simplify<Partial<Omit<CreateResponse, "input" | "tools" | "
+      * Defaults to `true`.
+      */
+     readonly strictJsonSchema?: boolean | undefined;
++    /**
++     * Send the model's reasoning back as `reasoning_content` on the assistant
++     * message that holds it, with that message's tool calls (gent patch).
++     *
++     * Defaults to `false`: the request is the upstream SDK's.
++     */
++    readonly replayReasoning?: boolean | undefined;
+ }>;
+ type ModelConfig = Omit<ConfigOptions, "model"> & {
+     readonly [x: string]: unknown;
+@@ -78,6 +85,7 @@ declare const Config_base: Context.ServiceClass<Config, "@effect/ai-openai-compa
+         readonly verbosity?: "low" | "medium" | "high" | undefined;
+     } | undefined;
+     readonly strictJsonSchema?: boolean | undefined;
++    readonly replayReasoning?: boolean | undefined;
+ } & {
+     readonly [x: string]: unknown;
+ }>;
+diff --git a/dist/OpenAiLanguageModel.js b/dist/OpenAiLanguageModel.js
+index 53783fcab2843189b0890dbf4b981c21726e1bcc..73ae95d9287c209d74a7df5df0fe0e72b9df835a 100644
+--- a/dist/OpenAiLanguageModel.js
++++ b/dist/OpenAiLanguageModel.js
+@@ -135,6 +135,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* ({
+     const {
+       fileIdPrefixes: _fip,
+       strictJsonSchema: _sjs,
++      replayReasoning: _rr,
+       ...apiConfig
+     } = config;
+     const request = {
+@@ -152,7 +153,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* ({
+         tool_choice: toolChoice
+       } : undefined)
+     };
+-    return toChatCompletionsRequest(request);
++    return toChatCompletionsRequest(request, config.replayReasoning === true);
+   });
+   return yield* LanguageModel.make({
+     codecTransformer: toCodecOpenAI,
+@@ -255,6 +256,11 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
+   }
+   const messages = [];
+   for (const message of options.prompt.content) {
++    if (config.replayReasoning === true) {
++      messages.push({
++        type: "message_boundary"
++      });
++    }
+     switch (message.role) {
+       case "system":
+         {
+@@ -379,6 +385,15 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
+                   if (hasConversation && Predicate.isNotNull(id)) {
+                     break;
+                   }
++                  if (config.replayReasoning === true && Predicate.isNull(id) && part.text.length > 0) {
++                    messages.push({
++                      type: "reasoning",
++                      summary: [{
++                        type: "summary_text",
++                        text: part.text
++                      }]
++                    });
++                  }
+                   if (Predicate.isNotNull(id)) {
+                     const message = reasoningMessages[id];
+                     if (config.store === true) {
+@@ -985,8 +1000,8 @@ const prepareTools = /*#__PURE__*/Effect.fnUntraced(function* ({
+     toolChoice
+   };
+ });
+-const toChatCompletionsRequest = payload => {
+-  const messages = toChatMessages(payload.input);
++const toChatCompletionsRequest = (payload, replayReasoning) => {
++  const messages = toChatMessages(payload.input, replayReasoning);
+   const responseFormat = toChatResponseFormat(payload.text?.format);
+   const tools = payload.tools !== undefined ? payload.tools.map(toChatTool).filter(tool => tool !== undefined) : [];
+   const toolChoice = toChatToolChoice(payload.tool_choice);
+@@ -1133,7 +1148,7 @@ const toChatTool = tool => {
+   }
+   return undefined;
+ };
+-const toChatMessages = input => {
++const toChatMessages = (input, replayReasoning) => {
+   if (Predicate.isUndefined(input)) {
+     return [];
+   }
+@@ -1143,6 +1158,12 @@ const toChatMessages = input => {
+       content: input
+     }];
+   }
++  if (replayReasoning !== true) {
++    return toUpstreamChatMessages(input);
++  }
++  return toReplayingChatMessages(input);
++};
++const toUpstreamChatMessages = input => {
+   const messages = [];
+   for (const item of input) {
+     if (Predicate.hasProperty(item, "type") && item.type === "function_call") {
+@@ -1166,6 +1187,48 @@ const toChatMessages = input => {
+   }
+   return messages;
+ };
++// Each prompt message's items follow a `message_boundary` item. Reasoning and
++// tool calls attach only to an assistant message of the same prompt message.
++const toReplayingChatMessages = input => {
++  const messages = [];
++  let reasoning = undefined;
++  let firstOfMessage = 0;
++  const withReasoning = message => {
++    if (reasoning === undefined || message.role !== "assistant") return message;
++    const text = reasoning;
++    reasoning = undefined;
++    return {
++      ...message,
++      reasoning_content: (message.reasoning_content ?? "") + text
++    };
++  };
++  for (const item of input) {
++    if (Predicate.hasProperty(item, "type") && item.type === "message_boundary") {
++      reasoning = undefined;
++      firstOfMessage = messages.length;
++    } else if (Predicate.hasProperty(item, "type") && item.type === "reasoning") {
++      reasoning = (reasoning ?? "") + (item.summary ?? []).map(part => part.text).join("");
++    } else if (Predicate.hasProperty(item, "type") && item.type === "function_call") {
++      const previous = messages.length > firstOfMessage ? messages.at(-1) : undefined;
++      const toolCall = toChatToolCall(item);
++      if (previous?.role === "assistant") {
++        messages[messages.length - 1] = withReasoning({
++          ...previous,
++          tool_calls: [...(previous.tool_calls ?? []), toolCall]
++        });
++      } else {
++        messages.push(withReasoning({
++          role: "assistant",
++          content: null,
++          tool_calls: [toolCall]
++        }));
++      }
++    } else {
++      messages.push(...toChatMessagesFromItem(item).map(withReasoning));
++    }
++  }
++  return messages;
++};
+ const toChatMessagesFromItem = item => {
+   if (Predicate.hasProperty(item, "type") && item.type === "message") {
+     return [{

@@ -682,36 +682,161 @@ type ModelsDevModel = typeof ModelsDevModel.Type
 const decodeModelsDevModel = Schema.decodeUnknownOption(ModelsDevModel)
 
 /**
- * The format of the disk cache, derived from the two shapes that decide what
- * a cached catalog holds: the models.dev entry the parser reads and the
- * `Model` it writes. A build that parses a new field, or adds one to `Model`,
- * gets a new format, so a cache an older build wrote refetches at once
- * instead of serving models without that field for up to a day.
+ * One reasoning control a model accepts, as models.dev lists it under
+ * `reasoning_options`: a list of effort values, an on/off toggle, or a
+ * thinking budget in tokens. models.dev writes the "no reasoning" effort as
+ * `null`; the catalog keeps it as `"none"`.
+ */
+export const ReasoningOption = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("effort"), values: Schema.Array(Schema.String) }),
+  Schema.Struct({ type: Schema.Literal("toggle") }),
+  Schema.Struct({
+    type: Schema.Literal("budget_tokens"),
+    min: Schema.optional(Schema.Finite),
+    max: Schema.optional(Schema.Finite),
+  }),
+]).pipe(Schema.toTaggedUnion("type"))
+export type ReasoningOption = typeof ReasoningOption.Type
+
+/**
+ * How a driver talks to a model, from its models.dev entry. A gateway that
+ * serves several wire formats names each model's format here, so the driver
+ * reads it instead of keeping its own list.
+ */
+export const ModelWire = Schema.Struct({
+  /**
+   * The AI SDK package models.dev names for the model's API: the model's own
+   * `provider.npm`, else its provider's `npm`. The package names the wire
+   * format (`@ai-sdk/openai` Responses, `@ai-sdk/anthropic` Messages,
+   * `@ai-sdk/openai-compatible` Chat Completions).
+   */
+  npm: Schema.optional(Schema.String),
+  /** The reasoning controls the model accepts; empty when it has none to set. */
+  reasoningOptions: Schema.optional(Schema.Array(ReasoningOption)),
+  /**
+   * The assistant-message field that carries the model's reasoning back to it
+   * (`interleaved.field`, such as `reasoning_content`).
+   */
+  reasoningField: Schema.optional(Schema.String),
+})
+export type ModelWire = typeof ModelWire.Type
+
+/** The wire fields of a models.dev entry, each decoded alone so one odd field drops only itself. */
+const ModelsDevWireFields = Schema.Struct({
+  provider: Schema.optional(Schema.Json),
+  reasoning_options: Schema.optional(Schema.Json),
+  interleaved: Schema.optional(Schema.Json),
+})
+type ModelsDevWireFields = typeof ModelsDevWireFields.Type
+const decodeModelsDevWireFields = Schema.decodeUnknownOption(ModelsDevWireFields)
+const decodeNpm = Schema.decodeUnknownOption(Schema.Struct({ npm: Schema.String }))
+const decodeRawReasoningOptions = Schema.decodeUnknownOption(Schema.Array(Schema.Json))
+const decodeReasoningOption = Schema.decodeUnknownOption(ReasoningOption)
+const RawEffortOption = Schema.Struct({
+  type: Schema.Literal("effort"),
+  values: Schema.Array(Schema.Json),
+})
+const decodeRawEffortOption = Schema.decodeUnknownOption(RawEffortOption)
+const decodeReasoningField = Schema.decodeUnknownOption(Schema.Struct({ field: Schema.String }))
+
+/** One `reasoning_options` entry; an effort list's `null` becomes `"none"`. */
+const parseReasoningOption = (value: Schema.Json): Option.Option<ReasoningOption> =>
+  Option.match(decodeRawEffortOption(value), {
+    onNone: () => decodeReasoningOption(value),
+    onSome: (effort) =>
+      Option.some(
+        ReasoningOption.cases.effort.make({
+          type: "effort",
+          values: effort.values.flatMap((each) => {
+            if (Predicate.isString(each)) return [each]
+            if (Predicate.isNull(each)) return ["none"]
+            return []
+          }),
+        }),
+      ),
+  })
+
+/**
+ * The wire facts of one models.dev entry; none when it names nothing a driver
+ * reads. Each field is decoded alone, so an odd one drops only itself, never
+ * the model.
+ */
+const parseModelWire = (
+  fields: ModelsDevWireFields,
+  providerNpm: Option.Option<string>,
+): Option.Option<ModelWire> => {
+  const npm = decodeNpm(fields.provider).pipe(
+    Option.map((value) => value.npm),
+    Option.orElse(() => providerNpm),
+  )
+  const reasoningOptions = decodeRawReasoningOptions(fields.reasoning_options).pipe(
+    Option.map((values) => values.flatMap((each) => Option.toArray(parseReasoningOption(each)))),
+  )
+  const reasoningField = Option.map(
+    decodeReasoningField(fields.interleaved),
+    (value) => value.field,
+  )
+  if (Option.isNone(npm) && Option.isNone(reasoningOptions) && Option.isNone(reasoningField)) {
+    return Option.none()
+  }
+  return Option.some(
+    ModelWire.make(
+      omitUndefined({
+        npm: Option.getOrUndefined(npm),
+        reasoningOptions: Option.getOrUndefined(reasoningOptions),
+        reasoningField: Option.getOrUndefined(reasoningField),
+      }),
+    ),
+  )
+}
+
+/**
+ * The format of the disk cache, derived from the shapes that decide what a
+ * cached catalog holds: the models.dev entry the parser reads, and the
+ * `Model` and `ModelWire` it writes. A build that parses a new field, or adds
+ * one to either, gets a new format, so a cache an older build wrote refetches
+ * at once instead of serving models without that field for up to a day.
  */
 const CACHE_FORMAT = (
   Hash.string(
     Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))([
       Schema.toJsonSchemaDocument(ModelsDevModel),
       Schema.toJsonSchemaDocument(Model),
+      Schema.toJsonSchemaDocument(ModelWire),
     ]),
   ) >>> 0
 ).toString(16)
+
+/** The wire facts of the catalog's models, by model id; a model that names none has no entry. */
+const CatalogWire = Schema.Record(Schema.String, ModelWire)
+type CatalogWire = typeof CatalogWire.Type
+
+/** One parsed catalog: the models, and how a driver talks to each. */
+interface Catalog {
+  readonly models: ReadonlyArray<Model>
+  readonly wire: CatalogWire
+}
+const EMPTY_CATALOG: Catalog = { models: EMPTY_MODELS, wire: {} }
 
 /**
  * The cache file: the catalog and the format that wrote it. A file without
  * the stamp reads as absent, so the next load fetches and rewrites it.
  */
-const CachedCatalog = Schema.Struct({ format: Schema.String, models: Schema.Array(Model) })
+const CachedCatalog = Schema.Struct({
+  format: Schema.String,
+  models: Schema.Array(Model),
+  wire: Schema.optional(CatalogWire),
+})
 const CachedCatalogJson = Schema.fromJsonString(CachedCatalog)
 const decodeCachedCatalog = Schema.decodeUnknownOption(CachedCatalogJson)
 const encodeCachedCatalog = Schema.encodeSync(CachedCatalogJson)
 
 interface DiskCatalog {
-  readonly models: ReadonlyArray<Model>
+  readonly catalog: Catalog
   /** True when this build's format wrote the file. */
   readonly current: boolean
 }
-const NO_DISK_CATALOG: DiskCatalog = { models: EMPTY_MODELS, current: false }
+const NO_DISK_CATALOG: DiskCatalog = { catalog: EMPTY_CATALOG, current: false }
 
 const parsePricing = (value: ModelsDevModel["cost"]): Option.Option<ModelPricing> =>
   Option.fromUndefinedOr(value).pipe(
@@ -732,17 +857,20 @@ const parseOutputLimit = (value: ModelsDevModel["limit"]): Option.Option<number>
   Option.fromUndefinedOr(value).pipe(Option.flatMap(({ output }) => Option.fromUndefinedOr(output)))
 
 /**
- * The models.dev payload as gent's canonical `Model[]`. A malformed entry is
- * dropped, and so is a model without tool calling: every gent turn sends tools.
+ * The models.dev payload as gent's canonical `Model[]`, with each model's wire
+ * facts. A malformed entry is dropped, and so is a model without tool calling:
+ * every gent turn sends tools.
  */
-const parseModelsDev = (data: Schema.Json): ReadonlyArray<Model> => {
-  if (!isRecord(data)) return []
+const parseModelsDev = (data: Schema.Json): Catalog => {
+  if (!isRecord(data)) return EMPTY_CATALOG
 
   const models: Model[] = []
+  const wire: Record<string, ModelWire> = {}
   for (const [providerId, providerValue] of Object.entries(data)) {
     if (!isRecord(providerValue)) continue
     const modelsValue = providerValue["models"]
     if (!isRecord(modelsValue)) continue
+    const providerNpm = Option.map(decodeNpm(providerValue), (value) => value.npm)
 
     for (const [modelKey, rawModelValue] of Object.entries(modelsValue)) {
       const decoded = decodeModelsDevModel(rawModelValue)
@@ -770,10 +898,14 @@ const parseModelsDev = (data: Schema.Json): ReadonlyArray<Model> => {
           }),
         }),
       )
+      const modelWire = Option.flatMap(decodeModelsDevWireFields(rawModelValue), (fields) =>
+        parseModelWire(fields, providerNpm),
+      )
+      if (Option.isSome(modelWire)) wire[id] = modelWire.value
     }
   }
 
-  return models
+  return { models, wire }
 }
 
 /** The catalog on disk, or nothing when the file is absent, empty, or malformed. */
@@ -789,7 +921,10 @@ const readCachedModels = Effect.fn("ModelsDev.readCache")(
     return Option.match(decodeCachedCatalog(content), {
       onNone: () => NO_DISK_CATALOG,
       onSome: (cached): DiskCatalog => ({
-        models: cached.models,
+        catalog: {
+          models: cached.models,
+          wire: Option.getOrElse(Option.fromUndefinedOr(cached.wire), () => ({})),
+        },
         current: cached.format === CACHE_FORMAT,
       }),
     })
@@ -798,11 +933,12 @@ const readCachedModels = Effect.fn("ModelsDev.readCache")(
 )
 
 const writeCachedModels = Effect.fn("ModelsDev.writeCache")(
-  function* (cachePath: string, models: ReadonlyArray<Model>) {
+  function* (cachePath: string, catalog: Catalog) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const text = yield* Effect.try({
-      try: () => encodeCachedCatalog({ format: CACHE_FORMAT, models }),
+      try: () =>
+        encodeCachedCatalog({ format: CACHE_FORMAT, models: catalog.models, wire: catalog.wire }),
       catch: () => "",
     })
     if (text.length === 0) return
@@ -838,15 +974,15 @@ const fetchRemoteModels = Effect.fn("ModelsDev.fetchRemote")(
     const response = yield* http.get(`${MODELS_URL}/api.json`, {
       headers: { "User-Agent": "gent" },
     })
-    if (response.status >= 400) return EMPTY_MODELS
+    if (response.status >= 400) return EMPTY_CATALOG
     const text = yield* response.text
-    if (text.length === 0) return EMPTY_MODELS
+    if (text.length === 0) return EMPTY_CATALOG
     const decoded = decodeJson(text)
-    if (decoded._tag === "None") return EMPTY_MODELS
+    if (decoded._tag === "None") return EMPTY_CATALOG
     return parseModelsDev(decoded.value)
   },
   Effect.timeout(FETCH_TIMEOUT_MS),
-  Effect.catchEager(() => Effect.succeed(EMPTY_MODELS)),
+  Effect.catchEager(() => Effect.succeed(EMPTY_CATALOG)),
 )
 
 const loadCatalog = Effect.fn("ModelsDev.load")(function* (home: string) {
@@ -854,21 +990,18 @@ const loadCatalog = Effect.fn("ModelsDev.load")(function* (home: string) {
   const cachePath = path.join(home, CACHE_RELATIVE)
   const disk = yield* readCachedModels(cachePath)
   const stale = yield* isCacheStale(cachePath)
-  if (disk.models.length > 0 && disk.current && !stale) return disk.models
+  if (disk.catalog.models.length > 0 && disk.current && !stale) return disk.catalog
 
   const remote = yield* fetchRemoteModels()
   // A failed or empty fetch keeps whatever the disk still holds: stale, or
   // in an older format, is better than no catalog.
-  if (remote.length === 0) return disk.models
+  if (remote.models.length === 0) return disk.catalog
   yield* writeCachedModels(cachePath, remote)
   return remote
 })
 
-type CatalogEffect = Effect.Effect<
-  ReadonlyArray<Model>,
-  never,
-  FileSystem.FileSystem | Path.Path | HttpClient.HttpClient
->
+type CatalogServices = FileSystem.FileSystem | Path.Path | HttpClient.HttpClient
+type CatalogEffect = Effect.Effect<ReadonlyArray<Model>, never, CatalogServices>
 
 /**
  * One memoized load per home directory. The drivers each call `driverCatalog`
@@ -885,10 +1018,10 @@ type CatalogEffect = Effect.Effect<
  */
 const CATALOG_MEMO_TTL = Duration.minutes(5)
 
-const catalogsByHome = new Map<string, CatalogEffect>()
+const catalogsByHome = new Map<string, Effect.Effect<Catalog, never, CatalogServices>>()
 
 /**
- * The models.dev catalog for `home`, loaded at most once per `CATALOG_MEMO_TTL`
+ * The parsed catalog for `home`, loaded at most once per `CATALOG_MEMO_TTL`
  * while the load produces models.
  *
  * The memo is built the first time a home is asked for and stored before the
@@ -897,7 +1030,7 @@ const catalogsByHome = new Map<string, CatalogEffect>()
  * allocates the latch and performs no IO, so building the memo here decides
  * nothing about when the catalog loads.
  */
-export const modelsDevCatalog = (home: string): CatalogEffect => {
+const catalogFor = (home: string): Effect.Effect<Catalog, never, CatalogServices> => {
   const existing = Option.fromUndefinedOr(catalogsByHome.get(home))
   if (Option.isSome(existing)) return existing.value
   // `Effect.cachedWithTTL` only allocates the memo's latch — no IO, no failure —
@@ -906,15 +1039,19 @@ export const modelsDevCatalog = (home: string): CatalogEffect => {
   const memo = Effect.runSync(Effect.cachedWithTTL(loadCatalog(home), CATALOG_MEMO_TTL)).pipe(
     // An empty result means no cache and no reachable host. Forget it, so a
     // later call retries instead of serving nothing for the whole process.
-    Effect.tap((models) =>
+    Effect.tap((catalog) =>
       Effect.sync(() => {
-        if (models.length === 0) catalogsByHome.delete(home)
+        if (catalog.models.length === 0) catalogsByHome.delete(home)
       }),
     ),
   )
   catalogsByHome.set(home, memo)
   return memo
 }
+
+/** The models.dev catalog for `home`: every provider's models. */
+export const modelsDevCatalog = (home: string): CatalogEffect =>
+  catalogFor(home).pipe(Effect.map((catalog) => catalog.models))
 
 /** The models.dev catalog narrowed to one provider — a driver's own list. */
 export const driverCatalog = (home: string, providerId: string): CatalogEffect =>
@@ -947,16 +1084,42 @@ export const catalogSource = Effect.fn("ModelsDev.catalogSource")(function* (hom
 export const driverListModels =
   (source: CatalogSource, providerId: string, promptCacheTtl: Duration.Duration) =>
   (): Effect.Effect<ReadonlyArray<Model>> =>
-    driverCatalog(source.home, providerId).pipe(
-      Effect.map((models) =>
-        models.map((model) =>
-          Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(promptCacheTtl) }),
+    readCatalog(
+      source,
+      driverCatalog(source.home, providerId).pipe(
+        Effect.map((models) =>
+          models.map((model) =>
+            Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(promptCacheTtl) }),
+          ),
         ),
       ),
-      // @effect-diagnostics-next-line strictEffectProvide:off -- The catalog owns its own HTTP client at the driver boundary; it outlives no scope.
-      Effect.provide(FetchHttpClient.layer),
-      Effect.provideContext(source.platform),
     )
+
+/**
+ * The wire facts of one model of the catalog, for a driver's `resolveModel`:
+ * none when the catalog has no entry for it or the entry names nothing.
+ */
+export const driverModelWire = (
+  source: CatalogSource,
+  modelId: string,
+): Effect.Effect<Option.Option<ModelWire>> =>
+  readCatalog(
+    source,
+    catalogFor(source.home).pipe(
+      Effect.map((catalog) => Option.fromUndefinedOr(catalog.wire[modelId])),
+    ),
+  )
+
+/** A catalog read, run on the platform setup captured with an HTTP client of its own. */
+const readCatalog = <A>(
+  source: CatalogSource,
+  read: Effect.Effect<A, never, CatalogServices>,
+): Effect.Effect<A> =>
+  read.pipe(
+    // @effect-diagnostics-next-line strictEffectProvide:off -- The catalog owns its own HTTP client at the driver boundary; it outlives no scope.
+    Effect.provide(FetchHttpClient.layer),
+    Effect.provideContext(source.platform),
+  )
 
 // ── host context update ─────────────────────────────────────────────────────
 
