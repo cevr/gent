@@ -365,8 +365,19 @@ describe("gamut open turns", () => {
       ["done", "TurnCompleted"],
       ["failed", "MessageReceived"],
       ["failed", "ErrorOccurred"],
+      ["failed", "TurnCompleted"],
     ])
     expect(openTurnSessions(db)).toEqual([])
+  })
+  test("a notice error mid-turn leaves the turn open: only TurnCompleted ends it", () => {
+    // Core publishes ErrorOccurred as a notice while a turn recovers (a
+    // context overflow, a compaction fallback); the turn goes on.
+    const db = withEvents([
+      ["child", "MessageReceived"],
+      ["child", "StreamStarted"],
+      ["child", "ErrorOccurred"],
+    ])
+    expect(openTurnSessions(db)).toEqual(["child"])
   })
   test("the record says whether any turn has started", () => {
     expect(runRecord(withEvents([]), 0)).toEqual({ started: false, open: [], stored: false })
