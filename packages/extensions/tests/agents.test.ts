@@ -99,6 +99,10 @@ describe("project instructions", () => {
         expect(yield* instructionsIn(home, `${root}/packages/core`)).toBe(
           "root rules\n---\ncore rules",
         )
+        // A link to the subdirectory walks up from the directory it names.
+        const links = yield* makeTempDirectoryScoped("instructions-links-")
+        yield* (yield* FileSystem.FileSystem).symlink(`${root}/packages/core`, `${links}/core`)
+        expect(yield* instructionsIn(home, `${links}/core`)).toBe("root rules\n---\ncore rules")
         // Outside a git work tree only the session's own directory is read.
         const outer = yield* makeTempDirectoryScoped("instructions-outer-")
         yield* writeFile(`${outer}/AGENTS.md`, "outer rules")

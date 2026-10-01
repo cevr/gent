@@ -65,20 +65,23 @@ const SEPARATOR = "\n---\n"
 /**
  * The directories from the git root down to `cwd`, root first. A directory
  * that holds `.git` (a directory, or a worktree's file) is the root. Outside a
- * git work tree only `cwd` is read, so no unrelated ancestor speaks.
+ * git work tree only `cwd` is read, so no unrelated ancestor speaks. The walk
+ * starts at the directory `cwd` names, so a link to a subdirectory finds the
+ * repository it is in.
  */
 const projectDirectories = Effect.fn("Agents.projectDirectories")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const chain = [cwd]
-  let current = cwd
+  const start = yield* fs.realPath(cwd).pipe(Effect.catchEager(() => Effect.succeed(cwd)))
+  const chain = [start]
+  let current = start
   while (true) {
     const isRoot = yield* fs
       .exists(path.join(current, ".git"))
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
     if (isRoot) return chain.toReversed()
     const parent = path.dirname(current)
-    if (parent === current) return [cwd]
+    if (parent === current) return [start]
     chain.push(parent)
     current = parent
   }
