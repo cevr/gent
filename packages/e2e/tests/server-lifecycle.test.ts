@@ -7,12 +7,7 @@ import { hostname } from "node:os"
 import { Effect, Exit, Option, Random, Schedule, Schema, Scope } from "effect"
 import { Gent } from "@gent/sdk"
 import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
-import {
-  killProcess,
-  spawnServer,
-  stopProcess,
-  waitForProcessExit,
-} from "../src/server-process-fixture"
+import { exitWithin, killProcess, spawnServer, stopProcess } from "../src/server-process-fixture"
 
 const randomLifecyclePort = Random.nextIntBetween(19_000, 20_000)
 
@@ -76,7 +71,7 @@ describe("server lifecycle", () => {
           expect(new TextDecoder().decode(first.value)).toContain("ready")
           reader.releaseLock()
           yield* stopProcess(proc, 300)
-          expect(yield* waitForProcessExit(proc.pid, 2_000)).toBe(true)
+          expect(Option.isSome(yield* exitWithin(proc.exited, "2 seconds"))).toBe(true)
         }),
       ).pipe(Effect.timeout("8 seconds")),
     10_000,
@@ -118,10 +113,8 @@ describe("server lifecycle", () => {
           const port = yield* randomLifecyclePort
           const { proc } = yield* spawnServer({ dataDir, port })
           yield* killProcess(proc, "SIGTERM")
-          const exited = yield* waitForProcessExit(proc.pid, 5_000)
-          expect(exited).toBe(true)
           // A shell chain after an interrupted server must not read success.
-          expect(yield* Effect.promise(() => proc.exited)).toBe(143)
+          expect(yield* exitWithin(proc.exited, "5 seconds")).toEqual(Option.some(143))
         }),
       ).pipe(Effect.timeout("12 seconds")),
     15_000,

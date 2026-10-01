@@ -1,5 +1,6 @@
+import { BunHttpServer } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Crypto, Effect, Random, Schema } from "effect"
+import { Crypto, Effect, Schema } from "effect"
 import { defineExtension, ExtensionHost, request } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
 import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
@@ -34,6 +35,17 @@ const fetchIdentityJson = (baseUrl: string) =>
 const fetchIdentity = (baseUrl: string) =>
   fetchIdentityJson(baseUrl).pipe(Effect.andThen(Schema.decodeUnknownEffect(ServerIdentity)))
 
+/**
+ * A port the kernel just handed out and took back: a listener binds port 0,
+ * the kernel picks a free port, and the listener closes before the server
+ * under test binds it. A random pick from a range can land on a port in use.
+ */
+const freePort = Effect.gen(function* () {
+  const { address } = yield* BunHttpServer.make({ port: 0 })
+  if (address._tag === "UnixPathAddress") return yield* Effect.die("a TCP listener has no path")
+  return address.port
+}).pipe(Effect.scoped, Effect.orDie)
+
 describe("Gent.server options", () => {
   it.live(
     "binds the requested port and publishes its identity",
@@ -41,7 +53,7 @@ describe("Gent.server options", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = yield* makeTempDirectoryScoped("gent-server-options-")
-          const port = yield* Random.nextIntBetween(20_100, 21_000)
+          const port = yield* freePort
           const server = yield* Gent.server({
             cwd: dataDir,
             port,

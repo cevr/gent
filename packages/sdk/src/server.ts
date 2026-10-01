@@ -333,13 +333,19 @@ const ServerStopResult = Schema.Union([
   Schema.TaggedStruct("None", {}),
   /** A process holds the kernel lock but names no pid to signal. */
   Schema.TaggedStruct("Unnamed", {}),
-  /** The server is gone and the caller did not ask to remove its entry. */
+  /**
+   * The server is gone and its entry stays: the caller did not ask to remove
+   * it, or a new owner took the kernel lock first and the entry is its own.
+   */
   Schema.TaggedStruct("NotRunning", { entry: ServerLockEntry }),
   /** The server is gone; its entry is removed. */
   Schema.TaggedStruct("Removed", { entry: ServerLockEntry }),
   /** The server is alive but its identity endpoint does not confirm the entry, so no signal. */
   Schema.TaggedStruct("NotOwned", { entry: ServerLockEntry }),
-  /** SIGTERM sent, the server released the kernel lock, and its entry is removed. */
+  /**
+   * SIGTERM sent and the server released the kernel lock. Its entry is
+   * removed, unless a new owner took the lock first.
+   */
   Schema.TaggedStruct("Stopped", { entry: ServerLockEntry }),
   /** SIGTERM sent, but the server still held the kernel lock when the wait ended. */
   Schema.TaggedStruct("StillRunning", { entry: ServerLockEntry }),
@@ -425,10 +431,7 @@ const lockStatus = (
       if (held) return ServerLockStatus.cases.Unnamed.make({})
       return ServerLockStatus.cases.None.make({})
     }
-    // A server from before the kernel lock holds none, but it still answers for its entry.
-    if (held || (yield* probeServerLockEntryIdentity(entry.value))) {
-      return ServerLockStatus.cases.Alive.make({ entry: entry.value })
-    }
+    if (held) return ServerLockStatus.cases.Alive.make({ entry: entry.value })
     return ServerLockStatus.cases.Stale.make({ entry: entry.value })
   })
 
@@ -460,8 +463,7 @@ const goneWithin = (
 /**
  * Stop the server the entry names. SIGTERM goes out only after the identity
  * endpoint confirms every field of the entry, so a reused pid is never signalled.
- * An entry whose kernel lock is free and whose endpoint does not answer is
- * proved stale, and `removeStale` removes it.
+ * An entry whose kernel lock is free is stale, and `removeStale` removes it.
  */
 const stopLocked = (
   home: string,
@@ -474,7 +476,9 @@ const stopLocked = (
     const { entry } = status
     if (status._tag === "Stale") {
       if (options?.removeStale !== true) return ServerStopResult.cases.NotRunning.make({ entry })
-      yield* removeStaleEntry(home, entry.serverId)
+      if (!(yield* removeStaleEntry(home, entry.serverId))) {
+        return ServerStopResult.cases.NotRunning.make({ entry })
+      }
       return ServerStopResult.cases.Removed.make({ entry })
     }
     if (!(yield* probeServerLockEntryIdentity(entry))) {
@@ -887,16 +891,6 @@ const resolveServerInternal = (
       // The lock is taken in a child scope, so a start that does not own can let it go.
       const lockScope = yield* Scope.fork(scope)
       if (yield* serverLockFile.hold(home).pipe(Scope.provide(lockScope))) {
-        // A server from before the kernel lock holds none; its entry still names it.
-        const existing = yield* serverLockFile.read(home)
-        if (
-          Option.isSome(existing) &&
-          existing.value.dbPath === dbPath &&
-          (yield* probeServerLockEntryIdentity(existing.value))
-        ) {
-          yield* Scope.close(lockScope, Exit.void)
-          return yield* attachOrBlock(existing.value)
-        }
         return yield* startOwnedServer(options, stateSpec, providerSpec, home, dbPath, fingerprint)
       }
       yield* Scope.close(lockScope, Exit.void)
@@ -920,8 +914,7 @@ const resolveServerInternal = (
 
 /**
  * Start the server that owns the database. The caller holds the kernel lock in
- * this scope and has probed the entry on disk, so that entry names a server
- * that is gone, or one on another database.
+ * this scope, so an entry on disk names a server that is gone.
  */
 const startOwnedServer = (
   options: GentServerOptions,

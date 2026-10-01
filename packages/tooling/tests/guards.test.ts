@@ -13,7 +13,6 @@ import {
   findRepoTempDirectories,
   findSharedTestHomes,
   findPreCommitHookFindings,
-  findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
@@ -21,6 +20,7 @@ import {
   findRetiredSurfaces,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
+  findTestLaneDefaults,
   findTuiSessionIdentityReads,
   findUnadaptedSeams,
   findUnconsumedExports,
@@ -34,10 +34,6 @@ import {
   findUnusedCatalogEntries,
   findUnusedDependencies,
   findUnusedSuppressionApprovals,
-  guideBlockFile,
-  guideCodeBlocks,
-  guideCodeContextOf,
-  guideDiagnosticLine,
   HOOK_FILE,
   type DependencyScope,
   type InstalledPackage,
@@ -307,70 +303,6 @@ describe("core feature independence guard", () => {
       'const MODELS_URL = "https://models.dev"',
     )
     expect(findings).toEqual([])
-  })
-})
-
-// ── identity encode ─────────────────────────────────────────────────────────
-
-const ENCODER = "const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))"
-
-const identityLines = (file: string, ...lines: ReadonlyArray<string>) =>
-  findIdentityEncodes(file, [ENCODER, ...lines].join("\n")).map((finding) => finding.line)
-
-describe("identity encode guard", () => {
-  test("reports an encode stored under a camelCase identity name", () => {
-    const file = "apps/tui/src/message-list.tsx"
-    expect(identityLines(file, "const identity = encodeJson(m)")).toEqual([2])
-    expect(identityLines(file, "const messageIdentity = encodeJson(m)")).toEqual([2])
-    expect(identityLines(file, "const dedupeKey = encodeJson(m)")).toEqual([2])
-    expect(identityLines(file, "const cache_key = encodeJson(m)")).toEqual([2])
-  })
-
-  test("reports an encode compared or collected on the same line", () => {
-    const file = "packages/core/src/runtime/turn.ts"
-    expect(identityLines(file, "if (encodeJson(a) === encodeJson(b)) return")).toEqual([2])
-    expect(identityLines(file, "if (seen.has(encodeJson(m))) continue")).toEqual([2])
-    expect(identityLines(file, "seen.add(encodeJson(m))")).toEqual([2])
-  })
-
-  test("leaves display encodes and fixed-order projections alone", () => {
-    const file = "apps/tui/src/message-list.tsx"
-    expect(identityLines(file, "yield* Effect.log(encodeJson(entry))")).toEqual([])
-    expect(identityLines(file, "const text = encodeJson(result)")).toEqual([])
-    expect(identityLines(file, "const keyboardHint = 1")).toEqual([])
-    expect(
-      identityLines(file, "const toolIdentity = (c: ToolCall) => encodeJson(toolFingerprint(c))"),
-    ).toEqual([])
-    expect(identityLines(file, "const identity = encodeJson([call.id, call.status])")).toEqual([])
-    expect(
-      identityLines(file, 'const identity = encodeJson(["tool", 1, true, call?.id, null])'),
-    ).toEqual([])
-    expect(
-      identityLines(file, "const key = encodeJson([s._tag, toolFingerprint(s.toolCall)])"),
-    ).toEqual([])
-  })
-
-  test("reports an array literal that carries a whole object", () => {
-    const file = "apps/tui/src/message-list.tsx"
-    expect(identityLines(file, "const identity = encodeJson([item])")).toEqual([2])
-    expect(identityLines(file, "const identity = encodeJson([item.id, { a: 1 }])")).toEqual([2])
-    expect(identityLines(file, "const identity = encodeJson([item.id, rest(item)])")).toEqual([2])
-  })
-
-  test("checks each encode on a line, so a safe one does not hide an unsafe one", () => {
-    const file = "packages/core/src/runtime/turn.ts"
-    expect(identityLines(file, "if (encodeJson([a.id]) === encodeJson(b)) return")).toEqual([2])
-    expect(
-      identityLines(file, "if (encodeJson(aFingerprint(a)) === encodeJson(b)) return"),
-    ).toEqual([2])
-    expect(identityLines(file, "if (encodeJson([a.id]) === encodeJson([b.id])) return")).toEqual([])
-  })
-
-  test("scans shipped source only", () => {
-    expect(
-      identityLines("packages/core/tests/x.test.ts", "const identity = encodeJson(m)"),
-    ).toEqual([])
-    expect(identityLines("ARCHITECTURE.md", "const identity = encodeJson(m)")).toEqual([])
   })
 })
 
@@ -972,6 +904,57 @@ describe("pre-commit hook runs only its fast commands", () => {
       "    - run: bun run gate",
     ].join("\n")
     expect(findPreCommitHookFindings(HOOK_FILE, text)).toEqual([])
+  })
+})
+
+// ── test lane defaults ──────────────────────────────────────────────────────
+
+/** A manifest whose `test` script (line 3) is `script`, which holds no quote. */
+const laneManifest = (script: string) =>
+  ["{", '  "scripts": {', `    "test": "${script}",`, '    "build": "tsc"', "  }", "}"].join("\n")
+
+/** Each finding's line, and whether it is the missing preload (true) or the missing timeout (false). */
+const laneFindings = (file: string, script: string) =>
+  findTestLaneDefaults(file, laneManifest(script)).map((finding) => [
+    finding.line,
+    finding.message.includes("without the test preload"),
+  ])
+
+describe("test lane defaults guard", () => {
+  test("a parallel lane, and a plain lane with the preload's timeout, pass", () => {
+    expect(
+      laneFindings(
+        "packages/sdk/package.json",
+        "bun test --preload ../../packages/tooling/src/test-preload.ts --parallel tests",
+      ),
+    ).toEqual([])
+    expect(
+      laneFindings(
+        "packages/tooling/package.json",
+        "bun test --preload ./src/test-preload.ts --timeout=30000 ./tests/",
+      ),
+    ).toEqual([])
+  })
+
+  test("a plain lane without the timeout, or with another one, is reported", () => {
+    const preload = "bun test --preload ../tooling/src/test-preload.ts"
+    expect(laneFindings("packages/e2e/package.json", `${preload} tests`)).toEqual([[3, false]])
+    expect(laneFindings("packages/e2e/package.json", `${preload} --timeout=5000 tests`)).toEqual([
+      [3, false],
+    ])
+  })
+
+  test("a lane without the preload is reported", () => {
+    expect(laneFindings("examples/package.json", "bun test --parallel tests")).toEqual([[3, true]])
+    expect(
+      laneFindings("examples/package.json", "bun test --preload ./other-preload.ts --parallel"),
+    ).toEqual([[3, true]])
+  })
+
+  test("a script that runs no bun test, and the gamut fixture's own project, pass", () => {
+    expect(laneFindings("packages/core/package.json", "tsc --noEmit")).toEqual([])
+    expect(laneFindings("testbeds/gamut/fixture/package.json", "bun test")).toEqual([])
+    expect(laneFindings("packages/core/tsconfig.json", "bun test")).toEqual([])
   })
 })
 
@@ -2439,73 +2422,6 @@ describe("guide check inputs", () => {
   })
 })
 
-// ── the steering prose's code compiles ──────────────────────────────────────
-
-describe("steering prose code blocks", () => {
-  const guide = [
-    "# Guide",
-    "```ts",
-    "const a = 1",
-    "const b = 2",
-    "```",
-    "```json",
-    '{ "x": 1 }',
-    "```",
-    "```typescript",
-    "const c = 3",
-    "```",
-  ].join("\n")
-
-  test("each ts and typescript block is read with the file line of its first code line", () => {
-    expect(guideCodeBlocks("docs/extensions.md", guide)).toEqual([
-      { file: "docs/extensions.md", line: 3, code: "const a = 1\nconst b = 2", extension: "ts" },
-      { file: "docs/extensions.md", line: 10, code: "const c = 3", extension: "ts" },
-    ])
-  })
-
-  test("a tsx block is written as a tsx module and compiles in the context of its file", () => {
-    const blocks = guideCodeBlocks("apps/tui/AGENTS.md", ["```tsx", "<box />", "```"].join("\n"))
-    expect(blocks).toEqual([
-      { file: "apps/tui/AGENTS.md", line: 2, code: "<box />", extension: "tsx" },
-    ])
-    expect(blocks.map((block, index) => guideBlockFile(index, block))).toEqual(["b1.tsx"])
-    expect(guideCodeContextOf("apps/tui/AGENTS.md").tsconfig).toBe("apps/tui/tsconfig.json")
-    expect(guideCodeContextOf("AGENTS.md").modules).toBe("examples/node_modules")
-  })
-
-  test("a ts fence quoted inside a fence of another language is not a block", () => {
-    expect(guideCodeBlocks("docs/x.md", ["```text", "```ts", "```"].join("\n"))).toEqual([])
-  })
-
-  test("a block marked illustrative with a reason is skipped; a mark without one is not", () => {
-    const marked = ["<!-- illustrative: elides the layer -->", "```ts", "x ...", "```"]
-    const bare = ["<!-- illustrative: -->", "```ts", "const y = 1", "```"]
-    expect(guideCodeBlocks("docs/x.md", marked.join("\n"))).toEqual([])
-    expect(guideCodeBlocks("docs/x.md", bare.join("\n")).map((block) => block.code)).toEqual([
-      "const y = 1",
-    ])
-  })
-
-  test("a diagnostic is reported at its line in the file that holds the block", () => {
-    const blocks = [
-      ...guideCodeBlocks("docs/extensions.md", guide),
-      ...guideCodeBlocks("apps/tui/AGENTS.md", ["", "```tsx", "<box />", "```"].join("\n")),
-    ]
-    expect(guideDiagnosticLine("b1.ts(2,7): error TS1: x", blocks)).toBe(
-      "docs/extensions.md:4:7: error TS1: x",
-    )
-    expect(
-      guideDiagnosticLine("/tmp/gent-guide-code-x/extension/b2.ts(1,1): suggestion TS2: y", blocks),
-    ).toBe("docs/extensions.md:10:1: suggestion TS2: y")
-    expect(guideDiagnosticLine("tui/b3.tsx(1,2): error TS3: z", blocks)).toBe(
-      "apps/tui/AGENTS.md:3:2: error TS3: z",
-    )
-    expect(guideDiagnosticLine("error TS2688: no bun types", blocks)).toBe(
-      "error TS2688: no bun types",
-    )
-  })
-})
-
 // ── tui session identity ────────────────────────────────────────────────────
 
 const FILE_TUI_IDENTITY = "apps/tui/src/hooks/use-thing.ts"
@@ -2738,6 +2654,96 @@ const consumedThroughApi = (file: string, text: string): ReadonlySet<string> =>
     Option.fromNullishOr(collectExportFacts(file, text).imported.get("@gent/core/extensions/api")),
     () => new Set<string>(),
   )
+
+// ── the lexer every scan reads through ──────────────────────────────────────
+
+describe("the guards' lexer", () => {
+  test("a regex literal that holds a backtick or `/*` hides no read after it", () => {
+    const consumer = {
+      file: "packages/e2e/tests/probe.test.ts",
+      text: 'import { used } from "../src/probe"\nused()\n',
+    }
+    const findingsAfter = (regex: string) =>
+      findingsFor([
+        {
+          file: "packages/e2e/src/probe.ts",
+          text: [
+            "export type Helper = number",
+            `const RE = ${regex}`,
+            "export const used = (): Helper => Number(RE.test('x'))",
+          ].join("\n"),
+        },
+        consumer,
+      ]).length
+    expect(["/[a]/", "/[`]/", "/`/", "/[/*]/"].map(findingsAfter)).toEqual([0, 0, 0, 0])
+  })
+
+  test("a regex after a control-flow head or a comment is a regex; after a value, a slash divides", () => {
+    const homes = (source: string) =>
+      findSharedTestHomes("apps/tui/tests/probe.test.ts", `${source}\nconst env = { cwd: "/tmp" }`)
+        .length
+    expect(
+      [
+        "if (ok) /[/*]/.test(s)",
+        "while (next()) /[/*]/.test(s)",
+        "for (const s of all) /[/*]/.test(s)",
+        "if (ok) f(); else /[/*]/.test(s)",
+        "const re = /*comment*/ /[/*]/",
+        "const re = // a note\n  /[/*]/",
+        "const half = (a + b) / 2 /* a note */",
+        "const half = f(a) / 2 /* a note */",
+      ].map(homes),
+    ).toEqual([1, 1, 1, 1, 1, 1, 1, 1])
+  })
+
+  test("JSX in a .tsx file is neither a string nor a regex", () => {
+    const homes = (source: string) =>
+      findSharedTestHomes("apps/tui/tests/probe.test.tsx", source).length
+    expect(
+      [
+        'mount({ cwd: pick(dir), note: "/tmp/log" })',
+        'mount({ cwd: pick(<box></box>, dir), note: "/tmp/log" })',
+        'mount({ cwd: pick(<text>it\'s</text>, dir), note: "/tmp/log" })',
+        'mount({ cwd: pick(<box title="a/b" />, dir), note: "/tmp/log" })',
+        'mount({ cwd: pick(<><text>{`it\'s`}</text></>, dir), note: "/tmp/log" })',
+      ].map(homes),
+    ).toEqual([0, 0, 0, 0, 0])
+  })
+
+  test("a type parameter list is code, in a .tsx and a .ts file", () => {
+    const homes = (file: string, source: string) => findSharedTestHomes(file, source).length
+    const tsx = "apps/tui/tests/probe.test.tsx"
+    expect([
+      homes(tsx, 'const f = <A,>(a: A) => a; const env = { cwd: "/tmp" }'),
+      homes(tsx, 'const f = <A extends object>(a: A) => a; const env = { cwd: "/tmp" }'),
+      homes(tsx, 'const f = <A>(a: A) => a; const env = { cwd: "/tmp" }'),
+      homes(tsx, 'const f = <Row = unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
+      homes(tsx, 'const f = <Row=unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
+      homes(
+        "apps/tui/tests/probe.test.ts",
+        'const f = <Row>(a: Row) => a; const env = { cwd: "/tmp" }',
+      ),
+    ]).toEqual([1, 1, 1, 1, 1, 1])
+  })
+
+  test("a defaulted type parameter in a .tsx file hides no read after it", () => {
+    const findings = findingsFor([
+      {
+        file: "packages/e2e/src/probe.tsx",
+        text: [
+          "export type Helper = number",
+          "const same = <Row = unknown,>(x: Row) => x",
+          "export const used = (): Helper => same(1)",
+        ].join("\n"),
+      },
+      {
+        file: "packages/e2e/tests/probe.test.ts",
+        text: 'import { used } from "../src/probe"\nused()\n',
+      },
+    ])
+    expect(findings).toEqual([])
+  })
+})
 
 describe("module surface declarations", () => {
   test("reads declared exports from a scanned core file", () => {
@@ -3160,8 +3166,8 @@ export const plantedDeadSdkExport = "nothing imports this"
     expect(findings[0]?.message).toContain("viaRelative")
   })
 
-  // An own-file surface reads identifiers in its own code, so what the blanking
-  // leaves as code decides these.
+  // An own-file surface reads a type's identifiers in its own code, so what the
+  // blanking leaves as code decides these.
   const OWN_FILE = "packages/tooling/src/check-guardrails.ts"
   const ownFindings = (text: string) =>
     findingsFor([{ file: OWN_FILE, text }]).map((finding) => finding.message)
@@ -3169,7 +3175,7 @@ export const plantedDeadSdkExport = "nothing imports this"
   test("a comment inside a template interpolation does not keep a name alive", () => {
     expect(
       ownFindings(
-        "export const vanished = 1\nexport const shown = `a ${/* vanished */ 1} b ${`c ${2 /* vanished */}`}`\nuse(shown)\n",
+        "export type vanished = 1\nconst shown = `a ${/* vanished */ 1} b ${`c ${2 /* vanished */}`}`\nuse(shown)\n",
       ),
     ).toEqual([expect.stringContaining("`vanished`")])
   })
@@ -3177,7 +3183,7 @@ export const plantedDeadSdkExport = "nothing imports this"
   test("template text naming an export does not keep it alive", () => {
     expect(
       ownFindings(
-        "export const fixtureOnly = 1\nconst fixture = `\nimport { fixtureOnly } from './x'\n`\nuse(fixture)\n",
+        "export type fixtureOnly = 1\nconst fixture = `\nimport { fixtureOnly } from './x'\n`\nuse(fixture)\n",
       ),
     ).toEqual([expect.stringContaining("`fixtureOnly`")])
   })
@@ -3185,7 +3191,7 @@ export const plantedDeadSdkExport = "nothing imports this"
   test("a name read inside a template interpolation is live", () => {
     expect(
       ownFindings(
-        "export const interpolated = 1\nconst label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
+        "export type interpolated = 1\nconst label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
       ),
     ).toEqual([])
   })
@@ -3193,7 +3199,7 @@ export const plantedDeadSdkExport = "nothing imports this"
   test("a name read in an interpolation after template text holding `//` is live", () => {
     expect(
       ownFindings(
-        "export const afterSlashes = 1\nconst label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
+        "export type afterSlashes = 1\nconst label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
       ),
     ).toEqual([])
   })
@@ -3201,9 +3207,32 @@ export const plantedDeadSdkExport = "nothing imports this"
   test("a name read beside a URL in a string is live", () => {
     expect(
       ownFindings(
-        `export const fetchedName = 1\nconst url = "https://example.test"; use(url, fetchedName)\n`,
+        `export type fetchedName = 1\nconst url = "https://example.test"; use(url, fetchedName)\n`,
       ),
     ).toEqual([])
+  })
+
+  test("an own-file read keeps a type alive, never a value", () => {
+    const text = [
+      "export interface Options { readonly size: number }",
+      "export type Handle = { readonly close: () => void }",
+      "export const parseGrid = (options: Options): Handle => ({ close: () => options.size })",
+      "export class SettleError extends Error {}",
+      "export const build = () => { if (Math.random() > 2) throw new SettleError(); return parseGrid({ size: 1 }) }",
+    ].join("\n")
+    const consumer = {
+      file: "packages/tooling/tests/probe.test.ts",
+      text: 'import { build } from "../src/check-guardrails"\nbuild()\n',
+    }
+    expect(
+      findingsFor([{ file: OWN_FILE, text }, consumer]).map((finding) => [
+        finding.line,
+        finding.message.includes("drop the `export` keyword"),
+      ]),
+    ).toEqual([
+      [3, true],
+      [4, true],
+    ])
   })
 
   test("a name only its own module reads is still reported", () => {
@@ -4005,6 +4034,39 @@ describe("an export is read only through an import", () => {
       },
     ])
     expect(names(findings)).toEqual(["ResourceId", "WakeAlarmsService"])
+  })
+
+  test("a member read through a literal dynamic import is a read", () => {
+    const declaring = {
+      file: "packages/tooling/src/probe.ts",
+      text: [
+        "export const probe = () => 1",
+        "export const unread = () => 2",
+        "export const run = () => probe() + unread()",
+        "",
+      ].join("\n"),
+    }
+    const allow = "// gent/no-dynamic-imports: allow the probe loads late"
+    const readers = [
+      `${allow}\nconst direct = (await import("../src/probe")).probe`,
+      `${allow}\nconst { probe: late, run } = await import("../src/probe")`,
+      `${allow}\nconst Probe = await import("../src/probe")\nProbe.probe()\nProbe.run()`,
+      `type Late = typeof import("../src/probe").probe`,
+    ]
+    expect(
+      readers.map((text) =>
+        names(
+          findingsFor([
+            declaring,
+            { file: "packages/tooling/tests/probe.test.ts", text: `${text}\n` },
+            {
+              file: "packages/tooling/tests/run.test.ts",
+              text: 'import { run } from "../src/probe"\nrun()\n',
+            },
+          ]),
+        ),
+      ),
+    ).toEqual([["unread"], ["unread"], ["unread"], ["unread"]])
   })
 
   test("a name on a @ts-expect-error line asserts absence, not a read", () => {

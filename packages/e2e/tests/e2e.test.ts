@@ -12,8 +12,8 @@ import {
   seedSkillAndSpawn,
   settlePty,
   spawnNoAuth,
-  type TestContext,
 } from "../src/pty-fixture"
+import { exitWithin } from "../src/server-process-fixture"
 
 const TEST_TIMEOUT = 30_000
 
@@ -26,10 +26,6 @@ const ESC_KEY_DECODE_MS = 650
 
 /** A repaint burst is over once the child writes nothing for this long. */
 const REPAINT = { quietMs: 200, timeoutMs: 5_000 }
-
-/** The child's exit code, or `None` when it is still running after `timeout`. */
-const exitCodeWithin = (ctx: TestContext, timeout: `${number} seconds`) =>
-  Effect.promise(() => ctx.pty.exited).pipe(Effect.timeoutOption(timeout))
 
 describe("E2E: Basics", () => {
   it.scopedLive(
@@ -62,7 +58,7 @@ describe("E2E: Basics", () => {
         ctx.pty.write(CTRL_C)
         yield* ptyWaitFor(ctx, "ctrl+c again to exit", { timeout: 5_000 })
         ctx.pty.write(CTRL_C)
-        expect(yield* exitCodeWithin(ctx, "10 seconds")).toEqual(Option.some(0))
+        expect(yield* exitWithin(ctx.pty.exited, "10 seconds")).toEqual(Option.some(0))
       }),
     TEST_TIMEOUT,
   )
@@ -74,7 +70,7 @@ describe("E2E: Basics", () => {
         const ctx = yield* seedAndSpawn()
         yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write(CTRL_D)
-        expect(yield* exitCodeWithin(ctx, "10 seconds")).toEqual(Option.some(0))
+        expect(yield* exitWithin(ctx.pty.exited, "10 seconds")).toEqual(Option.some(0))
       }),
     TEST_TIMEOUT,
   )
@@ -116,7 +112,7 @@ describe("E2E: Auth", () => {
 
 describe("E2E: Slash Commands", () => {
   it.scopedLive(
-    "/ prefix shows autocomplete popup with commands",
+    "/ prefix shows the commands popup, and ESC closes it",
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn()
@@ -125,6 +121,11 @@ describe("E2E: Slash Commands", () => {
         yield* ptyWaitFor(ctx, "Commands", { timeout: 5_000 })
         yield* ptyWaitFor(ctx, "/new", { timeout: 5_000 })
         ctx.pty.write(ESC)
+        // The output keeps the frames that drew the popup; the screen must not.
+        yield* screenWaitFor(ctx, (visible) => !visible.some((row) => row.includes("Commands")), {
+          timeout: 5_000,
+          label: "no commands popup",
+        })
       }),
     TEST_TIMEOUT,
   )
@@ -135,7 +136,7 @@ describe("E2E: Slash Commands", () => {
 // shell output goes to the agent as a turn; `--mock-empty` keeps that turn offline.
 describe("E2E: Shell Mode", () => {
   it.scopedLive(
-    "! enters shell, runs echo, ESC exits",
+    "! runs a shell command and shows its output",
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn(["--mock-empty"])
@@ -145,7 +146,6 @@ describe("E2E: Shell Mode", () => {
         ctx.pty.write("echo zigpty-$((1+1))")
         ctx.pty.write(ENTER)
         yield* ptyWaitFor(ctx, "zigpty-2", { timeout: 5_000 })
-        ctx.pty.write(ESC)
       }),
     TEST_TIMEOUT,
   )
@@ -168,7 +168,6 @@ describe("E2E: Shell Mode", () => {
         ctx.pty.write("echo second-$((2+1))")
         ctx.pty.write(ENTER)
         yield* ptyWaitFor(ctx, "second-3", { timeout: 5_000 })
-        ctx.pty.write(ESC)
       }),
     TEST_TIMEOUT,
   )
@@ -213,7 +212,6 @@ describe("E2E: Skill Popup", () => {
         ctx.pty.write("$t")
         yield* screenWaitFor(ctx, showsSkillsPopup, { timeout: 10_000, label: "the skills popup" })
         yield* ptyWaitFor(ctx, "test-skill", { timeout: 10_000 })
-        ctx.pty.write(ESC)
       }).pipe(Effect.provide(BunServices.layer)),
     TEST_TIMEOUT,
   )
