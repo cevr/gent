@@ -49,7 +49,8 @@ import {
   explainCredentialFailure,
   authorizedClient,
   freshEnoughAt,
-  isHostContextUpdateText,
+  isCacheableBlock,
+  isHostContextUpdate,
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
@@ -57,6 +58,7 @@ import {
   readOptionalEnv,
   requestJsonObject,
   withHeaders,
+  writesPromptCache,
 } from "./providers.js"
 import { ChildProcessSpawner } from "effect/process"
 import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/http"
@@ -1634,29 +1636,8 @@ export const readPromptCacheTtl: Effect.Effect<PromptCacheTtl> = Effect.gen(func
 })
 
 const cacheMarker = (ttl: PromptCacheTtl): JsonRecord => ({ type: "ephemeral", ttl })
-/** Content block types that take `cache_control`. Thinking blocks and empty text do not. */
-const CACHEABLE_BLOCK_TYPES: ReadonlySet<unknown> = new Set([
-  "text",
-  "image",
-  "document",
-  "search_result",
-  "tool_use",
-  "tool_result",
-])
 
 const hasCacheMarker = (block: JsonRecord): boolean => isRecord(block["cache_control"])
-
-/** A user message the SDK built from a later system message, not from the conversation. */
-const isHostContextUpdate = (message: JsonRecord): boolean => {
-  const content = message["content"]
-  if (message["role"] !== "user" || !isRecordArray(content) || content.length === 0) return false
-  return content.every(
-    (block) => block["type"] === "text" && isHostContextUpdateText(block["text"]),
-  )
-}
-
-const isCacheableBlock = (block: JsonRecord): boolean =>
-  CACHEABLE_BLOCK_TYPES.has(block["type"]) && !(block["type"] === "text" && block["text"] === "")
 
 const countCacheMarkers = (payload: JsonRecord): number => {
   let count = 0
@@ -2370,10 +2351,13 @@ const anthropicRequest = (
       config = { ...config, temperature: temperature.value }
     }
   }
-  const cacheKey = Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.cacheKey))
   const child = Option.exists(hints, (value) => value.child === true)
   const lifetimes = cacheLifetimes(promptCacheTtl, child)
-  return { config, plan, cacheLifetimes: Option.map(cacheKey, () => lifetimes) }
+  return {
+    config,
+    plan,
+    cacheLifetimes: Option.liftPredicate(lifetimes, () => writesPromptCache(hints)),
+  }
 }
 
 /**

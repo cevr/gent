@@ -28,6 +28,8 @@ import {
   catalogSource,
   driverListModels,
   driverModelWire,
+  isCacheableBlock,
+  isHostContextUpdate,
   isJsonObject,
   effortAtOrAbove,
   type ModelWire,
@@ -37,6 +39,7 @@ import {
   RESPONSES_PROMPT_CACHE_TTL,
   withEncryptedReasoning,
   withPromptCacheTtl,
+  writesPromptCache,
 } from "./providers.js"
 
 // Test seam: only tests read OPENCODE_GATEWAYS and buildOpenCodeModelDriver,
@@ -484,11 +487,13 @@ const planApplied =
  * Prompt caching as OpenCode asks the gateway for it on this format
  * (`applyCaching` in `provider/transform.ts`): an `ephemeral` marker on the
  * first two system blocks and on the last block of each of the last two
- * messages, four markers, the Messages API's limit. A thinking block takes
- * no marker, so the last block that can carry one does.
+ * messages, four markers, the Messages API's limit. The blocks and messages
+ * follow the Messages block rule (`isCacheableBlock`, `isHostContextUpdate`):
+ * the last block that takes a marker carries it, and a host context update
+ * does not count as one of the two messages. A request that writes no cache
+ * (`writesPromptCache`) is not marked.
  */
 const CACHE_MARKER: Schema.JsonObject = { type: "ephemeral" }
-const UNMARKABLE_BLOCKS: ReadonlySet<Schema.Json> = new Set(["thinking", "redacted_thinking"])
 
 const markBlocks = (
   content: Schema.Json,
@@ -505,8 +510,7 @@ const markBlocks = (
   })
 }
 
-const isMarkable = (block: Schema.Json): boolean =>
-  isJsonObject(block) && !Option.exists(field(block, "type"), (type) => UNMARKABLE_BLOCKS.has(type))
+const isMarkable = (block: Schema.Json): boolean => isJsonObject(block) && isCacheableBlock(block)
 
 const lastMarkable = (blocks: ReadonlyArray<Schema.Json>): ReadonlyArray<number> => {
   const index = blocks.findLastIndex(isMarkable)
@@ -515,7 +519,18 @@ const lastMarkable = (blocks: ReadonlyArray<Schema.Json>): ReadonlyArray<number>
 }
 
 const firstTwo = (blocks: ReadonlyArray<Schema.Json>): ReadonlyArray<number> =>
-  [0, 1].filter((index) => index < blocks.length)
+  [0, 1].filter((index) => Option.exists(Option.fromUndefinedOr(blocks[index]), isMarkable))
+
+/** The indexes of the last two messages of the conversation, host context updates left out. */
+const lastTwoMessages = (messages: ReadonlyArray<Schema.Json>): ReadonlySet<number> =>
+  new Set(
+    messages
+      .flatMap((message, index) => {
+        if (isJsonObject(message) && isHostContextUpdate(message)) return []
+        return [index]
+      })
+      .slice(-2),
+  )
 
 const cacheMarked = (body: Schema.JsonObject): Schema.JsonObject => {
   let result = body
@@ -523,11 +538,11 @@ const cacheMarked = (body: Schema.JsonObject): Schema.JsonObject => {
   if (Option.isSome(system)) result = { ...result, system: markBlocks(system.value, firstTwo) }
   const messages = messagesOf(body)
   if (Option.isNone(messages)) return result
-  const firstMarked = messages.value.length - 2
+  const marked = lastTwoMessages(messages.value)
   return {
     ...result,
     messages: messages.value.map((message, index) => {
-      if (index < firstMarked || !isJsonObject(message)) return message
+      if (!marked.has(index) || !isJsonObject(message)) return message
       return Option.match(field(message, "content"), {
         onNone: () => message,
         onSome: (content) => ({ ...message, content: markBlocks(content, lastMarkable) }),
@@ -581,14 +596,14 @@ const chatCompletionsModel = (resolution: Resolution) => {
 
 const messagesModel = (resolution: Resolution) => {
   const plan = messagesPlan(resolution.modelName, resolution.hints, resolution.wire)
+  const planned = planApplied(plan)
+  let rewrite = planned
+  if (writesPromptCache(resolution.hints)) rewrite = (body) => cacheMarked(planned(body))
   const client = AnthropicClient.layer({
     apiKey: Redacted.make(resolution.apiKey),
     apiUrl: resolution.gateway.origin,
     transformClient: (http) =>
-      http.pipe(
-        rewriteJsonBody((body) => cacheMarked(planApplied(plan)(body))),
-        gatewayHeaders(resolution.sessionId),
-      ),
+      http.pipe(rewriteJsonBody(rewrite), gatewayHeaders(resolution.sessionId)),
   }).pipe(Layer.provide(FetchHttpClient.layer))
   return AnthropicLanguageModel.layer({
     model: resolution.modelName,

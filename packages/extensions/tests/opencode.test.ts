@@ -741,6 +741,81 @@ describe("OpenCode prompt caching", () => {
       ).toEqual([[false], [true], [true]])
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
+
+  /** Which blocks of each message carry a cache marker, and how many markers the body has. */
+  const markers = (state: FakeFetchState) =>
+    Effect.gen(function* () {
+      const body = yield* bodyOf(lastRequest(state))
+      const Blocks = Schema.Array(Schema.JsonObject)
+      const messages = yield* Schema.decodeUnknownEffect(
+        Schema.Array(Schema.Struct({ role: Schema.String, content: Blocks })),
+      )(body["messages"])
+      const system = yield* Schema.decodeUnknownEffect(Blocks)(body["system"])
+      const marked = (block: Schema.JsonObject) => Predicate.isObject(block["cache_control"])
+      return {
+        messages: messages.map((message) => message.content.map(marked)),
+        system: system.map(marked),
+      }
+    })
+
+  // The patched SDK sends a system message after the conversation (a turn
+  // notice) as a user message of its own; caching it would spend a marker on
+  // text the next turn does not repeat.
+  it.live("Messages keeps the markers off a turn notice and on the conversation", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const conversation = Prompt.make([
+        { role: "system", content: "be brief" },
+        { role: "user", content: "one" },
+        { role: "assistant", content: "two" },
+        { role: "user", content: "three" },
+        { role: "system", content: "the cache is cold" },
+      ])
+      yield* generate(zen, "claude-opus-5", state, { cacheKey: "s" }, conversation)
+      expect((yield* markers(state)).messages).toEqual([[false], [true], [true], [false]])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("Messages puts no marker on an empty text block", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const conversation = Prompt.make([
+        { role: "system", content: "be brief" },
+        { role: "user", content: "one" },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "two" },
+            { type: "text", text: "" },
+          ],
+        },
+        { role: "user", content: "three" },
+      ])
+      yield* generate(zen, "claude-opus-5", state, { cacheKey: "s" }, conversation)
+      expect((yield* markers(state)).messages).toEqual([[false], [true, false], [true]])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  // The compaction summary names no conversation: nothing reads its cache back.
+  it.live("Messages marks nothing on a request without a conversation", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const conversation = Prompt.make([
+        { role: "system", content: "summarize" },
+        { role: "user", content: "one" },
+        { role: "assistant", content: "two" },
+        { role: "user", content: "three" },
+      ])
+      yield* generate(zen, "claude-opus-5", state, {}, conversation)
+      expect(yield* markers(state)).toEqual({
+        messages: [[false], [false], [false]],
+        system: [false],
+      })
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
 })
 
 // ── classifiers ─────────────────────────────────────────────────────────────

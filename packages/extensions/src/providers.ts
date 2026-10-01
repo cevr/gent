@@ -16,6 +16,7 @@ import {
 } from "effect"
 import {
   isRecord,
+  isRecordArray,
   Model,
   ModelId,
   type ModelPricing,
@@ -23,6 +24,7 @@ import {
   credentialFailureMetadata,
   ProviderAuthError,
   type ProviderAuthInfo,
+  type ProviderHints,
   ProviderId,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
@@ -1200,8 +1202,9 @@ const readCatalog = <A>(
  * the host speaking, not the user. An API that takes no system message after
  * the conversation gets it as a user message in this wrap: the Anthropic SDK
  * builds this text from a later system message (`prepareMessages` in
- * `@effect/ai-anthropic`, patched). The Anthropic driver reads the wrap to keep its cache marker off the update.
- * The content is escaped, so a notice cannot close the wrap.
+ * `@effect/ai-anthropic`, patched). The Messages drivers read the wrap to keep
+ * their cache markers off the update. The content is escaped, so a notice
+ * cannot close the wrap.
  */
 const HOST_CONTEXT_UPDATE_OPEN = "<host-context-update>\n"
 const HOST_CONTEXT_UPDATE_CLOSE = "\n</host-context-update>"
@@ -1211,9 +1214,49 @@ export const hostContextUpdateText = (content: string): string =>
   `${HOST_CONTEXT_UPDATE_OPEN}${content.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}${HOST_CONTEXT_UPDATE_CLOSE}`
 
 /** True for a text block that carries a later system message. */
-export const isHostContextUpdateText = Schema.is(
+const isHostContextUpdateText = Schema.is(
   Schema.String.check(Schema.isStartingWith(HOST_CONTEXT_UPDATE_OPEN)),
 )
+
+// ── messages prompt cache ───────────────────────────────────────────────────
+
+/**
+ * The block rule both Messages drivers (Anthropic, and the OpenCode gateways'
+ * Messages models) mark by. A request that names no conversation (its hints
+ * carry no `cacheKey`: the compaction summary) writes no cache, since no later
+ * request reads it back. A marker goes on a block the API takes one on, never
+ * on a thinking block or an empty text block (the API refuses it), and never
+ * on a host context update, which the next turn does not repeat.
+ */
+/** A block or message of a request body, as either driver reads it. */
+const WireRecord = Schema.Record(Schema.String, Schema.Unknown)
+type WireRecord = typeof WireRecord.Type
+
+const CACHEABLE_BLOCK_TYPES: ReadonlySet<unknown> = new Set([
+  "text",
+  "image",
+  "document",
+  "search_result",
+  "tool_use",
+  "tool_result",
+])
+
+/** Whether a request writes a prompt cache: only one that names its conversation. */
+export const writesPromptCache = (hints: Option.Option<ProviderHints>): boolean =>
+  Option.exists(hints, (value) => Predicate.isNotUndefined(value.cacheKey))
+
+/** True for a content block that takes `cache_control`. */
+export const isCacheableBlock = (block: WireRecord): boolean =>
+  CACHEABLE_BLOCK_TYPES.has(block["type"]) && !(block["type"] === "text" && block["text"] === "")
+
+/** True for a user message the SDK built from a later system message, not from the conversation. */
+export const isHostContextUpdate = (message: WireRecord): boolean => {
+  const content = message["content"]
+  if (message["role"] !== "user" || !isRecordArray(content) || content.length === 0) return false
+  return content.every(
+    (block) => block["type"] === "text" && isHostContextUpdateText(block["text"]),
+  )
+}
 
 // ── api keys ────────────────────────────────────────────────────────────────
 
