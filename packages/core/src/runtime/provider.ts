@@ -36,6 +36,8 @@ import {
 import { causeMessage } from "../domain/guards.js"
 import { wireToolName } from "../domain/capability.js"
 import {
+  AuthAuthorizationMethod,
+  AuthMethod,
   DEFAULT_RETRY_POLICY,
   type PersistAuth,
   ProviderAuthError,
@@ -57,25 +59,15 @@ import type * as AiToolkit from "effect/ai/Toolkit"
 // ── auth ────────────────────────────────────────────────────────────────────
 
 /**
- * Every auth concept gent uses: the auth method, the store, its persistence,
+ * Every auth concept gent uses beyond the driver's own sign-in methods
+ * (`AuthMethod`, in domain/driver.ts): the authorization, the store, its persistence,
  * and the guard.
  * Each provider's auth blob is one URL-encoded JSON file under the configured
  * directory (default `~/.gent/auth/`), mode 0600, replaced atomically. The
  * schema is `AuthInfo`, a tagged enum with `Api | Oauth` variants.
  */
 
-// ── auth method wire types ──────────────────────────────────────────────────
-
-/** How a provider signs in: an API key or an OAuth login. */
-const AuthType = Schema.Literals(["api", "oauth"])
-
-export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
-  type: AuthType,
-  label: Schema.String,
-}) {}
-
-export const AuthAuthorizationMethod = Schema.Literals(["auto", "code", "done"])
-export type AuthAuthorizationMethod = typeof AuthAuthorizationMethod.Type
+// ── auth authorization wire type ────────────────────────────────────────────
 
 export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuthorization")({
   authorizationId: Schema.String,
@@ -127,7 +119,7 @@ export const AuthProviderInfo = Schema.Struct({
   provider: ProviderId,
   hasKey: Schema.Boolean,
   source: Schema.optional(AuthSource),
-  authType: Schema.optional(AuthType),
+  authType: Schema.optional(AuthMethod.fields.type),
   required: Schema.Boolean,
 })
 export type AuthProviderInfo = typeof AuthProviderInfo.Type

@@ -1,6 +1,7 @@
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { Headers } from "effect/http"
 import { RpcMiddleware } from "effect/rpc"
+import { CurrentWorkspaceId, WorkspaceId } from "../domain/ids.js"
 // @effect-diagnostics nodeBuiltinImport:off -- the workspace id is a wire constant, see workspaceIdForCwd
 // oxlint-disable-next-line gent/no-bun-outside-adapter -- a client and its server derive the wire id in separate processes; it is pinned to node:crypto sha256, not an adapter's hash
 import { createHash } from "node:crypto"
@@ -9,13 +10,6 @@ import { createHash } from "node:crypto"
 import { resolve as resolvePath } from "node:path"
 
 export const WORKSPACE_ID_HEADER = "x-gent-workspace-id"
-
-const WorkspaceIdPattern = /^[a-f0-9]{64}$/
-export const WorkspaceId = Schema.String.check(Schema.isPattern(WorkspaceIdPattern)).pipe(
-  Schema.brand("@gent/core/server/WorkspaceId"),
-)
-export type WorkspaceId = typeof WorkspaceId.Type
-export const DefaultWorkspaceId: WorkspaceId = WorkspaceId.make("0".repeat(64))
 
 /**
  * Derive the workspace id for a working directory.
@@ -47,11 +41,6 @@ type WorkspaceHeaders = { readonly [WORKSPACE_ID_HEADER]: string }
 export const workspaceHeadersForCwd = (cwd: string): WorkspaceHeaders => ({
   [WORKSPACE_ID_HEADER]: String(workspaceIdForCwd(cwd)),
 })
-
-export const CurrentWorkspaceId = Context.Reference<WorkspaceId>(
-  "@gent/core/src/server/workspace-rpc/CurrentWorkspaceId",
-  { defaultValue: () => DefaultWorkspaceId },
-)
 
 class WorkspaceHeaderError extends Schema.TaggedError<WorkspaceHeaderError>()(
   "WorkspaceHeaderError",

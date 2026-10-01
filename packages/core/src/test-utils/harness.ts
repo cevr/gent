@@ -16,7 +16,6 @@ import {
 } from "effect"
 import {
   type AnyExtensionHook,
-  defineResource,
   ExtensionContext,
   type ExtensionContextService,
   type ExtensionContributions,
@@ -334,8 +333,6 @@ export const testLeafContext = (ctx: TestToolContext): ExtensionContextService =
 
 // ── call recording ──────────────────────────────────────────────────────────
 
-// Call Record
-
 export interface CallRecord {
   service: string
   method: string
@@ -343,8 +340,6 @@ export interface CallRecord {
   result?: unknown
   timestamp: number
 }
-
-// Sequence Recorder Service
 
 interface SequenceRecorderService {
   readonly record: (call: Omit<CallRecord, "timestamp">) => Effect.Effect<void>
@@ -371,8 +366,6 @@ export class SequenceRecorder extends Context.Service<SequenceRecorder, Sequence
     }),
   )
 }
-
-// Recording EventStore
 
 /**
  * The in-memory event store with each append recorded in the
@@ -433,6 +426,8 @@ export const collectTestContributions = <E, R>(
     return yield* collector.seal
   })
 
+// ── storage fixtures ────────────────────────────────────────────────────────
+
 /**
  * In-memory SQLite storage with its platform closed: deterministic ids from
  * `GentPlatform.Test()` and the Bun `Crypto` the host would provide. Storage
@@ -446,8 +441,6 @@ export const testSqliteStorage = <A>(
   SqliteStorage.MemoryWithSql(extra, featureMigrations).pipe(
     Layer.provide(Layer.merge(GentPlatform.Test(), BunCrypto.layer)),
   )
-
-// Mock Helpers
 
 const sameAdmission = Schema.toEquivalence(SessionAdmission)
 
@@ -726,21 +719,31 @@ interface E2ELayerOptions {
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Keep running when an extension fails to load. Only for tests about that failure path. */
   readonly allowFailedExtensions?: boolean
-  /** Approval service override. Default auto-approves for E2E tests. */
+  /**
+   * The approval service. Default `ApprovalService.Test()` approves every
+   * ask; `ApprovalService.Live` is the production service with durable
+   * pending rows.
+   */
   readonly approvalLayer?: Layer.Layer<
     ApprovalService,
     never,
     EventStore | GentPlatform | InteractionStorage
   >
-  /** Use the production cold-interaction service with durable pending rows. */
-  readonly durableApproval?: boolean
   /** File-backed SQLite path for restart/recovery tests. Defaults to in-memory SQLite. */
   readonly storagePath?: string
   /**
-   * The runtime's working directory. Defaults to a temp directory of the
-   * layer's own, made beside its home and removed with it.
+   * The runtime's working directory: the launch workspace and the client's
+   * workspace, as a host's launch directory is. Defaults to a temp directory
+   * of the layer's own, removed with it.
    */
   readonly cwd?: string
+  /**
+   * The runtime's home: auth, extension files and the data directory live
+   * under it, as a host's home does. Defaults to a temp directory of the
+   * layer's own, removed with it. A test that restarts a layer passes the
+   * same home to both.
+   */
+  readonly home?: string
   /** Optional per-cwd profile cache for per-workspace routing tests. */
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
@@ -757,41 +760,9 @@ interface E2ELayerOptions {
    * config resolution — e.g., for driver-override-from-session-cwd tests.
    */
   readonly configServiceLayer?: Layer.Layer<ConfigService>
-  /** Per-extension layer overrides (e.g., memory vault test layer) */
-  readonly layerOverrides?: Record<string, () => Layer.Layer<never>>
 }
 
 export type E2ELayerConfig = E2ELayerOptions & E2EExtensionSource
-
-const applyLayerOverride = (
-  contributions: ExtensionContributions,
-  extensionId: ExtensionId,
-  override: Option.Option<() => Layer.Layer<never>>,
-): ExtensionContributions => {
-  if (Option.isNone(override)) return contributions
-  const processResources = (contributions.resources ?? []).filter((r) => r.scope === "process")
-  if (processResources.length > 1) {
-    return Effect.runSync(
-      Effect.die(
-        new Error(
-          `e2e-layer.layerOverrides: extension "${extensionId}" has ${processResources.length} process-scope Resources; the override path replaces all of them with one merged layer. Provide a complete merged layer in the override factory, or extend layerOverrides to address Resources individually.`,
-        ),
-      ),
-    )
-  }
-  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The test override erases resource output types at this heterogeneous layer boundary.
-  const overrideLayer = override.value() as unknown as Layer.Layer<unknown, never, never>
-  const layerOverride = defineResource({
-    id: "test/e2e-layer/process-override",
-    scope: "process",
-    layer: overrideLayer,
-  })
-  const otherResources = (contributions.resources ?? []).filter((r) => r.scope !== "process")
-  return {
-    ...contributions,
-    resources: [...otherResources, layerOverride],
-  }
-}
 
 /** Re-registers one compiled slot; the switch restores the kind/handler correlation. */
 const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.Effect<void> => {
@@ -829,29 +800,6 @@ const fromLoadedExtension = (
   setup: registerContributions(extension.contributions),
 })
 
-const wrapExtensionInput = (
-  extension: GentExtension<ExtensionSetupServices>,
-  layerOverrides: E2ELayerOptions["layerOverrides"],
-): GentExtension<ExtensionSetupServices> => ({
-  manifest: extension.manifest,
-  artifactIdentity: extension.artifactIdentity,
-  setup: Effect.gen(function* () {
-    const loader = yield* ExtensionHost
-    const collector = makeCollectingExtensionHost(
-      testHostFacts({ cwd: loader.cwd, home: loader.home }),
-    )
-    yield* extension.setup.pipe(Effect.provideService(ExtensionHost, collector.service))
-    const contributions = yield* collector.seal
-    yield* registerContributions(
-      applyLayerOverride(
-        contributions,
-        extension.manifest.id,
-        Option.fromUndefinedOr(layerOverrides?.[extension.manifest.id]),
-      ),
-    )
-  }),
-})
-
 const extensionInputsForConfig = (
   config: E2ELayerConfig,
 ): ReadonlyArray<GentExtension<ExtensionSetupServices>> => {
@@ -862,20 +810,9 @@ const extensionInputsForConfig = (
     .map((list) => testAgentsExtension(list))
     .toArray()
   if (Predicate.isUndefined(config.extensions)) {
-    return [
-      ...agents,
-      ...(config.extensionInputs ?? []).map((extension) =>
-        wrapExtensionInput(extension, config.layerOverrides),
-      ),
-    ]
+    return [...agents, ...(config.extensionInputs ?? [])]
   }
   return [...agents, ...config.extensions.map(fromLoadedExtension)]
-}
-
-const approvalOverrideForConfig = (config: E2ELayerConfig) => {
-  if (!Predicate.isUndefined(config.approvalLayer)) return Option.some(config.approvalLayer)
-  if (config.durableApproval === true) return Option.none()
-  return Option.some(ApprovalService.Test())
 }
 
 /**
@@ -891,13 +828,13 @@ const approvalOverrideForConfig = (config: E2ELayerConfig) => {
  * reads project extensions, skills and `AGENTS.md` from its cwd. A shared
  * directory would hand one test's files to the next.
  */
-export const createE2ELayer = (config: E2ELayerConfig) => {
-  let toolRunnerLayer = Option.none<Layer.Layer<ToolRunner>>()
-  if (config.toolRunner === "test") toolRunnerLayer = Option.some(ToolRunner.Test())
-
-  return Layer.unwrap(
+export const createE2ELayer = (config: E2ELayerConfig) =>
+  Layer.unwrap(
     Effect.gen(function* () {
-      const home = yield* makeTempDirectoryScoped("gent-test-home-")
+      const home = yield* Option.match(Option.fromUndefinedOr(config.home), {
+        onNone: () => makeTempDirectoryScoped("gent-test-home-"),
+        onSome: Effect.succeed,
+      })
       const path = yield* Path.Path
       // A file-backed layer is a server a test restarts: by default it runs in
       // the database's directory, so the restarted layer is in the same place
@@ -909,15 +846,13 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         onNone: () => makeTempDirectoryScoped("gent-test-cwd-"),
         onSome: Effect.succeed,
       })
-      return e2eDependencies(config, { cwd, home }, toolRunnerLayer)
+      return e2eDependencies(config, { cwd, home })
     }),
   ).pipe(Layer.provide(BunPlatformLive))
-}
 
 const e2eDependencies = (
   config: E2ELayerConfig,
   directories: { readonly cwd: string; readonly home: string },
-  toolRunnerLayer: Option.Option<Layer.Layer<ToolRunner>>,
 ) =>
   createDependencies({
     ...directories,
@@ -926,9 +861,7 @@ const e2eDependencies = (
       onNone: () => StateLocation.cases.Memory.make({}),
       onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
     }),
-    modelResolverOverride: Option.getOrUndefined(
-      Option.map(Option.fromUndefinedOr(config.providerLayer), LanguageModelLayers.resolver),
-    ),
+    modelResolverOverride: LanguageModelLayers.resolver(config.providerLayer),
     extensions: extensionInputsForConfig(config),
     // A broken extension fails the test with its reason, not a later timeout.
     failOnExtensionFailure: config.allowFailedExtensions !== true,
@@ -936,10 +869,16 @@ const e2eDependencies = (
     overrides: {
       modelRegistryLayer: ModelRegistry.Test([], Option.fromUndefinedOr(config.modelPricing)),
       authLayer: config.authLayer ?? Auth.Test(),
-      approvalLayer: Option.getOrUndefined(approvalOverrideForConfig(config)),
+      approvalLayer: config.approvalLayer ?? ApprovalService.Test(),
       configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
       sessionProfileCacheLayer: config.sessionProfileCacheLayer,
-      toolRunnerLayer: Option.getOrUndefined(toolRunnerLayer),
+      // `"test"` stubs the tool runner; otherwise the production runner runs.
+      toolRunnerLayer: Option.getOrUndefined(
+        Option.map(
+          Option.liftPredicate(config.toolRunner, (runner) => runner === "test"),
+          () => ToolRunner.Test(),
+        ),
+      ),
       extraLayers: config.extraLayers,
     },
   })
@@ -983,21 +922,16 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 //
 // The harness is intentionally thin: it folds the four lines every RPC test
 // already writes (build E2E layer → createRpcClient → session.create → return
-// client + ids) into a single yield. The seeded session runs in the layer's
-// own temp working directory; pass `cwd` to seed it elsewhere.
+// client + ids) into a single yield. The layer launches in `cwd` and the
+// seeded session runs there, as a host and its first session do.
 //
 // The harness is exposed as `@gent/core/test-utils` so it can be imported from
 // any test file. Because `core` cannot reach into `@gent/extensions`, the
 // caller passes pre-loaded extensions and an agents bucket — the same
 // fragments callers already pass to `createE2ELayer`.
 
-type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner" | "cwd"> &
+type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner"> &
   E2EExtensionSource & {
-    /**
-     * Working directory passed to the seeded session.create call. Defaults to
-     * the layer's own temp working directory.
-     */
-    readonly cwd?: string
     /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
     readonly admission?: SessionAdmission
   }
@@ -1016,11 +950,15 @@ type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner" | "cwd"> &
  */
 export const createRpcHarness = (config: RpcHarnessConfig) =>
   Effect.gen(function* () {
-    const { cwd, admission, ...layerConfig } = config
-    const layerCwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
-    const { client } = yield* createRpcClient(createE2ELayer({ ...layerConfig, cwd: layerCwd }))
+    const { admission, ...layerConfig } = config
+    // One working directory: the layer launches in it and the seeded session runs in it.
+    const cwd = yield* Option.match(Option.fromUndefinedOr(config.cwd), {
+      onNone: () => makeTempDirectoryScoped("gent-test-cwd-"),
+      onSome: Effect.succeed,
+    })
+    const { client } = yield* createRpcClient(createE2ELayer({ ...layerConfig, cwd }))
     const { sessionId, branchId } = yield* client.session.create({
-      cwd: cwd ?? layerCwd,
+      cwd,
       ...omitUndefined({ admission }),
     })
     return { client, sessionId, branchId }

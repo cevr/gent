@@ -117,7 +117,6 @@ import {
   type StorageTransaction,
   ToolCallBindingStorage,
   type TurnRecord,
-  turnRecordAtStep,
   TurnRecordStorage,
 } from "../storage/storage.js"
 import {
@@ -138,7 +137,7 @@ import {
   type TurnInterruption,
 } from "./tools.js"
 import { ConfigService, type UserConfig } from "./config.js"
-import { asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
+import { type AgentLoopError, asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
   driverCacheWritesByLifetime,
   driverRetryPolicy,
@@ -2041,13 +2040,13 @@ type AgentLoopTurnExecutionContext = {
   readonly branchId: BranchId
   readonly resolveTurnProfile: (
     run: RunOpener,
-  ) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
+  ) => Effect.Effect<AgentLoopTurnProfile, AgentLoopError, Scope.Scope>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption
   readonly inbox: LoopInbox
   /** The branch's services a turn's hooks run with; see `AgentLoopBehavior.branchContext`. */
-  readonly branchContext: Effect.Effect<Context.Context<never>>
+  readonly branchContext: Effect.Effect<Context.Context<never>, AgentLoopError>
 }
 
 export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext) =>
@@ -2256,10 +2255,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
       const write = Effect.gen(function* () {
         const current = yield* readBase
-        yield* turnRecordStorage.put(
-          turnRecordKey(messageId),
-          turnRecordAtStep({ ...current, ...change(current) }),
-        )
+        yield* turnRecordStorage.put(turnRecordKey(messageId), { ...current, ...change(current) })
       })
       if (options.onFailure === "die") return write.pipe(Effect.orDie)
       return write.pipe(
@@ -2626,6 +2622,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             costUsd: Option.getOrUndefined(streamEndedCost),
             pricedModel,
             child: params.resolved.child,
+            cacheWritesByLifetime: Option.getOrUndefined(
+              Option.liftPredicate(cacheWritesByLifetime, (writes) => writes.length > 0),
+            ),
             outcome: outcome._tag,
           }),
         )
@@ -2953,7 +2952,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         const dispatching = params.nativeToolCalls.filter((call) =>
           Option.match(Option.fromUndefinedOr(params.toolBindings.get(call.name)), {
             onNone: () => false,
-            onSome: (entry) => entry.capability.dispatches === true,
+            onSome: (entry) => getToolMetadata(entry.capability).dispatches === true,
           }),
         )
         if (dispatching.length === 0) return params.toolBindings

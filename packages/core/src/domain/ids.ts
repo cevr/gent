@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Context, Schema } from "effect"
 
 // ── ids ─────────────────────────────────────────────────────────────────────
 
@@ -29,8 +29,8 @@ export type InteractionRequestId = typeof InteractionRequestId.Type
 /**
  * Client-generated request ID for end-to-end correlation and transport-retry
  * dedup. Bounded to 128 chars so a malicious/buggy client cannot bloat the
- * per-server dedup cache with arbitrary-length keys. Callers in this repo
- * use `crypto.randomUUID()` which fits comfortably.
+ * in-flight dedup table and the durable operation rows with arbitrary-length
+ * keys. Callers in this repo use `crypto.randomUUID()`, which fits.
  */
 export const RequestId = Schema.String.check(Schema.isMaxLength(128))
 export type RequestId = typeof RequestId.Type
@@ -46,6 +46,21 @@ export type ClientRequestGrant = typeof ClientRequestGrant.Type
 
 export const ExtensionId = Schema.String.pipe(Schema.brand("ExtensionId"))
 export type ExtensionId = typeof ExtensionId.Type
+
+// ── workspace ───────────────────────────────────────────────────────────────
+
+/** A workspace: the sha256 of a resolved working directory (`workspaceIdForCwd`). */
+export const WorkspaceId = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)).pipe(
+  Schema.brand("WorkspaceId"),
+)
+export type WorkspaceId = typeof WorkspaceId.Type
+export const DefaultWorkspaceId: WorkspaceId = WorkspaceId.make("0".repeat(64))
+
+/** The workspace a request runs in; the workspace middleware sets it per request. */
+export const CurrentWorkspaceId = Context.Reference<WorkspaceId>(
+  "@gent/core/src/domain/ids/CurrentWorkspaceId",
+  { defaultValue: () => DefaultWorkspaceId },
+)
 
 // ── process-generation ──────────────────────────────────────────────────────
 

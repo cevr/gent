@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, Option, Stream } from "effect"
 import { AgentsExtension, main as builtinAgent } from "../src/agents.js"
-import type { SystemPromptInput } from "@gent/core/extensions/api"
+import { getToolId, type SystemPromptInput } from "@gent/core/extensions/api"
 import {
   collectTestContributions,
   createRpcHarness,
@@ -86,7 +86,7 @@ describe("session.send summary", () => {
     Effect.gen(function* () {
       const contributions = yield* collectTestContributions(SessionToolsExtension.setup)
       const send = Option.fromUndefinedOr(
-        contributions.tools?.find((candidate) => candidate.id === "session.send"),
+        contributions.tools?.find((candidate) => getToolId(candidate) === "session.send"),
       )
       expect(Option.isSome(send)).toBe(true)
       expect(

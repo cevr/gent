@@ -168,22 +168,6 @@ interface ToolDeclarations {
 }
 
 /**
- * Erased runtime shape of a `tool({...})` Capability. The author-facing branded
- * `ToolCapability` is in the tool section below; runtime code reads Gent-only
- * fields from the `GentToolMetadata` annotation, not this shape.
- */
-interface ToolCapabilityApi extends ToolDeclarations {
-  readonly _tag: "tool"
-  readonly id: ToolId
-  readonly readonly: boolean
-  readonly input: unknown
-  readonly output: unknown
-  readonly effect: unknown
-  readonly description: string
-  readonly metadata: unknown
-}
-
-/**
  * Erased runtime shape of a `request({...})` Capability. The author-facing
  * branded `RequestCapability` is in the request section below.
  */
@@ -489,13 +473,19 @@ type GentAiTool = AiTool.Tool<
 >
 
 export type ToolCapability<Input = unknown, Output = unknown, Error = unknown> = GentAiTool & {
+  /**
+   * Effect's own tool id, `effect/ai/Tool/<id>`; it is not the Gent tool id.
+   * Read that with `getToolId(tool)`: a comparison of this field with a
+   * `ToolId` does not compile.
+   */
+  readonly id: `effect/ai/Tool/${string}`
   readonly [ToolCapabilityBrand]: true
   readonly [ToolCapabilityType]?: {
     readonly input: Input
     readonly output: Output
     readonly error: Error
   }
-} & ToolCapabilityApi
+}
 
 // oxlint-disable-next-line effect/noNullish -- Native tools do not carry Gent metadata.
 const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =>
@@ -672,24 +662,14 @@ export const tool = <
     .annotate(GentToolMetadataTag, metadata)
     .annotate(AiTool.Readonly, metadata.readonly)
     .annotate(AiTool.Destructive, input.destructive === true)
-  type MutableCapability = { -readonly [K in keyof ToolCapabilityApi]: ToolCapabilityApi[K] }
-  const capability: MutableCapability = {
-    _tag: "tool",
-    id,
-    readonly: metadata.readonly,
-    input: metadata.input,
-    output: metadata.output,
-    effect: metadata.effect,
-    description: input.description,
-    metadata,
-  }
-  Object.assign(capability, declarationsOf(metadata))
   const brand: ToolCapability<
     Schema.Schema.Type<Params>,
     Schema.Schema.Type<Output>,
     Error
   >[typeof ToolCapabilityBrand] = true
-  const branded = Object.assign(native, capability, { [ToolCapabilityBrand]: brand })
+  // The value `AiTool.dynamic` already set; restated so the type names its form.
+  const nativeId: ToolCapability["id"] = `effect/ai/Tool/${input.id}`
+  const branded = Object.assign(native, { id: nativeId, [ToolCapabilityBrand]: brand })
 
   return branded
 }

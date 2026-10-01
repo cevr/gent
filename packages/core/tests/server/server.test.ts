@@ -31,6 +31,7 @@ import {
   MessageId,
   ProcessGenerationId,
   SessionId,
+  WorkspaceId,
 } from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
 import { StorageError } from "../../src/domain/errors.js"
@@ -92,12 +93,11 @@ import {
   EventStoreError,
 } from "../../src/domain/event"
 import { BunServices } from "@effect/platform-bun"
-import { TestClock } from "effect/testing"
 import { SqlClient, type SqlError } from "effect/sql"
 import { ModelResolver } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { RpcClient, RpcTest } from "effect/rpc"
-import { WORKSPACE_ID_HEADER, WorkspaceId } from "../../src/server/workspace-rpc"
+import { WORKSPACE_ID_HEADER } from "../../src/server/workspace-rpc"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -2130,61 +2130,41 @@ describe("session transport contract", () => {
   )
 
   it.live(
-    "a sent message is readable through message.list and the session snapshot, and leaves the queue empty",
+    "a sent message and its reply read back through message.list and the snapshot, with metrics and an empty queue",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { client } = yield* makeDebugClient()
+          const userText = "hello from the transport contract"
+          const assistantText = "transport contract reply"
+          const { client } = yield* makeClient(assistantText)
           const created = yield* client.session.create({ cwd: process.cwd() })
+          const target = { sessionId: created.sessionId, branchId: created.branchId }
+          const said = (role: "user" | "assistant", text: string) => (message: Message) =>
+            message.role === role && messagePartsText(message.parts) === text
 
-          yield* client.message.send({
-            sessionId: created.sessionId,
-            branchId: created.branchId,
-            content: "hello from the transport contract",
-          })
+          yield* client.message.send({ ...target, content: userText })
 
-          const messages = yield* waitFor(
-            client.message.list({ branchId: created.branchId }),
-            (items) =>
-              items.some(
-                (message) =>
-                  messagePartsText(message.parts) === "hello from the transport contract",
-              ),
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot(target),
+            (current) =>
+              current.messages.some(said("assistant", assistantText)) && current.metrics.turns > 0,
+            5_000,
+            "the reply and the turn metrics in the session snapshot",
           )
+          expect(snapshot.messages.some(said("user", userText))).toBe(true)
+          expect(snapshot.metrics.lastInputTokens).toBeGreaterThan(0)
+          expect(snapshot.resolvedModelId).toBeDefined()
 
-          expect(
-            messages.some((message) => {
-              if (message.role !== "user") return false
-              return messagePartsText(message.parts) === "hello from the transport contract"
-            }),
-          ).toBe(true)
+          const messages = yield* client.message.list({ branchId: created.branchId })
+          expect(messages.some(said("user", userText))).toBe(true)
+          expect(messages.some(said("assistant", assistantText))).toBe(true)
 
-          yield* waitFor(client.message.list({ branchId: created.branchId }), (items) =>
-            items.some((message) => message.role === "assistant"),
-          )
-
-          yield* waitFor(
-            client.session.getSnapshot({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-            }),
-            (state) =>
-              state.messages.some(
-                (message) =>
-                  message.role === "user" &&
-                  messagePartsText(message.parts) === "hello from the transport contract",
-              ),
-          )
-
-          const queueAfterSend = yield* client.queue.get({
-            sessionId: created.sessionId,
-            branchId: created.branchId,
-          })
+          const queueAfterSend = yield* client.queue.get(target)
           expect(queueAfterSend.followUp).toEqual([])
           expect(queueAfterSend.steering).toEqual([])
-        }),
-      ).pipe(Effect.timeout("13 seconds")),
-    15_000,
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
 
   // Two sessions on two distinct cwds must have independent per-session
@@ -2432,57 +2412,38 @@ describe("requestId idempotency", () => {
     }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
-  it.live("duplicate public message.send requestId dispatches to the runtime only once", () =>
+  // A send with a request id returns when its turn ends. Its repeats, in
+  // flight together or sent after that, run no second turn.
+  it.live("a repeated message.send requestId runs one turn, in flight or after it ends", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        let dispatchCount = 0
-        const { client, inWorkspace } = yield* makeRpcHandlersClient({
-          sendUserMessage: () =>
-            Effect.sync(() => {
-              dispatchCount++
-            }),
-        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("one"),
+          textStep("two"),
+        ])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { sessionId, branchId } = yield* client.session.create({ cwd: process.cwd() })
         const send = (content: string, requestId: string) =>
-          inWorkspace(
-            client["message.send"]({
-              sessionId: SessionId.make("s1"),
-              branchId: BranchId.make("b1"),
-              content,
-              requestId,
-            }),
-          )
+          client.message.send({ sessionId, branchId, content, requestId })
 
-        yield* send("hi", "req-send-1")
+        yield* Effect.all([send("hi", "req-send-1"), send("hi", "req-send-1")], {
+          concurrency: "unbounded",
+        })
         yield* send("hi", "req-send-1")
         yield* send("hi (distinct)", "req-send-2")
 
-        expect(dispatchCount).toBe(2)
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
-
-  it.live("concurrent duplicate public message.send requestIds dispatch only once", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let dispatchCount = 0
-        const { client, inWorkspace } = yield* makeRpcHandlersClient({
-          sendUserMessage: () =>
-            Effect.sync(() => {
-              dispatchCount++
-            }),
-        })
-        const send = inWorkspace(
-          client["message.send"]({
-            sessionId: SessionId.make("s1"),
-            branchId: BranchId.make("b1"),
-            content: "hi",
-            requestId: "req-conc-send",
-          }),
+        const snapshot = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) => current.runtime._tag === "Idle",
+          3_000,
+          "runtime idle after the sends",
         )
-
-        yield* Effect.all([send, send, send], { concurrency: "unbounded" })
-
-        expect(dispatchCount).toBe(1)
+        expect(
+          snapshot.messages
+            .filter((message) => message.role === "user")
+            .map((message) => messagePartsText(message.parts)),
+        ).toEqual(["hi", "hi (distinct)"])
+        expect(yield* controls.callCount).toBe(2)
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -2701,12 +2662,11 @@ describe("requestId idempotency", () => {
     ),
   )
 
-  // Fresh process cache. createSession has a durable operation result
-  // underneath the in-memory process cache, so a retry of the same
-  // `requestId` still returns the original session/branch ids after the
-  // cache is gone. Each `Effect.provide` of the layer builds a new
-  // `SessionMutations` (new dedup cache) over the same SQLite file.
-  it.scoped("durable createSession result survives a fresh process cache", () =>
+  // createSession stores its result as a durable operation row, so a retry
+  // of the same `requestId` in a new process returns the original
+  // session/branch ids. Each `Effect.provide` of the layer builds a new
+  // `SessionMutations` over the same SQLite file.
+  it.scoped("a createSession retry in a new process returns the stored result", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -2729,28 +2689,6 @@ describe("requestId idempotency", () => {
       expect(second.branchId).toBe(first.branchId)
       expect(sessions).toHaveLength(1)
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
-  )
-
-  // Companion to the TTL eviction test: prove the bound is the bound.
-  // Within the 60s window, a retry MUST collapse onto the cached outcome
-  // — otherwise "evict past TTL" would be vacuous.
-  it.effect("dedup cache retains success entry within TTL — retried requestId collapses", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const sessions = yield* SessionStorage
-      const first = yield* mutations.createSession({
-        cwd: "/nonexistent/ttl-mid",
-        requestId: "req-ttl-mid",
-      })
-      // Advance well inside the 60s window — should still hit the cache.
-      yield* TestClock.adjust("30 seconds")
-      const second = yield* mutations.createSession({
-        cwd: "/nonexistent/ttl-mid",
-        requestId: "req-ttl-mid",
-      })
-      expect(second.sessionId).toBe(first.sessionId)
-      expect((yield* sessions.listSessions).length).toBe(1)
-    }).pipe(Effect.provide(sessionMutationsLayer)),
   )
 
   it.scoped("createSession requestId replays durable result after mutations layer restart", () =>
@@ -3007,55 +2945,6 @@ describe("requestId idempotency", () => {
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("message.send", () => {
-  it.live(
-    "persists the user message and assistant reply through the public snapshot contract",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const userText = "hello from acceptance"
-          const assistantText = "acceptance reply"
-          const { client } = yield* makeClient(assistantText)
-          const created = yield* client.session.create({ cwd: process.cwd() })
-
-          yield* client.message.send({
-            sessionId: created.sessionId,
-            branchId: created.branchId,
-            content: userText,
-          })
-
-          const snapshot = yield* waitFor(
-            client.session.getSnapshot({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-            }),
-            (current) =>
-              current.messages.some(
-                (message) =>
-                  message.role === "assistant" &&
-                  message.parts.some((part) => part.type === "text" && part.text === assistantText),
-              ),
-            5_000,
-            "assistant reply in session snapshot",
-          )
-
-          expect(
-            snapshot.messages.some(
-              (message) =>
-                message.role === "user" &&
-                message.parts.some((part) => part.type === "text" && part.text === userText),
-            ),
-          ).toBe(true)
-          expect(
-            snapshot.messages.some(
-              (message) =>
-                message.role === "assistant" &&
-                message.parts.some((part) => part.type === "text" && part.text === assistantText),
-            ),
-          ).toBe(true)
-        }).pipe(Effect.timeout("4 seconds")),
-      ),
-  )
-
   it.live("a session created with a run spec runs its turns under it", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -3528,46 +3417,5 @@ describe("message.send", () => {
         expect(yield* controls.callCount).toBe(0)
       }).pipe(Effect.timeout("4 seconds")),
     ),
-  )
-})
-
-// ── session snapshot rpc ────────────────────────────────────────────────────
-
-/**
- * Session snapshot canary: exercises product RPCs over fresh request scopes.
- */
-
-describe("Session snapshot across RPC boundaries", () => {
-  it.live(
-    "session snapshot observes messages across RPC request boundaries",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-
-          const { sessionId, branchId } = yield* client.session.create({})
-
-          const before = yield* client.session.getSnapshot({ sessionId, branchId })
-          yield* client.message.send({ sessionId, branchId, content: "hello" })
-          const after = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (snapshot) =>
-              snapshot.messages.some((message) => messagePartsText(message.parts) === "hello") &&
-              snapshot.metrics.turns > 0,
-            5_000,
-            "session snapshot user message and metrics",
-          )
-
-          expect(after.messages.length).toBeGreaterThanOrEqual(before.messages.length)
-          expect(after.messages.map((message) => messagePartsText(message.parts))).toContain(
-            "hello",
-          )
-          expect(after.metrics.turns).toBeGreaterThan(0)
-          expect(after.metrics.lastInputTokens).toBeGreaterThan(0)
-          expect(after.resolvedModelId).toBeDefined()
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
   )
 })

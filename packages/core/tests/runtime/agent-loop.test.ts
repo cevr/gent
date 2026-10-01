@@ -29,8 +29,8 @@ import {
   RequestId,
   SessionId,
   ToolCallId,
+  DefaultWorkspaceId,
 } from "../../src/domain/ids"
-import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import {
   AgentLoopLiveActor,
   AgentLoopSessionGovernance,
@@ -1511,6 +1511,67 @@ describe("a turn whose agent cannot be read", () => {
         expect((yield* Ref.get(harness.interruptedTurns))[0]).toBe(false)
         yield* Fiber.interrupt(loop)
       }),
+  )
+})
+
+describe("a loop whose session cannot be read", () => {
+  // The loop's branch tools run in the session's cwd. A failed read is not
+  // "no session": opening in the host cwd would run them in another project.
+  it.live("fails its open, and the next op opens it once the read succeeds", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("unreadable-open-session")
+      const branchId = BranchId.make("unreadable-open-branch")
+      const unreadable = yield* Ref.make(false)
+      const storage = Layer.effect(
+        SessionStorage,
+        Effect.map(SessionStorage, (real) =>
+          SessionStorage.of({
+            ...real,
+            getSession: (id) =>
+              Effect.flatMap(Ref.get(unreadable), (failing) => {
+                if (failing) return Effect.fail(new StorageError({ message: "session unreadable" }))
+                return real.getSession(id)
+              }),
+          }),
+        ),
+      ).pipe(Layer.provideMerge(testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)))
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+      yield* Effect.gen(function* () {
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* (yield* SessionStorage).createSession(
+          new Session({
+            id: sessionId,
+            cwd: "/nonexistent/unreadable-open-cwd",
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        yield* (yield* BranchStorage).createBranch(
+          new Branch({ id: branchId, sessionId, createdAt: now }),
+        )
+        yield* Ref.set(unreadable, true)
+        const ref = yield* (yield* AgentLoopActor.Context)(
+          entityIdOf(DefaultWorkspaceId, sessionId, branchId),
+        )
+        const platform = yield* GentPlatform
+        const getState = Effect.gen(function* () {
+          return yield* ref.execute(
+            AgentLoopActor.GetState.make({
+              workspaceId: DefaultWorkspaceId,
+              sessionId,
+              branchId,
+              commandId: ActorCommandId.make(yield* platform.randomId),
+            }),
+          )
+        })
+        expect(yield* Effect.flip(getState)).toBeInstanceOf(AgentLoopError)
+        yield* Ref.set(unreadable, false)
+        expect(Exit.isSuccess(yield* Effect.exit(getState))).toBe(true)
+      }).pipe(
+        Effect.provide(actorTestRoot({ provider: providerLayer, storage })),
+        Effect.timeout("4 seconds"),
+      )
+    }),
   )
 })
 

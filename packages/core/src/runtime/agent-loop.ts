@@ -34,6 +34,7 @@ import {
   MessageId,
   RpcId,
   type SessionId,
+  CurrentWorkspaceId,
 } from "../domain/ids.js"
 import type { AgentName } from "../domain/agent.js"
 import * as Prompt from "effect/ai/Prompt"
@@ -147,7 +148,6 @@ import type { StorageError } from "../domain/errors.js"
 import { type ModelRegistry, ModelResolver } from "./provider.js"
 import { GentPlatform } from "./gent-platform.js"
 import { Actor } from "effect-encore"
-import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 // ── session governance ──────────────────────────────────────────────────────
 
@@ -257,9 +257,8 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * to, because storage decodes it. This module is the only code that reads or
  * writes its three compartments — every other file sees verbs.
  *
- * `wantsWakeOnRecovery` is the one exported function over a
- * loaded-but-not-yet-installed queue: startup has to decide whether to wake
- * before a loop exists to ask.
+ * `wantsWakeOnRecovery` decides from a loaded queue, before the loop is
+ * built over it, whether recovery wakes the loop.
  */
 
 /**
@@ -1478,7 +1477,9 @@ type AgentLoopBehavior = {
    */
   withdrawFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   /** The profile for one run; its opener says whether a client opened it (`turnCanAsk`). */
-  resolveTurnProfile: (run: RunOpener) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
+  resolveTurnProfile: (
+    run: RunOpener,
+  ) => Effect.Effect<AgentLoopTurnProfile, AgentLoopError, Scope.Scope>
   /**
    * Branch-lifetime services: the cell kernel, the model context ledger, and
    * every extension Resource declared with `scope: "branch"`. Extension leaves
@@ -1486,7 +1487,7 @@ type AgentLoopBehavior = {
    * context, or a branch Resource resolves as "Service not found". Built on
    * first use from the session's profile.
    */
-  branchContext: Effect.Effect<Context.Context<never>>
+  branchContext: Effect.Effect<Context.Context<never>, AgentLoopError>
   /** Start the turn a restart cut short; only an opening loop calls it. */
   startRecovered: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   /** Take the next queued item and start it in one permit region, as the loop's own fiber. */
@@ -1638,7 +1639,7 @@ const makeAgentLoopResidency = Effect.gen(function* () {
  *
  * Yields layer-level services directly inside its Effect body — the actor
  * does not pre-bundle them into a deps record. The factory returns
- * `Effect<AgentLoopBehavior, never, R>` whose R-channel is the full union of
+ * `Effect<AgentLoopBehavior, AgentLoopError, R>` whose R-channel is the full union of
  * services consumed by the loop, propagating cleanly to the actor layer.
  */
 const makeAgentLoopBehavior = (
@@ -1651,7 +1652,7 @@ const makeAgentLoopBehavior = (
   profileCache?: SessionProfileCacheService,
 ): Effect.Effect<
   AgentLoopBehavior,
-  never,
+  AgentLoopError,
   | Scope.Scope
   | Entity.CurrentAddress
   | SessionStorage
@@ -1760,7 +1761,10 @@ const makeAgentLoopBehavior = (
           profileCache,
           hostProvider,
           defaults: { baseSections },
-        }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry)),
+        }).pipe(
+          Effect.provideService(ExtensionRegistry, extensionRegistry),
+          asAgentLoopError(`Cannot read session ${sessionId} for its profile`),
+        ),
       )
 
     const turnInterruption = yield* makeTurnInterruption
@@ -1770,7 +1774,10 @@ const makeAgentLoopBehavior = (
     // closes. Process-scope Resources are not collected here — they belong to
     // the process graph host and outlive this scope.
     const branchTools = yield* CurrentBranchToolFeature
-    const branchCwd = yield* sessionWorkingDirectory(sessionId)
+    // A failed read fails the open; the next op opens again.
+    const branchCwd = yield* sessionWorkingDirectory(sessionId).pipe(
+      asAgentLoopError(`Cannot read session ${sessionId} for its working directory`),
+    )
     const branchToolContext = yield* Layer.build(
       branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
     ).pipe(Scope.provide(loopScope))
@@ -2199,8 +2206,9 @@ const BehaviorHandle = Schema.declare<AgentLoopBehavior>((value): value is Agent
  * does the next op have to rebuild — are one value, so no ordering between
  * them is possible and the illegal combinations cannot be written.
  *
- * `Building` is the state before the first `openLoop` publishes anything, the
- * only one with no handle. `Closed` keeps its handle because a close is not a
+ * `Building` is the state before an `openLoop` publishes anything, the only
+ * one with no handle; a first open that failed leaves it, and the next op
+ * opens again. `Closed` keeps its handle because a close is not a
  * teardown: the finalizer and `TerminateBranch` close the behavior they last
  * held, and the next op rebuilds over it.
  */
@@ -2806,7 +2814,16 @@ const buildAgentLoopActorHandlers = (config: {
       yield* handle.runOpenHooks
     })
 
-    yield* openLoop.pipe(provideActorWorkspace)
+    // An open that fails (the session cannot be read) leaves `Building`, and
+    // the next op opens again.
+    yield* openLoop.pipe(
+      provideActorWorkspace,
+      Effect.catchEager((error) =>
+        Effect.logWarning("agent loop open failed").pipe(
+          Effect.annotateLogs({ sessionId, branchId, error: error.message }),
+        ),
+      ),
+    )
     yield* Effect.addFinalizer(() =>
       Effect.flatMap(Ref.get(lifecycleRef), (lifecycle) => {
         const loop = lifecycleHandle(lifecycle)
@@ -2820,12 +2837,13 @@ const buildAgentLoopActorHandlers = (config: {
     // permit window, so the handle a caller is handed belongs to the cycle
     // this call just settled.
     const ensureStarted = Effect.gen(function* () {
-      if ((yield* Ref.get(lifecycleRef))._tag === "Closed") {
+      const before = (yield* Ref.get(lifecycleRef))._tag
+      if (before === "Closed" || before === "Building") {
         yield* openLoop.pipe(provideActorWorkspace)
       }
-      // The rebuild above settles `Open` or `Failed`. The other two mean the
-      // rebuild left no usable loop, and handing back a closed handle would
-      // run the op against a behavior whose fibers are gone.
+      // The rebuild above settles `Open` or `Failed`, or fails this op. The
+      // other two mean the rebuild left no usable loop, and handing back a
+      // closed handle would run the op against a behavior whose fibers are gone.
       const unavailable = Effect.fail(
         new AgentLoopError({
           message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,

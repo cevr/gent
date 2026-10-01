@@ -265,19 +265,10 @@ export interface FailedExtension {
   readonly error: string
 }
 
+/** An extension as health reports it: active, or failed with its phase and error. */
 export type ExtensionStatusInfo =
-  | {
-      readonly manifest: ExtensionManifest
-      readonly scope: ExtensionScope
-      readonly sourcePath: string
-      readonly status: "active"
-    }
-  | ({
-      readonly manifest: ExtensionManifest
-      readonly scope: ExtensionScope
-      readonly sourcePath: string
-      readonly status: "failed"
-    } & FailedExtension)
+  | (Pick<LoadedExtension, "manifest" | "scope" | "sourcePath"> & { readonly status: "active" })
+  | (FailedExtension & { readonly status: "failed" })
 
 /** Scope precedence for extension resolution. Higher value = higher priority. */
 export const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 }
@@ -1227,13 +1218,6 @@ interface LockEntry {
   readonly refcount: number
 }
 
-interface FileLockApi {
-  readonly withLock: <A, E, R>(
-    path: string,
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E, R>
-}
-
 /**
  * The lock table, refcount-bounded: an entry exists only while at least one
  * caller holds (or is waiting on) the lock, and the last release evicts it.
@@ -1247,9 +1231,10 @@ export const makeFileLockTable: Effect.Effect<FileLockTable> = TxRef.make(
   HashMap.empty<string, LockEntry>(),
 )
 
-export class FileLockService extends Context.Service<FileLockService, FileLockApi>()(
-  "@gent/core/src/domain/extension/FileLockService",
-) {
+export class FileLockService extends Context.Service<
+  FileLockService,
+  ExtensionFileLockServiceApi
+>()("@gent/core/src/domain/extension/FileLockService") {
   /** The service over a lock table its builder made; `layer` makes its own. */
   static over = (locksRef: FileLockTable) =>
     Layer.effect(FileLockService, fileLockService(locksRef))

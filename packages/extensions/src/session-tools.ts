@@ -8,6 +8,7 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
+  getToolId,
   headTailChars,
   interjectionMessageId,
   isSpawnedSession,
@@ -654,7 +655,7 @@ export const SessionToolsExtension = defineExtension({
     yield* host.on("turnProjection", ({ agent }) =>
       stoppedTurnNotices().pipe(
         Effect.map((notices) => {
-          if (agent.deniedTools?.includes(SendSessionTool.id) === true) return { notices }
+          if (agent.deniedTools?.includes(getToolId(SendSessionTool)) === true) return { notices }
           return { promptSections: [SESSIONS_SECTION], notices }
         }),
       ),

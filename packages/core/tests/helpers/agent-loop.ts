@@ -48,8 +48,8 @@ import {
   ActorCommandId,
   ExtensionId,
   MessageId,
+  DefaultWorkspaceId,
 } from "../../src/domain/ids"
-import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import { omitUndefined } from "../../src/domain/guards"
 // ============================================================================
 // Shared helpers

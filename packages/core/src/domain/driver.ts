@@ -15,11 +15,21 @@
 import { Context, Effect, Option, Predicate, Schema, type Layer } from "effect"
 import { AiError, type LanguageModel, type Model as AiModel, type Response } from "effect/ai"
 import type { CacheWriteByLifetime, Model } from "./agent.js"
-import type { AuthAuthorizationMethod, AuthMethod } from "../runtime/provider.js"
 import type { SessionId } from "./ids.js"
 
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
 export type DriverFailureId = typeof DriverFailureId.Type
+
+// ── Auth method wire types ──
+
+/** How a provider signs in: an API key or an OAuth login. */
+export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
+  type: Schema.Literals(["api", "oauth"]),
+  label: Schema.String,
+}) {}
+
+export const AuthAuthorizationMethod = Schema.Literals(["auto", "code", "done"])
+export type AuthAuthorizationMethod = typeof AuthAuthorizationMethod.Type
 
 // ── Failure type ──
 
@@ -137,8 +147,8 @@ export interface StoredOAuthCredentials {
   readonly accountId?: string
 }
 
-/** Persist auth credentials — invoked by `ProviderAuth` into a model driver's
- *  auth handlers. */
+/** Persist auth credentials — handed by `authorizeProvider` and `completeProviderAuth`
+ *  to a model driver's auth handlers. */
 export type PersistAuth = (
   auth:
     | { readonly type: "api"; readonly key: string }

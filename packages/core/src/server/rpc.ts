@@ -22,12 +22,11 @@ import {
   InteractionDecisionConflictError,
   InteractionRequestMismatchError,
 } from "../domain/interaction.js"
-import { DriverError, ProviderAuthError } from "../domain/driver.js"
+import { AuthMethod, DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
 import { SessionRuntimeError } from "../runtime/session.js"
 import {
   AuthAuthorization,
-  AuthMethod,
   AuthProviderInfo,
   ListAuthProvidersPayload,
 } from "../runtime/provider.js"
@@ -85,7 +84,7 @@ export type GentRpcError = typeof GentRpcError.Type
 
 // ── rpc payloads ────────────────────────────────────────────────────────────
 
-export { Branch, BranchTreeNode, Session }
+export { BranchTreeNode }
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -275,9 +274,7 @@ export const CallbackAuthInput = Schema.Struct({
 })
 export type CallbackAuthInput = typeof CallbackAuthInput.Type
 
-export { AuthProviderInfo, ListAuthProvidersPayload }
-export { EventEnvelope }
-export { QueueSnapshot }
+export { ListAuthProvidersPayload }
 
 /** Input shape for public extension RPC dispatch.
  *  `extensionId` + `capabilityId` route to the registered request;

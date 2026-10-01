@@ -16,7 +16,7 @@ import {
   getToolMetadata,
   isToolCapability,
 } from "../../src/domain/capability"
-import { ExtensionId, type RpcId, type ToolId } from "../../src/domain/ids"
+import { ExtensionId, type RpcId, ToolId } from "../../src/domain/ids"
 import { buildTurnPromptSections } from "../../src/runtime/turn"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
 
@@ -188,11 +188,10 @@ describe("tool declarations", () => {
     expect(metadata.dispatches).toBe(true)
   })
 
-  test("reach the capability itself", () => {
-    expect(declaredTool.promptSnippet).toBe("a one-liner")
-    expect(declaredTool.promptGuidelines).toEqual(["prefer this tool"])
-    expect(declaredTool.interactive).toBe(true)
-    expect(declaredTool.dispatches).toBe(true)
+  // The native `id` is Effect's; its type keeps it apart from a `ToolId`.
+  test("leave the native tool its own id; the Gent id comes from getToolId", () => {
+    expect(declaredTool.id).toBe("effect/ai/Tool/declared")
+    expect(getToolId(declaredTool)).toBe(ToolId.make("declared"))
   })
 
   test("stay absent, not undefined, when the tool declares none", () => {

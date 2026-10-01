@@ -10,7 +10,6 @@ import {
   getToolId,
   request,
   tool,
-  CapabilityError,
   ExtensionContext,
   runProcess,
   type RequestInput,
@@ -724,38 +723,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("request({...}) — happy path compiles with ordinary Effect services", () => {
-    const ok = request({
-      id: "ok-read",
-      input: NoInput,
-      output: StringOutput,
-      execute: () =>
-        Effect.gen(function* () {
-          const svc = yield* ReadOnlyService
-          return yield* svc.read
-        }),
-    })
-
-    void ok
-    expect(true).toBe(true)
-  })
-
-  test("request({...}) may yield ExtensionContext", () => {
-    const ok = request({
-      id: "read-context",
-      input: NoInput,
-      output: StringOutput,
-      execute: () =>
-        Effect.gen(function* () {
-          const ctx = yield* ExtensionContext
-          return ctx.cwd
-        }),
-    })
-
-    void ok
-    expect(true).toBe(true)
-  })
-
   test("request({...}) — write-capable Tag in R is allowed", () => {
     const ok = request({
       id: "ok-write",
@@ -782,30 +749,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
       execute: (_input, _ctx) => Effect.succeed("ok"),
     }
     void bad
-    expect(true).toBe(true)
-  })
-
-  test("write request host authority is imported as ExtensionContext service", () => {
-    request({
-      id: "write-privileged-context",
-      input: NoInput,
-      output: StringOutput,
-      execute: () =>
-        Effect.gen(function* () {
-          const ctx = yield* ExtensionContext
-          yield* ctx.Session.send({ delivery: "queue", sourceId: "lock", content: "x" })
-          return "ok"
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new CapabilityError({
-                extensionId: ExtensionId.make("surface-locks"),
-                capabilityId: "write-privileged-context",
-                reason: cause.message,
-              }),
-          ),
-        ),
-    })
     expect(true).toBe(true)
   })
 
@@ -853,58 +796,6 @@ describe("Effect-purity locks (compile-time)", () => {
       // @ts-expect-error -- Promise handler must not be assignable to Effect-returning execute
       execute: () => promiseString,
     })
-    expect(true).toBe(true)
-  })
-
-  test("request handlers receive decoded input only", () => {
-    const bad: RequestInput<{}, void, never> = {
-      id: "default-request-context",
-      input: Schema.Struct({}),
-      output: Schema.Void,
-      // @ts-expect-error -- request handlers receive decoded input only; host access comes from ExtensionContext
-      execute: (_input, _ctx) => Effect.void,
-    }
-    void bad
-    expect(true).toBe(true)
-  })
-
-  test("session follow-up authority is imported through ExtensionContext", () => {
-    defineExtension({
-      id: "queue-follow-up-compile-lock",
-      setup: Effect.gen(function* () {
-        const host = yield* ExtensionHost
-        yield* host.register(
-          "request",
-          request({
-            id: "queue-follow-up",
-            slash: { name: "Queue Follow Up", description: "ok" },
-            input: Schema.Struct({}),
-            output: Schema.Void,
-            execute: () =>
-              Effect.gen(function* () {
-                const ctx = yield* ExtensionContext
-                yield* ctx.Session.send({ delivery: "queue", sourceId: "lock", content: "x" })
-              }).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new CapabilityError({
-                      extensionId: ExtensionId.make("queue-follow-up-compile-lock"),
-                      capabilityId: "queue-follow-up",
-                      reason: cause.message,
-                    }),
-                ),
-              ),
-          }),
-        )
-        yield* host.on("turnAfter", (_input: PublicExtensionApi.TurnAfterInput) =>
-          Effect.gen(function* () {
-            const ctx = yield* ExtensionContext
-            void ctx.Session.send
-          }),
-        )
-      }),
-    })
-
     expect(true).toBe(true)
   })
 
@@ -977,18 +868,6 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("read request handlers do not receive host facts by parameter", () => {
-    const bad: RequestInput<{}, string> = {
-      id: "facts-only-read",
-      input: Schema.Struct({}),
-      output: Schema.String,
-      // @ts-expect-error -- request handlers receive decoded params only; facts come from ExtensionContext/setup context
-      execute: (_input, _ctx) => Effect.succeed("ok"),
-    }
-    void bad
-    expect(true).toBe(true)
-  })
-
   test("GentExtension.setup is an Effect value, not a thunk receiving ctx", () => {
     type SetupField = PublicExtensionApi.GentExtension["setup"]
     // Setup must be assignable from a value (an Effect), not from a `() => Effect`.
@@ -1022,21 +901,6 @@ describe("Effect-purity locks (compile-time)", () => {
       return `${platform}:${home.length}:${cwd}`
     })
     void setup
-    expect(true).toBe(true)
-  })
-
-  test("tool authoring uses ExtensionContext instead of a ctx parameter", () => {
-    tool({
-      id: "facts-only-tool",
-      description: "facts",
-      params: Schema.Struct({}),
-      output: Schema.String,
-      execute: () =>
-        Effect.gen(function* () {
-          const ctx = yield* ExtensionContext
-          return ctx.cwd
-        }),
-    })
     expect(true).toBe(true)
   })
 

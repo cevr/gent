@@ -201,7 +201,7 @@ const startApprovalCell = (code: string) =>
       extensions: cell.extensions,
       providerLayer,
       branchTools: CellBranchTools,
-      durableApproval: true,
+      approvalLayer: ApprovalService.Live,
       agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
     })
     yield* client.message.send({ sessionId, branchId, content: "Run a cell with approval" })
@@ -382,7 +382,7 @@ describe("cell approvals", () => {
                 extensions: cell.extensions,
                 providerLayer,
                 branchTools: CellBranchTools,
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
                 storagePath,
               }),
@@ -522,7 +522,7 @@ describe("cell approvals", () => {
           extensions: cell.extensions,
           providerLayer,
           branchTools: CellBranchTools,
-          durableApproval: true,
+          approvalLayer: ApprovalService.Live,
           agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
         })
         const dialogs = yield* Queue.unbounded<{
@@ -917,7 +917,7 @@ it.scopedLive(
           branchTools: CellBranchTools,
           extensions,
           providerLayer: LanguageModelLayers.debug(),
-          durableApproval: true,
+          approvalLayer: ApprovalService.Live,
         }),
       )
       yield* Effect.gen(function* () {
@@ -1181,7 +1181,7 @@ it.scopedLive(
           branchTools: CellBranchTools,
           extensions: [extension(revision)],
           providerLayer: LanguageModelLayers.debug(),
-          durableApproval: true,
+          approvalLayer: ApprovalService.Live,
           storagePath,
         })
       const first = yield* Effect.scoped(
@@ -1665,7 +1665,7 @@ it.scopedLive(
           extensionInputs: [],
           branchTools: CellBranchTools,
           providerLayer: LanguageModelLayers.debug(),
-          durableApproval: true,
+          approvalLayer: ApprovalService.Live,
         }),
       ),
     ),

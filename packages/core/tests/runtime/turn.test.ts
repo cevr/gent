@@ -148,6 +148,7 @@ import { type ModelDriverContribution, type ProviderHints } from "../../src/doma
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
+  ApprovalService,
   ExtensionRegistry,
   resolveExtensions,
   SessionProfileCache,
@@ -2175,12 +2176,16 @@ describe("native model compaction integration", () => {
         const admission: SessionAdmission = { runSpec: { overrides: { modelId } } }
         yield* ensureStorageParents({ sessionId, branchId, admission })
         yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "hello"), admission)
-        const costs = (yield* Ref.get(events))
-          .filter((event) => event._tag === "StreamEnded")
-          .map((event) => event.costUsd)
+        const ended = (yield* Ref.get(events)).filter((event) => event._tag === "StreamEnded")
+        const costs = ended.map((event) => event.costUsd)
         // 6,000 x $6.25 + 4,000 x $10 per million, not 10,000 x $10.
         expect(costs).toHaveLength(1)
         expect(costs[0]).toBeCloseTo((6_000 * 6.25 + 4_000 * 10) / 1_000_000, 12)
+        // The step's end carries the split, so a client prices a miss by it too.
+        expect(ended[0]?.cacheWritesByLifetime).toEqual([
+          { ttlMs: 300_000, tokens: 6_000 },
+          { ttlMs: 3_600_000, tokens: 4_000 },
+        ])
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
   })
@@ -4390,7 +4395,7 @@ describe("a tool call a restart cut short", () => {
             agents: e2ePreset.agents,
             providerLayer,
             extensions: [extension],
-            durableApproval: true,
+            approvalLayer: ApprovalService.Live,
             storagePath: dbPath,
           }),
         )

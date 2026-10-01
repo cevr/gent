@@ -1,10 +1,8 @@
 import {
-  Cache,
   Cause,
   Context,
-  Duration,
+  Deferred,
   Effect,
-  Exit,
   Layer,
   Option,
   Predicate,
@@ -30,6 +28,8 @@ import {
   type InteractionRequestId,
   type RequestId,
   type SessionId,
+  CurrentWorkspaceId,
+  type WorkspaceId,
 } from "../domain/ids.js"
 import { Actor } from "effect-encore"
 import {
@@ -52,7 +52,6 @@ import {
 } from "../domain/agent-loop.js"
 import { resolveExistingSessionBranch } from "./extension-host.js"
 import { GentPlatform } from "./gent-platform.js"
-import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 
 // ── event-store-live ────────────────────────────────────────────────────────
 
@@ -111,84 +110,59 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
 
 // ── request-dedup ───────────────────────────────────────────────────────────
 
-// Dedup cache: bound success entries by both time and count so a
-// long-running server does not accumulate one entry per user
-// prompt + per session create indefinitely.
-const DEDUP_SUCCESS_TTL: Duration.Input = Duration.seconds(60)
-const DEDUP_MAX_ENTRIES = 1024
+/** A call's place in the in-flight table: it runs the body, or it waits on the call that does. */
+interface DedupClaim<A, E> {
+  readonly outcome: Deferred.Deferred<A, E>
+  readonly runs: boolean
+}
 
 /**
- * Atomic-claim dedup helper backed by `Cache.makeWith`. Concurrent callers
- * with the same `requestId` collapse onto a single body execution via the
- * Cache's internal `Deferred`.
+ * Collapses concurrent calls with one `requestId` onto one body run: the
+ * first call runs the body, and each call that arrives while it runs awaits
+ * its outcome. The entry goes when the body ends, so nothing is kept after
+ * it. A sequential retry converges on the durable seam its body reads: the
+ * operation row of `session.create` and the branch mutations, or, for
+ * `message.send`, the user message id its `requestId` names (decided by
+ * make-operations-idempotent: a process-local window cannot answer a
+ * retry after a restart, and the durable seam answers every retry).
  *
- * Eviction:
- * - On failure: `timeToLive: Duration.zero` removes the entry immediately so
- *   retries can re-attempt the same `requestId` under fresh state
- *   (Cache.ts:707-710).
- * - On success: TTL window keeps the result available for retries
- *   (Cache.ts:705-708).
- * - Hard cap (LRU): `Cache` re-inserts on read (Cache.ts:524-526) and evicts
- *   the oldest-touched entry past `capacity` (Cache.ts:724-733). Under the
- *   retry-heavy workload this dedup serves, LRU is safe: a fresh same-key
- *   retry observes a still-fresh cache entry; an unrelated stale entry is the
- *   one evicted to make room.
+ * If the running call is interrupted, the calls waiting on it end
+ * interrupted too, and the client retries.
  */
 export const makeRequestDeduper = <In, A, E>(opts: {
   readonly body: (input: In) => Effect.Effect<A, E>
   readonly keyOf: (input: In) => Option.Option<string>
 }): Effect.Effect<(input: In) => Effect.Effect<A, E>> =>
   Effect.gen(function* () {
-    // Body bridge: `Cache.lookup` takes only the key, but each call has a
-    // distinct body Effect. Pending stores the body keyed by `requestId`; the
-    // running lookup pulls it out on miss. Every caller registers its body
-    // and removes it on exit via `Effect.ensuring`, which keeps `pending`
-    // free of stale-body leaks under interruption and same-key races.
-    const pending = yield* Ref.make(new Map<string, Effect.Effect<A, E>>())
-    const cache = yield* Cache.makeWith<string, A, E>(
-      (key) =>
-        Effect.gen(function* () {
-          const body = Option.fromUndefinedOr((yield* Ref.get(pending)).get(key))
-          if (Option.isNone(body))
-            return yield* Effect.die("makeRequestDeduper: missing pending body")
-          return yield* body.value
-        }),
-      {
-        capacity: DEDUP_MAX_ENTRIES,
-        timeToLive: (exit) => {
-          if (Exit.isSuccess(exit)) {
-            return DEDUP_SUCCESS_TTL
-          }
-          return Duration.zero
-        },
-      },
-    )
+    const inFlight = yield* Ref.make(new Map<string, Deferred.Deferred<A, E>>())
     const run = (input: In) => {
       const key = opts.keyOf(input)
       if (Option.isNone(key)) return opts.body(input)
       const keyValue = key.value
-      const body = opts.body(input)
-      const remove = Ref.update(pending, (m) => {
-        // Only delete if we are still the registered body — a later caller
-        // may have already overwritten us, in which case our entry is gone
-        // (or about to be removed by that caller's `ensuring`).
-        if (m.get(keyValue) !== body) return m
-        const next = new Map(m)
-        next.delete(keyValue)
-        return next
-      })
-      return Effect.gen(function* () {
-        // Always overwrite: same-key concurrent fibers all register their
-        // bodies; whichever wins the lookup race determines the outcome that
-        // every caller awaits via `Cache.get`. The `requestId` dedup contract
-        // assumes idempotency, so any caller's body produces the same result.
-        yield* Ref.update(pending, (m) => {
-          const next = new Map(m)
-          next.set(keyValue, body)
-          return next
-        })
-        return yield* Cache.get(cache, keyValue)
-      }).pipe(Effect.ensuring(remove))
+      return Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const own = yield* Deferred.make<A, E>()
+          const claim = yield* Ref.modify(
+            inFlight,
+            (running): readonly [DedupClaim<A, E>, Map<string, Deferred.Deferred<A, E>>] => {
+              const current = Option.fromUndefinedOr(running.get(keyValue))
+              if (Option.isSome(current)) return [{ outcome: current.value, runs: false }, running]
+              const next = new Map(running)
+              next.set(keyValue, own)
+              return [{ outcome: own, runs: true }, next]
+            },
+          )
+          if (!claim.runs) return yield* restore(Deferred.await(claim.outcome))
+          const exit = yield* Effect.exit(restore(opts.body(input)))
+          yield* Ref.update(inFlight, (running) => {
+            const next = new Map(running)
+            next.delete(keyValue)
+            return next
+          })
+          yield* Deferred.done(own, exit)
+          return yield* exit
+        }),
+      )
     }
     return run
   })
