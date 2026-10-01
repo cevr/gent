@@ -671,12 +671,13 @@ type E2EExtensionSource =
       readonly extensionInputs?: never
     }
 
-interface E2ELayerOptions {
+interface E2ELayerOptions<A = never> {
   /**
    * The branch-tool feature this harness installs. Defaults to
-   * `noBranchTools`; a test exercising a real feature names it.
+   * `noBranchTools`; a test exercising a real feature names it, and the
+   * layer then provides the feature's storage tags.
    */
-  readonly branchTools?: BranchToolFeature<never>
+  readonly branchTools?: BranchToolFeature<A>
   /** Language model layer — typically from `LanguageModelLayers.sequence` */
   readonly providerLayer: Layer.Layer<LanguageModel.LanguageModel>
   /** Agents to register in the extension registry */
@@ -734,7 +735,7 @@ interface E2ELayerOptions {
   readonly configServiceLayer?: Layer.Layer<ConfigService>
 }
 
-export type E2ELayerConfig = E2ELayerOptions & E2EExtensionSource
+export type E2ELayerConfig<A = never> = E2ELayerOptions<A> & E2EExtensionSource
 
 /** Re-registers one compiled slot; the switch restores the kind/handler correlation. */
 const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.Effect<void> => {
@@ -800,7 +801,7 @@ const extensionInputsForConfig = (
  * reads project extensions, skills and `AGENTS.md` from its cwd. A shared
  * directory would hand one test's files to the next.
  */
-export const createE2ELayer = (config: E2ELayerConfig) =>
+export const createE2ELayer = <A = never>(config: E2ELayerConfig<A>) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const home = yield* Option.match(Option.fromUndefinedOr(config.home), {
@@ -822,11 +823,19 @@ export const createE2ELayer = (config: E2ELayerConfig) =>
     }),
   ).pipe(Layer.provide(BunPlatformLive))
 
-const e2eDependencies = (
-  config: E2ELayerConfig,
+/**
+ * The feature a test names, else `noBranchTools`. A config that names none
+ * infers `A = never`, so the default provides exactly the tags it claims.
+ */
+const branchToolsOf = <A>(config: E2ELayerConfig<A>): BranchToolFeature<A> =>
+  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Absent a feature, `A` is `never`, the tags `noBranchTools` provides.
+  config.branchTools ?? (noBranchTools as BranchToolFeature<A>)
+
+const e2eDependencies = <A>(
+  config: E2ELayerConfig<A>,
   directories: { readonly cwd: string; readonly home: string },
 ) =>
-  createDependencies({
+  createDependencies<A>({
     ...directories,
     platform: "test",
     state: Option.match(Option.fromUndefinedOr(config.storagePath), {
@@ -837,7 +846,7 @@ const e2eDependencies = (
     extensions: extensionInputsForConfig(config),
     // A broken extension fails the test with its reason, not a later timeout.
     failOnExtensionFailure: config.allowFailedExtensions !== true,
-    branchTools: config.branchTools ?? noBranchTools,
+    branchTools: branchToolsOf(config),
     overrides: {
       modelRegistryLayer: ModelRegistry.Test(
         config.models ?? [],

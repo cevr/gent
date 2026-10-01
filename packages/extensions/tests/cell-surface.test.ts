@@ -44,6 +44,8 @@ import {
   ApprovalService,
   turnRequestText,
   systemTextOf,
+  testLeafContext,
+  testToolContext,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/ai/Prompt"
@@ -1102,7 +1104,10 @@ describe("child cell", () => {
 
 it.scopedLive("rejects cell dispatch without a branch owner", () =>
   Effect.gen(function* () {
-    const error = yield* dispatchCell().pipe(Effect.flip)
+    const error = yield* dispatchCell().pipe(
+      Effect.provideService(ExtensionContext, testLeafContext(testToolContext())),
+      Effect.flip,
+    )
     expect(error).toMatchObject({
       _tag: "AgentLoopError",
       message: "Cell execution requires a branch-owned runtime",

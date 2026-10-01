@@ -469,6 +469,7 @@ const makeSessionMutationsService: Effect.Effect<
    * the hooks that run once they are gone. None when the session has no
    * branch (it does not exist). The caller's scope holds the profile's lease.
    */
+  const runtimeEnvironment = yield* RuntimeEnvironment
   const deletedSessionProfile = Effect.fn("SessionMutations.deletedSessionProfile")(function* (
     sessionId: SessionId,
   ) {
@@ -484,6 +485,7 @@ const makeSessionMutationsService: Effect.Effect<
     }).pipe(
       Effect.provideService(ExtensionRegistry, launchRegistry),
       Effect.provideService(SessionStorage, sessionStorage),
+      Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
     )
     return Option.some(profile)
   })
@@ -1814,7 +1816,7 @@ export const StateLocation = Schema.TaggedUnion({
 })
 export type StateLocation = typeof StateLocation.Type
 
-interface DependenciesConfig {
+interface DependenciesConfig<A = never> {
   cwd: string
   home: string
   platform: string
@@ -1845,7 +1847,7 @@ interface DependenciesConfig {
    * fails on first use, and a default would hide that until run time. A
    * deployment whose tools are all stateless passes `noBranchTools`.
    */
-  branchTools: BranchToolFeature<never>
+  branchTools: BranchToolFeature<A>
   /** Internal composition-root knobs used by tests to preset the production root. */
   overrides?: DependencyOverrides
 }
@@ -1867,7 +1869,7 @@ const platformServicesLive = Layer.provideMerge(
   childProcessSpawnerLive,
 )
 
-const makeStorageLayer = (config: DependenciesConfig) => {
+const makeStorageLayer = <A>(config: DependenciesConfig<A>) => {
   const branchTools = config.branchTools
   if (config.state._tag === "Memory")
     return SqliteStorage.MemoryWithSql(branchTools.storage, branchTools.migrations)
@@ -1880,7 +1882,7 @@ const makeClusterRunnerLayer = (state: StateLocation) => {
   return SingleRunner.layer({ runnerStorage })
 }
 
-export const createDependencies = (config: DependenciesConfig) => {
+export const createDependencies = <A = never>(config: DependenciesConfig<A>) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: config.cwd,
     home: config.home,
@@ -1926,15 +1928,13 @@ export const createDependencies = (config: DependenciesConfig) => {
       const profile = yield* cache
         .resolve(config.cwd)
         .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
-      // `SessionProfile.layerContext` carries dynamically acquired resource
-      // services, so its type intentionally cannot enumerate every service
-      // contributed by an extension. Keep the stable registry services
-      // explicit at this package boundary while retaining that context at
-      // runtime for extension consumers.
+      // Only the launch registry and prompt sections join the server context.
+      // The profile's resource services stay in the profile: a turn, a
+      // request or a hook reads them from its session's profile, so one
+      // project's extension services never reach another project's turn.
       return Layer.mergeAll(
         Layer.succeed(ExtensionRegistry, profile.registryService),
         Layer.succeed(LaunchBaseSections, profile.baseSections),
-        Layer.succeedContext(profile.layerContext),
       )
     }),
   )

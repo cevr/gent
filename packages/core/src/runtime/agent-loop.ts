@@ -137,7 +137,8 @@ import {
   sessionWorkingDirectory,
   suspendExtensions,
 } from "./extension-host.js"
-import type { ConfigService, RuntimeEnvironment } from "./config.js"
+import type { ConfigService } from "./config.js"
+import { RuntimeEnvironment } from "./config.js"
 import type {
   CapabilityError,
   CapabilityNotFoundError,
@@ -1684,6 +1685,7 @@ const makeAgentLoopBehavior = (
   Effect.gen(function* () {
     yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
+    const runtimeEnvironment = yield* RuntimeEnvironment
     const eventStore = yield* EventStore
     yield* ToolCallBindingStorage
     yield* TurnRecordStorage
@@ -1764,6 +1766,7 @@ const makeAgentLoopBehavior = (
           defaults: { baseSections },
         }).pipe(
           Effect.provideService(ExtensionRegistry, extensionRegistry),
+          Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
           asAgentLoopError(`Cannot read session ${sessionId} for its profile`),
         ),
       )

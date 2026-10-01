@@ -26,6 +26,8 @@ import { describe, expect, it, test } from "effect-bun-test"
 import * as ExtensionApiEntry from "../../src/extensions/api"
 import * as BranchToolsEntry from "../../src/extensions/branch-tools"
 import {
+  createE2ELayer,
+  createRpcClient,
   createRpcHarness,
   registerContributions,
   runToolWithCtx,
@@ -121,7 +123,12 @@ import {
 } from "../../src/domain/driver"
 import { Model as AiModel, type LanguageModel } from "effect/ai"
 import { Auth, DecisionModelResolver, ModelRegistry } from "../../src/runtime/provider"
-import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  textStep,
+  toolCallStep,
+  waitFor,
+} from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
   AgentName,
@@ -1515,6 +1522,103 @@ describe("resolveTurnProfile", () => {
         expect(extensionRegistry.getResolved().modelDrivers.has("profile-driver")).toBe(false)
       }).pipe(Effect.provide(testLayer))
     }),
+  )
+})
+
+// ── turn services ────────────────────────────────────────────────────────────
+
+/**
+ * What a turn's tool sees of a process resource, through the full RPC path.
+ * The launch cwd enables the marker extension; the project's config disables it.
+ */
+const markerSeenByTurn = (
+  sessionCwd: (dirs: { readonly project: string }) => Option.Option<string>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-turn-services-home-" })
+    const launch = yield* fs.makeTempDirectoryScoped({ prefix: "gent-turn-services-launch-" })
+    const project = yield* fs.makeTempDirectoryScoped({ prefix: "gent-turn-services-project-" })
+    yield* fs.makeDirectory(path.join(project, ".gent"), { recursive: true })
+    yield* fs.writeFileString(
+      path.join(project, ".gent", "config.json"),
+      encodeJson({ disabledExtensions: ["@gent/test-turn-services/marker"] }),
+    )
+    const seen = yield* Deferred.make<string>()
+    const probeExtension = defineExtension({
+      id: "@gent/test-turn-services/probe",
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.register(
+          "tool",
+          tool({
+            id: "marker-probe",
+            description: "reports whether the marker resource is in scope",
+            params: S.Struct({}),
+            output: S.String,
+            execute: () =>
+              Effect.gen(function* () {
+                const marker = yield* Effect.serviceOption(SessionProfileResourceMarker)
+                const answer = Option.match(marker, {
+                  onNone: () => "absent",
+                  onSome: (value) => value.value,
+                })
+                yield* Deferred.succeed(seen, answer)
+                return answer
+              }),
+          }),
+        )
+      }),
+    })
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      toolCallStep("marker-probe", {}),
+      textStep("done"),
+    ])
+    const configServiceLayer = ConfigService.Live.pipe(
+      Layer.provide(Layer.merge(BunServices.layer, RuntimeEnvironment.Live({ cwd: launch, home }))),
+    )
+    const { client } = yield* createRpcClient(
+      createE2ELayer({
+        providerLayer,
+        agents: [testAgent],
+        extensionInputs: [
+          markerExtension("@gent/test-turn-services/marker", "launch"),
+          probeExtension,
+        ],
+        cwd: launch,
+        home,
+        configServiceLayer,
+      }),
+    )
+    const created = yield* client.session.create(
+      omitUndefined({ cwd: Option.getOrUndefined(sessionCwd({ project })) }),
+    )
+    yield* client.message.send({
+      sessionId: created.sessionId,
+      branchId: created.branchId,
+      content: "probe",
+    })
+    return yield* Deferred.await(seen)
+  }).pipe(Effect.timeout("10 seconds"))
+
+describe("turn services", () => {
+  // The session's profile is the one owner of a turn's extension services:
+  // the launch profile's resources never reach another project's turn.
+  it.scopedLive("a turn in a project that disables an extension does not see its resource", () =>
+    markerSeenByTurn(({ project }) => Option.some(project)).pipe(
+      Effect.map((seen) => expect(seen).toBe("absent")),
+      Effect.provide(BunServices.layer),
+    ),
+  )
+
+  // A session with no stored cwd runs in the host's cwd, so its turn reads
+  // the launch profile.
+  it.scopedLive("a turn of a session with no stored cwd sees the launch profile's resource", () =>
+    markerSeenByTurn(() => Option.none()).pipe(
+      Effect.map((seen) => expect(seen).toBe("launch")),
+      Effect.provide(BunServices.layer),
+    ),
   )
 })
 
@@ -4721,6 +4825,18 @@ const makeMutationsLayer = (
   events: Ref.Ref<AgentEvent[]>,
 ) => {
   const resolvedExtensions = makeTestExtensions()
+  const cwd = "/nonexistent/gent-test-cwd"
+  // The launch profile is the cache's profile of the host cwd, as in a server
+  // root: a session with no stored cwd runs under it.
+  const launchRegistry = ExtensionRegistry.of({ getResolved: () => resolvedExtensions })
+  const launchProfile: SessionProfile = {
+    cwd,
+    resolved: resolvedExtensions,
+    layerContext: Context.make(ExtensionRegistry, launchRegistry),
+    registryService: launchRegistry,
+    baseSections: [],
+    generationId: ProcessGenerationId.make("test"),
+  }
   const eventStoreLayer = recordingEventStore(events)
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const clusterRunnerLayer = Layer.provide(
@@ -4733,19 +4849,16 @@ const makeMutationsLayer = (
     providerLayer,
     LanguageModelLayers.resolver(providerLayer),
     eventStoreLayer,
-    ExtensionRegistry.fromResolved(resolvedExtensions),
+    Layer.succeed(ExtensionRegistry, launchRegistry),
     ToolRunner.Test(),
     ApprovalService.Test(),
-    RuntimeEnvironment.Live({
-      cwd: "/nonexistent/gent-test-cwd",
-      home: "/nonexistent/gent-test-home",
-    }),
+    RuntimeEnvironment.Live({ cwd, home: "/nonexistent/gent-test-home" }),
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
     DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
     GentPlatform.Test(),
-    fixedSessionProfiles(),
+    fixedSessionProfiles(new Map([[cwd, launchProfile]])),
     AgentLoopSessionGovernance.Live,
   )
   const sessionRuntimeLayer = Layer.provide(

@@ -379,7 +379,13 @@ The production server uses one live profile owner:
 - `server/server.ts` selects the launch profile from that cache. An RPC that
   names a session reads that session's profile; one shared lookup
   (`loadSession`) fails it with `NotFoundError` when the session does not
-  exist, so no call answers from the launch profile instead.
+  exist, so no call answers from the launch profile instead. Only the
+  launch registry and the launch prompt sections join the server context; an
+  extension's resource services never do. A turn, an extension request and a
+  hook read them from their session's profile (for a session with no stored
+  cwd, the profile of the host's cwd), the one owner of a turn's services, so
+  a project that disables an extension does not see its resources. Receipt:
+  "turn services" in `packages/core/tests/runtime/extension-host.test.ts`.
 - Every session-scoped RPC names its session (owner rule). The contract
   (`packages/core/src/server/rpc.ts`) requires `sessionId` on `auth.setKey`,
   `auth.deleteKey`, `auth.listMethods`, `auth.listProviders`, `driver.set`,

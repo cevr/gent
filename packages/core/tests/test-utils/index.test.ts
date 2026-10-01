@@ -9,8 +9,10 @@ import {
   type E2ELayerConfig,
 } from "../../src/test-utils/harness"
 import { RuntimeEnvironment } from "../../src/runtime/config"
+import { CurrentWorkspaceId } from "../../src/domain/ids"
+import { workspaceIdForCwd } from "../../src/server/workspace-rpc"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
-import { ExtensionRegistry } from "../../src/runtime/extension-host"
+import { ExtensionRegistry, SessionProfileCache } from "../../src/runtime/extension-host"
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
 
 /** The server root with the stub tool runner, the scripted model, and no agents. */
@@ -59,7 +61,13 @@ describe("extension tool test layer", () => {
         }),
       })
       yield* Effect.gen(function* () {
-        const instance = yield* ResourceInstance
+        // A resource lives in its profile, not in the server context: the
+        // launch profile is the one of the launch cwd in its workspace.
+        const { cwd } = yield* RuntimeEnvironment
+        const profile = yield* (yield* SessionProfileCache)
+          .resolve(cwd)
+          .pipe(Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(cwd)))
+        const instance = Context.get(profile.layerContext, ResourceInstance)
         expect(instance.id).toBe(1)
         expect(acquired).toBe(1)
         expect(released).toBe(0)
