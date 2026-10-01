@@ -470,6 +470,27 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
 }
 
 /**
+ * Counts the renderer teardowns the app performs in place of them, so a test
+ * reads the frame after an exit: `useEnv().shutdown` is a no-op in the
+ * harness. The scope gives the renderer its teardown back before the harness
+ * destroys it, so no renderer outlives its test.
+ */
+const countShutdowns = (setup: TestSetup) =>
+  Effect.gen(function* () {
+    let shutdowns = 0
+    const destroy = setup.renderer.destroy.bind(setup.renderer)
+    setup.renderer.destroy = () => {
+      shutdowns += 1
+    }
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        setup.renderer.destroy = destroy
+      }),
+    )
+    return { shutdowns: () => shutdowns, destroy }
+  })
+
+/**
  * The session view over a turn that runs, on a terminal `height` rows tall.
  * The runtime stream says Running once and then stays quiet, as it does
  * through a long generation or a long tool call.
@@ -481,7 +502,6 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
     const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
     const steers: Array<string> = []
     const sent: Array<string> = []
-    let shutdowns = 0
     let readActivity = () => "unmounted"
     const activityProbe = defineClientExtension("@test/activity-probe", {
       setup: Effect.gen(function* () {
@@ -558,9 +578,7 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
         },
       },
     )
-    setup.renderer.destroy = () => {
-      shutdowns += 1
-    }
+    const { shutdowns } = yield* countShutdowns(setup)
     yield* waitForFrame(
       setup,
       () => ctx.pipe(Option.exists((value) => value.isStreaming())),
@@ -573,7 +591,7 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
       client: clientValue,
       steers,
       sent,
-      shutdowns: () => shutdowns,
+      shutdowns,
       activity: () => readActivity(),
     }
   })
@@ -605,7 +623,6 @@ const mountIdleSession = (
   } = {},
 ) =>
   Effect.gen(function* () {
-    let shutdowns = 0
     const sent: Array<string> = []
     const client = createMockClient({
       auth: { listProviders: () => Effect.succeed([]) },
@@ -625,18 +642,13 @@ const mountIdleSession = (
       },
     })
     yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
-    // `useEnv().shutdown` is a no-op in the harness, so count the renderer
-    // teardown the controller performs alongside it.
-    const unmount = setup.renderer.destroy.bind(setup.renderer)
-    setup.renderer.destroy = () => {
-      shutdowns += 1
-    }
+    const { shutdowns, destroy } = yield* countShutdowns(setup)
     return {
       setup,
-      shutdowns: () => shutdowns,
+      shutdowns,
       sent: (): ReadonlyArray<string> => sent,
       /** Tears the view down, as the harness does after the test. */
-      unmount,
+      unmount: destroy,
       /** Time for a key to be parsed and handled before a negative assertion. */
       // oxlint-disable-next-line effect/noFixedWaitInTests -- A lone escape byte stays in the stdin parser until its real-clock timeout flushes it as a key; no event marks the flush.
       settle: Effect.sleep("100 millis"),
@@ -1481,7 +1493,6 @@ describe("App session view and fatal screen", () => {
       const logged: Array<string> = []
       const record = (msg: string) => logged.push(msg)
       const written: Array<string> = []
-      let shutdowns = 0
       const setup = yield* renderScoped(() => <App />, {
         client: createMockClient({
           auth: { listProviders: () => Effect.succeed([]) },
@@ -1499,10 +1510,7 @@ describe("App session view and fatal screen", () => {
         },
       })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
-      const unmount = setup.renderer.destroy.bind(setup.renderer)
-      setup.renderer.destroy = () => {
-        shutdowns += 1
-      }
+      const { shutdowns } = yield* countShutdowns(setup)
       setBroken(true)
       const frame = yield* waitForFrame(
         setup,
@@ -1513,9 +1521,8 @@ describe("App session view and fatal screen", () => {
       expect(frame).toContain("ctrl+c")
       expect(logged).toContain("app.fatal")
       setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(setup, () => shutdowns === 1, "exit")
+      yield* waitForFrame(setup, () => shutdowns() === 1, "exit")
       expect(written).toEqual(["\nto resume: gent resume session-fatal\n"])
-      unmount()
     }).pipe(Effect.timeout("10 seconds")),
   )
   // `/new` keeps the session in view until the server answers. A create the
@@ -2321,7 +2328,6 @@ describe("App cancel and quit keys during a turn", () => {
   // on the idle session, is two gestures and does not quit.
   it.scopedLive("escape after a ctrl+c that cancelled a turn does not quit", () =>
     Effect.gen(function* () {
-      let shutdowns = 0
       const sessionId = SessionId.make("session-cancel")
       const branchId = BranchId.make("branch-cancel")
       const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
@@ -2367,10 +2373,7 @@ describe("App cancel and quit keys during a turn", () => {
           },
         },
       )
-      const destroy = setup.renderer.destroy.bind(setup.renderer)
-      setup.renderer.destroy = () => {
-        shutdowns += 1
-      }
+      const { shutdowns } = yield* countShutdowns(setup)
       const streaming = () => ctx.pipe(Option.exists((value) => value.isStreaming()))
       yield* waitForFrame(setup, streaming, "running turn")
       setup.mockInput.pressKey("c", { ctrl: true })
@@ -2378,13 +2381,11 @@ describe("App cancel and quit keys during a turn", () => {
       setup.mockInput.pressEscape()
       // oxlint-disable-next-line effect/noFixedWaitInTests -- the escape must be parsed and handled before the negative assertion
       yield* Effect.sleep("100 millis")
-      expect(shutdowns).toBe(0)
-      setup.renderer.destroy = destroy
+      expect(shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ctrl+c twice quits an idle session while the btw pane is open", () =>
     Effect.gen(function* () {
-      let shutdowns = 0
       const client = createMockClient({
         auth: { listProviders: () => Effect.succeed([]) },
         branch: { getTree: () => Effect.succeed([]) },
@@ -2405,16 +2406,12 @@ describe("App cancel and quit keys during a turn", () => {
       yield* Effect.promise(() => setup.mockInput.typeText("/btw"))
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("btw · fork"), "btw pane")
-      const destroy = setup.renderer.destroy.bind(setup.renderer)
-      setup.renderer.destroy = () => {
-        shutdowns += 1
-      }
+      const { shutdowns } = yield* countShutdowns(setup)
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
-      expect(shutdowns).toBe(0)
+      expect(shutdowns()).toBe(0)
       setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(setup, () => shutdowns > 0, "quit")
-      setup.renderer.destroy = destroy
+      yield* waitForFrame(setup, () => shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
   )
 })
@@ -3582,39 +3579,27 @@ describe("App interjections and the boot branch picker", () => {
   // does nothing here, and the hint names the way out.
   it.scopedLive("Esc in the boot branch picker does nothing; its hint says ctrl+c exits", () =>
     Effect.gen(function* () {
-      let shutdowns = 0
       const setup = yield* mountBootBranchPicker
-      const destroy = setup.renderer.destroy.bind(setup.renderer)
-      setup.renderer.destroy = () => {
-        shutdowns += 1
-      }
+      const { shutdowns } = yield* countShutdowns(setup)
       expect(renderFrame(setup)).toContain("ctrl+c exit")
       setup.mockInput.pressEscape()
       // oxlint-disable-next-line effect/noFixedWaitInTests -- a lone escape byte stays in the stdin parser until its timeout flushes it as a key
       yield* Effect.sleep("100 millis")
       const frame = yield* waitForFrame(setup, () => true, "the key handled")
       expect(frame).toContain("Resume: Session A")
-      expect(shutdowns).toBe(0)
-      setup.renderer.destroy = destroy
+      expect(shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ctrl+c in the boot branch picker arms the exit, and a second quits", () =>
     Effect.gen(function* () {
-      let shutdowns = 0
       const setup = yield* mountBootBranchPicker
-      // `useEnv().shutdown` is a no-op in the harness, so observe the renderer
-      // teardown the controller performs alongside it.
-      const destroy = setup.renderer.destroy.bind(setup.renderer)
-      setup.renderer.destroy = () => {
-        shutdowns += 1
-      }
+      const { shutdowns } = yield* countShutdowns(setup)
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
-      expect(shutdowns).toBe(0)
+      expect(shutdowns()).toBe(0)
       setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(setup, () => shutdowns > 0, "quit")
-      setup.renderer.destroy = destroy
-      expect(shutdowns).toBe(1)
+      yield* waitForFrame(setup, () => shutdowns() > 0, "quit")
+      expect(shutdowns()).toBe(1)
     }).pipe(Effect.timeout("10 seconds")),
   )
 })
@@ -3773,7 +3758,6 @@ describe("App auth gate at startup", () => {
   // no session to fall back to, so ctrl+c quits over it.
   it.scopedLive("ctrl+c over an enforced sign-in arms the exit, and a second quits", () =>
     Effect.gen(function* () {
-      let shutdowns = 0
       const client = createMockClient({
         auth: {
           listProviders: () =>
@@ -3801,16 +3785,12 @@ describe("App auth gate at startup", () => {
         },
       })
       yield* waitForFrame(setup, (frame) => frame.includes("Sign in ·"), "the sign-in")
-      const destroy = setup.renderer.destroy.bind(setup.renderer)
-      setup.renderer.destroy = () => {
-        shutdowns += 1
-      }
+      const { shutdowns } = yield* countShutdowns(setup)
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
-      expect(shutdowns).toBe(0)
+      expect(shutdowns()).toBe(0)
       setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(setup, () => shutdowns > 0, "quit")
-      setup.renderer.destroy = destroy
+      yield* waitForFrame(setup, () => shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
   )
   // Esc never quits, and an enforced sign-in holds the slot: Esc on its
