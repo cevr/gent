@@ -70,6 +70,9 @@ const loadTmuxBuffer = (text: string) =>
         stdin: Stream.make(new TextEncoder().encode(text)),
         stdout: "ignore",
         stderr: "ignore",
+        // The timeout stops the run with SIGTERM; a tmux that ignores it
+        // would hold the run's cleanup open for good.
+        forceKillAfter: "1 second",
       }),
     )
   }).pipe(Effect.timeout("2 seconds"), Effect.ignore)

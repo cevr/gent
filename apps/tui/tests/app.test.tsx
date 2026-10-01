@@ -4376,12 +4376,16 @@ describe("App clipboard", () => {
   const tmuxEnv = { TMUX: "/nonexistent/gent-probe-tmux,1,0" }
 
   /**
-   * A host with the environment `env` whose `tmux` runs nowhere: each run's
-   * arguments and stdin land in `runs`. Every other command runs for real.
+   * A host with the environment `env` whose `tmux` never runs: each run's
+   * arguments and stdin land in `runs`, and `standIn` (a program and its
+   * arguments) runs in its place, under the tmux run's kill options, its
+   * handle in `children`. Every other command runs for real.
    */
   const recordedTmux = (
     runs: Array<{ args: ReadonlyArray<string>; stdin: string }>,
     env: Record<string, string>,
+    standIn: readonly [string, ...string[]] = ["true"],
+    children: Array<ChildProcessSpawner.ChildProcessHandle> = [],
   ) =>
     Layer.mergeAll(
       ConfigProvider.layer(ConfigProvider.fromEnvRecord(env)),
@@ -4400,7 +4404,15 @@ describe("App clipboard", () => {
                 stdin = new TextDecoder().decode(Buffer.concat(chunks))
               }
               runs.push({ args: command.args, stdin })
-              return yield* real.spawn(ChildProcess.make("true", []))
+              const [program, ...args] = standIn
+              const child = yield* real.spawn(
+                ChildProcess.make(program, args, {
+                  killSignal: command.options.killSignal,
+                  forceKillAfter: command.options.forceKillAfter,
+                }),
+              )
+              children.push(child)
+              return child
             }).pipe(Effect.orDie)
           })
         }),
@@ -4580,6 +4592,43 @@ describe("App clipboard", () => {
       expect(runs).toEqual([{ args: ["load-buffer", "-w", "-"], stdin: deviceUrl }])
       expect(output.written()).toContain(Base64.encode(deviceUrl))
     }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  // The run stops at its timeout. A tmux that ignores SIGTERM would hold the
+  // run's cleanup open for good; it gets SIGKILL after a grace period.
+  it.scopedLive(
+    "a tmux that ignores SIGTERM is killed after the copy's timeout",
+    () =>
+      Effect.gen(function* () {
+        const runs: Array<{ args: ReadonlyArray<string>; stdin: string }> = []
+        const children: Array<ChildProcessSpawner.ChildProcessHandle> = []
+        const stubborn = recordedTmux(
+          runs,
+          tmuxEnv,
+          ["sh", "-c", "trap '' TERM; sleep 30"],
+          children,
+        )
+        const { setup } = yield* mountOAuthScreen(deviceUrl, stubborn)
+
+        setup.mockInput.pressKey("y", { ctrl: true })
+        yield* waitUntil(() => children.length > 0, "the stand-in tmux")
+        const child = Option.fromNullishOr(children[0])
+        if (Option.isNone(child)) return yield* Effect.die("no stand-in tmux")
+        const running = child.value.isRunning.pipe(Effect.orElseSucceed(() => false))
+        expect(yield* running).toBe(true)
+        let stopped = false
+        yield* waitUntilAdvancing(
+          running.pipe(
+            Effect.map((value) => {
+              stopped = !value
+            }),
+          ),
+          () => stopped,
+          "the stand-in killed",
+          6_000,
+        )
+      }).pipe(Effect.timeout("9 seconds")),
+    12_000,
   )
 
   it.scopedLive("outside tmux a copy runs no tmux", () =>
