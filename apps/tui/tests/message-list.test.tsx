@@ -1,6 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { Deferred, Effect, Option, Schedule, Schema } from "effect"
-import { type CliRenderer, type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
+import {
+  type CliRenderer,
+  type CliRendererExternalOutputEvent,
+  SyntaxStyle,
+  TextAttributes,
+} from "@opentui/core"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   addStep,
@@ -61,7 +66,7 @@ import {
   useToolRenderers,
 } from "../src/tool-renderers"
 import { destroyRenderSetup, renderFrame, renderScoped } from "./render-harness-boundary"
-import { makeSettleHold } from "./scrollback-hold-boundary"
+import { makeSettleHold, makeSettleTimeouts } from "./scrollback-hold-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
@@ -3019,7 +3024,147 @@ describe("native transcript markdown", () => {
       expect(history).not.toContain("`")
     }).pipe(Effect.timeout("10 seconds")),
   )
+
+  // Scrollback is immutable, so a row that reaches it without its highlight
+  // keeps that look for good. A highlight can miss its budget (a cold
+  // tree-sitter worker, a loaded machine) or never land (a dead worker).
+  it.scopedLive(
+    "headings reach history without their marks when no highlight ever lands",
+    () =>
+      Effect.gen(function* () {
+        const timeouts = makeSettleTimeouts(Number.MAX_SAFE_INTEGER)
+        const committedText: string[] = []
+        const sections = Array.from(
+          { length: 8 },
+          (_, index) => `## Section ${index + 1}\n\nbody ${index + 1}`,
+        )
+        const items = [assistant("first", sections.join("\n\n")), assistant("second", "TAIL")]
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                timeouts.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("Section 8"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("8 seconds"),
+          Effect.ignore,
+        )
+        const history = committedText.join("")
+        for (const section of sections.keys()) {
+          expect(history).toContain(`Section ${section + 1}`)
+        }
+        expect(history).not.toContain("#")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a settle that times out is tried again, so history keeps the highlight",
+    () =>
+      Effect.gen(function* () {
+        const timeouts = makeSettleTimeouts(1)
+        // The snapshot is freed once the event returns, so its cells are read in the handler.
+        const committed: Option.Option<ReadonlyArray<number>>[] = []
+        const items = [
+          assistant("first", `## Highlighted heading\n\n${longBody("BODY")}`),
+          assistant("second", "TAIL"),
+        ]
+        const setup = yield* renderScoped(
+          () => {
+            const renderer = useRenderer()
+            timeouts.applyTo(renderer)
+            const capture = (event: CliRendererExternalOutputEvent) =>
+              committed.push(cellsOf(event, "Highlighted heading"))
+            renderer.on("external_output", capture)
+            onCleanup(() => renderer.off("external_output", capture))
+            return (
+              <NativeTranscript
+                items={items}
+                settled
+                streaming={false}
+                footerHeight={3}
+                expanded={false}
+                disclosure="collapsed"
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible) => (
+                  <MessageList
+                    items={visible}
+                    disclosure="collapsed"
+                    syntaxStyle={boldHeadings}
+                    openAnswer={Option.none()}
+                  />
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committed.length > 0,
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("8 seconds"),
+          Effect.ignore,
+        )
+        const heading = Option.getOrThrow(Option.firstSomeOf(committed))
+        // The first settle timed out before the highlight; the commit waited for a second.
+        expect(timeouts.calls()).toBeGreaterThanOrEqual(2)
+        expect(heading.every((attributes) => (attributes & TextAttributes.BOLD) !== 0)).toBe(true)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
 })
+
+/** Headings draw bold once highlighted; the draft before the highlight is plain. */
+const boldHeadings = () =>
+  SyntaxStyle.fromTheme([
+    {
+      scope: ["markup.heading", "markup.heading.1", "markup.heading.2"],
+      style: { bold: true },
+    },
+  ])
+
+/** The attributes of each cell of `text` in a committed snapshot, or `None` when it is not there. */
+const cellsOf = (
+  event: CliRendererExternalOutputEvent,
+  text: string,
+): Option.Option<ReadonlyArray<number>> => {
+  const { snapshot } = event
+  const { char, attributes } = snapshot.buffers
+  for (let row = 0; row < snapshot.height; row++) {
+    const line = Array.from({ length: snapshot.width }, (_, column) =>
+      String.fromCodePoint(char[row * snapshot.width + column] ?? 32),
+    ).join("")
+    const at = line.indexOf(text)
+    if (at === -1) continue
+    return Option.some(
+      Array.from(
+        { length: text.length },
+        (_, offset) => attributes[row * snapshot.width + at + offset] ?? 0,
+      ),
+    )
+  }
+  return Option.none()
+}
 
 // ── native transcript footer room ───────────────────────────────────────────
 

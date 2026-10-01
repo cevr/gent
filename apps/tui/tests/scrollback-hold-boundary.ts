@@ -1,12 +1,12 @@
 /**
- * The Promise edge for a held scrollback commit.
+ * The Promise edge for a held or timed-out scrollback commit.
  *
  * `ScrollbackSurface.settle` is a Promise API that the commit awaits, so a test
  * that wants to act mid-commit has to hold that Promise open. `Deferred` drives
  * the hold; this module owns the single Effect-to-Promise edge the renderer
  * needs, which keeps the test file free of Promise control flow.
  */
-import { Deferred, Effect } from "effect"
+import { Deferred, Effect, Schema } from "effect"
 import type { CliRenderer, ScrollbackSurface } from "@opentui/core"
 
 interface SettleHold {
@@ -55,3 +55,36 @@ export const makeSettleHold: Effect.Effect<SettleHold> = Effect.gen(function* ()
     applyTo,
   }
 })
+
+/** The error a timed-out `settle` rejects with, as OpenTUI's own timeout does. */
+class SettleTimeout extends Schema.TaggedError<SettleTimeout>()("SettleTimeout", {}) {}
+
+interface SettleTimeouts {
+  /** How many `settle` calls the renderer's surfaces made so far. */
+  readonly calls: () => number
+  /**
+   * Replaces the renderer's scrollback factory with one whose surfaces time
+   * out at once on their first `failures` settles, before any highlight can
+   * land: a cold tree-sitter worker, a loaded machine, a worker that died.
+   * Every later settle is the surface's own.
+   */
+  readonly applyTo: (renderer: CliRenderer) => void
+}
+
+export const makeSettleTimeouts = (failures: number): SettleTimeouts => {
+  let calls = 0
+  const applyTo = (renderer: CliRenderer): void => {
+    const create = renderer.createScrollbackSurface.bind(renderer)
+    renderer.createScrollbackSurface = (options?: Parameters<typeof create>[0]) => {
+      const surface: ScrollbackSurface = create(options)
+      const settle = surface.settle.bind(surface)
+      const timedSettle = (timeoutMs?: number): Promise<void> => {
+        calls += 1
+        if (calls <= failures) return Effect.runPromise(Effect.fail(new SettleTimeout()))
+        return settle(timeoutMs)
+      }
+      return Object.defineProperty(surface, "settle", { value: timedSettle })
+    }
+  }
+  return { calls: () => calls, applyTo }
+}

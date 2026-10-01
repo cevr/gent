@@ -509,6 +509,16 @@ function UserMessage(props: MessageRowProps & { customType?: string; fullDetail:
 /** The columns an answer is indented by; its text is fitted to the rest. */
 const ANSWER_INDENT = 2
 
+/**
+ * How answers and reasoning draw their markdown. Each top-level block (a
+ * heading, a paragraph, a list) is its own block, so the text a block draws
+ * before its highlight lands comes from its inline tokens: a heading never
+ * shows its `#` marks, in the live view or in a row that reaches history
+ * without its highlight. Tables keep their grid, which the top-level mode
+ * would otherwise trade for borderless columns.
+ */
+const ANSWER_TABLE = { style: "grid" } as const
+
 function AssistantMessage(props: {
   content: string
   reasoning: string
@@ -566,6 +576,8 @@ function AssistantMessage(props: {
                     <markdown
                       syntaxStyle={props.syntaxStyle()}
                       streaming
+                      internalBlockMode="top-level"
+                      tableOptions={ANSWER_TABLE}
                       content={reasoningMarkdown(segment.content)}
                       fg={theme.textMuted}
                       conceal
@@ -597,6 +609,8 @@ function AssistantMessage(props: {
                     <markdown
                       syntaxStyle={props.syntaxStyle()}
                       streaming
+                      internalBlockMode="top-level"
+                      tableOptions={ANSWER_TABLE}
                       content={renderContent()}
                       conceal
                     />
@@ -1162,6 +1176,25 @@ function StickyPrompt(props: { readonly text: string; readonly width: number }) 
 
 // ── native scrollback transcript ────────────────────────────────────────────
 
+/** How long one commit waits for its highlights before it is tried again. */
+const SETTLE_BUDGET_MS = 2000
+
+/**
+ * How many times an item waits for its highlights before it commits as
+ * drawn. The bound keeps a dead highlight worker from holding history back
+ * for good; a top-level block draws its text without marks before its
+ * highlight lands, so the last try loses only the colors.
+ */
+const SETTLE_TRIES = 3
+
+/**
+ * How one commit ended: its rows reached history (`landed`); the screen
+ * changed hands or the display was cleared (`refused`); its highlights missed
+ * the budget (`unsettled`); or an item before it came back, so it waits for
+ * the next pass (`stale`).
+ */
+type CommitOutcome = "landed" | "refused" | "unsettled" | "stale"
+
 interface NativeTranscriptProps {
   items: SessionItem[]
   /** The items are final: no source still derives rows that would land among them. */
@@ -1207,6 +1240,13 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * drops its rows instead of writing history the reader already dismissed.
    */
   let displayGeneration = 0
+  /**
+   * Bumped when an item comes back to the live view, so the items queued
+   * behind it do not land before it.
+   */
+  let commitEpoch = 0
+  /** The tries each item's highlights missed, by fingerprint, until it lands. */
+  const unsettledTries = new Map<string, number>()
   let displayRevision = 0
   const [displayBoundary, setDisplayBoundary] = createSignal(captureTranscriptDisplay([]))
   const displayedItems = createMemo(() => projectTranscriptDisplay(props.items, displayBoundary()))
@@ -1307,11 +1347,18 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * scrollback. `splitFooterHeight` keeps the output region large enough
    * instead, so the commit needs no footer of its own.
    */
-  const commitItems = (items: SessionItem[]): Effect.Effect<boolean> =>
+  const commitItems = (
+    items: SessionItem[],
+    epoch: number,
+    lastTry: boolean,
+  ): Effect.Effect<CommitOutcome> =>
     Effect.suspend(() => {
+      // An item queued behind one that came back waits for the next pass.
+      if (commitEpoch !== epoch) return Effect.succeed("stale")
       const generation = displayGeneration
-      const stillCurrent = () => displayGeneration === generation && canCommitNatively()
-      if (!stillCurrent()) return Effect.succeed(false)
+      const stillCurrent = () =>
+        displayGeneration === generation && commitEpoch === epoch && canCommitNatively()
+      if (!stillCurrent()) return Effect.succeed("refused")
       const surface: ScrollbackSurface = renderer.createScrollbackSurface()
       const surfaceRenderer = Object.create(surface.renderContext)
       Object.defineProperties(surfaceRenderer, {
@@ -1331,24 +1378,23 @@ export function NativeTranscript(props: NativeTranscriptProps) {
           }),
         ),
       )
-      return Effect.tryPromise(() => surface.settle(2000)).pipe(
-        // A highlight that never lands still commits; the row text is complete.
-        // A surface the renderer already tore down has nothing left to draw.
-        Effect.catch(() =>
-          Effect.suspend(() => {
-            if (surface.isDestroyed) return Effect.void
-            return Effect.sync(() => surface.render())
-          }),
-        ),
+      return Effect.tryPromise(() => surface.settle(SETTLE_BUDGET_MS)).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
         // Settling is asynchronous. The screen may have changed hands and the
         // reader may have cleared the display while it ran, so both are
         // checked again before the rows are handed over.
-        Effect.andThen(
+        Effect.andThen((settled): Effect.Effect<CommitOutcome> =>
           Effect.suspend(() => {
-            if (surface.isDestroyed || !stillCurrent()) return Effect.succeed(false)
+            if (surface.isDestroyed || !stillCurrent()) return Effect.succeed("refused")
+            // A highlight that missed its budget is tried again: scrollback
+            // keeps forever what it is given. Past the last try the rows
+            // commit as drawn; their text is complete, only unstyled.
+            if (!settled && !lastTry) return Effect.succeed("unsettled")
             return Effect.sync(() => {
+              if (!settled) surface.render()
               surface.commitRows(0, surface.height)
-              return true
+              return "landed"
             })
           }),
         ),
@@ -1361,8 +1407,13 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       )
     })
 
-  /** The screen changed hands: give the item back to the live view. */
+  /**
+   * Give the item back to the live view, and every item queued behind it:
+   * history is written in transcript order, so none of them may land before
+   * it. A later pass offers them again.
+   */
   const rewind = () => {
+    commitEpoch += 1
     queued = committed.length
     setRetryVersion((version) => version + 1)
   }
@@ -1373,11 +1424,16 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * untouched, so the item stays visible and a later pass retries it.
    */
   const write = (item: SessionItem, fingerprintValue: string) => {
+    const tries = unsettledTries.get(fingerprintValue) ?? 0
+    const epoch = commitEpoch
     enqueueNative(
-      commitItems([item]).pipe(
-        Effect.andThen((landed) =>
+      commitItems([item], epoch, tries + 1 >= SETTLE_TRIES).pipe(
+        Effect.andThen((outcome) =>
           Effect.sync(() => {
-            if (!landed) return rewind()
+            if (outcome === "stale") return
+            if (outcome === "unsettled") unsettledTries.set(fingerprintValue, tries + 1)
+            if (outcome !== "landed") return rewind()
+            unsettledTries.delete(fingerprintValue)
             committed = [...committed, fingerprintValue]
             setCommittedCount(committed.length)
           }),
