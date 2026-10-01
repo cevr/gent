@@ -67,7 +67,12 @@ import {
   useToolRenderers,
 } from "../src/tool-renderers"
 import { destroyRenderSetup, renderFrame, renderScoped } from "./render-harness-boundary"
-import { makeSettleHold, makeSettleTimeouts } from "./scrollback-hold-boundary"
+import {
+  highlightOutage,
+  makeSettleHold,
+  makeSettleTimeouts,
+  refuseCommits,
+} from "./scrollback-hold-boundary"
 import { waitForFrame, waitForTerminal } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
@@ -2994,6 +2999,66 @@ describe("native transcript markdown", () => {
     15_000,
   )
 
+  // A highlight that never lands leaves a code block and a quote with no
+  // text to draw, and one that fails puts back the raw markdown, marks and
+  // all. Past its last try an answer commits as plain text the transcript
+  // draws itself: the heading without its marks, the code and the quote as
+  // their text.
+  for (const outage of ["stalled", "failing"] as const) {
+    it.scopedLive(
+      `an answer whose highlight is ${outage} reaches history readable`,
+      () =>
+        Effect.gen(function* () {
+          yield* highlightOutage(outage)
+          const timeouts = makeSettleTimeouts(Number.MAX_SAFE_INTEGER)
+          const committedText: string[] = []
+          const answer = [
+            "## HEADING-MARKS",
+            "Some **bold** words.",
+            "```ts\nconst CODE_BODY = 1\n```",
+            "> QUOTE_BODY quoted",
+            "- LIST_ITEM one",
+          ].join("\n\n")
+          const items = [assistant("first", answer), assistant("second", "TAIL")]
+          yield* renderScoped(
+            () =>
+              transcriptCommit({
+                items,
+                displayRevision: () => 0,
+                overlayOpen: () => false,
+                onRenderer: (renderer) => {
+                  timeouts.applyTo(renderer)
+                  renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                    committedText.push(
+                      new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                    )
+                  })
+                },
+              }),
+            { width: 60, height: 14 },
+          ).pipe(
+            Effect.tap((setup) =>
+              Effect.promise(() => setup.flush()).pipe(
+                Effect.repeat({
+                  until: () => committedText.join("").includes("TAIL"),
+                  schedule: Schedule.spaced("10 millis"),
+                }),
+                Effect.timeout("6 seconds"),
+                Effect.ignore,
+              ),
+            ),
+          )
+          const history = committedText.join("")
+          for (const text of ["HEADING-MARKS", "bold", "CODE_BODY", "QUOTE_BODY", "LIST_ITEM"])
+            expect(history).toContain(text)
+          expect(history).not.toContain("#")
+          expect(history).not.toContain("**")
+          expect(history).not.toContain("```")
+        }).pipe(Effect.timeout("10 seconds")),
+      15_000,
+    )
+  }
+
   it.scopedLive(
     "a settle that times out is tried again, so history keeps the highlight",
     () =>
@@ -3408,6 +3473,47 @@ describe("native transcript exit", () => {
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
+
+  // A highlight can hold a commit for its whole budget. Exit does not wait
+  // for it: what the live view holds commits at once as plain text.
+  it.scopedLive(
+    "exit during a slow highlight still moves the live view into history",
+    () =>
+      Effect.gen(function* () {
+        const hold = yield* makeSettleHold
+        const committedText: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const items: ListMessage[] = [
+          assistant("earlier", "## SLOW-ANSWER\n\nbody"),
+          { ...assistant("open", "IN-FLIGHT-DRAFT"), draft: true },
+        ]
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => items,
+              streaming: () => true,
+              footer: () => 3,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                hold.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush())
+        // The first answer's commit waits inside its settle, and never comes out.
+        yield* hold.held
+        yield* flushTranscriptForExit(Option.getOrThrow(screen))
+        const history = committedText.join("")
+        expect(history).toContain("SLOW-ANSWER")
+        expect(history).not.toContain("#")
+        expect(history).toContain("IN-FLIGHT-DRAFT")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
 })
 
 // ── native transcript mouse ─────────────────────────────────────────────────
@@ -3705,6 +3811,94 @@ describe("native transcript commit handover", () => {
           }),
         )
         expect(committedText.join("")).toContain("FIRST-ITEM line 1")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // A resize while the surface settles makes its rows the wrong width, and
+  // the replay the resize asks for writes history again from the top. The
+  // item must reach history once that replay runs, not vanish between them.
+  it.scopedLive(
+    "a resize mid-commit loses no item",
+    () =>
+      Effect.gen(function* () {
+        const hold = yield* makeSettleHold
+        const items = [assistant("first", longBody("RESIZED-ITEM")), assistant("second", "TAIL")]
+        const committedText: string[] = []
+
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                hold.applyTo(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush())
+        yield* hold.held
+        setup.resize(50, 14)
+        yield* Effect.promise(() => setup.flush())
+        yield* hold.release
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("RESIZED-ITEM line 1"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+        expect(committedText.join("")).toContain("RESIZED-ITEM line 1")
+        // Written once, by the replay: the commit drawn for the old width wrote nothing.
+        expect(committedText.join("").split("RESIZED-ITEM line 12").length - 1).toBe(1)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // The item leaves the live view only once scrollback has taken its rows:
+  // a write scrollback refuses keeps it, and the next pass writes it.
+  it.scopedLive(
+    "a write scrollback refuses keeps the item and writes it on the next pass",
+    () =>
+      Effect.gen(function* () {
+        const items = [assistant("first", longBody("REFUSED-ITEM")), assistant("second", "TAIL")]
+        const committedText: string[] = []
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                refuseCommits(1)(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("REFUSED-ITEM line 1"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+        const history = committedText.join("")
+        expect(history).toContain("REFUSED-ITEM line 1")
+        expect(history.split("REFUSED-ITEM line 12").length - 1).toBe(1)
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
