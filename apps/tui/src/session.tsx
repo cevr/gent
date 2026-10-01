@@ -332,11 +332,11 @@ export type ComposerInteractionEvent = Schema.Schema.Type<typeof ComposerInterac
  * Start triggers (like /) detected only at text position 0.
  */
 const deriveAutocomplete = (
-  _state: ComposerInteractionState,
+  state: ComposerInteractionState,
   text: string,
   contributions: ReadonlyArray<AutocompleteContribution>,
 ): Option.Option<AutocompleteState> => {
-  if (_state.mode === "shell") return Option.none()
+  if (state.mode === "shell") return Option.none()
 
   const prefixes = contributions.map((c) => c.prefix)
   if (prefixes.length === 0) return Option.none()
@@ -368,31 +368,39 @@ export function transitionComposerInteraction(
   event: ComposerInteractionEvent,
   contributions: ReadonlyArray<AutocompleteContribution> = [],
 ): ComposerInteractionState {
-  if (event._tag === "DraftChanged") {
-    return {
-      ...state,
-      draft: event.text,
-      autocomplete: deriveAutocomplete(state, event.text, contributions),
-    }
-  }
-
-  if (event._tag === "RestoreDraft") {
-    return { ...state, draft: event.text, autocomplete: Option.none() }
-  }
-
-  if (event._tag === "ClearDraft") {
-    return { ...state, draft: "", autocomplete: Option.none() }
-  }
-
-  if (event._tag === "EnterShell") {
-    return { ...state, mode: "shell", autocomplete: Option.none() }
-  }
-
-  if (event._tag === "ExitShell") {
-    return { ...state, mode: "editing", autocomplete: Option.none() }
-  }
-
-  return { ...state, autocomplete: Option.none() }
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      DraftChanged: ({ text }): ComposerInteractionState => ({
+        ...state,
+        draft: text,
+        autocomplete: deriveAutocomplete(state, text, contributions),
+      }),
+      RestoreDraft: ({ text }): ComposerInteractionState => ({
+        ...state,
+        draft: text,
+        autocomplete: Option.none(),
+      }),
+      ClearDraft: (): ComposerInteractionState => ({
+        ...state,
+        draft: "",
+        autocomplete: Option.none(),
+      }),
+      EnterShell: (): ComposerInteractionState => ({
+        ...state,
+        mode: "shell",
+        autocomplete: Option.none(),
+      }),
+      ExitShell: (): ComposerInteractionState => ({
+        ...state,
+        mode: "editing",
+        autocomplete: Option.none(),
+      }),
+      CloseAutocomplete: (): ComposerInteractionState => ({
+        ...state,
+        autocomplete: Option.none(),
+      }),
+    }),
+  )
 }
 
 // ── composer state ──────────────────────────────────────────────────────────
@@ -437,27 +445,31 @@ interface TransitionResult {
 }
 
 function transition(state: ComposerState, event: ComposerEvent): TransitionResult {
-  if (event._tag === "EnterInteraction") {
-    return { state: { _tag: "interaction", interaction: event.interaction } }
-  }
-
-  if (event._tag === "ResolveInteraction") {
-    if (state._tag !== "interaction") return { state }
-    return {
-      state: ComposerState.idle(),
-      effect: {
-        _tag: "DispatchInteractionResult",
-        interaction: state.interaction,
-        result: event.result,
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      EnterInteraction: ({ interaction }): TransitionResult => ({
+        state: { _tag: "interaction", interaction },
+      }),
+      ResolveInteraction: ({ result }): TransitionResult => {
+        if (state._tag !== "interaction") return { state }
+        return {
+          state: ComposerState.idle(),
+          effect: {
+            _tag: "DispatchInteractionResult",
+            interaction: state.interaction,
+            result,
+          },
+        }
       },
-    }
-  }
-
-  if (state._tag !== "interaction") return { state }
-  if (!("requestId" in state.interaction) || state.interaction.requestId !== event.requestId) {
-    return { state }
-  }
-  return { state: ComposerState.idle() }
+      // Only the interaction on screen is dismissed; a late dismissal of another is dropped.
+      DismissInteraction: ({ requestId }): TransitionResult => {
+        if (state._tag !== "interaction" || state.interaction.requestId !== requestId) {
+          return { state }
+        }
+        return { state: ComposerState.idle() }
+      },
+    }),
+  )
 }
 
 // ── composer memory ─────────────────────────────────────────────────────────
