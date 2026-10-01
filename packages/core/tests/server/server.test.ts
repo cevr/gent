@@ -48,6 +48,7 @@ import {
   emptyQueueSnapshot,
 } from "../../src/test-utils/harness"
 import {
+  DEFAULT_SESSION_NAME,
   messagePartsText,
   Branch,
   dateFromMillis,
@@ -941,6 +942,45 @@ describe("session command persistence", () => {
       Effect.timeout("4 seconds"),
     )
   })
+
+  it.live(
+    "a rename that expects the default name keeps a name set between its read and its write",
+    () => {
+      const sessionId = SessionId.make("session-rename-expected")
+      const branchId = BranchId.make("branch-rename-expected")
+      return Effect.gen(function* () {
+        const mutations = yield* SessionMutations
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        yield* createActiveSessionFixture({
+          sessions,
+          branches,
+          sessionId,
+          branchId,
+          now: FIXED_NOW,
+          name: DEFAULT_SESSION_NAME,
+        })
+
+        const result = yield* mutations.renameSession({
+          sessionId,
+          name: "from the first message",
+          expectedName: DEFAULT_SESSION_NAME,
+        })
+
+        expect(result).toEqual({ renamed: false })
+        expect((yield* sessions.getSession(sessionId))?.name).toBe("asked for by the user")
+      }).pipe(
+        Effect.provide(
+          interleavedSessionMutationsLayer({
+            sessionId,
+            racingWrite: (sql) =>
+              sql`UPDATE sessions SET name = ${"asked for by the user"} WHERE id = ${sessionId}`,
+          }),
+        ),
+        Effect.timeout("4 seconds"),
+      )
+    },
+  )
 
   it.live("a settings change keeps a rename that lands between its read and its write", () => {
     const sessionId = SessionId.make("session-settings-race")

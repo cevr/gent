@@ -3,6 +3,7 @@ import {
   AGENT_PROMPT_PRIORITY,
   type Branch,
   BranchId,
+  DEFAULT_SESSION_NAME,
   defineExtension,
   defineResource,
   ExtensionContext,
@@ -11,6 +12,7 @@ import {
   getToolId,
   headTailChars,
   interjectionMessageId,
+  isRuntimeUserMessage,
   isSpawnedSession,
   type Message,
   type MessageId,
@@ -142,9 +144,63 @@ export const ReadSessionTool = tool({
 
 // ── rename-session ──────────────────────────────────────────────────────────
 
-const NAMING_INSTRUCTION = `
-## Session naming
-Call rename_session with a specific 3-5 word lowercase title once you understand what the user needs. If the conversation topic shifts significantly, rename again.`
+/** The first line of `text` with any text on it, trimmed. */
+const firstTextLine = (text: string): Option.Option<string> =>
+  Option.fromUndefinedOr(
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0),
+  )
+
+/**
+ * The sessions this process found no text to name from, so a session whose
+ * first message has no text loads its history once per process, not at
+ * every turn end.
+ */
+class Untitled extends Context.Service<Untitled, Ref.Ref<ReadonlySet<SessionId>>>()(
+  "@gent/extensions/src/session-tools/Untitled",
+) {}
+
+const UntitledResource = defineResource({
+  id: "@gent/session-tools/untitled",
+  scope: "process",
+  layer: Layer.effect(Untitled, Ref.make<ReadonlySet<SessionId>>(new Set())),
+})
+
+/**
+ * A session that still has the default name takes the first line of its
+ * first user message at a turn end, as a delegate child takes its task. The
+ * rename trims it to the title length. A name given before, by the create or
+ * by `rename_session`, is left alone: the rename expects the default name,
+ * and the write checks it, so a rename that lands after the read here wins.
+ * A first message with no text leaves the default name.
+ */
+const nameFromFirstMessage = Effect.fn("SessionTools.nameFromFirstMessage")(function* (
+  input: Pick<TurnAfterInput, "sessionId" | "branchId">,
+) {
+  const ctx = yield* ExtensionContext
+  const session = Option.fromUndefinedOr(yield* ctx.Session.getSession(input.sessionId))
+  if (!Option.exists(session, (found) => found.name === DEFAULT_SESSION_NAME)) return
+  const untitled = yield* Untitled
+  if ((yield* Ref.get(untitled)).has(input.sessionId)) return
+  const detail = yield* ctx.Session.getDetail(input.sessionId)
+  const title = Option.fromUndefinedOr(
+    detail.branches.find((entry) => entry.branch.id === input.branchId),
+  ).pipe(
+    Option.flatMap((entry) =>
+      Option.fromUndefinedOr(
+        entry.messages.find((message) => message.role === "user" && !isRuntimeUserMessage(message)),
+      ),
+    ),
+    Option.flatMap((message) => firstTextLine(messagePartsDisplayText(message.parts))),
+  )
+  if (Option.isNone(title)) {
+    yield* Ref.update(untitled, (current) => new Set([...current, input.sessionId]))
+    return
+  }
+  yield* ctx.Session.renameCurrent(title.value, { expectedName: DEFAULT_SESSION_NAME })
+})
 
 const RenameSessionParams = Schema.Struct({
   name: Schema.String.annotate({
@@ -159,8 +215,9 @@ const RenameSessionResult = Schema.Struct({
 
 const RenameSessionTool = tool({
   id: "rename_session",
-  description:
-    "Rename the current session. Call once you understand the task, and again if the topic shifts significantly.",
+  // A session takes its first message as its name at a turn end
+  // (`nameFromFirstMessage`), so this tool is for a rename the user asks for.
+  description: "Rename the current session.",
   params: RenameSessionParams,
   output: RenameSessionResult,
   execute: Effect.fn("RenameSessionTool.execute")(function* (
@@ -638,7 +695,7 @@ export const SessionToolsExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", ReadSessionTool, RenameSessionTool, SendSessionTool)
-    yield* host.register("resource", SentTurnsResource)
+    yield* host.register("resource", SentTurnsResource, UntitledResource)
     // Every turn end is read twice: as the end of a turn a send opened, and
     // as the sender's own turn, which stops what its sends opened when it was
     // interrupted and settles the record when it was not.
@@ -660,11 +717,14 @@ export const SessionToolsExtension = defineExtension({
         }),
       ),
     )
-    yield* host.on("systemPrompt", (input) => {
-      if (input.interactive === false) {
-        return Effect.succeed(input.basePrompt)
-      }
-      return Effect.succeed(input.basePrompt + NAMING_INSTRUCTION)
-    })
+    yield* host.on("turnAfter", (input) =>
+      nameFromFirstMessage(input).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("session-naming.failed").pipe(
+            Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+          ),
+        ),
+      ),
+    )
   }),
 })

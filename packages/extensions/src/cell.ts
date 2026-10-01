@@ -1690,9 +1690,10 @@ export const handleContextCall = Effect.fn("CellContextHost.call")(function* (pa
   readonly name: string
   readonly input: Schema.Json
 }) {
-  const operation = yield* Schema.decodeUnknownEffect(ContextOperation)(
-    params.name.slice(CONTEXT_CALL_PREFIX.length),
-  ).pipe(Effect.mapError(() => contextHostFailure(`Unknown context operation ${params.name}`)))
+  const requested = params.name.slice(CONTEXT_CALL_PREFIX.length)
+  const operation = yield* Schema.decodeUnknownEffect(ContextOperation)(requested).pipe(
+    Effect.mapError(() => contextHostFailure(`Unknown operation context.${requested}`)),
+  )
   const ledger = yield* ModelContextLedger
   switch (operation) {
     case "status": {
@@ -1840,9 +1841,10 @@ const handleModelsCall = Effect.fn("CellModelsHost.call")(function* (params: {
   readonly input: Schema.Json
   readonly resolver: Option.Option<typeof DecisionModelResolver.Service>
 }) {
-  yield* Schema.decodeUnknownEffect(ModelsOperation)(
-    params.name.slice(MODELS_CALL_PREFIX.length),
-  ).pipe(Effect.mapError(() => contextHostFailure(`Unknown models operation ${params.name}`)))
+  const requested = params.name.slice(MODELS_CALL_PREFIX.length)
+  yield* Schema.decodeUnknownEffect(ModelsOperation)(requested).pipe(
+    Effect.mapError(() => contextHostFailure(`Unknown operation models.${requested}`)),
+  )
   const request = yield* Schema.decodeUnknownEffect(DecideInput)(params.input).pipe(
     Effect.mapError((cause) =>
       contextHostFailure(`models.decide input is invalid: ${cause.message}`),

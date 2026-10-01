@@ -311,7 +311,8 @@ describe("cell context host", () => {
         name: "context:reset",
         input: {},
       }).pipe(Effect.flip)
-      expect(unknown.message).toContain("Unknown context operation")
+      // The error names the call as the cell spells it, not its wire name.
+      expect(unknown.message).toBe("Unknown operation context.reset")
     }).pipe(Effect.provide(layer)),
   )
 

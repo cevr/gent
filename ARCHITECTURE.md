@@ -373,7 +373,10 @@ The production server uses one live profile owner:
   test running. The harness loads every `extensionInputs`/`extensions` entry
   at builtin scope; a scope test builds its profile from `LoadedExtension`s
   and passes it as `sessionProfileCacheLayer`.
-- `server/server.ts` selects the launch profile from that cache.
+- `server/server.ts` selects the launch profile from that cache. An RPC that
+  names a session reads that session's profile; one shared lookup
+  (`loadSession`) fails it with `NotFoundError` when the session does not
+  exist, so no call answers from the launch profile instead.
 
 Turn profiles carry the process identity that built them. A process-local tool
 binding names that process and is valid only inside it.
@@ -522,6 +525,16 @@ Shape:
   terminal columns on a grapheme) over the text; `sessionMessageBody` removes
   the header, with or without the child line, so older rows render the same.
   Full detail shows the header the model reads.
+- A session takes its name from its first user message: at a turn end,
+  `@gent/session-tools` renames a session that still has
+  `DEFAULT_SESSION_NAME` to the first line of its branch's first user
+  message (the rename trims it to 80 characters), as a delegate child takes
+  its task. No prompt text asks the model to name a session; `rename_session`
+  stays for a rename the user asks for, and a name it gave first wins: the
+  automatic rename passes `expectedName`, and the storage write renames only
+  while the stored name is still the default (`renameCurrent`,
+  `SessionStorage.renameSession`). A session whose first message has no text
+  keeps the default; its history is read once per process, not every turn.
 - `Interject` steering never interrupts an open stream. The item is admitted to
   the durable steering queue; a running turn delivers it at its next safe step
   boundary (tool results stored, no stream open) by persisting the interjection
@@ -654,7 +667,10 @@ Shape:
   `Model.kind: "classifier"`, so they share its id, auth, env credential and
   catalog; the TUI picker leaves them out, and the turn refuses one by name
   (`ModelContextCapabilityFailure.ClassifierModel`) before any chat
-  `resolveModel`, whichever agent, config or override named it.
+  `resolveModel`, whichever agent, config or override named it. A driver
+  declares `resolveDecisionModel` only when it lists a classifier, so the
+  cell shows its `models.decide` guideline when such a driver has a stored or
+  env credential, with no catalog read.
   `DecisionModelResolver`
   (`runtime/provider.ts`, in the loop's runtime services) picks the named
   catalog classifier. With none named it takes a classifier whose driver has a

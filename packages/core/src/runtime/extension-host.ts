@@ -2855,9 +2855,9 @@ export const makeExtensionHostContextProvider = (
             Effect.mapError(sessionError("getDetail")),
             inWorkspace,
           ),
-        renameCurrent: (name) =>
+        renameCurrent: (name, options) =>
           mutations((service) =>
-            service.renameSession({ sessionId: runInfo.sessionId, name }),
+            service.renameSession({ sessionId: runInfo.sessionId, name, ...options }),
           ).pipe(Effect.mapError(sessionError("renameCurrent")), inWorkspace),
         create: (params) =>
           mutations((service) =>
