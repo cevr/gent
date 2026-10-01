@@ -614,21 +614,34 @@ export const RESPONSES_PROMPT_CACHE_TTL = Duration.minutes(30)
  * `encrypted_content`, and a reply carries that only when `include` asks for
  * it. `@effect/ai-openai` asks only for the model prefixes it knows (`o1`,
  * `o3`, `o4-mini`, `codex-mini`, `gpt-5`), and its computed `include`
- * replaces any the config names. So the body of every request that reasons
- * without store asks for it here.
+ * replaces any the config names. So every request without store to a model
+ * that reasons asks for it here. A reasoning model reasons at its default
+ * effort when the request names none, so the model decides, not the body's
+ * `reasoning` field.
  */
 const ENCRYPTED_REASONING = "reasoning.encrypted_content"
 
-export const withEncryptedReasoning = (body: Schema.JsonObject): Schema.JsonObject => {
-  const reasons = Option.exists(Option.fromUndefinedOr(body["reasoning"]), isJsonObject)
-  if (body["store"] !== false || !reasons) return body
-  const include = Option.getOrElse(
-    Option.filter(Option.fromUndefinedOr(body["include"]), isArray),
-    (): ReadonlyArray<Schema.Json> => [],
+/** Whether the resolved model reasons: the catalog's word (`supportsReasoning`), else `fallback`. */
+export const modelReasons = (
+  hints: Option.Option<ProviderHints>,
+  fallback: () => boolean,
+): boolean =>
+  Option.getOrElse(
+    Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.supportsReasoning)),
+    fallback,
   )
-  if (include.includes(ENCRYPTED_REASONING)) return body
-  return { ...body, include: [...include, ENCRYPTED_REASONING] }
-}
+
+export const withEncryptedReasoning =
+  (reasons: boolean) =>
+  (body: Schema.JsonObject): Schema.JsonObject => {
+    if (body["store"] !== false || !reasons) return body
+    const include = Option.getOrElse(
+      Option.filter(Option.fromUndefinedOr(body["include"]), isArray),
+      (): ReadonlyArray<Schema.Json> => [],
+    )
+    if (include.includes(ENCRYPTED_REASONING)) return body
+    return { ...body, include: [...include, ENCRYPTED_REASONING] }
+  }
 
 // ── oauth token endpoint ────────────────────────────────────────────────────
 

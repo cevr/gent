@@ -75,6 +75,7 @@ import {
   replaceHeldCredential,
   RESPONSES_PROMPT_CACHE_TTL,
   withEncryptedReasoning,
+  modelReasons,
   withHeaders,
 } from "./providers.js"
 import {
@@ -1338,8 +1339,8 @@ const openAiReasoningEffort = (
 }
 
 /** Whether the model reasons: the catalog's flag, else a known reasoning family. */
-const openAiModelReasons = (modelName: string, hints: ProviderHints): boolean =>
-  hints.supportsReasoning ?? OPENAI_ACCEPTED_EFFORTS.some((entry) => entry.pattern.test(modelName))
+const openAiModelReasons = (modelName: string, hints: Option.Option<ProviderHints>): boolean =>
+  modelReasons(hints, () => OPENAI_ACCEPTED_EFFORTS.some((entry) => entry.pattern.test(modelName)))
 
 /** The one request config for both auth paths; both speak the Responses API. */
 const buildOpenAiResponsesConfig = (
@@ -1358,7 +1359,7 @@ const buildOpenAiResponsesConfig = (
     // OpenAI's reasoning models reject `temperature`. GPT-5.1 and 5.2 take it
     // at effort `none`; it is dropped there too, as one rule per model.
     const temperature = Option.fromNullishOr(hints.value.temperature)
-    if (Option.isSome(temperature) && !openAiModelReasons(modelName, hints.value)) {
+    if (Option.isSome(temperature) && !openAiModelReasons(modelName, hints)) {
       config = { ...config, temperature: temperature.value }
     }
     const reasoning = openAiReasoningEffort(modelName, hints.value)
@@ -1569,10 +1570,10 @@ const rejectionCheck = (
  * out, and on a rejection records it and retries once.
  */
 const reasoningReplayClient =
-  (rejected: RejectedReasoning) =>
+  (rejected: RejectedReasoning, reasons: boolean) =>
   (client: HttpClient.HttpClient): HttpClient.HttpClient =>
     client.pipe(
-      rewriteJsonBody(withEncryptedReasoning),
+      rewriteJsonBody(withEncryptedReasoning(reasons)),
       HttpClient.mapRequestEffect((req) =>
         Effect.map(Ref.get(rejected), (ids) => withoutRejectedReasoning(req, ids)),
       ),
@@ -1598,11 +1599,15 @@ const makeApiKeyOpenAIResolution = (
   apiKey: string,
   refusedKeys: RefusedKeys,
   rejectedReasoning: RejectedReasoning,
+  reasons: boolean,
 ) => {
   const httpClientLayer = Layer.effect(
     HttpClient.HttpClient,
     Effect.map(HttpClient.HttpClient, (client) =>
-      summaryRefusalClient(refusedKeys, apiKey)(reasoningReplayClient(rejectedReasoning)(client)),
+      summaryRefusalClient(
+        refusedKeys,
+        apiKey,
+      )(reasoningReplayClient(rejectedReasoning, reasons)(client)),
     ),
   ).pipe(Layer.provide(FetchHttpClient.layer))
   const clientLayer = OpenAiResponsesClient.layer({ apiKey: Redacted.make(apiKey) }).pipe(
@@ -1635,12 +1640,13 @@ const makeOauthOpenAILayer = (
   config: OpenAiResponsesConfig,
   creds: CredentialCache<OpenAICredentials>,
   rejectedReasoning: RejectedReasoning,
+  reasons: boolean,
 ) => {
   const codexHttpClientLayer = Layer.effect(
     HttpClient.HttpClient,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
-      return buildCodexClient(creds)(reasoningReplayClient(rejectedReasoning)(client))
+      return buildCodexClient(creds)(reasoningReplayClient(rejectedReasoning, reasons)(client))
     }),
   ).pipe(Layer.provide(FetchHttpClient.layer))
   const clientLayer = OpenAiResponsesClient.layer({
@@ -1795,6 +1801,7 @@ export const buildOpenAIModelDriver = (
     resolveModel: (modelName, authInfo, hints) =>
       Effect.gen(function* () {
         const auth = Option.fromNullishOr(authInfo)
+        const reasons = openAiModelReasons(modelName, Option.fromNullishOr(hints))
         // Stored OAuth — handle inline with token refresh. Both paths speak the
         // Responses API through @effect/ai-openai; OAuth adds the Codex rewrite.
         if (Option.isSome(auth) && auth.value._tag === "Oauth") {
@@ -1813,7 +1820,7 @@ export const buildOpenAIModelDriver = (
           return AiModel.make(
             "openai",
             modelName,
-            makeOauthOpenAILayer(modelName, config, creds, rejectedReasoning),
+            makeOauthOpenAILayer(modelName, config, creds, rejectedReasoning, reasons),
           )
         }
 
@@ -1828,6 +1835,7 @@ export const buildOpenAIModelDriver = (
             apiKey.value,
             refusedKeys,
             rejectedReasoning,
+            reasons,
           )
         }
 

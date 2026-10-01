@@ -2224,6 +2224,11 @@ describe("OpenAI reasoning replay", () => {
         expect(yield* included(authInfo, { reasoning: "high" })).toEqual(
           Option.some(["reasoning.encrypted_content"]),
         )
+        // With no effort named the model still reasons, at its default effort.
+        expect(yield* included(authInfo, { supportsReasoning: true })).toEqual(
+          Option.some(["reasoning.encrypted_content"]),
+        )
+        expect(yield* included(authInfo, {})).toEqual(Option.some(["reasoning.encrypted_content"]))
         // A model the catalog says does not reason sends no reasoning to keep.
         expect(yield* included(authInfo, { reasoning: "high", supportsReasoning: false })).toEqual(
           Option.none(),

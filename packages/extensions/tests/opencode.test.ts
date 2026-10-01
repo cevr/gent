@@ -467,6 +467,11 @@ describe("OpenCode reasoning", () => {
       expect((yield* bodyOf(lastRequest(state)))["include"]).toEqual([
         "reasoning.encrypted_content",
       ])
+      // With no effort named the model still reasons, at its default effort.
+      yield* generate(zen, "gpt-6-sol", state, { cacheKey: "s", supportsReasoning: true })
+      expect((yield* bodyOf(lastRequest(state)))["include"]).toEqual([
+        "reasoning.encrypted_content",
+      ])
       yield* generate(zen, "gpt-6-sol", state, {
         cacheKey: "s",
         reasoning: "high",

@@ -38,6 +38,7 @@ import {
   rewriteJsonBody,
   RESPONSES_PROMPT_CACHE_TTL,
   withEncryptedReasoning,
+  modelReasons,
   withPromptCacheTtl,
   writesPromptCache,
 } from "./providers.js"
@@ -562,12 +563,20 @@ interface Resolution {
   readonly wire: Option.Option<ModelWire>
 }
 
+/** Whether a Responses model reasons: the catalog's flag, else whether it lists reasoning controls. */
+const responsesModelReasons = (resolution: Resolution): boolean =>
+  modelReasons(resolution.hints, () => reasoningOptions(resolution.wire).length > 0)
+
 const responsesModel = (resolution: Resolution) => {
+  const reasons = responsesModelReasons(resolution)
   const client = OpenAiResponsesClient.layer({
     apiKey: Redacted.make(resolution.apiKey),
     apiUrl: `${resolution.gateway.origin}/v1`,
     transformClient: (http) =>
-      http.pipe(rewriteJsonBody(withEncryptedReasoning), gatewayHeaders(resolution.sessionId)),
+      http.pipe(
+        rewriteJsonBody(withEncryptedReasoning(reasons)),
+        gatewayHeaders(resolution.sessionId),
+      ),
   }).pipe(Layer.provide(FetchHttpClient.layer))
   return OpenAiResponsesLanguageModel.layer({
     model: resolution.modelName,
