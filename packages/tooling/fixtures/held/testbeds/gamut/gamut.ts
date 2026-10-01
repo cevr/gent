@@ -2,7 +2,7 @@
 // Retired: gent/no-retired-bun-member (094b2f976). The gamut driver keeps
 // `noGlobals` with `builtins: false`: it may reach Bun and the host, but not
 // the retired Bun members, and its members list holds the globals the
-// language service held before (GR-8).
+// retired language-service rule held.
 export const files = new Bun.Glob("*") // held-by: effect/noGlobals
 export const computed = new Bun["Glob"]("*") // held-by: effect/noGlobals
 export const id = Bun.randomUUIDv7() // held-by: effect/noGlobals

@@ -173,6 +173,12 @@ interface RuleCase {
 
 const CASES: ReadonlyArray<RuleCase> = [
   {
+    rule: "gent/no-code-unit-padding",
+    invalid: "apps/tui/src/no-code-unit-padding.invalid.ts",
+    valid: ["apps/tui/src/no-code-unit-padding.valid.ts"],
+    expectedCount: 15,
+  },
+  {
     // A shipped extension reads only the two authoring entries.
     rule: "gent/core-entry-boundary",
     invalid: "packages/extensions/src/core-entry-boundary.invalid.ts",
@@ -419,6 +425,13 @@ effectDescribe("custom lint rules", () => {
         )
         expect(expected.length).toBeGreaterThan(90)
         expect(expected.filter((line) => !reported.has(line))).toEqual([])
+        const heldRules = new Set(expected.map((line) => line.replace(/:\d+ /, " ")))
+        const expectedLines = new Set(expected)
+        expect(
+          [...reported].filter(
+            (line) => heldRules.has(line.replace(/:\d+ /, " ")) && !expectedLines.has(line),
+          ),
+        ).toEqual([])
       }).pipe(Effect.timeout(FIXTURE_LINT_BOUND), Effect.provide(BunServices.layer)),
     FIXTURE_LINT_BACKSTOP_MS,
   )

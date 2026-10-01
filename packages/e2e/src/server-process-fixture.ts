@@ -30,7 +30,7 @@ class ServerProcessFixtureError extends Schema.TaggedError<ServerProcessFixtureE
 const READY_PREFIX = "Gent server ready on "
 const READY_LINE = new RegExp(`${READY_PREFIX}.+`)
 
-const readReadyUrl = (
+export const readReadyUrl = (
   proc: Bun.Subprocess,
   readyWithin: Duration.Input,
 ): Effect.Effect<string, ServerProcessFixtureError> => {
@@ -78,42 +78,52 @@ const readReadyUrl = (
 }
 
 /**
- * Spawn a standalone server subprocess on `port` and wait for its ready line,
- * for at most `readyWithin` (10 seconds unless given). The server belongs to
- * the caller's scope: closing it stops the server and waits for its exit,
- * and so does a missed ready bound, so no server outlives its test.
+ * Spawn a standalone server subprocess on `port`. The server belongs to the
+ * caller's scope: closing it stops the server and waits for its exit, so no
+ * server outlives its test.
+ */
+export const startServer = ({
+  dataDir,
+  port,
+}: {
+  readonly dataDir: string
+  readonly port: number
+}): Effect.Effect<Bun.Subprocess, never, Scope.Scope> =>
+  Effect.acquireRelease(
+    Effect.sync(() =>
+      // oxlint-disable-next-line effect/noGlobals -- the fixture spawns the real server process with the test's environment
+      Bun.spawn(
+        ["bun", "src/main.tsx", "server", "start", "--port", String(port), "--isolate", "--mock"],
+        {
+          cwd: tuiDirectory,
+          env: {
+            // oxlint-disable-next-line effect/noGlobals -- the fixture spawns the real server process with the test's environment
+            ...Bun.env,
+            GENT_DATA_DIR: dataDir,
+          },
+          stdout: "pipe",
+          // Nothing reads stderr; a pipe nobody drains can stall the server.
+          stderr: "ignore",
+        },
+      ),
+    ),
+    (proc) => stopProcess(proc, 5_000),
+  )
+
+/**
+ * `startServer`, then its ready line, read for at most 10 seconds. A missed
+ * bound fails, and the caller's scope still stops the server.
  */
 export const spawnServer = ({
   dataDir,
   port,
-  readyWithin = "10 seconds",
 }: {
   readonly dataDir: string
   readonly port: number
-  readonly readyWithin?: Duration.Input
 }): Effect.Effect<{ url: string; proc: Bun.Subprocess }, ServerProcessFixtureError, Scope.Scope> =>
   Effect.gen(function* () {
-    const proc = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        // oxlint-disable-next-line effect/noGlobals -- the fixture spawns the real server process with the test's environment
-        Bun.spawn(
-          ["bun", "src/main.tsx", "server", "start", "--port", String(port), "--isolate", "--mock"],
-          {
-            cwd: tuiDirectory,
-            env: {
-              // oxlint-disable-next-line effect/noGlobals -- the fixture spawns the real server process with the test's environment
-              ...Bun.env,
-              GENT_DATA_DIR: dataDir,
-            },
-            stdout: "pipe",
-            // Nothing reads stderr; a pipe nobody drains can stall the server.
-            stderr: "ignore",
-          },
-        ),
-      ),
-      (proc) => stopProcess(proc, 5_000),
-    )
-    const url = yield* readReadyUrl(proc, readyWithin)
+    const proc = yield* startServer({ dataDir, port })
+    const url = yield* readReadyUrl(proc, "10 seconds")
     return { url: `${url}/rpc`, proc }
   })
 

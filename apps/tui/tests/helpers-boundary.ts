@@ -1,8 +1,6 @@
 import { renderFrame, terminalText, type renderWithProviders } from "./render-harness-boundary"
 import { Effect, type ManagedRuntime, Schema } from "effect"
 
-export { renderFrame, terminalText }
-
 type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
 /** Run `effect` against a managed runtime's services, inside the calling test's fiber. */

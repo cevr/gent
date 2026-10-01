@@ -30,6 +30,8 @@ import {
   findUnparsedSources,
   findUnshippedSkillFiles,
   findUnhashedSteeringFiles,
+  findDeadTurboInputs,
+  TurboTaskInputsSchema,
   BUNDLED_SKILLS_MODULE,
   findUnusedCatalogEntries,
   findUnusedDependencies,
@@ -410,6 +412,10 @@ describe("process name guard", () => {
     ["R26", "-tooling-1"],
     ["EF12", "-3"],
     ["T24", "-3"],
+    ["TL26", "-3"],
+    ["BG26", "-1"],
+    ["GR", "-8"],
+    ["WK", "-1"],
     ["wave", "14"],
     ["batch", "12"],
     ["pass", "-26"],
@@ -422,7 +428,7 @@ describe("process name guard", () => {
           findProcessNames("packages/core/tests/a.test.ts", `// fixed in ${token}\n`).length,
       ),
     ).toEqual(tokens.map(() => 1))
-    expect(findProcessNames("apps/tui/src/a.ts", `\nconst ${tokens[4]}Probe = 1\n`)).toMatchObject([
+    expect(findProcessNames("apps/tui/src/a.ts", `\nconst ${tokens[8]}Probe = 1\n`)).toMatchObject([
       { file: "apps/tui/src/a.ts", line: 2 },
     ])
   })
@@ -435,6 +441,7 @@ describe("process name guard", () => {
           "const T = 1 // T-1 is a type",
           "ES2022, UTF-8, C17 and W3C",
           "batchSize, waves, passes",
+          "GPT-5, SHA-256, X-Forwarded-For, TLS-1",
         ].join("\n"),
       ),
     ).toEqual([])
@@ -443,6 +450,26 @@ describe("process name guard", () => {
   test("plans and files outside the source roots are not read", () => {
     expect(findProcessNames("plans/a.ts", `// ${tokens[0]}`)).toEqual([])
     expect(findProcessNames("scripts/a.ts", `// ${tokens[0]}`)).toEqual([])
+  })
+
+  test("product strings, regexes and JSX text keep ledger-like names", () => {
+    const id = tokens[6]
+    expect(
+      findProcessNames(
+        "apps/tui/src/a.tsx",
+        `const header = "X-${id}"; const code = "${id}"; const pattern = /${id}/; const view = <text>${id}</text>`,
+      ),
+    ).toEqual([])
+  })
+
+  test("test and suite titles still name the behavior", () => {
+    const id = tokens[6]
+    expect(
+      findProcessNames(
+        "packages/core/tests/a.test.ts",
+        `describe("${id} fix", () => {});\nit.live("${id} fix", () => {});\ntest.each([])(\`${id} fix\`, () => {})`,
+      ).map((finding) => finding.line),
+    ).toEqual([1, 2, 3])
   })
 })
 
@@ -2131,6 +2158,87 @@ describe("guide check inputs", () => {
 
 // ── suppression inventory ───────────────────────────────────────────────────
 
+test("package task inputs resolve parent paths and leave Turbo tokens to Turbo", () => {
+  const tracked = ["packages/core/src/a.ts", "apps/tui/scripts/build.ts"]
+  expect(
+    findDeadTurboInputs(
+      "packages/tooling/turbo.json",
+      {
+        typecheck: { inputs: ["$TURBO_EXTENDS$", "../core/src/**"] },
+      },
+      tracked,
+    ),
+  ).toEqual([])
+  expect(
+    findDeadTurboInputs(
+      "apps/tui/turbo.json",
+      {
+        typecheck: { inputs: ["$TURBO_DEFAULT$", "../../packages/core/src/**"] },
+        build: { inputs: ["$TURBO_ROOT$/apps/tui/scripts/**", "scripts/missing.ts"] },
+      },
+      tracked,
+    ),
+  ).toMatchObject([
+    { message: "the build input `scripts/missing.ts` matches no tracked file; delete it" },
+  ])
+})
+
+test("Turbo deferred and default inputs need no tracked output", () => {
+  const config = Schema.decodeSync(TurboTaskInputsSchema)({
+    tasks: {
+      build: {
+        inputs: [
+          "$TURBO_DEFAULT$",
+          "$TURBO_EXTENDS$",
+          { mode: "jit", globs: ["src/generated/**"], withDefaults: true },
+          { mode: "dependencyOutputs", globs: ["dist/**/*.d.ts"], from: ["^check-types"] },
+        ],
+      },
+      // eslint-disable-next-line effect/noNullish -- Turbo's JSON config accepts null to use default inputs.
+      test: { inputs: null },
+    },
+  })
+  expect(findDeadTurboInputs("packages/tooling/turbo.json", config.tasks, [])).toEqual([])
+})
+
+test("Turbo directory and compound globs match tracked files", () => {
+  expect(
+    findDeadTurboInputs(
+      "packages/tooling/turbo.json",
+      {
+        build: {
+          inputs: [
+            "src",
+            "src/",
+            "sr*",
+            "src/*.{ts,tsx}",
+            "src/[ab].ts",
+            "{src/a.ts}",
+            "{src/{a,b}.ts}",
+            "src/[^b].ts",
+            "src/**/.hidden.ts",
+            "src/a\\*.ts",
+          ],
+        },
+      },
+      [
+        "packages/tooling/src/a.ts",
+        "packages/tooling/src/.hidden.ts",
+        "packages/tooling/src/a*.ts",
+      ],
+    ),
+  ).toEqual([])
+  expect(
+    findDeadTurboInputs(
+      "packages/tooling/turbo.json",
+      {
+        build: { inputs: ["{src/missing.ts}"] },
+      },
+      ["packages/tooling/src/a.ts"],
+    ),
+  ).toHaveLength(1)
+})
+
 const nextLine = ["// @effect", "diagnostics-next-line"].join("-")
 const membraneFile = "packages/core/src/runtime/extension-host.ts"
 const membraneComment = `${nextLine} anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.`
@@ -2621,6 +2729,46 @@ export type LogPaths = { readonly dir: string }
     expect(declaredNames(SDK_FILE, source)).toEqual(["buildLogPaths", "LogPaths"])
   })
 
+  test("every declaration shape the language has is declared", () => {
+    const source = [
+      "export async function load() {}",
+      "export let counter = 0",
+      "export abstract class Base {}",
+      "export const { left, right: renamed } = { left: 1, right: 2 }",
+      "export declare const ambient: number",
+      "export enum Mode { On }",
+      "",
+    ].join("\n")
+    expect(declaredNames(SDK_FILE, source)).toEqual([
+      "load",
+      "counter",
+      "Base",
+      "left",
+      "renamed",
+      "ambient",
+      "Mode",
+    ])
+  })
+
+  test("module syntax inside a template or a string is fixture text, not a read", () => {
+    const findings = findingsFor([
+      { file: SDK_FILE, text: `export const orphan = 1\n` },
+      {
+        file: SDK_CONSUMER,
+        text: [
+          'const a = `import { orphan } from "./log-paths.js"`',
+          'const b = `const { orphan } = await import("./log-paths.js")`',
+          "const c = \"export { orphan } from './log-paths.js'\"",
+          "void [a, b, c]",
+          "",
+        ].join("\n"),
+      },
+    ])
+    expect(findings.map((finding) => finding.message)).toEqual([
+      expect.stringContaining("`orphan` is exported but"),
+    ])
+  })
+
   test("a bare export block is a surface, so its names are declared", () => {
     // 26 names hid in one such block in packages/sdk/src/client.ts because
     // only `export const|type|...` was read.
@@ -2637,13 +2785,23 @@ export { buildLogPaths }
     expect(declaredNames(SDK_FILE, source)).toEqual(["buildLogPaths"])
   })
 
-  test("a bare block re-exporting an imported name declares nothing", () => {
-    // The name belongs to the file that declared it. Counting the pass-through
-    // here would make this file a declaring site and hide the real consumer.
+  test("a bare block re-exporting an imported name declares it at this path", () => {
     const source = `import { WakeExtension } from "./wake/index.js"
 export { WakeExtension }
 `
-    expect(declaredNames("packages/extensions/src/index.ts", source)).toEqual([])
+    expect(declaredNames("packages/extensions/src/index.ts", source)).toEqual(["WakeExtension"])
+  })
+
+  test("a bare re-export of an imported name nothing reads is reported, and its import keeps the upstream", () => {
+    // `export type { DisclosureLevel }` in the TUI's message list passed the
+    // scan while every reader imported the name from its declaring module.
+    const findings = findingsFor([
+      { file: SDK_FILE, text: `import { Passed } from "./origin.js"\nexport { Passed }\n` },
+      { file: "packages/sdk/src/origin.ts", text: `export const Passed = 1\n` },
+    ])
+    expect(findings.map(({ file, message }) => ({ file, name: message.split("`")[1] }))).toEqual([
+      { file: SDK_FILE, name: "Passed" },
+    ])
   })
 
   test("a from block on a module surface declares the name it exposes", () => {
@@ -2724,10 +2882,25 @@ void Orphan
     expect(findings.map((finding) => finding.message.split("`")[1])).toEqual(names)
   })
 
-  test("core's exempt entry points declare nothing as a module", () => {
-    const source = `export const tool = 1\n`
-    expect(declaredNames(API_FILE, source)).toEqual([])
-    expect(declaredNames("packages/core/src/protocol.ts", source)).toEqual([])
+  test("a name an entry point declares itself is measured through its specifier", () => {
+    // `defineExtension` is declared in the api entry point, not re-exported.
+    // A reader of re-export blocks alone never measured it.
+    const source = `export const defineTool = 1\n`
+    expect(
+      findingsFor([
+        { file: API_FILE, text: source },
+        { file: "packages/core/src/runtime/turn.ts", text: `import { defineTool } from "../x"` },
+      ]).map((finding) => finding.message),
+    ).toEqual([expect.stringContaining('"defineTool" has no consumer outside packages/core/src/')])
+    expect(
+      findingsFor([
+        { file: API_FILE, text: source },
+        {
+          file: "packages/extensions/src/probe.ts",
+          text: `import { defineTool } from "@gent/core/extensions/api"`,
+        },
+      ]),
+    ).toEqual([])
   })
 
   test("test-utils declares its own names: the directory is a surface, not an exemption", () => {
@@ -2769,10 +2942,8 @@ void Orphan
     expect(findings[0]?.message).toContain("@gent/core/extensions/branch-tools")
   })
 
-  test("the branch-tool entry point declares its re-exported names, not its module exports", () => {
-    // A second scanned entry point: `export { X } from "..."` is the shape it
-    // exposes, so a module-style `export const` on it declares nothing.
-    expect(declaredNames(BRANCH_TOOLS_FILE, `export const tool = 1\n`)).toEqual([])
+  test("the branch-tool entry point declares every name it exposes", () => {
+    expect(declaredNames(BRANCH_TOOLS_FILE, `export const tool = 1\n`)).toEqual(["tool"])
     expect(
       declaredNames(
         BRANCH_TOOLS_FILE,

@@ -971,7 +971,11 @@ export function ReadToolRenderer(props: ToolRendererProps) {
                         line: (item) => (
                           <text>
                             <span style={{ fg: theme.border }}>
-                              {String(item.lineNum).padStart(4)} │{" "}
+                              {
+                                // oxlint-disable-next-line gent/no-code-unit-padding -- the line row has a numeric lineNum; decimal digits and default space padding are ASCII
+                                String(item.lineNum).padStart(4)
+                              }{" "}
+                              │{" "}
                             </span>
                             <span style={{ fg: theme.textMuted }}>{drawnText(item)}</span>
                           </text>
@@ -1371,7 +1375,11 @@ function GrepToolRenderer(props: ToolRendererProps) {
                           {(m) => (
                             <text>
                               <span style={{ fg: theme.textMuted }}>
-                                {String(m.line).padStart(4)} │{" "}
+                                {
+                                  // oxlint-disable-next-line gent/no-code-unit-padding -- grep schema requires a numeric line; decimal digits and default space padding are ASCII
+                                  String(m.line).padStart(4)
+                                }{" "}
+                                │{" "}
                               </span>
                               <span style={{ fg: theme.text }}>{m.content}</span>
                             </text>
