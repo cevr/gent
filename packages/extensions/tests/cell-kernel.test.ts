@@ -27,6 +27,7 @@ import {
 } from "../src/cell.js"
 import { CellEvaluationError, maximumCellFrameBytes } from "../src/cell-protocol.js"
 import {
+  cellWorkerSource,
   packageDirectory,
   buildCellWorker,
   buildCellExecutable,
@@ -43,7 +44,7 @@ describe("cell worker kernel", () => {
     () =>
       Effect.gen(function* () {
         const artifact = yield* buildCellExecutable
-        const kernel = yield* openCellKernel({ worker: artifact, cwd: packageDirectory })
+        const kernel = yield* openCellKernel({ worker: artifact, cwd: yield* packageDirectory })
         const host = CellOperationHost.of({
           catalog: hostCatalog("value"),
           call: () => Effect.succeed(21),
@@ -130,11 +131,11 @@ describe("cell worker kernel", () => {
         expect(launch).toEqual(
           CellWorker.cases.Script.make({
             runtimePath: yield* platform.execPath,
-            scriptPath: new URL("../src/cell-worker-boundary.ts", import.meta.url).pathname,
+            scriptPath: yield* cellWorkerSource,
           }),
         )
         // The launch runs: the namespace in this checkout answers a host call.
-        const kernel = yield* openCellKernel({ worker: launch, cwd: packageDirectory })
+        const kernel = yield* openCellKernel({ worker: launch, cwd: yield* packageDirectory })
         const host = CellOperationHost.of({
           catalog: hostCatalog("read.file"),
           call: (request) => Effect.succeed(request.name),
@@ -157,7 +158,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* cellWorkerLaunch,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const evaluate = (code: string) =>
@@ -205,7 +206,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* cellWorkerLaunch,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const evaluate = (code: string) =>
@@ -239,7 +240,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* cellWorkerLaunch,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const evaluate = (code: string) =>
@@ -294,7 +295,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const host = CellOperationHost.of({
           catalog: hostCatalog("broken"),
@@ -346,7 +347,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const host = CellOperationHost.of({ call: () => Effect.succeed(0) })
         // The filler alone exceeds maximumCellDisplayLength, so the buffer must drop
@@ -371,7 +372,7 @@ describe("cell worker kernel", () => {
         const platform = yield* GentPlatform
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const started = yield* Deferred.make<number>()
         const stopped = yield* Deferred.make<boolean>()
@@ -405,7 +406,7 @@ describe("cell worker kernel", () => {
         const platform = yield* GentPlatform
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const started = yield* Deferred.make<number>()
         const stopped = yield* Deferred.make<boolean>()
@@ -445,7 +446,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const firstHost = CellOperationHost.of({
           catalog: hostCatalog("value"),
@@ -488,7 +489,7 @@ describe("cell worker kernel", () => {
         const platform = yield* GentPlatform
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
           evaluationTimeoutMs: 1000,
           maximumFailedLaunches: 1,
         })
@@ -543,7 +544,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
           evaluationTimeoutMs: 400,
           maximumFailedLaunches: 1,
         })
@@ -575,7 +576,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
           evaluationTimeoutMs: 1000,
           maximumFailedLaunches: 1,
         })
@@ -630,7 +631,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const catalog = {
           hash: "huge-v1",
@@ -662,7 +663,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
         const run = (source: string) =>
@@ -686,7 +687,7 @@ describe("cell worker kernel", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
         })
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
         const crash = Effect.gen(function* () {
@@ -718,7 +719,7 @@ describe("cell worker kernel", () => {
         const launch = yield* buildCellWorker
         const kernel = yield* openCellKernel({
           worker: launch,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
           maximumFailedLaunches: 1,
         })
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })

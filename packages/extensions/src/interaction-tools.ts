@@ -4,7 +4,6 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
-  type Question,
   tool,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
@@ -14,8 +13,37 @@ import {
 
 // ── ask-user ────────────────────────────────────────────────────────────────
 
-const AnswersSchema = Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String)))
-const decodeAnswers = Schema.decodeUnknownEffect(AnswersSchema)
+// The ask-user wire, which the TUI's client extension reads through
+// `@gent/extensions/client`. The interaction metadata carries the questions;
+// the answer's notes carry one array of picks per question, as JSON. A
+// question stored in an interaction before a limit was added must still
+// decode, so these schemas check shape only; the tool's params add the limits.
+
+const AskUserOption = Schema.Struct({
+  label: Schema.String,
+  description: Schema.optionalKey(Schema.String),
+})
+
+const AskUserQuestion = Schema.Struct({
+  question: Schema.String,
+  header: Schema.optionalKey(Schema.String),
+  markdown: Schema.optionalKey(Schema.String),
+  options: Schema.optionalKey(Schema.Array(AskUserOption)),
+  multiple: Schema.optionalKey(Schema.Boolean),
+})
+type AskUserQuestion = typeof AskUserQuestion.Type
+
+export const ASK_USER_INTERACTION_TYPE = "ask-user"
+
+/** The metadata of an ask-user interaction. */
+export const AskUserMetadata = Schema.Struct({
+  type: Schema.Literal(ASK_USER_INTERACTION_TYPE),
+  questions: Schema.Array(AskUserQuestion),
+})
+
+/** The answer notes: one array of picks per question, JSON-encoded. */
+export const AskUserAnswers = Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String)))
+const decodeAnswers = Schema.decodeUnknownEffect(AskUserAnswers)
 
 /** Exactly one answer list per question: pad with empty lists, drop extras. */
 const alignAnswers = (
@@ -37,8 +65,7 @@ const parseAnswers = (
     Effect.map((answers) => alignAnswers(answers, questionCount)),
   )
 
-// AskUser Params — canonical questions[] input
-// Mirrors QuestionSchema with exact-optional fields for provider tool schemas.
+// AskUser Params — the wire question with the limits a new call must keep.
 
 const AskUserQuestionOptionSchema = Schema.Struct({
   label: Schema.String,
@@ -79,7 +106,7 @@ const AskUserResult = Schema.Struct({
 
 // AskUser Tool — uses ExtensionContext.Interaction.approve() with structured question metadata
 
-const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
+const formatQuestionsText = (questions: ReadonlyArray<AskUserQuestion>): string =>
   questions
     .map((q, i) => {
       const header = Option.fromNullishOr(q.header).pipe(
@@ -106,7 +133,10 @@ export const AskUserTool = tool({
     const ctx = yield* ExtensionContext
     const decision = yield* ctx.Interaction.approve({
       text: formatQuestionsText(params.questions),
-      metadata: { type: "ask-user", questions: params.questions },
+      metadata: {
+        type: ASK_USER_INTERACTION_TYPE,
+        questions: params.questions,
+      } satisfies typeof AskUserMetadata.Type,
     })
     if (!decision.approved) {
       return { answers: [], cancelled: true }

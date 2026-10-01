@@ -17,9 +17,11 @@ import {
   ExtensionContext,
   ExtensionId,
   ExtensionHost,
+  headChars,
   request,
   runProcess,
   splitLines,
+  tailChars,
   tool,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
@@ -392,7 +394,14 @@ const gitLsFiles = (
     const handle = yield* ChildProcess.make(
       "git",
       ["-C", cwd, "ls-files", "-z", "-t", "--cached", "--others", "--exclude-standard"],
-      { env: GIT_ENV, extendEnv: true, stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+      {
+        env: GIT_ENV,
+        extendEnv: true,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "ignore",
+        forceKillAfter: "1 second",
+      },
     )
     const chunks: Array<Uint8Array> = []
     let onDisk = 0
@@ -760,12 +769,10 @@ interface ReadWindow {
 
 /** A line cut to `MAX_READ_LINE_LENGTH` characters; `beyond` counts characters already dropped unread. */
 const cutReadLine = (line: string, beyond: number): string => {
-  let end = Math.min(line.length, MAX_READ_LINE_LENGTH)
-  // A lone half of a surrogate pair is not valid text, and the API refuses it.
-  if (end < line.length && splitsSurrogatePair(line, end)) end--
-  const lost = line.length - end + beyond
+  const kept = headChars(line, MAX_READ_LINE_LENGTH)
+  const lost = line.length - kept.length + beyond
   if (lost === 0) return line
-  return `${line.slice(0, end)} [${lost} chars cut]`
+  return `${kept} [${lost} chars cut]`
 }
 
 /** A file read whole: small, or UTF-16. */
@@ -1601,13 +1608,6 @@ type GrepMatch = typeof GrepMatch.Type
 /** A match or context line longer than this is cut to this many characters. */
 const MAX_LINE_LENGTH = 500
 
-/** True when a cut at `index` falls between the two halves of a surrogate pair. */
-const splitsSurrogatePair = (text: string, index: number): boolean => {
-  const before = text.charCodeAt(index - 1)
-  const after = text.charCodeAt(index)
-  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff
-}
-
 /**
  * Cut a long line to `MAX_LINE_LENGTH` characters from shortly before `at`,
  * with a marker that counts what each side lost. One minified line would
@@ -1616,11 +1616,12 @@ const splitsSurrogatePair = (text: string, index: number): boolean => {
 const clipLine = (line: string, at: number): string => {
   if (line.length <= MAX_LINE_LENGTH) return line
   const from = Math.max(0, Math.min(at - MAX_LINE_LENGTH / 5, line.length - MAX_LINE_LENGTH))
-  // Both ends move inward off a surrogate pair: a lone half is not valid text,
-  // and the API refuses a request that holds one.
-  const start = from + Number(splitsSurrogatePair(line, from))
-  const end = from + MAX_LINE_LENGTH - Number(splitsSurrogatePair(line, from + MAX_LINE_LENGTH))
-  let clipped = line.slice(start, end)
+  // Both ends move inward off a surrogate pair.
+  const rest = tailChars(line, line.length - from)
+  const start = line.length - rest.length
+  const kept = headChars(rest, MAX_LINE_LENGTH)
+  const end = start + kept.length
+  let clipped = kept
   if (start > 0) clipped = `[${start} chars cut] ${clipped}`
   if (end < line.length) clipped = `${clipped} [${line.length - end} chars cut]`
   return clipped

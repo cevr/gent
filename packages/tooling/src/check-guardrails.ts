@@ -12,8 +12,6 @@ import {
   findE2eFixtureImportFindings,
   findProcessNames,
   findEffectVersionDrift,
-  findRepoTempDirectories,
-  findSharedTestHomes,
   findPreCommitHookFindings,
   findPackageSurfaceFindings,
   findReadersWithoutWriters,
@@ -294,8 +292,6 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
   findProcessNames,
-  findRepoTempDirectories,
-  findSharedTestHomes,
   findUnparsedSources,
 ]
 

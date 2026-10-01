@@ -28,9 +28,10 @@ describe("builtin peer modules", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
+      const testsDirectory = yield* path.fromFileUrl(new URL(".", import.meta.url))
       const roots = [
-        path.join(import.meta.dirname, "..", "src"),
-        path.join(import.meta.dirname, "..", "..", "..", "examples", "extensions"),
+        path.join(testsDirectory, "..", "src"),
+        path.join(testsDirectory, "..", "..", "..", "examples", "extensions"),
       ]
       const imported = new Set<string>()
       for (const root of roots) {

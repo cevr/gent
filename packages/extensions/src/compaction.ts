@@ -15,6 +15,7 @@ import {
   defineResource,
   ExtensionHost,
   ExtensionId,
+  headChars,
   MessageId,
   type ModelId,
   SessionId,
@@ -38,9 +39,6 @@ import {
 import type { LanguageModel } from "effect/ai"
 import * as AiError from "effect/ai/AiError"
 import * as Prompt from "effect/ai/Prompt"
-import { CHILD_COMPLETION_TYPE } from "./delegate.js"
-import { GOAL_CONTEXT_MESSAGE_TYPE } from "./goal.js"
-import { WAKE_MESSAGE_TYPE } from "./wake.js"
 import type * as Response from "effect/ai/Response"
 
 // Test seam: only tests read these exports. MODEL_COMPACTION_OUTPUT_TOKENS,
@@ -121,8 +119,8 @@ const MODEL_COMPACTION_MESSAGE_CHARS = 8_000
 
 const clipMessageText = (text: string): string => {
   if (text.length <= MODEL_COMPACTION_MESSAGE_CHARS) return text
-  const omitted = text.length - MODEL_COMPACTION_MESSAGE_CHARS
-  return `${text.slice(0, MODEL_COMPACTION_MESSAGE_CHARS)}\n[… ${omitted} more characters; read the message by id]`
+  const kept = headChars(text, MODEL_COMPACTION_MESSAGE_CHARS)
+  return `${kept}\n[… ${text.length - kept.length} more characters; read the message by id]`
 }
 
 const formatMessage = (message: Message): string =>
@@ -283,43 +281,56 @@ const CONTEXT_WINDOW_TYPE = "context-window"
 /** Characters of one listed user message's one-line preview. */
 const HANDOFF_PREVIEW_CHARS = 120
 
+/** A message's one-line preview: the user's own words when an extension wrapped them. */
 const previewOf = (message: Message): string => {
-  const line = message.parts.map(partToText).join(" ").replace(/\s+/g, " ").trim()
+  const text = Option.getOrElse(Option.fromUndefinedOr(message.metadata?.userText), () =>
+    message.parts.map(partToText).join(" "),
+  )
+  const line = text.replace(/\s+/g, " ").trim()
   if (line.length <= HANDOFF_PREVIEW_CHARS) return line
-  return `${line.slice(0, HANDOFF_PREVIEW_CHARS)}…`
+  return `${headChars(line, HANDOFF_PREVIEW_CHARS)}…`
+}
+
+/** The custom type an older build gave a user's mid-turn correction. */
+const LEGACY_STEERING_TYPE = "steering"
+
+/**
+ * Whether the user asked a message, read from its origin. A message a client
+ * sent is the user's whatever its custom type (a `/goal` runs as a client
+ * request, so the goal it queues is the user's), and so is one an extension
+ * delivered with the user's words (`userText`: a `/btw` question). Any other
+ * message an extension sent
+ * (`extensionId`: a wake, a goal continuation, a child's completion, a
+ * background job, another session's message or a child's question) is not,
+ * and neither is a runtime notice (continuation, max-steps, model-change),
+ * which carries a custom type and no origin. A row stored before the origin
+ * stamps carries neither: it is the user's when it has no custom type, or
+ * when it is an older build's "steering" correction.
+ */
+const askedByUser = (message: Message): boolean => {
+  if (message.metadata?.fromClient === true) return true
+  if (Predicate.isNotUndefined(message.metadata?.userText)) return true
+  if (Predicate.isNotUndefined(message.metadata?.extensionId)) return false
+  const customType = message.metadata?.customType
+  return Predicate.isUndefined(customType) || customType === LEGACY_STEERING_TYPE
 }
 
 /**
- * User-role notices the runtime or an extension writes for the model: the
- * loop's step continuation, last-step and model-change notes (core's
- * `RuntimeUserMessageType`), a goal continuation, a child's completion, and a
- * wake. None is something the user asked. Any other custom type (an older
- * build's "steering" correction, an extension's rendering of a user's task)
- * can carry what the user wrote.
- */
-const NOTICE_TYPES: ReadonlySet<string> = new Set([
-  "continuation",
-  "max-steps",
-  "model-change",
-  GOAL_CONTEXT_MESSAGE_TYPE,
-  CHILD_COMPLETION_TYPE,
-  WAKE_MESSAGE_TYPE,
-])
-
-/**
  * The user's messages by id with a preview each, oldest first, then how many
- * the cap left out. A message a client sent is the user's whatever its custom
- * type (a `/goal` runs as a client request, so the goal it queues is the
- * user's); otherwise a notice type leaves it out. An earlier window marker gets
- * its own line: the messages before it are listed there.
+ * the cap left out. The branch's first user message is always listed: it is
+ * the task, also when an extension sent it (a child's task from its parent).
+ * An earlier window marker gets its own line: the messages before it are
+ * listed there.
  */
 const userMessageLines = (history: ReadonlyArray<Message>): ReadonlyArray<string> => {
-  const asked = history.filter((message) => {
-    if (message.role !== "user") return false
-    if (message.metadata?.fromClient === true) return true
-    const customType = message.metadata?.customType
-    return Predicate.isUndefined(customType) || !NOTICE_TYPES.has(customType)
-  })
+  const task = history.find((message) => message.role === "user")
+  const asked = history.filter(
+    (message) =>
+      message.role === "user" &&
+      (message === task ||
+        message.metadata?.customType === CONTEXT_WINDOW_TYPE ||
+        askedByUser(message)),
+  )
   if (asked.length === 0) return []
   const listed = asked.slice(0, HANDOFF_USER_MESSAGES)
   const lineOf = (message: Message) => {

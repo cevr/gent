@@ -48,7 +48,7 @@ describe("recorded cell execution", () => {
         if (!first || !reset || !next || !read) return yield* Effect.die("Missing cells")
         const execution = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           ),
           CellExecution,
         )
@@ -88,7 +88,7 @@ describe("recorded cell execution", () => {
             ),
         })
         const context = yield* Layer.build(
-          CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
         )
         const cells = Context.get(context, CellExecution)
         const running = yield* cells
@@ -149,7 +149,7 @@ describe("recorded cell execution", () => {
         })
         const cells = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           ),
           CellExecution,
         )
@@ -194,7 +194,7 @@ describe("recorded cell execution", () => {
           yield* Layer.build(
             CellExecution.Live({
               worker: unusedWorker,
-              cwd: packageDirectory,
+              cwd: yield* packageDirectory,
               sessionId,
               branchId,
             }).pipe(Layer.provide(Layer.succeed(CellStorage, gated))),
@@ -256,7 +256,7 @@ describe("recorded cell execution", () => {
           yield* Layer.build(
             CellExecution.Live({
               worker: unusedWorker,
-              cwd: packageDirectory,
+              cwd: yield* packageDirectory,
               sessionId,
               branchId,
             }),
@@ -295,7 +295,7 @@ describe("recorded cell execution", () => {
         })
         const cells = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }).pipe(
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }).pipe(
               Layer.provide(Layer.succeed(CellStorage, broken)),
             ),
           ),
@@ -339,7 +339,7 @@ describe("recorded cell execution", () => {
         })
         const cells = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           ),
           CellExecution,
         )
@@ -371,7 +371,7 @@ describe("recorded cell execution", () => {
         })
         const cells = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           ),
           CellExecution,
         )
@@ -414,7 +414,7 @@ describe("recorded cell execution", () => {
         })
         const cells = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           ),
           CellExecution,
         )
@@ -559,7 +559,7 @@ describe("recorded cell execution", () => {
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const open = Effect.gen(function* () {
           const context = yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           )
           return Context.get(context, CellExecution)
         })
@@ -688,7 +688,7 @@ describe("recorded cell execution", () => {
           const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
           const open = Effect.gen(function* () {
             const context = yield* Layer.build(
-              CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+              CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
             )
             return Context.get(context, CellExecution)
           })
@@ -743,7 +743,7 @@ describe("recorded cell execution", () => {
           const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
           const cells = Context.get(
             yield* Layer.build(
-              CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+              CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
             ),
             CellExecution,
           )
@@ -841,7 +841,7 @@ describe("recorded cell execution", () => {
             yield* Layer.build(
               CellExecution.Live({
                 worker,
-                cwd: packageDirectory,
+                cwd: yield* packageDirectory,
                 sessionId,
                 branchId,
                 evaluationTimeoutMs: 3000,
@@ -883,7 +883,7 @@ describe("recorded cell execution", () => {
           yield* Layer.build(
             CellExecution.Live({
               worker,
-              cwd: packageDirectory,
+              cwd: yield* packageDirectory,
               sessionId,
               branchId,
               evaluationTimeoutMs: 3000,
@@ -925,7 +925,7 @@ describe("recorded cell execution", () => {
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const cells = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           ),
           CellExecution,
         )
@@ -964,7 +964,7 @@ describe("recorded cell execution", () => {
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const cells = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           ),
           CellExecution,
         )
@@ -1041,7 +1041,7 @@ describe("recorded cell execution", () => {
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const cells = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           ),
           CellExecution,
         )
@@ -1113,7 +1113,7 @@ describe("recorded cell execution", () => {
           Effect.gen(function* () {
             const execution = Context.get(
               yield* Layer.build(
-                CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+                CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
               ),
               CellExecution,
             )
@@ -1139,7 +1139,7 @@ describe("recorded cell execution", () => {
                 ...worker,
                 scriptPath: path.join(directory, "missing-worker.js"),
               }),
-              cwd: packageDirectory,
+              cwd: yield* packageDirectory,
               sessionId,
               branchId,
             }),
@@ -1186,7 +1186,7 @@ describe("recorded cell execution", () => {
         })
         const execution = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           ),
           CellExecution,
         )
@@ -1199,7 +1199,7 @@ describe("recorded cell execution", () => {
         // The loop closed under the cell; the next loop opens its own execution.
         const reopened = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           ),
           CellExecution,
         )
@@ -1228,7 +1228,7 @@ describe("recorded cell execution", () => {
           yield* Layer.build(
             CellExecution.Live({
               worker,
-              cwd: packageDirectory,
+              cwd: yield* packageDirectory,
               sessionId,
               branchId,
               maximumFailedLaunches: 1,

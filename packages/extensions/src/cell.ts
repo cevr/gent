@@ -30,6 +30,7 @@ import {
   ExtensionId,
   getToolId,
   getToolPrompt,
+  headChars,
   headTailChars,
   InteractionPendingError,
   isSpawnedSession,
@@ -1653,7 +1654,7 @@ const historyEntry = (message: Message): Schema.Json => {
     id: message.id,
     role: message.role,
     chars: text.length,
-    preview: text.slice(0, HISTORY_PREVIEW_CHARS).replace(/\s+/g, " "),
+    preview: headChars(text, HISTORY_PREVIEW_CHARS).replace(/\s+/g, " "),
     createdAt: message.createdAt.toISOString(),
   }
   return Option.match(Option.fromUndefinedOr(message.metadata?.customType), {
@@ -3753,7 +3754,7 @@ const renderObjectType = (
 const firstLine = (text: string) => {
   const line = (text.split("\n")[0] ?? "").trim()
   if (line.length <= DESCRIPTION_LIMIT) return line
-  return `${line.slice(0, DESCRIPTION_LIMIT - 3)}...`
+  return `${headChars(line, DESCRIPTION_LIMIT - 3)}...`
 }
 
 /**

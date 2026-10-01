@@ -33,6 +33,7 @@ import {
   textStep,
   toolCallStep,
   waitFor,
+  systemTextOf,
 } from "@gent/core/test-utils"
 import { ExtensionId, getToolId, type ToolCapability } from "@gent/core/extensions/api"
 import { messagePartsText } from "@gent/core/protocol"
@@ -316,12 +317,7 @@ const systemRecorder = () => {
   const recordSystem = (step: SequenceStep): SequenceStep => ({
     ...step,
     assertOptions: (options) => {
-      systems.push(
-        options.prompt.content
-          .filter((message) => message.role === "system")
-          .map((message) => String(message.content))
-          .join("\n"),
-      )
+      systems.push(systemTextOf(options.prompt))
     },
   })
   return { systems, recordSystem }

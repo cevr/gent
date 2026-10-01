@@ -128,12 +128,13 @@ export const AuthProviderInfo = Schema.Struct({
 export type AuthProviderInfo = typeof AuthProviderInfo.Type
 
 /**
- * Public RPC payload for `auth.listProviders`. `agentName` adds that agent's
- * model to the providers that need auth; an unknown `sessionId` fails.
+ * Public RPC payload for `auth.listProviders`, read in the session's profile.
+ * `agentName` adds that agent's model to the providers that need auth; an
+ * unknown `sessionId` fails.
  */
 export const ListAuthProvidersPayload = Schema.Struct({
   agentName: Schema.optional(AgentName),
-  sessionId: Schema.optional(SessionId),
+  sessionId: SessionId,
 })
 export type ListAuthProvidersPayload = typeof ListAuthProvidersPayload.Type
 
@@ -836,6 +837,15 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   return yield* Effect.suspend(() =>
     extensionProvider.resolveModel(modelName, Option.getOrUndefined(authParam), request.hints),
   ).pipe(
+    Effect.catchTag("DriverError", (error) =>
+      Effect.fail(
+        new ProviderError({
+          message: `Extension provider "${providerName}" failed: ${error.reason}`,
+          model: request.modelId,
+          cause: error,
+        }),
+      ),
+    ),
     Effect.catchDefect((defect) =>
       Effect.fail(resolveModelDefect(defect, providerName, request.modelId)),
     ),

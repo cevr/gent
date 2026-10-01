@@ -4,23 +4,10 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { hostname } from "node:os"
-import { BunHttpServer } from "@effect/platform-bun"
 import { Effect, Exit, Option, Schedule, Schema, Scope } from "effect"
 import { Gent } from "@gent/sdk"
-import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
+import { freePort, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
 import { exitWithin, killProcess, spawnServer, stopProcess } from "../src/server-process-fixture"
-
-/**
- * A port the kernel just handed out and took back: a listener binds port 0,
- * the kernel picks a free port, and the listener closes before the server
- * under test binds it. A random pick from a range can land on a port another
- * lane's server holds.
- */
-const freePort = Effect.gen(function* () {
-  const { address } = yield* BunHttpServer.make({ port: 0 })
-  if (address._tag === "UnixPathAddress") return yield* Effect.die("a TCP listener has no path")
-  return address.port
-}).pipe(Effect.scoped, Effect.orDie)
 
 /** What `/_gent/identity` serves. */
 const ServerIdentity = Schema.Struct({

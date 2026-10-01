@@ -163,4 +163,14 @@ describe("bounded output", () => {
     expect(many.read()).toBe("")
     expect(many.truncated()).toBe(false)
   })
+  test("a cut inside an emoji drops the whole emoji, and later text keeps its order", () => {
+    // The head cut and each tail cut fall between an emoji's two halves.
+    const bounded = makeBoundedOutput({ limit: 4, headLimit: 2 })
+    bounded.append("a😀b")
+    bounded.append("c😀")
+    bounded.append("d")
+    const text = bounded.read()
+    expect(text.isWellFormed()).toBe(true)
+    expect(text).toBe("a\n... [6 characters omitted] ...\nd")
+  })
 })

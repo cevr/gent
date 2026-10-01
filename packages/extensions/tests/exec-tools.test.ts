@@ -24,6 +24,7 @@ import {
   BackgroundBashSupervisorLive,
   BashParams,
   BashTool,
+  runBashCommand,
   splitCdCommand,
   stripBackground,
 } from "../src/exec-tools.js"
@@ -224,7 +225,12 @@ describe("background shell through a cell", () => {
           })
           yield* Fiber.join(completed)
           yield* fs.writeFileString(release, "go")
-          expect(Array.from(yield* Fiber.join(notice))).toHaveLength(1)
+          // The notice names its kind, so a reader tells it from what the user wrote.
+          const delivered = Array.from(yield* Fiber.join(notice)).flatMap(({ event }) => {
+            if (event._tag !== "MessageReceived") return []
+            return [event.message.metadata?.customType]
+          })
+          expect(delivered).toEqual(["background-bash"])
           yield* fs.remove(release)
         }
         // A deadlock bound only: each wait above is an event. Two harnesses
@@ -1409,10 +1415,8 @@ describe("BashTool execution", () => {
  * Exec-tools RPC acceptance test — exercises the `bash` tool through a real
  * agent turn (LLM emits the tool call, runtime dispatches it inside the
  * per-request scope, BunChildProcessSpawner from BunServices spawns a real
- * process). The existing `bash.test.ts` calls the executor directly via
+ * process). The tool tests above call the executor directly through
  * `runToolWithCtx`, which bypasses the scope boundary production uses.
- *
- * Maps W37 S6 C14 (audit L5-P1-2).
  */
 
 describe("ExecToolsExtension (bash) via model turn", () => {
@@ -1560,6 +1564,22 @@ describe("foreground command output", () => {
     Bun.gc(true)
     return process.memoryUsage().heapUsed
   })
+
+  it.scopedLive.layer(BunServices.layer)(
+    "a cut that lands inside an emoji leaves the whole emoji out",
+    () =>
+      Effect.gen(function* () {
+        // 131,050 + 2 + 200,000 characters: the marker for that total leaves
+        // a head of 131,051, which ends between the emoji's two halves.
+        const command =
+          "head -c 131050 /dev/zero | tr '\\0' x; printf '\\360\\237\\230\\200'; head -c 200000 /dev/zero | tr '\\0' y"
+        const result = yield* runBashCommand(command, Option.none(), Option.none())
+        expect(result.stdout.isWellFormed()).toBe(true)
+        expect(result.stdout.startsWith(`${"x".repeat(131_050)}\n\n... [`)).toBe(true)
+        expect(result.stdout.endsWith("y")).toBe(true)
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
+  )
 
   it.scopedLive.layer(BunFileSystem.layer)(
     "a foreground command's output past the kept ends goes to its file, not to server memory or the row",

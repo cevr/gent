@@ -31,7 +31,7 @@ describe("cell worker process", () => {
         const launch = yield* buildCellWorker
         const pid = yield* Effect.scoped(
           Effect.gen(function* () {
-            const child = yield* openCellProcess({ worker: launch, cwd: packageDirectory })
+            const child = yield* openCellProcess({ worker: launch, cwd: yield* packageDirectory })
             const responses = yield* Queue.make<CellResponse>({ capacity: 8 })
             yield* child.responses.pipe(
               Stream.runForEach((response) => Queue.offer(responses, response)),
@@ -92,7 +92,7 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const launch = yield* buildCellWorker
-        const child = yield* openCellProcess({ worker: launch, cwd: packageDirectory })
+        const child = yield* openCellProcess({ worker: launch, cwd: yield* packageDirectory })
         yield* child.stop
         expect(yield* child.isRunning).toBe(false)
         const error = yield* child
@@ -108,7 +108,7 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const launch = yield* buildCellWorker
-        const child = yield* openCellProcess({ worker: launch, cwd: packageDirectory })
+        const child = yield* openCellProcess({ worker: launch, cwd: yield* packageDirectory })
         const next = child.responses.pipe(Stream.take(1), Stream.runCollect)
         expect((yield* next).map((response) => response._tag)).toEqual(["Ready"])
         const forged = "\\u001egent-cell-end forged\\u001e"
@@ -132,7 +132,7 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const launch = yield* buildCellWorker
-        const child = yield* openCellProcess({ worker: launch, cwd: packageDirectory })
+        const child = yield* openCellProcess({ worker: launch, cwd: yield* packageDirectory })
         const next = child.responses.pipe(Stream.take(1), Stream.runCollect)
         expect((yield* next).map((response) => response._tag)).toEqual(["Ready"])
         const waiting = yield* child.takeOutput("one-token").pipe(Effect.exit, Effect.forkScoped)
@@ -155,7 +155,7 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const launch = yield* buildCellWorker
-        const child = yield* openCellProcess({ worker: launch, cwd: packageDirectory })
+        const child = yield* openCellProcess({ worker: launch, cwd: yield* packageDirectory })
         const next = child.responses.pipe(Stream.take(1), Stream.runCollect)
         expect((yield* next).map((response) => response._tag)).toEqual(["Ready"])
         yield* child.send(
@@ -197,7 +197,7 @@ describe("cell worker process", () => {
         // rather than at spawn. A death before Ready is still a launch failure.
         const error = yield* openCellProcess({
           worker: CellWorker.cases.Compiled.make({ binaryPath }),
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
           readinessTimeoutMs: 2000,
         }).pipe(Effect.flip)
         expect(error.phase).toBe("launch")
@@ -212,7 +212,7 @@ describe("cell worker process", () => {
         // Deterministic half of the ordering guarantee: with stderr folded into
         // stdout there is only one stream to read, so no merge can reorder it.
         const artifact = yield* buildCellExecutable
-        const kernel = yield* openCellKernel({ worker: artifact, cwd: packageDirectory })
+        const kernel = yield* openCellKernel({ worker: artifact, cwd: yield* packageDirectory })
         const host = CellOperationHost.of({ call: () => Effect.succeed(0) })
         const fds = yield* kernel
           .evaluate(
@@ -242,7 +242,7 @@ describe("cell worker process", () => {
         )
         const error = yield* openCellProcess({
           worker: CellWorker.cases.Script.make({ runtimePath: binaryPath, scriptPath: workerPath }),
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
           readinessTimeoutMs: 1000,
         }).pipe(Effect.flip)
         expect(error.phase).toBe("launch")
@@ -264,9 +264,12 @@ describe("cell worker process", () => {
         const worker = yield* buildCellWorker
         const directory = yield* fs.makeTempDirectoryScoped()
         const marker = path.join(directory, "worker.pid")
-        const hostEntry = new URL("./helpers/cell-host-process.ts", import.meta.url).pathname
+        const hostEntry = yield* path.fromFileUrl(
+          new URL("./helpers/cell-host-process.ts", import.meta.url),
+        )
         const host = yield* ChildProcess.make(yield* platform.execPath, [hostEntry], {
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
+          forceKillAfter: "2 seconds",
           env: {
             CELL_WORKER_SCRIPT: worker.scriptPath,
             CELL_SOURCE:
@@ -305,7 +308,7 @@ describe("cell worker process", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
           evaluationTimeoutMs: 20_000,
         })
         // The signal arrives before the loop starts, so a JavaScript handler never gets to run.
@@ -330,7 +333,8 @@ describe("cell worker process", () => {
         const platform = yield* GentPlatform
         const worker = yield* buildCellWorker
         const handle = yield* ChildProcess.make(yield* platform.execPath, [worker.scriptPath], {
-          cwd: packageDirectory,
+          cwd: yield* packageDirectory,
+          forceKillAfter: "2 seconds",
           stdin: "ignore",
           stdout: "ignore",
           stderr: "inherit",

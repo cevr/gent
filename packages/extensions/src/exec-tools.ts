@@ -27,11 +27,13 @@ import {
   type ExtensionContextService,
   ExtensionHost,
   ExtensionId,
+  headChars,
   headTailChars,
   lineCount,
   maximumModelToolResultChars,
   resolveDataDir,
   type SessionId,
+  tailChars,
   tool,
   ToolCallId,
   type TurnAfterInput,
@@ -583,6 +585,9 @@ const targetStillExists = (target: BackgroundBashTarget) =>
     return branches.some((branch) => branch.id === target.branchId)
   })
 
+/** `metadata.customType` on a settled job's message: a notice, not something the user wrote. */
+const BACKGROUND_BASH_MESSAGE_TYPE = "background-bash"
+
 /**
  * Queues a settled job's message; false when the send was refused (a full
  * follow-up queue, for one), so the caller keeps the result for a notice. A
@@ -599,6 +604,7 @@ const queueBackgroundFollowUp = (params: {
       delivery: "queue",
       sourceId: params.sourceId,
       content: params.content,
+      metadata: { customType: BACKGROUND_BASH_MESSAGE_TYPE },
     }).pipe(
       Effect.as(true),
       Effect.catchEager((error) =>
@@ -685,13 +691,16 @@ interface OutputEnds {
 
 const noOutput: OutputEnds = { head: "", tail: "", totalChars: 0 }
 
-/** `ends` after `text` arrives; each end stays within `endChars`. */
+/**
+ * `ends` after `text` arrives; each end stays within `endChars` and is cut
+ * between code points. The head takes text only while nothing has passed it.
+ */
 const appendOutput = (ends: OutputEnds, text: string, endChars: number): OutputEnds => {
-  const room = Math.max(0, endChars - ends.head.length)
-  const rest = text.slice(room)
+  let added = ""
+  if (ends.totalChars === ends.head.length) added = headChars(text, endChars - ends.head.length)
   return {
-    head: ends.head + text.slice(0, room),
-    tail: `${ends.tail}${rest}`.slice(-endChars),
+    head: ends.head + added,
+    tail: tailChars(`${ends.tail}${text.slice(added.length)}`, endChars),
     totalChars: ends.totalChars + text.length,
   }
 }
@@ -701,10 +710,6 @@ interface JobOutput extends OutputEnds {
   /** The file with all of it; none when the file could not be written. */
   readonly file: Option.Option<string>
 }
-
-/** A cut never splits a surrogate pair: a lone half at the cut goes with the middle. */
-const HIGH_SURROGATE_END = /[\uD800-\uDBFF]$/
-const LOW_SURROGATE_START = /^[\uDC00-\uDFFF]/
 
 /**
  * The output within `maxChars`, as `headTailChars` cuts it. When the middle
@@ -717,11 +722,8 @@ const cutJobOutput = (output: OutputEnds, maxChars: number): string => {
   const marker = (cut: number) => `\n\n... [${cut} characters truncated] ...\n\n`
   const room = maxChars - marker(output.totalChars).length
   if (room < 0) return headTailChars(kept, maxChars).text
-  const head = output.head.slice(0, Math.floor(room / 2)).replace(HIGH_SURROGATE_END, "")
-  let tail = ""
-  if (room > head.length) {
-    tail = output.tail.slice(-(room - head.length)).replace(LOW_SURROGATE_START, "")
-  }
+  const head = headChars(output.head, Math.floor(room / 2))
+  const tail = tailChars(output.tail, room - head.length)
   return `${head}${marker(output.totalChars - head.length - tail.length)}${tail}`
 }
 
@@ -1069,9 +1071,8 @@ const maximumNoticeOutputChars = 2_000
 
 const noticeCommand = (command: string) => {
   const line = command.replace(/\s+/g, " ").trim()
-  const chars = Array.from(line)
-  if (chars.length <= maximumNoticeCommandChars) return line
-  return `${chars.slice(0, maximumNoticeCommandChars - 1).join("")}…`
+  if (line.length <= maximumNoticeCommandChars) return line
+  return `${headChars(line, maximumNoticeCommandChars - 1)}…`
 }
 
 /** One notice naming at most `maximumNoticeJobs` jobs, the rest a count; none for no jobs. */

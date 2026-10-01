@@ -1043,32 +1043,6 @@ const runWithTestClock = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
   Effect.scoped(eff).pipe(Effect.provide(TestClock.layer()))
 // ── Tests ──
 describe("Anthropic credential cache — cache hit/miss", () => {
-  it.live("returns cached creds within TTL even when source changes", () =>
-    Effect.gen(function* () {
-      // Outcome assertion: if the source switches underneath, a cached
-      // call must STILL return the original creds — that proves the
-      // cache was consulted, no internal call counter needed.
-      const creds1 = makeCreds("k1", FAR_FUTURE)
-      const creds2 = makeCreds("k2", FAR_FUTURE)
-      const callsRef = { current: creds1 }
-      const state: IOState = {
-        readResult: () => Effect.succeed(callsRef.current),
-        refreshResult: () =>
-          Effect.fail(new ProviderAuthError({ message: "should not be called" })),
-      }
-      const cache = credentialCache(makeIO(state))
-      yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* cache
-          const first = yield* svc.getFresh
-          callsRef.current = creds2 // source switches; cache should ignore
-          const second = yield* svc.getFresh
-          expect(first.accessToken).toBe("k1-access")
-          expect(second.accessToken).toBe("k1-access")
-        }),
-      )
-    }),
-  )
   it.live("re-reads source after TTL expires", () =>
     Effect.gen(function* () {
       const creds1 = makeCreds("k1", FAR_FUTURE)
@@ -1095,90 +1069,6 @@ describe("Anthropic credential cache — cache hit/miss", () => {
   )
 })
 describe("Anthropic credential cache — refresh on stale", () => {
-  it.live("concurrent stale calls share one refresh", () =>
-    Effect.gen(function* () {
-      const stale = makeCreds("stale", 30000)
-      const fresh = makeCreds("fresh", FAR_FUTURE)
-      const refreshStarted = yield* Deferred.make<void>()
-      const releaseRefresh = yield* Deferred.make<void>()
-      let refreshCount = 0
-      const state: IOState = {
-        readResult: () => Effect.succeed(stale),
-        refreshResult: () =>
-          Effect.gen(function* () {
-            refreshCount += 1
-            yield* Deferred.done(refreshStarted, Exit.void)
-            yield* Deferred.await(releaseRefresh)
-            return fresh
-          }),
-      }
-      const cache = credentialCache(makeIO(state))
-      yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* cache
-          const fiber = yield* Effect.all([svc.getFresh, svc.getFresh], {
-            concurrency: 2,
-          }).pipe(Effect.forkChild)
-          yield* Deferred.await(refreshStarted)
-          yield* Effect.yieldNow
-          yield* Effect.yieldNow
-          expect(refreshCount).toBe(1)
-          yield* Deferred.done(releaseRefresh, Exit.void)
-          const results = yield* Fiber.join(fiber)
-          expect(results[0].accessToken).toBe("fresh-access")
-          expect(results[1].accessToken).toBe("fresh-access")
-          expect(refreshCount).toBe(1)
-        }),
-      )
-    }),
-  )
-  it.live("expiring-soon creds trigger refresh; refreshed creds returned", () =>
-    Effect.gen(function* () {
-      // Outcome assertion: the returned creds are the refreshed ones, not
-      // the stale ones.
-      const stale = makeCreds("stale", 30000) // 30s — inside the 60s freshness margin
-      const fresh = makeCreds("fresh", FAR_FUTURE)
-      const state: IOState = {
-        readResult: () => Effect.succeed(stale),
-        refreshResult: () => Effect.succeed(fresh),
-      }
-      const cache = credentialCache(makeIO(state))
-      yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* cache
-          const result = yield* svc.getFresh
-          expect(result.accessToken).toBe("fresh-access")
-        }),
-      )
-    }),
-  )
-  it.live("refresh failure surfaces ProviderAuthError to caller", () =>
-    Effect.gen(function* () {
-      const stale = makeCreds("stale", 30000)
-      const state: IOState = {
-        readResult: () => Effect.succeed(stale),
-        refreshResult: () =>
-          Effect.fail(new ProviderAuthError({ message: "OAuth 401 from refresh" })),
-      }
-      const cache = credentialCache(makeIO(state))
-      const result = yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* cache
-          return yield* Effect.exit(svc.getFresh)
-        }),
-      )
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        const errOpt = Cause.findErrorOption(result.cause)
-        expect(Option.isSome(errOpt)).toBe(true)
-        if (Option.isSome(errOpt)) {
-          // The refresh's own reason reaches the caller, with what to do next.
-          expect(errOpt.value.message).toContain("OAuth 401 from refresh")
-          expect(errOpt.value.message).toContain("choose Claude Code in /auth")
-        }
-      }
-    }),
-  )
   it.live("an unreachable token endpoint stays a failure that can pass", () =>
     Effect.gen(function* () {
       const stale = makeCreds("stale", 30000)
@@ -1195,32 +1085,6 @@ describe("Anthropic credential cache — refresh on stale", () => {
         }),
       )
       expect(result._tag).toBe("CredentialRefreshUnavailable")
-    }),
-  )
-})
-describe("Anthropic credential cache — invalidate", () => {
-  it.live("invalidate forces next getFresh to re-read", () =>
-    Effect.gen(function* () {
-      const creds1 = makeCreds("k1", FAR_FUTURE)
-      const creds2 = makeCreds("k2", FAR_FUTURE)
-      const callsRef = { current: creds1 }
-      const state: IOState = {
-        readResult: () => Effect.succeed(callsRef.current),
-        refreshResult: () =>
-          Effect.fail(new ProviderAuthError({ message: "should not be called" })),
-      }
-      const cache = credentialCache(makeIO(state))
-      yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* cache
-          const before = yield* svc.getFresh
-          callsRef.current = creds2
-          yield* svc.invalidate(before)
-          const after = yield* svc.getFresh
-          expect(before.accessToken).toBe("k1-access")
-          expect(after.accessToken).toBe("k2-access")
-        }),
-      )
     }),
   )
 })

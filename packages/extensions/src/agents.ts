@@ -47,7 +47,7 @@ export const basePromptSections = [
 ]
 
 /**
- * The one shipped agent and its persona. Its model is `DEFAULT_MODEL_ID`.
+ * The default agent and its persona. Its model is `DEFAULT_MODEL_ID`.
  * Children run as the `delegate` agent, so there is no roster of role
  * agents to pick from.
  */
@@ -63,23 +63,50 @@ const PROJECT_INSTRUCTIONS_PRIORITY = 70
 const SEPARATOR = "\n---\n"
 
 /**
- * Project instruction locations in the order they appear in the prompt. Each
- * location reads `AGENTS.md`, or `CLAUDE.md` when `AGENTS.md` is missing or
- * empty. When no location has content, the Claude user file stands in.
- * Launched from home (or a link to it), the project's `.gent` is the user's,
- * so it is read once, as the user's.
+ * The directories from the git root down to `cwd`, root first. A directory
+ * that holds `.git` (a directory, or a worktree's file) is the root. Outside a
+ * git work tree only `cwd` is read, so no unrelated ancestor speaks. The walk
+ * starts at the directory `cwd` names, so a link to a subdirectory finds the
+ * repository it is in.
+ */
+const projectDirectories = Effect.fn("Agents.projectDirectories")(function* (cwd: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const start = yield* fs.realPath(cwd).pipe(Effect.catchEager(() => Effect.succeed(cwd)))
+  const chain = [start]
+  let current = start
+  while (true) {
+    const isRoot = yield* fs
+      .exists(path.join(current, ".git"))
+      .pipe(Effect.catchEager(() => Effect.succeed(false)))
+    if (isRoot) return chain.toReversed()
+    const parent = path.dirname(current)
+    if (parent === current) return [start]
+    chain.push(parent)
+    current = parent
+  }
+})
+
+/**
+ * Project instruction locations in the order they appear in the prompt: the
+ * user's, each project directory from the git root down to the session's
+ * (as opencode reads them), then the project-local `.gent`. Each location
+ * reads `AGENTS.md`, or `CLAUDE.md` when `AGENTS.md` is missing or empty.
+ * When no location has content, the Claude user file stands in. Launched from
+ * home (or a link to it), the project's `.gent` is the user's, so it is read
+ * once, as the user's.
  */
 const locations = Effect.fn("Agents.locations")(function* () {
   const { cwd, home } = yield* ExtensionContext
   const path = yield* Path.Path
-  const user = [path.join(home, ".gent", "AGENTS.md"), path.join(home, ".gent", "CLAUDE.md")]
-  const project = [path.join(cwd, "AGENTS.md"), path.join(cwd, "CLAUDE.md")]
-  if (!(yield* hasProjectScope({ user: home, project: cwd }))) return [user, project]
-  return [
-    user,
-    project,
-    [path.join(cwd, ".gent", "AGENTS.md"), path.join(cwd, ".gent", "CLAUDE.md")],
+  const inDirectory = (directory: string) => [
+    path.join(directory, "AGENTS.md"),
+    path.join(directory, "CLAUDE.md"),
   ]
+  const user = inDirectory(path.join(home, ".gent"))
+  const project = (yield* projectDirectories(cwd)).map(inDirectory)
+  if (!(yield* hasProjectScope({ user: home, project: cwd }))) return [user, ...project]
+  return [user, ...project, inDirectory(path.join(cwd, ".gent"))]
 })
 
 const readIfPresent = Effect.fn("Agents.readIfPresent")(function* (path: string) {

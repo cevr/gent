@@ -28,6 +28,8 @@ import {
   cellRequestFd,
   CellResponse,
   cellResponseFd,
+  cutHead,
+  cutTail,
   decodeCellRequest,
   encodeCellResponse,
   makeBoundedOutput,
@@ -554,7 +556,7 @@ const systemErrorFields = (error: object): ReadonlyArray<string> => {
       ),
       {
         onNone: () => [],
-        onSome: (value) => [`${key}: ${String(value).slice(0, SYSTEM_ERROR_FIELD_LIMIT)}`],
+        onSome: (value) => [`${key}: ${cutHead(String(value), SYSTEM_ERROR_FIELD_LIMIT)}`],
       },
     ),
   )
@@ -625,7 +627,7 @@ const errorDetail = (error: object): ReadonlyArray<string> => {
   if (Option.isSome(stderr)) {
     const text = new TextDecoder().decode(stderr.value).trim()
     if (text.length === 0) return []
-    return [`stderr: ${text.slice(-SHELL_STDERR_LIMIT)}`]
+    return [`stderr: ${cutTail(text, SHELL_STDERR_LIMIT)}`]
   }
   return systemErrorFields(error)
 }
@@ -742,7 +744,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   const failure = (phase: CellEvaluationError["phase"], cause: unknown) =>
     new CellEvaluationError({
       phase,
-      message: failureText(cause).slice(0, maximumCellDisplayLength),
+      message: cutHead(failureText(cause), maximumCellDisplayLength),
       output: rendered(),
     })
   // The catalog is data the host already validated. The namespace reads it on every access,

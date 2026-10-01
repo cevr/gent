@@ -5,7 +5,6 @@ import {
   calculateCost,
   DriverRef,
   effectiveModelDriver,
-  makeRunSpec,
   ModelId,
   parseModelId,
   ProviderId,
@@ -59,38 +58,7 @@ describe("effective model driver", () => {
 
 // ── run spec ────────────────────────────────────────────────────────────────
 
-describe("run spec construction", () => {
-  test("empty input produces empty spec — no spurious keys", () => {
-    const spec = makeRunSpec()
-    expect(Object.keys(spec)).toEqual([])
-  })
-
-  test("undefined fields are omitted, not stored", () => {
-    const spec = makeRunSpec({
-      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
-      overrides: undefined,
-    })
-    expect(Object.keys(spec)).toEqual([])
-    expect("overrides" in spec).toBe(false)
-  })
-
-  test("threads each provided field through", () => {
-    const spec = makeRunSpec({
-      overrides: {
-        modelId: ModelId.make("custom/model"),
-        allowedTools: ["bash"],
-        deniedTools: ["read"],
-        reasoningEffort: "high",
-        systemPromptAddendum: "extra",
-      },
-    })
-    expect(spec.overrides?.modelId).toBe(ModelId.make("custom/model"))
-    expect(spec.overrides?.allowedTools).toEqual(["bash"])
-    expect(spec.overrides?.deniedTools).toEqual(["read"])
-    expect(spec.overrides?.reasoningEffort).toBe("high")
-    expect(spec.overrides?.systemPromptAddendum).toBe("extra")
-  })
-
+describe("run spec", () => {
   test("a stored run spec that still carries the dropped parentToolCallId decodes", () => {
     const decoded = Schema.decodeSync(Schema.fromJsonString(RunSpecSchema))(
       '{"overrides":{"maxModelAttempts":32},"parentToolCallId":"tc-old"}',

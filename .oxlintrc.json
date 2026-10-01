@@ -30,8 +30,6 @@
     "gent/core-entry-boundary": "error",
     // Custom — a workspace imports only the workspace packages its manifest declares
     "gent/declared-workspace-imports": "error",
-    // Custom — core reads its own file path through Effect Path, not off `new URL(import.meta.url)`
-    "gent/no-hand-rolled-module-path": "error",
     // Custom — a child-session writer admits the depth in its own function
     "gent/child-session-writer-admits": "error",
     // Custom — a whole-object JSON encode decides no identity (shipped source)
@@ -49,6 +47,9 @@
       { "allow": ["withWideEvent"], "testFiles": ["**/tests/**"] }
     ],
     "effect/noTimeoutDieInTests": "error",
+    // A test's data directory and its user and project config directories are
+    // its own, beside the generic home keys the rule knows.
+    "effect/noSharedTestHome": ["error", { "keys": ["GENT_DATA_DIR", "userDir", "projectDir"] }],
     // No `import(...)` or `require(...)`: the compiled binary needs every module
     // reachable through a static import. A deliberate load keeps a line-local
     // suppression with its reason.

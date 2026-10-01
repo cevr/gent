@@ -55,7 +55,6 @@ import {
 export {
   AgentDefinition,
   AgentName,
-  makeRunSpec,
   ReasoningEffort,
   type RunSpec,
   RunSpecSchema,
@@ -69,6 +68,8 @@ export {
 export {
   credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
+  DriverError,
+  DriverFailureId,
   ProviderAuthError,
   ProviderAuthInfo,
   reportProviderStopReason,
@@ -101,7 +102,7 @@ export {
   assistantMessageIdForTurn,
   DEFAULT_SESSION_NAME,
 } from "../domain/message.js"
-export type { AgentEvent, Question } from "../domain/event.js"
+export type { AgentEvent } from "../domain/event.js"
 export {
   isRuntimeUserMessage,
   isSpawnedSession,
@@ -149,7 +150,7 @@ export {
   runProcess,
   writeFileAtomic,
 } from "../runtime/gent-platform.js"
-export { headTailChars, lineCount, splitLines } from "../domain/message.js"
+export { headChars, headTailChars, lineCount, splitLines, tailChars } from "../domain/message.js"
 export { maximumModelToolResultChars } from "../runtime/model-context.js"
 // Launched from home, the project's `.gent` is the user's; every reader of project files asks this.
 export { hasProjectScope } from "../runtime/config.js"

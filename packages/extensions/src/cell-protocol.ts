@@ -448,6 +448,33 @@ export const makeCellOutputScanner = (expected: () => Option.Option<string>) => 
   }
 }
 
+// ── code-point cuts ─────────────────────────────────────────────────────────
+
+// Core's `headChars` and `tailChars` rule for the worker side: a cut never
+// leaves half of a surrogate pair, which a provider refuses. The worker
+// bundle loads no core module (the core entry would grow it from 0.36 MB to
+// over 1 MB), so the worker keeps this copy; host code uses core's.
+
+const splitsPairAt = (text: string, index: number): boolean => {
+  const before = text.charCodeAt(index - 1)
+  const after = text.charCodeAt(index)
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff
+}
+
+/** The head of `text`, at most `maxChars` UTF-16 units, cut between code points. */
+export const cutHead = (text: string, maxChars: number): string => {
+  if (text.length <= maxChars) return text
+  const end = Math.max(0, maxChars)
+  return text.slice(0, end - Number(splitsPairAt(text, end)))
+}
+
+/** The tail of `text`, at most `maxChars` UTF-16 units, cut between code points. */
+export const cutTail = (text: string, maxChars: number): string => {
+  if (text.length <= maxChars) return text
+  const start = text.length - Math.max(0, maxChars)
+  return text.slice(start + Number(splitsPairAt(text, start)))
+}
+
 /** A bounded accumulator of output text: a head, an omitted count, and a bounded tail. */
 interface BoundedOutput {
   /** Add text; anything past the head spills into the bounded tail. */
@@ -493,16 +520,16 @@ export const makeBoundedOutput = (options: {
       let lead = ""
       if (head.length > 0 || tail.length > 0) lead = separator
       const next = lead + text
-      const headRoom = Math.max(0, options.headLimit - head.length)
-      if (headRoom >= next.length) {
-        head += next
-        return
-      }
-      head += next.slice(0, headRoom)
-      tail += next.slice(headRoom)
+      // The head takes text only while nothing has passed it.
+      let added = ""
+      if (tail.length === 0 && omitted === 0) added = cutHead(next, options.headLimit - head.length)
+      head += added
+      if (added.length === next.length) return
+      tail += next.slice(added.length)
       if (tail.length > tailLimit) {
-        omitted += tail.length - tailLimit
-        tail = tail.slice(tail.length - tailLimit)
+        const kept = cutTail(tail, tailLimit)
+        omitted += tail.length - kept.length
+        tail = kept
       }
     },
     read,

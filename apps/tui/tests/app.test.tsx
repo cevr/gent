@@ -44,6 +44,7 @@ import {
   AgentEvent,
   EventEnvelope,
   type ExtensionHealthSnapshot,
+  type ExtensionStatusScope,
   type GentClientRpcError,
   type QueueEntryInfo,
 } from "@gent/core/protocol"
@@ -5291,8 +5292,8 @@ describe("TUI renderer surfaces", () => {
         initialSession: testSession,
         client: createMockClient({
           extension: {
-            listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
-              expect(sessionId).toBe(testSession.id)
+            listStatus: ({ scope }: { scope: ExtensionStatusScope }) => {
+              expect(scope).toEqual({ _tag: "Session", id: testSession.id })
               return Effect.succeed({
                 _tag: "Degraded",
                 healthyExtensions: [],
@@ -5354,9 +5355,9 @@ describe("TUI renderer surfaces", () => {
           runtime: lifecycle.runtime,
           client: createMockClient({
             extension: {
-              listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
+              listStatus: ({ scope }: { scope: ExtensionStatusScope }) => {
                 callCount += 1
-                expect(sessionId).toBe(testSession.id)
+                expect(scope).toEqual({ _tag: "Session", id: testSession.id })
                 return Effect.succeed(currentHealth)
               },
             },
@@ -5398,8 +5399,8 @@ describe("TUI renderer surfaces", () => {
           initialSession: testSession,
           client: createMockClient({
             extension: {
-              listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
-                if (sessionId === testSession.id) {
+              listStatus: ({ scope }: { scope: ExtensionStatusScope }) => {
+                if (scope._tag === "Session" && scope.id === testSession.id) {
                   return Effect.succeed(scheduledFailureHealth("@gent/plan", "launchd boom"))
                 }
                 return Effect.succeed(healthyHealth)
@@ -5437,8 +5438,8 @@ describe("TUI renderer surfaces", () => {
           initialSession: testSession,
           client: createMockClient({
             extension: {
-              listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
-                if (sessionId === testSession.id) {
+              listStatus: ({ scope }: { scope: ExtensionStatusScope }) => {
+                if (scope._tag === "Session" && scope.id === testSession.id) {
                   return Effect.succeed(scheduledFailureHealth("@gent/plan", "launchd boom"))
                 }
                 return Effect.succeed(healthyHealth)
@@ -5469,7 +5470,7 @@ describe("TUI renderer surfaces", () => {
             ChildProcess.make(
               "git",
               ["-c", "user.email=probe@gent.test", "-c", "user.name=probe", ...args],
-              { cwd },
+              { cwd, forceKillAfter: "2 seconds" },
             ),
           )
         const statusRow = Effect.gen(function* () {
@@ -5516,7 +5517,7 @@ describe("TUI renderer surfaces", () => {
             ChildProcess.make(
               "git",
               ["-c", "user.email=probe@gent.test", "-c", "user.name=probe", ...args],
-              { cwd },
+              { cwd, forceKillAfter: "2 seconds" },
             ),
           )
         const repo = `${root}/repo`
