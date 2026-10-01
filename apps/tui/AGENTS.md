@@ -193,7 +193,8 @@ footer for the live tail to take. Exit commits the live tail first
 Answer markdown draws each top-level block on its own
 (`internalBlockMode="top-level"`), so a heading never shows its `#` marks
 before its highlight lands. A ` ```mermaid ` fence is its own block,
-drawn by `mermaidCodeBlocks` (`mermaid.ts`): compact boxes in theme colors,
+drawn by `useDiagramCodeBlocks` (`mermaid.ts`; beautiful-mermaid loads on
+the first fence, and history waits for it): compact boxes in theme colors,
 no wrap, no selection, at most 120 columns (a wider diagram is cut). While
 the fence streams it draws its complete statements and keeps its last
 diagram when they do not draw; once closed, a source that does not draw
