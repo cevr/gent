@@ -1256,7 +1256,7 @@ export const findTestLaneDefaults = (file: string, text: string): ReadonlyArray<
  *   it turns a rule off for nothing. The same holds for an `.oxlintignore` row
  *   and for an `include` glob of an Effect language-service override in the
  *   root tsconfig.
- * - A rule defined in `gent-rules.ts` that the root config never names: a rule
+ * - A rule defined in `gent-rules.ts` that no block of the lint config turns on: a rule
  *   nobody decided on, which may not even pass on shipped code.
  * - A `GENT_*` environment variable read in the source with nothing to set it:
  *   a branch nothing can take that looks like working code.
@@ -1417,11 +1417,31 @@ export const findUnmatchedTsconfigOverrides = (
       ]
     })
 
-// ── (b) A plugin rule the root config never enables ─────────────────────────
+// ── (b) A plugin rule the lint config never enables ─────────────────────────
 
 /** The line a rule's `"<name>":` key sits on in the plugin text, for a finding that points at it. */
 const lineOfRule = (pluginText: string, rule: string): number =>
   Math.max(1, pluginText.split("\n").findIndex((line) => line.includes(`"${rule}":`)) + 1)
+
+const OffLevel = Schema.Literals(["off", 0])
+
+/** A rule setting that turns the rule off: `"off"`, `0`, or either first in an options array. */
+const isOffSetting = Schema.is(
+  Schema.Union([OffLevel, Schema.TupleWithRest(Schema.Tuple([OffLevel]), [Schema.Unknown])]),
+)
+
+/**
+ * The rules some block of the config turns on: the root block, or an
+ * override that scopes the rule to the files that need it.
+ */
+export const enabledLintRules = (config: OxlintConfig): ReadonlySet<string> =>
+  new Set(
+    [config.rules ?? {}, ...(config.overrides ?? []).map((override) => override.rules ?? {})]
+      .flatMap((rules) => Object.entries(rules))
+      .values()
+      .filter(([, setting]) => !isOffSetting(setting))
+      .map(([rule]) => rule),
+  )
 
 /**
  * `ruleNames` is `Object.keys(plugin.rules)` of the loaded plugin, so the set
@@ -1432,15 +1452,15 @@ export const findUnenabledPluginRules = (
   pluginFile: string,
   pluginText: string,
   ruleNames: ReadonlyArray<string>,
-  rootRules: ReadonlySet<string>,
+  enabledRules: ReadonlySet<string>,
 ): ReadonlyArray<Finding> =>
   ruleNames
     .values()
-    .filter((rule) => !rootRules.has(`gent/${rule}`))
+    .filter((rule) => !enabledRules.has(`gent/${rule}`))
     .map((rule) => ({
       file: pluginFile,
       line: lineOfRule(pluginText, rule),
-      message: `lint rule \`gent/${rule}\` is defined but the root config never enables it; enable it, or delete the rule and its fixtures`,
+      message: `lint rule \`gent/${rule}\` is defined but the lint config never enables it; enable it, or delete the rule and its fixtures`,
     }))
     .toArray()
 
@@ -1731,7 +1751,8 @@ export const findWritersWithoutReaders = (
  * every spelling (`Bun.Glob`, `globalThis.Bun.Glob`, `globalThis["Bun"].Glob`,
  * `Bun["Glob"]`, an alias of `globalThis` or of `Bun`), the `bun` module ban
  * of `effect/noNodeBuiltinImport` holds an import of either member, and
- * `effect/noReflectGet` holds `Reflect.get`.
+ * `effect/noReflectGet` holds `Reflect.get`. The plain Bun scripts that turn
+ * `effect/noGlobals` off keep `gent/no-retired-bun-member` on.
  *
  * @module
  */

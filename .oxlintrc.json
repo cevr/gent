@@ -280,7 +280,9 @@
       // the driver decodes the SQLite rows it reads.
       "files": ["testbeds/gamut/gamut.ts", "testbeds/gamut/tests/**"],
       "rules": {
+        // `effect/noGlobals` off lets the script reach Bun; the retired members stay out.
         "effect/noGlobals": "off",
+        "gent/no-retired-bun-member": "error",
         "effect/noKnownValueWidening": "off",
         "effect/noNewError": "off",
         "effect/noNullish": "off",
@@ -310,6 +312,7 @@
         "effect/noAs": "off",
         "effect/noAsyncFunction": "off",
         "effect/noGlobals": "off",
+        "gent/no-retired-bun-member": "error",
         "effect/noNewError": "off",
         "effect/noNodeBuiltinImport": "off",
         "effect/noNullish": "off",

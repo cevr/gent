@@ -7,6 +7,7 @@
  * - core-entry-boundary: extensions read only the authoring entries of `@gent/core`.
  * - declared-workspace-imports: a package imports only the workspace packages it declares.
  * - no-hand-rolled-module-path: no file path read off `new URL(import.meta.url)` in core.
+ * - no-retired-bun-member: no `Bun.Glob` or `Bun.randomUUIDv7` where `effect/noGlobals` is off.
  * - no-platform-module-export-alias: no module exports an alias of an `@effect/platform-*` binding.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
@@ -280,6 +281,29 @@ const isImportMetaUrlConstruction = (node: AstNode | undefined): boolean => {
     getStringField(property, "name") === "url"
   )
 }
+
+/** The name a member expression reads when it is static: `b` for `a.b` and for `a["b"]`. */
+const staticMemberName = (node: AstNode): string | undefined => {
+  const property = getNodeField(node, "property")
+  if (property === undefined) return undefined
+  if (fieldOf(node, "computed") !== true) return getStringField(property, "name")
+  const value = fieldOf(property, "value")
+  return typeof value === "string" ? value : undefined
+}
+
+/** `Bun`, `globalThis.Bun` or `globalThis["Bun"]`. */
+const isBunValue = (node: AstNode | undefined): boolean => {
+  if (node?.type === "Identifier") return getStringField(node, "name") === "Bun"
+  if (node?.type !== "MemberExpression" || staticMemberName(node) !== "Bun") return false
+  const object = getNodeField(node, "object")
+  return object?.type === "Identifier" && getStringField(object, "name") === "globalThis"
+}
+
+/** The `Bun` members retired everywhere, and their replacements. */
+const RETIRED_BUN_MEMBERS: ReadonlyMap<string, string> = new Map([
+  ["Glob", "`Bun.Glob` is retired; list files through Effect `FileSystem`."],
+  ["randomUUIDv7", "`Bun.randomUUIDv7` is adapter-only; use `GentPlatform.randomId`."],
+])
 
 const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
   const args = fieldOf(node, "arguments")
@@ -673,6 +697,31 @@ const plugin: Plugin = {
                 "`new URL(import.meta.url)` read as a path is hand-rolled; use Effect `Path.fromFileUrl`.",
               node,
             })
+          },
+        }
+      },
+    },
+
+    /**
+     * No retired `Bun` member in a file that turns `effect/noGlobals` off.
+     *
+     * The built-in bans of `effect/noGlobals` hold `Bun.Glob` and
+     * `Bun.randomUUIDv7` in every spelling, but a plain Bun script (the gamut
+     * driver, the capture preload) turns that rule off, and its `members`
+     * option only adds bans to the built-in list. `.oxlintrc.json` enables
+     * this rule in those overrides: `Bun.Glob`, `Bun["Glob"]`,
+     * `globalThis.Bun.Glob` and `globalThis["Bun"].Glob` are reported, as is
+     * each spelling of `randomUUIDv7`.
+     */
+    "no-retired-bun-member": {
+      create(context) {
+        return {
+          MemberExpression(node) {
+            if (!isAstNode(node)) return
+            const member = staticMemberName(node)
+            if (member === undefined || !RETIRED_BUN_MEMBERS.has(member)) return
+            if (!isBunValue(getNodeField(node, "object"))) return
+            context.report({ message: RETIRED_BUN_MEMBERS.get(member) ?? member, node })
           },
         }
       },
