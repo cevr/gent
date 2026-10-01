@@ -1191,16 +1191,16 @@ describe("a defined rule must be enabled", () => {
   })
 
   test("a rule only an override enables counts as enabled, and a rule set off nowhere else does not", () => {
-    // no-retired-bun-member is on only where effect/noGlobals is off; the
-    // root block never names it.
+    // A rule scoped to a few files is on only in an override; the root block
+    // never names it.
     const enabled = enabledLintRules({
       rules: { "gent/no-sleep": "error", "gent/no-make-unsafe": "off" },
       overrides: [
-        { files: ["testbeds/gamut/gamut.ts"], rules: { "gent/no-retired-bun-member": "error" } },
+        { files: ["testbeds/gamut/gamut.ts"], rules: { "gent/no-script-glob": "error" } },
         { files: ["tools/**"], rules: { "gent/no-sleep": ["off"] } },
       ],
     })
-    expect([...enabled].toSorted()).toEqual(["gent/no-retired-bun-member", "gent/no-sleep"])
+    expect([...enabled].toSorted()).toEqual(["gent/no-script-glob", "gent/no-sleep"])
   })
 })
 

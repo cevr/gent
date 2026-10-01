@@ -1751,8 +1751,8 @@ export const findWritersWithoutReaders = (
  * every spelling (`Bun.Glob`, `globalThis.Bun.Glob`, `globalThis["Bun"].Glob`,
  * `Bun["Glob"]`, an alias of `globalThis` or of `Bun`), the `bun` module ban
  * of `effect/noNodeBuiltinImport` holds an import of either member, and
- * `effect/noReflectGet` holds `Reflect.get`. The plain Bun scripts that turn
- * `effect/noGlobals` off keep `gent/no-retired-bun-member` on.
+ * `effect/noReflectGet` holds `Reflect.get`. The plain Bun scripts keep
+ * `effect/noGlobals` on with `builtins: false` and only those two members.
  *
  * @module
  */

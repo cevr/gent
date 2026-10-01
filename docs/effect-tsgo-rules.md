@@ -16,7 +16,7 @@ rule holds at every site, so one site takes one suppression:
 holds `nodeBuiltinImport`, `effect/noGlobals` holds the `global*`,
 `processEnv` and `cryptoRandomUUID` rules, and `effect/noNewPromise` holds
 `newPromise`, including their `globalThis` and alias spellings. The gamut driver,
-its tests and the capture preload turn `effect/noGlobals` off, so overrides
+its tests and the capture preload drop the `effect/noGlobals` built-in bans, so overrides
 turn the matching rules back on there for each global the file does not use.
 Test files inherit the
 same catalog, with `strictEffectProvide` disabled through an override because

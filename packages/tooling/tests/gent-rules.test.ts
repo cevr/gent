@@ -260,15 +260,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 2,
   },
   {
-    // A script with effect/noGlobals off may reach Bun, but not its retired members.
-    rule: "gent/no-retired-bun-member",
-    invalid: "testbeds/gamut/no-retired-bun-member.invalid.ts",
-    valid: ["testbeds/gamut/no-retired-bun-member.valid.ts"],
-    // Bun.Glob, Bun["Glob"], Bun.randomUUIDv7, globalThis.Bun.Glob,
-    // globalThis["Bun"].randomUUIDv7, Bun?.randomUUIDv7
-    expectedCount: 6,
-  },
-  {
     // A child-session writer admits the depth in its own function, first.
     rule: "gent/child-session-writer-admits",
     invalid: "packages/core/src/server/child-session-writer-admits.invalid.ts",
