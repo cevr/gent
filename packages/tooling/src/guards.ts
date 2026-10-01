@@ -1,5 +1,12 @@
 import { Option, Predicate, Schema } from "effect"
-import { parseSync, Visitor } from "oxc-parser"
+import {
+  type Expression,
+  type ParseResult,
+  parseSync,
+  type Super,
+  type TSImportTypeQualifier,
+  Visitor,
+} from "oxc-parser"
 // A write or a caller in test support proves a reader works, not that
 // production supplies it; the lint rules read the same definitions.
 import { isShippedSource, isTestCode, isTestHarness, isTestSupport } from "./gent-rules"
@@ -43,11 +50,11 @@ interface SourceForms {
    */
   readonly codeOnly: string
   /**
-   * Comments and template text blanked, strings kept: an import keeps its
-   * specifier, and fixture text holding `import { X } from "./x"` in a
-   * template is no import.
+   * The module syntax the parse records: what the file exports, and what it
+   * reads from which module. Fixture text holding `import { X } from "./x"`
+   * in a template is no import.
    */
-  readonly statements: string
+  readonly module: ModuleSyntax
   /**
    * `codeOnly` with regex bodies blanked too, and the line breaks inside
    * blanked text: every bracket left is structure, and a line end left is a
@@ -82,11 +89,129 @@ const parseLanguage = (file: string): "ts" | "tsx" | "dts" => {
 /** A JSON or JSONC file is read as the expression it is, inside parentheses. */
 const isJsonFile = (file: string): boolean => /\.jsonc?$/.test(file)
 
-/** What oxc reads of a text: its errors, each comment, and each stretch that is not code, in source order. */
+/** One name a file exports, as the parse's module record lists it. */
+interface ExportEntry {
+  readonly name: string
+  readonly line: number
+  /** `export type`, `export interface`, `export { type X }`: a type, not a value. */
+  readonly isType: boolean
+  /**
+   * The name comes from another module: `export { X } from "./x"`, or a bare
+   * `export { X }` of an imported `X`. The file exposes it at its own path,
+   * and the module it names keeps its own declaration.
+   */
+  readonly passthrough: boolean
+}
+
+/** The names one statement or expression reads from `specifier`, and the line it opens on. */
+interface ModuleRead {
+  readonly specifier: string
+  readonly line: number
+  /** Names read by name: an entry's original name (`X` of `X as Y`), a member, a destructured key. */
+  readonly names: ReadonlyArray<string>
+  /** Local names bound to the whole module (`import * as NS`, `const M = await import("./m")`). */
+  readonly namespaces: ReadonlyArray<string>
+}
+
+/** A file's module syntax: what it exports, what it reads, and its star re-exports. */
+interface ModuleSyntax {
+  /** In source order. */
+  readonly exports: ReadonlyArray<ExportEntry>
+  /** Imports, re-exports, and literal dynamic imports. */
+  readonly reads: ReadonlyArray<ModuleRead>
+  /** Lines of `export * from` and `export * as NS from`. */
+  readonly starExportLines: ReadonlyArray<number>
+}
+
+/** What oxc reads of a text: its errors, each comment, each stretch that is not code, in source order, and its module syntax. */
 interface ParsedText {
   readonly errors: ReadonlyArray<CommentBody>
   readonly comments: ReadonlyArray<CommentBody>
   readonly spans: ReadonlyArray<Span>
+  readonly module: ModuleSyntax
+}
+
+/** Whether an import entry is `import * as NS`; oxc types the kinds as a const enum, which the runtime does not carry. */
+const isNamespaceImport = (kind: string): boolean => kind === "NamespaceObject"
+
+/** The specifier of `import("<literal>")`, through parentheses and `await`. */
+const literalImportOf = (node: Expression | Super): Option.Option<string> => {
+  if (node.type === "ParenthesizedExpression") return literalImportOf(node.expression)
+  if (node.type === "AwaitExpression") return literalImportOf(node.argument)
+  if (node.type !== "ImportExpression" || node.source.type !== "Literal") return Option.none()
+  return Option.liftPredicate(node.source.value, Predicate.isString)
+}
+
+/** The first name of `import("./m").A.B` as a type: `A`. */
+const firstQualifier = (qualifier: TSImportTypeQualifier): string => {
+  if (qualifier.type === "Identifier") return qualifier.name
+  return firstQualifier(qualifier.left)
+}
+
+/**
+ * The module syntax of one parse. Static imports and exports come from the
+ * module record. A literal dynamic import, which the record lists without
+ * what is read off it, comes from the tree: a member read off the import, a
+ * destructured key, a binding whose members are read, or a type's qualifier.
+ */
+const moduleSyntaxOf = (
+  result: ParseResult,
+  lineOf: (index: number) => number,
+  dynamicReads: ReadonlyArray<ModuleRead>,
+): ModuleSyntax => {
+  const exports: Array<{ readonly at: number; readonly entry: ExportEntry }> = []
+  const reads: Array<ModuleRead> = []
+  const starExportLines: Array<number> = []
+  for (const statement of result.module.staticImports) {
+    const names: Array<string> = []
+    const namespaces: Array<string> = []
+    for (const entry of statement.entries) {
+      const imported = Option.fromNullishOr(entry.importName.name)
+      if (Option.isSome(imported)) names.push(imported.value)
+      else if (isNamespaceImport(entry.importName.kind)) namespaces.push(entry.localName.value)
+    }
+    reads.push({
+      specifier: statement.moduleRequest.value,
+      line: lineOf(statement.start),
+      names,
+      namespaces,
+    })
+  }
+  for (const statement of result.module.staticExports) {
+    for (const entry of statement.entries) {
+      const request = Option.fromNullishOr(entry.moduleRequest)
+      const imported = Option.fromNullishOr(entry.importName.name)
+      if (Option.isSome(request) && Option.isNone(imported)) {
+        starExportLines.push(lineOf(entry.start))
+        continue
+      }
+      if (Option.isSome(request)) {
+        reads.push({
+          specifier: request.value.value,
+          line: lineOf(entry.start),
+          names: Option.toArray(imported),
+          namespaces: [],
+        })
+      }
+      const name = Option.fromNullishOr(entry.exportName.name)
+      if (Option.isNone(name)) continue
+      const at = Option.getOrElse(Option.fromNullishOr(entry.exportName.start), () => entry.start)
+      exports.push({
+        at,
+        entry: {
+          name: name.value,
+          line: lineOf(at),
+          isType: entry.isType,
+          passthrough: Option.isSome(request),
+        },
+      })
+    }
+  }
+  return {
+    exports: exports.sort((a, b) => a.at - b.at).map(({ entry }) => entry),
+    reads: [...reads, ...dynamicReads],
+    starExportLines,
+  }
 }
 
 const parsedText = (file: string, text: string): ParsedText => {
@@ -97,13 +222,46 @@ const parsedText = (file: string, text: string): ParsedText => {
     shift = 1
   }
   const result = parseSync(file, source, { lang: parseLanguage(file) })
+  const lineOf = (index: number) => lineAt(text, index - shift)
   const spans: Array<Span> = []
   const comments = result.comments.map((comment) => {
     spans.push({ kind: "comment", start: comment.start, end: comment.end })
     const lead = comment.value.length - comment.value.trimStart().length
     return { line: lineAt(text, comment.start - shift + 2 + lead), body: comment.value.trim() }
   })
+  const dynamicReads: Array<ModuleRead> = []
+  const dynamicRead = (specifier: string, start: number, read: Partial<ModuleRead>) => {
+    dynamicReads.push({ specifier, line: lineOf(start), names: [], namespaces: [], ...read })
+  }
   new Visitor({
+    MemberExpression: (node) => {
+      if (node.computed || node.property.type !== "Identifier") return
+      const name = node.property.name
+      for (const specifier of Option.toArray(literalImportOf(node.object))) {
+        dynamicRead(specifier, node.start, { names: [name] })
+      }
+    },
+    VariableDeclarator: (node) => {
+      const { id } = node
+      const specifiers = Option.toArray(
+        Option.flatMap(Option.fromNullishOr(node.init), literalImportOf),
+      )
+      for (const specifier of specifiers) {
+        if (id.type === "Identifier") dynamicRead(specifier, node.start, { namespaces: [id.name] })
+        if (id.type !== "ObjectPattern") continue
+        const names = id.properties.flatMap((property) => {
+          if (property.type !== "Property" || property.computed) return []
+          if (property.key.type !== "Identifier") return []
+          return [property.key.name]
+        })
+        dynamicRead(specifier, node.start, { names })
+      }
+    },
+    TSImportType: (node) => {
+      for (const qualifier of Option.toArray(Option.fromNullishOr(node.qualifier))) {
+        dynamicRead(node.source.value, node.start, { names: [firstQualifier(qualifier)] })
+      }
+    },
     Literal: (node) => {
       const opener = source[node.start]
       if (opener === '"' || opener === "'") {
@@ -130,6 +288,7 @@ const parsedText = (file: string, text: string): ParsedText => {
     spans: spans
       .map((span) => ({ ...span, start: span.start - shift, end: span.end - shift }))
       .sort((a, b) => a.start - b.start),
+    module: moduleSyntaxOf(result, lineOf, dynamicReads),
   }
 }
 
@@ -170,13 +329,13 @@ const sourceForms = (file: string, text: string): SourceForms => {
   let cache = sourceFormsCache[parseLanguage(file)]
   if (isJsonFile(file)) cache = sourceFormsCache.json
   return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
-    const { errors, comments, spans } = parsedText(file, text)
+    const { errors, comments, spans, module } = parsedText(file, text)
     const forms: SourceForms = {
       errors,
       comments,
       code: blankedSpans(text, spans, ["comment"], false),
       codeOnly: blankedSpans(text, spans, ["comment", "string", "template", "jsx-text"], false),
-      statements: blankedSpans(text, spans, ["comment", "template"], false),
+      module,
       structure: blankedSpans(
         text,
         spans,
@@ -2582,8 +2741,9 @@ export const findUnusedSuppressionApprovals = (
  * - An entry-point surface (`packages/core/src/extensions/api.ts`,
  *   `packages/core/src/protocol.ts`, `packages/core/src/host.ts`,
  *   `packages/core/src/test-utils/index.ts`, `packages/sdk/src/index.ts`,
- *   `packages/extensions/src/client.ts`) exposes names with
- *   `export { X } from "..."`. Consumption is read from the import
+ *   `packages/extensions/src/client.ts`) exposes names, mostly with
+ *   `export { X } from "..."`, and a few it declares itself; each is
+ *   measured the same way. Consumption is read from the import
  *   itself, through the entry point's specifier, by files outside the
  *   declaring package: a symbol a core test imports over a relative path does
  *   not count, and a name on a `@ts-expect-error` line asserts absence rather
@@ -2784,161 +2944,8 @@ interface Declaration {
   readonly name: string
   readonly line: number
   readonly surface: ScannedSurface
-  /** True for an `export type` or `export interface`: a type, not a value. */
-  readonly typeOnly?: boolean
-  /**
-   * True when the name reaches this file through `export { X } from "..."`.
-   * Such a file both exposes the name and names the upstream declaration, so
-   * it stays a consumer of that declaration while being measured itself.
-   */
-  readonly passthrough?: boolean
-}
-
-const DECLARATION =
-  /^export\s+(?:declare\s+)?(const|class|function|interface|type|enum)\s+([A-Za-z_$][\w$]*)/
-
-/**
- * `(name, line)` for every export a module surface file declares.
- *
- * Three shapes reach the same place. `export const Foo` names the value on the
- * spot. A bare `export { Foo, Bar }` with no `from` clause exposes names this
- * file owns, so it is a surface too. And `export { Foo } from "./x.js"` puts a
- * second consumable name at this module path, so a dead one is dead here even
- * though `./x.js` keeps its own alive.
- *
- * A bare block can also pass on a name the file imported. That name is
- * measured here like a `from` re-export, and the import still reads the
- * upstream declaration.
- */
-const declaredNames = (
-  text: string,
-): ReadonlyArray<{
-  readonly name: string
-  readonly line: number
-  readonly typeOnly?: boolean
-  readonly passthrough?: boolean
-}> => {
-  const found: Array<{ name: string; line: number; typeOnly: boolean }> = []
-  for (const [index, line] of text.split("\n").entries()) {
-    const match = DECLARATION.exec(line)
-    const name = match?.[2] ?? ""
-    if (name === "") continue
-    const keyword = match?.[1] ?? ""
-    found.push({ name, line: index + 1, typeOnly: keyword === "type" || keyword === "interface" })
-  }
-  // A bare block exposes names. A name the file declares is counted once, at
-  // its declaration. A name it imported is passed through, as a `from` block
-  // passes it: this path is measured, and the import stays the upstream
-  // declaration's consumer.
-  const declared = new Set(found.map((entry) => entry.name))
-  const imported = importedNames(text)
-  const bare = bareExportedNames(text)
-    .filter((entry) => !declared.has(entry.name))
-    .map((entry) => ({ ...entry, passthrough: imported.has(entry.name) }))
-  // A `from` re-export is this module's own surface entry even when the file
-  // also imports the name for its own use: the two are separate consumable
-  // paths, and only the re-export is being measured here.
-  const exposed = new Set([...declared, ...bare.map((entry) => entry.name)])
-  const passed = fromExportedNames(text)
-    .filter((entry) => !exposed.has(entry.name))
-    .map((entry) => ({ ...entry, passthrough: true }))
-  return [...found, ...bare, ...passed]
-}
-
-/** Every name this file binds with an `import { ... }` or `import X` statement. */
-const importedNames = (text: string): ReadonlySet<string> => {
-  const names = new Set<string>()
-  for (const match of text.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}/gm)) {
-    const inner = match[1] ?? ""
-    for (const part of inner.split(",")) {
-      const bound = part
-        .trim()
-        .replace(/^type\s+/, "")
-        .split(/\s+as\s+/)
-      const last = Option.fromNullishOr(bound[bound.length - 1])
-      if (Option.exists(last, (name) => /^[A-Za-z_$][\w$]*$/.test(name))) {
-        names.add(Option.getOrElse(last, () => ""))
-      }
-    }
-  }
-  for (const match of text.matchAll(/^import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from/gm)) {
-    const bound = Option.fromNullishOr(match[1])
-    if (Option.isSome(bound)) names.add(bound.value)
-  }
-  return names
-}
-
-const EXPORT_ENTRY =
-  /(?:^|[{,])\s*(?:type\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?/g
-
-/** The names an export block's text exposes: `type X` is `X`, `X as Y` is `Y`. */
-const exposedNamesIn = (text: string): ReadonlyArray<string> =>
-  [...text.matchAll(EXPORT_ENTRY)]
-    .flatMap((match) =>
-      Option.toArray(
-        Option.orElse(Option.fromNullishOr(match[2]), () => Option.fromNullishOr(match[1])),
-      ),
-    )
-    .filter((name) => name !== "export" && name !== "type" && name !== "from")
-
-/**
- * The names every `export { ... }` block exposes, kept or dropped by `carries`.
- *
- * The block is collected whole before that test, because a block broken across
- * lines carries its `from` on the closing line.
- */
-const blockExportedNames = (
-  text: string,
-  carries: (block: string) => boolean,
-): ReadonlyArray<{ readonly name: string; readonly line: number }> => {
-  const found: Array<{ name: string; line: number }> = []
-  const lines = text.split("\n")
-  let block: Option.Option<{ start: number; text: string }> = Option.none()
-  for (const [index, line] of lines.entries()) {
-    if (Option.isNone(block)) {
-      if (!/^export\s+(?:type\s+)?\{/.test(line)) continue
-      block = Option.some({ start: index, text: line })
-    } else {
-      block = Option.map(block, (open) => ({ ...open, text: `${open.text}\n${line}` }))
-    }
-    if (!line.includes("}")) continue
-    const closed = block
-    block = Option.none()
-    if (Option.isNone(closed)) continue
-    const open = closed.value
-    if (!carries(open.text)) continue
-    for (const name of exposedNamesIn(open.text)) found.push({ name, line: open.start + 1 })
-  }
-  return found
-}
-
-const HAS_FROM = /\}\s*from\s*["']/
-
-/** The names every `export { ... }` block without a `from` clause exposes. */
-const bareExportedNames = (text: string) =>
-  blockExportedNames(text, (block) => !HAS_FROM.test(block))
-
-/** The names every `export { ... } from "..."` block on a module surface exposes. */
-const fromExportedNames = (text: string) =>
-  blockExportedNames(text, (block) => HAS_FROM.test(block))
-
-/**
- * The names one `export { ... } from "..."` block exposes, with the line each
- * sits on. Handles `type X`, `X as Y` (the exposed name is `Y`), and blocks
- * broken across lines -- all three shapes appear in the entry point today.
- */
-const reExportedNames = (
-  text: string,
-): ReadonlyArray<{ readonly name: string; readonly line: number }> => {
-  const found: Array<{ name: string; line: number }> = []
-  let inBlock = false
-  for (const [index, line] of text.split("\n").entries()) {
-    if (!inBlock && /^export\s+(?:type\s+)?\{/.test(line)) inBlock = true
-    else if (!inBlock) continue
-    for (const name of exposedNamesIn(line)) found.push({ name, line: index + 1 })
-    if (line.includes("}")) inBlock = false
-  }
-  return found
+  /** True for a type this file declares (`export type`, `export interface`, `export type { Local }`). */
+  readonly typeOnly: boolean
 }
 
 const IDENTIFIER = /[A-Za-z_$][\w$]*/g
@@ -2957,79 +2964,6 @@ const expectErrorLines = (lines: ReadonlyArray<string>): ReadonlySet<number> => 
   }
   return marked
 }
-
-/** One `import … from "x"` or `export … from "x"` statement in code. */
-interface ModuleStatement {
-  readonly keyword: "import" | "export"
-  readonly specifier: string
-  /** The 1-based line the statement opens on. */
-  readonly line: number
-  /** The clause between the keyword and `from`: `{ a, b as c }`, `* as NS`, `D, { a }`. */
-  readonly clause: string
-}
-
-/**
- * A statement opens a line of code and names what it brings in before `from`.
- * The clause shapes are spelled out, so an `export const` followed some lines
- * later by an import never reads as one statement.
- */
-const MODULE_STATEMENT =
-  /^[ \t]*(import|export)[ \t]+(?:type[ \t]+)?(\*(?:\s+as\s+[\w$]+)?|\{[^}]*\}|[\w$]+(?:\s*,\s*(?:\{[^}]*\}|\*\s+as\s+[\w$]+))?)\s*from\s*["']([^"']+)["']/gm
-
-/**
- * Every import and re-export statement in a file's code.
- *
- * Read from the text with comments and template text blanked, so a statement
- * inside fixture text is no statement; quoted strings are kept for the
- * specifier. A statement broken across lines is read whole.
- */
-const moduleStatementsIn = (file: string, text: string): ReadonlyArray<ModuleStatement> => {
-  const code = sourceForms(file, text).statements
-  const statements: Array<ModuleStatement> = []
-  for (const match of code.matchAll(MODULE_STATEMENT)) {
-    let keyword: ModuleStatement["keyword"] = "import"
-    if (match[1] === "export") keyword = "export"
-    const opening = match.index + (match[0].length - match[0].trimStart().length)
-    statements.push({
-      keyword,
-      clause: match[2] ?? "",
-      specifier: match[3] ?? "",
-      line: code.slice(0, opening).split("\n").length,
-    })
-  }
-  return statements
-}
-
-/** The one name a `{ ... }` import entry brings in, before any `as` alias. */
-const importedName = (entry: string): Option.Option<string> => {
-  const cleaned = entry.replace(/\btype\b/g, "").trim()
-  if (cleaned.length === 0) return Option.none()
-  return Option.flatMap(Option.fromNullishOr(/^([A-Za-z_][A-Za-z0-9_]*)/.exec(cleaned)), (found) =>
-    Option.fromNullishOr(found[1]),
-  )
-}
-
-/** Names one `import { ... } from "<specifier>"` statement brings in. */
-const namedImportsIn = (statement: string): ReadonlyArray<string> => {
-  const braces = Option.fromNullishOr(/\{([^}]*)\}/s.exec(statement))
-  if (Option.isNone(braces)) return []
-  const body = braces.value[1] ?? ""
-  return body.split(",").flatMap((entry) =>
-    Option.match(importedName(entry), {
-      onNone: (): ReadonlyArray<string> => [],
-      onSome: (name) => [name],
-    }),
-  )
-}
-
-/** Aliases bound by `import * as X from "<specifier>"`. */
-const namespaceAliasesIn = (statement: string): ReadonlyArray<string> =>
-  [...statement.matchAll(/\*\s+as\s+([A-Za-z_][A-Za-z0-9_]*)/g)].flatMap((match) =>
-    Option.match(Option.fromNullishOr(match[1]), {
-      onNone: (): ReadonlyArray<string> => [],
-      onSome: (alias) => [alias],
-    }),
-  )
 
 /** Members read off a namespace alias, skipping lines that assert absence. */
 const namespaceMembersIn = (
@@ -3077,80 +3011,25 @@ interface SpecifierRead {
  *
  * A named entry credits the *original* name, not the local alias: `X as Y`
  * means the module still has to export `X`. A re-export `export { X } from`
- * reads `X` too: it is the chain an entry point is. A namespace import credits
- * every member the file's code reads off it. A statement or a member read on a
- * `@ts-expect-error` line asserts absence and reads nothing.
+ * reads `X` too: it is the chain an entry point is. A namespace import, or a
+ * binding of a literal dynamic import, credits every member the file's code
+ * reads off it. A read on a `@ts-expect-error` line asserts absence and reads
+ * nothing.
  */
 const specifierReadsIn = (file: string, text: string): ReadonlyArray<SpecifierRead> => {
+  const forms = sourceForms(file, text)
   const skip = expectErrorLines(text.split("\n"))
-  const codeLines = sourceForms(file, text).codeOnly.split("\n")
-  const statementReads = moduleStatementsIn(file, text)
-    .filter((statement) => !skip.has(statement.line))
-    .map((statement) => {
-      const named = namedImportsIn(statement.clause)
-      if (statement.keyword === "export") return { specifier: statement.specifier, names: named }
-      const members = namespaceAliasesIn(statement.clause).flatMap((alias) =>
-        namespaceMembersIn(codeLines, alias, skip),
-      )
-      return { specifier: statement.specifier, names: [...named, ...members] }
-    })
-  return [...statementReads, ...dynamicImportReadsIn(file, text, codeLines, skip)]
+  const codeLines = forms.codeOnly.split("\n")
+  return forms.module.reads
+    .filter((read) => !skip.has(read.line))
+    .map((read) => ({
+      specifier: read.specifier,
+      names: [
+        ...read.names,
+        ...read.namespaces.flatMap((alias) => namespaceMembersIn(codeLines, alias, skip)),
+      ],
+    }))
 }
-
-/** `import("<literal>")`, optionally awaited: a load a static read can follow. */
-const LITERAL_DYNAMIC_IMPORT = String.raw`(?:await\s+)?import\s*\(\s*["']([^"'\s]+)["']\s*\)`
-
-/** `import("./m").x`, `(await import("./m")).x`, `typeof import("./m").X`. */
-const DYNAMIC_IMPORT_MEMBER = new RegExp(
-  String.raw`${LITERAL_DYNAMIC_IMPORT}\s*\)?\s*\??\.\s*([A-Za-z_$][\w$]*)`,
-  "g",
-)
-/** `const { x, y: z } = await import("./m")`. */
-const DYNAMIC_IMPORT_DESTRUCTURE = new RegExp(
-  String.raw`\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*${LITERAL_DYNAMIC_IMPORT}`,
-  "g",
-)
-/** `const M = await import("./m")`: a namespace its members are read off. */
-const DYNAMIC_IMPORT_NAMESPACE = new RegExp(
-  String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*${LITERAL_DYNAMIC_IMPORT}`,
-  "g",
-)
-
-/**
- * The names a file reads through a literal dynamic import (allowed where an
- * `effect/noDynamicImports` suppression says why): a member read off the
- * import, a destructured key, or a member read off the binding it is
- * stored in. A read on a `@ts-expect-error` line reads nothing.
- */
-const dynamicImportReadsIn = (
-  file: string,
-  text: string,
-  codeLines: ReadonlyArray<string>,
-  skip: ReadonlySet<number>,
-): ReadonlyArray<SpecifierRead> => {
-  const code = withoutComments(file, text)
-  if (!code.includes("import")) return []
-  const lineOf = (index: number) => code.slice(0, index).split("\n").length
-  const found: Array<SpecifierRead> = []
-  for (const match of code.matchAll(DYNAMIC_IMPORT_MEMBER)) {
-    if (skip.has(lineOf(match.index))) continue
-    found.push({ specifier: match[1] ?? "", names: [match[2] ?? ""] })
-  }
-  for (const match of code.matchAll(DYNAMIC_IMPORT_DESTRUCTURE)) {
-    if (skip.has(lineOf(match.index))) continue
-    found.push({ specifier: match[2] ?? "", names: destructuredKeys(match[1] ?? "") })
-  }
-  for (const match of code.matchAll(DYNAMIC_IMPORT_NAMESPACE)) {
-    found.push({
-      specifier: match[2] ?? "",
-      names: namespaceMembersIn(codeLines, match[1] ?? "", skip),
-    })
-  }
-  return found
-}
-
-/** `*` or `* as NS`: the clause of a star import or re-export. */
-const isStarClause = (clause: string): boolean => clause.trim().startsWith("*")
 
 /**
  * A star re-export forwards names this scan cannot see: neither the barrel nor
@@ -3249,11 +3128,36 @@ export interface ExportFacts {
   readonly imported: ReadonlyMap<string, ReadonlySet<string>>
 }
 
-const declarationsIn = (surface: ScannedSurface, text: string): ReadonlyArray<Declaration> =>
-  Option.match(surface.specifier, {
-    onNone: () => declaredNames(text),
-    onSome: () => reExportedNames(text),
-  }).map((entry) => ({ ...entry, surface }))
+/**
+ * `(name, line)` for every name a surface file exports, each name once.
+ *
+ * Every export shape reaches the same place. `export const Foo` and a bare
+ * `export { Foo }` of a local name expose this file's own declaration. A
+ * `from` block, or a bare block that passes on an imported name, puts a
+ * second consumable name at this module path, so a dead one is dead here even
+ * though the declaring module keeps its own alive. A type this file declares
+ * is `typeOnly`; a type it passes on is not, since its own use reads the
+ * import, not the export.
+ */
+const declarationsIn = (
+  surface: ScannedSurface,
+  file: string,
+  text: string,
+): ReadonlyArray<Declaration> => {
+  // A value and a type may share a name, each on its own line; any other
+  // repeat (a bare block or a re-export of a declared name) is counted once.
+  const names = new Set<string>()
+  const declared = new Set<string>()
+  return sourceForms(file, text).module.exports.flatMap((entry) => {
+    const key = `${entry.name}:${String(entry.isType)}`
+    if (entry.passthrough && names.has(entry.name)) return []
+    if (!entry.passthrough && declared.has(key)) return []
+    names.add(entry.name)
+    declared.add(key)
+    const typeOnly = entry.isType && !entry.passthrough
+    return [{ name: entry.name, line: entry.line, typeOnly, surface }]
+  })
+}
 
 const importsIn = (
   file: string,
@@ -3273,7 +3177,7 @@ export const collectExportFacts = (file: string, text: string): ExportFacts => {
   const surface = surfaceOf(file)
   const declarations = Option.match(surface, {
     onNone: (): ReadonlyArray<Declaration> => [],
-    onSome: (found) => declarationsIn(found, text),
+    onSome: (found) => declarationsIn(found, file, text),
   })
   const identifiersByLine = Option.match(
     Option.filter(surface, (found) => found.ownFileCounts),
@@ -3285,10 +3189,7 @@ export const collectExportFacts = (file: string, text: string): ExportFacts => {
   const reads = specifierReadsIn(file, text)
   const starExportLines = Option.match(surface, {
     onNone: (): ReadonlyArray<number> => [],
-    onSome: () =>
-      moduleStatementsIn(file, text)
-        .filter((statement) => statement.keyword === "export" && isStarClause(statement.clause))
-        .map((statement) => statement.line),
+    onSome: () => sourceForms(file, text).module.starExportLines,
   })
   return {
     declarations,
