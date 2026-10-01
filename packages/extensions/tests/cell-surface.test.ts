@@ -6,6 +6,7 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Match,
   Option,
   Path,
   Predicate,
@@ -44,6 +45,7 @@ import {
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/ai/Prompt"
+import { type Decision, DecisionModel } from "effect/ai"
 import {
   BranchId,
   MessageId,
@@ -68,6 +70,10 @@ import {
   tool,
   type ToolCapability,
   LoadedArtifactIdentity,
+  Model,
+  ModelId,
+  ProviderId,
+  type ProviderAuthInfo,
 } from "@gent/core/extensions/api"
 import {
   InteractionStorage,
@@ -90,6 +96,8 @@ import {
 } from "../src/cell.js"
 import { BashTool } from "../src/exec-tools.js"
 import { BuiltinExtensions } from "../src/index.js"
+import { OpenCodeExtension } from "../src/opencode.js"
+import { TypeSafeExtension } from "../src/typesafe.js"
 import { EditTool, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { GoalTool } from "../src/goal.js"
 import { AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
@@ -328,6 +336,276 @@ describe("cell context host", () => {
       expect(pages.map((page) => page.length)).toEqual([100_000, 100_000, 50_000])
       expect(pages.join("")).toBe(text)
     }),
+  )
+})
+
+// ── cell models host ────────────────────────────────────────────────────────
+
+/** A variable no test run sets, so the judge driver has a credential only when a test stores one. */
+const JUDGE_ENV = "GENT_TEST_JUDGE_KEY_NEVER_SET"
+
+/** One provider call the judge driver answered. */
+interface JudgeCall {
+  readonly model: string
+  readonly key: Option.Option<string>
+  readonly options: DecisionModel.ProviderOptions
+}
+
+/** The API key a stored credential carries; none for an OAuth sign-in. */
+const storedApiKey = (info: ProviderAuthInfo): Option.Option<string> => {
+  if (info._tag === "Api") return Option.some(info.key)
+  return Option.none()
+}
+
+/** The judge's answer: the first label, the highest level, and 0.25. */
+const judgeAnswer = Match.type<Decision.Any>().pipe(
+  Match.tagsExhaustive({
+    Classify: (decision): DecisionModel.ProviderAnswer => {
+      const labels = Object.keys(decision.criteria)
+      return {
+        _tag: "Classify",
+        label: labels[0] ?? "",
+        probabilities: Object.fromEntries(
+          labels.map((label, index) => [label, Number(index === 0)]),
+        ),
+        confidence: 0.9,
+      }
+    },
+    Rate: (decision): DecisionModel.ProviderAnswer => {
+      const last = decision.criteria.length - 1
+      return {
+        _tag: "Rate",
+        rating: last,
+        probabilities: Object.fromEntries(
+          decision.criteria.map((level, index) => [level, Number(index === last)]),
+        ),
+      }
+    },
+    Probability: (): DecisionModel.ProviderAnswer => ({ _tag: "Probability", probability: 0.25 }),
+  }),
+)
+
+/**
+ * A model driver that serves two classifier models and no chat model. It
+ * answers through Effect's own `DecisionModel.make`, so the answers the cell
+ * sees passed the same validation a real provider's do.
+ */
+const judgeExtension = (calls: Ref.Ref<ReadonlyArray<JudgeCall>>) =>
+  defineExtension({
+    id: "@test/judge",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("modelDriver", {
+        id: "judge",
+        name: "Judge",
+        envCredential: JUDGE_ENV,
+        resolveModel: () => Effect.die("judge serves classifier models only"),
+        listModels: () =>
+          Effect.succeed(
+            ["jev-test", "jev-other", "jev-latest", "jev-broken", "jev-stalled"].map((name) =>
+              Model.make({
+                id: ModelId.make(`judge/${name}`),
+                name,
+                provider: ProviderId.make("judge"),
+                kind: "classifier",
+              }),
+            ),
+          ),
+        resolveDecisionModel: (model, authInfo) => {
+          // A driver whose model throws while it is built.
+          if (model === "jev-broken")
+            return Effect.succeed(
+              Layer.effect(DecisionModel.DecisionModel, Effect.die("judge model failed to build")),
+            )
+          // A provider that takes the request and never answers.
+          if (model === "jev-stalled")
+            return Effect.succeed(
+              Layer.effect(
+                DecisionModel.DecisionModel,
+                DecisionModel.make({ decide: () => Effect.never }),
+              ),
+            )
+          return Effect.succeed(
+            Layer.effect(
+              DecisionModel.DecisionModel,
+              DecisionModel.make({
+                decide: (options) =>
+                  Ref.update(calls, (all) => [
+                    ...all,
+                    {
+                      model,
+                      key: Option.flatMap(Option.fromUndefinedOr(authInfo), storedApiKey),
+                      options,
+                    },
+                  ]).pipe(
+                    Effect.as({
+                      answers: Object.fromEntries(
+                        Object.entries(options.decisions).map(([name, decision]) => [
+                          name,
+                          judgeAnswer(decision),
+                        ]),
+                      ),
+                      usage: { inputTokens: 21, outputTokens: 0 },
+                    }),
+                  ),
+              }),
+            ),
+          )
+        },
+      })
+    }),
+  })
+
+const SHIPPED_JEV_DRIVERS: ReadonlySet<string> = new Set([
+  TypeSafeExtension.manifest.id,
+  OpenCodeExtension.manifest.id,
+])
+
+/** Run `code` as one cell of a fresh session with the judge driver, and return its display. */
+const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
+  readonly code: string
+  readonly storeKey: boolean
+  readonly calls: Ref.Ref<ReadonlyArray<JudgeCall>>
+}) {
+  const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+    toolCallStep("cell", { code: params.code }),
+    textStep("done"),
+  ])
+  const { client, sessionId, branchId } = yield* createRpcHarness({
+    ...shippedPreset,
+    // The shipped Jev drivers read the developer's keys and would reach a provider.
+    extensionInputs: [
+      ...BuiltinExtensions.filter((extension) => !SHIPPED_JEV_DRIVERS.has(extension.manifest.id)),
+      judgeExtension(params.calls),
+    ],
+    providerLayer,
+  })
+  if (params.storeKey) yield* client.auth.setKey({ provider: "judge", key: "judge-key" })
+  yield* client.message.send({ sessionId, branchId, content: "decide" })
+  const messages = yield* waitFor(
+    client.message.list({ branchId }),
+    (all) =>
+      all.some(
+        (message) => message.role === "assistant" && messagePartsText(message.parts) === "done",
+      ),
+    10_000,
+    "assistant reply done",
+  )
+  const results = messages
+    .flatMap((message) => message.parts)
+    .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+  expect(results).toMatchObject([{ name: "cell", isFailure: false }])
+  return yield* Schema.decodeUnknownEffect(Schema.Struct({ display: Schema.String }))(
+    results[0]?.result,
+  )
+})
+
+const decodeDecideJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))
+
+describe("cell models host", () => {
+  it.scopedLive(
+    "a cell asks classify, rate and probability in one provider call; a credentialed -latest alias wins over an earlier classifier",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+        const { display } = yield* runJudgeCell({
+          calls,
+          storeKey: true,
+          code: [
+            "const reply = await models.decide({ text: 'charged twice, fix it today' }, {",
+            "  team: models.classify({ instructions: 'Which team', criteria: { billing: 'payments', technical: 'bugs' } }),",
+            "  mood: models.rate({ instructions: 'How upset', criteria: ['calm', 'upset', 'angry'] }),",
+            "  urgent: models.probability({ instructions: 'Needs action today' }),",
+            "})",
+            "JSON.stringify(reply)",
+          ].join("\n"),
+        })
+        expect(yield* decodeDecideJson(display)).toEqual({
+          model: "judge/jev-latest",
+          answers: {
+            team: {
+              label: "billing",
+              probabilities: { billing: 1, technical: 0 },
+              confidence: 0.9,
+            },
+            mood: {
+              rating: 2,
+              label: "angry",
+              probabilities: { calm: 0, upset: 0, angry: 1 },
+            },
+            urgent: { probability: 0.25 },
+          },
+          usage: { inputTokens: 21, outputTokens: 0 },
+        })
+        const made = yield* Ref.get(calls)
+        expect(made).toHaveLength(1)
+        expect(made[0]?.model).toBe("jev-latest")
+        expect(made[0]?.key).toEqual(Option.some("judge-key"))
+        expect(made[0]?.options.state).toEqual({ text: "charged twice, fix it today" })
+        expect(made[0]?.options.decisions).toEqual({
+          team: {
+            _tag: "Classify",
+            instructions: "Which team",
+            criteria: { billing: "payments", technical: "bugs" },
+          },
+          mood: { _tag: "Rate", instructions: "How upset", criteria: ["calm", "upset", "angry"] },
+          // A probability without criteria carries none.
+          urgent: { _tag: "Probability", instructions: "Needs action today" },
+        })
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    20000,
+  )
+
+  it.scopedLive(
+    "a named classifier answers; an unknown name or a one-label classify fails readably before any call",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+        const { display } = yield* runJudgeCell({
+          calls,
+          storeKey: true,
+          code: [
+            "const urgent = { urgent: models.probability({ instructions: 'Needs action today' }) }",
+            "const named = await models.decide('late order', urgent, { model: 'judge/jev-other' })",
+            "const unknown = await models.decide('late order', urgent, { model: 'judge/nope' }).catch((error) => error.message)",
+            "const single = await models.decide('late order', { team: models.classify({ instructions: 'Which team', criteria: { billing: 'payments' } }) }).catch((error) => error.message)",
+            "const broken = await models.decide('late order', urgent, { model: 'judge/jev-broken' }).catch((error) => error.message)",
+            "const stalled = await models.decide('late order', urgent, { model: 'judge/jev-stalled', timeoutMs: 200 }).catch((error) => error.message)",
+            "JSON.stringify({ model: named.model, unknown, single, broken, stalled })",
+          ].join("\n"),
+        })
+        expect(yield* decodeDecideJson(display)).toEqual({
+          model: "judge/jev-other",
+          unknown:
+            'models.decide: Unknown classifier model "judge/nope". Classifier models: judge/jev-test, judge/jev-other, judge/jev-latest, judge/jev-broken, judge/jev-stalled',
+          single:
+            "models.decide input is invalid: Error: Decision.classify: criteria must contain at least two labels",
+          // A model that throws while it is built rejects this call, not the cell.
+          broken: "models.decide: judge/jev-broken: judge model failed to build",
+          // A provider that never answers is cut off at the deadline; the cell goes on.
+          stalled: "models.decide (judge/jev-stalled) gave no answer within 200 ms",
+        })
+        expect((yield* Ref.get(calls)).map((call) => call.model)).toEqual(["jev-other"])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    20000,
+  )
+
+  it.scopedLive(
+    "with no classifier credential the call fails naming the variables and /auth",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+        const { display } = yield* runJudgeCell({
+          calls,
+          storeKey: false,
+          code: "await models.decide('late order', { urgent: models.probability({ instructions: 'Needs action today' }) }).catch((error) => error.message)",
+        })
+        expect(display).toBe(
+          `models.decide: No classifier model has a credential: set ${JUDGE_ENV}, or sign in with /auth`,
+        )
+        expect(yield* Ref.get(calls)).toEqual([])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    20000,
   )
 })
 
@@ -1518,6 +1796,21 @@ describe("cell prompt guidelines", () => {
           "run builds, test suites, and other long commands through tools.bash({ command, timeout })",
         )
         expect(guidelines).not.toContain("Bun.$ and Bun.spawn are for reading: builds, tests")
+      }),
+  )
+
+  it.effect(
+    "names models.decide, its three decision kinds, its cost, and composing it in code",
+    () =>
+      Effect.sync(() => {
+        const guidelines = (getToolMetadata(CellTool).promptGuidelines ?? []).join("\n")
+        expect(guidelines).toContain("models.decide(input, decisions, { model, timeoutMs })")
+        expect(guidelines).toContain("within timeoutMs (at most and by default 60000) rejects")
+        expect(guidelines).toContain("models.classify(")
+        expect(guidelines).toContain("models.rate(")
+        expect(guidelines).toContain("models.probability(")
+        expect(guidelines).toContain("a fraction of a cent")
+        expect(guidelines).toContain("compose it in code with other tools")
       }),
   )
 })

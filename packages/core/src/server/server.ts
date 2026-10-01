@@ -123,6 +123,7 @@ import {
   AuthApi,
   authorizeProvider,
   completeProviderAuth,
+  DecisionModelResolver,
   listAuthMethods,
   listAuthProviders,
   ModelCatalogRecord,
@@ -1947,6 +1948,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   const fileLockServiceLive = FileLockService.layer
 
   const modelResolverLive = makeModelResolverLayer(config, authDeps)
+  const decisionModelResolverLive = Layer.provide(DecisionModelResolver.Live, authLive)
 
   const baseServicesLive = Layer.provideMerge(
     Layer.mergeAll(
@@ -1965,6 +1967,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       fileLockServiceLive,
       AgentLoopSessionGovernance.Live,
       modelResolverLive,
+      decisionModelResolverLive,
       ...Option.getOrElse(Option.fromUndefinedOr(config.overrides?.extraLayers), () => []),
       FetchHttpClient.layer,
     ),

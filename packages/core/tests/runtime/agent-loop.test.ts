@@ -70,6 +70,7 @@ import {
   textDeltaPart,
   toolCallPart,
   Auth,
+  DecisionModelResolver,
   ModelRegistry,
   ModelResolver,
 } from "../../src/runtime/provider"
@@ -1262,7 +1263,92 @@ describe("model resolution failure", () => {
       }).pipe(Effect.scoped, Effect.provide(layer))
     }).pipe(Effect.timeout("5 seconds"))
   })
+
+  it.live("a classifier an agent names is refused before its driver resolves a chat model", () =>
+    refusesClassifier({
+      agents: [
+        AgentDefinition.make({
+          name: DEFAULT_AGENT_NAME,
+          description: "Agent configured with a classifier",
+          model: CLASSIFIER_MODEL_ID,
+          contextLength: 128_000,
+        }),
+      ],
+      overrides: {},
+    }),
+  )
+
+  it.live(
+    "a classifier a run override names is refused before its driver resolves a chat model",
+    () => refusesClassifier({ agents: testAgents, overrides: { modelId: CLASSIFIER_MODEL_ID } }),
+  )
 })
+
+const CLASSIFIER_MODEL_ID = ModelId.make("judge-driver/jev-latest")
+
+/** Run one turn whose model is a classifier, and check it is refused by name and never resolved for chat. */
+const refusesClassifier = (params: {
+  readonly agents: ReadonlyArray<AgentDefinition>
+  readonly overrides: { readonly modelId?: ModelId }
+}) => {
+  const modelId = CLASSIFIER_MODEL_ID
+  return Effect.gen(function* () {
+    const chatResolves = yield* Ref.make(0)
+    const driver: ModelDriverContribution = {
+      id: "judge-driver",
+      name: "Judge driver",
+      resolveModel: () =>
+        Ref.update(chatResolves, (count) => count + 1).pipe(
+          Effect.andThen(Effect.die("a classifier reached chat resolution")),
+        ),
+    }
+    const resolved = resolveExtensions([
+      {
+        manifest: { id: ExtensionId.make("judge-driver") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: { agents: params.agents, modelDrivers: [driver] },
+      },
+    ])
+    const eventsRef = yield* Ref.make<AgentEvent[]>([])
+    const layer = actorTestRoot({
+      registry: ExtensionRegistry.fromResolved(resolved),
+      eventStore: makeCountingEventStore(eventsRef),
+      // A context window does not make a classifier a chat model.
+      models: [
+        Model.make({
+          id: modelId,
+          name: "Jev",
+          provider: ProviderId.make("judge-driver"),
+          contextLength: 128_000,
+          kind: "classifier",
+        }),
+      ],
+      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+    })
+    yield* Effect.gen(function* () {
+      const agentLoop = yield* makeAgentLoopService
+      yield* runAgentLoop(
+        agentLoop,
+        makeMessage(
+          SessionId.make("classifier-session"),
+          BranchId.make("classifier-branch"),
+          "hello",
+        ),
+        { runSpec: { overrides: params.overrides } },
+      ).pipe(Effect.exit)
+      const events = yield* Ref.get(eventsRef)
+      const shown = events.flatMap((event) => {
+        if (event._tag !== "ErrorOccurred") return []
+        return [event.error]
+      })
+      expect(shown).toEqual([
+        "judge-driver/jev-latest is a classifier model: it runs no turn; a cell asks it with models.decide",
+      ])
+      expect(yield* Ref.get(chatResolves)).toBe(0)
+    }).pipe(Effect.scoped, Effect.provide(layer))
+  }).pipe(Effect.timeout("5 seconds"))
+}
 
 // ── admission withdrawal ────────────────────────────────────────────────────
 
@@ -2973,6 +3059,7 @@ const makeRuntimeLayer = (
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
+    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )

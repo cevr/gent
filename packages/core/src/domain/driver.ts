@@ -2,7 +2,9 @@
  * Model driver primitives. A `ModelDriverContribution` wraps an LLM provider:
  * auth, `listModels`, and `resolveModel` returning a model that provides an
  * `effect/ai` `LanguageModel`. The gent providers
- * (anthropic, openai) register one each.
+ * (anthropic, openai) register one each. A driver that serves classifier
+ * models also resolves them to an `effect/ai` `DecisionModel`
+ * (`resolveDecisionModel`).
  *
  * An agent may name a driver with `driver: DriverRef`; otherwise the loop
  * derives the driver from the provider segment of its model id.
@@ -13,7 +15,13 @@
  * @module
  */
 import { Context, Effect, Option, Predicate, Schema, type Layer } from "effect"
-import { AiError, type LanguageModel, type Model as AiModel, type Response } from "effect/ai"
+import {
+  AiError,
+  type DecisionModel,
+  type LanguageModel,
+  type Model as AiModel,
+  type Response,
+} from "effect/ai"
 import type { CacheWriteByLifetime, Model } from "./agent.js"
 import type { SessionId } from "./ids.js"
 
@@ -332,6 +340,15 @@ export interface ModelDriverContribution {
     authInfo?: ProviderAuthInfo,
     hints?: ProviderHints,
   ) => Effect.Effect<ProviderResolution, ProviderAuthError>
+  /**
+   * Resolve a classifier model name to an Effect AI `DecisionModel` with its
+   * auth and endpoint baked in. The driver lists those models in `listModels`
+   * with `kind: "classifier"`. Absent when the driver serves no classifier.
+   */
+  readonly resolveDecisionModel?: (
+    modelName: string,
+    authInfo?: ProviderAuthInfo,
+  ) => Effect.Effect<Layer.Layer<DecisionModel.DecisionModel>, ProviderAuthError>
   /** The driver's own model catalog. Core concatenates every driver's list; it fetches nothing. */
   readonly listModels?: (
     authInfo?: ProviderAuthInfo,

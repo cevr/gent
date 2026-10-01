@@ -1,0 +1,136 @@
+import { Effect, Layer, Option, Redacted, Schema } from "effect"
+import { FetchHttpClient, type HttpClient } from "effect/http"
+import type { DecisionModel } from "effect/ai"
+import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe"
+import {
+  AuthMethod,
+  defineExtension,
+  ExtensionHost,
+  Model,
+  ModelId,
+  type ModelDriverContribution,
+  type ModelPricing,
+  omitUndefined,
+  ProviderAuthError,
+  ProviderId,
+} from "@gent/core/extensions/api"
+import { apiKeyFrom, readOptionalEnv } from "./providers.js"
+
+// Test seam: only tests read buildTypeSafeModelDriver, which lets a test run
+// the driver against a fake fetch.
+
+/**
+ * TypeSafe's classifier models (Jev): typed answers to classify, rate and
+ * probability questions, the cell's `models.decide`. They run no turn. The
+ * driver posts to TypeSafe itself; the OpenCode Zen driver reuses
+ * `typeSafeDecisionModel` for the Jev models its gateway serves.
+ *
+ * Docs: docs.typesafe.ai and `@effect/ai-typesafe` (read 2026-10-01).
+ */
+
+// ── decision model ──────────────────────────────────────────────────────────
+
+/** Where a Jev request goes and how it is signed. */
+interface DecisionEndpoint {
+  readonly apiKey: string
+  /** The API root; the client posts to `${apiUrl}/systemone`. */
+  readonly apiUrl: string
+  readonly transformClient?: (client: HttpClient.HttpClient) => HttpClient.HttpClient
+}
+
+/** A Jev model as an Effect AI `DecisionModel`, on the host's `fetch`. */
+export const typeSafeDecisionModel = (
+  model: string,
+  endpoint: DecisionEndpoint,
+): Layer.Layer<DecisionModel.DecisionModel> =>
+  TypeSafeDecisionModel.layer({ model }).pipe(
+    Layer.provide(
+      TypeSafeClient.layer({
+        apiKey: Redacted.make(endpoint.apiKey),
+        apiUrl: endpoint.apiUrl,
+        transformClient: endpoint.transformClient,
+      }),
+    ),
+    Layer.provide(FetchHttpClient.layer),
+  )
+
+// ── catalog ─────────────────────────────────────────────────────────────────
+
+/** One classifier entry of a driver's static catalog: models.dev lists no Jev model. */
+export interface ClassifierEntry {
+  readonly name: string
+  readonly label: string
+  readonly pricing?: ModelPricing
+}
+
+/** A catalog `Model` for a classifier entry; the TUI picker leaves it out. */
+export const classifierModel = (providerId: string, entry: ClassifierEntry): Model =>
+  Model.make({
+    id: ModelId.make(`${providerId}/${entry.name}`),
+    name: entry.label,
+    provider: ProviderId.make(providerId),
+    kind: "classifier",
+    ...omitUndefined({ pricing: entry.pricing }),
+  })
+
+// ── driver ──────────────────────────────────────────────────────────────────
+
+const DRIVER_ID = "typesafe"
+const ENV_CREDENTIAL = "TYPESAFE_API_KEY"
+const API_URL = "https://api.typesafe.ai/v1"
+
+/**
+ * The model ids `@effect/ai-typesafe` names (`TypeSafeDecisionModel.Model`),
+ * as the TypeSafe docs list them. `jev-latest` comes first, so a cell that
+ * names no model and has a TypeSafe key gets it.
+ */
+const CLASSIFIERS: ReadonlyArray<ClassifierEntry> = [
+  { name: "jev-latest", label: "Jev (latest)" },
+  { name: "jev-preview", label: "Jev (preview)" },
+  { name: "jev-1.13.0", label: "Jev 1.13.0" },
+]
+
+/** A chat turn asked for a model of a driver that serves only classifiers. */
+class ClassifierOnlyDriver extends Schema.TaggedError<ClassifierOnlyDriver>(
+  "@gent/extensions/src/typesafe/ClassifierOnlyDriver",
+)("ClassifierOnlyDriver", {
+  message: Schema.String,
+}) {}
+
+/** The TypeSafe driver. `envApiKey` is `TYPESAFE_API_KEY`, read at setup; a stored key wins over it. */
+export const buildTypeSafeModelDriver = (
+  envApiKey: Option.Option<string>,
+): ModelDriverContribution => ({
+  id: DRIVER_ID,
+  name: "TypeSafe",
+  envCredential: ENV_CREDENTIAL,
+  resolveModel: (modelName) =>
+    Effect.die(
+      new ClassifierOnlyDriver({
+        message: `${DRIVER_ID}/${modelName} is a classifier model: it runs no turn; a cell asks it with models.decide`,
+      }),
+    ),
+  resolveDecisionModel: (modelName, authInfo) =>
+    Effect.gen(function* () {
+      const apiKey = apiKeyFrom(Option.fromNullishOr(authInfo), envApiKey)
+      if (Option.isNone(apiKey)) {
+        return yield* new ProviderAuthError({
+          message: `TypeSafe credentials unavailable: no stored API key and no ${ENV_CREDENTIAL} env var`,
+        })
+      }
+      return typeSafeDecisionModel(modelName, { apiKey: apiKey.value, apiUrl: API_URL })
+    }),
+  listModels: () => Effect.succeed(CLASSIFIERS.map((entry) => classifierModel(DRIVER_ID, entry))),
+  auth: {
+    methods: [AuthMethod.make({ type: "api", label: "TypeSafe API key" })],
+  },
+})
+
+export const TypeSafeExtension = defineExtension({
+  id: "@gent/provider-typesafe",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    const envApiKey = yield* readOptionalEnv(ENV_CREDENTIAL)
+    yield* host.register("modelDriver", buildTypeSafeModelDriver(envApiKey))
+  }),
+})

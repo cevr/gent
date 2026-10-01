@@ -80,6 +80,12 @@ export class Model extends Schema.Class<Model>("Model")({
    * requests keep `promptCacheTtlMs`. Read through `promptCacheTtlMsFor`.
    */
   childPromptCacheTtlMs: Schema.optional(Schema.Finite),
+  /**
+   * `classifier`: the model answers typed decisions (`effect/ai/Decision`)
+   * through its driver's `resolveDecisionModel` and never runs a turn.
+   * Absent for a chat model.
+   */
+  kind: Schema.optional(Schema.Literal("classifier")),
 }) {}
 
 /**

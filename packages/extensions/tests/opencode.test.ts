@@ -37,6 +37,8 @@ import {
 import { buildOpenCodeModelDriver, OPENCODE_GATEWAYS, OpenCodeExtension } from "../src/opencode.js"
 import { catalogSource, modelsDevCatalog } from "../src/providers.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
+import { decideTicket, systemOneBody, TICKET, TICKET_QUESTIONS } from "./helpers/decision-wire.js"
+import { BuiltinExtensions } from "../src/index.js"
 
 /**
  * The OpenCode gateways, Zen and Go: one driver constructor, three wire
@@ -701,6 +703,88 @@ describe("OpenCode prompt caching", () => {
         ),
       ).toEqual([[false], [true], [true]])
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+})
+
+// ── classifiers ─────────────────────────────────────────────────────────────
+
+describe("OpenCode Zen classifiers", () => {
+  it.live("a Jev decide posts to Zen's System One with the key and a session of its own", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const resolve = Option.getOrThrow(Option.fromUndefinedOr(zen.resolveDecisionModel))
+      const state = makeFakeFetchState()
+      const response = yield* decideTicket(yield* resolve("jev-1.13", apiAuth), state)
+      yield* decideTicket(yield* resolve("jev-1.13-free", apiAuth), state)
+      expect(state.captured.map((request) => request.url)).toEqual([
+        "https://opencode.ai/zen/v1/systemone",
+        "https://opencode.ai/zen/v1/systemone",
+      ])
+      for (const request of state.captured) {
+        expect(request.headers["authorization"]).toBe(`Bearer ${API_KEY}`)
+        expect(request.headers["x-opencode-client"]).toBe("gent")
+        expect(request.headers["user-agent"]).toBe("gent")
+      }
+      const sessions = state.captured.map((request) => request.headers["x-opencode-session"] ?? "")
+      expect(sessions.every((session) => UUID.test(session))).toBe(true)
+      expect(new Set(sessions).size).toBe(2)
+      const bodies = yield* Effect.forEach(state.captured, systemOneBody)
+      expect(bodies).toEqual([
+        { model: "jev-1.13", state: TICKET, questions: TICKET_QUESTIONS },
+        { model: "jev-1.13-free", state: TICKET, questions: TICKET_QUESTIONS },
+      ])
+      expect(response.answers.topic.label).toBe("billing")
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("Zen lists its Jev models as classifiers; Go serves none", () =>
+    Effect.gen(function* () {
+      const { zen, go } = yield* fixtureDrivers
+      const zenModels = yield* Option.getOrThrow(Option.fromUndefinedOr(zen.listModels))()
+      const classifiers = zenModels.filter((model) => model.kind === "classifier")
+      expect(classifiers.map((model) => model.id)).toEqual([
+        ModelId.make("opencode/jev-1.13"),
+        ModelId.make("opencode/jev-1.13-free"),
+      ])
+      const goModels = yield* Option.getOrThrow(Option.fromUndefinedOr(go.listModels))()
+      expect(goModels.some((model) => model.kind === "classifier")).toBe(false)
+      expect(go.resolveDecisionModel).toBeUndefined()
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live(
+    "without a stored key or OPENCODE_API_KEY, resolving a Jev model names the variable",
+    () =>
+      Effect.gen(function* () {
+        const { zen } = yield* fixtureDrivers
+        const resolve = Option.getOrThrow(Option.fromUndefinedOr(zen.resolveDecisionModel))
+        const error = yield* Effect.flip(resolve("jev-1.13"))
+        expect(error).toBeInstanceOf(ProviderAuthError)
+        expect(error.message).toContain("OPENCODE_API_KEY")
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("the shipped extensions list both routes' Jev models as classifiers over RPC", () =>
+    Effect.gen(function* () {
+      const home = yield* fixtureHome
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+      const { client } = yield* createRpcHarness({
+        agents: [],
+        home,
+        extensionInputs: BuiltinExtensions,
+        providerLayer,
+      })
+      const classifiers = (yield* client.model.list({}))
+        .filter((model) => model.kind === "classifier")
+        .map((model) => model.id)
+      expect(classifiers.toSorted()).toEqual([
+        ModelId.make("opencode/jev-1.13"),
+        ModelId.make("opencode/jev-1.13-free"),
+        ModelId.make("typesafe/jev-1.13.0"),
+        ModelId.make("typesafe/jev-latest"),
+        ModelId.make("typesafe/jev-preview"),
+      ])
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 })
 
