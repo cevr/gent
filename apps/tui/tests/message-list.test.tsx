@@ -2960,6 +2960,31 @@ const assistant = (id: string, content: string): ListMessage => ({
 })
 
 describe("native transcript markdown", () => {
+  // The answer is indented, so a diagram fits the columns after the indent:
+  // one fitted to the whole terminal wraps its right edge onto the next row.
+  it.scopedLive("a diagram fits the answer's width, not the terminal's", () =>
+    Effect.gen(function* () {
+      const diagram = "```mermaid\ngraph LR\n  Alpha-->Beta-->Gamma\n```"
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[assistant("diagram", diagram)]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        ),
+        { width: 48, height: 30 },
+      )
+      const rows = renderFrame(setup).split("\n")
+      const labelRow = Option.getOrThrow(
+        Option.fromUndefinedOr(rows.find((row) => row.includes("Alpha"))),
+      )
+      expect(labelRow).toContain("Gamma")
+      expect(labelRow.trimEnd().endsWith("│")).toBe(true)
+    }),
+  )
+
   it.scopedLive("a message enters native history with its markdown concealed", () =>
     Effect.gen(function* () {
       const savedText: string[] = []
