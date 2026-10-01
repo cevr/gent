@@ -266,6 +266,9 @@ const runGent = ({
     let mock = Option.none<{ readonly empty: boolean }>()
     if (debug) mock = Option.some({ empty: false })
     if (mockEmpty) mock = Option.some({ empty: true })
+    // A scripted model (`--debug`, `--mock-empty`) needs no sign-in, in
+    // headless and in the TUI alike.
+    const scriptedModel = Option.isSome(mock)
     const bundle = yield* resolveClientBundle({
       cwd,
       connect,
@@ -303,8 +306,7 @@ const runGent = ({
         state,
       })
 
-      // A scripted model (`--debug`, `--mock-empty`) needs no sign-in.
-      if (missingSignIns.length > 0 && Option.isNone(mock) && Option.isNone(connect)) {
+      if (missingSignIns.length > 0 && !scriptedModel && Option.isNone(connect)) {
         return yield* new CliStartupError({
           message: `missing required sign-ins: ${missingSignIns.join(", ")}`,
         })
@@ -379,6 +381,7 @@ const runGent = ({
                       >
                         <App
                           debugMode={debug}
+                          scriptedModel={scriptedModel}
                           initialBranches={bootstrap.initialBranches}
                           initialThemeMode={initialThemeMode}
                         />

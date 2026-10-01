@@ -2747,7 +2747,8 @@ export function createSessionController(props: {
    * loop to choose between.
    */
   initialBranches: Option.Option<readonly Branch[]>
-  debugMode?: boolean
+  /** The model is scripted (`--debug`, `--mock-empty`): it needs no sign-in. */
+  scriptedModel?: boolean
 }): SessionController {
   const client = useClient()
   const command = useCommand()
@@ -2833,7 +2834,7 @@ export function createSessionController(props: {
     on(
       [() => client.agent(), branchPickerOpen],
       ([agentName, pickerOpen]) => {
-        if (props.debugMode) return
+        if (props.scriptedModel === true) return
         if (pickerOpen) return
         Option.match(agentName, {
           onNone: () => {},
@@ -2874,7 +2875,7 @@ export function createSessionController(props: {
   )
 
   const authGatePending = () =>
-    !props.debugMode &&
+    props.scriptedModel !== true &&
     (authGateState() !== "closed" || !Equal.equals(validatedAgent(), client.agent()))
 
   const [composerState, setComposerState] = createSignal<ComposerState>(

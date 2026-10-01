@@ -491,6 +491,8 @@ interface SessionProps {
   /** Branches to dock the picker over at boot; `None` resumes straight in. */
   initialBranches: Option.Option<readonly Branch[]>
   debugMode?: boolean
+  /** The model is scripted (`--debug`, `--mock-empty`): it needs no sign-in. */
+  scriptedModel?: boolean
 }
 
 function ExtensionWidgets(props: { slot: WidgetSlot }) {
@@ -810,6 +812,8 @@ export function Session(props: SessionProps) {
 
 interface AppProps {
   debugMode?: boolean
+  /** The model is scripted (`--debug`, `--mock-empty`): it needs no sign-in. */
+  scriptedModel?: boolean
   initialThemeMode?: "dark" | "light"
   /**
    * Branches the boot flow resumed into, when the session has more than one.
@@ -855,6 +859,7 @@ function AppContent(props: AppProps) {
               branchId={session.branchId}
               initialBranches={branches}
               debugMode={props.debugMode}
+              scriptedModel={props.scriptedModel}
             />
           )
         }}

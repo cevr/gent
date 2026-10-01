@@ -1023,6 +1023,61 @@ describe("App auth gate", () => {
     }),
   )
 
+  // A scripted model (`--debug`, `--mock-empty`) answers with no key: the
+  // session view asks for no sign-in, as headless does not.
+  it.scopedLive("a scripted model opens the session with no sign-in", () =>
+    Effect.gen(function* () {
+      let checks = 0
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.sync(() => {
+              checks += 1
+              return [
+                {
+                  provider: "anthropic",
+                  hasKey: false,
+                  required: true,
+                  source: "none" satisfies "none",
+                  authType: absent,
+                },
+              ]
+            }),
+        },
+        branch: { getTree: () => Effect.succeed([]) },
+      })
+      let ctx = Option.none<ClientContextValue>()
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <App scriptedModel />
+            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+          </>
+        ),
+        {
+          client,
+          runtime: createMockRuntime(),
+          initialSession: {
+            id: SessionId.make("session-scripted"),
+            activeBranchId: BranchId.make("branch-scripted"),
+            name: "Scripted",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
+      )
+      yield* waitForFrame(setup, (next) => next.includes("ready ·"), "session view")
+      // The agent resolves: the point where a keyed model checks its sign-ins.
+      applySnapshotAgent(yield* requireClient(ctx), AgentName.make("main"))
+      yield* Effect.promise(() => setup.renderOnce())
+      const frame = yield* Effect.promise(() => setup.renderOnce()).pipe(
+        Effect.map(() => renderFrame(setup)),
+      )
+      expect(frame).not.toContain("Sign in ·")
+      expect(checks).toBe(0)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.scopedLive("rechecks auth requirements when the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
