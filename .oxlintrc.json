@@ -117,9 +117,6 @@
     // Import rules
     "import/no-duplicates": "error",
 
-    // Node rules
-    "node/no-process-env": "error",
-
     // Unused vars
     "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
     "no-underscore-dangle": "off",
@@ -285,9 +282,8 @@
       "rules": {
         "effect/noAsyncFunction": "off",
         // The script reaches the host through Bun's shell, `console` and `Date`;
-        // these members are the bans it keeps, and noGlobals is their one owner.
-        // `node/no-process-env` from the root rules reads only a direct
-        // `process.env`; the `process` member follows an alias too.
+        // these members are the bans it keeps, and noGlobals is their one owner;
+        // the `process` member follows an alias too.
         "effect/noGlobals": [
           "error",
           {
@@ -379,8 +375,7 @@
         "effect/noRuntimeTypeof": "off",
         "effect/noTernary": "off",
         "effect/noThrowStatement": "off",
-        "effect/noUnsafeDictionaryType": "off",
-        "node/no-process-env": "off"
+        "effect/noUnsafeDictionaryType": "off"
       }
     },
     {

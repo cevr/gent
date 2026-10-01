@@ -14,6 +14,6 @@ export const timer = setTimeout(() => {}, 1) // held-by: effect/noGlobals
 export const poll = setInterval(() => {}, 1) // held-by: effect/noGlobals
 export const coin = Math.random() // held-by: effect/noGlobals
 export const uuid = crypto.randomUUID() // held-by: effect/noGlobals
-export const env = process.env["LOOP_PROBE_X"] // held-by: node/no-process-env
+export const env = process.env["LOOP_PROBE_X"] // held-by: effect/noGlobals
 const host = process
 export const aliased = host.env["LOOP_PROBE_X"] // held-by: effect/noGlobals

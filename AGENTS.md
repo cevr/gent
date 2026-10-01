@@ -2,7 +2,7 @@
 
 Building gent - minimal, opinionated agent harness (built with Effect).
 
-North stars: effect-native, actor-model, a lean core with maximal expressiveness through extensions, and single files over fragmentation.
+North stars: effect-native, actor-model, a lean core with maximal expressiveness through extensions, cheap per task (maximum efficiency and cache rate), and one interaction model. `NORTH_STAR.md` holds them and the owner rules, among them single files over fragmentation.
 
 ## Quick Start
 

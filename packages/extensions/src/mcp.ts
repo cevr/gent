@@ -1391,7 +1391,7 @@ export const HostEnvironment = Context.Reference<Readonly<Record<string, string>
   {
     defaultValue: () =>
       Object.fromEntries(
-        // oxlint-disable-next-line effect/noGlobals, node/no-process-env -- the process environment is the platform's own store, and Effect reads it only by name
+        // oxlint-disable-next-line effect/noGlobals -- the process environment is the platform's own store, and Effect reads it only by name
         Object.entries(process.env).filter((entry): entry is [string, string] =>
           Predicate.isString(entry[1]),
         ),
