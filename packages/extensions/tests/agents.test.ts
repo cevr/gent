@@ -92,6 +92,27 @@ describe("project instructions", () => {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive(
+    "a session in a subdirectory reads each directory's file up to the git root, root first",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("instructions-home-")
+        const root = yield* makeTempDirectoryScoped("instructions-repo-")
+        // A worktree's `.git` is a file; it marks the root as a directory does.
+        yield* writeFile(`${root}/.git`, "gitdir: /nonexistent/loop-probe-x\n")
+        yield* writeFile(`${root}/AGENTS.md`, "root rules")
+        yield* writeFile(`${root}/packages/core/CLAUDE.md`, "core rules")
+        expect(yield* instructionsIn(home, `${root}/packages/core`)).toBe(
+          "root rules\n---\ncore rules",
+        )
+        // Outside a git work tree only the session's own directory is read.
+        const outer = yield* makeTempDirectoryScoped("instructions-outer-")
+        yield* writeFile(`${outer}/AGENTS.md`, "outer rules")
+        yield* writeFile(`${outer}/sub/AGENTS.md`, "sub rules")
+        expect(yield* instructionsIn(home, `${outer}/sub`)).toBe("sub rules")
+      }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.scopedLive("an empty AGENTS.md defers to CLAUDE.md beside it", () =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("instructions-home-")

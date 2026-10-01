@@ -633,8 +633,9 @@ Shape:
   names the session id, the branch id, and the replaced id range so the model
   can page the replaced history from the cell.
 - Project instructions are an extension, not a profile field. `@gent/agents`
-  reads `AGENTS.md` (or `CLAUDE.md`) from the gent home, the project and the
-  project-local `.gent/` on every turn and contributes the `project-instructions`
+  reads `AGENTS.md` (or `CLAUDE.md`) from the gent home, each directory from
+  the git root down to the project (the project alone outside a git work tree,
+  as opencode reads them) and the project-local `.gent/` on every turn and contributes the `project-instructions`
   prompt section at priority 70 beside the persona sections. Launched from home
   (`hasProjectScope` is false), the project-local `.gent/` is the gent home and
   is read once. Core builds no
