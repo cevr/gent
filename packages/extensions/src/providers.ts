@@ -17,6 +17,7 @@ import {
 import {
   isRecord,
   isRecordArray,
+  type JsonRecord,
   Model,
   ModelId,
   type ModelPricing,
@@ -1232,18 +1233,13 @@ const isHostContextUpdateText = Schema.is(
 )
 
 // ── messages prompt cache ───────────────────────────────────────────────────
-
-/**
- * The block rule both Messages drivers (Anthropic, and the OpenCode gateways'
- * Messages models) mark by. A request that names no conversation (its hints
- * carry no `cacheKey`: the compaction summary) writes no cache, since no later
- * request reads it back. A marker goes on a block the API takes one on, never
- * on a thinking block or an empty text block (the API refuses it), and never
- * on a host context update, which the next turn does not repeat.
- */
-/** A block or message of a request body, as either driver reads it. */
-const WireRecord = Schema.Record(Schema.String, Schema.Unknown)
-type WireRecord = typeof WireRecord.Type
+//
+// The block rule both Messages drivers (Anthropic, and the OpenCode gateways'
+// Messages models) mark by. A request that names no conversation (its hints
+// carry no `cacheKey`: the compaction summary) writes no cache, since no later
+// request reads it back. A marker goes on a block the API takes one on, never
+// on a thinking block or an empty text block (the API refuses it), and never
+// on a host context update, which the next turn does not repeat.
 
 const CACHEABLE_BLOCK_TYPES: ReadonlySet<unknown> = new Set([
   "text",
@@ -1259,11 +1255,11 @@ export const writesPromptCache = (hints: Option.Option<ProviderHints>): boolean 
   Option.exists(hints, (value) => Predicate.isNotUndefined(value.cacheKey))
 
 /** True for a content block that takes `cache_control`. */
-export const isCacheableBlock = (block: WireRecord): boolean =>
+export const isCacheableBlock = (block: JsonRecord): boolean =>
   CACHEABLE_BLOCK_TYPES.has(block["type"]) && !(block["type"] === "text" && block["text"] === "")
 
 /** True for a user message the SDK built from a later system message, not from the conversation. */
-export const isHostContextUpdate = (message: WireRecord): boolean => {
+export const isHostContextUpdate = (message: JsonRecord): boolean => {
   const content = message["content"]
   if (message["role"] !== "user" || !isRecordArray(content) || content.length === 0) return false
   return content.every(

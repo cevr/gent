@@ -25,6 +25,7 @@ import {
   type ExtensionHostService,
   isRecord,
   isRecordArray,
+  type JsonRecord,
   Model,
   type ModelDriverContribution,
   ProviderAuthError,
@@ -1139,8 +1140,8 @@ type KeychainTransformRequirements = Crypto.Crypto | AnthropicPlatform
 
 const MCP_PREFIX = "mcp_"
 const BILLING_HEADER_PREFIX = "x-anthropic-billing-header"
-const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
-type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
+/** Reads a wire value (a response body, a stream event) as a `JsonRecord`; a non-record throws. */
+const decodeJsonRecord = Schema.decodeSync(Schema.Record(Schema.String, Schema.Unknown))
 const JsonValueSchema = Schema.Unknown
 type JsonValue = Schema.Schema.Type<typeof JsonValueSchema>
 const MessageStreamEventSchema = Schema.Union([
@@ -1876,7 +1877,7 @@ export const transformStreamEvent =
   (toolIds: ReadonlyArray<string>) =>
   (event: AnthropicClient.MessageStreamEvent): AnthropicClient.MessageStreamEvent => {
     // content_block_start has type: "content_block_start" and content_block with the block data
-    const e = Schema.decodeSync(JsonRecordSchema)(event)
+    const e = decodeJsonRecord(event)
     if (e["type"] !== "content_block_start") return event
     const rawBlock = e["content_block"]
     if (!isRecord(rawBlock)) return event
@@ -2015,7 +2016,7 @@ const claudeCodeClientPath = (
     message: (call, toolIds) =>
       explain(call).pipe(
         Effect.map(([body, response]) => {
-          const b = Schema.decodeSync(JsonRecordSchema)(body)
+          const b = decodeJsonRecord(body)
           const content = b["content"]
           if (isRecordArray(content)) {
             const transformed = {

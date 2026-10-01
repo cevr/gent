@@ -804,9 +804,10 @@ describe("auth persistence RPC failures", () => {
             authLayer: failingAuthStoreLayer,
           }),
         )
+        const { sessionId } = yield* client.session.create({})
         const exit = yield* Effect.exit(
           client.auth.authorize({
-            sessionId: SessionId.make("auth-rpc-session"),
+            sessionId,
             provider: "persisting-authorize",
             method: 0,
           }),
@@ -830,15 +831,16 @@ describe("auth persistence RPC failures", () => {
             authLayer: failingAuthStoreLayer,
           }),
         )
+        const { sessionId } = yield* client.session.create({})
         const authorization = yield* client.auth.authorize({
-          sessionId: SessionId.make("auth-rpc-session"),
+          sessionId,
           provider: "persisting-oauth",
           method: 0,
         })
         if (Predicate.isNull(authorization)) return yield* Effect.die("auth setup failed")
         const exit = yield* Effect.exit(
           client.auth.callback({
-            sessionId: SessionId.make("auth-rpc-session"),
+            sessionId,
             provider: "persisting-oauth",
             method: 0,
             authorizationId: authorization.authorizationId,
@@ -5492,6 +5494,42 @@ describe("session profile lookup", () => {
           expect(tags).toEqual(["StorageError", "StorageError", "StorageError", "StorageError"])
         }).pipe(Effect.timeout("4 seconds")),
       ),
+  )
+
+  it.live("a call that names a deleted session fails, never answers from the launch profile", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { drivers } = yield* client.driver.list({})
+        const driver = { _tag: "Model" as const, id: drivers[0]?.id ?? "none" }
+        const { sessionId } = yield* client.session.create({})
+        yield* client.session.delete({ sessionId })
+        const tagOf = <A, E extends { readonly _tag: string }, R>(call: Effect.Effect<A, E, R>) =>
+          Effect.match(call, { onFailure: (error) => error._tag, onSuccess: () => "answered" })
+        const authorizeInput = { sessionId, provider: driver.id, method: 0 }
+        const calls = {
+          "model.list": tagOf(client.model.list({ sessionId })),
+          "driver.list": tagOf(client.driver.list({ sessionId })),
+          "driver.set": tagOf(
+            client.driver.set({ agentName: DEFAULT_AGENT_NAME, driver, sessionId }),
+          ),
+          "auth.listMethods": tagOf(client.auth.listMethods({ sessionId })),
+          "auth.listProviders": tagOf(client.auth.listProviders({ sessionId })),
+          "auth.authorize": tagOf(client.auth.authorize(authorizeInput)),
+          "auth.callback": tagOf(
+            client.auth.callback({ ...authorizeInput, authorizationId: "none" }),
+          ),
+          "auth.setKey": tagOf(client.auth.setKey({ provider: driver.id, key: "sk", sessionId })),
+          "auth.deleteKey": tagOf(client.auth.deleteKey({ provider: driver.id, sessionId })),
+          "extension.listStatus": tagOf(client.extension.listStatus({ sessionId })),
+          "extension.listSlashCommands": tagOf(client.extension.listSlashCommands({ sessionId })),
+        }
+        const tags = yield* Effect.all(calls)
+        // Each call that did not fail with NotFoundError, with what it did.
+        expect(Object.entries(tags).filter(([, tag]) => tag !== "NotFoundError")).toEqual([])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
 
   // A client of the launch cwd works in the launch workspace, so its

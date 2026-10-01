@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, Option, Stream } from "effect"
-import { AgentsExtension, main as builtinAgent } from "../src/agents.js"
-import { getToolId, type SystemPromptInput } from "@gent/core/extensions/api"
+import { AgentsExtension } from "../src/agents.js"
+import { DEFAULT_SESSION_NAME, getToolId } from "@gent/core/extensions/api"
 import {
   collectTestContributions,
   createRpcHarness,
@@ -9,7 +9,9 @@ import {
   LanguageModelLayers,
   textDeltaPart,
   toolCallPart,
+  textStep,
   toolCallStep,
+  waitFor,
 } from "@gent/core/test-utils"
 import * as Prompt from "effect/ai/Prompt"
 import {
@@ -33,49 +35,73 @@ import {
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolEventFor } from "./helpers/tool-event.js"
 
-/**
- * SessionToolsExtension prompt-slot behavior locks.
- *
- * The extension contributes a `systemPrompt` projection slot that injects
- * a `## Session naming` instruction for interactive prompts and skips it
- * for non-interactive ones. Test pins both branches against the
- * runtime slot compiler.
- */
+// ── session naming ──────────────────────────────────────────────────────────
 
-const getSystemPrompt = Effect.gen(function* () {
-  const contributions = yield* collectTestContributions(SessionToolsExtension.setup)
-  const systemPrompt = Option.fromUndefinedOr(
-    contributions.hooks?.find((slot) => slot.kind === "systemPrompt"),
+/** Forks a reader that ends after `count` turns of the branch have ended. */
+const turnEnds = <E>(stream: Stream.Stream<EventEnvelope, E>, count: number) =>
+  stream.pipe(
+    Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+    Stream.take(count),
+    Stream.runDrain,
+    Effect.forkScoped,
   )
-  if (Option.isNone(systemPrompt)) {
-    return yield* Effect.die(new Error("expected session tools systemPrompt hook"))
-  }
-  return systemPrompt.value.hook.handler
-})
 
-describe("SessionToolsExtension", () => {
-  it.live("injects naming instruction for interactive prompts", () =>
-    Effect.gen(function* () {
-      const systemPrompt = yield* getSystemPrompt
-      const prompt = yield* systemPrompt({
-        basePrompt: "base",
-        agent: builtinAgent,
-        interactive: true,
-      } satisfies SystemPromptInput)
-      expect(prompt).toContain("## Session naming")
-      expect(prompt.startsWith("base")).toBe(true)
-    }),
+describe("session naming", () => {
+  it.live(
+    "a root session takes its name from the first line of its first message",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("done")])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [AgentsExtension, SessionToolsExtension],
+          })
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "  Fix the login redirect\nIt loops after sign-in.",
+          })
+          const named = yield* waitFor(
+            client.session.get({ sessionId }),
+            (session) => session?.name !== DEFAULT_SESSION_NAME,
+            3_000,
+            "the session's name",
+          )
+          expect(named?.name).toBe("Fix the login redirect")
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
-  it.live("non-interactive prompts pass through unchanged", () =>
-    Effect.gen(function* () {
-      const systemPrompt = yield* getSystemPrompt
-      const prompt = yield* systemPrompt({
-        basePrompt: "base",
-        agent: builtinAgent,
-        interactive: false,
-      } satisfies SystemPromptInput)
-      expect(prompt).toBe("base")
-    }),
+  it.live(
+    "a name the model gives in the first turn wins over the first message",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("rename_session", { name: "auth redirect work" }),
+            textStep("done"),
+            textStep("again"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [AgentsExtension, SessionToolsExtension],
+          })
+          const events = client.session.events({ sessionId, branchId })
+          const first = yield* turnEnds(events, 1)
+          // The loop runs a turn's `turnAfter` hooks before it takes the next
+          // turn, so once the second turn ends the first one's hooks have run.
+          const second = yield* turnEnds(events, 2)
+          yield* client.message.send({ sessionId, branchId, content: "Fix the login redirect" })
+          yield* Fiber.join(first)
+          yield* client.message.send({ sessionId, branchId, content: "And the logout one" })
+          yield* Fiber.join(second)
+          expect((yield* client.session.get({ sessionId }))?.name).toBe("auth redirect work")
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
 })
 

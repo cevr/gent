@@ -10,7 +10,7 @@ import {
   TurnCompleted,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Exit, Option, Predicate, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Predicate, Schema } from "effect"
 import {
   AgentEvent,
   AgentName,
@@ -145,6 +145,7 @@ describe("session settings", () => {
     const next = transitionSessionState(
       active,
       SessionStateEvent.cases.UpdateSettings.make({
+        sessionId: active.sessionId,
         modelId: ModelId.make("openai/gpt-5.6-luna"),
         reasoningLevel: absent,
       }),
@@ -154,6 +155,23 @@ describe("session settings", () => {
       reasoningLevel: absent,
     })
     expect(next.name).toBe("S")
+  })
+  test("an update for a session the shell left changes nothing", () => {
+    const other = SessionId.make("left")
+    const updates = [
+      SessionStateEvent.cases.UpdateSettings.make({
+        sessionId: other,
+        modelId: ModelId.make("openai/gpt-5.6-luna"),
+        reasoningLevel: absent,
+      }),
+      SessionStateEvent.cases.UpdateName.make({ sessionId: other, name: "Other" }),
+      SessionStateEvent.cases.UpdateCwd.make({ sessionId: other, cwd: "/elsewhere" }),
+    ]
+    expect(updates.map((update) => transitionSessionState(active, update))).toEqual([
+      active,
+      active,
+      active,
+    ])
   })
 })
 
@@ -1002,6 +1020,59 @@ describe("ClientProvider session lifecycle", () => {
       expect(active.session().modelId).toEqual(ModelId.make("openai/gpt-5.6-luna"))
     }),
   )
+  for (const outcome of ["reply", "refusal"] as const) {
+    it.scopedLive(`a settings ${outcome} that lands after a switch stays with its session`, () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        const requested = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const client = createMockClient({
+          session: {
+            updateSettings: () =>
+              Deferred.succeed(requested, void 0).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(
+                  Effect.suspend(() => {
+                    if (outcome === "refusal")
+                      return Effect.fail({ _tag: "NotFoundError", message: "session gone" })
+                    return Effect.succeed({
+                      modelId: ModelId.make("openai/gpt-5.6-luna"),
+                      reasoningLevel: absent,
+                    })
+                  }),
+                ),
+              ),
+          },
+        })
+        yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client,
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        })
+        const active = yield* requireClientSessionState(ctx)
+        const done = yield* active
+          .updateSessionSettings({ modelId: Option.some(ModelId.make("openai/gpt-5.6-luna")) })
+          .pipe(Effect.exit, Effect.forkScoped)
+        yield* Deferred.await(requested)
+        active.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
+        yield* Deferred.succeed(release, void 0)
+        yield* Fiber.join(done)
+        expect(active.session().sessionId).toEqual(SECOND.sessionId)
+        expect(active.session().modelId).toBeUndefined()
+        expect(active.error()).toEqual(Option.none())
+        if (outcome === "reply") return
+        // The refusal waits with its own session and shows on the return.
+        active.switchSession(FIRST.sessionId, FIRST.branchId, "First")
+        active.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
+        expect(active.error()).toEqual(Option.some("Not found: session gone"))
+      }).pipe(Effect.timeout("5 seconds")),
+    )
+  }
   it.scopedLive("runtime idle clears finishing activity only for the current branch", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

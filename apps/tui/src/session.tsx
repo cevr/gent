@@ -101,7 +101,7 @@ import {
   recordFrecencyPick,
 } from "./autocomplete"
 import { type Command, executeSlashCommand, isSlashCommandName, useCommand } from "./commands"
-import { createStore, produce, type SetStoreFunction } from "solid-js/store"
+import { createStore, produce, type SetStoreFunction, unwrap } from "solid-js/store"
 import {
   addStep,
   type AssistantSegment,
@@ -1273,29 +1273,21 @@ export function usePromptHistory(): PromptHistory {
 // ── autocomplete frecency hook ──────────────────────────────────────────────
 
 /**
- * The live pick history behind the composer's autocomplete ranking.
+ * The pick history behind the composer's autocomplete ranking.
  *
- * One store serves every prefix and every session. The value lives in
- * the frecency store in `autocomplete.ts` rather than here, because two surfaces
- * record picks — this hook for `/` commands, and the `$` skills extension —
- * and a cache owned by one of them goes stale the moment the other writes.
- * A snapshot loaded once and written back on every `/` pick would erase
- * whatever `$` wrote in between.
+ * One file serves every prefix and every session. Two surfaces record picks
+ * into it — this hook for `/` commands, and the `$` skills extension — so the
+ * hook keeps no store of its own: a copy owned by one surface goes stale the
+ * moment the other writes.
  *
- * So this hook keeps no store of its own. It reads the shared snapshot for
- * ranking and delegates every write to `recordFrecencyPick`, which folds the
- * pick into what is actually on disk under a single-permit gate.
+ * `lookup` reads the file each time ranking runs (`readFrecencyLookup`), so a
+ * pick recorded anywhere ranks on the next keystroke. A missing or unreadable
+ * file answers zero for every row, as a reader with no history gets: the
+ * popup ranks by match quality.
  *
- * Ranking stays synchronous. It runs inside the popup's resource callback,
- * which Solid runs under `untrack`, so nothing read there can make the popup
- * re-rank. The lookup is therefore a plain map read of the shared snapshot,
- * re-done on the next keystroke, which is when a new ranking is wanted anyway.
- * Until the first load lands it answers zero, which is the same thing it
- * answers for a reader with no history: the popup ranks by match quality and
- * nothing waits.
- *
- * Writes never block the keystroke path either. `cast` forks the write onto
- * the client runtime and returns immediately.
+ * Every write goes through `recordFrecencyPick`, which folds the pick into
+ * what is on disk under a single-permit gate. `cast` forks the write onto the
+ * client runtime, so it never blocks the keystroke path.
  */
 
 interface AutocompleteFrecency {
@@ -1473,11 +1465,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
       const sessionReasoningLevel = Schema.decodeUnknownOption(ReasoningEffort)(
         reasoningLevel.value,
       )
-      props.cast(
-        props.client
-          .updateSessionSettings({ reasoningLevel: sessionReasoningLevel })
-          .pipe(props.client.surfaceError),
-      )
+      props.cast(props.client.updateSessionSettings({ reasoningLevel: sessionReasoningLevel }))
     },
   },
   {
@@ -1494,7 +1482,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         return
       }
       const apply = (modelId: Option.Option<ModelId>) =>
-        props.cast(props.client.updateSessionSettings({ modelId }).pipe(props.client.surfaceError))
+        props.cast(props.client.updateSessionSettings({ modelId }))
       if (query === "default" || query === "off") {
         apply(Option.none())
         return
@@ -1743,30 +1731,25 @@ const buildSegments = (
   )
 }
 
-const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
-  const filteredMsgs = msgs.filter((m) => m.role !== "tool")
+const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] =>
+  msgs.flatMap((m) => {
+    if (m.role === "tool") return []
+    return [buildMessage(m, m.toolInteractions.map(toToolCall))]
+  })
 
-  return filteredMsgs.map((m) => {
-    // Only an assistant message calls tools, and its segments name every call it made.
-    let segments = Option.none<AssistantSegment[]>()
-    if (m.role === "assistant")
-      segments = Option.some(buildSegments(m.segments, m.toolInteractions.map(toToolCall)))
-    if (m._tag === "interjection")
-      return {
-        _tag: "interjection-message",
-        id: m.id,
-        role: "user",
-        content: messagePartsText(m.parts),
-        reasoning: messagePartsReasoning(m.parts),
-        images: messagePartsImages(m.parts),
-        createdAt: m.createdAt.getTime(),
-        segments: Option.getOrUndefined(segments),
-        metadata: m.metadata,
-      }
+/**
+ * One feed message from a projected one. Its tool-call segments draw the
+ * `toolCalls` they name; a segment that names no call draws nothing.
+ */
+const buildMessage = (m: ProjectedMessage, toolCalls: ReadonlyArray<ToolCall>): Message => {
+  // Only an assistant message calls tools, and its segments name every call it made.
+  let segments = Option.none<AssistantSegment[]>()
+  if (m.role === "assistant") segments = Option.some(buildSegments(m.segments, toolCalls))
+  if (m._tag === "interjection")
     return {
-      _tag: "regular-message",
+      _tag: "interjection-message",
       id: m.id,
-      role: m.role,
+      role: "user",
       content: messagePartsText(m.parts),
       reasoning: messagePartsReasoning(m.parts),
       images: messagePartsImages(m.parts),
@@ -1774,24 +1757,42 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
       segments: Option.getOrUndefined(segments),
       metadata: m.metadata,
     }
-  })
+  return {
+    _tag: "regular-message",
+    id: m.id,
+    role: m.role,
+    content: messagePartsText(m.parts),
+    reasoning: messagePartsReasoning(m.parts),
+    images: messagePartsImages(m.parts),
+    createdAt: m.createdAt.getTime(),
+    segments: Option.getOrUndefined(segments),
+    metadata: m.metadata,
+  }
 }
 
+/**
+ * A received message takes its row, or replaces the row its id names. The
+ * replaced row's tool calls stay: the feed attached them live, and their
+ * status is newer than the received message's.
+ */
 const upsertReceivedMessage = (
   setStore: SetStoreFunction<SessionFeedStore>,
   message: ProjectedMessage,
 ) => {
-  const next = buildMessages([message])[0]
-  const nextMessage = Option.fromNullishOr(next)
-  if (Option.isNone(nextMessage)) return
+  if (message.role === "tool") return
   setStore(
     produce((draft) => {
-      const index = draft.messages.findIndex((candidate) => candidate.id === nextMessage.value.id)
-      if (index === -1) {
-        draft.messages.push(nextMessage.value)
+      const index = draft.messages.findIndex((candidate) => candidate.id === message.id)
+      const projectedCalls = message.toolInteractions.map(toToolCall)
+      const existing = Option.fromNullishOr(draft.messages[index])
+      if (Option.isNone(existing)) {
+        draft.messages.push(buildMessage(message, projectedCalls))
         return
       }
-      draft.messages[index] = nextMessage.value
+      draft.messages[index] = buildMessage(message, [
+        ...projectedCalls,
+        ...messageToolCalls(existing.value),
+      ])
     }),
   )
 }
@@ -1807,27 +1808,6 @@ const settleRetryingEvents = (
       for (const event of draft.events) {
         if (event._tag === "retrying" && from.includes(event.outcome)) event.outcome = outcome
       }
-    }),
-  )
-}
-
-/**
- * The retry's request goes out `delayMs` after its row; the answer the retry
- * gives dates from then, so the row sits above it. An answer the failed
- * attempt already wrote into keeps its place. Core's own clock readers date
- * the request the same way (`knownRequestStart` in turn.ts).
- */
-const dateAnswerFromRetry = (
-  setStore: SetStoreFunction<SessionFeedStore>,
-  id: string,
-  requestAt: number,
-) => {
-  setStore(
-    produce((draft) => {
-      const answer = Option.fromNullishOr(draft.messages.find((message) => message.id === id))
-      if (Option.isNone(answer) || answer.value.content !== "") return
-      if (messageToolCalls(answer.value).length > 0) return
-      answer.value.createdAt = requestAt
     }),
   )
 }
@@ -1996,14 +1976,12 @@ const toActiveInteraction = (event: AgentEvent): Option.Option<ActiveInteraction
 
 /**
  * Events whose effect the session snapshot already carries. Replay skips them
- * so a reload does not re-count turns or re-append settled tool payloads.
+ * so a reload does not re-append settled tool payloads. A replayed chunk is
+ * the answer in progress's to decide (`useSessionFeed`).
  */
 const isSnapshotHeldEvent = Predicate.or(
-  Predicate.isTagged("StreamChunk"),
-  Predicate.or(
-    Predicate.isTagged("ToolCallStarted"),
-    Predicate.or(Predicate.isTagged("ToolCallSucceeded"), Predicate.isTagged("ToolCallFailed")),
-  ),
+  Predicate.isTagged("ToolCallStarted"),
+  Predicate.or(Predicate.isTagged("ToolCallSucceeded"), Predicate.isTagged("ToolCallFailed")),
 )
 
 const isToolResultEvent = Predicate.or(
@@ -2118,6 +2096,8 @@ export function useSessionFeed(
   const [runningCalls, setRunningCalls] = createSignal<ReadonlyArray<RunningCall>>([])
   const [streamReady, setStreamReady] = createSignal(false)
   let streamMessageId = Option.none<string>()
+  // When the open answer's request went out: its row, drawn with the first chunk, sorts there.
+  let answerStartedAt = 0
   let eventSeq = 0
   // The steps of the turn in flight; TurnCompleted spends them on its label.
   let turnSteps = emptyTurnSteps
@@ -2139,7 +2119,8 @@ export function useSessionFeed(
     switch (event._tag) {
       case "MessageReceived":
         // A replayed message is already in the snapshot unless it is standalone.
-        if (isStandaloneMessage(event.message) || (live && event.message.role === "user")) {
+        // A live answer is the step's stored answer: it replaces the streamed text.
+        if (isStandaloneMessage(event.message) || live) {
           upsertReceivedMessage(setStore, projectMessage(event.message, []))
         }
         return
@@ -2163,6 +2144,9 @@ export function useSessionFeed(
 
       case "ToolCallStarted":
         setRunningCalls((calls) => startCall(calls, event, client.pathPlace()))
+        // A call is content too: it draws the open answer's row if no chunk did.
+        if (Predicate.isUndefined(event.parentToolCallId))
+          drawOpenAnswer(Option.fromUndefinedOr(event.assistantMessageId))
         startToolCall(setStore, event, receivedAt)
         return
 
@@ -2179,8 +2163,10 @@ export function useSessionFeed(
           createdAt: stampedAt,
           seq: eventSeq++,
         })
-        if (Option.isSome(streamMessageId))
-          dateAnswerFromRetry(setStore, streamMessageId.value, stampedAt + event.delayMs)
+        // The retry's request goes out `delayMs` after its row; an answer not
+        // yet drawn dates from then, so the row sits above it. Core's own
+        // clock readers date the request the same way (`knownRequestStart`).
+        answerStartedAt = stampedAt + event.delayMs
         return
 
       case "ErrorOccurred":
@@ -2227,34 +2213,96 @@ export function useSessionFeed(
     return true
   }
 
+  // ── the answer in progress ──
+  //
+  // Core publishes each chunk as a stored event and stores the step's answer
+  // (its `MessageReceived`) only when the step ends. So the answer in
+  // progress is built from chunks, stored and live alike: a `StreamStarted`
+  // opens it, its first content (a chunk, or a tool call) draws its row, each
+  // later chunk extends it, and the step's live `MessageReceived` replaces it
+  // with the stored answer (`applySettledEvent`). A step whose answer the
+  // snapshot holds is settled: its replayed chunks add nothing.
+
+  /** The ids of the answers the latest snapshot holds. */
+  let snapshotAnswers: ReadonlySet<string> = new Set()
+
   /**
-   * Start the message this turn's answer belongs to. The durable input id and
-   * step name it, so a later chunk or receipt finds the same owner.
+   * Take a snapshot. It holds settled answers only, so the answer in
+   * progress stays on top of it unless the snapshot already holds its id.
+   */
+  const applySnapshotMessages = (messages: ReadonlyArray<ProjectedMessage>) => {
+    snapshotAnswers = new Set(messages.map((message) => String(message.id)))
+    const next = buildMessages(messages)
+    streamMessageId = Option.filter(streamMessageId, (id) => !snapshotAnswers.has(id))
+    const inProgress = Option.flatMap(streamMessageId, (id) =>
+      Option.fromNullishOr(store.messages.find((message) => message.id === id)),
+    )
+    if (Option.isSome(inProgress)) next.push(unwrap(inProgress.value))
+    setStore("messages", next)
+  }
+
+  /**
+   * Open the answer this step streams into. The durable input id and step
+   * name it, so a later chunk or receipt finds the same owner. A replayed
+   * start opens only an answer the snapshot does not hold; one with no input
+   * id cannot say, so it opens nothing. Opening draws nothing: the row comes
+   * with the first chunk, so a step that streamed nothing (a provider that
+   * failed first, a cancel during the backoff) draws no answer, live or on
+   * a reload.
    */
   const openStreamedAnswer = (
     event: Extract<AgentEvent, { _tag: "StreamStarted" }>,
     stampedAt: number,
+    live: boolean,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
-      const id = yield* Option.fromUndefinedOr(event.messageId).pipe(
-        Option.match({
-          onNone: () => randomId,
-          onSome: (inputId) => Effect.succeed(assistantMessageIdForTurn(inputId, event.step)),
-        }),
+      const durable = Option.map(Option.fromUndefinedOr(event.messageId), (inputId) =>
+        String(assistantMessageIdForTurn(inputId, event.step)),
       )
-      streamMessageId = Option.some(id)
-      ensureAssistantMessage(setStore, "", id, stampedAt)
+      answerStartedAt = stampedAt
+      if (!live) {
+        streamMessageId = Option.filter(durable, (id) => !snapshotAnswers.has(id))
+        return
+      }
+      streamMessageId = Option.some(
+        yield* Option.match(durable, { onNone: () => randomId, onSome: Effect.succeed }),
+      )
     })
 
-  /** A chunk extends the open answer. A history stream without one gets a local id. */
-  const appendStreamedChunk = (chunk: string, stampedAt: number): Effect.Effect<void> =>
+  /**
+   * A chunk extends the open answer; the first one draws its row, dated when
+   * the answer's request went out. A replayed chunk with no open answer
+   * belongs to a settled step; a live one opens a local answer (a history
+   * stream with no start).
+   */
+  const appendStreamedChunk = (
+    chunk: string,
+    stampedAt: number,
+    live: boolean,
+  ): Effect.Effect<void> =>
     Effect.gen(function* () {
-      const id = yield* streamMessageId.pipe(
-        Option.match({ onNone: () => randomId, onSome: Effect.succeed }),
-      )
+      if (!live && Option.isNone(streamMessageId)) return
+      if (Option.isNone(streamMessageId)) answerStartedAt = stampedAt
+      const id = yield* Option.match(streamMessageId, {
+        onNone: () => randomId,
+        onSome: Effect.succeed,
+      })
       streamMessageId = Option.some(id)
-      ensureAssistantMessage(setStore, chunk, id, stampedAt)
+      ensureAssistantMessage(setStore, chunk, id, answerStartedAt)
     })
+
+  /**
+   * Draw the open answer's row, empty, when its first content is a tool call
+   * (`named` is the answer the call names, when it names one). An answer
+   * already drawn, or a call for another answer, draws nothing.
+   */
+  const drawOpenAnswer = (named: Option.Option<string>) => {
+    if (Option.isNone(streamMessageId)) return
+    const id = streamMessageId.value
+    if (Option.isSome(named) && named.value !== id) return
+    if (store.messages.some((message) => message.id === id)) return
+    ensureAssistantMessage(setStore, "", id, answerStartedAt)
+  }
 
   /** The transcript row that closes a turn: an interruption or a duration. */
   const appendTurnEndRow = (
@@ -2368,7 +2416,7 @@ export function useSessionFeed(
               yield* Effect.sync(() => {
                 client.applySessionSnapshot(snapshot)
                 callbacks.onQueueSnapshot(snapshot.runtime.queue)
-                setStore("messages", buildMessages(snapshot.messages))
+                applySnapshotMessages(snapshot.messages)
               })
 
               const after = lastSeenEventId
@@ -2516,8 +2564,9 @@ export function useSessionFeed(
    * One event handler for both passes.
    *
    * `replay` covers envelopes at or before the snapshot cursor: the snapshot
-   * already holds their message, tool, and metric state, so replay only
-   * rebuilds the event-only UI rows and stamps them with the recorded time.
+   * already holds their settled message, tool, and metric state, so replay
+   * rebuilds the event-only UI rows and the answer still in progress, and
+   * stamps them with the recorded time.
    * `live` covers everything after it and stamps rows with the current time so
    * they sort after the snapshot's own rows.
    */
@@ -2549,15 +2598,14 @@ export function useSessionFeed(
         case "StreamStarted":
           // A new step means the last step's retries ran.
           settleRetryingEvents(setStore, "retried")
-          if (!live) break
-          setRunningCalls([])
-          yield* openStreamedAnswer(event, stampedAt)
+          if (live) setRunningCalls([])
+          yield* openStreamedAnswer(event, stampedAt, live)
           break
 
         case "StreamChunk":
           // The answer streams: the retry ran.
           settleRetryingEvents(setStore, "retried")
-          yield* appendStreamedChunk(event.chunk, stampedAt)
+          yield* appendStreamedChunk(event.chunk, stampedAt, live)
           break
 
         default:
@@ -3209,12 +3257,12 @@ export function createSessionController(props: {
 
   const onModelSelect = (modelId: ModelId) => {
     closeOverlay()
-    cast(client.updateSessionSettings({ modelId: Option.some(modelId) }).pipe(client.surfaceError))
+    cast(client.updateSessionSettings({ modelId: Option.some(modelId) }))
   }
 
   const onReasoningSelect = (level: Option.Option<ReasoningEffort>) => {
     closeOverlay()
-    cast(client.updateSessionSettings({ reasoningLevel: level }).pipe(client.surfaceError))
+    cast(client.updateSessionSettings({ reasoningLevel: level }))
   }
 
   const onForkSelect = (messageId: MessageId) => {

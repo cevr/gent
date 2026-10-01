@@ -249,6 +249,7 @@ Special prefixes at input start trigger different modes:
 - Runs in the session's cwd; a spawn failure (the cwd is gone) is a refused submission (below)
 - Has no time limit: while it runs the activity row shows `$ cmd`, and ctrl+c stops it (or the view going). A stopped command sends nothing, and the status row says so
 - Output is read as it arrives, up to 8 MiB (`SHELL_READ_CAP_BYTES` in `composer.tsx`); past that the command is ended. The message keeps the lines that fit the `@file` cap; a cut writes the output read to `<data dir>/shell-output/` and the message names the file
+- A command that exits with a status other than zero ends its message with `[exit N]`, so a failure that prints nothing still reads as one
 
 ### Refused submissions
 

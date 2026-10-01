@@ -795,16 +795,9 @@ export function MessageList(props: MessageListProps) {
  *
  * Two readers compare transcript items for identity: native history decides
  * what already reached scrollback, and the display boundary decides what a
- * `/clear` already dismissed. Both used a JSON encode of the whole item, which
- * carries key order — and the feed built one message two ways, so the same
- * message encoded to two different strings. Native history replayed and
- * cleared the terminal's saved lines; the boundary would report an unchanged
- * tool call as changed.
- *
- * Naming the drawn fields in a fixed order answers both. A rebuild is silent;
- * new text, a completed tool call, and a changed event still change the value.
- *
- * @module
+ * `/clear` already dismissed. The fingerprint names the drawn fields in a
+ * fixed order, so an item rebuilt with the same fields gives the same value;
+ * new text, a completed tool call, and a changed event change it.
  */
 
 const encodeFingerprint = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
