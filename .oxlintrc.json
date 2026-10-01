@@ -284,12 +284,17 @@
         "effect/noAsyncFunction": "off",
         // The script reaches the host through Bun's shell, `console` and `Date`;
         // these members are the bans it keeps, and noGlobals is their one owner.
-        // `process.env` is held by `node/no-process-env` from the root rules.
+        // `node/no-process-env` from the root rules reads only a direct
+        // `process.env`; the `process` member follows an alias too.
         "effect/noGlobals": [
           "error",
           {
             "builtins": false,
             "members": {
+              "process": {
+                "properties": ["env"],
+                "use": "the driver's arguments, or Effect Config"
+              },
               "Bun": {
                 "properties": ["Glob", "randomUUIDv7"],
                 "use": "Effect FileSystem to list files, GentPlatform.randomId for ids"
