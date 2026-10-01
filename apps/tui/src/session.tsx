@@ -32,6 +32,7 @@ import {
 import {
   type ActiveInteraction,
   type AgentEvent,
+  ApprovalDecisionSchema,
   type ApprovalResult,
   assistantMessageIdForTurn,
   Branch,
@@ -412,12 +413,6 @@ export function transitionComposerInteraction(
  * This state handles server-driven interaction flows (questions, permissions, prompts, handoffs).
  */
 
-const ApprovalResultSchema = Schema.Struct({
-  approved: Schema.Boolean,
-  notes: Schema.optional(Schema.String),
-  editedContent: Schema.optional(Schema.String),
-})
-
 export type ComposerState =
   | { readonly _tag: "idle" }
   | { readonly _tag: "interaction"; readonly interaction: ActiveInteraction }
@@ -428,7 +423,7 @@ export const ComposerState = {
 
 export const ComposerEvent = Schema.TaggedUnion({
   EnterInteraction: { interaction: InteractionPresented },
-  ResolveInteraction: { result: ApprovalResultSchema },
+  ResolveInteraction: { result: ApprovalDecisionSchema },
   DismissInteraction: { requestId: Schema.String },
 })
 export type ComposerEvent = Schema.Schema.Type<typeof ComposerEvent>
