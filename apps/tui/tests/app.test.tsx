@@ -2491,6 +2491,25 @@ describe("App slash commands", () => {
       }
     }).pipe(Effect.timeout("4 seconds")),
   )
+  // The refusal names the draft it gave back: once the reader changes that
+  // draft, the reason goes with it.
+  it.scopedLive("an unknown command's refusal leaves the status row with its draft", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      yield* typeCommand("/zzq")(view.setup)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("Unknown command: /zzq") && frame.includes("┃ /zzq"),
+        "the refusal and the draft back",
+      )
+      view.setup.mockInput.pressKey("u", { ctrl: true })
+      yield* waitForFrame(
+        view.setup,
+        (frame) => !frame.includes("/zzq") && !frame.includes("Unknown command"),
+        "the draft and its refusal gone",
+      )
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   it.scopedLive("a pane that opens over a previewing prompt search gives the draft back", () =>
     Effect.gen(function* () {
       const setup = yield* renderScoped(() => <App />, {

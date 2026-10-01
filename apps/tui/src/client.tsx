@@ -603,6 +603,12 @@ interface ClientAgentValue {
    */
   setErrorIn: (target: SessionIdentity, error: string) => void
   /**
+   * Take back an error `setErrorIn` gave, while it still stands: what it
+   * named is gone, such as a refused draft the reader changed. A later error
+   * stays.
+   */
+  dismissErrorIn: (target: SessionIdentity, error: string) => void
+  /**
    * The last extension notice (`ClientContext.shell.notify`). It sits beside the
    * turn status, not in it: a notice leaves a running turn running and a
    * standing error standing. The next notice replaces it; a new turn or a
@@ -1420,6 +1426,13 @@ export function ClientProvider(props: ClientProviderProps) {
       let turnsStarted = Option.none<number>()
       if (inView) turnsStarted = agentStore.turnsStarted
       heldErrors.set(identityKey(target), { error, turnsStarted })
+    },
+    dismissErrorIn: (target, error) => {
+      const key = identityKey(target)
+      const held = Option.fromUndefinedOr(heldErrors.get(key))
+      if (Option.exists(held, (entry) => entry.error === error)) heldErrors.delete(key)
+      const shown = Option.exists(agentStore.error, (current) => current === error)
+      if (shown && sameIdentity(session(), target)) setAgentStore({ error: Option.none() })
     },
     setError: (error) => showError(Option.some(error)),
     notice,
