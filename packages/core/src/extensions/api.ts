@@ -74,7 +74,7 @@ export {
   ProviderAuthInfo,
   reportProviderStopReason,
 } from "../domain/driver.js"
-export { type ApprovalDecision, InteractionPendingError } from "../domain/interaction.js"
+export { InteractionPendingError } from "../domain/interaction.js"
 export type {
   ModelDriverContribution,
   ProviderAuthorizationResult,
