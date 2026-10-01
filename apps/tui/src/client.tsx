@@ -573,7 +573,7 @@ interface ClientAgentValue {
   sessionMetrics: () => SessionMetrics
   /** None until the model registry loads the model in use. */
   modelInfo: () => Option.Option<Model>
-  /** The models a registered driver can run, in registry order; empty until both load. */
+  /** The chat models a registered driver can run, in registry order; empty until both load. */
   models: () => readonly Model[]
   /** `models`, or `None` until the catalog's first load settles; a failed load settles empty. */
   modelCatalog: () => Option.Option<ReadonlyArray<Model>>
@@ -1336,9 +1336,10 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
   }
+  // A classifier model answers the cell's `models.decide` and never runs a turn.
   const runnableModels = (): readonly Model[] =>
-    Object.values(modelStore.modelsById).filter((model) =>
-      modelStore.driverIds.includes(model.provider),
+    Object.values(modelStore.modelsById).filter(
+      (model) => modelStore.driverIds.includes(model.provider) && model.kind !== "classifier",
     )
   // The agent's name, held as a memo. Every session snapshot writes a new
   // `Option` for the agent (a reconnect refetches one), and a write of the

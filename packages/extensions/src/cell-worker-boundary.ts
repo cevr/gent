@@ -480,17 +480,35 @@ const promiseState = (promise: object): Option.Option<PromiseState> => {
   return Option.some({ status, value: peekPromise(promise) })
 }
 
-/** The namespaces `tools` and `context` read: the latest evaluator's. */
+/** What `models.classify`, `models.rate` and `models.probability` take, as `effect/ai/Decision` names it. */
+interface DecisionOptions {
+  readonly instructions: Schema.Json
+  readonly criteria?: Schema.Json
+}
+
+/** What `models.decide` takes beside the input and the decisions. */
+interface DecideOptions {
+  readonly model?: Schema.Json
+  readonly timeoutMs?: Schema.Json
+}
+
+/** The host call `models.decide` sends: only the options the cell set. */
+interface DecideRequest extends DecideOptions {
+  readonly input: Schema.Json
+  readonly decisions: Schema.Json
+}
+
+/** The namespaces `tools`, `context` and `models` read: the latest evaluator's. */
 const hostNamespaces = new Map<string, unknown>()
 /**
  * Install a host namespace once per realm, as an accessor that is not
  * configurable and whose setter throws. A cell that declares or assigns
- * `tools` or `context` fails with this message; one that deletes or
- * redefines it fails, or is refused. So no cell can make either namespace
+ * `tools`, `context` or `models` fails with this message; one that deletes or
+ * redefines it fails, or is refused. So no cell can make a namespace
  * unrecoverable, and no reset needs to put one back.
  */
 // oxlint-disable-next-line effect/noUnknownParameters -- a namespace is whatever the evaluator built
-const installHostNamespace = (name: "tools" | "context", value: unknown) => {
+const installHostNamespace = (name: "tools" | "context" | "models", value: unknown) => {
   hostNamespaces.set(name, value)
   const installed = Option.exists(
     Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(globalThis, name)),
@@ -742,14 +760,18 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         ),
       ),
   })
-  // The context namespace is host-served: every method is one host call under `context.`.
-  const contextCall = (operation: string, input: Schema.Json) =>
+  // The context and models namespaces are host-served: every method is one
+  // host call under the namespace's name, its input checked as JSON first.
+  // oxlint-disable-next-line effect/noUnknownParameters -- cell code passes any JavaScript value
+  const namespaceCall = (name: string, input: unknown) =>
     runPromise(
-      Schema.decodeEffect(Schema.Json)(input).pipe(
+      Schema.decodeUnknownEffect(Schema.Json)(input).pipe(
         Effect.mapError((cause) => failure("execute", cause)),
-        Effect.flatMap((decoded) => host.call(`context.${operation}`, decoded)),
+        Effect.flatMap((decoded) => host.call(name, decoded)),
       ),
     )
+  const contextCall = (operation: string, input: Schema.Json) =>
+    namespaceCall(`context.${operation}`, input)
   const context = {
     status: () => contextCall("status", {}),
     history: (options: { offset?: number; limit?: number } = {}) =>
@@ -762,8 +784,25 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     },
     newWindow: () => contextCall("newWindow", {}),
   }
+  // `models.decide` asks a classifier model; the three builders spell a
+  // decision in `effect/ai/Decision`'s vocabulary, which the host checks. Cell
+  // code may pass any value: the types name what the host accepts.
+  const models = {
+    decide: (input: Schema.Json, decisions: Schema.Json, options: DecideOptions = {}) => {
+      // Only the options the cell set travel; the host checks their types.
+      let request: DecideRequest = { input, decisions }
+      if (!Predicate.isUndefined(options.model)) request = { ...request, model: options.model }
+      if (!Predicate.isUndefined(options.timeoutMs))
+        request = { ...request, timeoutMs: options.timeoutMs }
+      return namespaceCall("models.decide", request)
+    },
+    classify: (options: DecisionOptions) => ({ _tag: "Classify", ...options }),
+    rate: (options: DecisionOptions) => ({ _tag: "Rate", ...options }),
+    probability: (options: DecisionOptions) => ({ _tag: "Probability", ...options }),
+  }
   installHostNamespace("tools", toolsNamespace)
   installHostNamespace("context", context)
+  installHostNamespace("models", models)
   if (!(Predicate.hasProperty(globalThis, "require") && Predicate.isFunction(globalThis.require))) {
     Object.defineProperty(globalThis, "require", {
       value: createRequire(`${environment.workingDirectory}/`),

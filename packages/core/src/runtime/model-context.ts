@@ -767,15 +767,31 @@ export const ModelContextCapabilityFailure = Schema.TaggedUnion({
     modelId: Schema.String,
     reason: Schema.String,
   },
+  /** The catalog marks the model a classifier: the cell's `models.decide` asks it, no turn runs on it. */
+  ClassifierModel: {
+    modelId: Schema.String,
+  },
 })
 export type ModelContextCapabilityFailure = typeof ModelContextCapabilityFailure.Type
+
+const capabilityFailureMessage = ModelContextCapabilityFailure.match({
+  UnknownModel: (failure) => `${failure.modelId} is not in the model catalog`,
+  MissingContextLimit: (failure) => `${failure.modelId} has no context window in the catalog`,
+  InvalidContextLimit: (failure) => `${failure.modelId}: ${failure.reason}`,
+  ClassifierModel: (failure) =>
+    `${failure.modelId} is a classifier model: it runs no turn; a cell asks it with models.decide`,
+})
 
 export class ModelContextCapabilityError extends Schema.TaggedError<ModelContextCapabilityError>()(
   "ModelContextCapabilityError",
   {
     failure: ModelContextCapabilityFailure,
   },
-) {}
+) {
+  override get message(): string {
+    return capabilityFailureMessage(this.failure)
+  }
+}
 
 export class ModelContextProjectionError extends Schema.TaggedError<ModelContextProjectionError>()(
   "ModelContextProjectionError",

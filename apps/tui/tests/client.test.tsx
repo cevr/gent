@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import {
   emptyQueueSnapshot,
+  testAgent,
   ErrorOccurred,
   EventId,
   MessageReceived,
@@ -19,8 +20,10 @@ import {
   EventEnvelope,
   GentRpcError,
   Message,
+  Model,
   MessageId,
   ModelId,
+  ProviderId,
   SessionId,
   type SessionSnapshot,
   type ReasoningEffort,
@@ -1152,6 +1155,39 @@ describe("ClientProvider session lifecycle", () => {
       lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
       yield* waitUntil(() => listings === 2, "the reconnect reads the catalog again")
       expect(listings).toBe(2)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("a classifier model in the catalog is not offered as a chat model", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const chat = Model.make({
+        id: ModelId.make("anthropic/sonnet"),
+        name: "Sonnet",
+        provider: ProviderId.make("anthropic"),
+      })
+      const classifier = Model.make({
+        id: ModelId.make("typesafe/jev-latest"),
+        name: "Jev",
+        provider: ProviderId.make("typesafe"),
+        kind: "classifier",
+      })
+      const mockClient = createMockClient({
+        model: { list: () => Effect.succeed([chat, classifier]) },
+        driver: {
+          list: () =>
+            Effect.succeed({
+              drivers: [{ id: "anthropic" }, { id: "typesafe" }],
+              overrides: {},
+              agents: [testAgent],
+            }),
+        },
+      })
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        client: mockClient,
+      })
+      const client = yield* requireClientSessionState(ctx)
+      yield* waitUntil(() => Option.isSome(client.modelCatalog()), "the catalog load")
+      expect(client.models().map((model) => model.id)).toEqual([chat.id])
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(

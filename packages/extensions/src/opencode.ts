@@ -17,8 +17,10 @@ import {
   ExtensionHost,
   type ModelDriverContribution,
   ProviderAuthError,
+  type ProviderAuthInfo,
   type ProviderHints,
 } from "@gent/core/extensions/api"
+import { type ClassifierEntry, classifierModel, typeSafeDecisionModel } from "./typesafe.js"
 import {
   apiKeyFrom,
   type CatalogSource,
@@ -54,6 +56,8 @@ interface Gateway {
   /** The gateway root. The OpenAI paths live under `/v1`; the Anthropic SDK adds `/v1/messages` itself. */
   readonly origin: string
   readonly authLabel: string
+  /** The classifier models (Jev) the gateway serves over TypeSafe's API; models.dev lists none. */
+  readonly classifiers: ReadonlyArray<ClassifierEntry>
 }
 
 export const OPENCODE_GATEWAYS = {
@@ -62,12 +66,20 @@ export const OPENCODE_GATEWAYS = {
     name: "OpenCode Zen",
     origin: "https://opencode.ai/zen",
     authLabel: "OpenCode Zen API key",
+    // From Zen's own list, `https://opencode.ai/zen/v1/models` (read 2026-10-01),
+    // priced per its docs: $0.042 per million input tokens, output free.
+    // Zen serves no `jev-latest`.
+    classifiers: [
+      { name: "jev-1.13", label: "Jev 1.13", pricing: { input: 0.042, output: 0 } },
+      { name: "jev-1.13-free", label: "Jev 1.13 (free)", pricing: { input: 0, output: 0 } },
+    ],
   },
   go: {
     id: "opencode-go",
     name: "OpenCode Go",
     origin: "https://opencode.ai/zen/go",
     authLabel: "OpenCode Go / Go Plus API key",
+    classifiers: [],
   },
 } satisfies Record<string, Gateway>
 
@@ -599,7 +611,10 @@ const modelLayer = (format: WireFormat, resolution: Resolution) => {
   }
 }
 
-/** The models the driver lists: the gateway's catalog entries in a wire format it speaks. */
+/**
+ * The models the driver lists: the gateway's catalog entries in a wire format
+ * it speaks, then its classifier models.
+ */
 const listGatewayModels = (gateway: Gateway, catalog: CatalogSource) =>
   driverListModels(catalog, gateway.id, PROMPT_CACHE_TTL)().pipe(
     Effect.flatMap((models) =>
@@ -608,6 +623,25 @@ const listGatewayModels = (gateway: Gateway, catalog: CatalogSource) =>
           Effect.map((wire) => Option.isSome(wireFormatOf(wire))),
         ),
       ),
+    ),
+    Effect.map((models) => [
+      ...models,
+      ...gateway.classifiers.map((entry) => classifierModel(gateway.id, entry)),
+    ]),
+  )
+
+/** The gateway's API key: a stored key first, then `OPENCODE_API_KEY`. */
+const gatewayApiKey = (
+  gateway: Gateway,
+  authInfo: Option.Option<ProviderAuthInfo>,
+  envApiKey: Option.Option<string>,
+): Effect.Effect<string, ProviderAuthError> =>
+  Effect.fromOption(apiKeyFrom(authInfo, envApiKey)).pipe(
+    Effect.mapError(
+      () =>
+        new ProviderAuthError({
+          message: `${gateway.name} credentials unavailable: no stored API key and no ${ENV_CREDENTIAL} env var`,
+        }),
     ),
   )
 
@@ -623,46 +657,59 @@ export const buildOpenCodeModelDriver = (
   envApiKey: Option.Option<string>,
   catalog: CatalogSource,
   crypto: Crypto.Crypto,
-): ModelDriverContribution => ({
-  id: gateway.id,
-  name: gateway.name,
-  envCredential: ENV_CREDENTIAL,
-  retry: DEFAULT_RETRY_POLICY,
-  resolveModel: (modelName, authInfo, hintsInput) =>
-    Effect.gen(function* () {
-      const apiKey = apiKeyFrom(Option.fromNullishOr(authInfo), envApiKey)
-      if (Option.isNone(apiKey)) {
-        return yield* new ProviderAuthError({
-          message: `${gateway.name} credentials unavailable: no stored API key and no ${ENV_CREDENTIAL} env var`,
+): ModelDriverContribution => {
+  const driver: ModelDriverContribution = {
+    id: gateway.id,
+    name: gateway.name,
+    envCredential: ENV_CREDENTIAL,
+    retry: DEFAULT_RETRY_POLICY,
+    resolveModel: (modelName, authInfo, hintsInput) =>
+      Effect.gen(function* () {
+        const apiKey = yield* gatewayApiKey(gateway, Option.fromNullishOr(authInfo), envApiKey)
+        const wire = yield* driverModelWire(catalog, `${gateway.id}/${modelName}`)
+        const format = wireFormatOf(wire)
+        if (Option.isNone(format))
+          return yield* Effect.die(unsupportedWireFormat(gateway, modelName, wire))
+        const hints = Option.fromNullishOr(hintsInput)
+        const sessionId = yield* Option.match(
+          Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.cacheKey)),
+          {
+            onNone: () => crypto.randomUUIDv4.pipe(Effect.orDie),
+            onSome: Effect.succeed,
+          },
+        )
+        const resolution: Resolution = {
+          gateway,
+          modelName,
+          apiKey,
+          sessionId,
+          hints,
+          wire,
+        }
+        return AiModel.make(gateway.id, modelName, modelLayer(format.value, resolution))
+      }),
+    listModels: () => listGatewayModels(gateway, catalog),
+    auth: {
+      methods: [AuthMethod.make({ type: "api", label: gateway.authLabel })],
+    },
+  }
+  if (gateway.classifiers.length === 0) return driver
+  return {
+    ...driver,
+    // A Jev model speaks TypeSafe's API under the gateway's `/v1`, with the
+    // same key and session headers; each call is its own session.
+    resolveDecisionModel: (modelName, authInfo) =>
+      Effect.gen(function* () {
+        const apiKey = yield* gatewayApiKey(gateway, Option.fromNullishOr(authInfo), envApiKey)
+        const sessionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie)
+        return typeSafeDecisionModel(modelName, {
+          apiKey,
+          apiUrl: `${gateway.origin}/v1`,
+          transformClient: gatewayHeaders(sessionId),
         })
-      }
-      const wire = yield* driverModelWire(catalog, `${gateway.id}/${modelName}`)
-      const format = wireFormatOf(wire)
-      if (Option.isNone(format))
-        return yield* Effect.die(unsupportedWireFormat(gateway, modelName, wire))
-      const hints = Option.fromNullishOr(hintsInput)
-      const sessionId = yield* Option.match(
-        Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.cacheKey)),
-        {
-          onNone: () => crypto.randomUUIDv4.pipe(Effect.orDie),
-          onSome: Effect.succeed,
-        },
-      )
-      const resolution: Resolution = {
-        gateway,
-        modelName,
-        apiKey: apiKey.value,
-        sessionId,
-        hints,
-        wire,
-      }
-      return AiModel.make(gateway.id, modelName, modelLayer(format.value, resolution))
-    }),
-  listModels: () => listGatewayModels(gateway, catalog),
-  auth: {
-    methods: [AuthMethod.make({ type: "api", label: gateway.authLabel })],
-  },
-})
+      }),
+  }
+}
 
 export const OpenCodeExtension = defineExtension({
   id: "@gent/provider-opencode",

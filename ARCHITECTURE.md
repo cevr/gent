@@ -631,6 +631,34 @@ Shape:
   network reads and `bun:sqlite` on the data directory's `data.db` for past sessions. No
   `webfetch` or `search_sessions` tool ships; `read_session` stays as the
   parent-to-child output seam.
+- Classifier models (Jev) are one cell primitive, not a feature: the cell's
+  `models.decide(input, decisions, { model })` answers `effect/ai/Decision`
+  questions (`models.classify`, `models.rate`, `models.probability`) about a
+  JSON input in one provider call, and the model composes it with other tools
+  in its own code (gate, route, retry). A driver serves classifiers through the
+  optional `resolveDecisionModel` beside `resolveModel` and lists them with
+  `Model.kind: "classifier"`, so they share its id, auth, env credential and
+  catalog; the TUI picker leaves them out, and the turn refuses one by name
+  (`ModelContextCapabilityFailure.ClassifierModel`) before any chat
+  `resolveModel`, whichever agent, config or override named it.
+  `DecisionModelResolver`
+  (`runtime/provider.ts`, in the loop's runtime services) picks the named
+  catalog classifier. With none named it takes a classifier whose driver has a
+  stored or env credential: a `-latest` alias first (drivers are ordered by
+  extension id, so the order cannot pick it), else the first listed. It fails
+  readably naming the variables when none has a credential; a driver defect
+  while the model is resolved or built fails that call, not the cell. One call
+  has 60 s from resolve to answer (`DECIDE_DEADLINE_MS`; the cell may ask for
+  less with `timeoutMs`), since the watchdog pauses during host calls. The
+  reply carries the provider's token usage: the runtime keeps no spend record
+  for a tool's own model call. Like `context.*`, a decide call leaves no
+  receipt and a recovered cell does not repeat it. Two drivers serve Jev
+  through `@effect/ai-typesafe`: `typesafe` (`TYPESAFE_API_KEY` or a stored
+  key; `jev-latest`, `jev-preview`, `jev-1.13.0`) and OpenCode Zen (its key
+  and session headers at `https://opencode.ai/zen/v1`; `jev-1.13`,
+  `jev-1.13-free`). Both list static catalog entries, since models.dev lists no
+  Jev model. Receipts: `packages/extensions/src/cell.ts` (models host),
+  `packages/extensions/src/typesafe.ts`, `packages/core/src/domain/driver.ts`.
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in

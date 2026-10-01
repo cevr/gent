@@ -145,7 +145,7 @@ import type {
   PromptSection,
 } from "../domain/capability.js"
 import type { StorageError } from "../domain/errors.js"
-import { type ModelRegistry, ModelResolver } from "./provider.js"
+import { type DecisionModelResolver, type ModelRegistry, ModelResolver } from "./provider.js"
 import { GentPlatform } from "./gent-platform.js"
 import { Actor } from "effect-encore"
 
@@ -1432,6 +1432,7 @@ type AgentLoopRuntimeServices =
   | EventStorage
   | SqlClient.SqlClient
   | ModelResolver
+  | DecisionModelResolver
   | ModelRegistry
   | ToolRunner
   | EventStore
@@ -1666,6 +1667,7 @@ const makeAgentLoopBehavior = (
   | ApprovalService
   | SqlClient.SqlClient
   | ModelResolver
+  | DecisionModelResolver
   | ExtensionRegistry
   | EventStore
   | ToolRunner

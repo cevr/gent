@@ -39,6 +39,7 @@ import {
   AuthAuthorizationMethod,
   AuthMethod,
   DEFAULT_RETRY_POLICY,
+  type ModelDriverContribution,
   type PersistAuth,
   ProviderAuthError,
   ProviderAuthInfo,
@@ -47,7 +48,7 @@ import {
   type StoredOAuthCredentials,
 } from "../domain/driver.js"
 import { GentPlatform, writeFileAtomic } from "./gent-platform.js"
-import { LanguageModel } from "effect/ai"
+import { DecisionModel, LanguageModel } from "effect/ai"
 import { ProviderError } from "../domain/errors.js"
 import * as AiError from "effect/ai/AiError"
 import type { ProviderOptions } from "effect/ai/LanguageModel"
@@ -750,6 +751,180 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
             const built = yield* Layer.buildWithScope(resolved, scope)
             return Context.get(built, LanguageModel.LanguageModel)
           }).pipe(Effect.provideService(Auth, auth)),
+      })
+    }),
+  )
+}
+
+// ── decision-model-resolver ─────────────────────────────────────────────────
+
+/**
+ * Why no classifier model answered: none has a credential (`NoProvider`), the
+ * named one is not a classifier the profile's drivers list (`UnknownModel`),
+ * or its driver failed to build it (`ProviderFailed`).
+ */
+class DecisionModelError extends Schema.TaggedError<DecisionModelError>()("DecisionModelError", {
+  reason: Schema.Literals(["NoProvider", "UnknownModel", "ProviderFailed"]),
+  message: Schema.String,
+}) {}
+
+/** A classifier model ready to answer, and the catalog id it resolved to. */
+interface ResolvedDecisionModel {
+  readonly modelId: ModelId
+  readonly model: DecisionModel.DecisionModel
+}
+
+interface DecisionModelResolverService {
+  /**
+   * The named classifier model (`provider/model`), or with none a classifier
+   * whose driver has a stored or env credential: a `-latest` alias first,
+   * else the first the profile's drivers list.
+   */
+  readonly resolve: (
+    modelId: Option.Option<string>,
+  ) => Effect.Effect<ResolvedDecisionModel, DecisionModelError, Scope.Scope | ExtensionRegistry>
+}
+
+/** The model-name suffix of an alias that tracks its provider's newest model. */
+const LATEST_ALIAS = "-latest"
+
+/** One classifier entry with the driver that resolves it. */
+interface ClassifierEntry {
+  readonly model: Model
+  readonly driver: ModelDriverContribution
+}
+
+const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function* (
+  auth: AuthService,
+  requested: Option.Option<string>,
+) {
+  const storedAuth = (driverId: string) =>
+    auth.get(driverId).pipe(
+      Effect.map((info) =>
+        Option.map(Option.fromUndefinedOr(info), (found) =>
+          toProviderAuthInfo(auth, driverId, found),
+        ),
+      ),
+      Effect.mapError(
+        (cause) =>
+          new DecisionModelError({
+            reason: "ProviderFailed",
+            message: `Failed to read auth for provider "${driverId}": ${causeMessage(cause)}`,
+          }),
+      ),
+    )
+  const drivers = new Map(
+    [...(yield* ExtensionRegistry).getResolved().modelDrivers].filter(([, driver]) =>
+      Predicate.isNotUndefined(driver.resolveDecisionModel),
+    ),
+  )
+  // Only the classifier drivers' catalogs: a failed one leaves its models out.
+  const catalog = yield* listModelCatalog(drivers, (driverId) =>
+    storedAuth(driverId).pipe(
+      Effect.map(Option.getOrUndefined),
+      Effect.mapError((error) => new ProviderAuthError({ message: error.message })),
+    ),
+  ).pipe(
+    Effect.mapError(
+      (error) => new DecisionModelError({ reason: "ProviderFailed", message: error.message }),
+    ),
+  )
+  const classifiers: ReadonlyArray<ClassifierEntry> = catalog.models.flatMap((model) => {
+    const driver = drivers.get(model.provider)
+    if (model.kind !== "classifier" || Predicate.isUndefined(driver)) return []
+    return [{ model, driver }]
+  })
+  const chosen = yield* Option.match(requested, {
+    onSome: (id) =>
+      Option.match(Option.fromUndefinedOr(classifiers.find((entry) => entry.model.id === id)), {
+        onSome: Effect.succeed,
+        onNone: () => {
+          let known = "none"
+          if (classifiers.length > 0) known = classifiers.map((entry) => entry.model.id).join(", ")
+          return Effect.fail(
+            new DecisionModelError({
+              reason: "UnknownModel",
+              message: `Unknown classifier model "${id}". Classifier models: ${known}`,
+            }),
+          )
+        },
+      }),
+    onNone: () =>
+      Effect.gen(function* () {
+        const usable = yield* Effect.filter(classifiers, (entry) =>
+          Effect.gen(function* () {
+            const stored = yield* storedAuth(entry.driver.id)
+            const fromEnv = yield* envCredentialSet(
+              Option.fromUndefinedOr(entry.driver.envCredential),
+            )
+            return Option.isSome(stored) || fromEnv
+          }),
+        )
+        // A `-latest` alias tracks its provider's newest model, so it wins
+        // over a pinned version wherever the driver order puts it.
+        const chosenEntry = Option.orElse(
+          Option.fromUndefinedOr(usable.find((entry) => entry.model.id.endsWith(LATEST_ALIAS))),
+          () => Option.fromUndefinedOr(usable[0]),
+        )
+        if (Option.isSome(chosenEntry)) return chosenEntry.value
+        const variables = [...drivers.values()].flatMap((driver) =>
+          Option.toArray(Option.fromUndefinedOr(driver.envCredential)),
+        )
+        let hint = "no driver serves one"
+        if (variables.length > 0)
+          hint = `set ${[...new Set(variables)].join(" or ")}, or sign in with /auth`
+        return yield* new DecisionModelError({
+          reason: "NoProvider",
+          message: `No classifier model has a credential: ${hint}`,
+        })
+      }),
+  })
+  const resolveFor = Option.fromUndefinedOr(chosen.driver.resolveDecisionModel)
+  const modelName = Option.map(parseModelId(chosen.model.id), ([, name]) => name)
+  if (Option.isNone(resolveFor) || Option.isNone(modelName)) {
+    return yield* new DecisionModelError({
+      reason: "UnknownModel",
+      message: `Classifier model "${chosen.model.id}" has no provider/model id`,
+    })
+  }
+  const authInfo = yield* storedAuth(chosen.driver.id)
+  const scope = yield* Effect.scope
+  // Resolving, building and reading the driver's model all run driver code:
+  // a defect in any of them fails this call, never the cell's host.
+  const model = yield* Effect.suspend(() =>
+    resolveFor.value(modelName.value, Option.getOrUndefined(authInfo)),
+  ).pipe(
+    Effect.flatMap((layer) => Layer.buildWithScope(layer, scope)),
+    Effect.map((built) => Context.get(built, DecisionModel.DecisionModel)),
+    Effect.catchDefect((defect) =>
+      Effect.fail(new ProviderAuthError({ message: causeMessage(defect) })),
+    ),
+    Effect.mapError(
+      (error) =>
+        new DecisionModelError({
+          reason: "ProviderFailed",
+          message: `${chosen.model.id}: ${error.message}`,
+        }),
+    ),
+  )
+  return { modelId: chosen.model.id, model }
+})
+
+/**
+ * Resolves classifier models through the drivers of the `ExtensionRegistry`
+ * in scope, as `ModelResolver` resolves chat models. It holds the auth store,
+ * so a host that reaches it never reads credentials itself.
+ */
+export class DecisionModelResolver extends Context.Service<
+  DecisionModelResolver,
+  DecisionModelResolverService
+>()("@gent/core/src/runtime/provider/DecisionModelResolver") {
+  static Live: Layer.Layer<DecisionModelResolver, never, Auth> = Layer.effect(
+    DecisionModelResolver,
+    Effect.gen(function* () {
+      const auth = yield* Auth
+      return DecisionModelResolver.of({
+        resolve: (modelId) => resolveDecisionModel(auth, modelId),
       })
     }),
   )

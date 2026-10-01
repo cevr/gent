@@ -51,6 +51,8 @@ import {
   type LanguageModelStreamPart,
   textDeltaPart,
   toolCallPart,
+  Auth,
+  DecisionModelResolver,
   ModelRegistry,
   TEST_MODEL_CONTEXT_LIMIT_TOKENS,
 } from "../../src/runtime/provider"
@@ -162,6 +164,7 @@ const makeRuntimeLayer = (
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
+    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )
@@ -200,6 +203,7 @@ const makeLiveToolRuntimeLayer = (
     ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
+    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )

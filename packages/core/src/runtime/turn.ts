@@ -1569,6 +1569,15 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }),
     })
   }
+  // Every chat turn passes here before its driver resolves a model, whichever
+  // agent, config or override named it; a classifier's window changes nothing.
+  if (modelOption.value.kind === "classifier") {
+    return yield* new ModelContextCapabilityError({
+      failure: ModelContextCapabilityFailure.cases.ClassifierModel.make({
+        modelId: contextModelId,
+      }),
+    })
+  }
   // The agent's own window wins over the catalog: config or a run override can shrink it.
   const contextLimit = Option.getOrUndefined(
     Option.orElse(Option.fromUndefinedOr(resolved.agent.contextLength), () =>
