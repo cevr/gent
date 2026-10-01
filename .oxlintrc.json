@@ -52,8 +52,50 @@
     // Effect opt-in rules: house policy the preset leaves off.
     "effect/noPositionalLogArguments": "error",
     "effect/noRunPromise": "error",
-    "effect/noWithWrapperCall": ["error", { "allow": ["withWideEvent"] }],
+    // A local `withX` fixture helper stays only in a `tests/` tree; the
+    // harness and the `integration/` trees are held to the rule.
+    "effect/noWithWrapperCall": [
+      "error",
+      { "allow": ["withWideEvent"], "testFiles": ["**/tests/**"] }
+    ],
     "effect/noTimeoutDieInTests": "error",
+    // No `import(...)` or `require(...)`: the compiled binary needs every module
+    // reachable through a static import. A deliberate load keeps a line-local
+    // suppression with its reason.
+    "effect/noDynamicImports": ["error", { "allowNamedBoundaries": false }],
+    // Only the platform entry files provide a platform layer; everything else
+    // yields the service the entry provides.
+    "effect/noPlatformLayerOutsideEntry": [
+      "error",
+      { "layers": ["BunPlatformLive", "BunGentPlatformLive"] }
+    ],
+    // `Bun.*` and host process and OS facts stay in the platform adapters, the
+    // tooling and the test code (overrides below).
+    "effect/noGlobals": [
+      "error",
+      {
+        "members": {
+          "Bun": {
+            "use": "an Effect platform service (GentPlatform, FileSystem, ChildProcessSpawner, KeyValueStore, Config); Bun stays in adapter, tooling and test code"
+          },
+          "process": {
+            "properties": ["execPath", "kill", "pid", "platform"],
+            "use": "GentPlatform or an adapter-local Effect service"
+          }
+        }
+      }
+    ],
+    "effect/noNodeBuiltinImport": [
+      "error",
+      {
+        "modules": {
+          "os": {
+            "members": ["homedir", "hostname", "release"],
+            "use": "GentPlatform (osInfo, homeDirectory)"
+          }
+        }
+      }
+    ],
 
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
@@ -103,6 +145,76 @@
     "typescript/no-unnecessary-template-expression": "off"
   },
   "overrides": [
+    {
+      // Core and shipped-extension source also take their working directory
+      // and host modules through Effect services: `RuntimeEnvironment` or the
+      // extension context's `cwd`, `GentPlatform`, Effect `Crypto` and `Path`.
+      "files": ["packages/core/src/**", "packages/extensions/src/**"],
+      "rules": {
+        "effect/noGlobals": [
+          "error",
+          {
+            "members": {
+              "Bun": {
+                "use": "an Effect platform service (GentPlatform, FileSystem, ChildProcessSpawner, KeyValueStore, Config); Bun stays in adapter, tooling and test code"
+              },
+              "process": {
+                "properties": ["cwd", "execPath", "kill", "pid", "platform"],
+                "use": "GentPlatform, RuntimeEnvironment, or the extension context's cwd"
+              }
+            }
+          }
+        ],
+        "effect/noNodeBuiltinImport": [
+          "error",
+          {
+            "modules": {
+              "os": { "use": "GentPlatform (osInfo, homeDirectory)" },
+              "bun": { "use": "an Effect platform service" },
+              "crypto": {
+                "use": "Effect Crypto for random bytes and ids, GentPlatform.hash for digests"
+              },
+              "url": { "use": "Effect Path.fromFileUrl" }
+            }
+          }
+        ]
+      }
+    },
+    {
+      // The platform adapters, the tooling and the test code may reach Bun and
+      // the host directly; only the built-in bans apply there, which keep the
+      // retired `Bun.Glob` and `Bun.randomUUIDv7` out.
+      "files": [
+        "packages/core/src/runtime/gent-platform-bun.ts",
+        "**/*-adapter.ts",
+        "packages/tooling/**",
+        "packages/e2e/**",
+        "packages/core/src/test-utils/**",
+        "**/tests/**",
+        "**/integration/**",
+        "**/*.test.ts",
+        "**/*.test.tsx"
+      ],
+      "rules": {
+        "effect/noGlobals": "error",
+        "effect/noNodeBuiltinImport": "error"
+      }
+    },
+    {
+      // The platform entry files: each provides the platform layer once.
+      "files": [
+        "packages/core/src/runtime/gent-platform.ts",
+        "packages/core/src/runtime/gent-platform-bun.ts",
+        "packages/core/src/host.ts",
+        "packages/sdk/src/server.ts",
+        "apps/tui/src/main.tsx",
+        "apps/tui/scripts/build.ts",
+        "packages/tooling/src/check-guide-code.ts"
+      ],
+      "rules": {
+        "effect/noPlatformLayerOutsideEntry": "off"
+      }
+    },
     {
       // A `-boundary` file holds its module's Promise edges: the runtime runs
       // there, in a test's harness (.ts or .tsx) and in product code (.ts).

@@ -333,7 +333,7 @@ const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
 /** Parse YAML frontmatter; malformed YAML or a non-mapping reads as no header. */
 const parseFrontmatter = (yaml: string): SkillHeader =>
   Option.match(
-    // oxlint-disable-next-line gent/no-bun-outside-adapter -- Pure YAML parse with no Effect platform service; the cell runtime is full Bun.
+    // oxlint-disable-next-line effect/noGlobals, gent/no-bun-outside-adapter -- Pure YAML parse with no Effect platform service; the cell runtime is full Bun.
     Result.try(() => Bun.YAML.parse(yaml)).pipe(
       Result.getSuccess,
       Option.flatMap(decodeFrontmatter),

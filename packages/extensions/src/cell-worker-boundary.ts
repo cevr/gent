@@ -470,7 +470,7 @@ const errorProperty = (target: object, key: string): Option.Option<unknown> =>
  * A promise's state through `Bun.peek`, which reads the internal slot and
  * never runs `then`. Taken when the worker loads: a cell may replace `Bun`.
  */
-// oxlint-disable-next-line gent/no-bun-outside-adapter -- This worker boundary owns Bun's promise peek.
+// oxlint-disable-next-line effect/noGlobals, gent/no-bun-outside-adapter -- This worker boundary owns Bun's promise peek.
 const peekPromise = Bun.peek
 const peekStatus = peekPromise.status
 // oxlint-disable-next-line effect/noObjectParameters -- a promise the cell made has any JavaScript shape
@@ -624,7 +624,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(yield* Effect.context<CellHost>())
   const permit = yield* Semaphore.make(1)
   // The node target keeps `require(...)` calls intact; the bun target rewrites them to import.meta.
-  // oxlint-disable-next-line gent/no-bun-outside-adapter -- This worker boundary owns the unmatched Bun transpiler API.
+  // oxlint-disable-next-line effect/noGlobals, gent/no-bun-outside-adapter -- This worker boundary owns the unmatched Bun transpiler API.
   const transpiler = new Bun.Transpiler({ loader: "ts", target: "node", replMode: true })
   // Display keeps a head and a bounded tail so the end of output (usually the error) survives.
   const output = makeBoundedOutput({
@@ -1366,7 +1366,7 @@ if (import.meta.main) {
             Layer.succeed(
               CellWorkerEnvironment,
               CellWorkerEnvironment.of({
-                // oxlint-disable-next-line gent/no-bun-outside-adapter -- the worker process entry reads its own working directory once
+                // oxlint-disable-next-line effect/noGlobals, gent/no-bun-outside-adapter -- the worker process entry reads its own working directory once
                 workingDirectory: process.cwd(),
                 uncaught: Stream.fromQueue(uncaught),
               }),

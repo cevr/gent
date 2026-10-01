@@ -499,6 +499,7 @@ const startRedirectServer = (
   deferred: Deferred.Deferred<PendingCallbackPayload, OAuthError>,
 ): Effect.Effect<void, OAuthError, Scope.Scope> => {
   const HttpLive = HttpRouter.serve(buildCallbackRoutes(expectedState, deferred)).pipe(
+    // oxlint-disable-next-line effect/noPlatformLayerOutsideEntry -- the OAuth redirect listener binds the fixed port OpenAI registers, for one sign-in; no entry provides an HTTP server, and a user extension may start its own listener
     Layer.provide(BunHttpServer.layerServer({ port })),
   )
   return Layer.launch(HttpLive).pipe(
