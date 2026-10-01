@@ -6,24 +6,6 @@ until it is regenerated for the new release. The Effect patches follow
 `catalog.effect`; the guards fail when a patch key names another Effect
 version. These are local dependency patches, not upstream releases.
 
-## `@opentui/core@0.5.11`
-
-The Bun and Node renderer bundles use the same resize correction.
-`processResize` must clear from the actual split-footer origin when it is
-above the estimated bottom-pinned footer area. Otherwise a width decrease
-leaves stale composer rows on screen for short transcripts.
-
-The patch keeps the existing lower-bound estimate and extends the clear
-range upward to `renderOffset + 1`. It does not clear saved terminal lines.
-
-Herdr reproduced the defect when returning from 80×24 to 44×22. The same
-check passed after the patch, including a seeded transcript and a return
-from 120×40. See `docs/research/2026-09-18-fx-ui-acceptance.md` for captures and validation.
-
-Remove this patch when an OpenTUI release handles non-bottom-pinned
-split-footer resize cleanup. Recheck these paths before removing it.
-Rechecked on 2026-09-08: 0.5.11 still ships the unbounded clear, so the patch was regenerated for that release.
-
 ## `@effect/ai-anthropic@4.0.0`
 
 `prepareMessages` sets the request's `system` field from each system group
