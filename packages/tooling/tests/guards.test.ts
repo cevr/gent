@@ -2412,6 +2412,10 @@ describe("guide check inputs", () => {
       expect.stringContaining("`../.claude/skills/**/*.md` matches no tracked file"),
     ])
   })
+
+  test("a turbo token is not a glob, so it is never a dead input", () => {
+    expect(files([...exact, "$TURBO_DEFAULT$", "$TURBO_ROOT$/AGENTS.md"])).toEqual([])
+  })
 })
 
 // ── suppression inventory ───────────────────────────────────────────────────
@@ -2608,6 +2612,34 @@ describe("the directive grammar is the language service's", () => {
     `${fileScope}-file floatingEffect:off`,
     `${fileScope}floatingEffect:off`,
     nextLine.replace("effect-diagnostics", "EFFECT-DIAGNOSTICS") + " floatingEffect:off",
+    // The compiler reads the marker, then whitespace as Go's `\s` spells it
+    // (a form feed too, a vertical tab or a no-break space not), then words
+    // of letters, digits, `_`, `-`, `:` and `*`.
+    `${nextLine}\ffloatingEffect:off`,
+    `${nextLine} \f floatingEffect:off`,
+    `${nextLine}\vfloatingEffect:off`,
+    `${nextLine} floatingEffect:off`,
+    `${nextLine} x*floatingEffect:off`,
+    `${nextLine} floatingEffect*:off`,
+    `${nextLine} reason: floatingEffect:off`,
+    `${nextLine} reason. floatingEffect:off`,
+    // After the severity: `--` and any mark but a word character after an
+    // optional `-`.
+    `${nextLine} floatingEffect:off--reason`,
+    `${nextLine} floatingEffect:off-`,
+    `${nextLine} floatingEffect:off*x`,
+    `${nextLine} floatingEffect:off.`,
+    `${nextLine} floatingEffect:off_x`,
+    // A downgrade is honored: `warn` is a warning, as `warning` is.
+    `${nextLine} floatingEffect:warn`,
+    `${nextLine} floatingEffect:WARN--x`,
+    `${nextLine} floatingEffect:warning`,
+    `${nextLine} floatingEffect:message`,
+    `${nextLine} floatingEffect:suggestion`,
+    `${nextLine} floatingEffect:warning-x`,
+    `${nextLine} floatingEffect:warnx`,
+    `${nextLine} floatingEffect:msg`,
+    `${nextLine} floatingEffect:info`,
   ]
 
   const probeSource = (spelling: string, index: number): string =>
@@ -2647,11 +2679,14 @@ describe("the directive grammar is the language service's", () => {
           }),
           { includeStderr: true },
         )
-        // The control: an unhonored spelling leaves the floating Effect reported.
+        // The control: an unhonored spelling leaves the floating Effect
+        // reported as an error. An honored one silences it or downgrades it.
         expect(output).toContain("floatingEffect")
         const verdicts = SPELLINGS.map((spelling, index) => ({
           spelling,
-          honored: !new RegExp(`p${index}\\.ts\\(\\d+,\\d+\\)[^\\n]*floatingEffect`).test(output),
+          honored: !new RegExp(`p${index}\\.ts\\(\\d+,\\d+\\): error[^\\n]*floatingEffect`).test(
+            output,
+          ),
         }))
         expect(
           SPELLINGS.map((spelling) => ({

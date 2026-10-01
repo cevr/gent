@@ -2453,7 +2453,8 @@ export const TurboTypecheckInputsSchema = Schema.Struct({
  * that reads a Markdown file outside the set reruns the check for nothing. So
  * over the git index, the `.md` files the inputs match must be the
  * files `isSteeringFile` accepts. Turbo globs are relative to the package, so
- * `../x` names the repo path `x`, and a `!` input subtracts.
+ * `../x` and `$TURBO_ROOT$/x` name the repo path `x`, `$TURBO_DEFAULT$`
+ * names every file of the package, and a `!` input subtracts.
  */
 export const findUnhashedSteeringFiles = (
   file: string,
@@ -2462,6 +2463,8 @@ export const findUnhashedSteeringFiles = (
 ): ReadonlyArray<Finding> => {
   const packageDirectory = file.slice(0, file.lastIndexOf("/") + 1)
   const repoGlob = (input: string): RegExp => {
+    if (input === "$TURBO_DEFAULT$") return globMatcher(`${packageDirectory}**`)
+    if (input.startsWith("$TURBO_ROOT$/")) return globMatcher(input.slice("$TURBO_ROOT$/".length))
     if (input.startsWith("../")) return globMatcher(input.slice(3))
     return globMatcher(packageDirectory + input)
   }
@@ -2545,24 +2548,29 @@ const anyCase = (word: string): string =>
   word.replace(/[a-z]/g, (char) => `[${char}${char.toUpperCase()}]`)
 
 /**
- * The form the language service honors; the capture is `-next-line`, or empty
- * for the file scope. The marker is lowercase, then a space or a tab; words of
- * letters, digits, `_`, `-` and `:` may come first; then `<rule or *>:<severity>`,
- * the rule and the severity in any case, with no word character or `-` after
- * the severity. `tests/guards.test.ts` holds this grammar to `tsc` on a matrix
- * of spellings, so a language-service change fails a test.
+ * The form the compiler honors; the capture is `-next-line`, or empty for the
+ * file scope. The compiler's own pattern is
+ * `@effect-diagnostics(-next-line)?\s+([\w:\-*]+(?:\s+[\w:\-*]+)*)`, in Go,
+ * where `\s` is a space, a tab or a form feed on one line. Inside those words
+ * it reads `<rule or *>:<severity>`, the rule and the severity in any case,
+ * where no word character, alone or after one `-`, follows the severity.
+ * `warn` is `warning`. `tests/guards.test.ts` holds this grammar to `tsc` on
+ * a matrix of spellings, so a compiler change fails a test.
  */
+const DIRECTIVE_SPACE = "[ \\t\\f]"
+
 const HONORED_DIRECTIVE = new RegExp(
-  `@effect-diagnostics(-next-line)?[ \\t][ \\t\\w:-]*?(?:\\w+|\\*):(?:${[
+  `@effect-diagnostics(-next-line)?${DIRECTIVE_SPACE}+(?:[\\w:*-]|${DIRECTIVE_SPACE})*?(?:\\w+|\\*):(?:${[
     "off",
     "warning",
+    "warn",
     "error",
     "message",
     "suggestion",
     "skip-file",
   ]
     .map(anyCase)
-    .join("|")})(?![\\w-])`,
+    .join("|")})(?!-?\\w)`,
 )
 
 const approvedComment = (entry: ApprovedSuppressionEntry): string =>
