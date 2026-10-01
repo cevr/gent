@@ -121,6 +121,13 @@ describe("session naming", () => {
     ]
     for (const [text, title] of cases) expect([text, sessionTitleOf(text)]).toEqual([text, title])
   })
+
+  test("a fence closes only on a fence of its own kind, as long or longer", () => {
+    const nested = "````md\n```ts\nconst a = 1\n```\n````\nShip the docs"
+    const tildes = "~~~\n```\nnot a title\n~~~\nShip the docs"
+    expect(sessionTitleOf(nested)).toEqual(Option.some("Ship the docs"))
+    expect(sessionTitleOf(tildes)).toEqual(Option.some("Ship the docs"))
+  })
 })
 
 // ── read session ────────────────────────────────────────────────────────────

@@ -144,7 +144,7 @@ export const ReadSessionTool = tool({
 
 // ── rename-session ──────────────────────────────────────────────────────────
 
-/** A code fence: three backticks or tildes at the start of a trimmed line. */
+/** A code fence: three or more backticks or tildes at the start of a trimmed line. */
 const FENCE = /^(?:`{3,}|~{3,})/
 /** Markdown that opens a line: a heading, a quote, a list bullet, a rule, emphasis. */
 const LEADING_MARKERS = /^(?:(?:#{1,6}|[-*+]|[-*_]{3,})(?=\s|$)|\*\*|__|>)\s*/
@@ -164,20 +164,28 @@ const plainWords = (line: string): string => {
 /**
  * The first plain words of `text`: the first line with words on it once its
  * markdown markers are off. A fenced block, as an `@file` reference expands
- * to, is skipped; words after its closing fence count.
+ * to, is skipped. Only a fence of the opener's character, as long or longer,
+ * closes it, so a shorter fence inside is block text. Words after the closing
+ * fence count: the TUI writes the user's next words on that line.
  */
 export const sessionTitleOf = (text: string): Option.Option<string> => {
-  let fenced = false
+  let opener = Option.none<string>()
   for (const raw of text.split("\n")) {
     const line = raw.trim()
-    const fence = Option.fromNullishOr(FENCE.exec(line))
+    const fence = Option.map(Option.fromNullishOr(FENCE.exec(line)), (found) => found[0])
     let rest = line
-    if (Option.isSome(fence)) {
-      fenced = !fenced
-      if (fenced) continue
-      rest = line.slice(fence.value[0].length)
+    if (Option.isNone(opener)) {
+      if (Option.isSome(fence)) {
+        opener = fence
+        continue
+      }
+    } else {
+      const open = opener.value
+      if (Option.isNone(fence)) continue
+      if (fence.value[0] !== open[0] || fence.value.length < open.length) continue
+      opener = Option.none()
+      rest = line.slice(fence.value.length)
     }
-    if (fenced) continue
     const words = plainWords(rest)
     if (words.length > 0) return Option.some(words)
   }
