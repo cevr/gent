@@ -1686,7 +1686,7 @@ describe("interaction.respondInteraction", () => {
       Effect.gen(function* () {
         const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
         const dbPath = `${tempDir}/gent-decision.db`
-        const storageLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
+        const storageLayer = SqliteStorage.LiveWithSql(dbPath, Layer.empty, {}).pipe(
           Layer.provide(BunPlatformLive),
         )
         const finalReply = "approval resumed from stored decision"
@@ -2946,9 +2946,7 @@ describe("interaction.respondInteraction", () => {
           return yield* (yield* InteractionStorage).listOpen(session)
         }).pipe(
           Effect.provide(
-            SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
-              Layer.provide(BunPlatformLive),
-            ),
+            SqliteStorage.LiveWithSql(dbPath, Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
           ),
           Effect.provideService(CurrentWorkspaceId, workspaceOfDatabase(dbPath)),
         )
@@ -3609,7 +3607,7 @@ describe("interaction.respondInteraction", () => {
               yield* storage.decide(first, first.q2, decisionJson)
             }).pipe(
               Effect.provide(
-                SqliteStorage.LiveWithSql(first.dbPath, () => Layer.empty, {}).pipe(
+                SqliteStorage.LiveWithSql(first.dbPath, Layer.empty, {}).pipe(
                   Layer.provide(BunPlatformLive),
                 ),
               ),
@@ -4838,7 +4836,7 @@ describe("extension resources", () => {
                   Layer.mergeAll(
                     BunPlatformLive,
                     ConfigService.Test(),
-                    SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+                    SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(
                       Layer.provide(BunPlatformLive),
                     ),
                   ),
@@ -4918,7 +4916,7 @@ describe("extension resources", () => {
                   Layer.mergeAll(
                     BunPlatformLive,
                     ConfigService.Test(),
-                    SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+                    SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(
                       Layer.provide(BunPlatformLive),
                     ),
                   ),
@@ -5099,7 +5097,7 @@ export default defineExtension({
                     Layer.mergeAll(
                       BunPlatformLive,
                       ConfigService.Test(),
-                      SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+                      SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(
                         Layer.provide(BunPlatformLive),
                       ),
                     ),

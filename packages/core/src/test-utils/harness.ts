@@ -399,7 +399,7 @@ export const collectTestContributions = <E, R>(
  * `SqliteStorage.LiveWithSql` / `MemoryWithSql` under the host's platform.
  */
 export const testSqliteStorage = <A>(
-  extra: ExtraRepositories<A, StorageError, never>,
+  extra: ExtraRepositories<A>,
   featureMigrations: FeatureMigrations,
 ) =>
   SqliteStorage.MemoryWithSql(extra, featureMigrations).pipe(

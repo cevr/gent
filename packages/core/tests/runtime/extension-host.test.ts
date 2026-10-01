@@ -459,7 +459,7 @@ const makeCacheLayer = (params: {
     Layer.provide(
       Layer.merge(
         BunServices.layer,
-        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
       ),
     ),
     Layer.provideMerge(configLive),
@@ -1334,13 +1334,13 @@ describe("resolveTurnProfile", () => {
           Layer.mergeAll(
             BunServices.layer,
             configServiceLive,
-            SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+            SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
           ),
         ),
       )
       const testLayer = Layer.mergeAll(
         BunServices.layer,
-        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
         emptyRegistryLayer,
         runtimeEnvironmentLive,
         sessionProfileCacheLive,
@@ -1382,7 +1382,7 @@ describe("resolveTurnProfile", () => {
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
       }
       const testLayer = Layer.mergeAll(
-        testSqliteStorage(() => Layer.empty, {}),
+        testSqliteStorage(Layer.empty, {}),
         emptyRegistryLayer,
         runtimeEnvironmentLayer,
       )
@@ -1413,7 +1413,7 @@ describe("resolveTurnProfile", () => {
         home: "/nonexistent/runtime-context-home",
       })
       const testLayer = Layer.mergeAll(
-        testSqliteStorage(() => Layer.empty, {}),
+        testSqliteStorage(Layer.empty, {}),
         emptyRegistryLayer,
         runtimeEnvironmentLayer,
       )
@@ -1468,7 +1468,7 @@ describe("resolveTurnProfile", () => {
         home: "/nonexistent/runtime-context-home",
       })
       const testLayer = Layer.mergeAll(
-        testSqliteStorage(() => Layer.empty, {}),
+        testSqliteStorage(Layer.empty, {}),
         emptyRegistryLayer,
         runtimeEnvironmentLayer,
       )
@@ -5235,7 +5235,7 @@ describe("turn projection hooks", () => {
 const sharedLayer = Layer.mergeAll(
   fsLayer,
   ConfigService.Test(),
-  testSqliteStorage(() => Layer.empty, {}),
+  testSqliteStorage(Layer.empty, {}),
 )
 
 // Build a fresh production cache in the test's owning scope.
