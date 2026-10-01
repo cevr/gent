@@ -3378,7 +3378,7 @@ describe("native transcript rows in history", () => {
             roomTranscript({
               items: () => [
                 assistant("table", `TABLE-ANSWER\n\n${table}`),
-                assistant("tail", "TAIL"),
+                assistant("tail", longBody("TAIL")),
               ],
               streaming: () => false,
               footer: () => 3,
@@ -3397,9 +3397,9 @@ describe("native transcript rows in history", () => {
             schedule: Schedule.spaced("10 millis"),
           }),
           Effect.timeout("6 seconds"),
-          Effect.ignore,
         )
         const tableRows = committedRows.filter((row) => /[┌├│└]/.test(row))
+        expect(tableRows.some((row) => row.includes("└"))).toBe(true)
         // The cells wrap to fit the answer: more rows than the source's four.
         expect(tableRows.length).toBeGreaterThan(4)
         for (const row of tableRows) {
@@ -3617,7 +3617,10 @@ describe("native transcript region at the terminal's bottom", () => {
     })
 
   /** Renders a long session over the footer stand-in and waits for it to settle at the bottom. */
-  const settledLongSession = (options: BottomSetup) =>
+  const settledLongSession = (
+    options: BottomSetup,
+    ready: (text: string) => boolean = (text) => bodyRowCounts(text).has("ITEM-0 line 1"),
+  ) =>
     Effect.gen(function* () {
       let screen = Option.none<CliRenderer>()
       const setup = yield* renderScoped(
@@ -3636,10 +3639,10 @@ describe("native transcript region at the terminal's bottom", () => {
         () =>
           rowsUnderRegion(renderer) === 0 &&
           renderer.footerHeight === regionRows &&
-          bodyRowCounts(terminalText(setup)).has("ITEM-0 line 1"),
+          ready(terminalText(setup)),
         "the long session at the terminal's bottom",
         6_000,
-      ).pipe(Effect.ignore)
+      )
       const settled = yield* waitForStableFrame(setup)
       return { setup, renderer, settled }
     })
@@ -4156,13 +4159,16 @@ describe("native transcript region at the terminal's bottom", () => {
         ])
         const [streaming, setStreaming] = createSignal(false)
         const [footer, setFooter] = createSignal(4)
-        const { setup } = yield* settledLongSession({
-          items,
-          streaming,
-          footer,
-          paneOpen: () => false,
-          overlayOpen: () => false,
-        })
+        const { setup } = yield* settledLongSession(
+          {
+            items,
+            streaming,
+            footer,
+            paneOpen: () => false,
+            overlayOpen: () => false,
+          },
+          (text) => text.includes("ROWA-10 row"),
+        )
         // A short turn runs and ends, with the activity row in the footer.
         batch(() => {
           setItems([
