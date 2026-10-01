@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Deferred, Effect, Option, Schema } from "effect"
+import { Deferred, Effect, Option, Schedule, Schema } from "effect"
 import { type CliRenderer, type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
@@ -3666,14 +3666,20 @@ describe("native transcript commit handover", () => {
         yield* hold.held
         yield* Effect.promise(() => setup.flush())
         yield* hold.release
+        // Each settle waits on highlighting, whose time grows with the
+        // machine's load: flush on a clock until the second item lands, with a
+        // bound inside the test's own.
         yield* Effect.promise(() => setup.flush()).pipe(
           Effect.repeat({
             until: () => committedText.join("").includes("SECOND-ITEM line 1"),
-            times: 200,
+            schedule: Schedule.spaced("10 millis"),
           }),
+          Effect.timeout("8 seconds"),
+          Effect.ignore,
         )
         const text = committedText.join("")
         expect(text).toContain("FIRST-ITEM line 1")
+        expect(text).toContain("SECOND-ITEM line 1")
         expect(text.indexOf("FIRST-ITEM line 1")).toBeLessThan(text.indexOf("SECOND-ITEM line 1"))
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
