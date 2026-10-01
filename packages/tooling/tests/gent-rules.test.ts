@@ -332,17 +332,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     // in-place structs with a field of open or unknown encoding
     expectedCount: 16,
   },
-  {
-    // Upstream reads a die message only from strings and constructor arguments.
-    rule: "gent/no-timeout-die-payload-in-tests",
-    invalid: "packages/core/src/test-utils/no-timeout-die-payload-in-tests.invalid.ts",
-    valid: [
-      "packages/core/tests/no-timeout-die-payload-in-tests.valid.ts",
-      "packages/sdk/src/no-timeout-die-payload-in-tests.valid.ts",
-    ],
-    // a typed error payload, a plain object, and an object inside a constructor
-    expectedCount: 3,
-  },
 ]
 
 /** Each fixture file once: a run lints a path it is given once, however many cases name it. */

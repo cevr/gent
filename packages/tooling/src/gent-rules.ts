@@ -11,7 +11,6 @@
  *   comment (until upstream 0.19.0 `effect/noDynamicImports` strict mode).
  * - no-bun-outside-adapter: `Bun.*` and host facts stay in the platform adapters (until
  *   upstream 0.19.0).
- * - no-timeout-die-payload-in-tests: test code dies on no timeout spelled in an object payload.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
  */
@@ -437,52 +436,6 @@ const dottedName = (node: AstNode | undefined): string | undefined => {
     return joined(getNodeField(node, "object"), getNodeField(node, "property"))
   }
   return undefined
-}
-
-const TIMEOUT_TEXT = /tim(?:ed|e)\s*out|timeout|waiting for|gave up/i
-
-/** The text of a string literal or of a template part; anything else has none. */
-const literalTexts = (node: AstNode): ReadonlyArray<string> => {
-  if (node.type === "Literal") {
-    const value = fieldOf(node, "value")
-    return typeof value === "string" ? [value] : []
-  }
-  if (node.type !== "TemplateElement") return []
-  // The text sits under `value: { cooked, raw }`, a record with no `type`.
-  const value = fieldOf(node, "value")
-  if (!isRecord(value)) return []
-  const text = typeof value["cooked"] === "string" ? value["cooked"] : value["raw"]
-  return typeof text === "string" ? [text] : []
-}
-
-/**
- * The message text `effect/noTimeoutDieInTests` (0.18.0) reads from a die
- * argument: string literals, templates, `+` concatenations, and the
- * arguments of a constructor or call, but not the fields of an object.
- */
-const upstreamDieTexts = (node: AstNode): ReadonlyArray<string> => {
-  if (node.type === "Literal") return literalTexts(node)
-  if (node.type === "TemplateLiteral") {
-    return (getNodeArrayField(node, "quasis") ?? []).flatMap(literalTexts)
-  }
-  if (node.type === "BinaryExpression" && getStringField(node, "operator") === "+") {
-    return [getNodeField(node, "left"), getNodeField(node, "right")]
-      .filter((side) => side !== undefined)
-      .flatMap(upstreamDieTexts)
-  }
-  if (node.type === "NewExpression" || node.type === "CallExpression") {
-    return callExpressionArgs(node).flatMap(upstreamDieTexts)
-  }
-  return []
-}
-
-/** Every string a die argument spells, at any depth. */
-const allTexts = (node: AstNode): ReadonlyArray<string> => {
-  const texts: string[] = []
-  walkAst(node, (inner) => {
-    texts.push(...literalTexts(inner))
-  })
-  return texts
 }
 
 /** Locate a named property's arrow-function value inside an object literal. */
@@ -1142,43 +1095,6 @@ const plugin: Plugin = {
         }
       },
     },
-    /**
-     * Test code does not die on a timeout spelled in an object payload.
-     *
-     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
-     * `effect/noTimeoutDieInTests` reads a die's message from string
-     * literals, templates and constructor arguments, so
-     * `Effect.die(new WaitForError({ message: "timed out ..." }))` passes it.
-     * Goes when an upstream release reads the strings inside an object
-     * argument; none has yet.
-     *
-     * Reported in test code (`isTestCode`): an `Effect.die` or
-     * `Effect.dieMessage` call whose arguments spell a timeout at any depth
-     * but not where upstream reads it. A die on an impossible state stays
-     * allowed: that really is a defect.
-     */
-    "no-timeout-die-payload-in-tests": {
-      create(context) {
-        if (!isTestCode(ruleSubject(context))) return {}
-        const mentionsTimeout = (texts: ReadonlyArray<string>) =>
-          texts.some((text) => TIMEOUT_TEXT.test(text))
-        return {
-          CallExpression(node) {
-            if (!isAstNode(node)) return
-            const callee = dottedName(getNodeField(node, "callee"))
-            if (callee !== "Effect.die" && callee !== "Effect.dieMessage") return
-            const args = callExpressionArgs(node)
-            if (!mentionsTimeout(args.flatMap(allTexts))) return
-            if (mentionsTimeout(args.flatMap(upstreamDieTexts))) return
-            context.report({
-              message: `\`${callee}(...)\` on a timeout in test code — the defect surfaces detached from the test that waited. Fail with a typed error (\`Effect.timeout\` fails with a \`TimeoutError\`; \`Effect.timeoutOrElse\` maps it to your own).`,
-              node,
-            })
-          },
-        }
-      },
-    },
-
     /**
      * Every child-session writer in core admits the nesting depth.
      *
