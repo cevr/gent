@@ -135,6 +135,11 @@ const makeHistory = () => {
     readonly model?: ModelId
     readonly pricedModel?: ModelId
     readonly costUsd?: number
+    /** The cache writes the driver split by lifetime. */
+    readonly cacheWritesByLifetime?: ReadonlyArray<{
+      readonly ttlMs: number
+      readonly tokens: number
+    }>
     /** The step ran in a spawned child session. */
     readonly child?: boolean
     /** Refused attempts inside the step: when each was refused, and the delay before its retry. */
@@ -162,6 +167,7 @@ const makeHistory = () => {
         pricedModel: opts.pricedModel ?? opts.model ?? SONNET,
         costUsd: opts.costUsd ?? 0.05,
         child: opts.child,
+        cacheWritesByLifetime: opts.cacheWritesByLifetime,
       }),
     )
   }
@@ -677,6 +683,47 @@ describe("cache miss price", () => {
       expect(
         missCostUsd({ ...miss, missedTokens: 25_000 }, priceOf(SONNET), ROOT_LIFETIME),
       ).toBeCloseTo((20_000 * 2.3 + 5000 * 1.8) / 1_000_000, 10)
+    }),
+  )
+
+  it.live("a rewrite the driver split by lifetime is priced at each lifetime's rate", () =>
+    Effect.sync(() => {
+      // A child asks for 5 minutes, but its shared prefix writes at one hour.
+      const pricing = Option.some({
+        input: 2,
+        output: 10,
+        cacheRead: 0.2,
+        cacheWrite: 4,
+        cacheWriteByLifetime: [
+          { ttlMs: 5 * MINUTE, price: 2.5 },
+          { ttlMs: 60 * MINUTE, price: 4 },
+        ],
+      })
+      const childLifetime = Option.some(5 * MINUTE)
+      const history = cachedFirstStep()
+      history.input(14 * MINUTE, "t2")
+      history.step({
+        start: 14 * MINUTE + 10 * SECOND,
+        end: 15 * MINUTE,
+        turn: "t2",
+        usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+        cacheWritesByLifetime: [
+          { ttlMs: 60 * MINUTE, tokens: 20_000 },
+          { ttlMs: 5 * MINUTE, tokens: 10_000 },
+        ],
+        child: true,
+      })
+      const miss = onlyMiss(scanCacheMisses(history.envelopes))
+      // 20k rewritten at 4 $/M and 10k at 2.5 $/M, each over the 0.2 $/M read.
+      expect(missCostUsd(miss, pricing, childLifetime)).toBeCloseTo(
+        (20_000 * 3.8 + 10_000 * 2.3) / 1_000_000,
+        10,
+      )
+      // The prefix is written first, and the longest-lived entry leads it.
+      expect(missCostUsd({ ...miss, missedTokens: 20_000 }, pricing, childLifetime)).toBeCloseTo(
+        (20_000 * 3.8) / 1_000_000,
+        10,
+      )
     }),
   )
 

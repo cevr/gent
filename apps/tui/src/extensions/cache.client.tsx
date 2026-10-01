@@ -97,6 +97,10 @@ export interface CacheMiss {
   readonly inputTokens: number
   readonly cacheReadTokens: number
   readonly cacheWriteTokens: number
+  /** The part of the writes the driver split by lifetime; the rest took the step's. */
+  readonly cacheWritesByLifetime: NonNullable<
+    Extract<AgentEvent, { _tag: "StreamEnded" }>["cacheWritesByLifetime"]
+  >
   /** The step was billed; a subscription step reports no cost. */
   readonly billed: boolean
   readonly cause: CacheMissCause
@@ -285,6 +289,7 @@ export const makeCacheScan = (): CacheScan => {
           inputTokens: promptTokens,
           cacheReadTokens,
           cacheWriteTokens,
+          cacheWritesByLifetime: event.cacheWritesByLifetime ?? [],
           billed: (event.costUsd ?? 0) > 0,
           sinceRefreshMs,
           modelSwitch: model !== prior.model,
@@ -391,12 +396,14 @@ type ModelPricing = NonNullable<Model["pricing"]>
 
 /**
  * What the miss cost over a cache hit. The re-billed prefix was written to
- * the cache again, so the missed tokens fill this step's cache writes first,
- * at the write rate of the step's cache lifetime (a child writes at its own);
- * the rest paid the uncached input rate. Each part is priced over the
- * cache-read rate it would have paid. A provider that bills no writes
- * (OpenAI) reports none, so every missed token paid the input rate. An
- * unbilled step, or a model the catalog does not price, cost nothing.
+ * the cache again, so the missed tokens fill this step's cache writes first;
+ * the rest paid the uncached input rate. The writes run in prompt order: the
+ * ones the driver split by lifetime, longest-lived first (a child's shared
+ * prefix writes at the root lifetime), then the rest at the step's lifetime
+ * (a child's own). Each part is priced over the cache-read rate it would
+ * have paid. A provider that bills no writes (OpenAI) reports none, so every
+ * missed token paid the input rate. An unbilled step, or a model the catalog
+ * does not price, cost nothing.
  */
 export const missCostUsd = (
   miss: CacheMiss,
@@ -408,7 +415,19 @@ export const missCostUsd = (
   const readRate = price.cacheRead ?? price.input
   const rewritten = Math.min(miss.missedTokens, miss.cacheWriteTokens)
   const uncached = Math.max(0, miss.missedTokens - rewritten)
-  const writeWaste = rewritten * Math.max(0, cacheWriteRate(price, lifetimeMs) - readRate)
+  const split = [...miss.cacheWritesByLifetime].sort((a, b) => b.ttlMs - a.ttlMs)
+  const splitTokens = split.reduce((sum, write) => sum + write.tokens, 0)
+  const writes = [
+    ...split.map((write) => ({ tokens: write.tokens, lifetime: Option.some(write.ttlMs) })),
+    { tokens: Math.max(0, miss.cacheWriteTokens - splitTokens), lifetime: lifetimeMs },
+  ]
+  let left = rewritten
+  let writeWaste = 0
+  for (const write of writes) {
+    const tokens = Math.min(left, write.tokens)
+    writeWaste += tokens * Math.max(0, cacheWriteRate(price, write.lifetime) - readRate)
+    left -= tokens
+  }
   const inputWaste = uncached * Math.max(0, price.input - readRate)
   return (writeWaste + inputWaste) / 1_000_000
 }

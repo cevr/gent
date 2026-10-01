@@ -2622,6 +2622,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             costUsd: Option.getOrUndefined(streamEndedCost),
             pricedModel,
             child: params.resolved.child,
+            cacheWritesByLifetime: Option.getOrUndefined(
+              Option.liftPredicate(cacheWritesByLifetime, (writes) => writes.length > 0),
+            ),
             outcome: outcome._tag,
           }),
         )

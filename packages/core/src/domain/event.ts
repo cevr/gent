@@ -135,6 +135,16 @@ export const AgentEvent = Schema.TaggedUnion({
      * such a step reads as a root session's.
      */
     child: Schema.optional(Schema.Boolean),
+    /**
+     * The part of `usage.cacheWriteTokens` the driver split by the lifetime
+     * of the entry it wrote (`ModelDriverContribution.cacheWritesByLifetime`):
+     * a child's shared prefix writes at the root lifetime although the child
+     * asks for its own. Absent when the driver splits nothing, and on rows
+     * written before the field; the writes then take the step's lifetime.
+     */
+    cacheWritesByLifetime: Schema.optional(
+      Schema.Array(Schema.Struct({ ttlMs: Schema.Finite, tokens: Schema.Natural })),
+    ),
     interrupted: Schema.optional(Schema.Boolean),
     /** How the step ended; the step boundary the loop's policy matched on. */
     outcome: Schema.optional(StepOutcomeTag),
