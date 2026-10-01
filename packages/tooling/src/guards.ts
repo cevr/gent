@@ -186,13 +186,37 @@ const regexEnd = (text: string, start: number): number => {
  */
 const JSX_OPENER = /^<(?:>|[A-Za-z_$][\w$.:-]*(\s*(?:,|=|extends\b)|>\()?)/
 
-/** Whether `=>` follows the parenthesised group that opens at `open`. */
+/** Whether `=>` is the next token from `at`, past whitespace and comments. */
+const arrowAt = (text: string, at: number): boolean => {
+  let next = at
+  for (;;) {
+    while (/\s/.test(text[next] ?? "")) next += 1
+    const opener = text.slice(next, next + 2)
+    if (opener !== "//" && opener !== "/*") return opener === "=>"
+    next = commentEnd(text, next, opener)
+  }
+}
+
+/**
+ * Whether `=>` follows the parenthesised group that opens at `open`. The
+ * group is walked by the lexer, so a bracket in a string or a comment is text.
+ */
 const arrowFollowsGroup = (text: string, open: number): boolean => {
+  const frames = [0]
   let depth = 0
-  for (let at = open; at < text.length; at += 1) {
-    if (text[at] === "(") depth += 1
-    if (text[at] === ")") depth -= 1
-    if (depth === 0) return /^\s*=>/.test(text.slice(at + 1, at + 64))
+  let at = open
+  while (at < text.length) {
+    const token = lexStep(text, at, frames, "ts")
+    for (
+      let index = at;
+      token.kind === "code" && frames.length === 1 && index < token.end;
+      index += 1
+    ) {
+      if (text[index] === "(") depth += 1
+      if (text[index] === ")") depth -= 1
+      if (depth === 0) return arrowAt(text, index + 1)
+    }
+    at = token.end
   }
   return false
 }
@@ -1780,8 +1804,10 @@ export const findUnpairedBuildDefines = (
       const keys = namesMatchingAt(bracketedAt(code, open, syntax), DEFINE_KEY, open)
       defines.push(...keys.map((key) => ({ name: key.name, line: lineAt(code, key.at), file })))
     }
-    for (const reader of namesMatchingAt(code, DEFINE_READER)) {
-      readers.push({ name: reader.name, line: lineAt(code, reader.at), file })
+    // A reader is code: `declare const` spelled in a string declares nothing.
+    const declarations = codeOnly(text, syntax)
+    for (const reader of namesMatchingAt(declarations, DEFINE_READER)) {
+      readers.push({ name: reader.name, line: lineAt(declarations, reader.at), file })
     }
   }
   const defined = new Set(defines.map((define) => define.name))
@@ -2265,8 +2291,30 @@ const SOURCE_ROOT = /^(?:packages|apps|plans|testbeds|examples|docs|patches|\.cl
 /** Text between backticks, which is what marks a reference as a path. */
 const BACKTICKED = /`([^`\n]+)`/g
 
-/** A fence opens or closes a block whose contents are commands, not prose. */
-const FENCE = /^\s*```/
+/** A fence: three or more backticks or tildes, at any indent (a list item indents its fences). */
+const FENCE = /^\s*(`{3,}|~{3,})/
+
+/** A closing fence: the fence alone on its line. */
+const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/
+
+/**
+ * Whether each line of `text` is fenced: a fence line, or a line inside a
+ * block whose contents are commands, not prose. A block closes on a bare
+ * fence of its own character at least as long as the opener, so a ````
+ * block can show a ``` line, and a ~~~ block closes only on tildes.
+ */
+const fencedLines = (text: string): ReadonlyArray<boolean> => {
+  let opener = ""
+  return text.split("\n").map((line) => {
+    if (opener === "") {
+      opener = FENCE.exec(line)?.[1] ?? ""
+      return opener !== ""
+    }
+    const close = FENCE_CLOSE.exec(line)?.[1] ?? ""
+    if (close.startsWith(opener)) opener = ""
+    return true
+  })
+}
 
 /** Stands for a set of paths: a glob, or a brace expansion over filenames. */
 const MULTI_PATH = /[*{}]/
@@ -2357,13 +2405,9 @@ export const findSteeringFilePaths = (
   const prefixes = directoryPrefixesOf(trackedFiles)
   const directory = file.slice(0, Math.max(file.lastIndexOf("/"), 0))
   const findings: Finding[] = []
-  let inFence = false
+  const fenced = fencedLines(text)
   for (const [index, line] of text.split("\n").entries()) {
-    if (FENCE.test(line)) {
-      inFence = !inFence
-      continue
-    }
-    if (inFence) continue
+    if (fenced[index] === true) continue
     for (const match of line.matchAll(BACKTICKED)) {
       const claimed = match[1] ?? ""
       if (!isPathClaim(claimed)) continue
@@ -2396,17 +2440,35 @@ const RECEIPT =
 /** One backticked name of a receipt; a dotted name is read by its last segment. */
 const RECEIPT_NAME = /`(?:[\w$]+\.)*([A-Za-z_$][\w$]*)(?:\(\))?`/g
 
+/** A sentence end, or a blank line that ends a paragraph. */
+const SENTENCE_END = /[.!?]\s|\n[ \t]*\n/g
+
+/**
+ * Whether the pair at `at` is stated as a receipt: it opens a parenthesis
+ * (`(`name` in `path`)`), or its sentence runs from a `Receipt:` or
+ * `Receipts:` label. Any other pair is prose, such as "avoid `x` in `y.ts`",
+ * which asserts nothing about where `x` lives.
+ */
+const isStatedReceipt = (prose: string, at: number): boolean => {
+  const before = prose.slice(Math.max(0, at - 600), at)
+  if (/\(\s*$/.test(before)) return true
+  const sentenceStart = Option.match(
+    Option.fromUndefinedOr(before.matchAll(SENTENCE_END).toArray().at(-1)),
+    {
+      onNone: () => 0,
+      onSome: (end) => end.index + end[0].length,
+    },
+  )
+  return /\bReceipts?:/.test(before.slice(sentenceStart))
+}
+
 /** The text with each fenced block's lines blank, so offsets keep their lines. */
 const withoutFences = (text: string): string => {
-  let inFence = false
+  const fenced = fencedLines(text)
   return text
     .split("\n")
-    .map((line) => {
-      if (FENCE.test(line)) {
-        inFence = !inFence
-        return ""
-      }
-      if (inFence) return ""
+    .map((line, index) => {
+      if (fenced[index] === true) return ""
       return line
     })
     .join("\n")
@@ -2414,7 +2476,8 @@ const withoutFences = (text: string): string => {
 
 /**
  * Guard: a "`name` in `path`" receipt in steering prose names a word the
- * file holds.
+ * file holds. A pair is a receipt only where the prose states one
+ * (`isStatedReceipt`): in parentheses, or after a `Receipt:` label.
  *
  * The path check proves the file exists, not that the name still lives in
  * it: a renamed or deleted function leaves the receipt pointing at a file
@@ -2464,6 +2527,7 @@ export const findStaleSteeringReceipts = (
     const prose = withoutFences(text)
     return prose
       .matchAll(RECEIPT)
+      .filter((match) => isStatedReceipt(prose, match.index))
       .flatMap((match) =>
         receiptMessages(match[1] ?? "", match[2] ?? "").map((message) => ({
           file,
@@ -2700,8 +2764,9 @@ export const findTuiSessionIdentityReads = (file: string, text: string): Readonl
  * entry listed twice fails as well.
  *
  * The language service honors a directive anywhere in a file's text, a string
- * literal too: the marker, then whitespace, then a `rule:severity` flag. So
- * the scan reads each line for that form, not only the comment tokens. A
+ * literal too: the marker, then whitespace, then a `rule:severity` flag,
+ * whose rule is a name or `*`. So the scan reads each line for that form, not
+ * only the comment tokens. A
  * directive without `-next-line` suppresses its rules from there to the end
  * of the file; like a file-wide lint disable, it is banned outright.
  */
@@ -2720,7 +2785,7 @@ interface ApprovedSuppressionEntry {
 const directiveMarker = "@effect-diagnostics"
 
 /** The form the language service honors; the capture is `-next-line`, or empty for the file scope. */
-const HONORED_DIRECTIVE = /@effect-diagnostics(-next-line)?\s+[\w/]+:[a-z]/
+const HONORED_DIRECTIVE = /@effect-diagnostics(-next-line)?\s+(?:[\w/]+|\*):[a-z]/
 
 const approvedComment = (entry: ApprovedSuppressionEntry): string =>
   `// ${directiveMarker}-next-line ${entry.text}`

@@ -1639,6 +1639,15 @@ describe("a build define and its reader come in pairs", () => {
       ]),
     ).toEqual(["packages/extensions/src/cell.ts:1"])
   })
+
+  test("a declare const spelled in a string reads nothing", () => {
+    expect(
+      linesOf([
+        [BUILD, buildText(["__GENT_X__"])],
+        ["packages/extensions/src/cell.ts", 'const s = "declare const __GENT_X__: boolean"\n'],
+      ]),
+    ).toEqual([`${BUILD}:3`])
+  })
 })
 
 describe("the guard entry routes each tracked file to its finders", () => {
@@ -2092,33 +2101,56 @@ describe("steering receipts", () => {
   })
 
   test("a receipt whose file holds the name passes", () => {
-    expect(linesOfReceipts("`readKnownSteps` in `packages/core/src/runtime/turn.ts`")).toEqual([])
+    expect(
+      linesOfReceipts("Receipt: `readKnownSteps` in `packages/core/src/runtime/turn.ts`."),
+    ).toEqual([])
   })
 
   test("each name of a list is checked, and a dotted name or a call by its last segment", () => {
     const text = [
-      "`readKnownSteps`, `gone` and `runTurn()` in `packages/core/src/runtime/turn.ts`",
-      "`Tools.ToolSpec` or `Tools.Missing` in `packages/core/src/domain/tool.ts`",
+      "Receipts: `readKnownSteps`, `gone` and `runTurn()` in `packages/core/src/runtime/turn.ts`,",
+      "`Tools.ToolSpec` or `Tools.Missing` in `packages/core/src/domain/tool.ts`.",
     ].join("\n")
     expect(linesOfReceipts(text)).toEqual([1, 2])
   })
 
+  test("a parenthesised pair is a receipt", () => {
+    expect(linesOfReceipts("the policy (`gone` in `runtime/turn.ts`) holds")).toEqual([1])
+    expect(linesOfReceipts("the policy (`readKnownSteps` in `runtime/turn.ts`) holds")).toEqual([])
+  })
+
+  test("a pair outside a receipt run or a parenthesis is prose, not a receipt", () => {
+    const text = [
+      "Avoid `mutex` in `packages/core/src/runtime/turn.ts`.",
+      "The loop has one owner, `gone` in `packages/core/src/runtime/turn.ts`.",
+      "Receipt: `readKnownSteps` in `runtime/turn.ts`. Avoid `mutex` in `runtime/turn.ts`.",
+      "(not `mutex` in `runtime/turn.ts`)",
+    ].join("\n")
+    expect(linesOfReceipts(text)).toEqual([])
+  })
+
   test("a short path resolves by suffix outside fixtures, and one that ends no file is reported", () => {
-    expect(linesOfReceipts("`lastKnownModel` in `runtime/turn.ts`")).toEqual([1])
-    expect(linesOfReceipts("`readKnownSteps` in `runtime/turn.ts`")).toEqual([])
-    expect(linesOfReceipts("`readKnownSteps` in `runtime/gone.ts`")).toEqual([1])
+    expect(linesOfReceipts("Receipt: `lastKnownModel` in `runtime/turn.ts`.")).toEqual([1])
+    expect(linesOfReceipts("Receipt: `readKnownSteps` in `runtime/turn.ts`.")).toEqual([])
+    expect(linesOfReceipts("Receipt: `readKnownSteps` in `runtime/gone.ts`.")).toEqual([1])
   })
 
   test("a full path that names no file is left to the path check", () => {
-    expect(linesOfReceipts("`readKnownSteps` in `packages/core/src/runtime/gone.ts`")).toEqual([])
+    expect(
+      linesOfReceipts("Receipt: `readKnownSteps` in `packages/core/src/runtime/gone.ts`."),
+    ).toEqual([])
   })
 
-  test("a fenced block and a file outside the steering prose are not read", () => {
-    const fenced = ["```ts", "`gone` in `packages/core/src/runtime/turn.ts`", "```"].join("\n")
-    expect(linesOfReceipts(fenced)).toEqual([])
+  test("a fenced block of either character and any length, and a file outside the steering prose, are not read", () => {
+    const receipt = "Receipt: `gone` in `packages/core/src/runtime/turn.ts`."
     expect(
-      linesOfReceipts("`gone` in `packages/core/src/runtime/turn.ts`", "plans/ledger.md"),
-    ).toEqual([])
+      [
+        ["```ts", receipt, "```"],
+        ["~~~ts", receipt, "~~~"],
+        ["````md", "```", receipt, "```", "````"],
+      ].map((lines) => linesOfReceipts(lines.join("\n"))),
+    ).toEqual([[], [], []])
+    expect(linesOfReceipts(receipt, "plans/ledger.md")).toEqual([])
   })
 })
 
@@ -2423,6 +2455,15 @@ describe("suppression inventory guard", () => {
     ).toMatchObject([{ file: membraneFile, line: 1, message: expect.stringContaining("banned") }])
   })
 
+  test("a wildcard rule is a directive, in both scopes", () => {
+    const fileScope = nextLine.replace("-next-line", "")
+    expect(
+      [`${fileScope} *:skip-file`, `${nextLine} *:off`].map(
+        (text) => findSuppressionInventoryFindings("sample.ts", text).length,
+      ),
+    ).toEqual([1, 1])
+  })
+
   test("a directive in a string literal is read, since the language service honors it", () => {
     const marker = nextLine.replace("// ", "")
     expect(
@@ -2643,6 +2684,8 @@ describe("the guards' lexer", () => {
       ["sample.ts", "const h = (i)++ / 2"],
       ["sample.ts", "const h = xs[0]-- / 2"],
       ["sample.ts", "const h = ++i / 2"],
+      ["sample.tsx", 'type F = <T>(x: "(") => T;'],
+      ["sample.tsx", "type G = <T>(x: T) /* reason */ => T;"],
     ]
     expect(sources.map(([file, source]) => trailing(file, source))).toEqual(sources.map(() => 1))
   })
