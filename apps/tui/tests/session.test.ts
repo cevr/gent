@@ -52,7 +52,7 @@ import {
   ModelId,
   ProviderId,
   type QueueEntryInfo,
-  type ActiveInteraction,
+  type InteractionPresented,
   AgentEvent,
   AgentName,
   assistantMessageIdForTurn,
@@ -2348,7 +2348,7 @@ describe("useSessionFeed", () => {
         4,
         AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
       )
-      const interactionSeen = yield* Deferred.make<ActiveInteraction>()
+      const interactionSeen = yield* Deferred.make<InteractionPresented>()
       const liveSeen = yield* Deferred.make<void>()
       let requestedAfter: Option.Option<number> = Option.none()
       const bufferedTags: string[] = []

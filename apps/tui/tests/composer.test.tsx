@@ -23,7 +23,7 @@ import {
 } from "effect"
 import { runProcess } from "@gent/core/extensions/api"
 import {
-  type ActiveInteraction,
+  type InteractionPresented,
   BranchId,
   dateFromMillis,
   type GentClientRpcError,
@@ -619,7 +619,7 @@ describe("Composer renderer", () => {
         requestId: InteractionRequestId.make("req-pending"),
         text: "Ship the release?",
         metadata: { type: "ask-user", questions: [{ question: "Ship the release?" }] },
-      } satisfies ActiveInteraction
+      } satisfies InteractionPresented
       const setup = yield* renderScoped(
         () => (
           <TestComposer

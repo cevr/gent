@@ -30,7 +30,6 @@ import {
   Stream,
 } from "effect"
 import {
-  type ActiveInteraction,
   type AgentEvent,
   ApprovalDecisionSchema,
   type ApprovalResult,
@@ -429,7 +428,7 @@ export type ComposerEvent = Schema.Schema.Type<typeof ComposerEvent>
 
 type ComposerEffect = {
   readonly _tag: "DispatchInteractionResult"
-  readonly interaction: ActiveInteraction
+  readonly interaction: InteractionPresented
   readonly result: ApprovalResult
 }
 
@@ -1627,7 +1626,7 @@ export const runWithReconnect = <E, R>(
 // ── Types ──
 
 interface SessionFeedCallbacks {
-  onInteraction: (interaction: ActiveInteraction) => void
+  onInteraction: (interaction: InteractionPresented) => void
   onInteractionDismissed: (requestId: string) => void
   onBranchSwitch: (sessionId: SessionId, branchId: BranchId) => void
   onQueueSnapshot: (queue: QueueSnapshot) => void
@@ -1992,7 +1991,7 @@ const handleToolCallResult = (
   )
 }
 
-const toActiveInteraction = (event: AgentEvent): Option.Option<ActiveInteraction> => {
+const toActiveInteraction = (event: AgentEvent): Option.Option<InteractionPresented> => {
   if (event._tag === "InteractionPresented") return Option.some(event)
   return Option.none()
 }
@@ -2990,7 +2989,7 @@ export function createSessionController(props: {
     handleComposerEffect(Option.fromNullishOr(result.effect))
   }
 
-  const onInteraction = (interaction: ActiveInteraction) => {
+  const onInteraction = (interaction: InteractionPresented) => {
     dispatchComposer(ComposerEvent.cases.EnterInteraction.make({ interaction }))
   }
 

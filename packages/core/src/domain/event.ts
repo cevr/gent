@@ -375,13 +375,6 @@ export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
 export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChanged.Type
 const StreamSynchronized = AgentEvent.cases.StreamSynchronized
 
-// ── interaction types ───────────────────────────────────────────────────────
-
-// Shared between server and client.
-
-/** Active interaction — the generic InteractionPresented event */
-export type ActiveInteraction = InteractionPresented
-
 // ── event envelope and store ────────────────────────────────────────────────
 
 export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")({

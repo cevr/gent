@@ -10,7 +10,7 @@ import {
   Scope,
 } from "effect"
 import {
-  type ActiveInteraction,
+  type InteractionPresented,
   type AgentName,
   type ApprovalResult,
   type BranchId,
@@ -632,7 +632,7 @@ export type WidgetSlot = "below-messages" | "above-input" | "below-input"
 
 /** Props passed to an interaction renderer component */
 export interface InteractionRendererProps {
-  readonly event: ActiveInteraction
+  readonly event: InteractionPresented
   readonly resolve: (result: ApprovalResult) => void
 }
 

@@ -74,7 +74,7 @@ import { isSlashCommandName, parseSlashCommand, useCommand } from "./commands"
 import { useEnv, useWorkspace } from "./workspace"
 import { openExternalEditor, resolveEditor } from "./os"
 import {
-  type ActiveInteraction,
+  type InteractionPresented,
   type ApprovalResult,
   type GentClientRpcError,
   lineCount,
@@ -1647,14 +1647,14 @@ export function Composer(props: ComposerProps) {
    * The interaction to draw. It waits for the client extensions: a renderer
    * chosen before they load would be the fallback for good.
    */
-  const activeInteraction = (): Option.Option<ActiveInteraction> => {
+  const activeInteraction = (): Option.Option<InteractionPresented> => {
     const cs = sc.composerState()
     if (cs._tag !== "interaction" || !ext.loaded()) return Option.none()
     return Option.some(cs.interaction)
   }
 
   /** The renderer for `metadata.type`; the host's `PromptRenderer` draws the rest. */
-  const interactionRenderer = (interaction: ActiveInteraction): InteractionRendererComponent =>
+  const interactionRenderer = (interaction: InteractionPresented): InteractionRendererComponent =>
     decodeMetadata(interaction.metadata).pipe(
       Option.flatMap((metadata) => decodeString(metadata["type"])),
       Option.flatMap((type) => Option.fromNullishOr(ext.interactionRenderers().get(type))),
