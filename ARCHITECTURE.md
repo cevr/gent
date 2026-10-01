@@ -371,7 +371,10 @@ The production server uses one live profile owner:
   test running. The harness loads every `extensionInputs`/`extensions` entry
   at builtin scope; a scope test builds its profile from `LoadedExtension`s
   and passes it as `sessionProfileCacheLayer`.
-- `server/server.ts` selects the launch profile from that cache.
+- `server/server.ts` selects the launch profile from that cache. An RPC that
+  names a session reads that session's profile; one shared lookup
+  (`loadSession`) fails it with `NotFoundError` when the session does not
+  exist, so no call answers from the launch profile instead.
 
 Turn profiles carry the process identity that built them. A process-local tool
 binding names that process and is valid only inside it.

@@ -1317,12 +1317,24 @@ const RpcHandlers = GentRpcs.toLayer(
       keyOf: (input) => Option.fromUndefinedOr(input.requestId),
     })
 
-    // A storage failure fails the call: an answer from the launch profile
-    // would be another profile's models, drivers or commands.
-    const loadSession = (sessionId: Option.Option<SessionId>) =>
+    // The one owner of "a named session must exist". A session id that names
+    // no session, or a storage failure, fails the call: an answer from the
+    // launch profile would be another profile's models, drivers or commands.
+    // None only when the caller names no session.
+    const loadSession = (
+      sessionId: Option.Option<SessionId>,
+    ): Effect.Effect<Option.Option<Session>, StorageError | NotFoundError> =>
       Option.match(sessionId, {
         onNone: () => Effect.succeedNone,
-        onSome: (id) => sessionStorage.getSession(id).pipe(Effect.map(Option.fromUndefinedOr)),
+        onSome: (id) =>
+          sessionStorage.getSession(id).pipe(
+            Effect.flatMap((session) =>
+              Option.match(Option.fromUndefinedOr(session), {
+                onNone: () => Effect.fail(new NotFoundError({ message: "Session not found" })),
+                onSome: Effect.succeedSome,
+              }),
+            ),
+          ),
       })
 
     const cwdOf = (session: Option.Option<Session>) =>
@@ -1338,7 +1350,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
     const resolveSessionRegistry = (
       sessionId: Option.Option<SessionId>,
-    ): Effect.Effect<ExtensionRegistryService, StorageError, Scope.Scope> =>
+    ): Effect.Effect<ExtensionRegistryService, StorageError | NotFoundError, Scope.Scope> =>
       sessionCwd(sessionId).pipe(Effect.flatMap(registryForCwd))
 
     const underRegistry = <A, E>(
@@ -1360,18 +1372,6 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.flatMap((registry) => underRegistry(registry, effect)),
         Effect.scoped,
       )
-
-    /** `inSessionProfile`, but a session that does not exist fails and runs nothing. */
-    const inLiveSessionProfile = <A, E>(
-      sessionId: Option.Option<SessionId>,
-      effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
-    ) =>
-      Effect.gen(function* () {
-        if (Option.isSome(sessionId) && Option.isNone(yield* loadSession(sessionId))) {
-          return yield* new NotFoundError({ message: "Session not found" })
-        }
-        return yield* inSessionProfile(sessionId, effect)
-      })
 
     // ── login leases ──
     // A login's pending state lives on the driver instance that authorized
@@ -1628,11 +1628,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {
-          const requested = Option.fromUndefinedOr(sessionId)
-          const session = yield* loadSession(requested)
-          if (Option.isSome(requested) && Option.isNone(session)) {
-            return yield* new NotFoundError({ message: "Session not found" })
-          }
+          const session = yield* loadSession(Option.fromUndefinedOr(sessionId))
           // The models a turn in this session would run: the session's
           // registry and config, then its model override, as the turn does.
           const cwd = cwdOf(session)
@@ -1663,7 +1659,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
       // A key typed for a driver that shares a sign-in is the owner's key.
       "auth.setKey": ({ provider, key, sessionId }: SetAuthKeyInput) =>
-        inLiveSessionProfile(
+        inSessionProfile(
           Option.fromUndefinedOr(sessionId),
           storeSignIn(provider, AuthApi.make({ type: "api", key })).pipe(
             Effect.mapError((error) => authPersistenceError("set", provider, error)),
@@ -1672,7 +1668,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
       // A sign-in other drivers share removes every credential it reads.
       "auth.deleteKey": ({ provider, sessionId }: DeleteAuthKeyInput) =>
-        inLiveSessionProfile(
+        inSessionProfile(
           Option.fromUndefinedOr(sessionId),
           removeSignIn(provider).pipe(
             Effect.mapError((error) => authPersistenceError("delete", provider, error)),
