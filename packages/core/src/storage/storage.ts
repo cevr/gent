@@ -51,6 +51,7 @@ import {
   MESSAGE_CHUNK_SELECT,
   type MessageChunkRow,
   SESSION_COLUMNS,
+  BRANCH_COLUMNS,
   sessionFromRow,
   type SessionRow,
   toSqlNull,
@@ -438,8 +439,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
         getBranch: Effect.fn("BranchStorage.getBranch")(
           function* (id) {
             const workspaceId = yield* CurrentWorkspaceId
-            const rows =
-              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.created_at
+            const rows = yield* sql<BranchRow>`SELECT ${sql.literal(BRANCH_COLUMNS)}
               FROM branches b
               JOIN sessions s ON s.id = b.session_id
               WHERE b.id = ${id} AND s.workspace_id = ${workspaceId}`
@@ -454,8 +454,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
         listBranches: Effect.fn("BranchStorage.listBranches")(
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
-            const rows =
-              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.created_at
+            const rows = yield* sql<BranchRow>`SELECT ${sql.literal(BRANCH_COLUMNS)}
               FROM branches b
               JOIN sessions s ON s.id = b.session_id
               WHERE b.session_id = ${sessionId} AND s.workspace_id = ${workspaceId}
@@ -779,9 +778,6 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
           function* (event, options) {
             const workspaceId = yield* CurrentWorkspaceId
             const sessionId = getEventSessionId(event)
-            if (Predicate.isUndefined(sessionId)) {
-              return yield* new StorageError({ message: "Event missing sessionId" })
-            }
             const sessionRows = yield* sql<{ id: SessionId }>`
               SELECT id FROM sessions
               WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
@@ -1060,8 +1056,7 @@ export class RelationshipStorage extends Context.Service<
             }
             const session = yield* sessionFromRow(sessionRow)
 
-            const branchRows =
-              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.created_at
+            const branchRows = yield* sql<BranchRow>`SELECT ${sql.literal(BRANCH_COLUMNS)}
                 FROM branches b
                 JOIN sessions s ON s.id = b.session_id
                 WHERE b.session_id = ${sessionId} AND s.workspace_id = ${workspaceId}

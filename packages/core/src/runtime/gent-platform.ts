@@ -36,9 +36,8 @@ import { causeMessage } from "../domain/guards.js"
  *   - `execPath`         — absolute path to the running executable
  *   - `homeDirectory`    — current user home directory
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
- *   - `hash(alg, input)` — content-addressed hex digest. `sha256` for durable
- *                          ids and cache keys; `md5` for non-cryptographic
- *                          memoization. Sync because content-addressed
+ *   - `hash(alg, input)` — content-addressed `sha256` hex digest for durable
+ *                          ids and cache keys. Sync because content-addressed
  *                          SQLite chunking is sync.
  *
  * Random bytes come from Effect `Crypto`, and `file://` URLs become paths
@@ -49,8 +48,8 @@ import { causeMessage } from "../domain/guards.js"
  * tests can use it as a drop-in replacement for the live platform.
  *
  * The `effect/noGlobals` project bans in `.oxlintrc.json` keep `Bun.*` out of
- * product code but for `GentPlatform.Live`'s implementation file
- * (`gent-platform-bun.ts`) and the adapters.
+ * product code but for the live platform's implementation file
+ * (`gent-platform-bun.ts`, `BunGentPlatformLive`) and the adapters.
  */
 
 export interface GentPlatformOsInfo {
@@ -68,20 +67,14 @@ export interface GentPlatformOsInfo {
  */
 type GentPlatformSignal = string | 0
 
-/**
- * `SignalError` is the typed failure for `GentPlatform.signal(pid, sig)`. The
- * supervisor-side classifier reads `code` (POSIX `ESRCH` / `EPERM` /
- * `EINVAL`) without parsing free-form `reason` text. `code` is `null` when
- * the underlying error did not carry a `code` property.
- */
+/** `SignalError` is the typed failure for `GentPlatform.signal(pid, sig)`. */
 export class SignalError extends Schema.TaggedError<SignalError>()("SignalError", {
   pid: Schema.Finite,
   signal: Schema.Union([Schema.String, Schema.Literal(0)]),
-  code: Schema.NullOr(Schema.String),
   reason: Schema.String,
 }) {}
 
-type GentPlatformHashAlgorithm = "sha256" | "md5"
+type GentPlatformHashAlgorithm = "sha256"
 
 /**
  * A module a file loaded at runtime may import: its exports, read when a file
@@ -135,18 +128,16 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           homeDirectory: Effect.succeed("/nonexistent/gent-test-home"),
           signal: () => Effect.void,
           // Deterministic, content-derived stub: same input → same digest.
-          // Length matches the real `sha256`/`md5` hex output (64/32) so
-          // consumers that slice off a prefix observe the right shape.
-          hash: (algorithm, input) => {
+          // Length matches the real `sha256` hex output (64) so consumers
+          // that slice off a prefix observe the right shape.
+          hash: (_algorithm, input) => {
             let text = ""
             if (Predicate.isString(input)) text = input
             else text = new TextDecoder().decode(input)
             let h = 5381
             for (let i = 0; i < text.length; i += 1) h = (h * 33) ^ text.charCodeAt(i)
             const seed = (h >>> 0).toString(16).padStart(8, "0")
-            let width = 32
-            if (algorithm === "sha256") width = 64
-            return seed.repeat(Math.ceil(width / 8)).slice(0, width)
+            return seed.repeat(8)
           },
         })
       }),

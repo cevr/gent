@@ -456,8 +456,6 @@ const makeSessionMutationsService: Effect.Effect<
       Effect.flatMap((workspaceId) => governance.clearTerminated(workspaceId, sessionId)),
       Effect.orDie,
     )
-  const forgetDeletedSessionRuntimeStateForMutation = (sessionId: SessionId) =>
-    eventStore.removeSession(sessionId)
 
   // The host context the `sessionDeleted` hooks run under. No loop owns a
   // deleted session, so no session control is wired.
@@ -523,7 +521,7 @@ const makeSessionMutationsService: Effect.Effect<
     const preSet = new Set(preTombstoned)
     const postDeleteOnly = cascadedIds.filter((id) => !preSet.has(id))
     yield* Effect.forEach(postDeleteOnly, cleanupSessionRuntimeStateForMutation, { discard: true })
-    yield* Effect.forEach(cascadedIds, forgetDeletedSessionRuntimeStateForMutation, {
+    yield* Effect.forEach(cascadedIds, (sessionId) => eventStore.removeSession(sessionId), {
       discard: true,
     })
     yield* Effect.forEach(
@@ -1907,8 +1905,6 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const storageLive = makeStorageLayer(config)
   const clusterRunnerLive = makeClusterRunnerLayer(config.state)
-  // Snapshots and event replay must share a cursor, including in-memory SQLite.
-  const baseEventStoreLive = EventStoreLive
 
   // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
   // The composition root owns FileSystem/Path; this dependency graph only
@@ -1988,7 +1984,8 @@ export const createDependencies = (config: DependenciesConfig) => {
       platformServicesLive,
       runtimeEnvironmentLive,
       clusterRunnerLive,
-      baseEventStoreLive,
+      // Snapshots and event replay share a cursor, including in-memory SQLite.
+      EventStoreLive,
       authLive,
       configServiceLive,
       modelCatalogRecordLive,

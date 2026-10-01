@@ -32,11 +32,7 @@ import {
   type WorkspaceId,
 } from "../domain/ids.js"
 import { Actor } from "effect-encore"
-import {
-  isSpawnedSession,
-  type QueueSnapshot,
-  type SteerCommand as SteerCommandType,
-} from "../domain/message.js"
+import { isSpawnedSession, type QueueSnapshot, type SteerCommand } from "../domain/message.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.js"
 import {
   AgentLoopError,
@@ -248,7 +244,7 @@ export interface SessionRuntimeService {
   readonly sendUserMessage: (
     input: SendUserMessagePayload,
   ) => Effect.Effect<void, SessionRuntimeError>
-  readonly steer: (command: SteerCommandType) => Effect.Effect<void, SessionRuntimeError>
+  readonly steer: (command: SteerCommand) => Effect.Effect<void, SessionRuntimeError>
   readonly respondInteraction: (
     input: SessionRuntimeTarget & { readonly requestId: InteractionRequestId },
   ) => Effect.Effect<void, SessionRuntimeError>

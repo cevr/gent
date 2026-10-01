@@ -144,6 +144,7 @@ import {
   type MessageMetadata,
   type RequesterBranch,
   type Session,
+  type SteerCommand,
   turnCanAsk,
   isSpawnedSession,
 } from "../domain/message.js"
@@ -153,7 +154,6 @@ import {
   listWorkspaceLoops,
   type SendUserMessagePayload,
   type SessionRuntimeState,
-  type SteerCommandType,
 } from "../domain/agent-loop.js"
 import { StorageError } from "../domain/errors.js"
 import type { AgentLoopTurnProfile } from "./turn.js"
@@ -2601,7 +2601,7 @@ interface ExtensionSessionControlService {
   readonly send: (input: SendUserMessagePayload) => Effect.Effect<void, Error>
   /** Steer a branch; `clientRequest` is the grant of the client request it runs under. */
   readonly steer: (
-    command: SteerCommandType,
+    command: SteerCommand,
     clientRequest?: ClientRequestGrant,
   ) => Effect.Effect<void, Error>
   /** Stop what one message opens on a branch; true when the stop reached it. */

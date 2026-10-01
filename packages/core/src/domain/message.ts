@@ -742,64 +742,51 @@ interface MessagePartsDisplayTextOptions {
   readonly maxToolChars?: number
 }
 
-// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
-const messagePartText = (part: MessagePart): string | undefined => {
-  if (part.type === "text") return part.text
-  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
-  return undefined
+// Each part projection answers none for a part of another kind.
+const messagePartText = (part: MessagePart): Option.Option<string> => {
+  if (part.type === "text") return Option.some(part.text)
+  return Option.none()
 }
 
-// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
-const messagePartReasoning = (part: MessagePart): string | undefined => {
-  if (part.type === "reasoning") return part.text
-  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
-  return undefined
+const messagePartReasoning = (part: MessagePart): Option.Option<string> => {
+  if (part.type === "reasoning") return Option.some(part.text)
+  return Option.none()
 }
 
-// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
-const messagePartImage = (part: MessagePart): ImagePartProjection | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
-  if (part.type !== "file" || !part.mediaType.startsWith("image/")) return undefined
-  return { mediaType: part.mediaType }
+const messagePartImage = (part: MessagePart): Option.Option<ImagePartProjection> => {
+  if (part.type !== "file" || !part.mediaType.startsWith("image/")) return Option.none()
+  return Option.some({ mediaType: part.mediaType })
 }
 
-// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
-const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
-  if (part.type !== "tool-call") return undefined
-  return {
+const messagePartToolCall = (part: MessagePart): Option.Option<ToolCallPartProjection> => {
+  if (part.type !== "tool-call") return Option.none()
+  return Option.some({
     id: part.id,
     toolName: part.name,
     input: part.params,
-  }
+  })
 }
 
-// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
-const messagePartToolResult = (part: MessagePart): ToolResultPartProjection | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
-  if (part.type !== "tool-result") return undefined
-  return {
+const messagePartToolResult = (part: MessagePart): Option.Option<ToolResultPartProjection> => {
+  if (part.type !== "tool-result") return Option.none()
+  return Option.some({
     id: part.id,
     toolName: part.name,
     value: part.result,
     summary: summarizeOutput(part.result),
     text: stringifyOutput(part.result),
     isError: part.isFailure,
-  }
+  })
 }
 
 export const messagePartsText = (parts: ReadonlyArray<MessagePart>): string =>
-  parts.flatMap((part) => messagePartText(part) ?? []).join("")
+  parts.flatMap((part) => Option.toArray(messagePartText(part))).join("")
 
 export const messagePartsTextLines = (parts: ReadonlyArray<MessagePart>): ReadonlyArray<string> =>
-  parts.flatMap((part) => {
-    const text = messagePartText(part)
-    if (Predicate.isUndefined(text)) return []
-    return [text]
-  })
+  parts.flatMap((part) => Option.toArray(messagePartText(part)))
 
 export const messagePartsReasoning = (parts: ReadonlyArray<MessagePart>): string =>
-  parts.flatMap((part) => messagePartReasoning(part) ?? []).join("")
+  parts.flatMap((part) => Option.toArray(messagePartReasoning(part))).join("")
 
 /**
  * The answer a child run hands back: the last assistant message's text parts,
@@ -821,20 +808,12 @@ export const latestAssistantText = (
 }
 
 const messagePartsReasoningLines = (parts: ReadonlyArray<MessagePart>): ReadonlyArray<string> =>
-  parts.flatMap((part) => {
-    const reasoning = messagePartReasoning(part)
-    if (Predicate.isUndefined(reasoning)) return []
-    return [reasoning]
-  })
+  parts.flatMap((part) => Option.toArray(messagePartReasoning(part)))
 
 export const messagePartsImages = (
   parts: ReadonlyArray<MessagePart>,
 ): ReadonlyArray<ImagePartProjection> =>
-  parts.flatMap((part) => {
-    const image = messagePartImage(part)
-    if (Predicate.isUndefined(image)) return []
-    return [image]
-  })
+  parts.flatMap((part) => Option.toArray(messagePartImage(part)))
 
 export const messagePartsToolCallParts = (
   parts: ReadonlyArray<MessagePart>,
@@ -851,17 +830,17 @@ const buildToolResultMapFromMessages = (
   for (const [messageIndex, message] of messages.entries()) {
     if (message.role !== "tool") continue
     for (const [partIndex, part] of message.parts.entries()) {
-      const result = messagePartToolResult(part)
-      if (Predicate.isUndefined(result)) continue
-      const results = resultMap.get(result.id) ?? []
-      results.push({
-        messageIndex,
-        partIndex,
-        summary: result.summary,
-        output: result.text,
-        isError: result.isError,
-      })
-      resultMap.set(result.id, results)
+      for (const result of Option.toArray(messagePartToolResult(part))) {
+        const results = resultMap.get(result.id) ?? []
+        results.push({
+          messageIndex,
+          partIndex,
+          summary: result.summary,
+          output: result.text,
+          isError: result.isError,
+        })
+        resultMap.set(result.id, results)
+      }
     }
   }
   return resultMap
@@ -878,11 +857,11 @@ const indexedToolCalls = (
   const calls = new Map<string, IndexedToolCallState[]>()
   for (const [messageIndex, message] of messages.entries()) {
     for (const [partIndex, part] of message.parts.entries()) {
-      const toolCall = messagePartToolCall(part)
-      if (Predicate.isUndefined(toolCall)) continue
-      const existing = calls.get(toolCall.id) ?? []
-      existing.push({ ...toolCall, position: { messageIndex, partIndex } })
-      calls.set(toolCall.id, existing)
+      for (const toolCall of Option.toArray(messagePartToolCall(part))) {
+        const existing = calls.get(toolCall.id) ?? []
+        existing.push({ ...toolCall, position: { messageIndex, partIndex } })
+        calls.set(toolCall.id, existing)
+      }
     }
   }
   return calls
@@ -1585,8 +1564,9 @@ const messagePartsToolInteractions = (
 ): ReadonlyArray<ToolInteraction> => {
   const interactions: ToolInteraction[] = []
   for (const [partIndex, part] of parts.entries()) {
-    const toolCall = messagePartToolCall(part)
-    if (Predicate.isUndefined(toolCall)) continue
+    const projected = messagePartToolCall(part)
+    if (Option.isNone(projected)) continue
+    const toolCall = projected.value
     const id = ToolCallId.make(toolCall.id)
     const result = resultForToolCall(partIndex)
     let status: ToolInteraction["status"] = "running"
@@ -1656,13 +1636,14 @@ export const messagePartsDisplayText = (
 
   for (const part of parts) {
     const text = messagePartText(part)
-    if (!Predicate.isUndefined(text)) {
-      chunks.push(text)
+    if (Option.isSome(text)) {
+      chunks.push(text.value)
       continue
     }
 
-    const toolCall = messagePartToolCall(part)
-    if (!Predicate.isUndefined(toolCall)) {
+    const projectedCall = messagePartToolCall(part)
+    if (Option.isSome(projectedCall)) {
+      const toolCall = projectedCall.value
       chunks.push(
         `### tool: ${toolCall.toolName}\n${clipChars(
           Option.getOrElse(tryStringifyJson(toolCall.input), () => String(toolCall.input)),
@@ -1673,8 +1654,8 @@ export const messagePartsDisplayText = (
     }
 
     const toolResult = messagePartToolResult(part)
-    if (!Predicate.isUndefined(toolResult)) {
-      chunks.push(`result: ${clipChars(toolResult.text, maxToolChars)}`)
+    if (Option.isSome(toolResult)) {
+      chunks.push(`result: ${clipChars(toolResult.value.text, maxToolChars)}`)
     }
   }
 

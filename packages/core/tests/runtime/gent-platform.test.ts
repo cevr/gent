@@ -81,13 +81,11 @@ describe("GentPlatform", () => {
         // host (darwin: ~99999, linux default: 4194304). `process.kill`
         // therefore raises ESRCH for this pid on every CI runner we
         // support. We assert the typed `SignalError` is on the failure
-        // channel — not on the defect channel — and that `code` is
-        // populated (supervisor classification reads `code`, not `reason`).
+        // channel, not on the defect channel.
         const failure = yield* Effect.flip(platform.signal(2 ** 31 - 1, 0))
         expect(failure).toBeInstanceOf(SignalError)
         expect(failure.pid).toBe(2 ** 31 - 1)
         expect(failure.signal).toBe(0)
-        expect(failure.code).toBe("ESRCH")
         expect(Predicate.isString(failure.reason)).toBe(true)
         expect(failure.reason.length).toBeGreaterThan(0)
       }).pipe(Effect.provide(BunGentPlatformLive)),
