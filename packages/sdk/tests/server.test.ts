@@ -22,7 +22,7 @@ import {
   serverLock,
   serverLockFile,
   ServerLockEntry,
-} from "../src/server"
+} from "../src/discovery"
 import { BunServices } from "@effect/platform-bun"
 import { homedir, hostname } from "node:os"
 import { Gent } from "../src/client"

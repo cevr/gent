@@ -1515,16 +1515,16 @@ Production rule:
 
 ## Shared Server Discovery
 
-`packages/sdk/src/server.ts` owns shared-server discovery. Two files sit beside `data.db` in the data directory (`GENT_DATA_DIR`, else `~/.gent`):
+`packages/sdk/src/discovery.ts` owns shared-server discovery: the data paths, the build fingerprint, the lock, and the decision to attach or to start. The server root that composes the server stack (`packages/sdk/src/server.ts`: the shipped extensions, the dependency graph, the HTTP listener) is a separate module that `resolveServer` imports only when this process builds a server, as `Gent.client` does for an owned handle; a launch that attaches, and a command that only reads the data directory, never evaluate it (an attach launch to its composer, median of 7 interleaved runs: compiled 278 ms to 194 ms, source 704 ms to 490 ms). `packages/sdk/tests/index.test.ts` imports the SDK entry in a fresh process and fails when a module of the shipped extensions, the server root or the OpenTelemetry SDK loads. Two files sit beside `data.db` in the data directory (`GENT_DATA_DIR`, else `~/.gent`):
 
 - `server.lock.db` is the kernel lock. The owning server holds an exclusive SQLite lock on it (`BEGIN EXCLUSIVE`, `busy_timeout` 0) for the life of its scope. The OS releases it when the process exits. A server is alive exactly when this lock cannot be taken, so a crash, a reboot, or a reused pid cannot leave a live-looking lock, and two concurrent starts give one owner: the other waits for the owner's entry and attaches.
 - `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. An entry whose kernel lock is free names a server that is gone, and a start that takes the lock replaces it. `gent server stop` sends SIGTERM only after the identity probe; `--all` removes an entry whose kernel lock is free, and holds the kernel lock through that removal so a new owner's entry is never deleted.
 
-A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it. The build fingerprint (`buildFingerprint` in `packages/sdk/src/server.ts`, read once per start, so the lock entry and the identity endpoint name one build) is the binary's mtime for the compiled gent, wherever it is installed (`GentPlatform.compiled`, the one reader of the build's `__GENT_COMPILED__` define, which the cell reads too), and the checkout's git hash for a source run. A build neither names is `unknown`, and `unknown` matches no build, itself included: such a start never attaches.
+A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it. The build fingerprint (`buildFingerprint` in `packages/sdk/src/discovery.ts`, read once per start, so the lock entry and the identity endpoint name one build) is the binary's mtime for the compiled gent, wherever it is installed (`GentPlatform.compiled`, the one reader of the build's `__GENT_COMPILED__` define, which the cell reads too), and the checkout's git hash for a source run. A build neither names is `unknown`, and `unknown` matches no build, itself included: such a start never attaches.
 
 A fixed port (`gent server start --port`) changes only the attach decision. A SQLite server on a fixed port still takes the kernel lock and writes its entry, so the TUI finds and attaches to it; it never attaches to another server itself, and fails with the holder's pid when the database is owned. The standalone server runs until a signal stops it: there is no idle shutdown and no shared launch mode.
 
-`packages/sdk/src/server.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
+`packages/sdk/src/discovery.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
 
 The old SDK worker supervisor and worker-http transport are deleted. E2E coverage that needs process boundaries uses focused server-process fixtures; transport contract tests run through the in-process direct transport.
 
@@ -1876,10 +1876,10 @@ Logging conventions:
 
 Log destinations:
 
-- One directory, `<GENT_DATA_DIR or ~/.gent>/logs` (`dataPaths(home).logDir` in `packages/sdk/src/server.ts`): logs follow the data directory, so an isolated run keeps its logs beside its database. Startup (`ensureLogDir`) removes gent logs last written more than 14 days ago
+- One directory, `<GENT_DATA_DIR or ~/.gent>/logs` (`dataPaths(home).logDir` in `packages/sdk/src/discovery.ts`): logs follow the data directory, so an isolated run keeps its logs beside its database. Startup (`ensureLogDir`) removes gent logs last written more than 14 days ago
 - `<hash>-<ts>-server.log` — server-side JSON lines (via the SDK's `GentObservability`)
 - `<hash>-<ts>-client.log` — TUI-side JSON lines (`clientLog` and `clientTraceLogger` in `apps/tui/src/client.tsx`); `<hash>` names the cwd, `<ts>` the process start
-- Spans go to an OTLP endpoint when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (`GentTracerLive`); no trace file is written
+- Spans go to an OTLP endpoint when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (`GentTracerLive`), and the OpenTelemetry SDK loads only then; no trace file is written
 
 Request-ID correlation: TUI generates a request id with `randomId` (`apps/tui/src/utils.ts`, Effect `Random`) at `sendMessage`/`createSession`, passes via `requestId` field in transport contract. Server threads into log annotations and RPC wide event boundaries.
 

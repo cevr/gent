@@ -19,7 +19,7 @@ import {
   GentObservability,
   makeJsonFileLogger,
 } from "../src/logger"
-import { dataPaths } from "../src/server"
+import { dataPaths } from "../src/discovery"
 
 // ── log paths ───────────────────────────────────────────────────────────────
 

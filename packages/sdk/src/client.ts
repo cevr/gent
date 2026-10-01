@@ -19,13 +19,13 @@ import {
   workspaceHeadersForCwd,
 } from "@gent/core/host"
 import {
+  loadServerRoot,
   resolveServer,
-  getOwnedInternal,
   state as stateFactories,
   provider as providerFactories,
   type GentServer,
   type GentServerOptions,
-} from "./server.js"
+} from "./discovery.js"
 
 // ---------------------------------------------------------------------------
 // GentRuntime — execution surface for the caller
@@ -245,7 +245,9 @@ export const Gent = {
         Match.tagsExhaustive({
           Owned: (ownedServer) =>
             Effect.gen(function* () {
-              const internal = yield* Effect.fromOption(getOwnedInternal(ownedServer)).pipe(
+              // The server root built this handle, so its module is already loaded.
+              const root = yield* loadServerRoot
+              const internal = yield* Effect.fromOption(root.getOwnedInternal(ownedServer)).pipe(
                 Effect.mapError(
                   () => new GentConnectionError({ message: "owned server internal state missing" }),
                 ),
