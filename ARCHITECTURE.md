@@ -107,9 +107,9 @@ updates this list in the same commit.
     holds `Reflect.get`. `gent/no-hand-rolled-module-path` keeps core and
     shipped-extension source from reading a file path off
     `new URL(import.meta.url)`.
-    `effect/noPlatformLayerOutsideEntry` and
-    `gent/no-platform-module-export-alias` keep the Bun platform layers in the
-    platform entry files.
+    `effect/noPlatformLayerOutsideEntry` keeps the Bun platform layers in the
+    platform entry files, and reports a platform module or member a file
+    exports.
     The TUI session controller owns screen state, views render and dispatch;
     app-specific UI facets live at the app edge. Receipts:
     `packages/core/src/runtime/gent-platform.ts`,

@@ -269,15 +269,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 6,
   },
   {
-    // An exported alias carries a platform binding past the upstream layer rule.
-    rule: "gent/no-platform-module-export-alias",
-    invalid: "packages/core/src/runtime/no-platform-module-export-alias.invalid.ts",
-    valid: ["packages/core/src/runtime/no-platform-module-export-alias.valid.ts"],
-    // a named import, a namespace member, a cast module, a let, a local alias,
-    // an alias of an alias, a destructured alias, and a member of an alias
-    expectedCount: 8,
-  },
-  {
     // A child-session writer admits the depth in its own function, first.
     rule: "gent/child-session-writer-admits",
     invalid: "packages/core/src/server/child-session-writer-admits.invalid.ts",

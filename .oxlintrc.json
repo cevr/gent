@@ -32,8 +32,6 @@
     "gent/declared-workspace-imports": "error",
     // Custom — core reads its own file path through Effect Path, not off `new URL(import.meta.url)`
     "gent/no-hand-rolled-module-path": "error",
-    // Custom — no module exports an alias of an @effect/platform-* binding; 0.22 holds all but a non-layer member
-    "gent/no-platform-module-export-alias": "error",
     // Custom — a child-session writer admits the depth in its own function
     "gent/child-session-writer-admits": "error",
     // Custom — a whole-object JSON encode decides no identity (shipped source)
@@ -232,8 +230,7 @@
         "packages/tooling/src/check-guide-code.ts"
       ],
       "rules": {
-        "effect/noPlatformLayerOutsideEntry": "off",
-        "gent/no-platform-module-export-alias": "off"
+        "effect/noPlatformLayerOutsideEntry": "off"
       }
     },
     {

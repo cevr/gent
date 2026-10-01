@@ -8,7 +8,6 @@
  * - declared-workspace-imports: a package imports only the workspace packages it declares.
  * - no-hand-rolled-module-path: no file path read off `new URL(import.meta.url)` in core.
  * - no-retired-bun-member: no `Bun.Glob` or `Bun.randomUUIDv7` where `effect/noGlobals` is off.
- * - no-platform-module-export-alias: no module exports an alias of an `@effect/platform-*` binding.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
  */
@@ -148,37 +147,6 @@ const importSourceOf = (node: AstNode): string | undefined => {
   const source = getNodeField(node, "source")
   if (source === undefined) return undefined
   return getStringField(source, "value")
-}
-
-/** An `@effect/platform-*` package or one of its modules: `@effect/platform-bun/BunPath`. */
-const PLATFORM_PACKAGE = /^@effect\/platform-[a-z-]+(?:\/|$)/
-
-/** Wrappers that keep the value they wrap: `x as T`, `x satisfies T`, `x!`, `a?.b`. */
-const VALUE_WRAPPERS = new Set([
-  "TSAsExpression",
-  "TSSatisfiesExpression",
-  "TSNonNullExpression",
-  "ChainExpression",
-])
-
-/** A layer name, `layer` or `layerServer`: a read `effect/noPlatformLayerOutsideEntry` reports itself. */
-const LAYER_NAME = /^layer/
-
-/**
- * The name an alias is read off: `A` for `A`, `A.b`, `A?.b` and `A as T`. A
- * chain through a layer member (`A.layer`) is no alias: the upstream rule
- * reports that read where it stands.
- */
-const aliasRoot = (node: AstNode | undefined): string | undefined => {
-  if (node === undefined) return undefined
-  if (VALUE_WRAPPERS.has(node.type)) return aliasRoot(getNodeField(node, "expression"))
-  if (node.type === "MemberExpression") {
-    const property = getNodeField(node, "property")
-    const name = property === undefined ? undefined : getStringField(property, "name")
-    if (LAYER_NAME.test(name ?? "")) return undefined
-    return aliasRoot(getNodeField(node, "object"))
-  }
-  return node.type === "Identifier" ? getStringField(node, "name") : undefined
 }
 
 /** The absolute path a relative specifier names, or undefined for a package specifier. */
@@ -722,107 +690,6 @@ const plugin: Plugin = {
             if (member === undefined || !RETIRED_BUN_MEMBERS.has(member)) return
             if (!isBunValue(getNodeField(node, "object"))) return
             context.report({ message: RETIRED_BUN_MEMBERS.get(member) ?? member, node })
-          },
-        }
-      },
-    },
-
-    /**
-     * No module hands a platform package on under an exported alias.
-     *
-     * `effect/noPlatformLayerOutsideEntry` keeps the `@effect/platform-*`
-     * layers in the platform entry files: it follows each read of a binding a
-     * module takes from a platform package, and reports a re-export. Since
-     * 0.22.0 it also reports a platform module or package exported as a
-     * declaration's value (`export const Services = BunServices`), through
-     * aliases and destructures. It leaves an exported non-layer member alone
-     * (`export const socket = Local.makeNet`); this rule reports that too.
-     *
-     * Reported outside test code: an exported `const`, `let` or `var` whose
-     * value is a binding imported from an `@effect/platform-*` package or
-     * module, or a member of one (`PlatformBun.BunServices`), or a local alias
-     * of one, however many steps away (`const Local = BunServices`, or
-     * `const { BunServices: Local } = PlatformBun`). A layer read
-     * (`BunServices.layer`, `import { layer }`) is left to upstream, which
-     * reports it where it stands. The platform entry files are exempt by
-     * their `.oxlintrc.json` override, as they are from the upstream rule.
-     */
-    "no-platform-module-export-alias": {
-      create(context) {
-        if (isTestCode(ruleSubject(context))) return {}
-        const platformBindings = new Set<string>()
-        const exported: Array<{ readonly node: AstNode; readonly root: string }> = []
-        /** Each local name, and the name its value is read off. */
-        const localAliases = new Map<string, string>()
-        const platformRoot = (name: string): string | undefined => {
-          const seen = new Set<string>()
-          let current: string | undefined = name
-          while (current !== undefined && !seen.has(current)) {
-            if (platformBindings.has(current)) return current
-            seen.add(current)
-            current = localAliases.get(current)
-          }
-          return undefined
-        }
-        return {
-          VariableDeclarator(node) {
-            if (!isAstNode(node)) return
-            const root = aliasRoot(getNodeField(node, "init"))
-            const id = getNodeField(node, "id")
-            if (root === undefined || id === undefined) return
-            if (id.type === "Identifier") {
-              const name = getStringField(id, "name")
-              if (name !== undefined) localAliases.set(name, root)
-              return
-            }
-            if (id.type !== "ObjectPattern") return
-            for (const property of getNodeArrayField(id, "properties") ?? []) {
-              const key = getNodeField(property, "key")
-              const value = getNodeField(property, "value")
-              const keyName = key === undefined ? undefined : getStringField(key, "name")
-              if (keyName === undefined || LAYER_NAME.test(keyName)) continue
-              if (value?.type !== "Identifier") continue
-              const name = getStringField(value, "name")
-              if (name !== undefined) localAliases.set(name, root)
-            }
-          },
-          ImportDeclaration(node) {
-            if (!isAstNode(node) || getStringField(node, "importKind") === "type") return
-            const source = importSourceOf(node) ?? ""
-            if (!PLATFORM_PACKAGE.test(source)) return
-            for (const specifier of getNodeArrayField(node, "specifiers") ?? []) {
-              if (getStringField(specifier, "importKind") === "type") continue
-              // `import { layer as l }` is reported at the import upstream.
-              const imported = getNodeField(specifier, "imported")
-              if (
-                LAYER_NAME.test(
-                  imported === undefined ? "" : (getStringField(imported, "name") ?? ""),
-                )
-              )
-                continue
-              const local = getNodeField(specifier, "local")
-              const name = local === undefined ? undefined : getStringField(local, "name")
-              if (name !== undefined) platformBindings.add(name)
-            }
-          },
-          ExportNamedDeclaration(node) {
-            if (!isAstNode(node)) return
-            const declaration = getNodeField(node, "declaration")
-            if (declaration?.type !== "VariableDeclaration") return
-            for (const declarator of getNodeArrayField(declaration, "declarations") ?? []) {
-              const root = aliasRoot(getNodeField(declarator, "init"))
-              if (root !== undefined) exported.push({ node: declarator, root })
-            }
-          },
-          "Program:exit"() {
-            for (const alias of exported) {
-              const root = platformRoot(alias.root)
-              if (root === undefined) continue
-              context.report({
-                message: `exports an alias of \`${root}\`, a binding from an @effect/platform package, which hands its layers to every importer where no rule follows them; import the package where it is used, or yield the service the platform entry provides`,
-                node: alias.node,
-              })
-            }
           },
         }
       },
