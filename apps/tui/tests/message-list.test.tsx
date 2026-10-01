@@ -3868,6 +3868,67 @@ describe("native transcript commit handover", () => {
     15_000,
   )
 
+  // The terminal keeps its own screen under the alternate screen, so a
+  // return finds history where it was. A replay would clear the screen and
+  // the reader's own saved lines, then write history a second time.
+  it.scopedLive(
+    "closing an overlay keeps history as it is, with no replay",
+    () =>
+      Effect.gen(function* () {
+        const items = [assistant("first", longBody("KEPT-ITEM")), assistant("second", "TAIL")]
+        const [overlayOpen, setOverlayOpen] = createSignal(false)
+        const committedText: string[] = []
+        const resets: string[] = []
+        const setup = yield* renderScoped(
+          () =>
+            transcriptCommit({
+              items,
+              displayRevision: () => 0,
+              overlayOpen,
+              onRenderer: (renderer) => {
+                const reset = renderer.resetSplitFooterForReplay.bind(renderer)
+                Object.defineProperty(renderer, "resetSplitFooterForReplay", {
+                  configurable: true,
+                  value: (options?: { readonly clearSavedLines?: boolean }) => {
+                    resets.push(`clearSavedLines=${String(options?.clearSavedLines === true)}`)
+                    reset(options)
+                  },
+                })
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(
+                    new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                  )
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        const flushUntil = (done: () => boolean) =>
+          Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({ until: done, schedule: Schedule.spaced("10 millis") }),
+            Effect.timeout("3 seconds"),
+            Effect.ignore,
+          )
+        yield* flushUntil(() => committedText.join("").includes("KEPT-ITEM line 12"))
+        expect(committedText.join("")).toContain("KEPT-ITEM line 12")
+        // The launch replays once; only what the overlay does counts here.
+        resets.splice(0)
+
+        setOverlayOpen(true)
+        yield* Effect.promise(() => setup.flush())
+        setOverlayOpen(false)
+        // A replay would write the item again within these frames.
+        yield* flushUntil(() => committedText.join("").split("KEPT-ITEM line 12").length > 2).pipe(
+          Effect.timeout("1 second"),
+          Effect.ignore,
+        )
+        expect(committedText.join("").split("KEPT-ITEM line 12").length - 1).toBe(1)
+        expect(resets).toEqual([])
+        expect(setup.renderer.screenMode).toBe("split-footer")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
   // A resize while the surface settles makes its rows the wrong width, and
   // the replay the resize asks for writes history again from the top. The
   // item must reach history once that replay runs, not vanish between them.

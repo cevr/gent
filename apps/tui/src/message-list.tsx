@@ -1395,6 +1395,31 @@ type CommitOutcome = "landed" | "refused" | "unsettled" | "stale"
 /** How long exit waits for the live view's last commits. */
 const EXIT_FLUSH_MS = 1500
 
+/**
+ * Where the split region sat as the alternate screen took over: the
+ * terminal rows above it (`top`) and its height (`rows`).
+ */
+interface RegionPlace {
+  readonly top: number
+  readonly rows: number
+}
+
+/**
+ * The region's place on the terminal. opentui keeps the rows above the
+ * region in a field it does not publish; a renderer without it reads as a
+ * region at the bottom of the terminal.
+ */
+const RegionOffset = Schema.Struct({ renderOffset: Schema.Finite })
+const regionPlace = (renderer: CliRenderer): RegionPlace => {
+  const rows = renderer.footerHeight
+  return Schema.decodeUnknownOption(RegionOffset)(renderer).pipe(
+    Option.match({
+      onSome: ({ renderOffset }) => ({ top: renderOffset, rows }),
+      onNone: () => ({ top: Math.max(0, renderer.terminalHeight - rows), rows }),
+    }),
+  )
+}
+
 /** The last commits of each live transcript, by the renderer it draws on. */
 const exitFlushes = new WeakMap<CliRenderer, Effect.Effect<void>>()
 
@@ -1524,6 +1549,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const displayedItems = createMemo(() => projectTranscriptDisplay(props.items, displayBoundary()))
   let viewport = Option.none<ScrollBoxRenderable>()
   let settlingNative = false
+  let leftRegion = Option.none<RegionPlace>()
   const [replayPending, setReplayPending] = createSignal(false)
   let measuredDimensions = dimensions()
   let measuredDisclosure = props.disclosure
@@ -1851,35 +1877,39 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     if (!ready()) return
     if (props.expanded || props.overlayOpen) {
       setNativeOutputReady(false)
+      if (renderer.screenMode === "split-footer") leftRegion = Option.some(regionPlace(renderer))
       renderer.externalOutputMode = "passthrough"
       renderer.screenMode = "alternate-screen"
       // The expanded transcript owns scrolling, so the wheel must reach the scrollbox.
       renderer.useMouse = true
       return
     }
-    const returning = renderer.screenMode === "alternate-screen"
-    sizeRegion(returning || replayPending())
+    // A return from the alternate screen (the palette, a picker, the
+    // expanded transcript) finds the terminal's own screen as it was:
+    // history above, and the region's rows, cleared, under it. Nothing
+    // replays: the region takes the rows it left, and the items the live
+    // view kept commit as they would have. The footer's size is still the
+    // overlay's here, so the region takes the rows it had, and the footer's
+    // next measure sizes it from there.
+    const returning = Option.filter(leftRegion, () => renderer.screenMode === "alternate-screen")
+    leftRegion = Option.none()
+    if (Option.isSome(returning) && !replayPending()) renderer.footerHeight = returning.value.rows
+    else sizeRegion(replayPending())
     renderer.screenMode = "split-footer"
+    // The region starts under the cursor row the output mode reads.
+    Option.map(returning, (place) => renderer.setCursorPosition(1, place.top, false))
     renderer.externalOutputMode = "capture-stdout"
     renderer.useMouse = false
-    if ((returning || replayPending()) && !settlingNative) {
+    if (replayPending() && !settlingNative) {
       settlingNative = true
       renderer.once("frame", finishNativeReturn)
-      // The reset clears the screen, and the live tail no longer holds the
-      // recent transcript, so a return from the alternate screen replays all
-      // of history as a resize does. Clear before the layout frame; replay
-      // only after its measurements arrive.
-      if (returning)
-        untrack(() =>
-          batch(() => {
-            committed = []
-            queued = 0
-            setCommittedCount(0)
-          }),
-        )
+      // A resize or a disclosure change replays all of history: the reset
+      // clears the screen, not the terminal's saved lines, which hold the
+      // reader's own shell. Clear before the layout frame; replay only after
+      // its measurements arrive.
       enqueueNative(
         Effect.sync(() => {
-          renderer.resetSplitFooterForReplay({ clearSavedLines: true })
+          renderer.resetSplitFooterForReplay()
           renderer.requestRender()
         }),
       )
