@@ -1267,7 +1267,10 @@ type LoginCallbackContext = Parameters<
   NonNullable<NonNullable<ModelDriverContribution["auth"]>["callback"]>
 >[0]
 
-/** An interrupted store still settles the login, as a failure its other callers can report. */
+/**
+ * A store that ends interrupted, which only its own persist can cause, still
+ * settles the login, as a failure its other callers can report.
+ */
 const settledLogin = (
   exit: Exit.Exit<void, ProviderAuthError>,
 ): Exit.Exit<void, ProviderAuthError> => {
@@ -1767,7 +1770,23 @@ export const buildOpenAIModelDriver = (
       }
       return yield* Effect.gen(function* () {
         if (!isPending(authorizationId, entry)) return yield* Deferred.await(entry.finished)
-        const result = yield* entry.flow.exchange(grant.value).pipe(Effect.mapError(callbackFailed))
+        return yield* tradeGrant(authorizationId, entry, ctx, grant.value)
+      }).pipe((exchange) => entry.exchanging.withPermit(exchange))
+    })
+  /**
+   * Trade a grant and store the tokens. A grant trades once, so nothing
+   * stops a started trade: Esc stops a caller's waits for its grant and for
+   * `exchanging`, never the exchange, so a traded grant is always stored.
+   */
+  const tradeGrant = (
+    authorizationId: string,
+    entry: PendingCallbackEntry,
+    ctx: LoginCallbackContext,
+    grant: AuthorizationGrant,
+  ) =>
+    Effect.uninterruptible(
+      Effect.gen(function* () {
+        const result = yield* entry.flow.exchange(grant).pipe(Effect.mapError(callbackFailed))
         const signedIn: OpenAICredentials = {
           access: result.access,
           refresh: result.refresh,
@@ -1785,8 +1804,8 @@ export const buildOpenAIModelDriver = (
             ctx.persist(result),
           )
         }).pipe(Effect.onExit((exit) => Deferred.done(entry.finished, settledLogin(exit))))
-      }).pipe((exchange) => entry.exchanging.withPermit(exchange))
-    })
+      }),
+    )
   return {
     id: "openai",
     name: "OpenAI",

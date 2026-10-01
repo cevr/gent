@@ -2944,46 +2944,64 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     readonly expires: number
   }
 
-  // The winner stops after it took the login and before its store: the caller waiting still hears.
-  it.live("a caller stopped between the claim and the store still settles the login", () =>
+  // Esc stops a caller that waits for its grant. A grant is one use: once the
+  // exchange starts, Esc no longer stops it, so a traded grant is stored.
+  it.live("a caller stopped once its exchange started still stores the credential", () =>
     Effect.gen(function* () {
       const pending: PendingCallbacks = new Map()
       const { callback } = yield* makeDriver(pending)
-      const closing = yield* Deferred.make<void>()
-      const waiting = yield* Deferred.make<void>()
-      const releaseGrant = yield* Deferred.make<void>()
+      const grantWaiting = yield* Deferred.make<void>()
+      const exchangeStarted = yield* Deferred.make<void>()
+      const releaseExchange = yield* Deferred.make<void>()
+      const finished = yield* Deferred.make<void, ProviderAuthError>()
+      const persisted: Array<string> = []
       let grants = 0
-      pending.set("claimed", {
+      pending.set("traded", {
         flow: {
           authorization: { url: "https://auth.openai.com", method: "auto", instructions: "" },
-          // The first caller's grant waits until the second is stopped; the second's comes at once.
+          // The first caller waits for its grant; the second gets one at once.
           grant: () => {
             grants++
-            if (grants === 2) return Effect.succeed({ code: "code", verifier: "verifier" })
-            return Deferred.succeed(waiting, void 0).pipe(
-              Effect.andThen(Deferred.await(releaseGrant)),
-              Effect.as({ code: "code", verifier: "verifier" }),
-            )
+            if (grants === 1)
+              return Deferred.succeed(grantWaiting, void 0).pipe(Effect.andThen(Effect.never))
+            return Effect.succeed({ code: "code", verifier: "verifier" })
           },
-          exchange: () => Effect.succeed({ ...newSignInTokens }),
+          exchange: () =>
+            Deferred.succeed(exchangeStarted, void 0).pipe(
+              Effect.andThen(Deferred.await(releaseExchange)),
+              Effect.as({ ...newSignInTokens }),
+            ),
         },
-        // Closing the login's scope blocks, so the first caller stops inside the claim.
-        close: Deferred.succeed(closing, void 0).pipe(Effect.andThen(Effect.never)),
-        finished: yield* Deferred.make<void, ProviderAuthError>(),
+        close: Effect.void,
+        finished,
         exchanging: yield* Semaphore.make(1),
         inFlight: 0,
         timer: Option.none(),
       })
-      const waiter = yield* Effect.forkChild(Effect.exit(callback(authContext(0, "claimed"))))
-      yield* Deferred.await(waiting)
-      const winner = yield* Effect.forkChild(callback(authContext(0, "claimed")))
-      yield* Deferred.await(closing)
-      yield* Fiber.interrupt(winner)
-      yield* Deferred.succeed(releaseGrant, void 0)
-      const exit = yield* Fiber.join(waiter).pipe(Effect.timeout("3 seconds"))
-      expect(Exit.isFailure(exit)).toBe(true)
-      expect(String(exit)).toContain("stopped before it stored")
-    }),
+      const context = {
+        ...authContext(0, "traded"),
+        persist: (auth: { readonly type: string }) =>
+          Effect.sync(() => {
+            persisted.push(auth.type)
+          }),
+      }
+      const waiter = yield* Effect.forkChild(callback(context))
+      yield* Deferred.await(grantWaiting)
+      yield* Fiber.interrupt(waiter)
+      expect(pending.has("traded")).toBe(true)
+      expect(yield* Deferred.isDone(finished)).toBe(false)
+      const trader = yield* Effect.forkChild(callback(context))
+      yield* Deferred.await(exchangeStarted)
+      const stopping = yield* Effect.forkChild(Fiber.interrupt(trader))
+      // The interrupt reaches the trader before its exchange answers.
+      yield* Effect.yieldNow.pipe(Effect.repeat({ times: 50 }))
+      yield* Deferred.succeed(releaseExchange, void 0)
+      yield* Fiber.join(stopping)
+      expect(persisted).toEqual(["oauth"])
+      expect(pending.has("traded")).toBe(false)
+      expect(yield* Effect.exit(Deferred.await(finished))).toEqual(Exit.void)
+      yield* dropLogin(pending, "traded")
+    }).pipe(Effect.timeout("3 seconds")),
   )
 
   // A caller entering the login interrupts its timer. The timer once took
