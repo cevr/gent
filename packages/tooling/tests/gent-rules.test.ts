@@ -247,34 +247,17 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 9,
   },
   {
-    // Core reads no host global past effect/noGlobals and hand-rolls no path;
-    // the platform impl and the harness back the platform and are exempt.
-    rule: "gent/no-host-fact-bypass",
-    invalid: "packages/core/src/runtime/no-host-fact-bypass.invalid.ts",
+    // Core and shipped-extension source read a module's own file path through
+    // Effect Path; the test harness and the process hosts may hand-roll it.
+    rule: "gent/no-hand-rolled-module-path",
+    invalid: "packages/core/src/runtime/no-hand-rolled-module-path.invalid.ts",
     valid: [
-      "packages/core/src/runtime/no-host-fact-bypass.valid.ts",
-      "runtime/gent-platform-bun.ts",
-      "packages/core/src/test-utils/no-host-fact-bypass.valid.ts",
+      "packages/core/src/runtime/no-hand-rolled-module-path.valid.ts",
+      "packages/core/src/test-utils/no-hand-rolled-module-path.valid.ts",
+      "apps/tui/src/no-hand-rolled-module-path.valid.ts",
     ],
-    // globalThis.process, globalThis.Bun, a computed globalThis["process"],
-    // a computed Bun member, and a hand-rolled file path
-    expectedCount: 5,
-  },
-  {
-    // The TUI host is a process host: only the global bypass applies.
-    rule: "gent/no-host-fact-bypass",
-    invalid: "apps/tui/src/no-host-fact-bypass.invalid.ts",
-    valid: ["packages/core/src/runtime/no-host-fact-bypass.valid.ts"],
-    // globalThis.process.execPath
-    expectedCount: 1,
-  },
-  {
-    // The harness reaches Bun, but the retired members stay out in any spelling.
-    rule: "gent/no-host-fact-bypass",
-    invalid: "packages/e2e/src/no-host-fact-bypass.invalid.ts",
-    valid: ["packages/e2e/src/no-host-fact-bypass.valid.ts", "runtime/gent-platform-bun.ts"],
-    // globalThis.Bun.Glob, globalThis["Bun"].randomUUIDv7, Bun["Glob"]
-    expectedCount: 3,
+    // `.pathname` and `.href` read off `new URL(import.meta.url)`
+    expectedCount: 2,
   },
   {
     // An exported alias carries a platform binding past the upstream layer rule.

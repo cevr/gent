@@ -10,7 +10,7 @@
   "rules": {
     "gent/core-entry-boundary": "error",
     "gent/declared-workspace-imports": "error",
-    "gent/no-host-fact-bypass": "error",
+    "gent/no-hand-rolled-module-path": "error",
     "gent/no-platform-module-export-alias": "error",
     "gent/child-session-writer-admits": "error",
     "gent/no-identity-encode": "error"

@@ -30,8 +30,8 @@
     "gent/core-entry-boundary": "error",
     // Custom — a workspace imports only the workspace packages its manifest declares
     "gent/declared-workspace-imports": "error",
-    // Custom — no host global read where effect/noGlobals does not look (upstream gap)
-    "gent/no-host-fact-bypass": "error",
+    // Custom — core reads its own file path through Effect Path, not off `new URL(import.meta.url)`
+    "gent/no-hand-rolled-module-path": "error",
     // Custom — no module exports an alias of an @effect/platform-* binding (upstream gap)
     "gent/no-platform-module-export-alias": "error",
     // Custom — a child-session writer admits the depth in its own function
@@ -187,9 +187,9 @@
     {
       // The platform adapters, the tooling and the test code may reach Bun and
       // the host directly. The retired `Bun.Glob` and `Bun.randomUUIDv7` stay
-      // out: the built-in `noGlobals` bans hold the global, the `bun` module
-      // ban below holds an import, and `gent/no-host-fact-bypass` holds
-      // `globalThis.Bun` and a computed member. `node:crypto` stays out
+      // out: the built-in `noGlobals` bans hold the global, in every spelling
+      // (`globalThis.Bun`, a computed member, an alias), and the `bun` module
+      // ban below holds an import. `node:crypto` stays out
       // everywhere: Effect `Crypto` and `GentPlatform.hash` own ids and digests.
       "files": [
         "packages/core/src/runtime/gent-platform-bun.ts",

@@ -6,7 +6,7 @@
  *
  * - core-entry-boundary: extensions read only the authoring entries of `@gent/core`.
  * - declared-workspace-imports: a package imports only the workspace packages it declares.
- * - no-host-fact-bypass: no host global read where `effect/noGlobals` does not look.
+ * - no-hand-rolled-module-path: no file path read off `new URL(import.meta.url)` in core.
  * - no-platform-module-export-alias: no module exports an alias of an `@effect/platform-*` binding.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
@@ -246,17 +246,6 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
 }
 
 /**
- * The files that may touch `Bun.*` and host facts directly, judged by the
- * repo-relative path a rule sees (`ruleSubject`): the platform impl, the
- * adapters, the tooling, and test code.
- */
-const platformBoundaryFilename = (subject: string): boolean =>
-  /(?:^|\/)runtime\/gent-platform-bun\.ts$/.test(subject) ||
-  /-adapter\.tsx?$/.test(subject) ||
-  /^packages\/tooling\//.test(subject) ||
-  isTestCode(subject)
-
-/**
  * Core and shipped-extension source, outside the test harness: the code that
  * also takes its working directory and host modules through Effect services.
  * The TUI, the SDK and the server launcher are process hosts; they read their
@@ -290,69 +279,6 @@ const isImportMetaUrlConstruction = (node: AstNode | undefined): boolean => {
     property !== undefined &&
     getStringField(property, "name") === "url"
   )
-}
-
-/** The host globals the project bans of `effect/noGlobals` hold. */
-const HOST_GLOBALS = new Set(["Bun", "process"])
-
-/** The name a member expression reads: `b` for `a.b` and for `a["b"]`. */
-const memberPropertyName = (node: AstNode): string | undefined => {
-  const property = getNodeField(node, "property")
-  if (property === undefined) return undefined
-  if (fieldOf(node, "computed") !== true) return getStringField(property, "name")
-  const value = fieldOf(property, "value")
-  return typeof value === "string" ? value : undefined
-}
-
-/**
- * A host global read where `effect/noGlobals` does not look: `globalThis.Bun`,
- * `globalThis.process` (dotted or computed), or a computed member of `Bun`.
- */
-const hostBypassMessage = (node: AstNode): string | undefined => {
-  const object = getNodeField(node, "object")
-  if (object?.type !== "Identifier") return undefined
-  const objectName = getStringField(object, "name")
-  const property = memberPropertyName(node)
-  if (objectName === "globalThis" && HOST_GLOBALS.has(property ?? "")) {
-    return `\`globalThis.${property}\` reads a host global past \`effect/noGlobals\`. Route it through an Effect platform service (\`GentPlatform\`, \`FileSystem\`, \`ChildProcessSpawner\`, \`Config\`); host globals stay in adapter, tooling and test code.`
-  }
-  if (objectName === "Bun" && fieldOf(node, "computed") === true) {
-    return "A computed `Bun[...]` member reads Bun past `effect/noGlobals`. Route it through an Effect platform service; Bun stays in adapter, tooling and test code."
-  }
-  return undefined
-}
-
-/** The `Bun` members retired everywhere, and their replacements. */
-const RETIRED_BUN_MEMBERS: ReadonlyMap<string, string> = new Map([
-  ["Glob", "`Bun.Glob` is retired; list files through Effect `FileSystem`."],
-  ["randomUUIDv7", "`Bun.randomUUIDv7` is adapter-only; use `GentPlatform.randomId`."],
-])
-
-/** `globalThis.Bun` or `globalThis["Bun"]`. */
-const isGlobalThisBun = (node: AstNode | undefined): boolean => {
-  if (node?.type !== "MemberExpression") return false
-  const object = getNodeField(node, "object")
-  return (
-    object?.type === "Identifier" &&
-    getStringField(object, "name") === "globalThis" &&
-    memberPropertyName(node) === "Bun"
-  )
-}
-
-/**
- * The retired `Bun` member a read names where `effect/noGlobals` does not
- * look: `globalThis.Bun.Glob`, `globalThis["Bun"].Glob` or `Bun["Glob"]`.
- */
-const bypassedRetiredBunMember = (node: AstNode): string | undefined => {
-  const object = getNodeField(node, "object")
-  const viaGlobalThis = isGlobalThisBun(object)
-  const computedBun =
-    object?.type === "Identifier" &&
-    getStringField(object, "name") === "Bun" &&
-    fieldOf(node, "computed") === true
-  if (!viaGlobalThis && !computedBun) return undefined
-  const property = memberPropertyName(node)
-  return property !== undefined && RETIRED_BUN_MEMBERS.has(property) ? property : undefined
 }
 
 const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
@@ -725,62 +651,28 @@ const plugin: Plugin = {
     },
 
     /**
-     * A host fact read where `effect/noGlobals` does not look.
+     * No module path hand-rolled off its own URL.
      *
-     * `.oxlintrc.json` bans `Bun.*` and the host process and OS facts through
-     * the project bans of `effect/noGlobals` and `effect/noNodeBuiltinImport`;
-     * core and shipped-extension source also take `process.cwd()` and the
-     * `os`, `bun`, `crypto` and `url` modules through services. Upstream
-     * (0.20.0) reads a global's member only as `Global.member`, so three
-     * spellings pass it, and this rule reports them:
-     *
-     * - `globalThis.Bun` and `globalThis.process`, dotted or computed, as in
-     *   `globalThis.process.cwd()`;
-     * - a computed member of `Bun`, as in `Bun["spawn"]`;
-     * - in core and shipped-extension source outside `test-utils/`, a file
-     *   path hand-rolled as `new URL(import.meta.url).pathname`, where Effect
-     *   `Path.fromFileUrl` reads it.
-     *
-     * Exempt by filename, as the upstream project bans are by override:
-     * `runtime/gent-platform-bun.ts`, `*-adapter.ts`, the tooling, and test
-     * code. The retired `Bun.Glob` and `Bun.randomUUIDv7` stay banned in
-     * those files too, as the built-in bans of `effect/noGlobals` keep the
-     * dotted spelling: `globalThis.Bun.Glob`, `globalThis["Bun"].Glob` and
-     * `Bun["Glob"]` are reported in every file, and `randomUUIDv7` is allowed
-     * in the platform impl only. Goes when an upstream release reads these
-     * spellings.
+     * In core and shipped-extension source outside `test-utils/`, a member
+     * read off `new URL(import.meta.url)`, as `.pathname`, builds a file path
+     * by hand; Effect `Path.fromFileUrl` reads it. The TUI, the SDK and the
+     * server launcher are process hosts and read their own paths.
+     * `effect/noGlobals` holds the host globals themselves, through
+     * `globalThis` and computed members too.
      */
-    "no-host-fact-bypass": {
+    "no-hand-rolled-module-path": {
       create(context) {
-        const subject = ruleSubject(context)
-        const platformImpl = /(?:^|\/)runtime\/gent-platform-bun\.ts$/.test(subject)
-        const reportRetired = (node: AstNode): boolean => {
-          const member = bypassedRetiredBunMember(node)
-          if (member === undefined || (platformImpl && member === "randomUUIDv7")) return false
-          context.report({ message: RETIRED_BUN_MEMBERS.get(member) ?? member, node })
-          return true
-        }
-        if (platformBoundaryFilename(subject)) {
-          return {
-            MemberExpression(node) {
-              if (isAstNode(node)) reportRetired(node)
-            },
-          }
-        }
-        const protectedFile = protectedHostFactFilename(subject)
+        if (!protectedHostFactFilename(ruleSubject(context))) return {}
         return {
           MemberExpression(node) {
-            if (!isAstNode(node) || reportRetired(node)) return
-            if (protectedFile && isImportMetaUrlConstruction(getNodeField(node, "object"))) {
-              context.report({
-                message:
-                  "`new URL(import.meta.url)` read as a path is hand-rolled; use Effect `Path.fromFileUrl`.",
-                node,
-              })
+            if (!isAstNode(node) || !isImportMetaUrlConstruction(getNodeField(node, "object"))) {
               return
             }
-            const message = hostBypassMessage(node)
-            if (message !== undefined) context.report({ message, node })
+            context.report({
+              message:
+                "`new URL(import.meta.url)` read as a path is hand-rolled; use Effect `Path.fromFileUrl`.",
+              node,
+            })
           },
         }
       },

@@ -1727,11 +1727,11 @@ export const findWritersWithoutReaders = (
  *
  * Retired `Bun.*` members (`Bun.Glob`, and `Bun.randomUUIDv7` outside the
  * platform impl) are banned by the lint instead, because only the AST sees a
- * member access: the built-in bans of `effect/noGlobals` hold `Bun.Glob`, the
- * `bun` module ban of `effect/noNodeBuiltinImport` holds an import of either
- * member, and `gent/no-host-fact-bypass` holds `globalThis.Bun.Glob`,
- * `globalThis["Bun"].Glob` and `Bun["Glob"]`. A read through a local alias of
- * `globalThis` (`const g = globalThis`) or `Reflect.get` passes all three.
+ * member access: the built-in bans of `effect/noGlobals` hold both members in
+ * every spelling (`Bun.Glob`, `globalThis.Bun.Glob`, `globalThis["Bun"].Glob`,
+ * `Bun["Glob"]`, an alias of `globalThis` or of `Bun`), the `bun` module ban
+ * of `effect/noNodeBuiltinImport` holds an import of either member, and
+ * `effect/noReflectGet` holds `Reflect.get`.
  *
  * @module
  */
