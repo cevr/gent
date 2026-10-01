@@ -35,7 +35,6 @@ import {
   GentRpcError,
   MessageId,
   ModelId,
-  ProviderId,
   Message as StoredMessage,
   Session,
   SessionId,
@@ -56,7 +55,7 @@ import {
   QueueWidget,
   resolveHeadlessState,
   resolveInteractiveState,
-  resolveHeadlessMissingProviders,
+  resolveHeadlessMissingSignIns,
   resolveInteractiveBootstrap,
 } from "../src/app"
 import {
@@ -198,7 +197,7 @@ describe("startup agent and headless auth", () => {
       expect(calls).toEqual([])
     }),
   )
-  it.live("a headless session checks auth for the agent it was created with", () =>
+  it.live("a headless session names the missing sign-ins of the agent it was created with", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -231,8 +230,24 @@ describe("startup agent and headless auth", () => {
             calls.push(input)
             return Effect.succeed([
               {
+                provider: "opencode",
+                name: "OpenCode",
+                hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+              {
                 provider: "openai",
                 hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+              {
+                provider: "anthropic",
+                name: "Anthropic",
+                hasKey: true,
                 required: true,
                 source: noAuthSource,
                 authType: absent,
@@ -255,8 +270,9 @@ describe("startup agent and headless auth", () => {
         },
         prompt: "hi",
       }
-      const missing = yield* resolveHeadlessMissingProviders({ client, state })
-      expect(missing).toEqual([ProviderId.make("openai")])
+      // Named as `/auth` names them: the driver's name, else its id.
+      const missing = yield* resolveHeadlessMissingSignIns({ client, state })
+      expect(missing).toEqual(["OpenCode", "openai"])
       expect(calls).toEqual([
         { agentName: AgentName.make("secondary"), sessionId: SessionId.make("session-a") },
       ])
@@ -280,7 +296,7 @@ describe("startup agent and headless auth", () => {
         session: { ...sessionA, activeBranchId: absent },
         prompt: "hi",
       }
-      yield* resolveHeadlessMissingProviders({ client, state })
+      yield* resolveHeadlessMissingSignIns({ client, state })
       expect(calls).toEqual([{ agentName: DEFAULT_AGENT_NAME, sessionId: sessionA.id }])
     }),
   )
