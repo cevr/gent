@@ -19,6 +19,7 @@ import {
   defineResource,
   ExtensionHost,
   ExtensionId,
+  headChars,
   request,
 } from "@gent/core/extensions/api"
 
@@ -371,12 +372,7 @@ export function parseSkillFile(content: string, filename: string) {
   const description = header.description.pipe(
     Option.orElse(() =>
       Option.fromNullishOr(body.split(/\r?\n\r?\n/)[0]).pipe(
-        // Cut at a code point: a UTF-16 slice can split a surrogate pair.
-        Option.map((paragraph) =>
-          Array.from(oneLine(paragraph.replace(/^#.*(\r?\n|$)/, "")))
-            .slice(0, 100)
-            .join(""),
-        ),
+        Option.map((paragraph) => headChars(oneLine(paragraph.replace(/^#.*(\r?\n|$)/, "")), 100)),
         Option.filter((text) => text.length > 0),
       ),
     ),
@@ -404,12 +400,8 @@ const firstSentence = (description: string): string => {
     if (lead.length >= COMPACT_DESCRIPTION_MIN_CHARS) break
     lead = `${lead} ${sentence}`.trim()
   }
-  const points = Array.from(lead)
-  if (points.length <= COMPACT_DESCRIPTION_CHARS) return lead
-  return `${points
-    .slice(0, COMPACT_DESCRIPTION_CHARS - 1)
-    .join("")
-    .trimEnd()}…`
+  if (lead.length <= COMPACT_DESCRIPTION_CHARS) return lead
+  return `${headChars(lead, COMPACT_DESCRIPTION_CHARS - 1).trimEnd()}…`
 }
 
 /**

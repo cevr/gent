@@ -160,7 +160,9 @@ const layer = Layer.mergeAll(
 const seedTranscript = Effect.gen(function* () {
   yield* ensureStorageParents({ sessionId: sessionIdContextHost, branchId: branchIdContextHost })
   const storage = yield* MessageStorage
-  const lines = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\n")
+  const plain = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\n")
+  // The 120-character preview cut falls between the emoji's two halves.
+  const lines = `${plain.slice(0, 119)}😀${plain.slice(119)}`
   yield* storage.createMessage(
     Message.cases.regular.make({
       id: MessageId.make("m-long"),
@@ -238,6 +240,7 @@ describe("cell context host", () => {
       expect(first.entries?.map((entry) => entry.id)).toEqual(["m-long"])
       expect(first.entries?.[0]?.role).toBe("assistant")
       expect(first.entries?.[0]?.preview.startsWith("line 1 line 2")).toBe(true)
+      expect(first.entries?.[0]?.preview.isWellFormed()).toBe(true)
       expect(first.entries?.[0]?.chars).toBeGreaterThan(200)
       const rest = decodeReply(
         yield* handleContextCall({

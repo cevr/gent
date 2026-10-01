@@ -15,6 +15,7 @@ import {
   defineResource,
   ExtensionHost,
   ExtensionId,
+  headChars,
   MessageId,
   type ModelId,
   SessionId,
@@ -121,8 +122,8 @@ const MODEL_COMPACTION_MESSAGE_CHARS = 8_000
 
 const clipMessageText = (text: string): string => {
   if (text.length <= MODEL_COMPACTION_MESSAGE_CHARS) return text
-  const omitted = text.length - MODEL_COMPACTION_MESSAGE_CHARS
-  return `${text.slice(0, MODEL_COMPACTION_MESSAGE_CHARS)}\n[… ${omitted} more characters; read the message by id]`
+  const kept = headChars(text, MODEL_COMPACTION_MESSAGE_CHARS)
+  return `${kept}\n[… ${text.length - kept.length} more characters; read the message by id]`
 }
 
 const formatMessage = (message: Message): string =>
@@ -286,7 +287,7 @@ const HANDOFF_PREVIEW_CHARS = 120
 const previewOf = (message: Message): string => {
   const line = message.parts.map(partToText).join(" ").replace(/\s+/g, " ").trim()
   if (line.length <= HANDOFF_PREVIEW_CHARS) return line
-  return `${line.slice(0, HANDOFF_PREVIEW_CHARS)}…`
+  return `${headChars(line, HANDOFF_PREVIEW_CHARS)}…`
 }
 
 /**

@@ -8,9 +8,11 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
+  headChars,
   isSpawnedSession,
   request,
   SessionId,
+  tailChars,
 } from "@gent/core/extensions/api"
 
 // Test seam: only tests read these exports. The row shapes (LiveAgentRow,
@@ -315,7 +317,7 @@ export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFo
     case "StreamStarted":
       return { ...state, partial: "" }
     case "StreamChunk":
-      return { ...state, partial: (state.partial + event.chunk).slice(-4 * ACTIVITY_CHARS) }
+      return { ...state, partial: tailChars(state.partial + event.chunk, 4 * ACTIVITY_CHARS) }
     case "ToolCallStarted":
       return {
         ...state,
@@ -340,14 +342,14 @@ export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFo
 /** One line for the tray: the newest running tool and what it works on, else the last streamed line. */
 export const activityText = (state: ActivityFold): Option.Option<string> =>
   Option.fromUndefinedOr(state.tools.at(-1)).pipe(
-    Option.map((tool) => [...`running ${tool.label}`].slice(0, ACTIVITY_CHARS).join("")),
+    Option.map((tool) => headChars(`running ${tool.label}`, ACTIVITY_CHARS)),
     Option.orElse(() =>
       Option.fromUndefinedOr(
         state.partial
           .split("\n")
           .map((text) => text.trim())
           .findLast((text) => text.length > 0),
-      ).pipe(Option.map((line) => [...line].slice(0, ACTIVITY_CHARS).join(""))),
+      ).pipe(Option.map((line) => headChars(line, ACTIVITY_CHARS))),
     ),
   )
 

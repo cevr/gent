@@ -196,8 +196,11 @@ Content here`
   })
 
   test("a long fallback description is cut at a code point, not inside a surrogate pair", () => {
-    const result = parseSkillFile(`${"a".repeat(99)}😀 tail`, "emoji.md")
-    expect(result.description).toBe(`${"a".repeat(99)}😀`)
+    // The 100-character cut falls between the emoji's two halves; the emoji goes whole.
+    expect(parseSkillFile(`${"a".repeat(99)}😀 tail`, "emoji.md").description).toBe("a".repeat(99))
+    expect(parseSkillFile(`${"a".repeat(98)}😀 tail`, "emoji.md").description).toBe(
+      `${"a".repeat(98)}😀`,
+    )
   })
 
   test("malformed YAML falls back to the file name", () => {

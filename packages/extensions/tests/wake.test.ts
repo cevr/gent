@@ -234,6 +234,11 @@ describe("wake", () => {
       expect(monitorMessage(monitor, "timed-out", 9, "")).toBe(
         "Monitor m1 timed out after 9 checks of `true` without matching. merge it",
       )
+      // The 2,000-character tail starts inside the emoji: the cut leaves its low half out.
+      const longOutput = `😀${"b".repeat(1_999)}`
+      expect(monitorMessage(monitor, "matched", 1, longOutput)).toBe(
+        `Monitor m1 matched after 1 checks of \`true\`. merge it\n\nLast output:\n…${"b".repeat(1_999)}`,
+      )
       // The next tick is the first one still ahead; missed ticks fold into the fire that happened.
       expect(nextDueAt(1_000, 10, 1_000)).toBe(11_000)
       expect(nextDueAt(1_000, 10, 35_000)).toBe(41_000)

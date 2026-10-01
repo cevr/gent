@@ -94,12 +94,25 @@ export function headTailChars(text: string, maxChars: number = 64_000): HeadTail
  * The head of `text`, at most `maxChars` UTF-16 units, cut between code
  * points: a cut never leaves half of a surrogate pair, which a provider
  * refuses. The one cut for text the model or the store reads; a string's own
- * `.slice(0, n)` can split a pair.
+ * `.slice(0, n)` can split a pair. It reads only the two units at the cut, so
+ * a large text costs no walk.
  */
 export const headChars = (text: string, maxChars: number): string => {
   if (text.length <= maxChars) return text
-  return headWithin(text, maxChars, utf16Units)
+  const end = Math.max(0, maxChars)
+  return text.slice(0, end - Number(splitsPairAt(text, end)))
 }
+
+/** The tail of `text`, at most `maxChars` UTF-16 units, cut between code points as `headChars` cuts. */
+export const tailChars = (text: string, maxChars: number): string => {
+  if (text.length <= maxChars) return text
+  const start = text.length - Math.max(0, maxChars)
+  return text.slice(start + Number(splitsPairAt(text, start)))
+}
+
+/** True when a cut at `index` falls between the two halves of a surrogate pair. */
+const splitsPairAt = (text: string, index: number): boolean =>
+  index > 0 && isHighSurrogate(text.charCodeAt(index - 1)) && isLowSurrogate(text.charCodeAt(index))
 
 /**
  * Keep the head of `text` up to `maxChars`. A longer text ends in `marker`.

@@ -23,6 +23,7 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
+  headChars,
   type Message,
   type MessageId,
   request,
@@ -285,10 +286,10 @@ const forkTurns = (
 }
 
 const forkName = (question: string): string => {
-  const chars = [...question.trim()]
-  if (chars.length === 0) return "btw"
-  if (chars.length <= FORK_NAME_CHARS) return `btw: ${chars.join("")}`
-  return `btw: ${chars.slice(0, FORK_NAME_CHARS).join("")}…`
+  const text = question.trim()
+  if (text.length === 0) return "btw"
+  if (text.length <= FORK_NAME_CHARS) return `btw: ${text}`
+  return `btw: ${headChars(text, FORK_NAME_CHARS)}…`
 }
 
 const checkQuestion = (raw: string) =>

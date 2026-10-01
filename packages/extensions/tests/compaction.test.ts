@@ -414,6 +414,37 @@ describe("context handoff", () => {
     },
   )
 
+  it.scopedLive(
+    "a cut that lands inside an emoji keeps the notice and the summary input well formed",
+    () => {
+      let captured = Option.none<Prompt.Prompt>()
+      // The preview cut (120) and the summary-input cut (8,000) each land
+      // between the two halves of the emoji.
+      const asked = `${"a".repeat(119)}😀 tail`
+      const long = `${"b".repeat(7_999)}😀 tail`
+      return Effect.gen(function* () {
+        const result = yield* compact({
+          history: [
+            textMessage("task", "user", asked, 1),
+            textMessage("work", "assistant", long, 2),
+            textMessage("ask", "user", "go on", 3),
+            textMessage("last", "assistant", "c".repeat(100), 4),
+          ],
+        })
+        expect(result.notice).toContain(`- task: ${"a".repeat(119)}…`)
+        expect(result.notice.isWellFormed()).toBe(true)
+        expect(promptText(Option.getOrThrow(captured)).isWellFormed()).toBe(true)
+      }).pipe(
+        Effect.provide(
+          summaryProvider("bridge", (prompt) => {
+            captured = Option.some(prompt)
+          }),
+        ),
+        Effect.timeout("10 seconds"),
+      )
+    },
+  )
+
   it.scopedLive("the summary is asked for a short bridge", () => {
     let captured = Option.none<Prompt.Prompt>()
     return Effect.gen(function* () {

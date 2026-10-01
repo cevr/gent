@@ -24,6 +24,7 @@ import {
   BackgroundBashSupervisorLive,
   BashParams,
   BashTool,
+  runBashCommand,
   splitCdCommand,
   stripBackground,
 } from "../src/exec-tools.js"
@@ -1560,6 +1561,22 @@ describe("foreground command output", () => {
     Bun.gc(true)
     return process.memoryUsage().heapUsed
   })
+
+  it.scopedLive.layer(BunServices.layer)(
+    "a cut that lands inside an emoji leaves the whole emoji out",
+    () =>
+      Effect.gen(function* () {
+        // 131,050 + 2 + 200,000 characters: the marker for that total leaves
+        // a head of 131,051, which ends between the emoji's two halves.
+        const command =
+          "head -c 131050 /dev/zero | tr '\\0' x; printf '\\360\\237\\230\\200'; head -c 200000 /dev/zero | tr '\\0' y"
+        const result = yield* runBashCommand(command, Option.none(), Option.none())
+        expect(result.stdout.isWellFormed()).toBe(true)
+        expect(result.stdout.startsWith(`${"x".repeat(131_050)}\n\n... [`)).toBe(true)
+        expect(result.stdout.endsWith("y")).toBe(true)
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
+  )
 
   it.scopedLive.layer(BunFileSystem.layer)(
     "a foreground command's output past the kept ends goes to its file, not to server memory or the row",
