@@ -498,7 +498,7 @@ describe("what is a test", () => {
 
   test("a shipped boundary file is product code", () => {
     expect(kinds("apps/tui/src/extensions/loader-boundary.ts")).toEqual(product)
-    expect(kinds("packages/sdk/src/runtime-boundary.ts")).toEqual(product)
+    expect(kinds("packages/extensions/src/cell-worker-boundary.ts")).toEqual(product)
     expect(kinds("packages/core/src/runtime/agent-loop.ts")).toEqual(product)
   })
 })

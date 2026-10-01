@@ -13,7 +13,7 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import { LanguageModel } from "effect/ai"
 import { FetchHttpClient } from "effect/http"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter creates worker files before the child runtime starts.
@@ -252,6 +252,18 @@ export const makeTempDirectoryScoped = (prefix: string) =>
     Effect.sync(() => fs.mkdtempSync(path.join(os.tmpdir(), prefix))),
     (dir) => Effect.sync(() => fs.rmSync(dir, { recursive: true, force: true })),
   )
+
+/**
+ * A port the kernel just handed out and took back: a listener binds port 0,
+ * the kernel picks a free port, and the listener closes before the server
+ * under test binds it. A random pick from a range can land on a port another
+ * lane's server holds.
+ */
+export const freePort: Effect.Effect<number> = Effect.gen(function* () {
+  const { address } = yield* BunHttpServer.make({ port: 0 })
+  if (address._tag === "UnixPathAddress") return yield* Effect.die("a TCP listener has no path")
+  return address.port
+}).pipe(Effect.scoped, Effect.orDie)
 
 /** Create a worker environment with its own data and auth directories under `root`. */
 export const createWorkerEnv = (root: string): Record<string, string> => {

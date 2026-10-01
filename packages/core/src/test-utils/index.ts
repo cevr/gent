@@ -35,6 +35,7 @@ export {
   captureProviderStopReason,
   createWorkerEnv,
   fakeFetchLayer,
+  freePort,
   type FakeFetchState,
   LanguageModelLayers,
   makeFakeFetchState,
