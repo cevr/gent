@@ -62,9 +62,14 @@ import {
   GenericToolRenderer,
   RegisteredToolCall,
   type ToolCall,
+  ToolCallSchema,
 } from "./tool-renderers"
 import { useExtensionUI } from "./extensions/host"
-import type { MessageRenderer, MessageRowProps, StatusLabelColor } from "./extensions/client-facets"
+import {
+  type MessageRenderer,
+  type MessageRowProps,
+  StatusLabelColor,
+} from "./extensions/client-facets"
 import {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   type ImagePartProjection,
@@ -105,11 +110,12 @@ export const reasoningMarkdown = (reasoning: string): string => {
 // ── session event labels ────────────────────────────────────────────────────
 
 /** What the model steps of one turn added up to, from each `StreamEnded.outcome`. */
-type TurnSteps = {
-  readonly count: number
-  readonly toolCalls: number
-  readonly costUsd: number
-}
+const TurnSteps = Schema.Struct({
+  count: Schema.Finite,
+  toolCalls: Schema.Finite,
+  costUsd: Schema.Finite,
+})
+type TurnSteps = Schema.Schema.Type<typeof TurnSteps>
 
 export const emptyTurnSteps: TurnSteps = { count: 0, toolCalls: 0, costUsd: 0 }
 
@@ -122,59 +128,50 @@ export const addStep = (
   costUsd: steps.costUsd + (step.costUsd ?? 0),
 })
 
-export type SessionEvent =
-  | {
-      _tag: "turn-ended"
-      durationSeconds: number
-      steps: TurnSteps
-      createdAt: number
-      seq: number
-    }
-  | {
-      _tag: "interruption"
-      createdAt: number
-      seq: number
-    }
-  | {
-      _tag: "error"
-      error: string
-      createdAt: number
-      seq: number
-    }
-  | {
-      /**
-       * A muted row the turn goes on past: an error such as a compaction
-       * fallback, or a row a client extension derives (`noticeRowContribution`).
-       */
-      _tag: "notice"
-      /** Unique among the notice rows; the transcript keys the row on it. */
-      key: string
-      /** One glyph, drawn in `color`; the text after it is muted. */
-      glyph: string
-      color: StatusLabelColor
-      text: string
-      createdAt: number
-      seq: number
-    }
-  | {
-      _tag: "retrying"
-      attempt: number
-      maxAttempts: number
-      delayMs: number
-      outcome: RetryOutcome
-      /** The provider failure that caused the retry, as the core reported it. */
-      reason: string
-      createdAt: number
-      seq: number
-    }
-
 /**
  * How a retry ended, as far as the feed saw. `retried`: the retry ran (it
  * streamed, failed again, or its step ended). `cancelled`: the turn was cut
  * short before the retry answered. `stopped`: the runtime went idle before
  * the feed saw an outcome.
  */
-export type RetryOutcome = "pending" | "retried" | "cancelled" | "stopped"
+const RetryOutcome = Schema.Literals(["pending", "retried", "cancelled", "stopped"])
+export type RetryOutcome = Schema.Schema.Type<typeof RetryOutcome>
+
+const SessionEventPlacement = { createdAt: Schema.Finite, seq: Schema.Finite }
+
+const SessionEvent = Schema.Union([
+  Schema.TaggedStruct("turn-ended", {
+    durationSeconds: Schema.Finite,
+    steps: TurnSteps,
+    ...SessionEventPlacement,
+  }),
+  Schema.TaggedStruct("interruption", SessionEventPlacement),
+  Schema.TaggedStruct("error", { error: Schema.String, ...SessionEventPlacement }),
+  /**
+   * A muted row the turn goes on past: an error such as a compaction
+   * fallback, or a row a client extension derives (`noticeRowContribution`).
+   */
+  Schema.TaggedStruct("notice", {
+    /** Unique among the notice rows; the transcript keys the row on it. */
+    key: Schema.String,
+    /** One glyph, drawn in `color`; the text after it is muted. */
+    glyph: Schema.String,
+    color: StatusLabelColor,
+    text: Schema.String,
+    ...SessionEventPlacement,
+  }),
+  Schema.TaggedStruct("retrying", {
+    attempt: Schema.Finite,
+    maxAttempts: Schema.Finite,
+    delayMs: Schema.Finite,
+    /** The feed settles a pending retry in place once it learns the outcome. */
+    outcome: Schema.mutableKey(RetryOutcome),
+    /** The provider failure that caused the retry, as the core reported it. */
+    reason: Schema.String,
+    ...SessionEventPlacement,
+  }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type SessionEvent = Schema.Schema.Type<typeof SessionEvent>
 
 /** The first line of the retry's reason, after a separator; an empty reason adds nothing. */
 const retryReason = (reason: string): string => {
@@ -362,11 +359,18 @@ interface MessageMetadataInfo {
   extensionId?: string
 }
 
-export type AssistantSegment =
-  | { _tag: "text"; content: string }
-  | { _tag: "reasoning"; content: string }
-  | { _tag: "tool-call"; toolCall: ToolCall }
-  | { _tag: "image"; image: ImagePartProjection }
+const ImagePartProjectionSchema: Schema.Codec<ImagePartProjection> = Schema.Struct({
+  mediaType: Schema.String,
+})
+
+const AssistantSegment = Schema.Union([
+  /** The feed appends streamed text to the last text segment in place. */
+  Schema.TaggedStruct("text", { content: Schema.mutableKey(Schema.String) }),
+  Schema.TaggedStruct("reasoning", { content: Schema.String }),
+  Schema.TaggedStruct("tool-call", { toolCall: ToolCallSchema }),
+  Schema.TaggedStruct("image", { image: ImagePartProjectionSchema }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type AssistantSegment = Schema.Schema.Type<typeof AssistantSegment>
 
 interface MessageBase {
   id: string

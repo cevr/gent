@@ -1,5 +1,5 @@
 import { RGBA, SyntaxStyle, type TerminalColors } from "@opentui/core"
-import { Config, Effect, Fiber, Option, Predicate, Record } from "effect"
+import { Config, Effect, Fiber, Option, Predicate, Record, Schema } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { GentPlatform } from "@gent/core/host"
 import {
@@ -68,7 +68,15 @@ interface ThemeColors {
 export type Theme = ThemeColors
 
 /** A theme color an extension names; the host draws it in the active theme. */
-export type NamedThemeColor = "warning" | "info" | "success" | "primary" | "text" | "textMuted"
+export const NamedThemeColor = Schema.Literals([
+  "warning",
+  "info",
+  "success",
+  "primary",
+  "text",
+  "textMuted",
+])
+export type NamedThemeColor = Schema.Schema.Type<typeof NamedThemeColor>
 
 /** A named theme color or a resolved one, as the active theme draws it. */
 export const resolveThemeColor = (theme: Theme, color: RGBA | NamedThemeColor): RGBA => {

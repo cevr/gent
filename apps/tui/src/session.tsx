@@ -87,7 +87,7 @@ import {
   PromptSearchEvent,
   PromptSearchEvent as PromptSearchEventSchema,
   PromptSearchState,
-  PromptSearchState as PromptSearchStateFactory,
+  closedPromptSearch,
   transitionPromptSearch,
 } from "./pickers"
 import { useEnv, useWorkspace } from "./workspace"
@@ -413,13 +413,11 @@ export function transitionComposerInteraction(
  * This state handles server-driven interaction flows (questions, permissions, prompts, handoffs).
  */
 
-export type ComposerState =
-  | { readonly _tag: "idle" }
-  | { readonly _tag: "interaction"; readonly interaction: ActiveInteraction }
-
-export const ComposerState = {
-  idle: (): ComposerState => ({ _tag: "idle" }),
-}
+export const ComposerState = Schema.Union([
+  Schema.TaggedStruct("idle", {}),
+  Schema.TaggedStruct("interaction", { interaction: InteractionPresented }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type ComposerState = Schema.Schema.Type<typeof ComposerState>
 
 export const ComposerEvent = Schema.TaggedUnion({
   EnterInteraction: { interaction: InteractionPresented },
@@ -448,7 +446,7 @@ function transition(state: ComposerState, event: ComposerEvent): TransitionResul
       ResolveInteraction: ({ result }): TransitionResult => {
         if (state._tag !== "interaction") return { state }
         return {
-          state: ComposerState.idle(),
+          state: ComposerState.cases.idle.make({}),
           effect: {
             _tag: "DispatchInteractionResult",
             interaction: state.interaction,
@@ -461,7 +459,7 @@ function transition(state: ComposerState, event: ComposerEvent): TransitionResul
         if (state._tag !== "interaction" || state.interaction.requestId !== requestId) {
           return { state }
         }
-        return { state: ComposerState.idle() }
+        return { state: ComposerState.cases.idle.make({}) }
       },
     }),
   )
@@ -716,31 +714,28 @@ const useComposerDrafts = () => useComposerMemory().drafts
 
 // ── session UI state ────────────────────────────────────────────────────────
 
-/** The palette owns its own state; the overlay carries it rather than copying its fields. */
-interface PromptSearchOverlayState {
-  readonly _tag: "prompt-search"
-  readonly state: PromptSearchState
-}
-
-type SessionOverlayState =
-  | { readonly _tag: "none" }
-  | { readonly _tag: "fork"; readonly messages: readonly DurableMessage[] }
-  | { readonly _tag: "auth"; readonly enforceAuth: boolean }
-  | { readonly _tag: "model" }
-  | { readonly _tag: "reasoning" }
+const SessionOverlayState = Schema.Union([
+  Schema.TaggedStruct("none", {}),
+  Schema.TaggedStruct("fork", { messages: Schema.Array(DurableMessage) }),
+  Schema.TaggedStruct("auth", { enforceAuth: Schema.Boolean }),
+  Schema.TaggedStruct("model", {}),
+  Schema.TaggedStruct("reasoning", {}),
   /**
    * The branch picker. The boot flow is the only thing that opens it, so
    * escape does nothing: a reader who never chose a branch has nowhere to
    * fall back to, and ctrl+c still quits.
    */
-  | { readonly _tag: "branches"; readonly branches: readonly Branch[] }
-  | PromptSearchOverlayState
+  Schema.TaggedStruct("branches", { branches: Schema.Array(Branch) }),
+  /** The palette owns its own state; the overlay carries it rather than copying its fields. */
+  Schema.TaggedStruct("prompt-search", { state: PromptSearchState }),
   /**
    * A client extension's docked pane, by the name the extension gave it. It
    * shares this union so one pane or picker is open at a time; unlike the
    * session's own overlays it leaves the composer focused and its keys live.
    */
-  | { readonly _tag: "pane"; readonly id: string }
+  Schema.TaggedStruct("pane", { id: Schema.String }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+type SessionOverlayState = Schema.Schema.Type<typeof SessionOverlayState>
 
 /** Whether the overlay takes the composer and the session's keys; an extension pane does not. */
 export const overlayHoldsComposer = (overlay: SessionOverlayState): boolean =>
@@ -772,7 +767,7 @@ export const SessionUiState = {
     transcriptExpanded: false,
     displayRevision: 0,
     overlay: Option.match(initialBranches, {
-      onNone: (): SessionOverlayState => ({ _tag: "none" }),
+      onNone: (): SessionOverlayState => SessionOverlayState.cases.none.make({}),
       onSome: (branches): SessionOverlayState => ({ _tag: "branches", branches }),
     }),
   }),
@@ -922,7 +917,7 @@ function transitionSlot(state: SessionUiState, event: SessionUiEvent): SessionUi
         if (state.overlay._tag !== "prompt-search" && event.event._tag !== "Open") {
           return { state, effects: [] }
         }
-        let promptState = PromptSearchStateFactory.closed()
+        let promptState = closedPromptSearch()
         if (state.overlay._tag === "prompt-search") promptState = state.overlay.state
         const result = transitionPromptSearch(promptState, event.event)
         const effects = composerEffects(result.effects)
@@ -2824,7 +2819,9 @@ export function createSessionController(props: {
     !props.debugMode &&
     (authGateState() !== "closed" || !Equal.equals(validatedAgent(), client.agent()))
 
-  const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.idle())
+  const [composerState, setComposerState] = createSignal<ComposerState>(
+    ComposerState.cases.idle.make({}),
+  )
   const drafts = useComposerDrafts()
   const draftBranchId = props.branchId
   const [interactionState, setInteractionState] = createSignal({
@@ -3026,7 +3023,7 @@ export function createSessionController(props: {
     state: () => {
       const overlay = uiState().overlay
       if (overlay._tag === "prompt-search") return overlay.state
-      return PromptSearchState.closed()
+      return closedPromptSearch()
     },
     entries: history.entries,
     draft: () => interactionState().draft,

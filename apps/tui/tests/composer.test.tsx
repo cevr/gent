@@ -50,7 +50,7 @@ import {
   renderScoped as renderScopedHarness,
 } from "./render-harness-boundary"
 import { createSignal, ErrorBoundary, type JSX, onMount, Show } from "solid-js"
-import { PromptSearchState } from "../src/pickers"
+import { closedPromptSearch } from "../src/pickers"
 import { type ClientContextValue, type SessionIdentity, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
 import { type RenderWaitTimeoutError, waitForFrame } from "./helpers-boundary"
@@ -500,9 +500,9 @@ function TestComposer(props: {
       if (props.suspended !== true) return SessionUiState.initial()
       return { ...SessionUiState.initial(), overlay: { _tag: "model" } }
     },
-    composerState: props.composerState ?? (() => ComposerState.idle()),
+    composerState: props.composerState ?? (() => ComposerState.cases.idle.make({})),
     promptSearch: {
-      state: PromptSearchState.closed,
+      state: closedPromptSearch,
       entries: () => [],
       open: () => {},
       onEvent: () => {},
@@ -1946,9 +1946,9 @@ function TestComposerGhost(props: {
     interactionState,
     saveDraft: () => {},
     uiState: SessionUiState.initial,
-    composerState: () => ComposerState.idle(),
+    composerState: () => ComposerState.cases.idle.make({}),
     promptSearch: {
-      state: PromptSearchState.closed,
+      state: closedPromptSearch,
       entries: () => [],
       open: () => {},
       onEvent: () => {},
@@ -2193,9 +2193,9 @@ function TestComposerSlashEnter(props: {
     interactionState,
     saveDraft: () => {},
     uiState: SessionUiState.initial,
-    composerState: () => ComposerState.idle(),
+    composerState: () => ComposerState.cases.idle.make({}),
     promptSearch: {
-      state: PromptSearchState.closed,
+      state: closedPromptSearch,
       entries: () => [],
       open: () => {},
       onEvent: () => {},

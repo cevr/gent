@@ -22,7 +22,7 @@ import {
   type PromptSearchEvent,
   promptSearchItems,
   PromptSearchPalette,
-  PromptSearchState,
+  openPromptSearch,
   reasoningRows,
   SettingsPicker,
 } from "../src/pickers"
@@ -351,11 +351,7 @@ describe("Settings picker", () => {
 const openPalette = (entries: readonly string[], onEvent: (event: PromptSearchEvent) => void) =>
   renderScoped(
     () => (
-      <PromptSearchPalette
-        state={PromptSearchState.open("draft")}
-        entries={entries}
-        onEvent={onEvent}
-      />
+      <PromptSearchPalette state={openPromptSearch("draft")} entries={entries} onEvent={onEvent} />
     ),
     { width: 90, height: 28 },
   )
@@ -463,7 +459,7 @@ describe("prompt search and the fork picker on a short terminal", () => {
         const setup = yield* renderScoped(
           () => (
             <PromptSearchPalette
-              state={PromptSearchState.open("draft")}
+              state={openPromptSearch("draft")}
               entries={["ENTRY-ONE", "ENTRY-TWO", "ENTRY-THREE"]}
               onEvent={() => {}}
             />
