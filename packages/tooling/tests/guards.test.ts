@@ -21,7 +21,6 @@ import {
   findStaleSteeringReceipts,
   findSuppressionInventoryFindings,
   findTestLaneDefaults,
-  findTuiSessionIdentityReads,
   findUnadaptedSeams,
   findUnconsumedExports,
   enabledLintRules,
@@ -29,6 +28,7 @@ import {
   findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
   findUnmatchedTsconfigOverrides,
+  findUnparsedSources,
   findUnshippedSkillFiles,
   findUnhashedSteeringFiles,
   BUNDLED_SKILLS_MODULE,
@@ -638,7 +638,7 @@ describe("shared test home checker", () => {
       "RuntimeEnvironment.Live({ home, cwd })",
       'RuntimeEnvironment.Live({ home: root, cwd: yield* makeTempDirectoryScoped("gent-cwd-") })',
       'const workspace = workspaceIdForCwd("/tmp/run-workspace")',
-      '{ extension, scope: "user", sourcePath: "/tmp/good.ts" }',
+      'const loaded = { extension, scope: "user", sourcePath: "/tmp/good.ts" }',
       'const home = mkdtempSync(join(tmpdir(), "gent-home-"))',
       'const homePage = "/tmp/page"',
       '// home: "/tmp" in a comment',
@@ -2340,103 +2340,6 @@ describe("guide check inputs", () => {
   })
 })
 
-// ── tui session identity ────────────────────────────────────────────────────
-
-const FILE_TUI_IDENTITY = "apps/tui/src/hooks/use-thing.ts"
-
-const linesOfTuiIdentity = (text: string): ReadonlyArray<number> =>
-  findTuiSessionIdentityReads(FILE_TUI_IDENTITY, text).map((finding) => finding.line)
-
-describe("TUI session identity guard", () => {
-  test("flags the record as an `on` source", () => {
-    const text = [
-      "  createEffect(",
-      "    on(",
-      "      () => client.session(),",
-      "      (session) => startTracking(session),",
-      "    ),",
-      "  )",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([3])
-    expect(findTuiSessionIdentityReads(FILE_TUI_IDENTITY, text)[0]?.message).toContain(
-      "sessionIdentity()",
-    )
-  })
-
-  test("an emitter's `.on(` is not a reactive scope", () => {
-    const text = ['  emitter.on("change", () => {', "    render(client.session())", "  })"].join(
-      "\n",
-    )
-    expect(linesOfTuiIdentity(text)).toEqual([])
-  })
-
-  test("flags the record read in a createEffect body", () => {
-    const text = [
-      "  createEffect(() => {",
-      "    const current = Option.fromNullishOr(client.session())",
-      "    if (Option.isNone(current)) return",
-      "  })",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([2])
-  })
-
-  test("flags the record read in a createMemo", () => {
-    const text = [
-      "  const identity = createMemo(() =>",
-      "    Option.map(Option.fromNullishOr(sessionClient.session()), (s) => s.sessionId),",
-      "  )",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([2])
-  })
-
-  test("reports one finding per reactive scope, not one per opener", () => {
-    const text = [
-      "  createEffect(",
-      "    on(",
-      "      () => client.session(),",
-      "      () => {},",
-      "    ),",
-      "  )",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toHaveLength(1)
-  })
-
-  test("allows the record in an event handler", () => {
-    const text = ["  const onSelect = () => {", "    const s = client.session()", "  }"].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([])
-  })
-
-  test("allows the record in a JSX expression", () => {
-    const text = ["  return (", "    <text>{client.session()?.name}</text>", "  )"].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([])
-  })
-
-  test("allows the narrowed identity accessors", () => {
-    const text = [
-      "  createEffect(() => {",
-      "    const current = client.activeSessionId()",
-      "    const identity = client.sessionIdentity()",
-      "  })",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([])
-  })
-
-  test("allows the transport identity accessor", () => {
-    const text = [
-      "  createEffect(() => {",
-      "    const session = Option.fromNullishOr(opts.transport.currentSession())",
-      "  })",
-    ].join("\n")
-    expect(linesOfTuiIdentity(text)).toEqual([])
-  })
-
-  test("leaves files outside the TUI source alone", () => {
-    const text = ["  createEffect(() => {", "    const s = client.session()", "  })"].join("\n")
-    expect(findTuiSessionIdentityReads("packages/core/src/runtime/thing.ts", text)).toEqual([])
-    expect(findTuiSessionIdentityReads("apps/tui/tests/thing.test.ts", text)).toEqual([])
-  })
-})
-
 // ── suppression inventory ───────────────────────────────────────────────────
 
 const nextLine = ["// @effect", "diagnostics-next-line"].join("-")
@@ -2609,7 +2512,7 @@ const consumedThroughApi = (file: string, text: string): ReadonlySet<string> =>
 
 // ── the lexer every scan reads through ──────────────────────────────────────
 
-describe("the guards' lexer", () => {
+describe("the guards read source as oxc parses it", () => {
   test("a regex literal that holds a backtick or `/*` hides no read after it", () => {
     const consumer = {
       file: "packages/e2e/tests/probe.test.ts",
@@ -2669,7 +2572,6 @@ describe("the guards' lexer", () => {
     expect([
       homes(tsx, 'const f = <A,>(a: A) => a; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <A extends object>(a: A) => a; const env = { cwd: "/tmp" }'),
-      homes(tsx, 'const f = <A>(a: A) => a; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <Row = unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <Row=unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
       homes(tsx, 'type F = <Row>(x: Row) => Row; const env = { cwd: "/tmp" }'),
@@ -2677,7 +2579,7 @@ describe("the guards' lexer", () => {
         "apps/tui/tests/probe.test.ts",
         'const f = <Row>(a: Row) => a; const env = { cwd: "/tmp" }',
       ),
-    ]).toEqual([1, 1, 1, 1, 1, 1, 1])
+    ]).toEqual([1, 1, 1, 1, 1, 1])
   })
 
   test("a trailing directive is read after each JSX, regex and division form", () => {
@@ -2688,7 +2590,7 @@ describe("the guards' lexer", () => {
       ["sample.tsx", "const a = <b>(it's) (twice)</b>"],
       ["sample.tsx", "const a = <X>(it's)</X>"],
       ["sample.tsx", "type F = <A>(a: A) => A; const s = 'it'"],
-      ["sample.tsx", "const f = <A>(a: (b: A) => A) => a; const s = 'it'"],
+      ["sample.ts", "const f = <A>(a: (b: A) => A) => a; const s = 'it'"],
       ["sample.tsx", "const n = i++ <a; const s = 'it'"],
       ["sample.ts", "const r = /it's/"],
       ["sample.ts", "const r = a + /it's/.source"],
@@ -2702,6 +2604,34 @@ describe("the guards' lexer", () => {
       ["sample.tsx", "type G = <T>(x: T) /* reason */ => T;"],
     ]
     expect(sources.map(([file, source]) => trailing(file, source))).toEqual(sources.map(() => 1))
+  })
+
+  test("a generic call or construct signature in a .tsx file hides no directive after it", () => {
+    const fileWide = `/* ${["oxlint", "disable"].join("-")} */`
+    const signatures = [
+      "type Call = { <A>(a: A): A }",
+      "interface Call { <A>(a: A): A }",
+      "type Make = { new <A>(a: A): A }",
+    ]
+    expect(
+      signatures.map((signature) => {
+        const text = `${signature}\n${fileWide}\nexport const x = 1\n`
+        return [
+          findBlanketEslintDisables("sample.tsx", text).length,
+          findBannedEslintDisableBlocks("sample.tsx", text).length,
+        ]
+      }),
+    ).toEqual(signatures.map(() => [1, 1]))
+  })
+
+  test("a source oxc cannot parse is reported at its first error", () => {
+    // In a .tsx file `<A>(` opens an element, so a generic arrow there is a
+    // syntax error; the same text is a generic arrow in a .ts file.
+    const arrow = "export const x = 1\nconst f = <A>(a: A) => a\n"
+    expect([
+      findUnparsedSources("sample.tsx", arrow),
+      findUnparsedSources("sample.ts", arrow),
+    ]).toMatchObject([[{ file: "sample.tsx", line: 2 }], []])
   })
 
   test("a defaulted type parameter in a .tsx file hides no read after it", () => {

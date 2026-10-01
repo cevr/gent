@@ -1,4 +1,5 @@
 import { Option, Predicate, Schema } from "effect"
+import { parseSync, Visitor } from "oxc-parser"
 // A write or a caller in test support proves a reader works, not that
 // production supplies it; the lint rules read the same definitions.
 import { isShippedSource, isTestCode, isTestHarness, isTestSupport } from "./gent-rules"
@@ -13,472 +14,210 @@ export interface Finding {
 /** This file: the guards name what they look for, so several scans skip it. */
 const GUARDS_FILE = "packages/tooling/src/guards.ts"
 
-const blankKeepingLines = (text: string): string =>
-  text
-    .split("\n")
-    .map((line) => " ".repeat(line.length))
-    .join("\n")
+// ── source text, read by the parser ─────────────────────────────────────────
 
-// ── the lexer ───────────────────────────────────────────────────────────────
+/** A comment's trimmed body, and the line it starts on. */
+interface CommentBody {
+  readonly line: number
+  readonly body: string
+}
 
 /**
- * How a file's text is lexed: `tsx` also reads JSX, whose tags and text are
- * not TypeScript. A `.tsx` or `.jsx` file is `tsx`.
+ * The forms of a source text the guards read. oxc parses the text, the
+ * parser oxlint lints it with, so a comment, a string, a template's text, a
+ * regex and JSX text are what the language says they are. Each text form has
+ * the source's length and line breaks: an index or a line in one is the same
+ * place in every other and in the source.
  */
-type Syntax = "ts" | "tsx"
+interface SourceForms {
+  /** What oxc could not parse, with the line of each error; past an error the forms may miss code. */
+  readonly errors: ReadonlyArray<CommentBody>
+  /** Each comment, its body trimmed, and the line its body starts on. */
+  readonly comments: ReadonlyArray<CommentBody>
+  /** Comments blanked. */
+  readonly code: string
+  /**
+   * Comments, the text of strings and templates, and JSX text blanked: only
+   * code is left. A doc comment naming a class, a `_tag` string and fixture
+   * text in a template name nothing the code reads.
+   */
+  readonly codeOnly: string
+  /**
+   * Comments and template text blanked, strings kept: an import keeps its
+   * specifier, and fixture text holding `import { X } from "./x"` in a
+   * template is no import.
+   */
+  readonly statements: string
+  /**
+   * `codeOnly` with regex bodies blanked too, and the line breaks inside
+   * blanked text: every bracket left is structure, and a line end left is a
+   * line end of code.
+   */
+  readonly structure: string
+}
 
-const syntaxOf = (file: string): Syntax => {
+/** What a stretch of source is when it is not code. */
+type SpanKind = "comment" | "string" | "template" | "jsx-text" | "regex"
+
+interface Span {
+  readonly kind: SpanKind
+  readonly start: number
+  readonly end: number
+}
+
+/** The 1-based line of a character index. */
+const lineAt = (code: string, index: number): number => code.slice(0, index).split("\n").length
+
+/** A `.tsx` or `.jsx` file also reads JSX; any other source file is TypeScript. */
+const parseLanguage = (file: string): "ts" | "tsx" => {
   if (/\.[cm]?[jt]sx$/.test(file)) return "tsx"
   return "ts"
 }
 
+/** A JSON or JSONC file is read as the expression it is, inside parentheses. */
+const isJsonFile = (file: string): boolean => /\.jsonc?$/.test(file)
+
+/** What oxc reads of a text: its errors, each comment, and each stretch that is not code, in source order. */
+interface ParsedText {
+  readonly errors: ReadonlyArray<CommentBody>
+  readonly comments: ReadonlyArray<CommentBody>
+  readonly spans: ReadonlyArray<Span>
+}
+
+const parsedText = (file: string, text: string): ParsedText => {
+  let source = text
+  let shift = 0
+  if (isJsonFile(file)) {
+    source = `(${text}\n)`
+    shift = 1
+  }
+  const result = parseSync(file, source, { lang: parseLanguage(file) })
+  const spans: Array<Span> = []
+  const comments = result.comments.map((comment) => {
+    spans.push({ kind: "comment", start: comment.start, end: comment.end })
+    const lead = comment.value.length - comment.value.trimStart().length
+    return { line: lineAt(text, comment.start - shift + 2 + lead), body: comment.value.trim() }
+  })
+  new Visitor({
+    Literal: (node) => {
+      const opener = source[node.start]
+      if (opener === '"' || opener === "'") {
+        spans.push({ kind: "string", start: node.start + 1, end: node.end - 1 })
+      } else if ("regex" in node) {
+        spans.push({ kind: "regex", start: node.start + 1, end: source.lastIndexOf("/", node.end) })
+      }
+    },
+    TemplateElement: (node) => {
+      const start = node.start + 1
+      spans.push({ kind: "template", start, end: start + node.value.raw.length })
+    },
+    JSXText: (node) => {
+      spans.push({ kind: "jsx-text", start: node.start, end: node.end })
+    },
+  }).visit(result.program)
+  const errors = result.errors.map((error) => ({
+    line: lineAt(text, (error.labels[0]?.start ?? shift) - shift),
+    body: error.message,
+  }))
+  return {
+    errors,
+    comments,
+    spans: spans
+      .map((span) => ({ ...span, start: span.start - shift, end: span.end - shift }))
+      .sort((a, b) => a.start - b.start),
+  }
+}
+
+/** `text` with the spans of `kinds` blanked to spaces; `lineBreaks` blanks their line breaks too. */
+const blankedSpans = (
+  text: string,
+  spans: ReadonlyArray<Span>,
+  kinds: ReadonlyArray<SpanKind>,
+  lineBreaks: boolean,
+): string => {
+  const out: Array<string> = []
+  let at = 0
+  for (const span of spans) {
+    if (!kinds.includes(span.kind) || span.start < at) continue
+    out.push(text.slice(at, span.start))
+    const chunk = text.slice(span.start, span.end)
+    if (lineBreaks) out.push(" ".repeat(chunk.length))
+    else out.push(chunk.replace(/[^\n]/g, " "))
+    at = span.end
+  }
+  out.push(text.slice(at))
+  return out.join("")
+}
+
 /**
- * A scanner frame. A count of 0 or more is code, with that many braces open
- * in the stretch (an interpolation or a JSX expression closes at 0). The
- * negative values are the stretches that are not code.
+ * Each source's forms, keyed by how it is read and by its text: a guards run
+ * reads one file's text in several scans, and parses it once.
  */
-const IN_TEMPLATE = -1
-/** Inside a JSX tag, among its attributes. */
-const IN_TAG = -2
-/** Inside a JSX element, among its children. */
-const IN_CHILDREN = -3
-
-/** What one scanner step read. */
-type TokenKind = "code" | "comment" | "string" | "template" | "regex" | "jsx-text"
-
-interface Token {
-  readonly kind: TokenKind
-  readonly end: number
+const sourceFormsCache = {
+  ts: new Map<string, SourceForms>(),
+  tsx: new Map<string, SourceForms>(),
+  json: new Map<string, SourceForms>(),
 }
 
-/** The end of a quoted string that starts at `start`: its closing quote, or the line end. */
-const quotedEnd = (text: string, start: number): number => {
-  const quote = text[start]
-  let at = start + 1
-  while (at < text.length && text[at] !== quote && text[at] !== "\n") {
-    at += 1 + Number(text[at] === "\\")
-  }
-  return Math.min(at + 1, text.length)
-}
-
-/** The end of a JSX attribute string: its closing quote, across lines, with no escapes. */
-const attributeEnd = (text: string, start: number): number => {
-  const close = text.indexOf(text[start] ?? "", start + 1)
-  if (close === -1) return text.length
-  return close + 1
-}
-
-/** The end of the comment that opens at `start` with `opener` (`//` or `/*`). */
-const commentEnd = (text: string, start: number, opener: string): number => {
-  if (opener === "//") {
-    const newline = text.indexOf("\n", start)
-    if (newline === -1) return text.length
-    return newline
-  }
-  const close = text.indexOf("*/", start + 2)
-  if (close === -1) return text.length
-  return close + 2
-}
-
-/** Characters after which a `/` opens a regex literal, and a `<` a JSX tag, rather than an operator. */
-const OPERAND_PRECEDERS = "(,=:[!&|?{};+-*%<>~^"
-const OPERAND_KEYWORD_BEFORE =
-  /(?:^|[^\w$])(?:return|typeof|case|void|delete|in|of|new|throw|yield|await|else|do)$/
-
-/** A statement head whose `(...)` ends in no value: `if (ok) /re/` starts an operand. */
-const CONTROL_HEAD = /(?:^|[^\w$.])(?:if|while|for(?:\s+await)?|with)\s*$/
-
-/**
- * Where the `//` comment on the line from `lineStart` opens, if it opens
- * before `end`. The line is lexed from its start, so a `//` in a string or a
- * regex on it is text.
- */
-const lineCommentStart = (text: string, lineStart: number, end: number): Option.Option<number> => {
-  if (!text.slice(lineStart, end).includes("//")) return Option.none()
-  const frames = [0]
-  let at = lineStart
-  while (at < end) {
-    const token = lexStep(text, at, frames, "ts")
-    if (token.kind === "comment" && text.startsWith("//", at)) return Option.some(at)
-    at = token.end
-  }
-  return Option.none()
-}
-
-/** The end of the last significant text before `at`: whitespace and comments skipped. */
-const significantEnd = (text: string, at: number): number => {
-  let end = at
-  for (;;) {
-    while (end > 0 && /\s/.test(text[end - 1] ?? "")) end -= 1
-    if (text.startsWith("*/", end - 2)) {
-      const blockOpen = text.lastIndexOf("/*", end - 3)
-      if (blockOpen === -1) return end
-      end = blockOpen
-      continue
+/** The forms of `text`, read as `file` is read. */
+const sourceForms = (file: string, text: string): SourceForms => {
+  let cache = sourceFormsCache[parseLanguage(file)]
+  if (isJsonFile(file)) cache = sourceFormsCache.json
+  return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
+    const { errors, comments, spans } = parsedText(file, text)
+    const forms: SourceForms = {
+      errors,
+      comments,
+      code: blankedSpans(text, spans, ["comment"], false),
+      codeOnly: blankedSpans(text, spans, ["comment", "string", "template", "jsx-text"], false),
+      statements: blankedSpans(text, spans, ["comment", "template"], false),
+      structure: blankedSpans(
+        text,
+        spans,
+        ["comment", "string", "template", "jsx-text", "regex"],
+        true,
+      ),
     }
-    const lineComment = lineCommentStart(text, text.lastIndexOf("\n", end - 1) + 1, end)
-    if (Option.isNone(lineComment)) return end
-    end = lineComment.value
-  }
+    cache.set(text, forms)
+    return forms
+  })
 }
 
-/** Whether the `)` at `close` ends a control-flow head: `if (...)`, `while (...)`, `for (...)`. */
-const closesControlHead = (text: string, close: number): boolean => {
-  let depth = 0
-  for (let at = close; at >= 0; at -= 1) {
-    if (text[at] === ")") depth += 1
-    if (text[at] === "(") depth -= 1
-    if (depth === 0) return CONTROL_HEAD.test(text.slice(Math.max(0, at - 16), at))
-  }
-  return false
-}
-
-/** A postfix `++` or `--` that ends at `end`: it follows an identifier, a `)` or a `]`. */
-const endsPostfixUpdate = (text: string, end: number): boolean => {
-  const update = text.slice(end - 2, end)
-  if (update !== "++" && update !== "--") return false
-  return /[\w$)\]]/.test(text[end - 3] ?? "")
-}
-
-/**
- * Whether an operand starts at `at`: the token before it, past whitespace
- * and comments, cannot end a value. A `)` ends one unless it closes a
- * control-flow head; a postfix `++` or `--` ends one.
- */
-const startsOperand = (text: string, at: number): boolean => {
-  const end = significantEnd(text, at)
-  if (end === 0) return true
-  const last = text[end - 1] ?? ""
-  if (endsPostfixUpdate(text, end)) return false
-  if (OPERAND_PRECEDERS.includes(last)) return true
-  if (last === ")") return closesControlHead(text, end - 1)
-  return OPERAND_KEYWORD_BEFORE.test(text.slice(Math.max(0, end - 8), end))
-}
-
-/** The end of a regex literal that opens at `start`: past its flags, or at the line end. */
-const regexEnd = (text: string, start: number): number => {
-  let at = start + 1
-  let inClass = false
-  while (at < text.length && text[at] !== "\n") {
-    const char = text[at]
-    if (char === "\\") at += 2
-    else if (char === "/" && !inClass) {
-      at += 1
-      while (/[a-z]/i.test(text[at] ?? "")) at += 1
-      return at
-    } else {
-      if (char === "[") inClass = true
-      if (char === "]") inClass = false
-      at += 1
-    }
-  }
-  return at
-}
-
-/**
- * A tag name after `<`, and what follows it. A `,`, an `extends` or a `=`
- * after the name makes the `<` a type parameter list: `.tsx` spells a
- * generic arrow `<A,>(a: A) => a`, with a constraint `<A extends B,>` or a
- * default `<A = B,>`. No JSX tag name is followed by `=`. A `>(` right after
- * the name is a generic function type `<A>(a: A) => A` only when `=>`
- * follows the parenthesised group; `<b>(it's)</b>` is an element. Any other
- * name, one letter or more (`<X>it's</X>`), opens an element.
- */
-const JSX_OPENER = /^<(?:>|[A-Za-z_$][\w$.:-]*(\s*(?:,|=|extends\b)|>\()?)/
-
-/** Whether `=>` is the next token from `at`, past whitespace and comments. */
-const arrowAt = (text: string, at: number): boolean => {
-  let next = at
-  for (;;) {
-    while (/\s/.test(text[next] ?? "")) next += 1
-    const opener = text.slice(next, next + 2)
-    if (opener !== "//" && opener !== "/*") return opener === "=>"
-    next = commentEnd(text, next, opener)
-  }
-}
-
-/**
- * Whether `=>` follows the parenthesised group that opens at `open`. The
- * group is walked by the lexer, so a bracket in a string or a comment is text.
- */
-const arrowFollowsGroup = (text: string, open: number): boolean => {
-  const frames = [0]
-  let depth = 0
-  let at = open
-  while (at < text.length) {
-    const token = lexStep(text, at, frames, "ts")
-    for (
-      let index = at;
-      token.kind === "code" && frames.length === 1 && index < token.end;
-      index += 1
-    ) {
-      if (text[index] === "(") depth += 1
-      if (text[index] === ")") depth -= 1
-      if (depth === 0) return arrowAt(text, index + 1)
-    }
-    at = token.end
-  }
-  return false
-}
-
-/** Whether the `<` at `at` opens a JSX element. */
-const opensJsx = (text: string, at: number): boolean => {
-  if (!startsOperand(text, at)) return false
-  const opener = Option.fromNullishOr(JSX_OPENER.exec(text.slice(at, at + 64)))
-  if (Option.isNone(opener)) return false
-  const [match, typeParameter] = opener.value
-  if (typeParameter === ">(") return !arrowFollowsGroup(text, at + match.length - 1)
-  return Predicate.isUndefined(typeParameter)
-}
-
-/** A lookup of the character codes in `chars`, for a scan that stops on any of them. */
-const charTable = (chars: string): Uint8Array => {
-  const table = new Uint8Array(128)
-  for (const char of chars) table[char.charCodeAt(0)] = 1
-  return table
-}
-
-/** The characters each frame's step reads; any other run is copied whole. */
-const SPECIAL = {
-  ts: charTable("/\"'`{}"),
-  tsx: charTable("/\"'`{}<"),
-  template: charTable("$\\`"),
-  tag: charTable("/\"'{>"),
-  children: charTable("{<"),
-}
-
-/** The end of the run from `at` that holds none of `table`'s characters. */
-const plainRunEnd = (text: string, at: number, table: Uint8Array): number => {
-  let end = at
-  while (end < text.length) {
-    const code = text.charCodeAt(end)
-    if (code < 128 && table[code] === 1) return end
-    end += 1
-  }
-  return end
-}
-
-/** A `}` in code: close a brace, or the interpolation or JSX expression it ends. */
-const closeBrace = (frames: Array<number>): void => {
-  const top = frames.length - 1
-  const depth = frames[top] ?? 0
-  if (depth === 0 && top > 0) frames.pop()
-  else frames[top] = Math.max(depth - 1, 0)
-}
-
-/** One step in code. */
-const codeStep = (text: string, at: number, frames: Array<number>, syntax: Syntax): Token => {
-  const char = text[at] ?? ""
-  const next = text[at + 1] ?? ""
-  if (char === "/" && (next === "/" || next === "*")) {
-    return { kind: "comment", end: commentEnd(text, at, `/${next}`) }
-  }
-  if (char === "/" && startsOperand(text, at)) return { kind: "regex", end: regexEnd(text, at) }
-  if (char === '"' || char === "'") return { kind: "string", end: quotedEnd(text, at) }
-  if (char === "`") frames.push(IN_TEMPLATE)
-  if (char === "<" && syntax === "tsx" && opensJsx(text, at)) frames.push(IN_TAG)
-  if (char === "{") frames[frames.length - 1] = (frames.at(-1) ?? 0) + 1
-  if (char === "}") closeBrace(frames)
-  return { kind: "code", end: at + 1 }
-}
-
-/** One step in a template's text. The `${` and the closing backtick are code: structure. */
-const templateStep = (text: string, at: number, frames: Array<number>): Token => {
-  if (text.startsWith("${", at)) {
-    frames.push(0)
-    return { kind: "code", end: at + 2 }
-  }
-  if (text[at] === "\\") return { kind: "template", end: at + 2 }
-  if (text[at] === "`") {
-    frames.pop()
-    return { kind: "code", end: at + 1 }
-  }
-  return { kind: "template", end: at + 1 }
-}
-
-/** One step among a JSX tag's attributes. `>` opens the children; `/>` ends the element. */
-const tagStep = (text: string, at: number, frames: Array<number>): Token => {
-  const char = text[at] ?? ""
-  const next = text[at + 1] ?? ""
-  if (char === "/" && (next === "/" || next === "*")) {
-    return { kind: "comment", end: commentEnd(text, at, `/${next}`) }
-  }
-  if (char === '"' || char === "'") return { kind: "string", end: attributeEnd(text, at) }
-  if (char === "{") frames.push(0)
-  if (char === ">") frames[frames.length - 1] = IN_CHILDREN
-  if (char === "/" && next === ">") {
-    frames.pop()
-    return { kind: "code", end: at + 2 }
-  }
-  return { kind: "code", end: at + 1 }
-}
-
-/** One step among a JSX element's children. A closing tag ends the element. */
-const childrenStep = (text: string, at: number, frames: Array<number>): Token => {
-  if (text[at] === "{") frames.push(0)
-  if (text[at] !== "<") return { kind: "code", end: at + 1 }
-  if (text[at + 1] !== "/") {
-    frames.push(IN_TAG)
-    return { kind: "code", end: at + 1 }
-  }
-  frames.pop()
-  const close = text.indexOf(">", at)
-  if (close === -1) return { kind: "code", end: text.length }
-  return { kind: "code", end: close + 1 }
-}
-
-/**
- * One step of the lexer from `at`, in the frame on top of `frames`: a run
- * no step reads, or one token. A step that opens or closes a template, a JSX
- * tag or element, an interpolation or a JSX expression pushes or pops its frame.
- */
-const lexStep = (text: string, at: number, frames: Array<number>, syntax: Syntax): Token => {
-  const frame = frames.at(-1) ?? 0
-  if (frame === IN_TEMPLATE) {
-    const runEnd = plainRunEnd(text, at, SPECIAL.template)
-    if (runEnd > at) return { kind: "template", end: runEnd }
-    return templateStep(text, at, frames)
-  }
-  if (frame === IN_TAG) {
-    const runEnd = plainRunEnd(text, at, SPECIAL.tag)
-    if (runEnd > at) return { kind: "code", end: runEnd }
-    return tagStep(text, at, frames)
-  }
-  if (frame === IN_CHILDREN) {
-    const runEnd = plainRunEnd(text, at, SPECIAL.children)
-    if (runEnd > at) return { kind: "jsx-text", end: runEnd }
-    return childrenStep(text, at, frames)
-  }
-  const runEnd = plainRunEnd(text, at, SPECIAL[syntax])
-  if (runEnd > at) return { kind: "code", end: runEnd }
-  return codeStep(text, at, frames, syntax)
-}
-
-/**
- * Where the token that opens at `at` ends when its text is not code -- a
- * string, a template, a comment, a regex literal or a JSX element -- or `at`
- * when none opens there. A bracket inside one is text, not structure.
- */
-const lexicalEnd = (text: string, at: number, syntax: Syntax): number => {
-  const frames = [0]
-  const first = lexStep(text, at, frames, syntax)
-  if (frames.length === 1) {
-    if (first.kind === "code") return at
-    return first.end
-  }
-  let end = first.end
-  while (frames.length > 1 && end < text.length) end = lexStep(text, end, frames, syntax).end
-  return end
-}
+/** The text with comments blanked, line count preserved. */
+const withoutComments = (file: string, text: string): string => sourceForms(file, text).code
 
 const OPENERS = "([{"
 const CLOSERS = ")]}"
 
 /**
- * The first index at or after `start` where `stopsAt` holds at bracket depth
- * zero, or where a closer takes the depth below zero: it closes a bracket
- * opened before `start`. A string, a template, a comment, a regex literal or
- * a JSX element is skipped whole. `text.length` when neither comes. Every
- * bracket walk in this file is this one.
+ * The first index at or after `start` in a `structure` form where `stopsAt`
+ * holds for the character at bracket depth zero, or where a closer takes the
+ * depth below zero: it closes a bracket opened before `start`. Strings,
+ * templates, comments, regex literals and JSX text are blank in that form, so
+ * every bracket it holds is code. `structure.length` when neither comes.
+ * Every bracket walk in this file is this one.
  */
 const topLevelStop = (
-  text: string,
+  structure: string,
   start: number,
-  syntax: Syntax,
-  stopsAt: (at: number) => boolean = () => false,
+  stopsAt: (char: string) => boolean = () => false,
 ): number => {
   let depth = 0
-  let at = start
-  while (at < text.length) {
-    const char = text[at] ?? ""
-    if (depth === 0 && stopsAt(at)) return at
-    const skipped = lexicalEnd(text, at, syntax)
-    if (skipped > at) {
-      at = skipped
-      continue
-    }
+  for (let at = start; at < structure.length; at += 1) {
+    const char = structure[at] ?? ""
+    if (depth === 0 && stopsAt(char)) return at
     if (OPENERS.includes(char)) depth += 1
     else if (CLOSERS.includes(char)) {
       if (depth === 0) return at
       depth -= 1
     }
-    at += 1
   }
-  return text.length
+  return structure.length
 }
 
-/** The text from the bracket at `open` through the one that closes it, or to the end. */
-const bracketedAt = (text: string, open: number, syntax: Syntax): string =>
-  text.slice(open, topLevelStop(text, open + 1, syntax) + 1)
-
-/** What `blankComments` blanks beside the comments. */
-interface Blanking {
-  /** Each quoted string becomes `""`, and JSX text becomes spaces. */
-  readonly quoted: boolean
-  /** A template's own text becomes spaces; its `${}` interpolations stay code. */
-  readonly templateText: boolean
-}
-
-/** A string blanked to `""`, keeping the line breaks a JSX attribute string may hold. */
-const blankedString = (chunk: string): string => `""${"\n".repeat(chunk.split("\n").length - 1)}`
-
-/** One token's text as `blanking` leaves it. A comment is always blanked. */
-const blankedToken = (kind: TokenKind, chunk: string, blanking: Blanking): string => {
-  if (kind === "comment") return blankKeepingLines(chunk)
-  if (kind === "string" && blanking.quoted) return blankedString(chunk)
-  if (kind === "jsx-text" && blanking.quoted) return blankKeepingLines(chunk)
-  if (kind === "template" && blanking.templateText) return blankKeepingLines(chunk)
-  return chunk
-}
-
-/**
- * Blank the comments in `text`, line count preserved, read left to right by
- * the lexer, so a `//` inside a string or a regex literal stays text.
- * Template literals and JSX are followed into their `${}` interpolations and
- * `{}` expressions, so a comment there is blanked too, and each of those is
- * kept whatever else `blanking` blanks, because it reads code.
- */
-const blankComments = (text: string, blanking: Blanking, syntax: Syntax): string => {
-  const out: Array<string> = []
-  const frames = [0]
-  let at = 0
-  while (at < text.length) {
-    const token = lexStep(text, at, frames, syntax)
-    out.push(blankedToken(token.kind, text.slice(at, token.end), blanking))
-    at = token.end
-  }
-  return out.join("")
-}
-
-/**
- * Each text's blanked forms, keyed by the text: a guards run blanks one
- * file's text for several scans, and the scan is the run's largest cost.
- */
-const blankCaches = () => ({
-  code: new Map<string, string>(),
-  codeOnly: new Map<string, string>(),
-  statements: new Map<string, string>(),
-})
-
-const blankedTexts = { ts: blankCaches(), tsx: blankCaches() }
-
-type BlankForm = keyof ReturnType<typeof blankCaches>
-
-const blankedOnce = (form: BlankForm, text: string, blanking: Blanking, syntax: Syntax): string => {
-  const cache = blankedTexts[syntax][form]
-  return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
-    const blanked = blankComments(text, blanking, syntax)
-    cache.set(text, blanked)
-    return blanked
-  })
-}
-
-/** The text with comments blanked, line count preserved. */
-const withoutComments = (text: string, syntax: Syntax): string =>
-  blankedOnce("code", text, { quoted: false, templateText: false }, syntax)
-
-/** The 1-based line of a character index. */
-const lineAt = (code: string, index: number): number => code.slice(0, index).split("\n").length
+/** One past the bracket that closes the one at `open`, or the text's end. */
+const bracketEnd = (forms: SourceForms, open: number): number =>
+  Math.min(topLevelStop(forms.structure, open + 1) + 1, forms.structure.length)
 
 // ── a lint directive names its rules ────────────────────────────────────────
 
@@ -498,41 +237,20 @@ const blanketDisableDirective = /^(?:es|ox)lint-disable(?:-next-line|-line)?\s*(
 
 const fileWideDisableDirective = /^(?:es|ox)lint-disable(?:\s|$)/
 
-/** A comment's trimmed body, and the line it starts on. */
-interface CommentBody {
-  readonly line: number
-  readonly body: string
-}
-
-/** Each comment of a source text, its body trimmed, keyed by the text: both directive guards read one lex. */
-const commentCache = () => new Map<string, ReadonlyArray<CommentBody>>()
-
-const commentBodyCache = { ts: commentCache(), tsx: commentCache() }
-
-/** A comment token's body: after `//`, or between `/*` and its `*\/` when it has one. */
-const COMMENT_BODY = /^(?:\/\/([^]*)|\/\*([^]*?)(?:\*\/)?)$/
-
-/** Every comment token of `text`, read by the lexer, so a `//` in a string is text. */
-const commentBodies = (text: string, syntax: Syntax): ReadonlyArray<CommentBody> => {
-  const cache = commentBodyCache[syntax]
-  return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
-    const bodies: Array<CommentBody> = []
-    const frames = [0]
-    let at = 0
-    while (at < text.length) {
-      const token = lexStep(text, at, frames, syntax)
-      if (token.kind === "comment") {
-        const [, line = "", block = ""] = COMMENT_BODY.exec(text.slice(at, token.end)) ?? []
-        const raw = line + block
-        const lead = raw.length - raw.trimStart().length
-        bodies.push({ line: lineAt(text, at + 2 + lead), body: raw.trim() })
-      }
-      at = token.end
-    }
-    cache.set(text, bodies)
-    return bodies
-  })
-}
+/**
+ * Guard: every source the guards read parses. Past a parse error oxc may
+ * read no more comments or strings, so each guard would read the rest of
+ * the file blind; oxlint lints none of it either. The first error is the
+ * finding.
+ */
+export const findUnparsedSources = (file: string, text: string): ReadonlyArray<Finding> =>
+  sourceForms(file, text)
+    .errors.slice(0, 1)
+    .map(({ line, body }) => ({
+      file,
+      line,
+      message: `oxc cannot parse this source (${body}): oxlint lints none of it, and the guards may misread it past the error`,
+    }))
 
 /** A file inside a fixture directory; a basename such as `pty-fixture.ts` is not one. */
 const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)\//
@@ -544,7 +262,7 @@ const DISABLE_MESSAGE =
 
 /** Every comment of a source file whose body is a directive `directive` matches. */
 const directiveLines = (file: string, text: string, directive: RegExp): ReadonlyArray<Finding> =>
-  commentBodies(text, syntaxOf(file)).flatMap(({ line, body }) => {
+  sourceForms(file, text).comments.flatMap(({ line, body }) => {
     if (!directive.test(body)) return []
     return [{ file, line, message: DISABLE_MESSAGE }]
   })
@@ -689,7 +407,8 @@ const declaredMembers = (text: string, blockPattern: RegExp): ReadonlyArray<stri
   if (start < 0) return []
   const open = text.indexOf("{", start)
   if (open < 0) return []
-  const body = text.slice(open + 1, topLevelStop(text, open + 1, "ts"))
+  const structure = sourceForms(SEAM_DECLARATION_FILE, text).structure
+  const body = text.slice(open + 1, topLevelStop(structure, open + 1))
   return [...body.matchAll(/^\s*readonly\s+([A-Za-z][A-Za-z0-9]*)\s*:/gm)].flatMap((match) =>
     Option.match(Option.fromNullishOr(match[1]), {
       onNone: (): ReadonlyArray<string> => [],
@@ -967,12 +686,12 @@ const TEMP_IN_REPO_MESSAGE =
 export const findRepoTempDirectories = (file: string, text: string): ReadonlyArray<Finding> => {
   // The guard's own tests spell the reported shapes as probe text.
   if (!isTestCode(file) || file.startsWith("packages/tooling/")) return []
-  const syntax = syntaxOf(file)
-  const code = withoutComments(text, syntax)
+  const forms = sourceForms(file, text)
+  const code = forms.code
   const lines = code.split("\n")
   // The same lines with strings and template text blanked: a bound name is
   // read only where it is code, so `"gent-login-"` does not name `login`.
-  const codeLines = codeOnly(text, syntax).split("\n")
+  const codeLines = forms.codeOnly.split("\n")
   // A name bound from a repo path, or from another such name, is a repo path.
   const bound = new Set<string>()
   const namesBound = (codeText: string): boolean =>
@@ -994,12 +713,13 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
   for (const call of code.matchAll(TEMP_CALL)) {
     const open = call.index + call[0].length - 1
     const first = code.slice(0, open).split("\n").length - 1
-    const argumentText = bracketedAt(code, open, syntax)
+    const end = bracketEnd(forms, open)
+    const argumentText = code.slice(open, end)
     if (RELATIVE_MKDTEMP.test(call[0] + argumentText.slice(1))) {
       reported.add(first)
       continue
     }
-    const argumentCode = codeOnly(argumentText, syntax).split("\n")
+    const argumentCode = forms.codeOnly.slice(open, end).split("\n")
     const hit = argumentText
       .split("\n")
       .findIndex((line, index) => namesRepo(line, argumentCode[index] ?? ""))
@@ -1059,8 +779,8 @@ const SHARED_TEMP_HOME_MESSAGE =
  * Where the value expression that starts at `start` ends: a `,`, `;`, closing
  * bracket or line end outside the value's own brackets and strings.
  */
-const valueEnd = (text: string, start: number, syntax: Syntax): number =>
-  topLevelStop(text, start, syntax, (at) => ",;\n".includes(text[at] ?? ""))
+const valueEnd = (forms: SourceForms, start: number): number =>
+  topLevelStop(forms.structure, start, (char) => ",;\n".includes(char))
 
 /** Whether a home's value expression is a path under the shared temp root. */
 const isSharedTempValue = (value: string): boolean =>
@@ -1079,7 +799,8 @@ const TEST_LAYER_DECLARATION =
   /^\s*(?:(?:static\s+(?:readonly\s+)?|(?:export\s+)?(?:const|let|function)\s+)(?:(?:[A-Z]\w*)?Test(?:Layers?|Actor)?|\w*TestLayers?)\b|(?:readonly\s+)?(?:[A-Z]\w*)?Test(?:Layers?|Actor)?\s*:)/
 
 /**
- * `code` with every line blanked but the test layers', so line numbers hold.
+ * `code` with every line blanked to spaces but the test layers', so lines and
+ * indexes hold.
  * A test layer is its declaration line and the lines after it that are blank,
  * indented deeper, or close a bracket at its own indent; the formatter keeps
  * that shape. The product code around it (a `Live` layer, an operator
@@ -1087,7 +808,7 @@ const TEST_LAYER_DECLARATION =
  */
 const testLayerLines = (code: string): string => {
   const lines = code.split("\n")
-  const kept = lines.map(() => "")
+  const kept = lines.map((line) => " ".repeat(line.length))
   for (const [index, line] of lines.entries()) {
     if (!TEST_LAYER_DECLARATION.test(line)) continue
     const indent = line.length - line.trimStart().length
@@ -1117,9 +838,9 @@ const isExampleSource = (file: string): boolean =>
  */
 const sharedHomeScanCode = (file: string, text: string): Option.Option<string> => {
   if (file.startsWith("packages/tooling/")) return Option.none()
-  if (isTestCode(file)) return Option.some(withoutComments(text, syntaxOf(file)))
+  if (isTestCode(file)) return Option.some(withoutComments(file, text))
   if (isShippedSource(file) || isExampleSource(file)) {
-    return Option.some(testLayerLines(withoutComments(text, syntaxOf(file))))
+    return Option.some(testLayerLines(withoutComments(file, text)))
   }
   return Option.none()
 }
@@ -1128,12 +849,13 @@ export const findSharedTestHomes = (file: string, text: string): ReadonlyArray<F
   const scanned = sharedHomeScanCode(file, text)
   if (Option.isNone(scanned)) return []
   const code = scanned.value
+  const forms = sourceForms(file, text)
   const reported = new Set<number>()
   for (const key of code.matchAll(SHARED_HOME_KEY)) {
     const afterKey = key.index + key[0].length
     // The value may start on the next line: `home:` then `"/tmp"`.
     const start = afterKey + (/^\s*/.exec(code.slice(afterKey))?.[0].length ?? 0)
-    if (isSharedTempValue(code.slice(start, valueEnd(code, start, syntaxOf(file))))) {
+    if (isSharedTempValue(code.slice(start, valueEnd(forms, start)))) {
       reported.add(code.slice(0, key.index).split("\n").length)
     }
   }
@@ -1594,16 +1316,17 @@ const namesMatchingAt = (text: string, pattern: RegExp, base = 0): ReadonlyArray
   )
 
 /**
- * The names source `text` (comments blanked) sets, by the record shape --
- * including the record a test hands `ConfigProvider.fromEnvRecord` -- and the
- * assignment shape.
+ * The names a source's code sets, by the record shape -- including the
+ * record a test hands `ConfigProvider.fromEnvRecord` -- and the assignment
+ * shape.
  */
-const namesWritten = (text: string, syntax: Syntax): ReadonlyArray<NameAt> => [
-  ...[...text.matchAll(ENV_RECORD_OPEN)].flatMap((match) => {
+const namesWritten = (forms: SourceForms): ReadonlyArray<NameAt> => [
+  ...[...forms.code.matchAll(ENV_RECORD_OPEN)].flatMap((match) => {
     const open = match.index + match[0].length - 1
-    return namesMatchingAt(bracketedAt(text, open, syntax), ENV_RECORD_KEY, open)
+    const record = forms.code.slice(open, bracketEnd(forms, open))
+    return namesMatchingAt(record, ENV_RECORD_KEY, open)
   }),
-  ...namesMatchingAt(text, ENV_ASSIGNMENT),
+  ...namesMatchingAt(forms.code, ENV_ASSIGNMENT),
 ]
 
 /** A manifest: its `scripts` can set a `GENT_*` variable, the way an operator's shell does. */
@@ -1687,15 +1410,15 @@ const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>): Gent
       continue
     }
     // A comment that shows `GENT_X=1` documents a variable; it sets nothing.
-    const syntax = syntaxOf(file)
-    const code = withoutComments(text, syntax)
+    const forms = sourceForms(file, text)
+    const code = forms.code
     mention(code)
     for (const [index, line] of code.split("\n").entries()) {
       for (const name of [...quotedReads(line), ...namesMatching(line, DIRECT_READ)]) {
         record(readers, name, { file, line: index + 1, testSupport })
       }
     }
-    for (const write of namesWritten(code, syntax)) {
+    for (const write of namesWritten(forms)) {
       record(writers, write.name, { file, line: lineAt(code, write.at), testSupport })
     }
   }
@@ -1817,15 +1540,15 @@ export const findUnpairedBuildDefines = (
   for (const [file, text] of sourceTexts) {
     if (file === GUARDS_FILE || file === GUARDS_TEST_FILE || isTestSupport(file)) continue
     if (!text.includes("__GENT_")) continue
-    const syntax = syntaxOf(file)
-    const code = withoutComments(text, syntax)
+    const forms = sourceForms(file, text)
+    const code = forms.code
     for (const match of code.matchAll(DEFINE_RECORD_OPEN)) {
       const open = match.index + match[0].length - 1
-      const keys = namesMatchingAt(bracketedAt(code, open, syntax), DEFINE_KEY, open)
+      const keys = namesMatchingAt(code.slice(open, bracketEnd(forms, open)), DEFINE_KEY, open)
       defines.push(...keys.map((key) => ({ name: key.name, line: lineAt(code, key.at), file })))
     }
     // A reader is code: `declare const` spelled in a string declares nothing.
-    const declarations = codeOnly(text, syntax)
+    const declarations = forms.codeOnly
     for (const reader of namesMatchingAt(declarations, DEFINE_READER)) {
       readers.push({ name: reader.name, line: lineAt(declarations, reader.at), file })
     }
@@ -2592,7 +2315,7 @@ export const findUnshippedSkillFiles = (
   trackedFiles: ReadonlyArray<string>,
 ): ReadonlyArray<Finding> => {
   // A commented-out import or row ships nothing, so neither is read.
-  const code = withoutComments(moduleText, syntaxOf(BUNDLED_SKILLS_MODULE))
+  const code = withoutComments(BUNDLED_SKILLS_MODULE, moduleText)
   const imported = new Map<string, { readonly path: string; readonly line: number }>()
   for (const [index, line] of code.split("\n").entries()) {
     const match = Option.fromNullishOr(BUNDLED_IMPORT.exec(line.trimStart()))
@@ -2681,91 +2404,6 @@ export const findUnhashedSteeringFiles = (
     .filter((path) => path.endsWith(".md") && hashed(path) !== isSteeringFile(path))
     .map((path) => ({ file, line: 1, message: message(path) }))
     .toArray()
-}
-
-// ── an effect tracks no whole session record ────────────────────────────────
-
-/**
- * Guard: a reactive effect must not track the whole session record.
- *
- * `transitionSessionState` rebuilds the `Session` object for `UpdateName` and
- * `UpdateSettings`, so a rename or a `/model` change hands every reader a new
- * object carrying the same ids. An effect that tracks the record restarts for
- * a change it does not care about: a fiber it owns is interrupted, the rows it
- * projected are dropped and fetched again, and a list it loads is empty while
- * the RPC runs.
- *
- * The client answers "which session" once, with `sessionIdentity()` and
- * `activeSessionId()` — memos with an equivalence on the ids. Anything that
- * reacts to the session rather than displays it reads those.
- *
- * What is reported: a `.session()` read inside a `createEffect`, a
- * `createMemo`, a `createResource` or an `on(...)` source — the places Solid
- * records a dependency and re-runs on it. A read in a JSX expression, in an
- * event handler, or in a plain accessor is untouched: those want the record,
- * and the name and the model live on the record.
- *
- * `transport.currentSession()` is not reported: it already answers with the
- * identity alone, and `extensions/context.tsx` builds it from the client's
- * `sessionIdentity()` memo.
- *
- * @module
- */
-
-const TUI_SOURCE = /^apps\/tui\/src\//
-
-/**
- * Opens a reactive scope: Solid re-runs what follows when its reads change.
- * A member call such as `emitter.on(` is a listener, not Solid's `on`.
- */
-const TRACKING_OPENER = /(?<![.\w])(?:createEffect|createMemo|createResource|on)\(/
-
-/** The record accessor. `sessionIdentity`/`activeSessionId` are the narrowed ones. */
-const RECORD_READ = /(?<!current)\.session\(\)/i
-
-/**
- * How far a reactive scope is followed. Long enough for the dependency list and
- * the head of the body this codebase writes, short enough that a later callback
- * in the same function is not attributed to the effect.
- */
-const SCOPE_LINES = 12
-
-/** The index of the first record read in the reactive scope the opener on line `index` starts. */
-const scopeRecordRead = (lines: ReadonlyArray<string>, index: number): Option.Option<number> => {
-  const opener = lines[index] ?? ""
-  const openerIndent = opener.length - opener.trimStart().length
-  const limit = Math.min(index + 1 + SCOPE_LINES, lines.length)
-  for (let cursor = index; cursor < limit; cursor += 1) {
-    const candidate = lines[cursor] ?? ""
-    // The scope closes when the nesting returns to the opener's column.
-    if (cursor > index && candidate.trim().length > 0) {
-      const indent = candidate.length - candidate.trimStart().length
-      if (indent <= openerIndent && !TRACKING_OPENER.test(candidate)) return Option.none()
-    }
-    if (RECORD_READ.test(candidate)) return Option.some(cursor)
-  }
-  return Option.none()
-}
-
-export const findTuiSessionIdentityReads = (file: string, text: string): ReadonlyArray<Finding> => {
-  if (!TUI_SOURCE.test(file)) return []
-
-  const lines = text.split("\n")
-  const reported = new Set<number>()
-  const findings: Finding[] = []
-  for (const [index, line] of lines.entries()) {
-    if (!TRACKING_OPENER.test(line)) continue
-    const read = scopeRecordRead(lines, index)
-    if (Option.isNone(read) || reported.has(read.value)) continue
-    reported.add(read.value)
-    findings.push({
-      file,
-      line: read.value + 1,
-      message:
-        "this reactive scope reads the whole session record, so a rename or a model change re-runs it -- read `sessionIdentity()` or `activeSessionId()`, which move only when the session or the branch does",
-    })
-  }
-  return findings
 }
 
 // ── the approved diagnostics suppressions ───────────────────────────────────
@@ -3391,25 +3029,6 @@ const IDENTIFIER = /[A-Za-z_$][\w$]*/g
 /** Every identifier-shaped word in a text, for a cheap "is this name mentioned" test. */
 const identifiersIn = (text: string): ReadonlySet<string> => new Set(text.match(IDENTIFIER) ?? [])
 
-/**
- * The text with comments, quoted strings and template text blanked, line count
- * preserved: only code is left.
- *
- * A doc comment naming a class, the `_tag` string a `Schema.TaggedError`
- * carries and fixture text in a template are not consumption; blanking them is
- * what lets an own-file reference be read as one.
- */
-const codeOnly = (text: string, syntax: Syntax): string =>
-  blankedOnce("codeOnly", text, { quoted: true, templateText: true }, syntax)
-
-/**
- * The text with comments and template text blanked, quoted strings kept, line
- * count preserved: an import statement and its specifier survive, and fixture
- * text holding `import { X } from "./x"` inside a template does not.
- */
-const statementsOnly = (text: string, syntax: Syntax): string =>
-  blankedOnce("statements", text, { quoted: false, templateText: true }, syntax)
-
 /** Lines carrying a `@ts-expect-error`, which assert absence rather than use. */
 const expectErrorLines = (lines: ReadonlyArray<string>): ReadonlySet<number> => {
   const marked = new Set<number>()
@@ -3447,8 +3066,8 @@ const MODULE_STATEMENT =
  * inside fixture text is no statement; quoted strings are kept for the
  * specifier. A statement broken across lines is read whole.
  */
-const moduleStatementsIn = (text: string, syntax: Syntax): ReadonlyArray<ModuleStatement> => {
-  const code = statementsOnly(text, syntax)
+const moduleStatementsIn = (file: string, text: string): ReadonlyArray<ModuleStatement> => {
+  const code = sourceForms(file, text).statements
   const statements: Array<ModuleStatement> = []
   for (const match of code.matchAll(MODULE_STATEMENT)) {
     let keyword: ModuleStatement["keyword"] = "import"
@@ -3545,10 +3164,10 @@ interface SpecifierRead {
  * every member the file's code reads off it. A statement or a member read on a
  * `@ts-expect-error` line asserts absence and reads nothing.
  */
-const specifierReadsIn = (text: string, syntax: Syntax): ReadonlyArray<SpecifierRead> => {
+const specifierReadsIn = (file: string, text: string): ReadonlyArray<SpecifierRead> => {
   const skip = expectErrorLines(text.split("\n"))
-  const codeLines = codeOnly(text, syntax).split("\n")
-  const statementReads = moduleStatementsIn(text, syntax)
+  const codeLines = sourceForms(file, text).codeOnly.split("\n")
+  const statementReads = moduleStatementsIn(file, text)
     .filter((statement) => !skip.has(statement.line))
     .map((statement) => {
       const named = namedImportsIn(statement.clause)
@@ -3558,7 +3177,7 @@ const specifierReadsIn = (text: string, syntax: Syntax): ReadonlyArray<Specifier
       )
       return { specifier: statement.specifier, names: [...named, ...members] }
     })
-  return [...statementReads, ...dynamicImportReadsIn(text, syntax, codeLines, skip)]
+  return [...statementReads, ...dynamicImportReadsIn(file, text, codeLines, skip)]
 }
 
 /** `import("<literal>")`, optionally awaited: a load a static read can follow. */
@@ -3587,12 +3206,12 @@ const DYNAMIC_IMPORT_NAMESPACE = new RegExp(
  * stored in. A read on a `@ts-expect-error` line reads nothing.
  */
 const dynamicImportReadsIn = (
+  file: string,
   text: string,
-  syntax: Syntax,
   codeLines: ReadonlyArray<string>,
   skip: ReadonlySet<number>,
 ): ReadonlyArray<SpecifierRead> => {
-  const code = withoutComments(text, syntax)
+  const code = withoutComments(file, text)
   if (!code.includes("import")) return []
   const lineOf = (index: number) => code.slice(0, index).split("\n").length
   const found: Array<SpecifierRead> = []
@@ -3743,14 +3362,14 @@ export const collectExportFacts = (file: string, text: string): ExportFacts => {
     Option.filter(surface, (found) => found.ownFileCounts),
     {
       onNone: (): ReadonlyArray<ReadonlySet<string>> => [],
-      onSome: () => codeOnly(text, syntaxOf(file)).split("\n").map(identifiersIn),
+      onSome: () => sourceForms(file, text).codeOnly.split("\n").map(identifiersIn),
     },
   )
-  const reads = specifierReadsIn(text, syntaxOf(file))
+  const reads = specifierReadsIn(file, text)
   const starExportLines = Option.match(surface, {
     onNone: (): ReadonlyArray<number> => [],
     onSome: () =>
-      moduleStatementsIn(text, syntaxOf(file))
+      moduleStatementsIn(file, text)
         .filter((statement) => statement.keyword === "export" && isStarClause(statement.clause))
         .map((statement) => statement.line),
   })
@@ -4265,12 +3884,12 @@ const matchedGroups = (text: string, pattern: RegExp): ReadonlyArray<string> =>
 const specifiersIn = (file: string, text: string): ReadonlyArray<string> => {
   if (/\.[cm]?[jt]sx?$/.test(file)) {
     return [
-      ...matchedGroups(withoutComments(text, syntaxOf(file)), SOURCE_SPECIFIER),
+      ...matchedGroups(withoutComments(file, text), SOURCE_SPECIFIER),
       ...matchedGroups(text, TYPES_REFERENCE),
     ]
   }
   if (/(?:^|\/)package\.json$/.test(file)) return []
-  if (/\.jsonc?$/.test(file)) return matchedGroups(withoutComments(text, "ts"), CONFIG_STRING)
+  if (/\.jsonc?$/.test(file)) return matchedGroups(withoutComments(file, text), CONFIG_STRING)
   if (/\.(?:toml|ya?ml)$/.test(file)) return matchedGroups(withoutHashComments(text), CONFIG_STRING)
   return []
 }

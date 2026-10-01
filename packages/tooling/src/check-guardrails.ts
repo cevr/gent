@@ -24,7 +24,7 @@ import {
   findStaleSteeringReceipts,
   findSuppressionInventoryFindings,
   findTestLaneDefaults,
-  findTuiSessionIdentityReads,
+  findUnparsedSources,
   findUnadaptedSeams,
   findUnconsumedExports,
   enabledLintRules,
@@ -294,7 +294,7 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findE2eFixtureImportFindings,
   findRepoTempDirectories,
   findSharedTestHomes,
-  findTuiSessionIdentityReads,
+  findUnparsedSources,
 ]
 
 const isSourceFile = (file: string): boolean => /\.[cm]?[jt]sx?$/.test(file)

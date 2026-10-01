@@ -9,6 +9,7 @@
  * - no-hand-rolled-module-path: no file path read off `new URL(import.meta.url)` in core.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
+ * - no-tracked-session-record: a TUI reactive scope tracks the session identity, not the record.
  */
 
 import { existsSync, readFileSync } from "node:fs"
@@ -805,6 +806,151 @@ const plugin: Plugin = {
               context.report({
                 message: `\`${name ?? "Schema.encodeSync(Schema.fromJsonString(...))"}\` encodes a whole object and the result decides identity here; JSON carries key order, so two spellings of one value compare unequal -- name the compared fields in a fixed order instead`,
                 node: call,
+              })
+            }
+          },
+        }
+      },
+    },
+
+    /**
+     * A reactive scope in the TUI tracks the session identity, not the record.
+     *
+     * `transitionSessionState` rebuilds the `Session` object for `UpdateName`
+     * and `UpdateSettings`, so a rename or a `/model` change hands every reader
+     * a new object carrying the same ids. A scope that tracks the record
+     * re-runs for a change it does not care about: a fiber it owns is
+     * interrupted, the rows it projected are dropped and fetched again, and a
+     * list it loads is empty while the RPC runs. The client answers "which
+     * session" once, with `sessionIdentity()` and `activeSessionId()`, memos
+     * with an equivalence on the ids.
+     *
+     * What is reported, in `apps/tui/src/`: a `.session()` call in a function
+     * Solid tracks -- a function passed to `createEffect`, `createMemo`,
+     * `createRenderEffect`, `createComputed`, `createResource` or `on` (a
+     * member call such as `emitter.on(` is a listener, not Solid's `on`), a
+     * callback such a function passes to a call (`items.map(() => ...)` runs
+     * while it tracks), and a same-file function such a function names or
+     * calls. A function it only builds -- an object's `onSelect`, a returned
+     * accessor -- runs later, outside the scope, and is not followed. A name bound to a `.session` accessor
+     * (`const read = client.session`) and called there is the same read. A
+     * read in a JSX expression, an event handler or a plain accessor is
+     * untouched: those want the record, and the name and the model live on it.
+     * `transport.currentSession()` already answers with the identity alone.
+     */
+    "no-tracked-session-record": {
+      create(context) {
+        if (!/^apps\/tui\/src\//.test(ruleSubject(context))) return {}
+        const TRACKERS = new Set([
+          "createEffect",
+          "createMemo",
+          "createRenderEffect",
+          "createComputed",
+          "createResource",
+          "on",
+        ])
+        const FUNCTION_TYPES = new Set([
+          "FunctionDeclaration",
+          "FunctionExpression",
+          "ArrowFunctionExpression",
+        ])
+        /** Same-file functions by the name they are bound to. */
+        const named = new Map<string, AstNode>()
+        /** Names bound to a `.session` accessor without calling it. */
+        const accessors = new Set<string>()
+        /** Functions Solid tracks directly, and names handed to a tracker. */
+        const tracked = new Set<AstNode>()
+        const trackedNames: Array<string> = []
+        /** Every call by name, for the functions a tracked one reaches. */
+        const namedCalls: Array<{ readonly node: AstNode; readonly name: string }> = []
+        const reads: Array<AstNode> = []
+
+        const isSessionMember = (node: AstNode | undefined): boolean => {
+          if (node?.type !== "MemberExpression" || fieldOf(node, "computed") === true) return false
+          const property = getNodeField(node, "property")
+          return /^session$/i.test(
+            property === undefined ? "" : (getStringField(property, "name") ?? ""),
+          )
+        }
+        /**
+         * The functions a node runs inside while its innermost one runs: up
+         * through each function passed as a call argument, and no further
+         * than the first function that is not one.
+         */
+        const runningFunctions = (node: AstNode): ReadonlyArray<AstNode> => {
+          const found: Array<AstNode> = []
+          let at = getNodeField(node, "parent")
+          while (at !== undefined) {
+            if (FUNCTION_TYPES.has(at.type)) {
+              found.push(at)
+              const holder = getNodeField(at, "parent")
+              const isCallback =
+                (holder?.type === "CallExpression" || holder?.type === "NewExpression") &&
+                getNodeField(holder, "callee") !== at
+              if (!isCallback) break
+            }
+            at = getNodeField(at, "parent")
+          }
+          return found
+        }
+        const bind = (name: string | undefined, init: AstNode | undefined) => {
+          if (name === undefined || init === undefined) return
+          if (FUNCTION_TYPES.has(init.type)) named.set(name, init)
+          if (isSessionMember(init)) accessors.add(name)
+        }
+
+        return {
+          FunctionDeclaration(node) {
+            if (!isAstNode(node)) return
+            const id = getNodeField(node, "id")
+            if (id !== undefined) bind(getStringField(id, "name"), node)
+          },
+          VariableDeclarator(node) {
+            if (!isAstNode(node)) return
+            const id = getNodeField(node, "id")
+            if (id?.type === "Identifier")
+              bind(getStringField(id, "name"), getNodeField(node, "init"))
+          },
+          CallExpression(node) {
+            if (!isAstNode(node)) return
+            const callee = getNodeField(node, "callee")
+            if (isSessionMember(callee)) reads.push(node)
+            if (callee?.type !== "Identifier") return
+            const name = getStringField(callee, "name") ?? ""
+            namedCalls.push({ node, name })
+            if (!TRACKERS.has(name)) return
+            for (const argument of callExpressionArgs(node)) {
+              if (FUNCTION_TYPES.has(argument.type)) tracked.add(argument)
+              if (argument.type === "Identifier")
+                trackedNames.push(getStringField(argument, "name") ?? "")
+            }
+          },
+          "Program:exit"() {
+            for (const name of trackedNames) {
+              const fn = named.get(name)
+              if (fn !== undefined) tracked.add(fn)
+            }
+            const isTracked = (node: AstNode) =>
+              runningFunctions(node).some((fn) => tracked.has(fn))
+            let grew = true
+            while (grew) {
+              grew = false
+              for (const call of namedCalls) {
+                const fn = named.get(call.name)
+                if (fn === undefined || tracked.has(fn) || !isTracked(call.node)) continue
+                tracked.add(fn)
+                grew = true
+              }
+            }
+            const aliasReads = namedCalls.flatMap((call) =>
+              accessors.has(call.name) ? [call.node] : [],
+            )
+            for (const read of [...reads, ...aliasReads]) {
+              if (!isTracked(read)) continue
+              context.report({
+                message:
+                  "this reactive scope reads the whole session record, so a rename or a model change re-runs it -- read `sessionIdentity()` or `activeSessionId()`, which move only when the session or the branch does",
+                node: read,
               })
             }
           },

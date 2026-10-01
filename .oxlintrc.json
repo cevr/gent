@@ -36,6 +36,8 @@
     "gent/child-session-writer-admits": "error",
     // Custom — a whole-object JSON encode decides no identity (shipped source)
     "gent/no-identity-encode": "error",
+    // Custom — a TUI reactive scope tracks the session identity, not the record (owner rule)
+    "gent/no-tracked-session-record": "error",
 
     // Effect opt-in rules: house policy the preset leaves off.
     "effect/noPositionalLogArguments": "error",

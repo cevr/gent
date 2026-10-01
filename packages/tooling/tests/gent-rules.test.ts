@@ -285,6 +285,18 @@ const CASES: ReadonlyArray<RuleCase> = [
     // in-place structs with a field of open or unknown encoding
     expectedCount: 16,
   },
+  {
+    // A TUI reactive scope tracks the session identity; a handler, a JSX
+    // expression and an emitter listener read the record.
+    rule: "gent/no-tracked-session-record",
+    invalid: "apps/tui/src/no-tracked-session-record.invalid.tsx",
+    valid: ["apps/tui/src/no-tracked-session-record.valid.tsx"],
+    // an `on` source, a createEffect body, a createMemo, a read past twelve
+    // lines into an effect, an aliased accessor, a function handed to `on` by
+    // name, a function a tracked scope calls, a createResource source, and a
+    // callback nested in a tracked scope
+    expectedCount: 9,
+  },
 ]
 
 /** Each fixture file once: a run lints a path it is given once, however many cases name it. */
