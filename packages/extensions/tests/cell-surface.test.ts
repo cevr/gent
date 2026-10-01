@@ -96,6 +96,8 @@ import {
 } from "../src/cell.js"
 import { BashTool } from "../src/exec-tools.js"
 import { BuiltinExtensions } from "../src/index.js"
+import { OpenCodeExtension } from "../src/opencode.js"
+import { TypeSafeExtension } from "../src/typesafe.js"
 import { EditTool, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { GoalTool } from "../src/goal.js"
 import { AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
@@ -400,7 +402,7 @@ const judgeExtension = (calls: Ref.Ref<ReadonlyArray<JudgeCall>>) =>
         resolveModel: () => Effect.die("judge serves classifier models only"),
         listModels: () =>
           Effect.succeed(
-            ["jev-test", "jev-other"].map((name) =>
+            ["jev-test", "jev-other", "jev-latest"].map((name) =>
               Model.make({
                 id: ModelId.make(`judge/${name}`),
                 name,
@@ -440,6 +442,11 @@ const judgeExtension = (calls: Ref.Ref<ReadonlyArray<JudgeCall>>) =>
     }),
   })
 
+const SHIPPED_JEV_DRIVERS: ReadonlySet<string> = new Set([
+  TypeSafeExtension.manifest.id,
+  OpenCodeExtension.manifest.id,
+])
+
 /** Run `code` as one cell of a fresh session with the judge driver, and return its display. */
 const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
   readonly code: string
@@ -452,7 +459,11 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
   ])
   const { client, sessionId, branchId } = yield* createRpcHarness({
     ...shippedPreset,
-    extensionInputs: [...BuiltinExtensions, judgeExtension(params.calls)],
+    // The shipped Jev drivers read the developer's keys and would reach a provider.
+    extensionInputs: [
+      ...BuiltinExtensions.filter((extension) => !SHIPPED_JEV_DRIVERS.has(extension.manifest.id)),
+      judgeExtension(params.calls),
+    ],
     providerLayer,
   })
   if (params.storeKey) yield* client.auth.setKey({ provider: "judge", key: "judge-key" })
@@ -479,7 +490,7 @@ const decodeDecideJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema
 
 describe("cell models host", () => {
   it.scopedLive(
-    "a cell asks classify, rate and probability in one provider call to the first classifier with a key",
+    "a cell asks classify, rate and probability in one provider call; a credentialed -latest alias wins over an earlier classifier",
     () =>
       Effect.gen(function* () {
         const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
@@ -496,7 +507,7 @@ describe("cell models host", () => {
           ].join("\n"),
         })
         expect(yield* decodeDecideJson(display)).toEqual({
-          model: "judge/jev-test",
+          model: "judge/jev-latest",
           answers: {
             team: {
               label: "billing",
@@ -514,7 +525,7 @@ describe("cell models host", () => {
         })
         const made = yield* Ref.get(calls)
         expect(made).toHaveLength(1)
-        expect(made[0]?.model).toBe("jev-test")
+        expect(made[0]?.model).toBe("jev-latest")
         expect(made[0]?.key).toEqual(Option.some("judge-key"))
         expect(made[0]?.options.state).toEqual({ text: "charged twice, fix it today" })
         expect(made[0]?.options.decisions).toEqual({
@@ -550,7 +561,7 @@ describe("cell models host", () => {
         expect(yield* decodeDecideJson(display)).toEqual({
           model: "judge/jev-other",
           unknown:
-            'models.decide: Unknown classifier model "judge/nope". Classifier models: judge/jev-test, judge/jev-other',
+            'models.decide: Unknown classifier model "judge/nope". Classifier models: judge/jev-test, judge/jev-other, judge/jev-latest',
           single:
             "models.decide input is invalid: Error: Decision.classify: criteria must contain at least two labels",
         })

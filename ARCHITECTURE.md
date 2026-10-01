@@ -640,13 +640,19 @@ Shape:
   `Model.kind: "classifier"`, so they share its id, auth, env credential and
   catalog; the TUI picker leaves them out. `DecisionModelResolver`
   (`runtime/provider.ts`, in the loop's runtime services) picks the named
-  catalog classifier, or the first one whose driver has a stored or env
-  credential, and fails readably naming the variables when none has. The
+  catalog classifier. With none named it takes a classifier whose driver has a
+  stored or env credential: a `-latest` alias first (drivers are ordered by
+  extension id, so the order cannot pick it), else the first listed. It fails
+  readably naming the variables when none has a credential. The
   reply carries the provider's token usage: the runtime keeps no spend record
   for a tool's own model call. Like `context.*`, a decide call leaves no
-  receipt and a recovered cell does not repeat it. Receipts:
-  `packages/extensions/src/cell.ts` (models host),
-  `packages/core/src/domain/driver.ts`.
+  receipt and a recovered cell does not repeat it. Two drivers serve Jev
+  through `@effect/ai-typesafe`: `typesafe` (`TYPESAFE_API_KEY` or a stored
+  key; `jev-latest`, `jev-preview`, `jev-1.13.0`) and OpenCode Zen (its key
+  and session headers at `https://opencode.ai/zen/v1`; `jev-1.13`,
+  `jev-1.13-free`). Both list static catalog entries, since models.dev lists no
+  Jev model. Receipts: `packages/extensions/src/cell.ts` (models host),
+  `packages/extensions/src/typesafe.ts`, `packages/core/src/domain/driver.ts`.
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in

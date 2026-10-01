@@ -47,6 +47,7 @@
     "@effect/ai-anthropic": "4.0.0-rc.118",
     "@effect/ai-openai": "4.0.0-rc.118",
     "@effect/ai-openai-compat": "4.0.0-rc.118",
+    "@effect/ai-typesafe": "4.0.0-rc.118",
     "@effect/platform-node-shared": "4.0.0-rc.118",
     "effect": "4.0.0-rc.118"
   },
@@ -65,6 +66,7 @@
     "@effect/ai-anthropic": "4.0.0-rc.118",
     "@effect/ai-openai": "4.0.0-rc.118",
     "@effect/ai-openai-compat": "4.0.0-rc.118",
+    "@effect/ai-typesafe": "4.0.0-rc.118",
     "@ff-labs/fff-bun": "0.10.6"
   },
   "patchedDependencies": {

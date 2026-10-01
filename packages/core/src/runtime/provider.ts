@@ -766,14 +766,17 @@ interface ResolvedDecisionModel {
 
 interface DecisionModelResolverService {
   /**
-   * The named classifier model (`provider/model`), or with none the first
-   * classifier the profile's drivers list whose driver has a stored or env
-   * credential.
+   * The named classifier model (`provider/model`), or with none a classifier
+   * whose driver has a stored or env credential: a `-latest` alias first,
+   * else the first the profile's drivers list.
    */
   readonly resolve: (
     modelId: Option.Option<string>,
   ) => Effect.Effect<ResolvedDecisionModel, DecisionModelError, Scope.Scope | ExtensionRegistry>
 }
+
+/** The model-name suffix of an alias that tracks its provider's newest model. */
+const LATEST_ALIAS = "-latest"
 
 /** One classifier entry with the driver that resolves it. */
 interface ClassifierEntry {
@@ -838,13 +841,22 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
       }),
     onNone: () =>
       Effect.gen(function* () {
-        for (const entry of classifiers) {
-          const stored = yield* storedAuth(entry.driver.id)
-          const fromEnv = yield* envCredentialSet(
-            Option.fromUndefinedOr(entry.driver.envCredential),
-          )
-          if (Option.isSome(stored) || fromEnv) return entry
-        }
+        const usable = yield* Effect.filter(classifiers, (entry) =>
+          Effect.gen(function* () {
+            const stored = yield* storedAuth(entry.driver.id)
+            const fromEnv = yield* envCredentialSet(
+              Option.fromUndefinedOr(entry.driver.envCredential),
+            )
+            return Option.isSome(stored) || fromEnv
+          }),
+        )
+        // A `-latest` alias tracks its provider's newest model, so it wins
+        // over a pinned version wherever the driver order puts it.
+        const chosenEntry = Option.orElse(
+          Option.fromUndefinedOr(usable.find((entry) => entry.model.id.endsWith(LATEST_ALIAS))),
+          () => Option.fromUndefinedOr(usable[0]),
+        )
+        if (Option.isSome(chosenEntry)) return chosenEntry.value
         const variables = [...drivers.values()].flatMap((driver) =>
           Option.toArray(Option.fromUndefinedOr(driver.envCredential)),
         )
