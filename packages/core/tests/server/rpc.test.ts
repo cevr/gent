@@ -54,6 +54,7 @@ import {
   AuthError,
   serializeAuthStore,
   AuthApi,
+  ListAuthProvidersPayload,
 } from "../../src/runtime/provider"
 import {
   LanguageModelLayers,
@@ -87,7 +88,13 @@ import {
   type ModelDriverContribution,
   ProviderAuthError,
 } from "../../src/domain/driver.js"
-import { type ExtensionHealthSnapshot, SetDriverOverrideInput } from "../../src/server/rpc.js"
+import {
+  DeleteAuthKeyInput,
+  type ExtensionHealthSnapshot,
+  ExtensionStatusScope,
+  SetAuthKeyInput,
+  SetDriverOverrideInput,
+} from "../../src/server/rpc.js"
 import {
   defineResource,
   ExtensionLoadError,
@@ -5546,6 +5553,128 @@ describe("session profile lookup", () => {
         expect(Object.entries(tags).filter(([, tag]) => tag !== "NotFoundError")).toEqual([])
       }).pipe(Effect.timeout("4 seconds")),
     ),
+  )
+
+  test("a session-scoped payload that names no session is a type error", () => {
+    type Client = GentNamespacedClient
+    const provider = "anthropic"
+    // @ts-expect-error -- auth.setKey names its session
+    const setKey: Parameters<Client["auth"]["setKey"]>[0] = { provider, key: "sk" }
+    // @ts-expect-error -- auth.deleteKey names its session
+    const deleteKey: Parameters<Client["auth"]["deleteKey"]>[0] = { provider }
+    // @ts-expect-error -- auth.listMethods names its session
+    const listMethods: Parameters<Client["auth"]["listMethods"]>[0] = {}
+    // @ts-expect-error -- auth.listProviders names its session
+    const listProviders: Parameters<Client["auth"]["listProviders"]>[0] = {
+      agentName: DEFAULT_AGENT_NAME,
+    }
+    // @ts-expect-error -- driver.set names its session
+    const setDriver: Parameters<Client["driver"]["set"]>[0] = {
+      agentName: DEFAULT_AGENT_NAME,
+      driver: { _tag: "Model", id: provider },
+    }
+    // @ts-expect-error -- driver.list names its session
+    const listDrivers: Parameters<Client["driver"]["list"]>[0] = {}
+    // @ts-expect-error -- model.list names its session
+    const listModels: Parameters<Client["model"]["list"]>[0] = {}
+    // @ts-expect-error -- extension.listStatus names its scope
+    const listStatus: Parameters<Client["extension"]["listStatus"]>[0] = {}
+    const payloads = [setKey, deleteKey, listMethods, listProviders, setDriver, listDrivers]
+    expect([...payloads, listModels, listStatus]).toHaveLength(8)
+  })
+
+  test("a session-scoped payload that names no session does not decode", () => {
+    const statusPayload = Schema.Struct({ scope: ExtensionStatusScope })
+    const driver = { _tag: "Model", id: "anthropic" }
+    const exits: ReadonlyArray<Exit.Exit<unknown, Schema.SchemaError>> = [
+      Schema.decodeUnknownExit(SetAuthKeyInput)({ provider: "anthropic", key: "sk" }),
+      Schema.decodeUnknownExit(DeleteAuthKeyInput)({ provider: "anthropic" }),
+      Schema.decodeUnknownExit(ListAuthProvidersPayload)({}),
+      Schema.decodeUnknownExit(SetDriverOverrideInput)({ agentName: "main", driver }),
+      Schema.decodeUnknownExit(statusPayload)({}),
+    ]
+    expect(exits.map((exit) => Exit.isFailure(exit))).toEqual([true, true, true, true, true])
+    expect(Exit.isSuccess(Schema.decodeExit(statusPayload)({ scope: { _tag: "Launch" } }))).toBe(
+      true,
+    )
+  })
+
+  // `/auth` and `/model` name the session, so a project's own driver serves them.
+  it.live(
+    "/auth and /model in a project session with a project driver answer from the project profile",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const profileCwd = yield* makeTempDirectoryScoped("gent-project-driver-")
+          const projectDriver: LoadedExtension = {
+            manifest: { id: ExtensionId.make("@test/project-models") },
+            scope: "project",
+            sourcePath: "test",
+            contributions: {
+              agents: [...e2ePreset.agents],
+              modelDrivers: [
+                {
+                  id: "project-models",
+                  name: "Project models",
+                  resolveModel: () => Effect.succeed(stubModel),
+                  listModels: () =>
+                    Effect.succeed([
+                      Model.make({
+                        id: ModelId.make("project-models/one"),
+                        name: "One",
+                        provider: ProviderId.make("project-models"),
+                      }),
+                    ]),
+                  auth: { methods: [AuthMethod.make({ type: "api", label: "Project key" })] },
+                },
+              ],
+            },
+          }
+          const profile = yield* makeProfile(profileCwd, [projectDriver])
+          const auth = yield* Effect.provide(Effect.service(Auth), Auth.Test({}))
+          const configContext = yield* Layer.build(ConfigService.Test())
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              agents: e2ePreset.agents,
+              providerLayer,
+              extensions: [],
+              authLayer: Layer.succeed(Auth, auth),
+              configServiceLayer: Layer.succeedContext(configContext),
+              sessionProfileCacheLayer: fixedSessionProfiles(new Map([[profileCwd, profile]])),
+            }),
+          )
+          const { sessionId } = yield* client.session.create({ cwd: profileCwd })
+          const projectSignIn = client.auth
+            .listProviders({ sessionId })
+            .pipe(
+              Effect.map((providers) =>
+                providers.find((entry) => entry.provider === "project-models"),
+              ),
+            )
+
+          // /model: the catalog and the drivers are the project's.
+          const models = yield* client.model.list({ sessionId })
+          expect(models.map((model) => model.id)).toEqual([ModelId.make("project-models/one")])
+          const { drivers } = yield* client.driver.list({ sessionId })
+          expect(drivers.map((driver) => driver.id)).toEqual(["project-models"])
+          yield* client.driver.set({
+            agentName: DEFAULT_AGENT_NAME,
+            driver: { _tag: "Model", id: "project-models" },
+            sessionId,
+          })
+
+          // /auth: the project driver is the sign-in the session needs.
+          expect(Object.keys(yield* client.auth.listMethods({ sessionId }))).toEqual([
+            "project-models",
+          ])
+          expect(yield* projectSignIn).toMatchObject({ required: true, hasKey: false })
+          yield* client.auth.setKey({ provider: "project-models", key: "sk-project", sessionId })
+          expect(yield* projectSignIn).toMatchObject({ required: true, hasKey: true })
+          yield* client.auth.deleteKey({ provider: "project-models", sessionId })
+          expect(yield* projectSignIn).toMatchObject({ required: true, hasKey: false })
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
   )
 
   // A client of the launch cwd works in the launch workspace, so its
