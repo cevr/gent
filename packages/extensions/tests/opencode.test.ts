@@ -103,6 +103,34 @@ const remotePayload = {
           { type: "budget_tokens", min: 1024 },
         ],
       },
+      "claude-opus-4-5": {
+        name: "Claude Opus 4.5",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/anthropic" },
+        reasoning_options: [
+          { type: "effort", values: ["low", "medium", "high"] },
+          { type: "budget_tokens", min: 1024 },
+        ],
+      },
+      "claude-sonnet-4": {
+        name: "Claude Sonnet 4",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/anthropic" },
+        reasoning_options: [{ type: "budget_tokens", min: 1024 }],
+      },
+      "qwen3.8-flash": {
+        name: "Qwen3.8 Flash",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/anthropic" },
+        reasoning_options: [
+          { type: "toggle" },
+          { type: "effort", values: ["low", "medium", "xhigh"] },
+          { type: "budget_tokens" },
+        ],
+      },
       "claude-opus-5": {
         name: "Claude Opus 5",
         tool_call: true,
@@ -251,6 +279,9 @@ const assistantMessages = (request: CapturedRequest) =>
   Schema.decodeEffect(MessagesBody)(Option.getOrThrow(Option.fromUndefinedOr(request.body))).pipe(
     Effect.map((body) => body.messages.filter((message) => message["role"] === "assistant")),
   )
+
+/** A field of a request body; none when the body leaves it out. */
+const field = (body: Schema.JsonObject, key: string) => Option.fromUndefinedOr(body[key])
 
 const lastRequest = (state: FakeFetchState) =>
   Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)))
@@ -406,15 +437,49 @@ describe("OpenCode reasoning", () => {
       yield* generate(go, "minimax-m3", state, { cacheKey: "s", reasoning: "none" })
       expect((yield* bodyOf(lastRequest(state)))["thinking"]).toEqual({ type: "disabled" })
 
-      yield* generate(zen, "claude-opus-4-6", state, { cacheKey: "s", reasoning: "high" })
-      const budget = yield* bodyOf(lastRequest(state))
-      expect(budget["thinking"]).toEqual({ type: "enabled", budget_tokens: 16_000 })
-      expect(budget["output_config"]).toEqual({ effort: "high" })
-
       yield* generate(zen, "claude-opus-5", state, { cacheKey: "s", reasoning: "xhigh" })
       const adaptive = yield* bodyOf(lastRequest(state))
       expect(adaptive["thinking"]).toEqual({ type: "adaptive", display: "summarized" })
       expect(adaptive["output_config"]).toEqual({ effort: "xhigh" })
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  // OpenCode's `reasoningVariants`: an effort list wins over a budget, and
+  // `anthropicEffort` picks the thinking mode by Claude family. A manual budget
+  // cannot think between tool calls on the adaptive families.
+  it.live("Messages prefers the effort list, and sends a budget only to a model with none", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const sent = (modelName: string, reasoning: string) =>
+        generate(zen, modelName, state, { cacheKey: "s", reasoning, maxTokens: 8192 }).pipe(
+          Effect.andThen(Effect.suspend(() => bodyOf(lastRequest(state)))),
+          Effect.map((body) => ({
+            thinking: field(body, "thinking"),
+            output: field(body, "output_config"),
+          })),
+        )
+
+      expect(yield* sent("claude-opus-4-6", "high")).toEqual({
+        thinking: Option.some({ type: "adaptive" }),
+        output: Option.some({ effort: "high" }),
+      })
+      expect(yield* sent("claude-opus-4-5", "high")).toEqual({
+        thinking: Option.some({ type: "enabled", budget_tokens: 4095 }),
+        output: Option.some({ effort: "high" }),
+      })
+      expect(yield* sent("qwen3.8-flash", "high")).toEqual({
+        thinking: Option.none(),
+        output: Option.some({ effort: "xhigh" }),
+      })
+      expect(yield* sent("claude-sonnet-4", "high")).toEqual({
+        thinking: Option.some({ type: "enabled", budget_tokens: 4096 }),
+        output: Option.none(),
+      })
+      expect(yield* sent("claude-sonnet-4", "max")).toEqual({
+        thinking: Option.some({ type: "enabled", budget_tokens: 8191 }),
+        output: Option.none(),
+      })
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 

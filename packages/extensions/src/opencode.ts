@@ -356,19 +356,65 @@ interface MessagesPlan {
 
 const NO_PLAN: MessagesPlan = { thinking: Option.none(), effort: Option.none() }
 
+/** A Claude model id's version, as OpenCode reads it: `claude-opus-4-6`, `claude-4.7-opus`. */
+const CLAUDE_VERSION = /claude-(?:[a-z]+-)?(\d+)(?:[.-](\d{1,2}))?(?:[.@-]|$)/i
+const CLAUDE_4_6 = ["opus-4-6", "opus-4.6", "4-6-opus", "4.6-opus", "sonnet-4-6", "sonnet-4.6"]
+const CLAUDE_OPUS_4_5 = ["opus-4-5", "opus-4.5"]
+const ADAPTIVE_SUMMARIZED: Schema.JsonObject = { type: "adaptive", display: "summarized" }
+
+/** Claude 4.7 and later (or a Claude id with no readable version) thinks adaptively, and omits the text unless asked. */
+const modernClaude = (modelName: string): boolean => {
+  const id = modelName.toLowerCase()
+  if (!id.includes("claude-")) return false
+  return Option.match(Option.fromNullishOr(CLAUDE_VERSION.exec(id)), {
+    onNone: () => true,
+    onSome: (version) => {
+      const major = Number(version[1])
+      const minor = Number(version[2] ?? 0)
+      return major > 4 || (major === 4 && minor >= 7)
+    },
+  })
+}
+
 /**
- * The Messages reasoning plan, from the catalog's controls as OpenCode reads
- * them for `@ai-sdk/anthropic` (`reasoningVariants`, `anthropicEffort`):
+ * The thinking that goes with an effort on Messages, by model family, as
+ * OpenCode's `anthropicEffort` picks it: adaptive for the Claude families
+ * that think between tool calls (summarized from 4.7, whose default omits
+ * the text; Kimi omits it too), a manual budget for Opus 4.5, and nothing
+ * beside the effort for any other model.
+ */
+const effortThinking = (
+  modelName: string,
+  maxTokens: Option.Option<number>,
+): Option.Option<Schema.JsonObject> => {
+  const id = modelName.toLowerCase()
+  if (CLAUDE_OPUS_4_5.some((name) => id.includes(name))) {
+    const budget = Option.match(maxTokens, {
+      onNone: () => 16_000,
+      onSome: (cap) => Math.min(16_000, Math.floor(cap / 2 - 1)),
+    })
+    return Option.some({ type: "enabled", budget_tokens: budget })
+  }
+  if (id.includes("kimi") || id.includes("moonshot")) return Option.some(ADAPTIVE_SUMMARIZED)
+  if (modernClaude(id)) return Option.some(ADAPTIVE_SUMMARIZED)
+  if (CLAUDE_4_6.some((name) => id.includes(name))) return Option.some({ type: "adaptive" })
+  return Option.none()
+}
+
+/**
+ * The Messages reasoning plan, from the catalog's controls in OpenCode's
+ * order (`reasoningVariants`, `anthropicEffort`):
  *
  * - `none`: a toggle turns thinking off; else the lowest effort.
- * - a level with a budget: thinking `enabled` with the budget, and the effort
- *   where the model lists one.
- * - a level with an effort list and no toggle (the Claude 4.7 and later
- *   families): adaptive thinking with summarized display, at that effort.
+ * - a level with an effort list: that effort, with the thinking its model
+ *   family takes (`effortThinking`). A budget the model also lists is unused.
+ * - a level with a budget and no effort list: thinking `enabled` with the
+ *   budget.
  * - a level with only a toggle (MiniMax M3, which thinks only when asked):
  *   adaptive thinking.
  */
 const messagesPlan = (
+  modelName: string,
   hints: Option.Option<ProviderHints>,
   wire: Option.Option<ModelWire>,
 ): MessagesPlan => {
@@ -382,6 +428,7 @@ const messagesPlan = (
     return { thinking: Option.none(), effort }
   }
   const maxTokens = Option.flatMap(hints, (value) => Option.fromNullishOr(value.maxTokens))
+  if (Option.isSome(effort)) return { thinking: effortThinking(modelName, maxTokens), effort }
   const budget = thinkingBudget(options, hint.value, maxTokens)
   if (Option.isSome(budget)) {
     return {
@@ -389,13 +436,8 @@ const messagesPlan = (
       effort,
     }
   }
-  if (Option.isSome(effort) && !hasToggle(options)) {
-    return { thinking: Option.some({ type: "adaptive", display: "summarized" }), effort }
-  }
-  if (Option.isNone(effort) && hasToggle(options)) {
-    return { thinking: Option.some({ type: "adaptive" }), effort }
-  }
-  return { thinking: Option.none(), effort }
+  if (hasToggle(options)) return { thinking: Option.some({ type: "adaptive" }), effort }
+  return NO_PLAN
 }
 
 const messagesConfig = (
@@ -528,7 +570,7 @@ const chatCompletionsModel = (resolution: Resolution) => {
 }
 
 const messagesModel = (resolution: Resolution) => {
-  const plan = messagesPlan(resolution.hints, resolution.wire)
+  const plan = messagesPlan(resolution.modelName, resolution.hints, resolution.wire)
   const client = AnthropicClient.layer({
     apiKey: Redacted.make(resolution.apiKey),
     apiUrl: resolution.gateway.origin,
