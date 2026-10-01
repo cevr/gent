@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Duration, Effect, FileSystem, Layer, Path, Predicate } from "effect"
+import { Clock, Duration, Effect, FileSystem, Layer, Path, Predicate } from "effect"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
   GentPlatform,
@@ -187,6 +187,22 @@ describe("runProcess", () => {
         expect(failed.timedOut).toBe(true)
         expect(failed.message).toContain("timed out")
       }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+  it.live(
+    "a timeout holds for a child that ignores SIGTERM",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Clock.currentTimeMillis
+        const failed = yield* provideBun(
+          runProcess("/bin/sh", ["-c", "trap '' TERM; sleep 8"], {
+            timeout: Duration.millis(300),
+          }).pipe(Effect.flip),
+        )
+        const elapsed = (yield* Clock.currentTimeMillis) - started
+        expect(failed.timedOut).toBe(true)
+        expect(elapsed).toBeLessThan(5_000)
+      }).pipe(Effect.timeout("6 seconds")),
     processTestTimeout,
   )
   it.live(

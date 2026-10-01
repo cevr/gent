@@ -1,7 +1,7 @@
 import {
   Config,
   Context,
-  type Duration,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -189,7 +189,16 @@ const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
 }
 
 /**
- * Run a child process to completion and collect its output.
+ * How long a stopped child has after SIGTERM before SIGKILL. Without it the
+ * spawner waits for the exit with no bound, so a child that ignores SIGTERM
+ * would hold a timed-out or interrupted call open until it chose to exit.
+ */
+const PROCESS_FORCE_KILL_AFTER = Duration.seconds(2)
+
+/**
+ * Run a child process to completion and collect its output. A timeout or an
+ * interrupt stops the child with SIGTERM, then SIGKILL after
+ * `PROCESS_FORCE_KILL_AFTER`.
  *
  * A free function over `ChildProcessSpawner`, not a service: there is one
  * implementation and nothing swaps it. Every caller already names the spawner
@@ -212,6 +221,7 @@ export const runProcess = (
         stdin: options.stdin,
         stdout: stdoutMode,
         stderr: stderrMode,
+        forceKillAfter: PROCESS_FORCE_KILL_AFTER,
       })
       const handle = yield* spawn
       let collectStdout: Effect.Effect<
