@@ -106,6 +106,15 @@ const remotePayload = {
         reasoning: true,
         reasoning_options: [{ type: "toggle" }],
       },
+      "gpt-6-sol": {
+        name: "GPT-6 Sol",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/openai" },
+        reasoning_options: [
+          { type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] },
+        ],
+      },
       "gpt-5.4": {
         name: "GPT-5.4",
         tool_call: true,
@@ -445,6 +454,27 @@ describe("OpenCode reasoning", () => {
       expect(body["reasoning"]).toEqual({ effort: "high", summary: "auto" })
       expect(body["prompt_cache_key"]).toBe("s")
       expect(body["store"]).toBe(false)
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  // `@effect/ai-openai` asks for the encrypted reasoning only for the model
+  // prefixes it knows; GPT-6 is not one of them.
+  it.live("Responses asks for encrypted reasoning whenever it reasons without store", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      yield* generate(zen, "gpt-6-sol", state, { cacheKey: "s", reasoning: "high" })
+      expect((yield* bodyOf(lastRequest(state)))["include"]).toEqual([
+        "reasoning.encrypted_content",
+      ])
+      yield* generate(zen, "gpt-6-sol", state, {
+        cacheKey: "s",
+        reasoning: "high",
+        supportsReasoning: false,
+      })
+      expect(field(yield* bodyOf(lastRequest(state)), "include")).not.toEqual(
+        Option.some(["reasoning.encrypted_content"]),
+      )
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 

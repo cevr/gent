@@ -71,7 +71,9 @@ import {
   isJsonObject,
   readOptionalEnv,
   requestJsonObject,
+  rewriteJsonBody,
   replaceHeldCredential,
+  withEncryptedReasoning,
   withHeaders,
 } from "./providers.js"
 import {
@@ -1561,13 +1563,15 @@ const rejectionCheck = (
 }
 
 /**
- * The client both auth paths run over, next to the transport: leaves rejected
- * reasoning out, and on a rejection records it and retries once.
+ * The client both auth paths run over, next to the transport: asks for the
+ * encrypted reasoning (`withEncryptedReasoning`), leaves rejected reasoning
+ * out, and on a rejection records it and retries once.
  */
-const undecryptableReasoningClient =
+const reasoningReplayClient =
   (rejected: RejectedReasoning) =>
   (client: HttpClient.HttpClient): HttpClient.HttpClient =>
     client.pipe(
+      rewriteJsonBody(withEncryptedReasoning),
       HttpClient.mapRequestEffect((req) =>
         Effect.map(Ref.get(rejected), (ids) => withoutRejectedReasoning(req, ids)),
       ),
@@ -1597,10 +1601,7 @@ const makeApiKeyOpenAIResolution = (
   const httpClientLayer = Layer.effect(
     HttpClient.HttpClient,
     Effect.map(HttpClient.HttpClient, (client) =>
-      summaryRefusalClient(
-        refusedKeys,
-        apiKey,
-      )(undecryptableReasoningClient(rejectedReasoning)(client)),
+      summaryRefusalClient(refusedKeys, apiKey)(reasoningReplayClient(rejectedReasoning)(client)),
     ),
   ).pipe(Layer.provide(FetchHttpClient.layer))
   const clientLayer = OpenAiResponsesClient.layer({ apiKey: Redacted.make(apiKey) }).pipe(
@@ -1638,7 +1639,7 @@ const makeOauthOpenAILayer = (
     HttpClient.HttpClient,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
-      return buildCodexClient(creds)(undecryptableReasoningClient(rejectedReasoning)(client))
+      return buildCodexClient(creds)(reasoningReplayClient(rejectedReasoning)(client))
     }),
   ).pipe(Layer.provide(FetchHttpClient.layer))
   const clientLayer = OpenAiResponsesClient.layer({

@@ -34,6 +34,7 @@ import {
   type ReasoningOption,
   readOptionalEnv,
   rewriteJsonBody,
+  withEncryptedReasoning,
 } from "./providers.js"
 
 // Test seam: only tests read OPENCODE_GATEWAYS and buildOpenCodeModelDriver,
@@ -273,7 +274,8 @@ type ResponsesConfig = Required<Parameters<typeof OpenAiResponsesLanguageModel.l
 /**
  * The Responses request: not stored, the session as the prompt cache key
  * (OpenCode sets `promptCacheKey` for its gateways), and the effort the
- * catalog accepts with a reasoning summary.
+ * catalog accepts with a reasoning summary. The body asks for the encrypted
+ * reasoning (`withEncryptedReasoning`).
  */
 const responsesConfig = (
   hints: Option.Option<ProviderHints>,
@@ -553,7 +555,8 @@ const responsesModel = (resolution: Resolution) => {
   const client = OpenAiResponsesClient.layer({
     apiKey: Redacted.make(resolution.apiKey),
     apiUrl: `${resolution.gateway.origin}/v1`,
-    transformClient: gatewayHeaders(resolution.sessionId),
+    transformClient: (http) =>
+      http.pipe(rewriteJsonBody(withEncryptedReasoning), gatewayHeaders(resolution.sessionId)),
   }).pipe(Layer.provide(FetchHttpClient.layer))
   return OpenAiResponsesLanguageModel.layer({
     model: resolution.modelName,

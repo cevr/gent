@@ -568,8 +568,10 @@ const CredentialRejection = Context.Reference<Option.Option<{ reject: Effect.Eff
  * writes it back the same way; a body of any other kind passes unread.
  */
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))
-/** True for a JSON object (not an array). */
 const isObject = Schema.is(Schema.JsonObject)
+const isArray = Schema.is(Schema.Array(Schema.Json))
+
+/** True for a JSON object (not an array). */
 export const isJsonObject = (value: Schema.Json): value is Schema.JsonObject => isObject(value)
 
 /** The request's JSON object body; none for any other body. */
@@ -591,7 +593,31 @@ export const rewriteJsonBody =
       }),
     )
 
-// ── oauth token endpoint────────────────────────────────────────────────────
+// ── responses requests ──────────────────────────────────────────────────────
+
+/**
+ * A Responses request with `store: false` keeps no reasoning on the server,
+ * so a reasoning item can go back to the model only with its
+ * `encrypted_content`, and a reply carries that only when `include` asks for
+ * it. `@effect/ai-openai` asks only for the model prefixes it knows (`o1`,
+ * `o3`, `o4-mini`, `codex-mini`, `gpt-5`), and its computed `include`
+ * replaces any the config names. So the body of every request that reasons
+ * without store asks for it here.
+ */
+const ENCRYPTED_REASONING = "reasoning.encrypted_content"
+
+export const withEncryptedReasoning = (body: Schema.JsonObject): Schema.JsonObject => {
+  const reasons = Option.exists(Option.fromUndefinedOr(body["reasoning"]), isJsonObject)
+  if (body["store"] !== false || !reasons) return body
+  const include = Option.getOrElse(
+    Option.filter(Option.fromUndefinedOr(body["include"]), isArray),
+    (): ReadonlyArray<Schema.Json> => [],
+  )
+  if (include.includes(ENCRYPTED_REASONING)) return body
+  return { ...body, include: [...include, ENCRYPTED_REASONING] }
+}
+
+// ── oauth token endpoint ────────────────────────────────────────────────────
 
 /**
  * An OAuth token POST runs inside the credential lock, so a hung endpoint
