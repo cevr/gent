@@ -19,7 +19,9 @@ import {
 import {
   type Cause,
   DateTime,
+  Deferred,
   Effect,
+  Exit,
   Match,
   Option,
   Predicate,
@@ -53,7 +55,12 @@ import {
   Show,
   untrack,
 } from "solid-js"
-import type { ScrollBoxRenderable, ScrollbackSurface, SyntaxStyle } from "@opentui/core"
+import type {
+  CliRenderer,
+  ScrollBoxRenderable,
+  ScrollbackSurface,
+  SyntaxStyle,
+} from "@opentui/core"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import {
   bashOutputRows,
@@ -1221,6 +1228,20 @@ const SETTLE_TRIES = 3
  */
 type CommitOutcome = "landed" | "refused" | "unsettled" | "stale"
 
+/** How long exit waits for the live view's last commits. */
+const EXIT_FLUSH_MS = 1500
+
+/** The last commits of each live transcript, by the renderer it draws on. */
+const exitFlushes = new WeakMap<CliRenderer, Effect.Effect<void>>()
+
+/**
+ * Moves what the live view still holds into native history, so exit loses
+ * no turn: destroying the renderer clears the split region. A turn still in
+ * flight commits as drawn. Waits at most `EXIT_FLUSH_MS`, then lets go.
+ */
+export const flushTranscriptForExit = (renderer: CliRenderer): Effect.Effect<void> =>
+  Option.getOrElse(Option.fromUndefinedOr(exitFlushes.get(renderer)), () => Effect.void)
+
 interface NativeTranscriptProps {
   items: SessionItem[]
   /** The items are final: no source still derives rows that would land among them. */
@@ -1454,7 +1475,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * from the live view. A commit that could not happen leaves the counters
    * untouched, so the item stays visible and a later pass retries it.
    */
-  const write = (item: SessionItem, fingerprintValue: string) => {
+  const write = (item: SessionItem, fingerprintValue: string, lastTry = false) => {
     const tries = unsettledTries.get(fingerprintValue) ?? 0
     const epoch = commitEpoch
     // The live tail gives up the item's rows in the same update that drops
@@ -1472,7 +1493,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       untrack(() => sizeRegion(false))
     }
     enqueueNative(
-      commitItems([item], epoch, tries + 1 >= SETTLE_TRIES, handOver).pipe(
+      commitItems([item], epoch, lastTry || tries + 1 >= SETTLE_TRIES, handOver).pipe(
         Effect.andThen((outcome) =>
           Effect.sync(() => {
             if (outcome === "stale") return
@@ -1485,6 +1506,27 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       ),
     )
   }
+
+  // At exit every item the live view still holds commits, final or not, on
+  // its one try; the queue's order makes the drain wait for all of them.
+  const flushForExit = Effect.suspend(() => {
+    if (disposed || !canCommitNatively() || props.expanded || props.overlayOpen) return Effect.void
+    const items = displayedItems()
+    const next = items.map((item) => transcriptFingerprint(item))
+    if (!committed.every((value, index) => next[index] === value)) return Effect.void
+    for (; queued < items.length; queued++) {
+      const item = items[queued]
+      const value = next[queued]
+      if (!item || !Predicate.isString(value)) break
+      write(item, value, true)
+    }
+    return Effect.gen(function* () {
+      const drained = yield* Deferred.make<void>()
+      enqueueNative(Deferred.done(drained, Exit.void))
+      yield* Deferred.await(drained).pipe(Effect.timeout(EXIT_FLUSH_MS), Effect.ignore)
+    })
+  })
+  exitFlushes.set(renderer, flushForExit)
 
   onMount(() => {
     renderer.footerHeight = props.footerHeight
@@ -1499,6 +1541,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
 
   onCleanup(() => {
     disposed = true
+    if (exitFlushes.get(renderer) === flushForExit) exitFlushes.delete(renderer)
     Queue.endUnsafe(nativeTasks)
     renderer.off("frame", finishNativeReturn)
     if (renderer.isDestroyed) return

@@ -107,6 +107,7 @@ import {
   type AssistantSegment,
   currentMillis,
   emptyTurnSteps,
+  flushTranscriptForExit,
   isMessageItem,
   type Message,
   messageToolCalls,
@@ -2730,18 +2731,32 @@ const ARMED_CUE = {
  * about to leave the screen. It is printed after the renderer is destroyed,
  * so it lands in the terminal the reader keeps, not in the alternate screen.
  * An in-memory store ends with the process, so it has nothing to resume.
+ * First the live view's last items reach native history: destroying the
+ * renderer clears the split region, and a turn still on screen would go
+ * with it. A second exit while that runs does nothing.
  */
 export const useExit = () => {
   const client = useClient()
   const renderer = useRenderer()
   const env = useEnv()
+  let leavingNow = false
   return () => {
+    if (leavingNow) return
+    leavingNow = true
     const leaving = client.activeSessionId()
-    shutdownLog("exit.renderer-destroy")
-    renderer.destroy()
-    if (env.resumable) env.writeTerminal(`\nto resume: gent resume ${leaving}\n`)
-    shutdownLog("exit.shutdown-signal")
-    env.shutdown()
+    client.runtime.cast(
+      flushTranscriptForExit(renderer).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            shutdownLog("exit.renderer-destroy")
+            renderer.destroy()
+            if (env.resumable) env.writeTerminal(`\nto resume: gent resume ${leaving}\n`)
+            shutdownLog("exit.shutdown-signal")
+            env.shutdown()
+          }),
+        ),
+      ),
+    )
   }
 }
 

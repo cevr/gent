@@ -11,6 +11,7 @@ import {
   addStep,
   currentMillis,
   emptyTurnSteps,
+  flushTranscriptForExit,
   getSessionEventLabel,
   type Message as ListMessage,
   MessageList,
@@ -3474,6 +3475,52 @@ describe("native transcript rows under the footer", () => {
         // Each commit took its own rows out of the region: what is left is the
         // footer and the empty live tail's one row.
         expect(renderer.height).toBe(4)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+})
+
+// ── native transcript exit ──────────────────────────────────────────────────
+
+describe("native transcript exit", () => {
+  it.scopedLive(
+    "exit moves a turn still in flight into history before the renderer goes",
+    () =>
+      Effect.gen(function* () {
+        const committedText: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const items: ListMessage[] = [
+          assistant("earlier", "EARLIER-ANSWER"),
+          { ...assistant("open", "IN-FLIGHT-DRAFT"), draft: true },
+        ]
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => items,
+              streaming: () => true,
+              footer: () => 3,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("EARLIER-ANSWER"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+        // The draft waits for its stored answer: the turn has not ended.
+        expect(committedText.join("")).toContain("EARLIER-ANSWER")
+        expect(committedText.join("")).not.toContain("IN-FLIGHT-DRAFT")
+        yield* flushTranscriptForExit(Option.getOrThrow(screen))
+        expect(committedText.join("")).toContain("IN-FLIGHT-DRAFT")
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )

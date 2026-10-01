@@ -354,6 +354,9 @@ const runGent = ({
     const renderer = yield* Effect.promise(() =>
       createCliRenderer({
         exitOnCtrlC: false,
+        // Exit clears the split region only: the transcript above it stays
+        // on screen, and the shell prompt follows.
+        clearOnShutdown: false,
         onDestroy: () => {
           shutdownLog("exit.renderer-destroy")
         },
