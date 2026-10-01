@@ -108,6 +108,16 @@ describe("executeShell", () => {
     }),
   )
 
+  shellTest("a command that prints nothing gives empty output, untruncated", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell("true", testDir, PROBE_HOME)
+      expect(result.output).toBe("")
+      expect(result.truncated).toBe(false)
+      expect(Option.isNone(result.savedPath)).toBe(true)
+    }),
+  )
+
   shellTest("stderr joins the output", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
