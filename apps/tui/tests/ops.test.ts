@@ -32,6 +32,7 @@ import {
   ServerLockEntry,
   ServerLockStatus,
 } from "@gent/sdk"
+import { textWidth } from "../src/bun-adapter"
 import { makeClientTraceLogger } from "../src/client"
 import {
   extensionHealthFromSnapshot,
@@ -444,6 +445,28 @@ describe("local health", () => {
       ["older", "older", "/work/older"],
     ])
     expect(formatSessionList([child])).toBe("No sessions found.")
+  })
+
+  // A name from a CJK or emoji prompt is wider on screen than its code
+  // units: the columns after it stay under their headers.
+  test("the sessions listing aligns its columns by display width", () => {
+    const named = (id: string, name: string) =>
+      new Session({
+        id: SessionId.make(id),
+        name,
+        cwd: `/work/${id}`,
+        createdAt: dateFromMillis(0),
+        updatedAt: dateFromMillis(0),
+      })
+    const [header = "", rule = "", ...rows] = formatSessionList([
+      named("a", "plain name"),
+      named("b", "日本語のテスト"),
+      named("c", "ship it 🚀"),
+    ]).split("\n")
+    const columnOf = (line: string, text: string) => textWidth(line.slice(0, line.indexOf(text)))
+    const cwdColumn = columnOf(header, "CWD")
+    expect(rows.map((row) => columnOf(row, "/work/"))).toEqual([cwdColumn, cwdColumn, cwdColumn])
+    expect(textWidth(rule)).toBe(Math.max(...rows.map(textWidth), textWidth(header)))
   })
 
   test("server status wider than the terminal prints one field per line", () => {

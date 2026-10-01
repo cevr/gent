@@ -79,13 +79,16 @@ export function truncate(value: string, width: number): string {
 }
 
 /**
- * Exactly `width` display columns: cut with `truncate`, then padded with
- * spaces by display width. `String.padEnd` counts code units, so it over-pads
- * a wide (CJK) name and under-pads a joined emoji.
+ * At least `width` display columns: padded with spaces by display width, never
+ * cut. `String.padEnd` counts code units, so it over-pads a wide (CJK) name
+ * and under-pads a joined emoji.
  */
+export const padWidth = (value: string, width: number): string =>
+  `${value}${" ".repeat(Math.max(0, width - textWidth(value)))}`
+
+/** Exactly `width` display columns: cut with `truncate`, then padded with `padWidth`. */
 export function fitWidth(value: string, width: number): string {
-  const cut = truncate(value, width)
-  return `${cut}${" ".repeat(Math.max(0, width - textWidth(cut)))}`
+  return padWidth(truncate(value, width), width)
 }
 
 /** Keep the tail without splitting a displayed character: the end of a query stays visible. */

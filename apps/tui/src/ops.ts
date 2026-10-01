@@ -37,8 +37,8 @@ import {
 import { BranchStorage, GentPlatform, MessageStorage, SessionStorage } from "@gent/core/host"
 import * as Prompt from "effect/ai/Prompt"
 import { Command, Flag } from "effect/cli"
-import { readonlySqlite } from "./bun-adapter"
-import { formatBytes, isConversation } from "./utils"
+import { readonlySqlite, textWidth } from "./bun-adapter"
+import { formatBytes, isConversation, padWidth } from "./utils"
 import * as Terminal from "effect/Terminal"
 
 // ── local health report ─────────────────────────────────────────────────────
@@ -810,11 +810,11 @@ const formatTable = (
   rows: ReadonlyArray<ReadonlyArray<string>>,
 ): string => {
   const widths = headers.map((header, column) =>
-    Math.max(header.length, ...rows.map((row) => (row[column] ?? "").length)),
+    Math.max(textWidth(header), ...rows.map((row) => textWidth(row[column] ?? ""))),
   )
   const line = (cells: ReadonlyArray<string>) =>
     cells
-      .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+      .map((cell, column) => padWidth(cell, widths[column] ?? 0))
       .join(" ")
       .trimEnd()
   const width = widths.reduce((sum, w) => sum + w, 0) + widths.length - 1
@@ -843,10 +843,10 @@ export const formatServerStatus = (
     fields.map(([header]) => header),
     [fields.map(([, , value]) => value)],
   )
-  const width = Math.max(...table.split("\n").map((line) => line.length))
+  const width = Math.max(...table.split("\n").map(textWidth))
   if (width <= columns) return table
-  const labelWidth = Math.max(...fields.map(([, name]) => name.length)) + 1
-  return fields.map(([, name, value]) => `${`${name}:`.padEnd(labelWidth)} ${value}`).join("\n")
+  const labelWidth = Math.max(...fields.map(([, name]) => textWidth(name))) + 1
+  return fields.map(([, name, value]) => `${padWidth(`${name}:`, labelWidth)} ${value}`).join("\n")
 }
 
 const serverStatus = Command.make("status", {}, () =>
