@@ -341,21 +341,33 @@ export function Auth(props: AuthProps) {
 
   let version = 0
   let successTimer = Option.none<Fiber.Fiber<void, never>>()
+  /**
+   * The browser leg of an `auto` flow. The server holds the login, and its
+   * loopback port, while this call is in flight, so the screen that started
+   * it ends it: any next action, and the pane closing.
+   */
+  let browserWait = Option.none<Fiber.Fiber<void, never>>()
 
   const stopSuccessTimer = () => {
     if (Option.isSome(successTimer)) cast(Fiber.interrupt(successTimer.value))
     successTimer = Option.none()
   }
+  const stopBrowserWait = () => {
+    if (Option.isSome(browserWait)) cast(Fiber.interrupt(browserWait.value))
+    browserWait = Option.none()
+  }
   const clearSuccess = () => {
     stopSuccessTimer()
     setFlashNote(Option.none())
   }
-  // A pane that closes stops the flash's clock with it.
+  // A pane that closes stops the flash's clock and the browser wait with it.
   onCleanup(stopSuccessTimer)
+  onCleanup(stopBrowserWait)
 
   /** Start an action: everything already in flight stops counting. */
   const begin = () => {
     clearSuccess()
+    stopBrowserWait()
     version += 1
     return version
   }
@@ -527,27 +539,30 @@ export function Auth(props: AuthProps) {
     methodIndex: number,
     authorizationId: string,
   ) => {
-    cast(
-      clientCtx.client.auth
-        .callback({
-          sessionId,
-          provider,
-          method: methodIndex,
-          authorizationId,
-        })
-        .pipe(
-          Effect.tap(() =>
-            whileCurrent(token, () => {
-              flashSuccess(`Authenticated ${label(provider)} via OAuth`)
-              loadAuth(token)
-            }),
-          ),
-          Effect.catchEager((err) =>
-            whileCurrent(token, () =>
-              send(AuthEvent.cases.OAuthAutoFailed.make({ error: formatError(err) })),
+    stopBrowserWait()
+    browserWait = Option.some(
+      clientCtx.runtime.fork(
+        clientCtx.client.auth
+          .callback({
+            sessionId,
+            provider,
+            method: methodIndex,
+            authorizationId,
+          })
+          .pipe(
+            Effect.tap(() =>
+              whileCurrent(token, () => {
+                flashSuccess(`Authenticated ${label(provider)} via OAuth`)
+                loadAuth(token)
+              }),
+            ),
+            Effect.catchEager((err) =>
+              whileCurrent(token, () =>
+                send(AuthEvent.cases.OAuthAutoFailed.make({ error: formatError(err) })),
+              ),
             ),
           ),
-        ),
+      ),
     )
   }
 
@@ -608,10 +623,11 @@ export function Auth(props: AuthProps) {
   }
 
   const submitOauth = (screen: OAuthScreen) => {
-    if (screen.waiting) return
     const trimmed = screen.code.trim()
-    // A "code" flow has nothing to send without one; "auto" may be retried bare.
-    if (screen.authorization.method === "code" && trimmed.length === 0) return
+    // A "code" flow has nothing to send without one. An "auto" flow takes a
+    // pasted code while its browser wait runs (the server races the two), and
+    // a bare retry only once that wait has failed.
+    if (trimmed.length === 0 && (screen.authorization.method === "code" || screen.waiting)) return
     const token = begin()
     clientCtx.log.info("auth:submit-oauth", {
       provider: screen.provider,
@@ -794,10 +810,7 @@ export function Auth(props: AuthProps) {
     return "Paste code (optional):"
   }
   const waitingNote = (current: { readonly waiting: boolean }) =>
-    Option.liftPredicate(
-      "Waiting for sign-in to finish. Paste a code if it fails.",
-      () => current.waiting,
-    )
+    Option.liftPredicate("Waiting for sign-in to finish, or paste a code.", () => current.waiting)
   const instructionLines = (current: { readonly authorization: AuthAuthorization }) =>
     Option.getOrElse(
       Option.fromNullishOr(current.authorization.instructions),
@@ -885,7 +898,6 @@ export function Auth(props: AuthProps) {
           label={codeLabel(bodyProps.current().authorization.method)}
           text={bodyProps.current().code}
           shown={codeLineShown()}
-          caret={!bodyProps.current().waiting}
           onEvent={send}
           onSubmit={() => submitOauth(bodyProps.current())}
           onCancel={close}
@@ -966,7 +978,6 @@ export function Auth(props: AuthProps) {
             <AuthTextLine
               label="API key ›"
               text={keyMask(current().value)}
-              caret={true}
               onEvent={send}
               onSubmit={() => submitKey(current().provider, current().value)}
               onCancel={close}
@@ -1003,7 +1014,6 @@ export function Auth(props: AuthProps) {
 function AuthTextLine(props: {
   readonly label: string
   readonly text: string
-  readonly caret: boolean
   readonly shown?: boolean
   readonly onEvent: (event: AuthEvent) => void
   readonly onSubmit: () => void
@@ -1015,9 +1025,8 @@ function AuthTextLine(props: {
   const { sectionWidth } = usePickerGeometry()
   /** The text that fits after the label and before the caret: its tail, cut with an ellipsis. */
   const visibleText = () => {
-    let caretWidth = 0
-    if (props.caret) caretWidth = 1
-    const room = Math.max(1, sectionWidth() - props.label.length - 1 - caretWidth)
+    // The label, its space and the caret take their columns first.
+    const room = Math.max(1, sectionWidth() - props.label.length - 2)
     const chars = [...props.text]
     if (chars.length <= room) return props.text
     return "…" + chars.slice(chars.length - (room - 1)).join("")
@@ -1062,9 +1071,7 @@ function AuthTextLine(props: {
         <text wrapMode="none" style={{ fg: theme.text }}>
           <span style={{ fg: theme.textMuted }}>{props.label} </span>
           {visibleText()}
-          <Show when={props.caret}>
-            <span style={{ fg: theme.primary }}>│</span>
-          </Show>
+          <span style={{ fg: theme.primary }}>│</span>
         </text>
       </ChromePanel.Section>
     </Show>

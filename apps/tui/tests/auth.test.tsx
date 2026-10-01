@@ -744,6 +744,105 @@ describe("Auth route", () => {
       ])
     }),
   )
+  /** One optional provider whose only method is a browser OAuth sign-in. */
+  const browserSignIn = (
+    callback: (input: { readonly code?: string }) => Effect.Effect<void>,
+  ): Effect.Effect<ReturnType<typeof createMockClient>> =>
+    Effect.succeed(
+      createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: "anthropic",
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ anthropic: [oauthMethodRoute] }),
+          authorize: () =>
+            Effect.succeed({
+              authorizationId: "auth-wait",
+              url: "https://example.com/oauth",
+              method: "auto",
+            }),
+          callback,
+        },
+      }),
+    )
+
+  // A browser that cannot reach the loopback redirect (ssh, a devbox) leaves
+  // the code in the address bar; the reader pastes it while the wait runs.
+  it.scopedLive("a code pasted while a browser sign-in waits signs in with it", () =>
+    Effect.gen(function* () {
+      const sent: Array<string> = []
+      const client = yield* browserSignIn((input) => {
+        const code = Option.fromUndefinedOr(input.code)
+        sent.push(Option.getOrElse(code, () => "<browser wait>"))
+        // The redirect never comes; only a pasted code finishes the sign-in.
+        if (Option.isNone(code)) return Effect.never
+        return Effect.void
+      })
+      const services = yield* servicesWithLinkOpener(() => Effect.void)
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+        initialAgent: AgentName.make("primary"),
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Waiting for sign-in") && sent.length === 1,
+        "the browser wait",
+      )
+      // A bare Enter while the browser wait runs starts no second wait.
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.mockInput.typeText("pasted-code"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Authenticated anthropic via OAuth"),
+        "the pasted code signs in",
+      )
+      expect(sent).toEqual(["<browser wait>", "pasted-code"])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  // The server holds the login (and its loopback port) while a browser wait
+  // is in flight, so a wait the reader left must end with the screen.
+  it.scopedLive("Esc on a waiting browser sign-in interrupts its wait", () =>
+    Effect.gen(function* () {
+      const waiting = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      const client = yield* browserSignIn(() =>
+        Deferred.done(waiting, Exit.void).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.done(interrupted, Exit.void)),
+        ),
+      )
+      const services = yield* servicesWithLinkOpener(() => Effect.void)
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+        initialAgent: AgentName.make("primary"),
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* Deferred.await(waiting)
+      setup.mockInput.pressEscape()
+      yield* Deferred.await(interrupted)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.scopedLive("ignores stale oauth opener failures after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
