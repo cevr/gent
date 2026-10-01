@@ -3116,32 +3116,6 @@ const cellMigrations: FeatureMigrations = {
 type CellStorageTags = CellStorage | RetainedBindings | ToolCallRecoveryService
 
 /**
- * The cell's storage layers, assembled as one unit.
- *
- * Core's SQLite assembler builds the kernel's tables and takes any extra
- * repositories as a parameter. This is the cell's contribution to that call:
- * the three tables it owns, wired against the same SQL client, so core never
- * names them.
- *
- * `interactionStorage` is passed in rather than rebuilt: operation receipts
- * and interaction records must share one instance, or a suspended approval
- * would be written to a store nothing reads back.
- */
-const cellStorageLayer = <E, R>(
-  base: Layer.Layer<SqlClient.SqlClient, E, R>,
-  interactionStorage: Layer.Layer<InteractionStorage, E, R>,
-): Layer.Layer<CellStorageTags, E, R | GentPlatform> => {
-  const tables = Layer.provide(CellStorage.Live, Layer.merge(base, interactionStorage))
-  // The projections ship with the tables. Installing the cell's storage
-  // without the answers core reads from it would leave a handoff silently
-  // reporting no retained names.
-  return Layer.provideMerge(
-    Layer.mergeAll(cellRetainedBindings, cellToolCallRecovery),
-    Layer.merge(tables, interactionStorage),
-  )
-}
-
-/**
  * The cell's answer to core's retained-names question: its namespace bindings.
  */
 const cellRetainedBindings = Layer.effect(
@@ -3161,6 +3135,23 @@ const cellRetainedBindings = Layer.effect(
     })
   }),
 )
+
+/**
+ * The cell's storage layers, assembled as one unit.
+ *
+ * Core's SQLite assembler builds the kernel's tables and installs any extra
+ * repositories over its SQL client and interaction storage. This is the
+ * cell's contribution: the three tables it owns, so core never names them.
+ * Operation receipts and interaction records share core's one interaction
+ * storage, or a suspended approval would be written to a store nothing reads
+ * back. The projections ship with the tables: without the answers core reads
+ * from it, a handoff would silently report no retained names.
+ */
+const cellStorageLayer: Layer.Layer<
+  CellStorageTags,
+  never,
+  SqlClient.SqlClient | InteractionStorage | GentPlatform
+> = Layer.provideMerge(Layer.mergeAll(cellRetainedBindings, cellToolCallRecovery), CellStorage.Live)
 
 /**
  * The cell's branch-scoped layer, as the feature's per-branch factory.

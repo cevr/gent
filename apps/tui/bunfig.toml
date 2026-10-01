@@ -1,4 +1,4 @@
-preload = ["@opentui/solid/preload"]
+preload = ["./scripts/dev-preload-boundary.ts"]
 
 [test]
 preload = ["@opentui/solid/preload"]

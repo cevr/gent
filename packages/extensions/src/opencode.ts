@@ -1,15 +1,12 @@
 import { Crypto, Duration, Effect, Layer, Option, Redacted, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
 import { Model as AiModel } from "effect/ai"
-import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
-import {
-  OpenAiClient as OpenAiResponsesClient,
-  OpenAiLanguageModel as OpenAiResponsesLanguageModel,
-} from "@effect/ai-openai"
-import {
-  OpenAiClient as OpenAiChatClient,
-  OpenAiLanguageModel as OpenAiChatLanguageModel,
-} from "@effect/ai-openai-compat"
+import type { AnthropicLanguageModel } from "@effect/ai-anthropic"
+import type { OpenAiLanguageModel as OpenAiResponsesLanguageModel } from "@effect/ai-openai"
+import type { OpenAiLanguageModel as OpenAiChatLanguageModel } from "@effect/ai-openai-compat"
+import type * as MessagesSdkModule from "@effect/ai-anthropic"
+import type * as ResponsesSdkModule from "@effect/ai-openai"
+import type * as ChatSdkModule from "@effect/ai-openai-compat"
 import {
   AuthMethod,
   DEFAULT_RETRY_POLICY,
@@ -564,7 +561,28 @@ interface Resolution {
 const responsesModelReasons = (resolution: Resolution): boolean =>
   modelReasons(resolution.hints, () => reasoningOptions(resolution.wire).length > 0)
 
-const responsesModel = (resolution: Resolution) => {
+/**
+ * Each wire format's SDK, loaded by the first model build on that format:
+ * their generated schemas cost a launch time to evaluate, and a launch that
+ * streams nothing never reads them.
+ */
+type ResponsesSdk = typeof ResponsesSdkModule
+type ChatSdk = typeof ChatSdkModule
+type MessagesSdk = typeof MessagesSdkModule
+// oxlint-disable-next-line effect/noDynamicImports -- the SDK loads at the first model build, not at launch
+const loadResponsesSdk = Effect.promise((): Promise<ResponsesSdk> => import("@effect/ai-openai"))
+// oxlint-disable-next-line effect/noDynamicImports -- the SDK loads at the first model build, not at launch
+const loadChatSdk = Effect.promise((): Promise<ChatSdk> => import("@effect/ai-openai-compat"))
+// oxlint-disable-next-line effect/noDynamicImports -- the SDK loads at the first model build, not at launch
+const loadMessagesSdk = Effect.promise((): Promise<MessagesSdk> => import("@effect/ai-anthropic"))
+
+const responsesModel = (
+  {
+    OpenAiClient: OpenAiResponsesClient,
+    OpenAiLanguageModel: OpenAiResponsesLanguageModel,
+  }: ResponsesSdk,
+  resolution: Resolution,
+) => {
   const reasons = responsesModelReasons(resolution)
   const client = OpenAiResponsesClient.layer({
     apiKey: Redacted.make(resolution.apiKey),
@@ -581,7 +599,10 @@ const responsesModel = (resolution: Resolution) => {
   }).pipe(Layer.provide(client))
 }
 
-const chatCompletionsModel = (resolution: Resolution) => {
+const chatCompletionsModel = (
+  { OpenAiClient: OpenAiChatClient, OpenAiLanguageModel: OpenAiChatLanguageModel }: ChatSdk,
+  resolution: Resolution,
+) => {
   const reasoningField = Option.flatMap(resolution.wire, (value) =>
     Option.fromUndefinedOr(value.reasoningField),
   )
@@ -600,7 +621,10 @@ const chatCompletionsModel = (resolution: Resolution) => {
   }).pipe(Layer.provide(client))
 }
 
-const messagesModel = (resolution: Resolution) => {
+const messagesModel = (
+  { AnthropicClient, AnthropicLanguageModel }: MessagesSdk,
+  resolution: Resolution,
+) => {
   const plan = messagesPlan(resolution.modelName, resolution.hints, resolution.wire)
   const planned = planApplied(plan)
   let rewrite = planned
@@ -621,11 +645,11 @@ const messagesModel = (resolution: Resolution) => {
 const modelLayer = (format: WireFormat, resolution: Resolution) => {
   switch (format) {
     case "responses":
-      return responsesModel(resolution)
+      return Effect.map(loadResponsesSdk, (sdk) => responsesModel(sdk, resolution))
     case "messages":
-      return messagesModel(resolution)
+      return Effect.map(loadMessagesSdk, (sdk) => messagesModel(sdk, resolution))
     case "chat-completions":
-      return chatCompletionsModel(resolution)
+      return Effect.map(loadChatSdk, (sdk) => chatCompletionsModel(sdk, resolution))
   }
 }
 
@@ -728,7 +752,7 @@ export const buildOpenCodeModelDriver = (
           hints,
           wire,
         }
-        return AiModel.make(gateway.id, modelName, modelLayer(format.value, resolution))
+        return AiModel.make(gateway.id, modelName, yield* modelLayer(format.value, resolution))
       }),
     listModels: () => listGatewayModels(gateway, catalog),
     auth: {

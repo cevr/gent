@@ -66,6 +66,7 @@ import {
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { ConfigService, UserConfig, RuntimeEnvironment } from "../../src/runtime/config"
 import {
+  ApprovalService,
   ExtensionRegistry,
   resolveExtensions,
   SessionProfileCache,
@@ -93,8 +94,9 @@ import {
 } from "../../src/domain/event"
 import { BunServices } from "@effect/platform-bun"
 import { SqlClient } from "effect/sql"
-import { ModelResolver } from "../../src/runtime/provider"
+import { Auth, ModelResolver } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import { noBranchTools } from "../../src/runtime/tools"
 import { RpcClient, RpcTest } from "effect/rpc"
 import { WORKSPACE_ID_HEADER } from "../../src/server/workspace-rpc"
 
@@ -214,7 +216,7 @@ const sessionMutationsTestLayer = (
     readonly eventStore?: Layer.Layer<EventStore>
   } = {},
 ) => {
-  const storageLayer = options.storage ?? testSqliteStorage(() => Layer.empty, {})
+  const storageLayer = options.storage ?? testSqliteStorage(Layer.empty, {})
   const sessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.flatMap(SessionStorage, options.sessionStorage ?? Effect.succeed),
@@ -587,7 +589,7 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
   })
 
 const sessionQueriesActorFailureLayer = Layer.mergeAll(
-  testSqliteStorage(() => Layer.empty, {}),
+  testSqliteStorage(Layer.empty, {}),
   GentPlatform.Test(),
   ConfigService.Test(),
   ExtensionRegistry.Test(),
@@ -2229,7 +2231,7 @@ describe("session transport contract", () => {
 describe("requestId idempotency", () => {
   const makePersistentSessionMutationsLayer = (dbPath: string) =>
     sessionMutationsTestLayer({
-      storage: SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
+      storage: SqliteStorage.LiveWithSql(dbPath, Layer.empty, {}).pipe(
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),
       ),
@@ -2273,7 +2275,7 @@ describe("requestId idempotency", () => {
         // One database; the process that retries no longer loads the agent.
         const shared = yield* Layer.build(
           Layer.mergeAll(
-            testSqliteStorage(() => Layer.empty, {}),
+            testSqliteStorage(Layer.empty, {}),
             sessionRuntimeLayer(),
             EventStore.Memory,
             EventStore.Memory,
@@ -2336,7 +2338,7 @@ describe("requestId idempotency", () => {
           SessionProfileCache.of({ resolve: () => Effect.succeed(profile) }),
         )
         const deps = Layer.mergeAll(
-          testSqliteStorage(() => Layer.empty, {}),
+          testSqliteStorage(Layer.empty, {}),
           sessionRuntimeLayer(),
           EventStore.Memory,
           EventStore.Memory,
@@ -2685,7 +2687,7 @@ describe("requestId idempotency", () => {
       const deliveredPromptRequestIds = new Set<string>()
 
       const makeLayer = (failPrompt: boolean) => {
-        const storageLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
+        const storageLayer = SqliteStorage.LiveWithSql(dbPath, Layer.empty, {}).pipe(
           Layer.provide(BunServices.layer),
           Layer.provide(GentPlatform.Test()),
         )
@@ -3400,6 +3402,49 @@ describe("message.send", () => {
         expect(exit._tag).toBe("Failure")
         expect(yield* controls.callCount).toBe(0)
       }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+})
+
+describe("server root composition", () => {
+  it.live("builds each layer a root passes in once, however many services read it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const builds = yield* Ref.make<Readonly<Record<string, number>>>({})
+        // `Layer.fromBuild` is not memoized: it runs once for every path of
+        // the layer graph that reaches it, so the count is the build count.
+        const counted = <A, E, R>(name: string, layer: Layer.Layer<A, E, R>) =>
+          Layer.merge(
+            layer,
+            Layer.fromBuild(() =>
+              Ref.update(builds, (counts) => ({ ...counts, [name]: (counts[name] ?? 0) + 1 })).pipe(
+                Effect.as(Context.empty()),
+              ),
+            ),
+          )
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        yield* Layer.build(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            authLayer: counted("auth", Auth.Test()),
+            configServiceLayer: counted("config", ConfigService.Test()),
+            approvalLayer: counted("approval", ApprovalService.Test()),
+            extraLayers: [counted("extra", Layer.empty)],
+            branchTools: {
+              ...noBranchTools,
+              storage: counted("storage", noBranchTools.storage),
+            },
+          }),
+        )
+        expect(yield* Ref.get(builds)).toEqual({
+          auth: 1,
+          config: 1,
+          approval: 1,
+          extra: 1,
+          storage: 1,
+        })
+      }).pipe(Effect.timeout("8 seconds")),
     ),
   )
 })

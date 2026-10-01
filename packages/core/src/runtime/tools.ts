@@ -619,13 +619,11 @@ export interface BranchToolFeature<A> {
   /** Migrations creating the feature's tables, merged into core's chain. */
   readonly migrations: FeatureMigrations
   /**
-   * The feature's storage tags, layered over core's SQL client. Generic in
-   * the error and requirement channels so one feature serves the live,
-   * memory, and test storage entries alike.
+   * The feature's storage tags, built over core's SQL client and interaction
+   * storage, which the storage entry provides once beneath it; the live,
+   * memory and test storage entries take the same layer.
    */
-  readonly storage: <E, R>(
-    ...args: Parameters<ExtraRepositories<A, E, R>>
-  ) => ReturnType<ExtraRepositories<A, E, R>>
+  readonly storage: ExtraRepositories<A>
   /** Per-branch services, built with the loop and torn down with it. */
   readonly branchLayer: BranchToolLayerFactory
 }
@@ -633,7 +631,7 @@ export interface BranchToolFeature<A> {
 /** The feature a deployment installs when its tools hold no branch state. */
 export const noBranchTools: BranchToolFeature<never> = {
   migrations: {},
-  storage: () => Layer.empty,
+  storage: Layer.empty,
   branchLayer: () => emptyErasedResourceLayer,
 }
 

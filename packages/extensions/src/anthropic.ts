@@ -63,8 +63,17 @@ import {
 } from "./providers.js"
 import { ChildProcessSpawner } from "effect/process"
 import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/http"
-import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
+import type { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
+import type * as AnthropicSdkModule from "@effect/ai-anthropic"
 import { type AiError, Model as AiModel, type Response } from "effect/ai"
+
+/**
+ * The SDK, loaded by the first model build: its generated schemas cost a
+ * launch time to evaluate, and a launch that streams nothing never reads them.
+ */
+type AnthropicSdk = typeof AnthropicSdkModule
+// oxlint-disable-next-line effect/noDynamicImports -- the SDK loads at the first model build, not at launch
+const loadAnthropicSdk = Effect.promise((): Promise<AnthropicSdk> => import("@effect/ai-anthropic"))
 
 // Test seam: only tests read these exports. The model beta lookup
 // (getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
@@ -1144,16 +1153,6 @@ const BILLING_HEADER_PREFIX = "x-anthropic-billing-header"
 const decodeJsonRecord = Schema.decodeSync(Schema.Record(Schema.String, Schema.Unknown))
 const JsonValueSchema = Schema.Unknown
 type JsonValue = Schema.Schema.Type<typeof JsonValueSchema>
-const MessageStreamEventSchema = Schema.Union([
-  Generated.BetaMessageStartEvent,
-  Generated.BetaMessageDeltaEvent,
-  Generated.BetaMessageStopEvent,
-  Generated.BetaContentBlockStartEvent,
-  Generated.BetaContentBlockDeltaEvent,
-  Generated.BetaContentBlockStopEvent,
-  Generated.BetaErrorResponse,
-])
-const decodeMessageStreamEvent = Schema.decodeUnknownSync(MessageStreamEventSchema)
 
 // ── Payload Transforms (outgoing) ──
 
@@ -1876,19 +1875,10 @@ export const transformResponseContent = (
 export const transformStreamEvent =
   (toolIds: ReadonlyArray<string>) =>
   (event: AnthropicClient.MessageStreamEvent): AnthropicClient.MessageStreamEvent => {
-    // content_block_start has type: "content_block_start" and content_block with the block data
-    const e = decodeJsonRecord(event)
-    if (e["type"] !== "content_block_start") return event
-    const rawBlock = e["content_block"]
-    if (!isRecord(rawBlock)) return event
-    const block = rawBlock
-    if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
-      return decodeMessageStreamEvent({
-        ...event,
-        content_block: { ...block, name: unprefixName(toolIds, block["name"]) },
-      })
-    }
-    return event
+    if (event.type !== "content_block_start") return event
+    const block = event.content_block
+    if (block.type !== "tool_use") return event
+    return { ...event, content_block: { ...block, name: unprefixName(toolIds, block.name) } }
   }
 
 // ── Layer ──
@@ -1941,6 +1931,7 @@ const reportStopReason = (event: AnthropicClient.MessageStreamEvent): Effect.Eff
  * path's reply mapping wraps the SDK service.
  */
 const anthropicClientLayer = <R>(
+  { AnthropicClient }: AnthropicSdk,
   plan: AnthropicRequestPlan,
   path: ClientPath<R>,
   sdkLayer: SdkClientLayer,
@@ -2007,10 +1998,12 @@ const apiKeyClientPath = (cacheLifetimes: Option.Option<CacheLifetimes>): Client
  * keeps the credential's own message.
  */
 const claudeCodeClientPath = (
+  { Generated }: AnthropicSdk,
   creds: CredentialCache<ClaudeCredentials>,
   cacheLifetimes: Option.Option<CacheLifetimes>,
 ): ClientPath<KeychainTransformRequirements> => {
   const explain = explainCredentialFailure(creds)
+  const decodeMessage = Schema.decodeUnknownSync(Generated.BetaMessage)
   return {
     payload: (payload) => transformPayload(payload, cacheLifetimes),
     message: (call, toolIds) =>
@@ -2023,10 +2016,7 @@ const claudeCodeClientPath = (
               ...b,
               content: transformResponseContent(content, toolIds),
             }
-            return [
-              Schema.decodeUnknownSync(Generated.BetaMessage)(transformed),
-              response,
-            ] satisfies CreateMessageReply
+            return [decodeMessage(transformed), response] satisfies CreateMessageReply
           }
           return [body, response] satisfies CreateMessageReply
         }),
@@ -2440,8 +2430,15 @@ const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): Json
  * billing-header system blocks + identity prefix, which API-key users
  * are not on the hook for.
  */
-const makeApiKeyAnthropicLayer = (modelName: string, request: AnthropicRequest, apiKey: string) => {
+const makeApiKeyAnthropicLayer = (
+  sdk: AnthropicSdk,
+  modelName: string,
+  request: AnthropicRequest,
+  apiKey: string,
+) => {
+  const { AnthropicClient, AnthropicLanguageModel } = sdk
   const clientLayer = anthropicClientLayer(
+    sdk,
     request.plan,
     apiKeyClientPath(request.cacheLifetimes),
     (rewriteBody) =>
@@ -2466,15 +2463,18 @@ const makeApiKeyAnthropicLayer = (modelName: string, request: AnthropicRequest, 
  * middleware ordering.
  */
 const makeOauthAnthropicLayer = (
+  sdk: AnthropicSdk,
   modelName: string,
   request: AnthropicRequest,
   creds: CredentialCache<ClaudeCredentials>,
   services: AnthropicDriverServices,
 ) => {
+  const { AnthropicClient, AnthropicLanguageModel } = sdk
   const keychain = buildKeychainTransformClient(creds, Context.get(services, AnthropicPlatform).env)
   const wrappedClient = anthropicClientLayer(
+    sdk,
     request.plan,
-    claudeCodeClientPath(creds, request.cacheLifetimes),
+    claudeCodeClientPath(sdk, creds, request.cacheLifetimes),
     (rewriteBody) =>
       AnthropicClient.layer({ transformClient: (client) => keychain(rewriteBody(client)) }),
   ).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(Layer.succeedContext(services)))
@@ -2534,7 +2534,7 @@ export const buildAnthropicModelDriver = (
         return AiModel.make(
           "anthropic",
           modelName,
-          makeOauthAnthropicLayer(modelName, request, creds, services),
+          makeOauthAnthropicLayer(yield* loadAnthropicSdk, modelName, request, creds, services),
         )
       }
 
@@ -2543,7 +2543,7 @@ export const buildAnthropicModelDriver = (
         return AiModel.make(
           "anthropic",
           modelName,
-          makeApiKeyAnthropicLayer(modelName, request, apiKey.value),
+          makeApiKeyAnthropicLayer(yield* loadAnthropicSdk, modelName, request, apiKey.value),
         )
       }
 

@@ -1,5 +1,16 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Logger, Option, Path, Predicate, References, Schema } from "effect"
+import {
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  Option,
+  Path,
+  Predicate,
+  References,
+  Schema,
+} from "effect"
+import { BunPlatformLive, GentPlatform } from "@gent/core/host"
 import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
@@ -36,7 +47,7 @@ import {
 import type { ToolRenderer, ToolRendererProps } from "../../src/tool-renderers"
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
-import { BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
 import { collectTestContributions } from "@gent/core/test-utils"
 import {
@@ -44,7 +55,14 @@ import {
   makeClientTestTransport,
   makeUnreachableTransport,
 } from "../extension-test-harness-boundary"
-import { defineRequests, ExtensionId, getToolId, ref, request } from "@gent/core/extensions/api"
+import {
+  defineRequests,
+  ExtensionId,
+  getToolId,
+  ref,
+  request,
+  runProcess,
+} from "@gent/core/extensions/api"
 import { inRuntime } from "../helpers-boundary"
 import { builtinClientModules } from "../../src/extensions/builtins"
 import { type Command, executeSlashCommand } from "../../src/commands"
@@ -1629,3 +1647,74 @@ describe("tool renderer reach", () => {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 })
+
+describe("client extension compile", () => {
+  // The test run's preload loads Babel itself, so these run in a fresh process
+  // that loads it the way a launch does.
+  it.live(
+    "importing the Bun adapter loads no Babel module until a client extension compiles",
+    () =>
+      Effect.gen(function* () {
+        const stdout = yield* runFresh(
+          [
+            `await import("${adapterUrl}")`,
+            `console.log(Object.keys(require.cache).filter((key) => key.includes("/@babel/")).length)`,
+          ],
+          [],
+        )
+        expect(stdout).toBe("0")
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(freshProcessLayer)),
+    30_000,
+  )
+
+  it.live(
+    "a build interrupted while the Solid plugin loads leaves the next build working",
+    () =>
+      Effect.gen(function* () {
+        const stdout = yield* runFresh(
+          [
+            `const { Effect, Fiber, Option } = await import("${import.meta.resolve("effect")}")`,
+            `const { buildClientExtension } = await import("${adapterUrl}")`,
+            `const names = { external: [], rename: () => Option.none(), solidRuntime: "@opentui/solid" }`,
+            `const file = import.meta.dir + "/widget.tsx"`,
+            `const first = Effect.runFork(buildClientExtension(file, names))`,
+            `await Effect.runPromise(Fiber.interrupt(first))`,
+            `const exit = await Effect.runPromiseExit(buildClientExtension(file, names))`,
+            `console.log(exit._tag === "Success" && exit.value.includes("widget-text") ? "built" : String(exit))`,
+          ],
+          [["widget.tsx", `export const widget = "widget-text"`]],
+        )
+        expect(stdout).toBe("built")
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(freshProcessLayer)),
+    30_000,
+  )
+})
+
+const adapterUrl = new URL("../../src/bun-adapter.ts", import.meta.url).href
+
+/** Run `lines` as a script in a fresh Bun beside `files`; its stdout, trimmed. */
+const runFresh = (
+  lines: ReadonlyArray<string>,
+  files: ReadonlyArray<readonly [name: string, text: string]>,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const platform = yield* GentPlatform
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-fresh-process-" })
+      for (const [name, text] of files) yield* fs.writeFileString(path.join(directory, name), text)
+      const script = path.join(directory, "script.ts")
+      yield* fs.writeFileString(script, lines.join("\n"))
+      const result = yield* runProcess(yield* platform.execPath, ["--config=/dev/null", script], {
+        cwd: directory,
+      })
+      expect(result.exitCode).toBe(0)
+      return result.stdout.trim()
+    }),
+  )
+
+const freshProcessLayer = Layer.mergeAll(
+  BunPlatformLive,
+  BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+)

@@ -302,7 +302,7 @@ The app surface is split by concern:
 
 `message.send` request-id dedup lives in `server/server.ts` next to the handler; the runtime keys the actor command on the same request id.
 
-The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
+The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path (the launch build visited 35,831 layers before, 347 now). The storage entry builds its SQL client once under every repository, and a branch-tool feature's storage is a layer over that client and the interaction storage (`ExtraRepositories`). A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
 
 `packages/core/src/server/server.ts` owns startup wiring:
 
@@ -991,7 +991,10 @@ Turbo builds that declared dependency before the TUI copies the worker into
 `bin/gent-cell` beside `bin/gent`. `@gent/extensions` owns the worker build; the TUI only
 packages it. The worker embeds Bun and needs no external Bun executable. Its
 compile options disable automatic dotenv, bunfig, tsconfig, and package.json
-loading. The process launcher uses this artifact as both its runtime
+loading. Both binaries compile to ESM bytecode, so a start does not parse
+the embedded bundle (`bin/gent` 0.41 s to 0.05 s before its first module
+runs; the worker 36 ms to 18 ms to its `Ready` frame); the bytecode belongs to
+the Bun each binary embeds. The process launcher uses this artifact as both its runtime
 and worker path. Turbo caches core's `dist` output and both TUI binaries. The
 TUI task hashes its build script. Run the root build for dependency ordering.
 This is a packaged worker, not a daemon or a new session owner.
@@ -1617,6 +1620,13 @@ fetched from npm. The bound specifiers are exact:
   `packages/extensions/tests/index.test.ts` derives that set from the sources
   and fails when the map differs, so a shipped extension never reads a module
   a user extension cannot. A user extension is as capable as a shipped one.
+  The provider SDKs (`@effect/ai-anthropic`, `-openai`, `-openai-compat`,
+  `-typesafe`) bind lazily: a shipped driver imports its SDK at its first model
+  build, and a user extension's import loads it then too, so a launch does not
+  evaluate their generated schemas (compiled launch module evaluation 122 ms
+  to 79 ms). A binding loads its SDK through the `#unbound/*` alias in
+  `packages/extensions/package.json`: once bound, the SDK's own name resolves
+  to the binding, which would import itself.
 - Client files only: `@gent/core/protocol`, `@gent/tui/extensions`,
   `@gent/extensions/client` (the shipped extensions' RPCs, ids and message
   types), `solid-js`, `solid-js/store` and `@opentui/solid`. A test in

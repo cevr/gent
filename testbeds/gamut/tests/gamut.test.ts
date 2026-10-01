@@ -529,7 +529,7 @@ describe("gamut reads the schema gent migrates", () => {
       expect(latestEventId(db)).toBe(0)
     }).pipe(
       Effect.scoped,
-      Effect.provide(testSqliteStorage(() => Layer.empty, {})),
+      Effect.provide(testSqliteStorage(Layer.empty, {})),
       Effect.timeout("10 seconds"),
     ),
   )

@@ -5,10 +5,6 @@ import {
   LoadedArtifactIdentity,
 } from "@gent/core/extensions/api"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
-import * as EffectAiAnthropic from "@effect/ai-anthropic"
-import * as EffectAiOpenAi from "@effect/ai-openai"
-import * as EffectAiOpenAiCompat from "@effect/ai-openai-compat"
-import * as EffectAiTypeSafe from "@effect/ai-typesafe"
 import * as EffectPlatformBun from "@effect/platform-bun"
 import * as EffectRoot from "effect"
 import * as EffectAi from "effect/ai"
@@ -121,15 +117,25 @@ export const BuiltinExtensions: ReadonlyArray<
  * does, and gets the same instances. The keys are exactly the specifiers the
  * shipped extensions import; `tests/index.test.ts` derives that set from their
  * sources and fails when the two differ.
+ *
+ * The provider SDKs load when a module first imports them, as the shipped
+ * drivers load them: their generated schemas cost a launch time to evaluate.
+ * Each loads through its `#unbound/*` alias (`package.json` `imports`): after
+ * the bind, its own name resolves to this binding, and the binding would
+ * import itself.
  */
-export const BuiltinExtensionModules: ReadonlyMap<string, () => object> = new Map<
+export const BuiltinExtensionModules: ReadonlyMap<string, () => object | Promise<object>> = new Map<
   string,
-  () => object
+  () => object | Promise<object>
 >([
-  ["@effect/ai-anthropic", () => EffectAiAnthropic],
-  ["@effect/ai-openai", () => EffectAiOpenAi],
-  ["@effect/ai-openai-compat", () => EffectAiOpenAiCompat],
-  ["@effect/ai-typesafe", () => EffectAiTypeSafe],
+  // oxlint-disable-next-line effect/noDynamicImports -- the SDK loads when a module first imports it, not at launch
+  ["@effect/ai-anthropic", () => import("#unbound/ai-anthropic")],
+  // oxlint-disable-next-line effect/noDynamicImports -- the SDK loads when a module first imports it, not at launch
+  ["@effect/ai-openai", () => import("#unbound/ai-openai")],
+  // oxlint-disable-next-line effect/noDynamicImports -- the SDK loads when a module first imports it, not at launch
+  ["@effect/ai-openai-compat", () => import("#unbound/ai-openai-compat")],
+  // oxlint-disable-next-line effect/noDynamicImports -- the SDK loads when a module first imports it, not at launch
+  ["@effect/ai-typesafe", () => import("#unbound/ai-typesafe")],
   // oxlint-disable-next-line effect/noPlatformLayerOutsideEntry -- a user extension resolves @effect/platform-bun here to share the instances a shipped extension imports; it provides no layer
   ["@effect/platform-bun", () => EffectPlatformBun],
   ["effect", () => EffectRoot],

@@ -1,6 +1,5 @@
 import { Database } from "bun:sqlite"
 import { type Cause, Effect, Option, Schema } from "effect"
-import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 
 /*
  * The TUI's whole Bun edge: the only TUI file that reads `Bun.*` or a `bun:`
@@ -56,6 +55,18 @@ export interface ClientBuildNames {
 }
 
 /**
+ * OpenTUI's Solid plugin, loaded on the first client build: it loads Babel,
+ * which a launch with no client extension file never needs. Each build
+ * imports it; the module registry keeps the loaded module, and an
+ * interrupted build leaves nothing behind for the next one to read.
+ */
+const loadSolidPlugin = Effect.tryPromise({
+  // oxlint-disable-next-line effect/noDynamicImports -- Babel loads only when a client extension file compiles
+  try: () => import("@opentui/solid/bun-plugin"),
+  catch: (cause) => new ClientExtensionBuildError({ cause }),
+})
+
+/**
  * Compile a client file and the relative modules it imports as the build
  * compiles the shipped ones (Solid JSX). Each client-only import is renamed
  * and kept external; a name in `external` stays an import too. The result is
@@ -65,32 +76,34 @@ export const buildClientExtension = (
   filePath: string,
   names: ClientBuildNames,
 ): Effect.Effect<string, ClientExtensionBuildError> =>
-  Effect.tryPromise({
-    try: () =>
-      Bun.build({
-        entrypoints: [filePath],
-        target: "bun",
-        format: "esm",
-        external: [...names.external],
-        plugins: [
-          {
-            name: "gent-client-modules",
-            setup: (build) => {
-              build.onResolve({ filter: /^[^./]/ }, (args) =>
-                Option.getOrUndefined(
-                  Option.map(names.rename(args.path), (path) => ({ path, external: true })),
-                ),
-              )
+  Effect.flatMap(loadSolidPlugin, ({ createSolidTransformPlugin }) =>
+    Effect.tryPromise({
+      try: () =>
+        Bun.build({
+          entrypoints: [filePath],
+          target: "bun",
+          format: "esm",
+          external: [...names.external],
+          plugins: [
+            {
+              name: "gent-client-modules",
+              setup: (build) => {
+                build.onResolve({ filter: /^[^./]/ }, (args) =>
+                  Option.getOrUndefined(
+                    Option.map(names.rename(args.path), (path) => ({ path, external: true })),
+                  ),
+                )
+              },
             },
-          },
-          createSolidTransformPlugin({
-            moduleName: names.solidRuntime,
-            resolvePath: (specifier) => Option.getOrNull(names.rename(specifier)),
-          }),
-        ],
-      }),
-    catch: (cause) => new ClientExtensionBuildError({ cause }),
-  }).pipe(
+            createSolidTransformPlugin({
+              moduleName: names.solidRuntime,
+              resolvePath: (specifier) => Option.getOrNull(names.rename(specifier)),
+            }),
+          ],
+        }),
+      catch: (cause) => new ClientExtensionBuildError({ cause }),
+    }),
+  ).pipe(
     Effect.flatMap((result) =>
       Option.match(
         Option.filter(Option.fromNullishOr(result.outputs[0]), () => result.success),
