@@ -58,8 +58,11 @@ and the tool calls on the same message as the text.
 The patch adds a model config option, `replayReasoning`, off by default and
 stripped from the request body. Off, the request is the upstream SDK's. On,
 a reasoning part without an id stays a reasoning item, and `toChatMessages`
-puts its text in `reasoning_content` on the next assistant message. A tool
-call joins the assistant message before it. Only the OpenCode driver
+puts its text in `reasoning_content` on that prompt message's assistant
+message. A tool call joins the assistant message before it in the same
+prompt message. A `message_boundary` item marks where each prompt message
+starts, so reasoning a reply ended on never reaches a later reply. Only the
+OpenCode driver
 (`packages/extensions/src/opencode.ts`) turns it on, then moves the text to
 the field the model's models.dev entry names (`interleaved.field`), or drops
 it when the entry names none.

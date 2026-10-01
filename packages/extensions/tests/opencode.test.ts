@@ -587,6 +587,59 @@ describe("OpenCode reasoning", () => {
       expect(calls.map((call) => call.id)).toEqual(["call_read"])
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
+
+  // A reply cut off after its reasoning leaves an assistant message with no
+  // text; that reasoning belongs to it alone, not to a later reply.
+  it.live("reasoning stays with its own assistant message, not the messages after it", () =>
+    Effect.gen(function* () {
+      const { go } = yield* fixtureDrivers
+      const conversation = Prompt.make([
+        { role: "user", content: "first question" },
+        {
+          role: "assistant",
+          content: [Prompt.makePart("reasoning", { text: "cut off mid thought" })],
+        },
+        { role: "user", content: "new question" },
+        { role: "assistant", content: [Prompt.makePart("text", { text: "unrelated answer" })] },
+        {
+          role: "assistant",
+          content: [
+            Prompt.makePart("tool-call", {
+              id: "call_read",
+              name: "read",
+              params: { path: "a.txt" },
+              providerExecuted: false,
+            }),
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            Prompt.makePart("tool-result", {
+              id: "call_read",
+              name: "read",
+              result: "alpha",
+              isFailure: false,
+              providerExecuted: false,
+            }),
+          ],
+        },
+      ])
+      const state = makeFakeFetchState()
+      yield* generate(go, "glm-5.3", state, { cacheKey: "s" }, conversation)
+      const assistants = yield* assistantMessages(lastRequest(state))
+      expect(
+        assistants.map((message) => ({
+          content: message["content"],
+          reasoning: message["reasoning_content"],
+          calls: "tool_calls" in message,
+        })),
+      ).toEqual([
+        { content: "unrelated answer", reasoning: "", calls: false },
+        { content: externalWireNull, reasoning: "", calls: true },
+      ])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
 })
 
 const ToolCalls = Schema.Array(Schema.Struct({ id: Schema.String }))
