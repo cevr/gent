@@ -24,6 +24,7 @@ import {
 } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
+  type ExitSignal,
   type HeadlessOptions,
   makeCliTeardown,
   renderHeadlessToolCall,
@@ -691,7 +692,7 @@ const exitCodeOf = (
   return code
 }
 
-const interruptedBy = (signal: Option.Option<"SIGINT" | "SIGTERM">, headless: boolean) =>
+const interruptedBy = (signal: Option.Option<ExitSignal>, headless: boolean) =>
   makeCliTeardown({ signal: () => signal, interactive: () => !headless })
 
 describe("headless readiness", () => {
@@ -708,8 +709,9 @@ describe("headless readiness", () => {
 })
 
 describe("CLI teardown", () => {
-  test("a signal ends a headless run non-zero: 130 for SIGINT, 143 for SIGTERM", () => {
+  test("a signal ends a headless run with 128 plus its signal number", () => {
     const interrupted = Exit.failCause(Cause.interrupt())
+    expect(exitCodeOf(interruptedBy(Option.some("SIGHUP"), true), interrupted)).toBe(129)
     expect(exitCodeOf(interruptedBy(Option.some("SIGINT"), true), interrupted)).toBe(130)
     expect(exitCodeOf(interruptedBy(Option.some("SIGTERM"), true), interrupted)).toBe(143)
   })
@@ -717,6 +719,7 @@ describe("CLI teardown", () => {
   test("a signal ends the TUI cleanly", () => {
     const interrupted = Exit.failCause(Cause.interrupt())
     expect(exitCodeOf(interruptedBy(Option.some("SIGINT"), false), interrupted)).toBe(0)
+    expect(exitCodeOf(interruptedBy(Option.some("SIGHUP"), false), interrupted)).toBe(0)
   })
 
   test("a headless run that answered exits 0, and one that failed exits 1", () => {
