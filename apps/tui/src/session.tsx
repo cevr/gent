@@ -1273,29 +1273,21 @@ export function usePromptHistory(): PromptHistory {
 // ── autocomplete frecency hook ──────────────────────────────────────────────
 
 /**
- * The live pick history behind the composer's autocomplete ranking.
+ * The pick history behind the composer's autocomplete ranking.
  *
- * One store serves every prefix and every session. The value lives in
- * the frecency store in `autocomplete.ts` rather than here, because two surfaces
- * record picks — this hook for `/` commands, and the `$` skills extension —
- * and a cache owned by one of them goes stale the moment the other writes.
- * A snapshot loaded once and written back on every `/` pick would erase
- * whatever `$` wrote in between.
+ * One file serves every prefix and every session. Two surfaces record picks
+ * into it — this hook for `/` commands, and the `$` skills extension — so the
+ * hook keeps no store of its own: a copy owned by one surface goes stale the
+ * moment the other writes.
  *
- * So this hook keeps no store of its own. It reads the shared snapshot for
- * ranking and delegates every write to `recordFrecencyPick`, which folds the
- * pick into what is actually on disk under a single-permit gate.
+ * `lookup` reads the file each time ranking runs (`readFrecencyLookup`), so a
+ * pick recorded anywhere ranks on the next keystroke. A missing or unreadable
+ * file answers zero for every row, as a reader with no history gets: the
+ * popup ranks by match quality.
  *
- * Ranking stays synchronous. It runs inside the popup's resource callback,
- * which Solid runs under `untrack`, so nothing read there can make the popup
- * re-rank. The lookup is therefore a plain map read of the shared snapshot,
- * re-done on the next keystroke, which is when a new ranking is wanted anyway.
- * Until the first load lands it answers zero, which is the same thing it
- * answers for a reader with no history: the popup ranks by match quality and
- * nothing waits.
- *
- * Writes never block the keystroke path either. `cast` forks the write onto
- * the client runtime and returns immediately.
+ * Every write goes through `recordFrecencyPick`, which folds the pick into
+ * what is on disk under a single-permit gate. `cast` forks the write onto the
+ * client runtime, so it never blocks the keystroke path.
  */
 
 interface AutocompleteFrecency {

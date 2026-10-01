@@ -253,7 +253,7 @@ const writeFrecencyStore = (
 /**
  * Serializes the read-modify-write below.
  *
- * Every surface that records picks (`/` commands, `$` skills, `@` files)
+ * Every surface that records picks (`/` commands, `$` skills)
  * writes through this one gate. One permit means the file is read, folded
  * and written as one step, so a pick from one surface never writes a stale
  * store over a pick from another. It is a module singleton because the thing
