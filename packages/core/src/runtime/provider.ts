@@ -117,6 +117,8 @@ type AuthSource = typeof AuthSource.Type
 
 export const AuthProviderInfo = Schema.Struct({
   provider: ProviderId,
+  /** The driver's display name ("OpenCode Go"); a client shows it in place of the id. */
+  name: Schema.optional(Schema.String),
   hasKey: Schema.Boolean,
   source: Schema.optional(AuthSource),
   authType: Schema.optional(AuthMethod.fields.type),
@@ -438,19 +440,27 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
   const providers: AuthProviderInfo[] = []
   for (const driver of registry.getResolved().modelDrivers.values()) {
     const provider = ProviderId.make(driver.id)
+    const name = driver.name
     const storedInfo = yield* auth.get(driver.id)
     if (Predicate.isUndefined(storedInfo)) {
       // Drivers try a stored credential first, then their env variable.
       const fromEnv = yield* envCredentialSet(Option.fromUndefinedOr(driver.envCredential))
       if (fromEnv) {
-        providers.push({ provider, hasKey: true, source: "env", required: required.has(driver.id) })
+        providers.push({
+          provider,
+          name,
+          hasKey: true,
+          source: "env",
+          required: required.has(driver.id),
+        })
         continue
       }
-      providers.push({ provider, hasKey: false, required: required.has(driver.id) })
+      providers.push({ provider, name, hasKey: false, required: required.has(driver.id) })
       continue
     }
     providers.push({
       provider,
+      name,
       hasKey: true,
       source: "stored",
       authType: storedInfo.type,

@@ -968,6 +968,18 @@ describe("listAuthProviders", () => {
       expect(result.find((p) => p.provider === "openai")?.hasKey).toBe(false)
     }),
   )
+
+  it.live("every provider carries its driver's display name", () =>
+    Effect.gen(function* () {
+      const result = yield* list({ anthropic: apiInfo("sk-test") }, [opus])
+      expect(result.map((p) => [p.provider, p.name])).toEqual([
+        ["anthropic", "Anthropic"],
+        ["openai", "OpenAI"],
+        ["google", "Google"],
+        ["mistral", "Mistral"],
+      ])
+    }),
+  )
 })
 
 // ── provider auth ───────────────────────────────────────────────────────────
