@@ -32,7 +32,7 @@ import {
   usePickerBody,
   usePickerGeometry,
 } from "./ui"
-import { formatError, plural, type UiError } from "./utils"
+import { formatError, plural, repliesInView, type ReplyWriter, type UiError } from "./utils"
 import {
   pastedLine,
   type ScopedKeyboardEvent,
@@ -54,7 +54,7 @@ import {
  *
  * The state has no loading screen and no in-flight flags: an RPC that is
  * in flight shows as the screen not having changed yet, and the route's
- * version counter decides whether its reply still counts.
+ * reply writer (`repliesInView`) decides whether its reply still counts.
  *
  * The state holds no cursor: `SelectList` owns the selected row for
  * both the provider list and the method list, so a screen below the list
@@ -339,7 +339,8 @@ export function Auth(props: AuthProps) {
 
   // ── Staleness ─────────────────────────────────────────────────────
 
-  let version = 0
+  // Each action is the newest read: its replies count until the next action.
+  const actions = repliesInView(() => sessionId)
   let successTimer = Option.none<Fiber.Fiber<void, never>>()
   /**
    * The browser leg of an `auto` flow. The server holds the login, and its
@@ -368,10 +369,8 @@ export function Auth(props: AuthProps) {
   const begin = () => {
     clearSuccess()
     stopBrowserWait()
-    version += 1
-    return version
+    return actions.take()
   }
-  const isCurrent = (captured: number) => captured === version
 
   /** Shows `note` in the note row for two seconds. */
   const flash = (note: string) => {
@@ -392,19 +391,16 @@ export function Auth(props: AuthProps) {
   }
   const flashSuccess = (message: string) => flash(`✓ ${message}`)
 
-  /** Run `body` only while the action that captured `token` is still current. */
-  const whileCurrent = (token: number, body: () => void) =>
-    Effect.sync(() => {
-      if (!isCurrent(token)) return
-      body()
-    })
+  /** Run `body` only while the action that took `token` is still current. */
+  const whileCurrent = (token: ReplyWriter, body: () => void) =>
+    Effect.sync(() => token.write(body))
 
-  const failed = (token: number) => (err: UiError) =>
+  const failed = (token: ReplyWriter) => (err: UiError) =>
     whileCurrent(token, () => send(AuthEvent.cases.Failed.make({ error: formatError(err) })))
 
   // ── Loading ───────────────────────────────────────────────────────
 
-  const loadAuth = (token: number) => {
+  const loadAuth = (token: ReplyWriter) => {
     clientCtx.log.info("auth:load-start")
     const request = omitUndefined({
       agentName: Option.getOrUndefined(clientCtx.agent()),
@@ -518,7 +514,7 @@ export function Auth(props: AuthProps) {
    * flow: a headless machine has no browser, and the device-code flow exists
    * for exactly that machine. The screen keeps the URL and says to open it.
    */
-  const openAuthorization = (token: number, url: string) =>
+  const openAuthorization = (token: ReplyWriter, url: string) =>
     Effect.gen(function* () {
       clientCtx.log.info("auth:open-authorization", { url })
       const opener = yield* LinkOpener
@@ -534,7 +530,7 @@ export function Auth(props: AuthProps) {
 
   /** The browser leg of an `auto` flow; a failure leaves a code to paste. */
   const awaitBrowserCallback = (
-    token: number,
+    token: ReplyWriter,
     provider: string,
     methodIndex: number,
     authorizationId: string,
@@ -605,13 +601,13 @@ export function Auth(props: AuthProps) {
           }),
         ),
         Effect.tap((authorization) => {
-          if (!isCurrent(token)) return Effect.void
+          if (!token.live()) return Effect.void
           const result = Option.fromNullishOr(authorization)
           if (Option.isNone(result) || result.value.method === "done") return Effect.void
           return openAuthorization(token, result.value.url).pipe(
             Effect.andThen(
               Effect.sync(() => {
-                if (!isCurrent(token) || result.value.method !== "auto") return
+                if (!token.live() || result.value.method !== "auto") return
                 awaitBrowserCallback(token, provider, methodIndex, result.value.authorizationId)
               }),
             ),
@@ -844,9 +840,9 @@ export function Auth(props: AuthProps) {
   // The note says copied for a copy some route took, and otherwise how to
   // copy instead. A note for a screen the reader has since left is dropped.
   const copyUrl = (current: OAuthScreen) => {
-    const token = version
+    const token = actions.newest()
     copyToClipboard(current.authorization.url, (taken) => {
-      if (!isCurrent(token)) return
+      if (!token.live()) return
       if (taken) return flashSuccess("URL copied to the clipboard")
       flash("Could not reach the clipboard — select the URL instead")
     })

@@ -168,6 +168,42 @@ export const isConversation = (
   session: Pick<Session, "id" | "parentSessionId" | "threadId">,
 ): boolean => Predicate.isUndefined(session.parentSessionId) || session.threadId !== session.id
 
+/** The writer of one read's reply. */
+export interface ReplyWriter {
+  /** The read is the newest one, and the view still shows the key it was taken under. */
+  readonly live: () => boolean
+  /** Apply `apply` while the read is `live`; otherwise drop it. */
+  readonly write: (apply: () => void) => void
+}
+
+/**
+ * The one writer path for replies to the reads a view starts. `take` starts a
+ * read and captures the view's key (a session identity); its writer applies
+ * the reply only while that read is the newest and the view still shows that
+ * key. A reply for a session the view left, or for a read a newer one
+ * replaced, changes nothing. `newest` is the newest read's writer, for a
+ * reply that belongs to it without starting another.
+ */
+export const repliesInView = <K>(
+  key: () => K,
+  same: (left: K, right: K) => boolean = (left, right) => left === right,
+) => {
+  let newest = 0
+  const writer = (read: number, captured: K): ReplyWriter => {
+    const live = () => read === newest && same(key(), captured)
+    return {
+      live,
+      write: (apply) => {
+        if (live()) apply()
+      },
+    }
+  }
+  return {
+    take: (): ReplyWriter => writer(++newest, key()),
+    newest: (): ReplyWriter => writer(newest, key()),
+  }
+}
+
 // ── size formatting ─────────────────────────────────────────────────────────
 
 /** `512 B`, `7.2 KB`, `1.5 MB`: the doctor's database size and a write's receipt. */

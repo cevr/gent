@@ -66,6 +66,7 @@ import {
   formatError,
   type PathPlace,
   randomId,
+  repliesInView,
   SEND_RETRY,
   type UiError,
   useRequiredContext,
@@ -910,7 +911,7 @@ export function ClientProvider(props: ClientProviderProps) {
     activeSessionId(),
   ]
 
-  let extensionHealthLoadVersion = 0
+  const healthReplies = repliesInView(activeSessionId)
   // Health can change while the session stays: a settings change (a model its
   // extension needs) or an extension's own pulse. Both invalidate it
   // explicitly; a rename, which also rebuilds the record, does not.
@@ -928,7 +929,7 @@ export function ClientProvider(props: ClientProviderProps) {
     on(
       healthKey,
       ([epoch, sessionId]) => {
-        const version = ++extensionHealthLoadVersion
+        const reply = healthReplies.take()
         if (Option.isNone(epoch)) {
           setExtensionHealth(EMPTY_EXTENSION_HEALTH)
           return
@@ -938,17 +939,15 @@ export function ClientProvider(props: ClientProviderProps) {
         cast(
           client.extension.listStatus(request).pipe(
             Effect.tap((nextHealth) =>
-              Effect.sync(() => {
-                if (version !== extensionHealthLoadVersion) return
-                setExtensionHealth(nextHealth)
-              }),
+              Effect.sync(() => reply.write(() => setExtensionHealth(nextHealth))),
             ),
             Effect.catchEager((error) =>
-              Effect.sync(() => {
-                if (version !== extensionHealthLoadVersion) return
-                setExtensionHealth(EMPTY_EXTENSION_HEALTH)
-                log.warn("extension.health.refresh.failed", { error: String(error) })
-              }),
+              Effect.sync(() =>
+                reply.write(() => {
+                  setExtensionHealth(EMPTY_EXTENSION_HEALTH)
+                  log.warn("extension.health.refresh.failed", { error: String(error) })
+                }),
+              ),
             ),
           ),
         )
@@ -960,10 +959,10 @@ export function ClientProvider(props: ClientProviderProps) {
   // The catalog is the active session's profile: a project model driver
   // appears once that session is active, a disabled one disappears. A load
   // that failed in a dropped connection is read again on the reconnect.
-  let modelCatalogLoadVersion = 0
+  const catalogReplies = repliesInView(activeSessionId)
   createEffect(
     on(connectionAndSession, ([epoch, sessionId]) => {
-      const version = ++modelCatalogLoadVersion
+      const reply = catalogReplies.take()
       if (Option.isNone(epoch)) return
       const request = { sessionId }
       cast(
@@ -972,25 +971,27 @@ export function ClientProvider(props: ClientProviderProps) {
           drivers: client.driver.list(request),
         }).pipe(
           Effect.tap(({ models, drivers }) =>
-            Effect.sync(() => {
-              if (version !== modelCatalogLoadVersion) return
-              const modelsById: Record<string, Model> = {}
-              for (const model of models) modelsById[model.id] = model
-              const agentsByName: Record<string, AgentDefinition> = {}
-              for (const agent of drivers.agents) agentsByName[agent.name] = agent
-              const driverIds = drivers.drivers.map((driver) => driver.id)
-              setModelStore({ modelsById, agentsByName, driverIds, settled: true })
-            }),
+            Effect.sync(() =>
+              reply.write(() => {
+                const modelsById: Record<string, Model> = {}
+                for (const model of models) modelsById[model.id] = model
+                const agentsByName: Record<string, AgentDefinition> = {}
+                for (const agent of drivers.agents) agentsByName[agent.name] = agent
+                const driverIds = drivers.drivers.map((driver) => driver.id)
+                setModelStore({ modelsById, agentsByName, driverIds, settled: true })
+              }),
+            ),
           ),
           Effect.catchEager((err) =>
-            Effect.sync(() => {
-              if (version !== modelCatalogLoadVersion) return
-              const error = formatError(err)
-              log.error("model.list.failed", { error })
-              setAgentStore({ error: Option.some(error) })
-              // A reader waiting for the catalog goes on with what it holds.
-              setModelStore({ settled: true })
-            }),
+            Effect.sync(() =>
+              reply.write(() => {
+                const error = formatError(err)
+                log.error("model.list.failed", { error })
+                setAgentStore({ error: Option.some(error) })
+                // A reader waiting for the catalog goes on with what it holds.
+                setModelStore({ settled: true })
+              }),
+            ),
           ),
         ),
       )
@@ -1044,23 +1045,24 @@ export function ClientProvider(props: ClientProviderProps) {
    * totals come from the fold. `session.get` answers the route without the
    * conversation, so the read does not grow with the session's history.
    */
+  const resolvedReplies = repliesInView(activeSessionId)
   const refreshResolvedSettings = (): void => {
-    const s = session()
+    const reply = resolvedReplies.take()
     cast(
-      client.session.get({ sessionId: s.sessionId }).pipe(
-        Effect.tap((reply) =>
+      client.session.get({ sessionId: activeSessionId() }).pipe(
+        Effect.tap((stored) =>
           Effect.sync(() => {
-            // The session can change while this reply is in flight. Writing it
-            // blind would restore the previous session's model over the new
-            // session's reset values, so a reply for a session the reader
-            // left, or for a session that is gone, is dropped.
-            const view = Option.fromNullishOr(reply)
+            // A reply for a session the reader left, for settings a newer read
+            // replaced, or for a session that is gone, is dropped: written
+            // blind it would restore a model the session no longer resolves.
+            const view = Option.fromNullishOr(stored)
             if (Option.isNone(view)) return
-            if (session().sessionId !== s.sessionId) return
-            setAgentStore({
-              resolvedModelId: Option.fromUndefinedOr(view.value.resolvedModelId),
-              resolvedReasoningLevel: Option.fromUndefinedOr(view.value.resolvedReasoningLevel),
-            })
+            reply.write(() =>
+              setAgentStore({
+                resolvedModelId: Option.fromUndefinedOr(view.value.resolvedModelId),
+                resolvedReasoningLevel: Option.fromUndefinedOr(view.value.resolvedReasoningLevel),
+              }),
+            )
           }),
         ),
         Effect.catchEager(() => Effect.void),

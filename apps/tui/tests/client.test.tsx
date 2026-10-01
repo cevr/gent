@@ -501,6 +501,66 @@ describe("ClientProvider session metrics", () => {
     }),
   )
 
+  it.scopedLive("a route reply a newer read replaced is dropped", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const held = yield* Deferred.make<ModelId>()
+      let reads = 0
+      // The read to hold: the first settings read, after the mount's own.
+      let holdRead = 0
+      const client = createMockClient({
+        session: {
+          get: (input: { sessionId: SessionId }) => {
+            reads += 1
+            const view = (resolvedModelId: ModelId) => ({
+              id: input.sessionId,
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+              resolvedModelId,
+            })
+            // The held read's reply lands after the newer one's.
+            if (reads === holdRead) return Deferred.await(held).pipe(Effect.map(view))
+            return Effect.succeed(view(ModelId.make("anthropic/newer-settings-model")))
+          },
+        },
+      })
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />,
+        {
+          client,
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
+      )
+      const clientContext = yield* requireClient(ctx)
+      holdRead = reads + 1
+      const settingsChanged = (id: number) =>
+        clientContext.applySessionEvent(
+          EventEnvelope.make({
+            id: EventId.make(id),
+            createdAt: 0,
+            event: AgentEvent.cases.SessionSettingsUpdated.make({ sessionId: FIRST.sessionId }),
+          }),
+        )
+      settingsChanged(1)
+      settingsChanged(2)
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(clientContext.model()).toBe(ModelId.make("anthropic/newer-settings-model"))
+
+      // The older read answers last, for settings the session no longer has.
+      yield* Deferred.succeed(held, firstResolvedModel)
+      yield* Effect.promise(() => setup.renderOnce())
+      yield* Effect.promise(() => setup.renderOnce())
+
+      expect(clientContext.model()).toBe(ModelId.make("anthropic/newer-settings-model"))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.scopedLive("live events move the totals on the snapshot's, with no snapshot read", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
