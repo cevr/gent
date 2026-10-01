@@ -1,6 +1,21 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Crypto, Effect, Exit, Layer, Option, Path, Predicate, Schema } from "effect"
-import { HttpClient, HttpClientResponse } from "effect/http"
+import {
+  Cause,
+  Crypto,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Path,
+  Predicate,
+  Redacted,
+  Schema,
+} from "effect"
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
+import {
+  OpenAiClient as OpenAiChatClient,
+  OpenAiLanguageModel as OpenAiChatLanguageModel,
+} from "@effect/ai-openai-compat"
 import { Prompt } from "effect/ai"
 import { BunCrypto, BunFileSystem } from "@effect/platform-bun"
 import {
@@ -540,46 +555,71 @@ describe("OpenCode reasoning", () => {
     () =>
       Effect.gen(function* () {
         const { go } = yield* fixtureDrivers
-        const conversation = Prompt.make([
-          { role: "user", content: "Read a.txt." },
-          {
-            role: "assistant",
-            content: [
-              Prompt.makePart("reasoning", { text: "need the file" }),
-              Prompt.makePart("text", { text: "Reading it." }),
-              Prompt.makePart("tool-call", {
-                id: "call_read",
-                name: "read",
-                params: { path: "a.txt" },
-                providerExecuted: false,
-              }),
-            ],
-          },
-          {
-            role: "tool",
-            content: [
-              Prompt.makePart("tool-result", {
-                id: "call_read",
-                name: "read",
-                result: "alpha",
-                isFailure: false,
-                providerExecuted: false,
-              }),
-            ],
-          },
-        ])
         const state = makeFakeFetchState()
-        yield* generate(go, "glm-5.3", state, { cacheKey: "s" }, conversation)
+        yield* generate(go, "glm-5.3", state, { cacheKey: "s" }, reasonedToolStep)
         const assistants = yield* assistantMessages(lastRequest(state))
         expect(assistants.length).toBe(1)
         expect(assistants[0]?.["reasoning_content"]).toBe("need the file")
         expect(assistants[0]?.["content"]).toBe("Reading it.")
-        const ToolCalls = Schema.Array(Schema.Struct({ id: Schema.String }))
         const calls = yield* Schema.decodeUnknownEffect(ToolCalls)(assistants[0]?.["tool_calls"])
         expect(calls.map((call) => call.id)).toEqual(["call_read"])
       }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
+
+  // The replay is OpenCode's opt-in (`replayReasoning`); every other user of
+  // the compat SDK sends what the unpatched SDK sends.
+  it.live("a compat client without the opt-in sends no reasoning and keeps upstream messages", () =>
+    Effect.gen(function* () {
+      const client = OpenAiChatClient.layer({
+        apiKey: Redacted.make(API_KEY),
+        apiUrl: "https://compat.example/v1",
+      }).pipe(Layer.provide(FetchHttpClient.layer))
+      const model = OpenAiChatLanguageModel.layer({ model: "plain" }).pipe(Layer.provide(client))
+      const state = makeFakeFetchState()
+      yield* oneGenerate(model, state, gatewayReply, reasonedToolStep)
+      const assistants = yield* assistantMessages(lastRequest(state))
+      expect(assistants.map((message) => "reasoning_content" in message)).toEqual([false, false])
+      expect(assistants.map((message) => message["content"])).toEqual([
+        "Reading it.",
+        externalWireNull,
+      ])
+      const calls = yield* Schema.decodeUnknownEffect(ToolCalls)(assistants[1]?.["tool_calls"])
+      expect(calls.map((call) => call.id)).toEqual(["call_read"])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
 })
+
+const ToolCalls = Schema.Array(Schema.Struct({ id: Schema.String }))
+
+/** A step that reasoned, wrote, and called a tool, then the tool's result. */
+const reasonedToolStep = Prompt.make([
+  { role: "user", content: "Read a.txt." },
+  {
+    role: "assistant",
+    content: [
+      Prompt.makePart("reasoning", { text: "need the file" }),
+      Prompt.makePart("text", { text: "Reading it." }),
+      Prompt.makePart("tool-call", {
+        id: "call_read",
+        name: "read",
+        params: { path: "a.txt" },
+        providerExecuted: false,
+      }),
+    ],
+  },
+  {
+    role: "tool",
+    content: [
+      Prompt.makePart("tool-result", {
+        id: "call_read",
+        name: "read",
+        result: "alpha",
+        isFailure: false,
+        providerExecuted: false,
+      }),
+    ],
+  },
+])
 
 // ── prompt caching ──────────────────────────────────────────────────────────
 

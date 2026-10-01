@@ -55,12 +55,15 @@ a new assistant message for a tool call that follows text. DeepSeek, Kimi
 and GLM want their reasoning back on the assistant message that holds it,
 and the tool calls on the same message as the text.
 
-The patch keeps a reasoning part without an id as a reasoning item, and
-`toChatMessages` puts its text in `reasoning_content` on the next assistant
-message. A tool call joins the assistant message before it. The OpenCode
-driver (`packages/extensions/src/opencode.ts`) then moves the text to the
-field the model's models.dev entry names (`interleaved.field`), or drops
+The patch adds a model config option, `replayReasoning`, off by default and
+stripped from the request body. Off, the request is the upstream SDK's. On,
+a reasoning part without an id stays a reasoning item, and `toChatMessages`
+puts its text in `reasoning_content` on the next assistant message. A tool
+call joins the assistant message before it. Only the OpenCode driver
+(`packages/extensions/src/opencode.ts`) turns it on, then moves the text to
+the field the model's models.dev entry names (`interleaved.field`), or drops
 it when the entry names none.
 
 Remove this patch when the SDK sends the reasoning back itself. It patches
-`dist` only; the shipped `src` copy keeps the upstream text.
+`dist` only (the `.js` and the option's type in the `.d.ts`); the shipped
+`src` copy keeps the upstream text.

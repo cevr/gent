@@ -299,13 +299,14 @@ type ChatConfig = NonNullable<Parameters<typeof OpenAiChatLanguageModel.layer>[0
  * The Chat Completions request: `reasoning_effort` from the catalog's effort
  * list (OpenCode sends nothing for a toggle or a budget on this format), and
  * tools without strict schemas, which the OpenAI-compatible upstreams do not
- * all take.
+ * all take. `replayReasoning` is the patched SDK's opt-in: the model's
+ * reasoning goes back on its own assistant message (see `patches/README.md`).
  */
 const chatConfig = (
   hints: Option.Option<ProviderHints>,
   wire: Option.Option<ModelWire>,
 ): ChatConfig => {
-  let config: ChatConfig = { strictJsonSchema: false }
+  let config: ChatConfig = { strictJsonSchema: false, replayReasoning: true }
   const maxTokens = Option.flatMap(hints, (value) => Option.fromNullishOr(value.maxTokens))
   if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
   const temperature = temperatureFor(hints)
