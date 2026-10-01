@@ -2,7 +2,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Option } from "effect"
 import {
-  type ActiveInteraction,
+  type InteractionPresented,
   type ApprovalResult,
   BranchId,
   type CreateSessionInput,
@@ -25,7 +25,7 @@ const interaction = (text: string) =>
     branchId: BranchId.make("b"),
     requestId: InteractionRequestId.make("req-1"),
     text,
-  }) satisfies ActiveInteraction
+  }) satisfies InteractionPresented
 
 describe("AskUserRenderer", () => {
   it.scopedLive("renders structured questions", () =>
@@ -47,7 +47,7 @@ describe("AskUserRenderer", () => {
                     },
                   ],
                 },
-              } satisfies ActiveInteraction
+              } satisfies InteractionPresented
             }
             resolve={(r) => results.push(r)}
           />
@@ -156,7 +156,7 @@ describe("AskUserRenderer answers", () => {
               {
                 ...interaction("fallback question"),
                 metadata: { type: "ask-user", questions },
-              } satisfies ActiveInteraction
+              } satisfies InteractionPresented
             }
             resolve={(r) => results.push(r)}
           />
@@ -379,7 +379,7 @@ describe("PromptRenderer", () => {
                   mode: "confirm",
                   title: "Code Review",
                 },
-              } satisfies ActiveInteraction
+              } satisfies InteractionPresented
             }
             resolve={(r) => results.push(r)}
           />

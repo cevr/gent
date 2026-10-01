@@ -145,6 +145,25 @@ describe("steering prose code blocks", () => {
     expect(guideCodeContextOf("AGENTS.md").modules).toBe("examples/node_modules")
   })
 
+  test("a ts block is read in every fence shape the guards read as a fence", () => {
+    const fences = [
+      ["- a list item", "  ```ts", "  const a = 1", "    const b = 2", "  ```"],
+      ["~~~ts", "const c = 3", "~~~"],
+      ["````ts", "```", "const d = 4", "````"],
+      ["```text title", "prose", "```", "```ts", "const e = 5", "```"],
+    ]
+    expect(
+      fences.map((lines) =>
+        guideCodeBlocks("docs/x.md", lines.join("\n")).map(({ line, code }) => ({ line, code })),
+      ),
+    ).toEqual([
+      [{ line: 3, code: "const a = 1\n  const b = 2" }],
+      [{ line: 2, code: "const c = 3" }],
+      [{ line: 2, code: "```\nconst d = 4" }],
+      [{ line: 5, code: "const e = 5" }],
+    ])
+  })
+
   test("a ts fence quoted inside a fence of another language is not a block", () => {
     expect(guideCodeBlocks("docs/x.md", ["```text", "```ts", "```"].join("\n"))).toEqual([])
   })

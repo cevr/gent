@@ -213,16 +213,23 @@ export function ForkPane(props: {
       </ChromePanel.Section>
     )
   }
+  // Enter on an empty line goes to the fork, as Enter on an agents row goes
+  // to that session.
+  const openOnEnter = () => draft().length === 0 && Option.isSome(props.controller.fork())
+  const enterHint = () => {
+    if (openOnEnter()) return keyHint("enter", "open")
+    return KeyHints.submit
+  }
   const paneKey = (event: Parameters<Parameters<typeof useScopedKeyboard>[0]>[0]) => {
     if (event.name === "escape") {
       props.onClose()
       return true
     }
-    if (event.ctrl === true && event.name === "o") {
-      if (Option.isSome(props.controller.fork())) props.onOpen()
-      return true
-    }
     if (event.name === "return") {
+      if (openOnEnter()) {
+        props.onOpen()
+        return true
+      }
       // A question typed while the fork replies waits in the draft.
       if (!ready()) return true
       const question = draft()
@@ -245,7 +252,8 @@ export function ForkPane(props: {
   const title = () =>
     Option.match(props.controller.fork(), {
       onNone: () => "btw · fork",
-      onSome: (view) => `btw · ${view.name}`,
+      // The fork names itself (`btw: <question>`); a second prefix would double it.
+      onSome: (view) => view.name,
     })
 
   return (
@@ -254,7 +262,7 @@ export function ForkPane(props: {
         error={Option.none()}
         height={height()}
         title={title()}
-        keys={[KeyHints.submit, keyHint("ctrl+o", "open"), KeyHints.close]}
+        keys={[enterHint(), KeyHints.close]}
       >
         <ChromePanel.Body stickToBottom>
           <Show when={fork()}>

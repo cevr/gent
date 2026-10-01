@@ -32,7 +32,7 @@ import {
   usePickerBody,
   usePickerGeometry,
 } from "./ui"
-import { formatError, plural, type UiError } from "./utils"
+import { formatError, plural, repliesInView, type ReplyWriter, type UiError } from "./utils"
 import {
   pastedLine,
   type ScopedKeyboardEvent,
@@ -54,7 +54,7 @@ import {
  *
  * The state has no loading screen and no in-flight flags: an RPC that is
  * in flight shows as the screen not having changed yet, and the route's
- * version counter decides whether its reply still counts.
+ * reply writer (`repliesInView`) decides whether its reply still counts.
  *
  * The state holds no cursor: `SelectList` owns the selected row for
  * both the provider list and the method list, so a screen below the list
@@ -339,27 +339,43 @@ export function Auth(props: AuthProps) {
 
   // ── Staleness ─────────────────────────────────────────────────────
 
-  let version = 0
+  // Each action is the newest read: its replies count until the next action.
+  const actions = repliesInView(() => sessionId)
   let successTimer = Option.none<Fiber.Fiber<void, never>>()
+  /**
+   * The browser leg of an `auto` flow. The server holds the login, and its
+   * loopback port, while this call is in flight, so the screen that started
+   * it ends it: the wait stops when its OAuth screen goes (Esc, a failure,
+   * a finished sign-in) and when the pane closes. A pasted code does not
+   * stop it: the wait may be trading the redirect's one-use grant, and the
+   * server holds the paste behind that trade.
+   */
+  let browserWait = Option.none<{
+    readonly authorizationId: string
+    readonly fiber: Fiber.Fiber<void, never>
+  }>()
 
   const stopSuccessTimer = () => {
     if (Option.isSome(successTimer)) cast(Fiber.interrupt(successTimer.value))
     successTimer = Option.none()
   }
+  const stopBrowserWait = () => {
+    if (Option.isSome(browserWait)) cast(Fiber.interrupt(browserWait.value.fiber))
+    browserWait = Option.none()
+  }
   const clearSuccess = () => {
     stopSuccessTimer()
     setFlashNote(Option.none())
   }
-  // A pane that closes stops the flash's clock with it.
+  // A pane that closes stops the flash's clock and the browser wait with it.
   onCleanup(stopSuccessTimer)
+  onCleanup(stopBrowserWait)
 
   /** Start an action: everything already in flight stops counting. */
   const begin = () => {
     clearSuccess()
-    version += 1
-    return version
+    return actions.take()
   }
-  const isCurrent = (captured: number) => captured === version
 
   /** Shows `note` in the note row for two seconds. */
   const flash = (note: string) => {
@@ -380,19 +396,28 @@ export function Auth(props: AuthProps) {
   }
   const flashSuccess = (message: string) => flash(`✓ ${message}`)
 
-  /** Run `body` only while the action that captured `token` is still current. */
-  const whileCurrent = (token: number, body: () => void) =>
-    Effect.sync(() => {
-      if (!isCurrent(token)) return
-      body()
-    })
+  /** Run `body` only while the action that took `token` is still current. */
+  const whileCurrent = (token: ReplyWriter, body: () => void) =>
+    Effect.sync(() => token.write(body))
 
-  const failed = (token: number) => (err: UiError) =>
+  const failed = (token: ReplyWriter) => (err: UiError) =>
     whileCurrent(token, () => send(AuthEvent.cases.Failed.make({ error: formatError(err) })))
+
+  /**
+   * A finished sign-in leaves its screen before the reload: a code typed
+   * while the catalog reloads has no OAuth screen to go to, so it never
+   * asks the server for the login it already finished.
+   */
+  const signedIn = (token: ReplyWriter, message: string) =>
+    whileCurrent(token, () => {
+      send(AuthEvent.cases.Close.make({}))
+      flashSuccess(message)
+      loadAuth(token)
+    })
 
   // ── Loading ───────────────────────────────────────────────────────
 
-  const loadAuth = (token: number) => {
+  const loadAuth = (token: ReplyWriter) => {
     clientCtx.log.info("auth:load-start")
     const request = omitUndefined({
       agentName: Option.getOrUndefined(clientCtx.agent()),
@@ -506,7 +531,7 @@ export function Auth(props: AuthProps) {
    * flow: a headless machine has no browser, and the device-code flow exists
    * for exactly that machine. The screen keeps the URL and says to open it.
    */
-  const openAuthorization = (token: number, url: string) =>
+  const openAuthorization = (token: ReplyWriter, url: string) =>
     Effect.gen(function* () {
       clientCtx.log.info("auth:open-authorization", { url })
       const opener = yield* LinkOpener
@@ -522,33 +547,32 @@ export function Auth(props: AuthProps) {
 
   /** The browser leg of an `auto` flow; a failure leaves a code to paste. */
   const awaitBrowserCallback = (
-    token: number,
+    token: ReplyWriter,
     provider: string,
     methodIndex: number,
     authorizationId: string,
   ) => {
-    cast(
-      clientCtx.client.auth
-        .callback({
-          sessionId,
-          provider,
-          method: methodIndex,
-          authorizationId,
-        })
-        .pipe(
-          Effect.tap(() =>
-            whileCurrent(token, () => {
-              flashSuccess(`Authenticated ${label(provider)} via OAuth`)
-              loadAuth(token)
-            }),
-          ),
-          Effect.catchEager((err) =>
-            whileCurrent(token, () =>
-              send(AuthEvent.cases.OAuthAutoFailed.make({ error: formatError(err) })),
+    stopBrowserWait()
+    browserWait = Option.some({
+      authorizationId,
+      fiber: clientCtx.runtime.fork(
+        clientCtx.client.auth
+          .callback({
+            sessionId,
+            provider,
+            method: methodIndex,
+            authorizationId,
+          })
+          .pipe(
+            Effect.tap(() => signedIn(token, `Authenticated ${label(provider)} via OAuth`)),
+            Effect.catchEager((err) =>
+              whileCurrent(token, () =>
+                send(AuthEvent.cases.OAuthAutoFailed.make({ error: formatError(err) })),
+              ),
             ),
           ),
-        ),
-    )
+      ),
+    })
   }
 
   const startMethod = (provider: string, methodIndex: number, method: AuthMethod) => {
@@ -590,13 +614,13 @@ export function Auth(props: AuthProps) {
           }),
         ),
         Effect.tap((authorization) => {
-          if (!isCurrent(token)) return Effect.void
+          if (!token.live()) return Effect.void
           const result = Option.fromNullishOr(authorization)
           if (Option.isNone(result) || result.value.method === "done") return Effect.void
           return openAuthorization(token, result.value.url).pipe(
             Effect.andThen(
               Effect.sync(() => {
-                if (!isCurrent(token) || result.value.method !== "auto") return
+                if (!token.live() || result.value.method !== "auto") return
                 awaitBrowserCallback(token, provider, methodIndex, result.value.authorizationId)
               }),
             ),
@@ -608,10 +632,11 @@ export function Auth(props: AuthProps) {
   }
 
   const submitOauth = (screen: OAuthScreen) => {
-    if (screen.waiting) return
     const trimmed = screen.code.trim()
-    // A "code" flow has nothing to send without one; "auto" may be retried bare.
-    if (screen.authorization.method === "code" && trimmed.length === 0) return
+    // A "code" flow has nothing to send without one. An "auto" flow takes a
+    // pasted code while its browser wait runs (the server races the two), and
+    // a bare retry only once that wait has failed.
+    if (trimmed.length === 0 && (screen.authorization.method === "code" || screen.waiting)) return
     const token = begin()
     clientCtx.log.info("auth:submit-oauth", {
       provider: screen.provider,
@@ -634,12 +659,7 @@ export function Auth(props: AuthProps) {
           }),
         )
         .pipe(
-          Effect.tap(() =>
-            whileCurrent(token, () => {
-              flashSuccess(`Authenticated ${label(screen.provider)} via OAuth`)
-              loadAuth(token)
-            }),
-          ),
+          Effect.tap(() => signedIn(token, `Authenticated ${label(screen.provider)} via OAuth`)),
           Effect.catchEager(failed(token)),
         ),
     )
@@ -671,6 +691,15 @@ export function Auth(props: AuthProps) {
     if (current._tag === "Method") return Option.some(current)
     return Option.none()
   }
+
+  // A browser wait lives while its OAuth screen does.
+  createEffect(() => {
+    const current = oauthScreen()
+    if (Option.isNone(browserWait)) return
+    const waitedFor = browserWait.value.authorizationId
+    if (Option.exists(current, (open) => open.authorization.authorizationId === waitedFor)) return
+    stopBrowserWait()
+  })
 
   /** The provider the open method screen is about, if the catalog still has it. */
   const methodProvider = () =>
@@ -773,31 +802,29 @@ export function Auth(props: AuthProps) {
     if (enforced()) return KeyHints.exit
     return KeyHints.close
   }
+  // The row under the cursor: ctrl+x is offered only where a stored key can go.
+  const [cursor, setCursor] = createSignal(Option.none<AuthProviderInfo>())
   const listKeys = () => {
     if (Option.isSome(state().error)) return [keyHint("r", "retry"), listLeave()]
-    return [KeyHints.move, KeyHints.select, KeyHints.delete, listLeave()]
+    if (Option.exists(cursor(), (provider) => provider.source === "stored"))
+      return [KeyHints.move, KeyHints.select, KeyHints.delete, listLeave()]
+    return [KeyHints.move, KeyHints.select, listLeave()]
   }
   const dismissList = () => {
     if (enforced()) return
     Option.map(Option.fromNullishOr(props.onClose), (onClose) => onClose())
   }
-  const emptyList = () => (
-    <text style={{ fg: theme.textMuted }}>
-      <Show when={Option.isSome(state().error)} fallback=" Loading providers...">
-        {" Press r to retry."}
-      </Show>
-    </text>
-  )
+  // An empty list is still loading, unless its load failed: then it says how to retry.
+  const listLoading = () => Option.isNone(state().error)
+  const retryRow = () =>
+    Option.map(state().error, () => <text style={{ fg: theme.textMuted }}> Press r to retry.</text>)
   const keyMask = (value: string) => "*".repeat(value.length)
   const codeLabel = (method: string) => {
     if (method === "code") return "Paste code:"
     return "Paste code (optional):"
   }
   const waitingNote = (current: { readonly waiting: boolean }) =>
-    Option.liftPredicate(
-      "Waiting for sign-in to finish. Paste a code if it fails.",
-      () => current.waiting,
-    )
+    Option.liftPredicate("Waiting for sign-in to finish, or paste a code.", () => current.waiting)
   const instructionLines = (current: { readonly authorization: AuthAuthorization }) =>
     Option.getOrElse(
       Option.fromNullishOr(current.authorization.instructions),
@@ -831,9 +858,9 @@ export function Auth(props: AuthProps) {
   // The note says copied for a copy some route took, and otherwise how to
   // copy instead. A note for a screen the reader has since left is dropped.
   const copyUrl = (current: OAuthScreen) => {
-    const token = version
+    const token = actions.newest()
     copyToClipboard(current.authorization.url, (taken) => {
-      if (!isCurrent(token)) return
+      if (!token.live()) return
       if (taken) return flashSuccess("URL copied to the clipboard")
       flash("Could not reach the clipboard — select the URL instead")
     })
@@ -885,7 +912,6 @@ export function Auth(props: AuthProps) {
           label={codeLabel(bodyProps.current().authorization.method)}
           text={bodyProps.current().code}
           shown={codeLineShown()}
-          caret={!bodyProps.current().waiting}
           onEvent={send}
           onSubmit={() => submitOauth(bodyProps.current())}
           onCancel={close}
@@ -917,7 +943,9 @@ export function Auth(props: AuthProps) {
               send(AuthEvent.cases.OpenMethod.make({ provider: provider.provider }))
             }
             onDismiss={dismissList}
-            empty={emptyList}
+            loading={listLoading}
+            empty={retryRow}
+            onCursor={setCursor}
             extraKeys={(event, selected) => {
               if (event.ctrl === true && event.name === "x") return armOrDelete(selected)
               // Any other key steps back from an armed row; Esc does only that.
@@ -966,7 +994,6 @@ export function Auth(props: AuthProps) {
             <AuthTextLine
               label="API key ›"
               text={keyMask(current().value)}
-              caret={true}
               onEvent={send}
               onSubmit={() => submitKey(current().provider, current().value)}
               onCancel={close}
@@ -1003,7 +1030,6 @@ export function Auth(props: AuthProps) {
 function AuthTextLine(props: {
   readonly label: string
   readonly text: string
-  readonly caret: boolean
   readonly shown?: boolean
   readonly onEvent: (event: AuthEvent) => void
   readonly onSubmit: () => void
@@ -1015,9 +1041,8 @@ function AuthTextLine(props: {
   const { sectionWidth } = usePickerGeometry()
   /** The text that fits after the label and before the caret: its tail, cut with an ellipsis. */
   const visibleText = () => {
-    let caretWidth = 0
-    if (props.caret) caretWidth = 1
-    const room = Math.max(1, sectionWidth() - props.label.length - 1 - caretWidth)
+    // The label, its space and the caret take their columns first.
+    const room = Math.max(1, sectionWidth() - props.label.length - 2)
     const chars = [...props.text]
     if (chars.length <= room) return props.text
     return "…" + chars.slice(chars.length - (room - 1)).join("")
@@ -1062,9 +1087,7 @@ function AuthTextLine(props: {
         <text wrapMode="none" style={{ fg: theme.text }}>
           <span style={{ fg: theme.textMuted }}>{props.label} </span>
           {visibleText()}
-          <Show when={props.caret}>
-            <span style={{ fg: theme.primary }}>│</span>
-          </Show>
+          <span style={{ fg: theme.primary }}>│</span>
         </text>
       </ChromePanel.Section>
     </Show>

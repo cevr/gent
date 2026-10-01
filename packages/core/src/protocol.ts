@@ -10,7 +10,6 @@ export {
 export { AuthMethod } from "./domain/driver.js"
 export { AuthAuthorization, AuthProviderInfo } from "./runtime/provider.js"
 export {
-  type ActiveInteraction,
   AgentEvent,
   EventEnvelope,
   InteractionPresented,

@@ -589,7 +589,7 @@ describe("Agents pane navigation", () => {
       setup.mockInput.pressEscape()
       yield* waitForFrame(setup, () => !open(), "agents pane closed")
       expect(open()).toBe(false)
-      expect(renderFrame(setup)).not.toContain("Agents")
+      expect(renderFrame(setup)).not.toContain("Sessions ·")
     }),
   )
 
@@ -824,13 +824,13 @@ describe("Agents pane navigation", () => {
         />
       ))
 
-      expect(renderFrame(setup)).not.toContain("Agents")
+      expect(renderFrame(setup)).not.toContain("Sessions ·")
 
       setup.mockInput.pressKey("t", { ctrl: true })
       yield* Effect.promise(() => setup.renderOnce())
       expect(toggles).toBe(1)
       expect(open()).toBe(true)
-      expect(renderFrame(setup)).toContain("Agents")
+      expect(renderFrame(setup)).toContain("Sessions ·")
 
       setup.mockInput.pressKey("t", { ctrl: true })
       yield* Effect.promise(() => setup.renderOnce())
@@ -999,7 +999,7 @@ describe("Agents pane framing", () => {
 
         // The title carries its counts, on the first line inside the top rule.
         const top = lines.findIndex((line) => line.startsWith("────"))
-        expect(lines[top + 1]).toContain("Agents · 0 running, 1 idle, 0 inactive")
+        expect(lines[top + 1]).toContain("Sessions · 0 running, 1 idle, 0 inactive")
 
         // One muted footer line, immediately under the bottom rule.
         const bottom = lines.findLastIndex((line) => line.startsWith("────"))
@@ -1305,7 +1305,7 @@ describe("agents pane rows", () => {
           { ...child("stored", "inactive", "root"), updatedAt: now - 2 * 3_600_000 },
         ]
         const setup = yield* paneOver(listed, 43)
-        const frame = yield* waitForFrame(setup, (next) => next.includes("Agents"), "pane")
+        const frame = yield* waitForFrame(setup, (next) => next.includes("Sessions ·"), "pane")
         const lines = frame.split("\n")
         const rule = lines.find((line) => line.startsWith("────")) ?? ""
         const lineOf = (text: string) => lines.findIndex((line) => line.includes(text))
@@ -1473,7 +1473,7 @@ describe("idle middle parent", () => {
         ),
         { width: 100, height: 20 },
       )
-      const frame = yield* waitForFrame(setup, (next) => next.includes("Agents"), "pane")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("Sessions ·"), "pane")
       expect(frame).toContain("1 running, 2 idle, 0 inactive")
       expect(frame).toContain("Running (1)")
       expect(frame).toContain("Idle (2)")

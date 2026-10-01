@@ -6,39 +6,13 @@ import { bashOutputRows, getEditUnifiedDiff, getFiletype } from "../src/tool-ren
 // ── edit utils ──────────────────────────────────────────────────────────────
 
 describe("getFiletype", () => {
-  test("maps common extensions", () => {
-    expect(getFiletype("foo.ts")).toBe("typescript")
-    expect(getFiletype("bar.tsx")).toBe("tsx")
-    expect(getFiletype("baz.js")).toBe("javascript")
-    expect(getFiletype("qux.jsx")).toBe("jsx")
-    expect(getFiletype("script.py")).toBe("python")
-    expect(getFiletype("main.rs")).toBe("rust")
-    expect(getFiletype("main.go")).toBe("go")
-    expect(getFiletype("README.md")).toBe("markdown")
-    expect(getFiletype("config.json")).toBe("json")
-    expect(getFiletype("config.yaml")).toBe("yaml")
-    expect(getFiletype("config.yml")).toBe("yaml")
-    expect(getFiletype("Cargo.toml")).toBe("toml")
-  })
-
-  test("handles case insensitivity", () => {
-    expect(getFiletype("foo.TS")).toBe("typescript")
-    expect(getFiletype("bar.JSON")).toBe("json")
-  })
-
-  test("returns undefined for unknown extensions", () => {
+  // The map itself is data; what a reader sees is the highlighted diff below.
+  // These pin the lookup: by the last extension, any case, and none for an
+  // unknown or missing one.
+  test("reads the last extension in any case, and names nothing it does not know", () => {
+    expect(getFiletype("/path/to/file.test.TS")).toBe("typescript")
     expect(Option.isNone(Option.fromUndefinedOr(getFiletype("foo.xyz")))).toBe(true)
-    expect(Option.isNone(Option.fromUndefinedOr(getFiletype("foo.cpp")))).toBe(true)
-  })
-
-  test("handles paths with multiple dots", () => {
-    expect(getFiletype("/path/to/file.test.ts")).toBe("typescript")
-    expect(getFiletype("foo.bar.baz.json")).toBe("json")
-  })
-
-  test("handles paths without extension", () => {
     expect(Option.isNone(Option.fromUndefinedOr(getFiletype("Makefile")))).toBe(true)
-    expect(Option.isNone(Option.fromUndefinedOr(getFiletype("/bin/bash")))).toBe(true)
   })
 })
 

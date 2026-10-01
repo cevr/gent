@@ -31,14 +31,17 @@ import { buildLogPaths } from "../src/logger"
 
 // ── build fingerprint ───────────────────────────────────────────────────────
 
-// FileSystem.layerNoop whose stat counts its calls; each call answers a new mtime.
-const makeCountingFs = (counter: Ref.Ref<number>): Layer.Layer<FileSystem.FileSystem> =>
+// FileSystem.layerNoop whose stat counts its calls and answers `mtime`.
+const makeCountingFs = (
+  counter: Ref.Ref<number>,
+  mtime: Option.Option<Date>,
+): Layer.Layer<FileSystem.FileSystem> =>
   FileSystem.layerNoop({
     stat: () =>
-      Ref.updateAndGet(counter, (n) => n + 1).pipe(
-        Effect.map((n) => ({
-          type: "File",
-          mtime: Option.some(dateFromMillis(n * 1000)),
+      Ref.update(counter, (n) => n + 1).pipe(
+        Effect.as({
+          type: "File" satisfies "File",
+          mtime,
           atime: Option.none(),
           birthtime: Option.none(),
           dev: 0,
@@ -51,7 +54,7 @@ const makeCountingFs = (counter: Ref.Ref<number>): Layer.Layer<FileSystem.FileSy
           size: ByteSize.zero,
           blksize: Option.none(),
           blocks: Option.none(),
-        })),
+        }),
       ),
   })
 
@@ -79,7 +82,7 @@ const gitFindsNoRepository = Effect.acquireRelease(
  * The services of a compiled gent whose executable is `execPath`, over a
  * filesystem whose stat counts calls. The spawner dies if it reaches git.
  */
-const compiledServices = (execPath: string, counter: Ref.Ref<number>) =>
+const compiledServices = (execPath: string, counter: Ref.Ref<number>, mtime: Option.Option<Date>) =>
   Layer.mergeAll(
     Layer.effect(
       GentPlatform,
@@ -88,7 +91,7 @@ const compiledServices = (execPath: string, counter: Ref.Ref<number>) =>
         return GentPlatform.of({ ...platform, execPath: Effect.succeed(execPath) })
       }),
     ).pipe(Layer.provide(GentPlatform.Test("bf"))),
-    makeCountingFs(counter),
+    makeCountingFs(counter, mtime),
     Path.layer,
     Layer.succeed(
       ChildProcessSpawnerNs.ChildProcessSpawner,
@@ -99,15 +102,31 @@ const compiledServices = (execPath: string, counter: Ref.Ref<number>) =>
   )
 
 describe("buildFingerprint", () => {
-  it.live("a compiled gent installed under ~/.bun/bin names its build by the binary", () =>
+  // `resolveServer` reads the fingerprint once, so the lock entry and the
+  // identity endpoint name one build; the fingerprint itself stats once.
+  it.live("a compiled build names itself by its binary's mtime, in one stat", () =>
+    Effect.gen(function* () {
+      const counter = yield* Ref.make(0)
+      const mtime = dateFromMillis(36_000)
+      const fingerprint = yield* buildFingerprint(Effect.succeed(true)).pipe(
+        Effect.provide(
+          compiledServices("/nonexistent/gent-probe-x/gent", counter, Option.some(mtime)),
+        ),
+      )
+      expect(fingerprint).toBe(`bin-${(36_000).toString(36)}`)
+      expect(yield* Ref.get(counter)).toBe(1)
+    }),
+  )
+
+  // Two builds whose stats both lack an mtime must not share a fingerprint,
+  // or one attaches to the other's server.
+  it.live("a binary whose stat has no mtime names no build", () =>
     Effect.gen(function* () {
       const counter = yield* Ref.make(0)
       const fingerprint = yield* buildFingerprint(Effect.succeed(true)).pipe(
-        Effect.provide(compiledServices("/nonexistent/gent-probe-x/.bun/bin/gent", counter)),
+        Effect.provide(compiledServices("/nonexistent/gent-probe-x/gent", counter, Option.none())),
       )
-      expect(fingerprint).toMatch(/^bin-/)
-      // A compiled build names itself by one stat of its binary.
-      expect(yield* Ref.get(counter)).toBe(1)
+      expect(fingerprint).toBe("unknown")
     }),
   )
 })
@@ -210,30 +229,19 @@ describe("Server Lock", () => {
       ),
   )
 
-  it.scopedLive("a missing or corrupt lock reads as absent", () =>
+  // The entry's server-id guard is covered through `serverLock.stop` below
+  // ("stale-entry cleanup never removes the entry a new owner writes").
+  it.scopedLive("a corrupt lock entry reads as no server", () =>
     provideFs(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const home = yield* makeTmpHomeScoped
-        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
-        yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
-        yield* fs.writeFileString(path.join(home, ".gent", "server.lock"), "not json")
-        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
-      }),
-    ),
-  )
-
-  it.scopedLive("removing a lock needs its server id", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        const entry = makeEntry()
-        yield* serverLockFile.write(home, entry)
-        expect(yield* serverLockFile.remove(home, "wrong-id")).toBe(false)
-        expect(Option.isSome(yield* serverLockFile.read(home))).toBe(true)
-        expect(yield* serverLockFile.remove(home, entry.serverId)).toBe(true)
-        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
+        const { serverLock: entryPath } = yield* dataPaths(home)
+        yield* fs.makeDirectory(path.dirname(entryPath), { recursive: true })
+        // A readable entry under a free kernel lock reads Stale; this one reads as none.
+        yield* fs.writeFileString(entryPath, "not json")
+        expect((yield* serverLock.status(home))._tag).toBe("None")
       }),
     ),
   )
@@ -489,32 +497,32 @@ const lockWithIdentity = (
   })
 
 describe("Server Lock Ownership", () => {
-  /** Start a sqlite server on `home` while the lock names `pid`, which no gent server owns. */
-  const startOverLockNaming = (pid: number) =>
-    Effect.gen(function* () {
-      const home = yield* makeTmpHomeScoped
-      const dbPath = (yield* dataPaths(home)).dbPath
-      const buildFingerprint = yield* ownBuildFingerprint
-      yield* serverLockFile.write(
-        home,
-        makeEntry({ pid, dbPath, buildFingerprint, rpcUrl: "http://127.0.0.1:1/rpc" }),
-      )
-      const { result, signals } = yield* Gent.server({
-        cwd: home,
-        state: Gent.state.sqlite({ home }),
-        provider: Gent.provider.mock(),
-      }).pipe(withSignalTrap)
-      expect(result._tag).toBe("Owned")
-      expect(signals).toEqual([])
-      expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).not.toBe("test-server-1")
-    }).pipe(Effect.timeout("20 seconds"))
-
+  // The lock names a pid no gent server owns: a reused pid. The case of the
+  // new process's own pid is the end of "a crashed server's lock is released
+  // by the OS, even while its pid is reused".
   it.scopedLive("a lock whose pid now belongs to another live process does not block startup", () =>
-    provideFs(startOverLockNaming(process.ppid)),
-  )
-
-  it.scopedLive("a lock that names the new process's own pid does not block startup", () =>
-    provideFs(startOverLockNaming(process.pid)),
+    provideFs(
+      Effect.gen(function* () {
+        const pid = process.ppid
+        const home = yield* makeTmpHomeScoped
+        const dbPath = (yield* dataPaths(home)).dbPath
+        const buildFingerprint = yield* ownBuildFingerprint
+        yield* serverLockFile.write(
+          home,
+          makeEntry({ pid, dbPath, buildFingerprint, rpcUrl: "http://127.0.0.1:1/rpc" }),
+        )
+        const { result, signals } = yield* Gent.server({
+          cwd: home,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        }).pipe(withSignalTrap)
+        expect(result._tag).toBe("Owned")
+        expect(signals).toEqual([])
+        expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).not.toBe(
+          "test-server-1",
+        )
+      }).pipe(Effect.timeout("20 seconds")),
+    ),
   )
 
   it.scopedLive(

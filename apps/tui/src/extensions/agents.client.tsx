@@ -511,12 +511,6 @@ export const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string
     },
   })
 
-/** An empty list means one of two different things; say which. */
-const emptyLabel = (loading: boolean): string => {
-  if (loading) return "loading…"
-  return "no agents"
-}
-
 export function AgentsPane(props: {
   open: boolean
   onClose: () => void
@@ -692,7 +686,7 @@ export function AgentsPane(props: {
       {/* A heading opens each section, so the pane draws more lines than it
           has rows; the frame adds the detail line under them. */}
       <PickerFrame
-        title={`Agents · ${countsLabel(visible())}`}
+        title={`Sessions · ${countsLabel(visible())}`}
         keys={[
           KeyHints.move,
           KeyHints.select,
@@ -745,9 +739,7 @@ export function AgentsPane(props: {
             }
             return false
           }}
-          empty={() => (
-            <text style={{ fg: theme.textMuted }}>{emptyLabel(props.controller.loading())}</text>
-          )}
+          loading={props.controller.loading}
           onSelect={props.onSelect}
           onDismiss={props.onClose}
         />

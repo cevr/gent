@@ -10,6 +10,7 @@ import {
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findProcessNames,
   findEffectVersionDrift,
   findRepoTempDirectories,
   findSharedTestHomes,
@@ -24,7 +25,7 @@ import {
   findStaleSteeringReceipts,
   findSuppressionInventoryFindings,
   findTestLaneDefaults,
-  findTuiSessionIdentityReads,
+  findUnparsedSources,
   findUnadaptedSeams,
   findUnconsumedExports,
   enabledLintRules,
@@ -292,9 +293,10 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findProcessNames,
   findRepoTempDirectories,
   findSharedTestHomes,
-  findTuiSessionIdentityReads,
+  findUnparsedSources,
 ]
 
 const isSourceFile = (file: string): boolean => /\.[cm]?[jt]sx?$/.test(file)

@@ -15,7 +15,7 @@ import {
 import { join as pathJoin, resolve as pathResolve } from "node:path"
 import { Database } from "bun:sqlite"
 import type { ChildProcessSpawner } from "effect/process"
-import { dateFromMillis, GentConnectionError } from "@gent/core/protocol"
+import { GentConnectionError } from "@gent/core/protocol"
 import {
   GentPlatform,
   type BranchStorage,
@@ -141,9 +141,15 @@ export const buildFingerprint = (
 
     if (yield* compiled) {
       const info = yield* fs.stat(yield* platform.execPath).pipe(Effect.option)
-      if (Option.isNone(info)) return UNKNOWN_BUILD
-      const mtime = Option.getOrElse(info.value.mtime, () => dateFromMillis(0))
-      return `bin-${mtime.getTime().toString(36)}`
+      // A binary with no stat, or no mtime, names no build: two such builds
+      // would otherwise share one fingerprint and attach to each other.
+      return Option.match(
+        Option.flatMap(info, (stat) => stat.mtime),
+        {
+          onNone: () => UNKNOWN_BUILD,
+          onSome: (mtime) => `bin-${mtime.getTime().toString(36)}`,
+        },
+      )
     }
 
     const here = yield* path.fromFileUrl(new URL(import.meta.url)).pipe(Effect.option)
@@ -580,6 +586,12 @@ interface OwnedServerInternal {
   readonly serverId: string
 }
 
+/** A server this process built, and the id its lock entry and identity name. */
+interface OwnedServer {
+  readonly server: GentServer
+  readonly serverId: string
+}
+
 /** WeakMap keyed by GentServer object identity — keeps handler context private */
 const ownedInternals = new WeakMap<GentServer, OwnedServerInternal>()
 
@@ -642,7 +654,7 @@ const buildOwnedServer = (
   stateSpec: StateSpec,
   providerSpec: ProviderSpec,
   fingerprint: string,
-): Effect.Effect<GentServer, GentConnectionError, Scope.Scope | LocalPlatform> =>
+): Effect.Effect<OwnedServer, GentConnectionError, Scope.Scope | LocalPlatform> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope
     const platform = yield* GentPlatform
@@ -757,7 +769,7 @@ const buildOwnedServer = (
       serverId,
     })
 
-    return server
+    return { server, serverId }
   })
 
 // ── Probe an existing server via identity endpoint ──
@@ -838,7 +850,7 @@ const resolveServerInternal = (
 
     // Memory state has nothing to share: owned outright, no lock.
     if (stateSpec._tag === "Memory") {
-      return yield* buildOwnedServer(options, stateSpec, providerSpec, fingerprint)
+      return (yield* buildOwnedServer(options, stateSpec, providerSpec, fingerprint)).server
     }
 
     // SQLite state: one server per database, decided by the kernel lock. A
@@ -918,16 +930,16 @@ const startOwnedServer = (
     const platform = yield* GentPlatform
     const osInfo = yield* platform.osInfo
     const pid = yield* platform.pid
-    const server = yield* buildOwnedServer(options, stateSpec, providerSpec, fingerprint)
-    const internal = yield* Effect.fromOption(getOwnedInternal(server)).pipe(
-      Effect.mapError(
-        () => new GentConnectionError({ message: "owned server internal state missing" }),
-      ),
+    const { server, serverId } = yield* buildOwnedServer(
+      options,
+      stateSpec,
+      providerSpec,
+      fingerprint,
     )
     yield* serverLockFile.write(
       home,
       new ServerLockEntry({
-        serverId: internal.serverId,
+        serverId,
         pid,
         hostname: osInfo.hostname,
         rpcUrl: server.url,
@@ -937,8 +949,6 @@ const startOwnedServer = (
       }),
     )
     // The entry goes before the kernel lock is released: finalizers run in reverse.
-    yield* Effect.addFinalizer(() =>
-      serverLockFile.remove(home, internal.serverId).pipe(Effect.ignore),
-    )
+    yield* Effect.addFinalizer(() => serverLockFile.remove(home, serverId).pipe(Effect.ignore))
     return server
   })

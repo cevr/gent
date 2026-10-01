@@ -97,15 +97,17 @@ updates this list in the same commit.
     Effect (OS info, executable path, home directory) stay on `GentPlatform`.
     The lint holds the edge outside the platform impl, the adapters, the
     tooling and test code: `effect/noGlobals` and `effect/noNodeBuiltinImport`
-    ban `Bun.*`, the `bun` module, `process.execPath`, `kill`, `pid` and
-    `platform`, and `os.homedir`, `hostname` and `release`, read as a global
-    or through an import, and in core and
-    shipped-extension source also `process.cwd` and the `os`, `crypto` and
-    `url` modules. `effect/noGlobals` follows each global through
+    ban `Bun.*`, the `bun` and `crypto` modules, `process.execPath`, `kill`,
+    `pid` and `platform`, and `os.homedir`, `hostname` and `release`, read as
+    a global or through an import, and in core and shipped-extension source
+    also `process.cwd` and the `os` and `url` modules. `effect/noGlobals`
+    follows each global through
     `globalThis`, computed members and local aliases, and `effect/noReflectGet`
     holds `Reflect.get`. `gent/no-hand-rolled-module-path` keeps core and
     shipped-extension source from reading a file path off
-    `new URL(import.meta.url)`.
+    `new URL(import.meta.url)` or `new URL("./x.ts", import.meta.url)`, or
+    off the host's `import.meta` path facts (`dir`, `dirname`, `filename`,
+    `path`).
     `effect/noPlatformLayerOutsideEntry` keeps the Bun platform layers in the
     platform entry files, and reports a platform module or member a file
     exports.
@@ -219,8 +221,7 @@ names the decision that left it open.
 
 ```text
 apps/
-├── tui/       # OpenTUI client over the shared transport contract
-└── server/    # HTTP + RPC adapter over the same app services
+└── tui/       # OpenTUI client over the shared transport contract
 
 packages/
 ├── core/          # entries: extensions/api, extensions/branch-tools, protocol, host, test-utils
@@ -1766,7 +1767,9 @@ Use the smallest honest boundary:
 
 **Banned test control flow**: test files do not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive` and scoped Effect resources so finalizers run under the test runtime.
 
-**Names describe behavior**: active test modules are behavior-named. Historical process names belong only in `plans/` and dated audit receipts.
+**Names describe behavior**: active test modules are behavior-named. Historical process names belong only in `plans/` and dated audit receipts; a guard (`findProcessNames` in `packages/tooling/src/guards.ts`) refuses a ledger id or a pass name in source and tests.
+
+**Lint strength never drops**: the guards read source through `oxc-parser`, the parser oxlint uses, so a comment, a string and code are told apart as oxlint tells them; a file oxc cannot parse is a finding. When a gent rule retires for an upstream one, its invalid lines stay in `packages/tooling/fixtures/held/`, each marked with the rule that holds it now, and `packages/tooling/tests/gent-rules.test.ts` lints them with the repo's own config. The TUI rule that a reactive scope tracks the session identity, not the record, is the oxlint rule `gent/no-tracked-session-record`.
 
 ### Commands
 
@@ -1850,7 +1853,7 @@ Log destinations:
 - `<hash>-<ts>-client.log` — TUI-side JSON lines (`clientLog` and `clientTraceLogger` in `apps/tui/src/client.tsx`); `<hash>` names the cwd, `<ts>` the process start
 - Spans go to an OTLP endpoint when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (`GentTracerLive`); no trace file is written
 
-Request-ID correlation: TUI generates `crypto.randomUUID()` at `sendMessage`/`createSession`, passes via `requestId` field in transport contract. Server threads into log annotations and RPC wide event boundaries.
+Request-ID correlation: TUI generates a request id with `randomId` (`apps/tui/src/utils.ts`, Effect `Random`) at `sendMessage`/`createSession`, passes via `requestId` field in transport contract. Server threads into log annotations and RPC wide event boundaries.
 
 ## Non-Goals
 

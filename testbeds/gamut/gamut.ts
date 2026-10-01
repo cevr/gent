@@ -727,8 +727,8 @@ const read = async (lines: number) => {
  * What the run's own events say: whether any turn has started, and which
  * sessions have a turn that has not ended. A turn starts with a user-role
  * `MessageReceived` (a prompt, a wake, a child's completion) or a
- * `StreamStarted`. It ends with `TurnCompleted`, or with `ErrorOccurred` when
- * it fails. The pane shows the agents tray only while it is on screen, so a
+ * `StreamStarted`. It ends with `TurnCompleted` alone, a failed turn too.
+ * The pane shows the agents tray only while it is on screen, so a
  * child still working can be invisible there; the events are the record.
  */
 export interface RunRecord {
@@ -749,6 +749,12 @@ export interface RunRecord {
 const TURN_START = `(event_tag = 'StreamStarted'
   OR (event_tag = 'MessageReceived' AND json_extract(event_json, '$.message.role') = 'user'))`
 
+/**
+ * The sessions with a turn started after their last `TurnCompleted`. Every
+ * admitted turn ends with exactly one `TurnCompleted`; an `ErrorOccurred` may
+ * be a notice in a turn that goes on (context-overflow recovery, a compaction
+ * fallback), so it ends nothing.
+ */
 export const openTurnSessions = (db: Database): ReadonlyArray<string> =>
   decodeRows(
     Schema.Struct({ session_id: Schema.String }),
@@ -756,7 +762,7 @@ export const openTurnSessions = (db: Database): ReadonlyArray<string> =>
       .query(
         `SELECT session_id FROM events GROUP BY session_id
          HAVING MAX(CASE WHEN ${TURN_START} THEN id END)
-           > COALESCE(MAX(CASE WHEN event_tag IN ('TurnCompleted', 'ErrorOccurred') THEN id END), 0)`,
+           > COALESCE(MAX(CASE WHEN event_tag = 'TurnCompleted' THEN id END), 0)`,
       )
       .all(),
   ).map((row) => row.session_id)

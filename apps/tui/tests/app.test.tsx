@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import {
   Cause,
   Clock,
@@ -31,13 +31,15 @@ import {
   AgentName,
   BranchId,
   dateFromMillis,
-  DEFAULT_AGENT_NAME,
   GentRpcError,
   MessageId,
+  Model,
   ModelId,
+  ProviderId,
   Message as StoredMessage,
   Session,
   SessionId,
+  ToolCallId,
   ConnectionState,
   AgentEvent,
   EventEnvelope,
@@ -45,7 +47,12 @@ import {
   type GentClientRpcError,
   type QueueEntryInfo,
 } from "@gent/core/protocol"
-import { emptyQueueSnapshot, EventId, makeTempDirectoryScoped } from "@gent/core/test-utils"
+import {
+  emptyQueueSnapshot,
+  EventId,
+  makeTempDirectoryScoped,
+  testAgent,
+} from "@gent/core/test-utils"
 import { Gent, type GentRuntime } from "@gent/sdk"
 import {
   App,
@@ -57,6 +64,8 @@ import {
   resolveInteractiveState,
   resolveHeadlessMissingSignIns,
   resolveInteractiveBootstrap,
+  activityLine,
+  statusModelName,
 } from "../src/app"
 import {
   applySnapshotAgent,
@@ -66,6 +75,7 @@ import {
   renderFrame,
   renderScoped,
   TerminalOutput,
+  snapshotNaming,
 } from "./render-harness-boundary"
 import { LinkOpener, LinkOpenerError } from "../src/os"
 import { createSignal, type JSX, onMount, Show, type Signal } from "solid-js"
@@ -78,8 +88,6 @@ import {
   waitUntilAdvancing,
 } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
-import { SyntaxStyle } from "@opentui/core"
-import { type Message, MessageList, type SessionItem } from "../src/message-list"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
@@ -140,91 +148,46 @@ const branchOf = (id: string, createdAtMs: number) => ({
   createdAt: dateFromMillis(createdAtMs),
 })
 
-describe("startup agent and headless auth", () => {
-  it.live("interactive startup uses the session snapshot agent and lists no providers", () =>
+describe("startup and headless auth", () => {
+  // The session view reads the agent from the snapshot it loads; startup
+  // reads neither the snapshot nor the providers before it renders.
+  it.live("interactive startup reads no snapshot and lists no providers", () =>
     Effect.gen(function* () {
-      const calls: Array<{
-        agentName?: AgentName
-        sessionId?: string
-      }> = []
+      const reads: Array<string> = []
       const client = createMockClient({
         branch: { list: () => Effect.succeed([branchOf("branch-a", 0)]) },
         session: {
           get: () => Effect.succeed(sessionA),
           getSnapshot: () =>
-            Effect.succeed({
-              sessionId: SessionId.make("session-a"),
-              branchId: BranchId.make("branch-a"),
-              messages: [],
-              lastEventId: nullValue,
-              reasoningLevel: absent,
-              agent: AgentName.make("secondary"),
-              runtime: {
-                _tag: idleTag,
-                queue: emptyQueueSnapshot(),
-              },
-              metrics: {
-                turns: 0,
-                durationMs: 0,
-                costUsd: 0,
-                lastInputTokens: 0,
-              },
-            }),
+            Effect.sync(() => {
+              reads.push("getSnapshot")
+            }).pipe(Effect.andThen(Effect.die("startup reads no snapshot"))),
         },
         auth: {
-          listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
-            calls.push(input)
-            return Effect.succeed([
-              {
-                provider: "openai",
-                hasKey: false,
-                required: true,
-                source: noAuthSource,
-                authType: absent,
-              },
-            ])
-          },
+          listProviders: () =>
+            Effect.sync(() => {
+              reads.push("listProviders")
+              return []
+            }),
         },
       })
-      const result = yield* resolveInteractiveBootstrap({
+      const bootstrap = yield* resolveInteractiveBootstrap({
         client,
         cwd: "/nonexistent/gent-test-cwd",
         sessionId: "session-a",
         continue_: false,
       })
-      expect(result.initialAgent).toBe(AgentName.make("secondary"))
-      // The session view's auth gate checks the providers itself, once mounted.
-      expect(calls).toEqual([])
+      expect(bootstrap.initialSession.sessionId).toBe(sessionA.id)
+      expect(reads).toEqual([])
     }),
   )
-  it.live("a headless session names the missing sign-ins of the agent it was created with", () =>
+  it.live("a headless session names the missing sign-ins of the agent it runs", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
         sessionId?: string
       }> = []
       const client = createMockClient({
-        session: {
-          getSnapshot: () =>
-            Effect.succeed({
-              sessionId: SessionId.make("session-a"),
-              branchId: BranchId.make("branch-a"),
-              messages: [],
-              lastEventId: nullValue,
-              reasoningLevel: absent,
-              agent: AgentName.make("secondary"),
-              runtime: {
-                _tag: idleTag,
-                queue: emptyQueueSnapshot(),
-              },
-              metrics: {
-                turns: 0,
-                durationMs: 0,
-                costUsd: 0,
-                lastInputTokens: 0,
-              },
-            }),
-        },
         auth: {
           listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
             calls.push(input)
@@ -290,34 +253,12 @@ describe("startup agent and headless auth", () => {
       // name two drivers share keeps the id beside it.
       const missing = yield* resolveHeadlessMissingSignIns({ client, state })
       expect(missing).toEqual(["OpenCode", "openai", "Mirror (mirror-a)"])
-      expect(calls).toEqual([
-        { agentName: AgentName.make("secondary"), sessionId: SessionId.make("session-a") },
-      ])
+      // The session id is the question: the server answers for the agent the
+      // session runs.
+      expect(calls).toEqual([{ sessionId: SessionId.make("session-a") }])
     }),
   )
-  it.live("a session with no branch yet starts as the default agent", () =>
-    Effect.gen(function* () {
-      const calls: Array<{
-        agentName?: AgentName
-        sessionId?: string
-      }> = []
-      const client = createMockClient({
-        auth: {
-          listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
-            calls.push(input)
-            return Effect.succeed([])
-          },
-        },
-      })
-      const state: HeadlessState = {
-        session: { ...sessionA, activeBranchId: absent },
-        prompt: "hi",
-      }
-      yield* resolveHeadlessMissingSignIns({ client, state })
-      expect(calls).toEqual([{ agentName: DEFAULT_AGENT_NAME, sessionId: sessionA.id }])
-    }),
-  )
-  it.live("names no agent while the user is choosing a branch", () =>
+  it.live("a session with several branches boots into the branch picker", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -336,16 +277,15 @@ describe("startup agent and headless auth", () => {
             }),
         },
       })
-      const result = yield* resolveInteractiveBootstrap({
+      const bootstrap = yield* resolveInteractiveBootstrap({
         client,
         cwd: "/nonexistent/gent-test-cwd",
         sessionId: "session-a",
         continue_: false,
       })
-      expect(Option.map(result.bootstrap.initialBranches, (branches) => branches.length)).toEqual(
+      expect(Option.map(bootstrap.initialBranches, (branches) => branches.length)).toEqual(
         Option.some(2),
       )
-      expect(result.initialAgent).toBeUndefined()
       expect(calls).toEqual([])
     }),
   )
@@ -570,6 +510,21 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
         command: (input: { readonly command: { readonly _tag: string } }) =>
           Effect.sync(() => {
             steers.push(input.command._tag)
+          }),
+      },
+      queue: {
+        // One follow-up waits behind the turn; alt+up takes it back into the draft.
+        drain: () =>
+          Effect.succeed({
+            steering: [],
+            followUp: [
+              {
+                _tag: "FollowUp" satisfies "FollowUp",
+                id: MessageId.make("queued-follow-up"),
+                content: "the queued follow-up",
+                createdAt: 0,
+              },
+            ],
           }),
       },
       message: {
@@ -990,7 +945,7 @@ describe("notice rows", () => {
   )
 })
 
-describe("App auth gate", () => {
+describe("App sign-in pane", () => {
   it.scopedLive("shares one terminal resize source across App and cleans it up", () =>
     Effect.gen(function* () {
       const setup = yield* renderScoped(
@@ -1020,6 +975,61 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
       expect(setup.renderer.listenerCount("resize")).toBe(0)
     }),
+  )
+
+  // A scripted model (`--debug`, `--mock-empty`) answers with no key: the
+  // session view asks for no sign-in, as headless does not.
+  it.scopedLive("a scripted model opens the session with no sign-in", () =>
+    Effect.gen(function* () {
+      let checks = 0
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.sync(() => {
+              checks += 1
+              return [
+                {
+                  provider: "anthropic",
+                  hasKey: false,
+                  required: true,
+                  source: "none" satisfies "none",
+                  authType: absent,
+                },
+              ]
+            }),
+        },
+        branch: { getTree: () => Effect.succeed([]) },
+      })
+      let ctx = Option.none<ClientContextValue>()
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <App scriptedModel />
+            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+          </>
+        ),
+        {
+          client,
+          runtime: createMockRuntime(),
+          initialSession: {
+            id: SessionId.make("session-scripted"),
+            activeBranchId: BranchId.make("branch-scripted"),
+            name: "Scripted",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
+      )
+      yield* waitForFrame(setup, (next) => next.includes("ready ·"), "session view")
+      // The agent resolves: the point where a keyed model checks its sign-ins.
+      applySnapshotAgent(yield* requireClient(ctx), AgentName.make("main"))
+      yield* Effect.promise(() => setup.renderOnce())
+      const frame = yield* Effect.promise(() => setup.renderOnce()).pipe(
+        Effect.map(() => renderFrame(setup)),
+      )
+      expect(frame).not.toContain("Sign in ·")
+      expect(checks).toBe(0)
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   it.scopedLive("rechecks auth requirements when the selected agent changes", () =>
@@ -1082,13 +1092,14 @@ describe("App auth gate", () => {
       expect(frame).toContain("Sign in ·")
     }),
   )
-  it.scopedLive("seeds startup auth gating from the initial selected agent", () =>
+  it.scopedLive("the startup auth check asks for the agent the session's snapshot names", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: string
         sessionId?: string
       }> = []
       const client = createMockClient({
+        session: snapshotNaming(AgentName.make("secondary")),
         auth: {
           listProviders: (input: { agentName?: string; sessionId?: string }) => {
             calls.push(input)
@@ -1115,7 +1126,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime,
-        initialAgent: AgentName.make("secondary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -1180,7 +1190,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime: createMockRuntime(),
-        initialAgent: AgentName.make("main"),
         height,
         initialSession: {
           id: SessionId.make("session-a"),
@@ -1426,6 +1435,9 @@ describe("App auth gate", () => {
       expect(sentMessages.filter((message) => message.sessionId === nextSessionId)).toEqual([])
     }),
   )
+})
+
+describe("App session view and fatal screen", () => {
   // Mermaid draws inline in the transcript. No key opens a full-screen
   // viewer over the session: panes dock, and the composer keeps the keys.
   it.scopedLive("ctrl+shift+m keeps the session view and its composer", () =>
@@ -1555,6 +1567,9 @@ describe("App auth gate", () => {
       expect(clientContext.session().sessionId).toEqual(SessionId.make("session-kept"))
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App draft, shell and exit keys", () => {
   // Esc never quits: on a draft the first press arms and says so, and the
   // second clears the draft.
   it.scopedLive("Esc Esc on a draft clears it and never quits", () =>
@@ -1794,6 +1809,9 @@ describe("App auth gate", () => {
       yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App status and activity rows", () => {
   // Every hint row spells a key the same way: lowercase key, one verb.
   it.scopedLive("the empty state and the transcript label use the hint spelling", () =>
     Effect.gen(function* () {
@@ -1802,7 +1820,7 @@ describe("App auth gate", () => {
       view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
       yield* waitForFrame(
         view.setup,
-        (frame) => frame.includes("transcript · esc return"),
+        (frame) => frame.includes("transcript · esc close"),
         "transcript",
       )
     }).pipe(Effect.timeout("10 seconds")),
@@ -1882,6 +1900,112 @@ describe("App auth gate", () => {
       expect(view.activity()).toBe("working")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // Every state shows its way out: a running turn names the key that stops it.
+  // The tray's hint names alt+up; the key it names takes the queue back.
+  it.scopedLive("alt+up takes the queued follow-up back into the draft", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.mockInput.pressArrow("up", { meta: true })
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("the queued follow-up"),
+        "the restored draft",
+      )
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  it.scopedLive("a running turn's activity row shows esc cancel", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      const frame = yield* waitForFrame(view.setup, (next) => next.includes("Generating"), "busy")
+      const row = frame.split("\n").find((line) => line.includes("Generating")) ?? ""
+      expect(row.trim()).toMatch(/^Generating( \(\d+s\))? · esc cancel$/)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  test("a narrow activity row drops the elapsed time first, then cuts the label, and keeps the way out", () => {
+    expect(activityLine("Generating", " (12s)", 40)).toBe("Generating (12s) · esc cancel")
+    expect(activityLine("Generating", " (12s)", 24)).toBe("Generating · esc cancel")
+    expect(activityLine("read(src/very/long/path.ts)", " (3s)", 20)).toBe("read(s… · esc cancel")
+  })
+  // Two catalogs can share a model name; the row says which provider runs,
+  // and bills, the next turn.
+  it.scopedLive("the status row names the provider of a model whose name another shares", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-shared-name")
+      const branchId = BranchId.make("branch-shared-name")
+      const sonnet = (provider: string) =>
+        new Model({
+          id: ModelId.make(`${provider}/claude-sonnet-5`),
+          name: "Claude Sonnet 5",
+          provider: ProviderId.make(provider),
+        })
+      const provider = (id: string, name: string) => ({
+        provider: id,
+        name,
+        hasKey: true,
+        required: false,
+        source: "stored" satisfies "stored",
+        authType: absent,
+      })
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([provider("anthropic", "Anthropic"), provider("opencode", "OpenCode")]),
+        },
+        branch: { getTree: () => Effect.succeed([]) },
+        model: { list: () => Effect.succeed([sonnet("anthropic"), sonnet("opencode")]) },
+        driver: {
+          list: () =>
+            Effect.succeed({
+              drivers: [{ id: "anthropic" }, { id: "opencode" }],
+              overrides: {},
+              agents: [testAgent],
+            }),
+        },
+        session: {
+          getSnapshot: () =>
+            Effect.succeed({
+              sessionId,
+              branchId,
+              messages: [],
+              lastEventId: nullValue,
+              reasoningLevel: absent,
+              resolvedModelId: ModelId.make("opencode/claude-sonnet-5"),
+              agent: AgentName.make("main"),
+              runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+              metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+            }),
+        },
+      })
+      const setup = yield* renderScoped(() => <App />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 120,
+        initialSession: {
+          id: sessionId,
+          activeBranchId: branchId,
+          name: "Shared",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Claude Sonnet 5 (OpenCode)"),
+        "the provider in the status row",
+      )
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  test("a model name no other provider shares stays bare", () => {
+    const model = new Model({
+      id: ModelId.make("anthropic/claude-opus-5"),
+      name: "Claude Opus 5",
+      provider: ProviderId.make("anthropic"),
+    })
+    expect(statusModelName(model, [model], [])).toBe("Claude Opus 5")
+  })
+})
+
+describe("App cancel and quit keys during a turn", () => {
   it.scopedLive("escape cancels a running turn while an error shows, and never quits", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
@@ -2233,6 +2357,9 @@ describe("App auth gate", () => {
       setup.renderer.destroy = destroy
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App slash commands", () => {
   it.scopedLive("a slash command typed before the client extensions load runs once they do", () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>()
@@ -2272,7 +2399,7 @@ describe("App auth gate", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => !frame.includes("/btw"), "the command sent")
       // A name no extension carries yet waits too; once the load settles it
-      // is no command, and its text goes out as a message.
+      // is no command, and it comes back to the draft.
       yield* Effect.promise(() => setup.mockInput.typeText("/nonesuch"))
       yield* waitForFrame(setup, (frame) => frame.includes("/nonesuch"), "the unknown command")
       setup.mockInput.pressEnter()
@@ -2281,11 +2408,45 @@ describe("App auth gate", () => {
       yield* Deferred.complete(release, Effect.void)
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("btw · fork") && sent.includes("/nonesuch"),
-        "btw pane and the settled name sent",
+        (frame) => frame.includes("btw · fork") && frame.includes("Unknown command: /nonesuch"),
+        "btw pane and the settled name refused",
       )
-      expect(sent).toEqual(["/nonesuch"])
+      expect(sent).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A `/word` no command source names is a typo, not a message: it stays in
+  // the draft with the way to the commands. A first word that reads as a
+  // path, with a second `/` or a `.`, is text for the model.
+  // `/help` is the usual way to look for commands: it opens the one list of
+  // them and starts no turn.
+  it.scopedLive("/help opens the command palette and sends nothing", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      yield* typeCommand("/help")(view.setup)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Commands"), "the palette")
+      expect(view.sent()).toEqual([])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  it.scopedLive("an unknown slash command is refused into its draft, and a path is sent", () =>
+    Effect.gen(function* () {
+      const typo = yield* mountIdleSession()
+      yield* typeCommand("/zzq")(typo.setup)
+      yield* waitForFrame(
+        typo.setup,
+        (frame) =>
+          frame.includes("Unknown command: /zzq · ctrl+p commands") && frame.includes("┃ /zzq"),
+        "the refusal and the draft back",
+      )
+      expect(typo.sent()).toEqual([])
+      typo.unmount()
+      for (const path of ["/tmp/x what is this", "/notes.md read it"]) {
+        const view = yield* mountIdleSession()
+        yield* typeCommand(path)(view.setup)
+        yield* waitUntil(() => view.sent().length > 0, "the path sent")
+        expect(view.sent()).toEqual([path])
+        view.unmount()
+      }
+    }).pipe(Effect.timeout("4 seconds")),
   )
   it.scopedLive("a pane that opens over a previewing prompt search gives the draft back", () =>
     Effect.gen(function* () {
@@ -2443,9 +2604,14 @@ describe("App auth gate", () => {
       yield* waitForFrame(setup, () => requests.length + sent.length > 0, "the command answered")
       expect(requests).toEqual(["now"])
       expect(sent).toEqual([])
+      // The second listing knows no `/nowhere` either: it is refused.
       yield* typeCommand("/nowhere else")(setup)
-      yield* waitForFrame(setup, () => sent.length > 0, "the message sent")
-      expect(sent).toEqual(["/nowhere else"])
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Unknown command: /nowhere"),
+        "the unknown name refused",
+      )
+      expect(sent).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
   )
   // A server command the server refuses says so on the status row.
@@ -2519,6 +2685,9 @@ describe("App auth gate", () => {
       expect(renderFrame(setup)).toContain("Detect, audit")
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App docked panes at short heights", () => {
   // A connection drop while the list is in flight is not an answer: the held
   // command waits, and the reconnect lists the server commands again.
   // The failed reply may reach the client before or after the connection
@@ -2722,7 +2891,7 @@ describe("App auth gate", () => {
       setup.mockInput.pressKey("t", { ctrl: true })
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Agents ·") && frame.includes("delegate: task 3"),
+        (frame) => frame.includes("Sessions ·") && frame.includes("delegate: task 3"),
         "the agents pane",
       )
       setup.mockInput.pressKey("x", { ctrl: true })
@@ -2740,7 +2909,7 @@ describe("App auth gate", () => {
         setup.mockInput.pressKey("t", { ctrl: true })
         yield* waitForFrame(
           setup,
-          (frame) => frame.includes("Agents ·") && frame.includes("delegate: task 3 · running"),
+          (frame) => frame.includes("Sessions ·") && frame.includes("delegate: task 3 · running"),
           "the agents pane with its cursor row",
         )
         const opened = renderFrame(setup)
@@ -2758,7 +2927,7 @@ describe("App auth gate", () => {
         setup.mockInput.pressEscape()
         yield* waitForFrame(
           setup,
-          (frame) => !frame.includes("Agents ·") && frame.includes("alarm in now"),
+          (frame) => !frame.includes("Sessions ·") && frame.includes("alarm in now"),
           "the trays back once the pane closes",
         )
       }).pipe(Effect.timeout("10 seconds")),
@@ -2962,7 +3131,7 @@ describe("App auth gate", () => {
     {
       name: "agents pane",
       open: (view) => Effect.sync(() => view.setup.mockInput.pressArrow("left")),
-      shown: "Agents ·",
+      shown: "Sessions ·",
       rowClean: () => true,
     },
   ]
@@ -3106,7 +3275,7 @@ describe("App auth gate", () => {
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
-      yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions ·"), "the agents pane")
       view.setup.resize(view.setup.renderer.terminalWidth, 5)
       yield* waitForFrame(
         view.setup,
@@ -3155,12 +3324,12 @@ describe("App auth gate", () => {
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
-      yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions ·"), "the agents pane")
       const width = view.setup.renderer.terminalWidth
       view.setup.resize(width, 5)
       yield* waitForFrame(
         view.setup,
-        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("Agents ·"),
+        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("Sessions ·"),
         "the agents pane with no row",
       )
       view.setup.mockInput.pressEscape()
@@ -3172,7 +3341,7 @@ describe("App auth gate", () => {
         (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("Generating"),
         "the full terminal",
       )
-      expect(renderFrame(view.setup)).not.toContain("Agents ·")
+      expect(renderFrame(view.setup)).not.toContain("Sessions ·")
       expect(view.steers).toEqual([])
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
@@ -3254,6 +3423,9 @@ describe("App auth gate", () => {
       }
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App interjections and the boot branch picker", () => {
   it.scopedLive("an interjection steers a running turn while an error shows", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
@@ -3366,6 +3538,9 @@ describe("App auth gate", () => {
       expect(shutdowns).toBe(1)
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App auth gate at startup", () => {
   it.scopedLive("branch picker does not trigger auth gating before a branch is selected", () =>
     Effect.gen(function* () {
       const calls: Array<{
@@ -3428,7 +3603,6 @@ describe("App auth gate", () => {
           // An agent is what makes the auth check runnable at all. Without one
           // the gate short-circuits before it reads the picker, and this test
           // proves nothing.
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -3483,7 +3657,6 @@ describe("App auth gate", () => {
         const setup = yield* renderScoped(() => <App />, {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -3540,7 +3713,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime: createMockRuntime(),
-        initialAgent: AgentName.make("primary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -3590,7 +3762,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime: createMockRuntime(),
-        initialAgent: AgentName.make("primary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -3650,7 +3821,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime,
-        initialAgent: AgentName.make("primary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -3703,7 +3873,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime,
-        initialAgent: AgentName.make("primary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -3748,7 +3917,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime,
-        initialAgent: AgentName.make("primary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -3899,7 +4067,6 @@ describe("App auth gate", () => {
           {
             client,
             runtime,
-            initialAgent: AgentName.make("primary"),
             initialSession: {
               id: alphaSessionId,
               activeBranchId: alphaBranchId,
@@ -4057,7 +4224,6 @@ describe("App auth gate", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -4106,6 +4272,9 @@ describe("App auth gate", () => {
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
     }),
   )
+})
+
+describe("App startup prompt and renames", () => {
   it.scopedLive("a renamed session keeps its view and does not send the startup prompt again", () =>
     Effect.gen(function* () {
       let ctx: Option.Option<ClientContextValue> = Option.none()
@@ -4130,7 +4299,6 @@ describe("App auth gate", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -4189,7 +4357,6 @@ describe("App auth gate", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -4240,7 +4407,6 @@ describe("App auth gate", () => {
         const setup = yield* renderScoped(() => <App />, {
           client,
           runtime: createMockRuntime(),
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -4287,7 +4453,6 @@ describe("App auth gate", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -4317,7 +4482,6 @@ describe("App auth gate", () => {
 
 // ── widgets render ──────────────────────────────────────────────────────────
 
-const syntaxStyle = () => SyntaxStyle.create()
 const testSession: Session = {
   id: SessionId.make("session-test"),
   name: "Test Session",
@@ -4494,7 +4658,6 @@ describe("App clipboard", () => {
         runtime: createMockRuntime(),
         services,
         output,
-        initialAgent: AgentName.make("main"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -4740,7 +4903,7 @@ describe("App clipboard", () => {
 // ── agents view on the left arrow ───────────────────────────────────────────
 
 describe("agents view on the left arrow", () => {
-  const paneOpen = (frame: string) => frame.includes("Agents ·")
+  const paneOpen = (frame: string) => frame.includes("Sessions ·")
 
   it.scopedLive("← on an empty composer opens the agents pane; ← again and Esc close it", () =>
     Effect.gen(function* () {
@@ -4819,6 +4982,101 @@ describe("agents view on the left arrow", () => {
 })
 
 describe("TUI renderer surfaces", () => {
+  // The answer in progress is the one the feed holds open, not the row that
+  // sorts last. A step's answer is stored before its tools run; through the
+  // tool run the turn is still running, and the stored answer draws its
+  // diagram.
+  it.scopedLive("a stored answer draws its diagram while its tool runs", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-diagram")
+      const branchId = BranchId.make("branch-diagram")
+      const envelope = (id: number, event: EventEnvelope["event"]) =>
+        EventEnvelope.make({ id: EventId.make(id), createdAt: id, event })
+      const answerId = MessageId.make("answer-diagram")
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+        session: {
+          events: () =>
+            Stream.concat(
+              Stream.make(
+                envelope(
+                  0,
+                  AgentEvent.cases.StreamSynchronized.make({
+                    sessionId,
+                    branchId,
+                    lastEventId: EventId.make(0),
+                  }),
+                ),
+                envelope(
+                  1,
+                  AgentEvent.cases.MessageReceived.make({
+                    message: StoredMessage.cases.regular.make({
+                      id: MessageId.make("ask-diagram"),
+                      sessionId,
+                      branchId,
+                      role: "user",
+                      parts: [Prompt.textPart({ text: "draw it" })],
+                      createdAt: dateFromMillis(1),
+                    }),
+                  }),
+                ),
+                envelope(
+                  2,
+                  AgentEvent.cases.MessageReceived.make({
+                    message: StoredMessage.cases.regular.make({
+                      id: answerId,
+                      sessionId,
+                      branchId,
+                      role: "assistant",
+                      parts: [
+                        Prompt.textPart({
+                          text: "```mermaid\ngraph LR\n  Alpha-->Beta\n```",
+                        }),
+                      ],
+                      createdAt: dateFromMillis(2),
+                    }),
+                  }),
+                ),
+                envelope(
+                  3,
+                  AgentEvent.cases.ToolCallStarted.make({
+                    sessionId,
+                    branchId,
+                    toolCallId: ToolCallId.make("call-diagram"),
+                    toolName: "bash",
+                    input: { command: "sleep 20" },
+                    assistantMessageId: answerId,
+                  }),
+                ),
+              ),
+              Stream.never,
+            ),
+        },
+      })
+      const setup = yield* renderScoped(() => <App />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 80,
+        height: 30,
+        initialSession: {
+          id: sessionId,
+          activeBranchId: branchId,
+          name: "Diagram",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Alpha") && next.includes("sleep 20"),
+        "the answer and its running tool",
+      )
+      // Drawn: the box's edge, and no raw edge statement.
+      expect(frame).not.toContain("Alpha-->Beta")
+      expect(frame).toContain("┌")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   // A text too wide for its column is cut once, at its end, by gent; the
   // renderer's own cut (`...` in the middle) never shows.
   it.scopedLive("at 40 columns the slash popup and the palette cut a text once, at its end", () =>
@@ -4921,51 +5179,6 @@ describe("TUI renderer surfaces", () => {
       expect(renderFrame(setup)).not.toContain("ready ·")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.scopedLive("MessageList renders user labels and assistant reasoning", () =>
-    Effect.gen(function* () {
-      const items: SessionItem[] = [
-        {
-          _tag: "interjection-message",
-          id: "user-1",
-          role: "user",
-          pendingMode: "steer",
-          content: "Stop and switch agent",
-          reasoning: "",
-          images: [],
-          createdAt: 0,
-        } satisfies Message,
-        {
-          _tag: "regular-message",
-          id: "assistant-1",
-          role: "assistant",
-          content: "Switching now",
-          reasoning: "Considering current todo state",
-          images: [],
-          createdAt: 0,
-          // The feed spells an assistant answer as segments in part order,
-          // with the flat fields alongside for readers that want the whole
-          // text at once.
-          segments: [
-            { _tag: "reasoning", content: "Considering current todo state" },
-            { _tag: "text", content: "Switching now" },
-          ],
-        } satisfies Message,
-      ]
-      const setup = yield* renderScoped(() => (
-        <MessageList
-          items={items}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          streaming={false}
-        />
-      ))
-      yield* Effect.promise(() => setup.renderOnce())
-      const frame = renderFrame(setup)
-      expect(frame).toContain("[steer]")
-      expect(frame).toContain("Stop and switch agent")
-      expect(frame).toContain("Considering current todo state")
-    }),
-  )
   it.scopedLive("QueueWidget renders steer and queued summaries", () =>
     Effect.gen(function* () {
       const steerMessages: QueueEntryInfo[] = [
@@ -4990,7 +5203,7 @@ describe("TUI renderer surfaces", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("[steer 1] switch to secondary")
       expect(frame).toContain("[queued 1] line one +2 lines")
-      expect(frame).toContain("cmd+up restore")
+      expect(frame).toContain("alt+up restore")
     }),
   )
   it.scopedLive("ConnectionWidget renders nothing when no connection issue", () =>
@@ -5107,27 +5320,6 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("failed extensions")
       expect(frame).toContain("@gent/plan")
     }),
-  )
-  // The status row and the activity report read `isReconnecting`, so both
-  // wire states that mean "not connected yet" have to answer true.
-  it.scopedLive("isReconnecting follows the connecting and reconnecting states", () =>
-    Effect.gen(function* () {
-      const lifecycle = createMutableRuntime(
-        ConnectionState.cases.Connected.make({ generation: 0 }),
-      )
-      const ReconnectProbe = () => {
-        const client = useClient()
-        return <text>{`reconnecting:${String(client.isReconnecting())}`}</text>
-      }
-      const setup = yield* renderScoped(() => <ReconnectProbe />, { runtime: lifecycle.runtime })
-      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "connected")
-      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
-      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "reconnecting")
-      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
-      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "reconnected")
-      lifecycle.emit(ConnectionState.cases.Connecting.make({}))
-      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "connecting")
-    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
     "ConnectionWidget refreshes extension status after reconnect generation changes",

@@ -2,14 +2,9 @@ import { makeTempDirectoryScoped, seedAuthKeys, waitFor } from "@gent/core/test-
 import { Terminal } from "@xterm/headless"
 import { Clock, Effect, FileSystem, Option, Predicate, Schema, type Scope } from "effect"
 import { spawn, type IPty } from "zigpty"
-import { exitWithin } from "./server-process-fixture"
+import { exitWithin, tuiDirectory } from "./server-process-fixture"
 
 const CTRL_C = "\x03"
-const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
-  /\/$/,
-  "",
-)
-const tuiDir = `${repoRoot}/apps/tui`
 
 const DEFAULT_COLS = 120
 const DEFAULT_ROWS = 40
@@ -42,8 +37,8 @@ const spawnWithDir = (
 ): Effect.Effect<TestContext, never, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      const mainPath = `${tuiDir}/src/main.tsx`
-      const preloadPath = `${tuiDir}/node_modules/@opentui/solid/scripts/preload.js`
+      const mainPath = `${tuiDirectory}/src/main.tsx`
+      const preloadPath = `${tuiDirectory}/node_modules/@opentui/solid/scripts/preload.js`
 
       let output = ""
       let currentSize = size
@@ -52,7 +47,7 @@ const spawnWithDir = (
         name: "xterm-256color",
         cols: size.cols,
         rows: size.rows,
-        cwd: tuiDir,
+        cwd: tuiDirectory,
         env: {
           // oxlint-disable-next-line effect/noGlobals -- the fixture hands the test's environment to the real TUI process
           ...Bun.env,
