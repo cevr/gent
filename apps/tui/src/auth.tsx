@@ -308,7 +308,7 @@ export function Auth(props: AuthProps) {
   const catalog = () => catalogOf(state())
 
   const [autoPrompted, setAutoPrompted] = createSignal(false)
-  const [successMessage, setSuccessMessage] = createSignal(Option.none<string>())
+  const [flashNote, setFlashNote] = createSignal(Option.none<string>())
   const sessionId = props.sessionId
 
   // ── Staleness ─────────────────────────────────────────────────────
@@ -322,7 +322,7 @@ export function Auth(props: AuthProps) {
   }
   const clearSuccess = () => {
     stopSuccessTimer()
-    setSuccessMessage(Option.none())
+    setFlashNote(Option.none())
   }
   // A pane that closes stops the flash's clock with it.
   onCleanup(stopSuccessTimer)
@@ -335,15 +335,16 @@ export function Auth(props: AuthProps) {
   }
   const isCurrent = (captured: number) => captured === version
 
-  const flashSuccess = (message: string) => {
+  /** Shows `note` in the note row for two seconds. */
+  const flash = (note: string) => {
     clearSuccess()
-    setSuccessMessage(Option.some(message))
+    setFlashNote(Option.some(note))
     successTimer = Option.some(
       clientCtx.runtime.fork(
         Effect.sleep("2 seconds").pipe(
           Effect.andThen(
             Effect.sync(() => {
-              setSuccessMessage(Option.none())
+              setFlashNote(Option.none())
               successTimer = Option.none()
             }),
           ),
@@ -351,6 +352,7 @@ export function Auth(props: AuthProps) {
       ),
     )
   }
+  const flashSuccess = (message: string) => flash(`✓ ${message}`)
 
   /** Run `body` only while the action that captured `token` is still current. */
   const whileCurrent = (token: number, body: () => void) =>
@@ -798,17 +800,19 @@ export function Auth(props: AuthProps) {
   // letter of a code typed by hand.
   const isUrlCopyKey = (event: ScopedKeyboardEvent) =>
     event.name === "y" && event.ctrl === true && event.meta !== true
+  // The note says copied for a copy some route took, and otherwise how to
+  // copy instead. A note for a screen the reader has since left is dropped.
   const copyUrl = (current: OAuthScreen) => {
-    copyToClipboard(current.authorization.url)
-    flashSuccess("URL copied to the clipboard")
+    const token = version
+    copyToClipboard(current.authorization.url, (taken) => {
+      if (!isCurrent(token)) return
+      if (taken) return flashSuccess("URL copied to the clipboard")
+      flash("Could not reach the clipboard — select the URL instead")
+    })
   }
   const OAUTH_KEYS = [keyHint("ctrl+y", "copy URL"), KeyHints.submit, KeyHints.back]
-  /** The note row: a copy's confirmation while it shows, else the waiting note. */
-  const oauthNote = (current: OAuthScreen) =>
-    Option.orElse(
-      Option.map(successMessage(), (message) => `✓ ${message}`),
-      () => waitingNote(current),
-    )
+  /** The note row: a copy's note while it shows, else the waiting note. */
+  const oauthNote = (current: OAuthScreen) => Option.orElse(flashNote(), () => waitingNote(current))
 
   /**
    * The OAuth screen inside its frame: the instructions and the URL, then the
@@ -874,7 +878,7 @@ export function Auth(props: AuthProps) {
           title={`Sign in · ${plural(catalog().providers.length, "provider")}`}
           keys={listKeys()}
           error={state().error}
-          detail={Option.map(successMessage(), (message) => `✓ ${message}`)}
+          detail={flashNote()}
         >
           <SelectList
             id="auth-provider"

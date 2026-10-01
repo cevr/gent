@@ -57,15 +57,16 @@ export const useTerminalDimensions = (): Accessor<TerminalDimensions> =>
  * `set-clipboard on`, the DCS-wrapped one OpenTUI sends needs
  * `allow-passthrough on`), while `-w` works under the default
  * `set-clipboard external`; Codex takes the same route. Outside tmux it
- * runs nothing. A tmux that fails (too old for `-w`, `set-clipboard off`)
- * leaves the OSC 52 write as the one copy.
+ * runs nothing. It succeeds with whether tmux took the text: a tmux that
+ * fails (too old for `-w`, `set-clipboard off`) or outlives the timeout did
+ * not.
  */
 const loadTmuxBuffer = (text: string) =>
   Effect.gen(function* () {
     const tmux = yield* Config.option(Config.String("TMUX"))
-    if (!Option.exists(tmux, (value) => value.length > 0)) return
+    if (!Option.exists(tmux, (value) => value.length > 0)) return false
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-    yield* spawner.exitCode(
+    const exitCode = yield* spawner.exitCode(
       ChildProcess.make("tmux", ["load-buffer", "-w", "-"], {
         stdin: Stream.make(new TextEncoder().encode(text)),
         stdout: "ignore",
@@ -75,7 +76,11 @@ const loadTmuxBuffer = (text: string) =>
         forceKillAfter: "1 second",
       }),
     )
-  }).pipe(Effect.timeout("2 seconds"), Effect.ignore)
+    return exitCode === 0
+  }).pipe(
+    Effect.timeout("2 seconds"),
+    Effect.orElseSucceed(() => false),
+  )
 
 /**
  * Puts text on the reader's clipboard, the one copy path. It writes OSC 52
@@ -84,14 +89,22 @@ const loadTmuxBuffer = (text: string) =>
  * clipboard, even over ssh; OpenTUI wraps it in DCS for tmux and screen.
  * Inside tmux it also loads the text into tmux (`loadTmuxBuffer`). Empty text
  * copies nothing: an empty OSC 52 write would clear the clipboard.
+ *
+ * `settled` hears whether a route took the copy. No terminal confirms an OSC
+ * 52 write, so a sent one counts; OpenTUI refuses one on a terminal that
+ * reports no OSC 52 support. A tmux that exits 0 counts too.
  */
-export function useClipboard(): (text: string) => void {
+export function useClipboard(): (text: string, settled?: (taken: boolean) => void) => void {
   const renderer = useRenderer()
   const { cast } = useRuntime()
-  return (text) => {
+  return (text, settled = () => {}) => {
     if (text.length === 0) return
-    renderer.copyToClipboardOSC52(text)
-    cast(loadTmuxBuffer(text))
+    const written = renderer.copyToClipboardOSC52(text)
+    cast(
+      loadTmuxBuffer(text).pipe(
+        Effect.flatMap((loaded) => Effect.sync(() => settled(written || loaded))),
+      ),
+    )
   }
 }
 

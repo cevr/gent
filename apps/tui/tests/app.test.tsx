@@ -4641,6 +4641,44 @@ describe("App clipboard", () => {
       expect(runs).toEqual([])
     }).pipe(Effect.timeout("8 seconds")),
   )
+
+  // OpenTUI refuses an OSC 52 write on a terminal that reports no support. A
+  // sent write is only an attempt (no terminal confirms one), so the note
+  // says copied; a copy no route took says so, and how to copy instead.
+  const refusesOsc52 = (setup: {
+    renderer: { copyToClipboardOSC52: (text: string) => boolean }
+  }) => {
+    setup.renderer.copyToClipboardOSC52 = () => false
+  }
+
+  it.scopedLive("a copy no route takes says the clipboard is out of reach", () =>
+    Effect.gen(function* () {
+      const runs: Array<{ args: ReadonlyArray<string>; stdin: string }> = []
+      const { setup } = yield* mountOAuthScreen(deviceUrl, recordedTmux(runs, {}))
+      refusesOsc52(setup)
+
+      setup.mockInput.pressKey("y", { ctrl: true })
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Could not reach the clipboard"),
+        "the unreachable note",
+      )
+      expect(frame).toContain("select the URL instead")
+      expect(frame).not.toContain("URL copied")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("tmux taking a copy the terminal refused still counts as copied", () =>
+    Effect.gen(function* () {
+      const runs: Array<{ args: ReadonlyArray<string>; stdin: string }> = []
+      const { setup } = yield* mountOAuthScreen(deviceUrl, recordedTmux(runs, tmuxEnv))
+      refusesOsc52(setup)
+
+      setup.mockInput.pressKey("y", { ctrl: true })
+      yield* waitForFrame(setup, (next) => next.includes("URL copied"), "the copied note")
+      expect(runs.length).toBe(1)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
 })
 
 // ── agents view on the left arrow ───────────────────────────────────────────
