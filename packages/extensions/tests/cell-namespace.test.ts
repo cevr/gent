@@ -82,10 +82,13 @@ const openCellOwner = (
   worker: Parameters<typeof CellExecution.Live>[0]["worker"],
   branch: BranchId = branchId,
 ) =>
-  Effect.map(
-    Layer.build(CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId: branch })),
-    (context) => Context.get(context, CellExecution),
-  )
+  Effect.gen(function* () {
+    const cwd = yield* packageDirectory
+    const context = yield* Layer.build(
+      CellExecution.Live({ worker, cwd, sessionId, branchId: branch }),
+    )
+    return Context.get(context, CellExecution)
+  })
 
 /** Run a recorded cell with a host that selects no tools. */
 const runCell = (
@@ -130,7 +133,7 @@ describe("cell namespace restore and handoff", () => {
         })
         const open = Effect.gen(function* () {
           const context = yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
           )
           return Context.get(context, CellExecution)
         })

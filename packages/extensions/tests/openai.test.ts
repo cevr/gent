@@ -51,6 +51,7 @@ import {
   type CapturedRequest,
   fakeFetchLayer,
   type FakeFetchState,
+  freePort,
   makeFakeFetchState,
   createRpcHarness,
   oneGenerate,
@@ -2301,9 +2302,6 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     ),
     (held) => Effect.promise(() => held.stop(true)),
   )
-
-  /** A port no listener holds: the OS picks it for a listener that stops at once. */
-  const freePort = Effect.scoped(heldPort.pipe(Effect.map((held) => held.port)))
 
   it.live("the browser login listens on the port OpenAI registers", () =>
     Effect.gen(function* () {

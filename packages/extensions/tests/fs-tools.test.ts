@@ -9,6 +9,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Path,
   Schema,
   Stream,
@@ -1201,7 +1202,7 @@ describe("GrepTool", () => {
       expect(
         anywhere.matches
           .map((match) => match.file.split("/").at(-1))
-          .sort((a, b) => (a ?? "").localeCompare(b ?? "")),
+          .sort((a, b) => Order.String(a ?? "", b ?? "")),
       ).toEqual(["nested.ts", "top.ts"])
       // A glob with a slash still matches the path relative to the search root.
       const scoped = yield* runToolWithCtx(
@@ -1226,9 +1227,7 @@ describe("GrepTool", () => {
       const namesFor = (glob: string) =>
         runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir, glob }, ctxGrep).pipe(
           Effect.map((result) =>
-            result.matches
-              .map((match) => match.file.slice(tmpDir.length + 1))
-              .sort((a, b) => a.localeCompare(b)),
+            result.matches.map((match) => match.file.slice(tmpDir.length + 1)).sort(Order.String),
           ),
         )
       expect(yield* namesFor("src/*.ts")).toEqual(["src/a.ts"])

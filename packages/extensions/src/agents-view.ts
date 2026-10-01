@@ -1,4 +1,4 @@
-import { Context, Effect, FiberMap, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Context, Effect, FiberMap, Layer, Option, Order, Ref, Schema, Stream } from "effect"
 import {
   type AgentEvent,
   BranchId,
@@ -204,13 +204,13 @@ export const buildRowTree = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<Agent
     const recency =
       Option.getOrElse(right.updatedAt, () => 0) - Option.getOrElse(left.updatedAt, () => 0)
     if (recency !== 0) return recency
-    return rowKey(left).localeCompare(rowKey(right))
+    return Order.String(rowKey(left), rowKey(right))
   }
   const byStart = (left: AgentRow, right: AgentRow) => {
     const start =
       Option.getOrElse(left.createdAt, () => 0) - Option.getOrElse(right.createdAt, () => 0)
     if (start !== 0) return start
-    return rowKey(left).localeCompare(rowKey(right))
+    return Order.String(rowKey(left), rowKey(right))
   }
   // The parent a row nests under here: one in the same section.
   const parentKeyOf = (row: AgentRow): Option.Option<string> =>

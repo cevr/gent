@@ -394,7 +394,14 @@ const gitLsFiles = (
     const handle = yield* ChildProcess.make(
       "git",
       ["-C", cwd, "ls-files", "-z", "-t", "--cached", "--others", "--exclude-standard"],
-      { env: GIT_ENV, extendEnv: true, stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+      {
+        env: GIT_ENV,
+        extendEnv: true,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "ignore",
+        forceKillAfter: "1 second",
+      },
     )
     const chunks: Array<Uint8Array> = []
     let onDisk = 0
