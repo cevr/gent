@@ -710,10 +710,18 @@ interface E2ELayerOptions {
   readonly home?: string
   /** Optional per-cwd profile cache for per-workspace routing tests. */
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
-  /** Extra layers to merge (e.g., additional service overrides) */
+  /**
+   * Services core does not own, merged above the launch profile (a compactor,
+   * a log capture). Core's own services have their own option.
+   */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
   /** `"test"` installs the stub tool runner; default runs the live one. */
   readonly toolRunner?: "test" | "live"
+  /**
+   * The models the registry knows, and no others. Absent, the registry makes
+   * up a model for every id it is asked for.
+   */
+  readonly models?: ReadonlyArray<Model>
   /** The price of every model the test registry makes up. Default: free. */
   readonly modelPricing?: ModelPricing
   /** Auth override. Use for public RPC auth failure-path tests. */
@@ -831,7 +839,10 @@ const e2eDependencies = (
     failOnExtensionFailure: config.allowFailedExtensions !== true,
     branchTools: config.branchTools ?? noBranchTools,
     overrides: {
-      modelRegistryLayer: ModelRegistry.Test([], Option.fromUndefinedOr(config.modelPricing)),
+      modelRegistryLayer: ModelRegistry.Test(
+        config.models ?? [],
+        Option.fromUndefinedOr(config.modelPricing),
+      ),
       authLayer: config.authLayer ?? Auth.Test(),
       approvalLayer: config.approvalLayer ?? ApprovalService.Test(),
       configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
@@ -852,10 +863,7 @@ const e2eDependencies = (
 // In-process integration layer: the E2E root with the stub tool runner and
 // the scripted debug model. Use with `createRpcClient()`.
 
-interface InProcessLayerConfig {
-  readonly agents: ReadonlyArray<AgentDefinition>
-  readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
-}
+type InProcessLayerConfig = Pick<E2ELayerOptions, "agents" | "extraLayers" | "models">
 
 /** Build a complete in-process test layer with a custom language model layer. */
 export const baseLocalLayerWithProvider = (
@@ -867,6 +875,7 @@ export const baseLocalLayerWithProvider = (
     agents: config.agents,
     extensions: [],
     extraLayers: config.extraLayers,
+    models: config.models,
     toolRunner: "test",
   })
 

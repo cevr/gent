@@ -78,7 +78,7 @@ import {
   textStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { finishPart, ModelRegistry, textDeltaPart, toolCallPart } from "../../src/runtime/provider"
+import { finishPart, textDeltaPart, toolCallPart } from "../../src/runtime/provider"
 import { SessionRuntime } from "../../src/runtime/session"
 import { getSessionSnapshot } from "../../src/server/server"
 import {
@@ -670,7 +670,8 @@ describe("context compaction degrade path", () => {
       ])
       const layer = baseLocalLayerWithProvider(providerLayer, {
         agents: [agent],
-        extraLayers: [ModelRegistry.Test([smallWindowModel]), failingCompactor],
+        models: [smallWindowModel],
+        extraLayers: [failingCompactor],
       })
       const result = yield* Effect.gen(function* () {
         yield* seedOverflowingHistory
@@ -816,7 +817,8 @@ const runOverflowTurn = (params: {
     )
     const layer = baseLocalLayerWithProvider(providerLayer, {
       agents: [wideAgent],
-      extraLayers: [ModelRegistry.Test([params.model]), ...params.extraLayers],
+      models: [params.model],
+      extraLayers: params.extraLayers,
     })
     const result = yield* Effect.gen(function* () {
       yield* seedHistory(params.seedSize ?? 0)
@@ -1298,7 +1300,7 @@ const runColdCacheTurns = (params: {
       providerLayer,
       agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: model.id })],
       extensionInputs: [waitToolExtension, ...compactor],
-      extraLayers: [ModelRegistry.Test([model, otherModel])],
+      models: [model, otherModel],
     })
     const { client } = harness
     let target = { sessionId: harness.sessionId, branchId: harness.branchId }

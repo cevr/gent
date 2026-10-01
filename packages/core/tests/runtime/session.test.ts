@@ -808,9 +808,7 @@ const makeLayer = (
 ) =>
   baseLocalLayerWithProvider(providerLayer, {
     agents: [primary, routed],
-    // `extraLayers` in `baseLocalLayerWithProvider` are merged AFTER the
-    // default `ModelRegistry.Test()`, so later merges win the tag.
-    extraLayers: [ModelRegistry.Test(models)],
+    models,
   })
 const createSessionBranchSessionMetrics = (agent = AgentName.make("primary")) =>
   Effect.gen(function* () {
@@ -1093,7 +1091,7 @@ describe("session metrics", () => {
         providerLayer,
         agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: smallWindow.id })],
         extensionInputs: [compactor],
-        extraLayers: [ModelRegistry.Test([smallWindow, ...summaryModels])],
+        models: [smallWindow, ...summaryModels],
       })
       return yield* Effect.gen(function* () {
         const { client } = yield* createRpcClient(layer)
