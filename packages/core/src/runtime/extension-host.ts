@@ -2001,8 +2001,9 @@ const buildSessionProfile = (params: {
  * SessionProfile — per-(workspace,cwd) live profile: one server serves many workspaces.
  *
  * Each cache entry is built once. Declarations are loaded, every extension's
- * process resources are built into a scope that closes with the server, and
- * the catalog is staged from the resulting context. An extension whose process
+ * process resources share a scope across compatible profiles, closing when
+ * their last holder retires or the server closes. The catalog is staged from
+ * the resulting context. An extension whose process
  * resource fails to build is reported as a failed extension and the rest of the
  * profile stays live.
  */

@@ -4,6 +4,7 @@ import {
   Context,
   Deferred,
   Effect,
+  Fiber,
   FileSystem,
   Layer,
   Logger,
@@ -25,6 +26,7 @@ import {
 import { ExtensionHealthSnapshot, GentRpcs } from "../../src/server/rpc"
 import {
   BranchId,
+  CurrentWorkspaceId,
   ExtensionId,
   MessageId,
   ProcessGenerationId,
@@ -42,6 +44,7 @@ import {
 import {
   createE2ELayer,
   createRpcClient,
+  createRpcHarness,
   testSqliteStorage,
   emptyQueueSnapshot,
 } from "../../src/test-utils/harness"
@@ -98,7 +101,7 @@ import { Auth, ModelResolver } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { noBranchTools } from "../../src/runtime/tools"
 import { RpcClient, RpcTest } from "effect/rpc"
-import { WORKSPACE_ID_HEADER } from "../../src/server/workspace-rpc"
+import { WORKSPACE_ID_HEADER, workspaceIdForCwd } from "../../src/server/workspace-rpc"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -2075,6 +2078,93 @@ describe("session queue and runtime watch", () => {
 // The debug model answers every turn, so a test may send more than one
 // message without scripting a step per send.
 describe("session transport contract", () => {
+  it.live("a concurrent rename agrees with the snapshot metadata and event cursor", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(
+          createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+        )
+        const sessions = Context.get(context, SessionStorage)
+        const sql = Context.get(context, SqlClient.SqlClient)
+        const mutations = Context.get(context, SessionMutations)
+        const { cwd } = Context.get(context, RuntimeEnvironment)
+        const read = yield* Deferred.make<void>()
+        const renamed = yield* Deferred.make<void>()
+        const armed = yield* Ref.make(false)
+        const wrapped = SessionStorage.of({
+          ...sessions,
+          getSession: (sessionId) =>
+            Effect.gen(function* () {
+              const session = yield* sessions.getSession(sessionId)
+              if (yield* Ref.getAndSet(armed, false)) {
+                yield* Deferred.succeed(read, void 0)
+                // Hold an unlocked read until the competing write commits. A read
+                // owning SQLite's transaction must release it before that write can run.
+                if (Option.isNone(yield* Effect.serviceOption(sql.transactionService)))
+                  yield* Deferred.await(renamed)
+              }
+              return session
+            }),
+        })
+        const { client } = yield* createRpcClient(
+          Layer.succeedContext(Context.add(context, SessionStorage, wrapped)),
+        )
+        const created = yield* client.session.create({ cwd, name: "before rename" })
+        const writer = yield* Effect.gen(function* () {
+          yield* Deferred.await(read)
+          yield* mutations.renameSession({ sessionId: created.sessionId, name: "after rename" })
+          yield* Deferred.succeed(renamed, void 0)
+        }).pipe(
+          Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(cwd)),
+          Effect.forkScoped,
+        )
+        yield* Ref.set(armed, true)
+        const snapshot = yield* client.session.getSnapshot(created)
+        yield* Fiber.join(writer)
+        const events = yield* startCollecting(
+          client.session.events({ sessionId: created.sessionId, branchId: created.branchId }),
+        )
+        const received = yield* waitForTaggedEvent(events, "SessionNameUpdated")
+        const update = received.find(({ event }) => event._tag === "SessionNameUpdated")
+        expect(update).toBeDefined()
+        if (Predicate.isUndefined(update)) return
+        if (
+          Option.exists(Option.fromNullishOr(snapshot.lastEventId), (cursor) => cursor >= update.id)
+        ) {
+          expect(snapshot.name).toBe("after rename")
+        } else {
+          expect(snapshot.name).toBe("before rename")
+        }
+      }).pipe(Effect.timeout("5 seconds")),
+    ),
+  )
+
+  it.live("a session with zero model attempts completes without requesting the model", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("this model must not be requested"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          admission: { runSpec: { overrides: { maxModelAttempts: 0 } } },
+        })
+        const events = yield* startCollecting(client.session.events({ sessionId, branchId }))
+        yield* client.message.send({ sessionId, branchId, content: "short prompt" })
+        const completed = yield* waitForTaggedEvent(events, "TurnCompleted")
+        expect(yield* controls.callCount).toBe(0)
+        expect(
+          completed.some(
+            ({ event }) =>
+              event._tag === "ErrorOccurred" &&
+              event.error.includes("Model-attempt budget exhausted"),
+          ),
+        ).toBe(true)
+      }).pipe(Effect.timeout("5 seconds")),
+    ),
+  )
+
   it.live(
     "a created session appears in list and get with an empty snapshot and queue",
     () =>

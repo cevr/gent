@@ -77,7 +77,8 @@ import type {
  * The `scope` discriminator is intentionally narrow. The host owns two
  * long-lived resource lifetimes:
  *
- *   - `"process"` — survives for the server's lifetime; requires `ServerScope`
+ *   - `"process"` — shared by compatible profiles, released when the last
+ *     holder retires or the server closes; requires `ServerScope`
  *   - `"branch"`  — survives for one agent-loop branch; requires `BranchScope`
  *
  * Add a scope literal only together with its host lifecycle implementation.
@@ -93,9 +94,10 @@ type ResourceId = typeof ResourceId.Type
 
 /**
  * Pure type-level scope brand used by Resource declarations. Encodes the
- * lifetime of a `Scope.Scope` at the type level. `ServerScope` survives for the
- * server's lifetime. Add new brands only when their resource host lifecycle
- * exists. These types carry no runtime payload; they are purely structural.
+ * lifetime of a `Scope.Scope` at the type level. `ServerScope` is held by the
+ * profiles sharing a process resource, until their last holder retires or the
+ * server closes. Add brands only with their host lifecycle. These types carry
+ * no runtime payload; they are purely structural.
  */
 declare const ServerBrand: unique symbol
 type ServerScope = { readonly [ServerBrand]: true }

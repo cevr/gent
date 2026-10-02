@@ -630,8 +630,8 @@ export interface ToolInput<
 }
 
 /**
- * Lower a `ToolInput` to a `ToolCapability` (defaults to a write/destructive
- * tool unless `readonly: true` is set).
+ * Lower a `ToolInput` to a `ToolCapability`. Defaults to a write tool unless
+ * `readonly: true`; destructive metadata is opt-in.
  */
 export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary

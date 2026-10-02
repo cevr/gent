@@ -272,8 +272,7 @@ export const DEFAULT_AGENT_NAME = AgentName.make("main")
  *
  * Per `composability-not-flags`, agent specs carry only what makes the agent
  * what it is: name, description, model, prompt, tool allow/deny, sampling
- * defaults, and driver routing. Per-run concerns (persistence/retention,
- * overrides, parent-tool linkage, tags) live on `RunSpec`.
+ * defaults, and driver routing. Per-run overrides live on `RunSpec`.
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,

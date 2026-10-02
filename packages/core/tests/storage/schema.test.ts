@@ -90,7 +90,7 @@ const WORKSPACE = "a".repeat(64)
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 
 describe("message search index removal", () => {
-  it.scopedLive("an older database keeps its sessions and loses messages_fts", () =>
+  it.scopedLive("an older search index is removed and the upgraded store accepts sessions", () =>
     Effect.gen(function* () {
       const dir = yield* makeTempDirectoryScoped("gent-fts-drop-")
       const dbPath = `${dir}/data.db`

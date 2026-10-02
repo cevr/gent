@@ -1084,17 +1084,17 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
   const eventStorage = yield* EventStorage
   const storageTransaction = yield* makeStorageTransaction
   const sessionRuntime = yield* SessionRuntime
-  const session = yield* sessionStorage.getSession(input.sessionId)
-  if (Predicate.isUndefined(session)) {
-    return yield* new NotFoundError({ message: "Session not found" })
-  }
-  const branch = yield* branchStorage.getBranch(input.branchId)
-  if (Predicate.isUndefined(branch) || branch.sessionId !== input.sessionId) {
-    return yield* new NotFoundError({ message: "Branch not found" })
-  }
 
   const snapshotState = yield* storageTransaction(
     Effect.gen(function* () {
+      const session = yield* sessionStorage.getSession(input.sessionId)
+      if (Predicate.isUndefined(session)) {
+        return yield* new NotFoundError({ message: "Session not found" })
+      }
+      const branch = yield* branchStorage.getBranch(input.branchId)
+      if (Predicate.isUndefined(branch) || branch.sessionId !== input.sessionId) {
+        return yield* new NotFoundError({ message: "Branch not found" })
+      }
       const messages = yield* messageStorage.listMessages(input.branchId)
       const events = yield* eventStorage
         .listEvents({ sessionId: input.sessionId, branchId: input.branchId })
@@ -1110,6 +1110,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
         branchId: input.branchId,
       })
       return {
+        session,
         projectedMessages: projectMessagesWithToolInteractions(messages, toolCallReceipts(events)),
         lastEventId,
         // The same read answers the HUD totals: one branch log, folded once.
@@ -1118,6 +1119,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     }),
   )
 
+  const { session } = snapshotState
   const runtime = yield* sessionRuntime.getState(input).pipe(
     Effect.mapError(
       (cause) =>

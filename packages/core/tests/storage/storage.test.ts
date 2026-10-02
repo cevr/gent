@@ -68,6 +68,42 @@ const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)
 
 describe("Sessions", () => {
+  it.live(
+    "a zero model budget spends no attempt and positive concurrent reservations obey their ceiling",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const operations = yield* SessionOperationStorage
+        const sql = yield* SqlClient.SqlClient
+        const sessionId = SessionId.make("model-budget-session")
+        const branchId = BranchId.make("model-budget-branch")
+        const messageId = MessageId.make("model-budget-message")
+        yield* sessions.createSession(
+          new Session({ id: sessionId, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
+        )
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
+        const address = { sessionId, branchId, messageId }
+
+        expect(yield* operations.reserveModelAttempt({ ...address, max: 0 })).toBe(false)
+        const empty =
+          yield* sql`SELECT request_id FROM durable_operations WHERE request_id = ${messageId}`
+        expect(empty).toHaveLength(0)
+
+        const admissions = yield* Effect.forEach(
+          [1, 2, 3],
+          () => operations.reserveModelAttempt({ ...address, max: 2 }),
+          { concurrency: 3 },
+        )
+        expect(admissions.filter(Boolean)).toHaveLength(2)
+        expect(yield* operations.reserveModelAttempt({ ...address, max: 2 })).toBe(false)
+        const receipts = yield* sql<{
+          attempts: number
+        }>`SELECT json_extract(result_json, '$.attempts') AS attempts FROM durable_operations WHERE request_id = ${messageId}`
+        expect(receipts).toEqual([{ attempts: 2 }])
+      }).pipe(Effect.provide(testSqliteStorage(Layer.empty, {}))),
+  )
+
   it.live("creates and retrieves a session", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage

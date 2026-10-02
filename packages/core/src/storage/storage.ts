@@ -1548,6 +1548,7 @@ export class SessionOperationStorage extends Context.Service<
             }
             if (!(yield* branchInSession(sql, address.branchId, address.sessionId)))
               return yield* new StorageError({ message: "Model branch does not belong to session" })
+            if (address.max === 0) return false
             const workspaceId = yield* CurrentWorkspaceId
             const createdAt = (yield* DateTime.nowAsDate).getTime()
             const reserved = yield* sql`
