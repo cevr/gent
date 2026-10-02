@@ -115,16 +115,22 @@ const countingHttpLayer = (calls: Ref.Ref<number>, body: string) =>
   )
 
 /**
- * An HTTP client that counts the call, then waits for `gate` before it
- * answers. Every caller that reaches it is still in flight until the gate
- * opens, so the count reflects how many callers got past the memo.
+ * An HTTP client that counts the call, signals `reached`, then waits for
+ * `gate` before it answers. Every caller that reaches it is still in flight
+ * until the gate opens.
  */
-const gatedHttpLayer = (calls: Ref.Ref<number>, gate: Deferred.Deferred<void>, body: string) =>
+const gatedHttpLayer = (
+  calls: Ref.Ref<number>,
+  reached: Deferred.Deferred<void>,
+  gate: Deferred.Deferred<void>,
+  body: string,
+) =>
   Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request) =>
       Effect.gen(function* () {
         yield* Ref.update(calls, (n) => n + 1)
+        yield* Deferred.succeed(reached, void 0)
         yield* Deferred.await(gate)
         return HttpClientResponse.fromWeb(request, new Response(body, { status: 200 }))
       }),
@@ -703,28 +709,26 @@ describe("models.dev catalog", () => {
 
   it.scopedLive("two drivers on one home share a single fetch", () =>
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
       const home = yield* freshHome("memo")
+      // A directory stands where the cache file goes: the disk can neither
+      // write nor serve a catalog, so only the memo can spare the second
+      // driver its own fetch. Without the memo this test sees 2 calls.
+      yield* fs.makeDirectory(yield* cachePathIn(home), { recursive: true })
       const calls = yield* Ref.make(0)
-      // The gate holds every request open until the test releases it. Both
-      // drivers are therefore still in flight when the count is taken, so the
-      // first load's disk write cannot serve the second caller and stand in
-      // for the memo. Without the memo store this test sees 2 calls.
+      const reached = yield* Deferred.make<void>()
       const gate = yield* Deferred.make<void>()
-      const gated = gatedHttpLayer(calls, gate, encodeAnyJson(remotePayload))
-      const http = Effect.provide(gated)
-
-      const both = yield* Effect.forkChild(
-        Effect.all(
-          [driverCatalog(home, "openai").pipe(http), driverCatalog(home, "anthropic").pipe(http)],
-          {
-            concurrency: "unbounded",
-          },
-        ),
+      const http = Effect.provide(
+        gatedHttpLayer(calls, reached, gate, encodeAnyJson(remotePayload)),
       )
-      // Let both callers reach the catalog before anything can answer.
-      yield* Effect.yieldNow
+
+      // The second driver lists while the first driver's fetch is in flight.
+      const first = yield* Effect.forkChild(driverCatalog(home, "openai").pipe(http))
+      yield* Deferred.await(reached)
+      const second = yield* Effect.forkChild(driverCatalog(home, "anthropic").pipe(http))
       yield* Deferred.succeed(gate, void 0)
-      const [openai, anthropic] = yield* Fiber.join(both).pipe(Effect.timeout(5_000))
+      const openai = yield* Fiber.join(first).pipe(Effect.timeout(5_000))
+      const anthropic = yield* Fiber.join(second).pipe(Effect.timeout(5_000))
 
       expect(yield* Ref.get(calls)).toBe(1)
       expect(openai.map((model) => model.id)).toEqual([

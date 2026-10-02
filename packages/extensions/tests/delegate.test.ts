@@ -1317,8 +1317,10 @@ describe("a start nobody waits for", () => {
   it.live("a child is named by its task's first line, cut between characters", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        // The emoji straddles the 60th UTF-16 unit, and the task goes on below its first line.
-        const firstLine = `CHILD-NAME ${"a".repeat(48)}🙂 then more`
+        // The first line runs past the 80-unit name limit, the emoji fills units 79
+        // and 80, and the task goes on below its first line.
+        const head = `CHILD-NAME ${"a".repeat(67)}`
+        const firstLine = `${head}🙂 then more`
         const todo = `${firstLine}\n\nContext: the rest of the task.`
         let parentCalls = 0
         const providerLayer = LanguageModelLayers.testStream((options) => {
@@ -1336,7 +1338,9 @@ describe("a start nobody waits for", () => {
         const child = yield* childOf(harness)
         const sessions = yield* harness.client.session.list()
         const name = sessions.find((session) => session.id === child.sessionId)?.name
-        expect(name).toBe(`${DELEGATE_AGENT_NAME}: ${firstLine}`)
+        // The cut drops the whole emoji: no half of a surrogate pair stays.
+        expect(head).toHaveLength(78)
+        expect(name).toBe(`${DELEGATE_AGENT_NAME}: ${head}…`)
       }).pipe(Effect.timeout("10 seconds")),
     ),
   )
