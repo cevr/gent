@@ -45,6 +45,7 @@ import {
   type NoticeRow,
   type WidgetComponent,
   type WidgetSlot,
+  ClientContributionsData,
   contributionBucketSchema,
 } from "./client-facets.js"
 import { bindModuleSource, buildClientExtension, type ClientBuildNames } from "../bun-adapter"
@@ -676,22 +677,54 @@ const withinLoadTimeout =
     )
 
 /**
- * What is wrong with a setup's result, if anything. A key outside the known
+ * What is wrong with a setup's buckets, if anything. A key outside the known
  * buckets fails by name, so a renamed bucket never drops its items silently;
- * a known bucket of another shape fails here, inside this extension's own
- * failure, and never reaches the resolution every extension shares.
+ * a known bucket of another shape fails by name too.
  */
-// eslint-disable-next-line effect/noUnknownParameters -- a user setup's result is parsed at this module boundary.
-const contributionsProblem = (value: unknown): Option.Option<string> => {
-  if (!Predicate.isObject(value)) return Option.some("setup must return contributions")
-  for (const key of Object.keys(value)) {
+const bucketsProblem = (
+  buckets: ReadonlyArray<readonly [string, unknown]>,
+): Option.Option<string> => {
+  for (const [key, bucket] of buckets) {
     const schema = contributionBucketSchema(key)
     if (Option.isNone(schema)) return Option.some(`unknown contribution "${key}"`)
-    if (Predicate.hasProperty(value, key) && !Schema.is(schema.value)(value[key])) {
-      return Option.some(`malformed contribution "${key}"`)
-    }
+    if (!Schema.is(schema.value)(bucket)) return Option.some(`malformed contribution "${key}"`)
   }
   return Option.none()
+}
+
+/**
+ * A setup's result as plain contributions, inside this extension's own
+ * failure. Every read of the extension's object (a getter can throw) happens
+ * here, and the decode builds new objects, so the resolution every extension
+ * shares never touches the extension's own object.
+ */
+const readContributions = (
+  id: string,
+  // eslint-disable-next-line effect/noUnknownParameters -- a user setup's result is parsed at this module boundary.
+  value: unknown,
+): Effect.Effect<ClientContributions, ClientExtensionFailure> => {
+  const guarded = <A>(read: () => A) =>
+    Effect.try({
+      try: read,
+      catch: (cause): ClientExtensionFailure => ({
+        id,
+        reason: `reading contributions failed: ${String(cause)}`,
+      }),
+    })
+  return Effect.gen(function* () {
+    if (!Predicate.isObject(value)) {
+      return yield* Effect.fail({ id, reason: "setup must return contributions" })
+    }
+    const buckets: ReadonlyArray<readonly [string, unknown]> = yield* guarded(() =>
+      Object.entries(value),
+    )
+    const problem = yield* guarded(() => bucketsProblem(buckets))
+    if (Option.isSome(problem)) return yield* Effect.fail({ id, reason: problem.value })
+    const decoded = yield* guarded(() =>
+      Schema.decodeExit(ClientContributionsData)(Object.fromEntries(buckets)),
+    )
+    return yield* Effect.mapError(decoded, () => ({ id, reason: "malformed contributions" }))
+  })
 }
 
 /** Run one extension's setup; any failure, defect or timeout becomes a recorded failure. */
@@ -708,18 +741,13 @@ const setupExtension = (
         ),
       ),
     ),
-    Effect.flatMap((contributions) =>
-      Option.match(contributionsProblem(contributions), {
-        onSome: (reason) => Effect.fail({ id: ext.module.id, reason }),
-        onNone: () =>
-          Effect.succeed({
-            id: ext.module.id,
-            scope: ext.scope,
-            filePath: ext.filePath,
-            contributions,
-          }),
-      }),
-    ),
+    Effect.flatMap((value) => readContributions(ext.module.id, value)),
+    Effect.map((contributions): LoadedTuiExtension => ({
+      id: ext.module.id,
+      scope: ext.scope,
+      filePath: ext.filePath,
+      contributions,
+    })),
     withinLoadTimeout(ext.module.id, "setup", timeout),
   )
 

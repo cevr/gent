@@ -783,6 +783,55 @@ export default {
       }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive(
+    "contributions read once inside their extension: a throwing bucket fails only it, and a bucket that changes after the check cannot reach resolution",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const root = yield* fs.makeTempDirectoryScoped({
+          prefix: "gent-client-throwing-bucket-",
+        })
+        const userDir = path.join(root, "home/.gent/extensions")
+        const projectDir = path.join(root, "project/.gent/extensions")
+        yield* fs.makeDirectory(userDir, { recursive: true })
+        yield* fs.writeFileString(
+          path.join(userDir, "throwing.client.ts"),
+          `
+import { Effect } from "effect";
+export default {
+  id: "@user/throwing",
+  setup: Effect.succeed({ get widgets() { throw new Error("broken") } }),
+};
+`,
+        )
+        // Well-formed on the first read, malformed on every read after it.
+        yield* fs.writeFileString(
+          path.join(userDir, "shifting.client.ts"),
+          `
+import { Effect } from "effect";
+let reads = 0;
+const widgets = [{ id: "shifting", slot: "below-input", component: () => null }];
+export default {
+  id: "@user/shifting",
+  setup: Effect.succeed({ get widgets() { reads++; return reads === 1 ? widgets : {} } }),
+};
+`,
+        )
+        const good: ExtensionClientModule = {
+          id: "@test/builtin-beside-throwing",
+          setup: Effect.succeed(
+            autocompleteContribution({ prefix: "!", title: "good", items: () => [] }),
+          ),
+        }
+        const result = yield* loadTuiExtensions({ builtins: [good], userDir, projectDir, runtime })
+        expect(result.autocompleteItems.map((c) => c.prefix)).toEqual(["!"])
+        expect(result.widgets.map((w) => w.id)).toEqual(["shifting"])
+        expect(result.failures.map((failure) => failure.id)).toEqual(["@user/throwing"])
+        expect(result.failures[0]?.reason).toContain("broken")
+      }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   // The compiled binary has no node_modules. A client extension outside the
   // repository resolves its imports, and compiles its JSX, only because the
   // loader binds them to the modules the TUI runs. A relative module the

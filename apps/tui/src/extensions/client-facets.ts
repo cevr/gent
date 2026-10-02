@@ -802,9 +802,12 @@ export interface ClientContributions {
 /** A function value; the host calls it, so its parameters are not checked here. */
 type HostCalledFunction = (...args: ReadonlyArray<never>) => void
 
-const ContributedFunction = Schema.declare((value: unknown): value is HostCalledFunction =>
-  Predicate.isFunction(value),
-)
+/**
+ * A function the host calls as `F`. Only that it is a function is checked:
+ * its parameters and result stay the extension's contract.
+ */
+const contributed = <F extends HostCalledFunction>() =>
+  Schema.declare((value: unknown): value is F => Predicate.isFunction(value))
 
 const bucketOf = <Fields extends Schema.Struct.Fields>(fields: Fields) =>
   Schema.UndefinedOr(Schema.Array(Schema.Struct(fields)))
@@ -817,17 +820,20 @@ const bucketOf = <Fields extends Schema.Struct.Fields>(fields: Fields) =>
  * host resolves every extension's contributions together.
  */
 const CONTRIBUTION_BUCKETS = {
-  renderers: bucketOf({ toolNames: Schema.Array(Schema.String), component: ContributedFunction }),
+  renderers: bucketOf({
+    toolNames: Schema.Array(Schema.String),
+    component: contributed<ToolRenderer>(),
+  }),
   messageRenderers: bucketOf({
     customType: Schema.String,
-    component: ContributedFunction,
-    prompt: Schema.optional(ContributedFunction),
+    component: contributed<MessageRenderer>(),
+    prompt: Schema.optional(contributed<(content: string) => string>()),
   }),
   widgets: bucketOf({
     id: Schema.String,
     slot: WidgetSlot,
     priority: Schema.optional(Schema.Finite),
-    component: ContributedFunction,
+    component: contributed<WidgetComponent>(),
   }),
   commands: bucketOf({
     id: Schema.String,
@@ -837,24 +843,43 @@ const CONTRIBUTION_BUCKETS = {
     keybind: Schema.optional(Schema.String),
     slash: Schema.optional(Schema.String),
     aliases: Schema.optional(Schema.Array(Schema.String)),
-    onSelect: ContributedFunction,
-    onSlash: Schema.optional(ContributedFunction),
+    onSelect: contributed<Command["onSelect"]>(),
+    onSlash: Schema.optional(contributed<(args: string) => void>()),
   }),
-  interactionRenderers: bucketOf({ metadataType: Schema.String, component: ContributedFunction }),
+  interactionRenderers: bucketOf({
+    metadataType: Schema.String,
+    component: contributed<InteractionRendererComponent>(),
+  }),
   statusLabels: bucketOf({
     priority: Schema.optional(Schema.Finite),
-    produce: ContributedFunction,
+    produce: contributed<StatusLabelContribution["produce"]>(),
   }),
-  noticeRows: bucketOf({ id: Schema.String, rows: ContributedFunction }),
+  noticeRows: bucketOf({ id: Schema.String, rows: contributed<NoticeRowContribution["rows"]>() }),
   autocomplete: bucketOf({
     prefix: Schema.String,
     title: Schema.String,
-    items: ContributedFunction,
-    formatInsertion: Schema.optional(ContributedFunction),
-    onSelect: Schema.optional(ContributedFunction),
-    onOpen: Schema.optional(ContributedFunction),
+    items: contributed<AutocompleteContribution["items"]>(),
+    formatInsertion: Schema.optional(contributed<(id: string) => string>()),
+    onSelect: Schema.optional(contributed<(id: string, filter: string) => void>()),
+    onOpen: Schema.optional(contributed<() => void>()),
   }),
 } satisfies Record<keyof ClientContributions, Schema.Top>
+
+/**
+ * A setup's contributions as plain data: decoding reads each value once and
+ * builds new objects and arrays, so the shared resolution never reads an
+ * extension's own object (a getter that throws, or answers differently later).
+ */
+export const ClientContributionsData = Schema.Struct({
+  renderers: Schema.optionalKey(CONTRIBUTION_BUCKETS.renderers),
+  messageRenderers: Schema.optionalKey(CONTRIBUTION_BUCKETS.messageRenderers),
+  widgets: Schema.optionalKey(CONTRIBUTION_BUCKETS.widgets),
+  commands: Schema.optionalKey(CONTRIBUTION_BUCKETS.commands),
+  interactionRenderers: Schema.optionalKey(CONTRIBUTION_BUCKETS.interactionRenderers),
+  statusLabels: Schema.optionalKey(CONTRIBUTION_BUCKETS.statusLabels),
+  noticeRows: Schema.optionalKey(CONTRIBUTION_BUCKETS.noticeRows),
+  autocomplete: Schema.optionalKey(CONTRIBUTION_BUCKETS.autocomplete),
+} satisfies Record<keyof ClientContributions, Schema.Top>)
 
 const isContributionBucket = (key: string): key is keyof typeof CONTRIBUTION_BUCKETS =>
   Object.hasOwn(CONTRIBUTION_BUCKETS, key)
