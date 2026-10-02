@@ -598,8 +598,9 @@ Shape:
   only re-runs the step. Transient means the provider library's typed
   `AiError` says so, or a mid-stream error event matches the driver's
   `transientStreamEvent` schema (Anthropic names a `type`, OpenAI a `code`).
-  A typed rate limit's `retryAfter` replaces the backoff. Nothing is inferred
-  from message text.
+  A typed rate limit's `retryAfter` replaces the backoff; one longer than the
+  policy's `maxDelay` (a usage limit that resets in hours) fails the step
+  without a retry. Nothing is inferred from message text.
   After partial output the partial assistant message stays, a durable
   continuation instruction (`<turn>:continuation:<step>`, `customType`
   `continuation`) follows it, and the same turn runs one more model step. Two

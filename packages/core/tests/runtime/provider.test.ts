@@ -140,16 +140,18 @@ describe("provider retry", () => {
     }),
   )
 
-  it.effect("caps the provider's retry-after at the configured maximum", () =>
+  // A usage limit (OpenCode Go, a free tier) answers 429 with a retry-after of
+  // hours: no retry inside the cap can succeed, so the limit fails the call.
+  it.effect("a retry-after longer than the configured maximum fails without a retry", () =>
     Effect.gen(function* () {
-      const { run, delays } = failThenSucceed(rateLimited(Duration.minutes(10)), 1, {
+      const { run, delays, calls } = failThenSucceed(rateLimited(Duration.hours(5)), 1, {
         ...fast,
-        maxDelay: 5_000,
+        maxDelay: 30_000,
       })
-      const fiber = yield* Effect.forkChild(run)
-      yield* TestClock.adjust("5 seconds")
-      expect(yield* Fiber.join(fiber)).toBe("ok")
-      expect(delays).toEqual([5_000])
+      const exit = yield* Effect.exit(run)
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(calls()).toBe(1)
+      expect(delays).toEqual([])
     }),
   )
 
