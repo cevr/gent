@@ -866,7 +866,7 @@ describe("driver routing through the client transport", () => {
   )
 })
 
-// ── ../herdr-test-server-boundary ───────────────────────────────────────────
+// ── herdr test server ───────────────────────────────────────────────────────
 
 /** Local socket boundary for Herdr acceptance tests. */
 
@@ -887,13 +887,14 @@ const encodeReply = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ id: Schema.String, result: Schema.Struct({}) })),
 )
 
-export const makeHerdrTestServer = Effect.fn("Test.makeHerdrServer")(function* () {
+const makeHerdrTestServer = Effect.fn("Test.makeHerdrServer")(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-herdr-" })
   const socketPath = path.join(directory, "s")
   const requests = yield* Queue.unbounded<typeof Request.Type>()
   let respond = true
+  let received = 0
   const server = yield* Effect.acquireRelease(
     Effect.sync(() =>
       // eslint-disable-next-line effect/noGlobals -- Real Unix socket peer at the test platform boundary.
@@ -912,6 +913,7 @@ export const makeHerdrTestServer = Effect.fn("Test.makeHerdrServer")(function* (
               socket.end()
               return
             }
+            received++
             Queue.offerUnsafe(requests, request.value)
             if (respond) socket.end(`${encodeReply({ id: request.value.id, result: {} })}\n`)
           },
@@ -923,6 +925,7 @@ export const makeHerdrTestServer = Effect.fn("Test.makeHerdrServer")(function* (
   return {
     target: { socketPath, paneId: "test:p1" },
     next: Queue.take(requests),
+    received: () => received,
     pauseReplies: () => {
       respond = false
     },
@@ -1041,20 +1044,44 @@ describe("Herdr integration", () => {
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("3 seconds")),
   )
 
-  it.live("does nothing outside Herdr, without pane identity, or in headless mode", () =>
+  it.scopedLive("reports nothing outside Herdr or without a socket and a pane", () =>
     Effect.gen(function* () {
-      for (const env of [
+      const server = yield* makeHerdrTestServer()
+      const socket = server.target.socketPath
+      // The context lives as long as the test, so a reporter that starts stays up.
+      const scope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      )
+      const setupIn = (env: Record<string, string>, sessionId: string) =>
+        Effect.gen(function* () {
+          const context = yield* Layer.buildWithScope(
+            contextLayer({
+              activity: () => ({ sessionId: SessionId.make(sessionId), state: "working" }),
+            }),
+            scope,
+          )
+          yield* builtinHerdr.setup.pipe(
+            Effect.provideContext(context),
+            Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)),
+          )
+        })
+      const outside: ReadonlyArray<Record<string, string>> = [
         {},
         { HERDR_ENV: "1" },
-        { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/unused", HERDR_PANE_ID: "test:p1" },
-        { HERDR_ENV: "0", HERDR_SOCKET_PATH: "/unused", HERDR_PANE_ID: "test:p1" },
-      ]) {
-        const result = yield* builtinHerdr.setup.pipe(
-          Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)),
-        )
-        expect(result).toBeDefined()
-      }
-    }).pipe(Effect.provide(contextLayer())),
+        { HERDR_ENV: "1", HERDR_SOCKET_PATH: socket },
+        { HERDR_ENV: "1", HERDR_PANE_ID: "test:p1" },
+        { HERDR_ENV: "0", HERDR_SOCKET_PATH: socket, HERDR_PANE_ID: "test:p1" },
+      ]
+      for (const env of outside) yield* setupIn(env, "session-off")
+      // The control: inside Herdr the first report reaches the socket, and it is the only one.
+      yield* setupIn(
+        { HERDR_ENV: "1", HERDR_SOCKET_PATH: socket, HERDR_PANE_ID: "test:p1" },
+        "session-on",
+      )
+      const first = yield* server.next
+      expect(first.params.agent_session_id).toBe("session-on")
+      expect(server.received()).toBe(1)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("3 seconds")),
   )
 })
 
