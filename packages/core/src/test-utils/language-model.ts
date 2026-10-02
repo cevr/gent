@@ -15,7 +15,6 @@ import {
 } from "effect"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import { LanguageModel } from "effect/ai"
-import { FetchHttpClient } from "effect/http"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter creates worker files before the child runtime starts.
 import * as fs from "node:fs"
 import * as os from "node:os"
@@ -47,155 +46,14 @@ import {
   toolCallPart,
 } from "../runtime/provider.js"
 
-// ── fake-fetch ──────────────────────────────────────────────────────────────
-
-// Shared fake-`FetchHttpClient.Fetch` capture pattern for provider-extension
-// tests: drive one real request through the resolved layer and assert on the
-// captured outbound shape, not on the layer's structure.
-//
-// Use this helper to:
-//   1. Build a `Layer` that overrides `FetchHttpClient.Fetch` with a fake
-//      that captures every outbound request into a shared array.
-//   2. Run one `LanguageModel.generateText({prompt})` through any provider
-//      layer that requires `LanguageModel.LanguageModel`.
-//   3. Inspect captured request URL / method / headers / body to assert
-//      on the production wiring (auth headers, system blocks, betas, etc).
-//
-// The driver tests in `packages/extensions/tests/` (`anthropic.test.ts`,
-// `openai.test.ts`, `providers.test.ts`) are its consumers.
-
-export interface CapturedRequest {
-  url: string
-  method: string
-  headers: Record<string, string>
-  body?: string
-}
-
-export interface FakeFetchState {
-  captured: Array<CapturedRequest>
-}
-
-/** Build a fresh capture state. */
-export const makeFakeFetchState = (): FakeFetchState => ({ captured: [] })
-
-type FakeFetchFn = (
-  input: globalThis.RequestInfo | globalThis.URL,
-  init?: globalThis.RequestInit,
-) => Promise<Response>
-
-interface FakeResponse {
-  status: number
-  headers?: Record<string, string>
-  body: string
-}
-
-type FakeResponder = (req: CapturedRequest) => FakeResponse | Effect.Effect<FakeResponse>
-
-const asEffect = (
-  answer: FakeResponse | Effect.Effect<FakeResponse>,
-): Effect.Effect<FakeResponse> => {
-  if (Effect.isEffect(answer)) return answer
-  return Effect.succeed(answer)
-}
-
-/**
- * Builds a fake `typeof globalThis.fetch` that captures each call into
- * `state.captured` and responds with the provided `responder` body.
- *
- * `responder` receives the captured request (same shape stored in
- * `state.captured`) so per-call response shaping is possible — e.g. 401
- * on first call, 200 on retry. A responder that returns an Effect runs it
- * before the response resolves, so a test can change the world while a
- * request is in flight.
- */
-const makeFakeFetch =
-  (state: FakeFetchState, responder: FakeResponder): FakeFetchFn =>
-  (input: globalThis.RequestInfo | globalThis.URL, init?: globalThis.RequestInit) => {
-    let url: string
-    if (Predicate.isString(input)) url = input
-    else if (input instanceof URL) url = input.href
-    else url = input.url
-
-    const headers: Record<string, string> = {}
-    const headerInit = init?.headers
-    if (headerInit instanceof Headers) {
-      headerInit.forEach((value, key) => {
-        headers[key.toLowerCase()] = value
-      })
-    } else if (Array.isArray(headerInit)) {
-      for (const [k, v] of headerInit) {
-        headers[k.toLowerCase()] = v
-      }
-    } else if (!Predicate.isUndefined(headerInit) && !Predicate.isNull(headerInit)) {
-      for (const [k, v] of Object.entries(headerInit)) {
-        if (Predicate.isString(v)) headers[k.toLowerCase()] = v
-      }
-    }
-
-    let bodyText = Option.none<string>()
-    if (Predicate.isString(init?.body)) bodyText = Option.some(init.body)
-    else if (init?.body instanceof Uint8Array)
-      bodyText = Option.some(new TextDecoder().decode(init.body))
-
-    const captured: CapturedRequest = {
-      url,
-      method: init?.method ?? "GET",
-      headers,
-      body: Option.getOrUndefined(bodyText),
-    }
-    state.captured.push(captured)
-
-    // oxlint-disable-next-line effect/noEffectRunInTests -- This adapter implements the Promise-based Fetch interface.
-    return Effect.runPromise(
-      Effect.map(
-        asEffect(responder(captured)),
-        (reply) =>
-          new globalThis.Response(reply.body, {
-            status: reply.status,
-            headers: reply.headers ?? { "content-type": "application/json" },
-          }),
-      ),
-    )
-  }
-
-/**
- * Build a `Layer` that overrides `FetchHttpClient.Fetch` with a fake
- * that captures into `state` and replies via `responder`.
- */
-export const fakeFetchLayer = (
-  state: FakeFetchState,
-  responder: FakeResponder,
-): Layer.Layer<never, never, never> =>
-  Layer.succeed(
-    FetchHttpClient.Fetch,
-    Object.assign(makeFakeFetch(state, responder), { preconnect: () => {} }),
-  )
-
-/**
- * Build the Effect that drives one `LanguageModel.generateText({prompt})`
- * through `layer` with `FetchHttpClient.Fetch` overridden to capture into
- * `state` and reply via `responder`. A test yields it inside its own
- * Effect, so it composes with `Effect.exit`, `TestClock` and the rest.
- */
-export const oneGenerate = (
-  layer: Layer.Layer<LanguageModel.LanguageModel>,
-  state: FakeFetchState,
-  responder: FakeResponder,
-  prompt: Prompt.RawInput = "hi",
-): Effect.Effect<void> =>
-  LanguageModel.generateText({ prompt }).pipe(
-    Effect.asVoid,
-    // @effect-diagnostics-next-line strictEffectProvide:off -- test entry point: the probe owns its fake fetch layer.
-    Effect.provide(Layer.provideMerge(layer, fakeFetchLayer(state, responder))),
-    Effect.scoped,
-    Effect.catchCause((cause) => Effect.die(cause)),
-  )
+// ── stored-credential model ─────────────────────────────────────────────────
 
 /**
  * The language model a turn resolves for `modelId` through the production
  * resolver, from `modelDrivers` and an auth store holding the API keys in
- * `stored` (store key → key). Drive it with `oneGenerate` to see which
- * credential a sign-in sends; a failed resolution is a defect.
+ * `stored` (store key → key). A driver test sends one request through it over
+ * a fake fetch to see which credential a sign-in sends; a failed resolution
+ * is a defect.
  */
 export const storedCredentialModel = (input: {
   readonly modelDrivers: ReadonlyArray<ModelDriverContribution>

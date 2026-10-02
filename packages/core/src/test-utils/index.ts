@@ -31,17 +31,12 @@ export {
   testTurnExtension,
 } from "./harness.js"
 export {
-  type CapturedRequest,
   captureProviderStopReason,
   createWorkerEnv,
-  fakeFetchLayer,
   freePort,
-  type FakeFetchState,
   LanguageModelLayers,
-  makeFakeFetchState,
   makeTempDirectoryScoped,
   multiToolCallStep,
-  oneGenerate,
   seedAuthKeys,
   storedCredentialModel,
   type SequenceStep,

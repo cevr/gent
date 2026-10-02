@@ -27,17 +27,19 @@ import {
   type ProviderHints,
 } from "@gent/core/extensions/api"
 import {
-  type CapturedRequest,
   createRpcHarness,
-  fakeFetchLayer,
-  type FakeFetchState,
   LanguageModelLayers,
-  makeFakeFetchState,
   makeTempDirectoryScoped,
-  oneGenerate,
   storedCredentialModel,
   textStep,
 } from "@gent/core/test-utils"
+import {
+  type CapturedRequest,
+  fakeFetchLayer,
+  type FakeFetchState,
+  makeFakeFetchState,
+  oneGenerate,
+} from "./helpers/fake-http-client.js"
 import { buildOpenCodeModelDriver, OPENCODE_GATEWAYS, OpenCodeExtension } from "../src/opencode.js"
 import { catalogSource, modelsDevCatalog } from "../src/providers.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"

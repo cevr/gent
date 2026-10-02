@@ -2974,10 +2974,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "strictEffectProvide:off -- the script's process entry provides the platform once.",
   },
   {
-    file: "packages/core/src/test-utils/language-model.ts",
-    text: "strictEffectProvide:off -- test entry point: the probe owns its fake fetch layer.",
-  },
-  {
     file: "packages/core/src/runtime/tools.ts",
     text: "anyUnknownInErrorContext:off -- an extension tool fails with unknown until normalizeToolExecutionError maps it.",
   },

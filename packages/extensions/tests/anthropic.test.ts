@@ -43,15 +43,7 @@ import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/process"
-import {
-  captureProviderStopReason,
-  testHostFacts,
-  fakeFetchLayer,
-  type FakeFetchState,
-  makeFakeFetchState,
-  oneGenerate,
-  turnNoticesText,
-} from "@gent/core/test-utils"
+import { captureProviderStopReason, testHostFacts, turnNoticesText } from "@gent/core/test-utils"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/http"
 import {
   type CredentialCacheCell,
@@ -71,10 +63,14 @@ import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import {
   type FakeClientState,
+  fakeFetchLayer,
+  type FakeFetchState,
+  type FakeResponder,
   makeFakeClient,
+  makeFakeFetchState,
+  oneGenerate,
   respondFirstWith,
   transportFailure,
-  type TransportFailure,
 } from "./helpers/fake-http-client.js"
 import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { AnthropicClient as AnthropicSdkClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
@@ -557,7 +553,7 @@ describe("keychainTransformClient — auth headers", () => {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const fakeState: FakeClientState = {
         captured: [],
-        responder: () => new Response("ok", { status: 200 }),
+        responder: () => ({ status: 200, body: "ok" }),
       }
       const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -575,7 +571,7 @@ describe("keychainTransformClient — auth headers", () => {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const fakeState: FakeClientState = {
         captured: [],
-        responder: () => new Response("ok", { status: 200 }),
+        responder: () => ({ status: 200, body: "ok" }),
       }
       const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -597,7 +593,7 @@ describe("keychainTransformClient — auth headers", () => {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const fakeState: FakeClientState = {
         captured: [],
-        responder: () => new Response("ok", { status: 200 }),
+        responder: () => ({ status: 200, body: "ok" }),
       }
       const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -617,7 +613,7 @@ describe("keychainTransformClient — auth headers", () => {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const fakeState: FakeClientState = {
         captured: [],
-        responder: () => new Response("ok", { status: 200 }),
+        responder: () => ({ status: 200, body: "ok" }),
       }
       const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -649,7 +645,7 @@ describe("keychainTransformClient — auth headers", () => {
       })
       const fakeState: FakeClientState = {
         captured: [],
-        responder: () => new Response("ok", { status: 200 }),
+        responder: () => ({ status: 200, body: "ok" }),
       }
       const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -673,7 +669,7 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
   // The agent loop owns the retry of 429, 529, 5xx, and transport failures
   // (it honors retry-after and reports each attempt). The transform sends
   // each request once and hands the result back.
-  const sendOnce = (responder: (call: number) => Response | TransportFailure) =>
+  const sendOnce = (responder: FakeResponder) =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const fakeState: FakeClientState = { captured: [], responder }
@@ -688,7 +684,7 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
   for (const status of [429, 529, 500]) {
     it.scopedLive(`a ${status} reaches the caller after one attempt`, () =>
       Effect.gen(function* () {
-        const { exit, captured } = yield* sendOnce(() => new Response("busy", { status }))
+        const { exit, captured } = yield* sendOnce(() => ({ status, body: "busy" }))
         expect(captured).toHaveLength(1)
         expect(Exit.isSuccess(exit) && exit.value.status).toBe(status)
       }),
@@ -698,7 +694,7 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
     Effect.gen(function* () {
       const body =
         '{"type":"error","error":{"message":"Extra usage is required for long context requests"}}'
-      const { exit, captured } = yield* sendOnce(() => new Response(body, { status: 400 }))
+      const { exit, captured } = yield* sendOnce(() => ({ status: 400, body: body }))
       expect(captured).toHaveLength(1)
       expect(Exit.isSuccess(exit) && exit.value.status).toBe(400)
       expect(captured[0]!.headers["anthropic-beta"]).toContain("interleaved-thinking-2025-05-14")
@@ -737,10 +733,7 @@ describe("keychainTransformClient — 401 recovery", () => {
       const creds = yield* credentialCache(togglingCredsIO("stale", "fresh"))
       const fakeState: FakeClientState = {
         captured: [],
-        responder: respondFirstWith(
-          new Response("auth", { status: 401 }),
-          new Response("ok", { status: 200 }),
-        ),
+        responder: respondFirstWith({ status: 401, body: "auth" }, { status: 200, body: "ok" }),
       }
       const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -772,10 +765,7 @@ describe("keychainTransformClient — 401 recovery", () => {
       })
       const fakeState: FakeClientState = {
         captured: [],
-        responder: respondFirstWith(
-          new Response("auth", { status: 401 }),
-          new Response("ok", { status: 200 }),
-        ),
+        responder: respondFirstWith({ status: 401, body: "auth" }, { status: 200, body: "ok" }),
       }
       const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -851,7 +841,7 @@ describe("keychainTransformClient — 401 recovery", () => {
           captured: [],
           // Both attempts get 401 — the second 401 is a real auth failure
           // (revoked session, missing scope) and must reach the caller.
-          responder: () => new Response("auth", { status: 401 }),
+          responder: () => ({ status: 401, body: "auth" }),
         }
         const transform = buildKeychainTransformClient(creds, TEST_ENV)
         const wrapped = transform(makeFakeClient(fakeState))
@@ -875,8 +865,8 @@ describe("keychainTransformClient — 401 recovery", () => {
       const fakeState: FakeClientState = {
         captured: [],
         responder: respondFirstWith(
-          new Response("server error", { status: 500 }),
-          new Response("ok", { status: 200 }),
+          { status: 500, body: "server error" },
+          { status: 200, body: "ok" },
         ),
       }
       const transform = buildKeychainTransformClient(creds, TEST_ENV)
