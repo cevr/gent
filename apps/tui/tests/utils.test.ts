@@ -343,11 +343,18 @@ describe("formatDuration", () => {
   describe("precise", () => {
     test("milliseconds under a second, tenths under a minute, then minutes and seconds", () => {
       expect(formatDuration(12, "precise")).toBe("12ms")
-      expect(formatDuration(999.6, "precise")).toBe("1000ms")
       expect(formatDuration(1_250, "precise")).toBe("1.3s")
       expect(formatDuration(59_940, "precise")).toBe("59.9s")
       expect(formatDuration(65_000, "precise")).toBe("1m 5s")
       expect(formatDuration(3_720_000, "precise")).toBe("1h 2m")
+    })
+
+    test("a value that rounds up to the next unit is written in that unit", () => {
+      expect(formatDuration(999.4, "precise")).toBe("999ms")
+      expect(formatDuration(999.6, "precise")).toBe("1.0s")
+      expect(formatDuration(59_960, "precise")).toBe("1m 0s")
+      expect(formatDuration(119_600, "precise")).toBe("2m 0s")
+      expect(formatDuration(3_599_600, "precise")).toBe("1h 0m")
     })
   })
 })
