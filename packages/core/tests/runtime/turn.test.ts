@@ -276,8 +276,6 @@ describe("agent turn response collectors", () => {
     })
   })
 
-  test("unknown finish reasons collapse to unknown", () => {})
-
   it.scopedLive("model collector retries pre-output provider failures by re-raising them", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)

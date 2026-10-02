@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Exit, Layer, Option, Order, Predicate, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Option, Order, Predicate, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import {
@@ -647,7 +647,7 @@ describe("tool execution", () => {
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ readValue: "read-ok", writeUnavailable: false })
     }))
-  test("readonly tools receive ExtensionContext with denied write facets", () =>
+  it.scopedLive("readonly tools can queue follow-ups and present notes through real facades", () =>
     Effect.gen(function* () {
       const ReadContextTool = tool({
         id: "read_extension_context",
@@ -656,73 +656,68 @@ describe("tool execution", () => {
         params: Schema.Struct({}),
         output: Schema.Struct({
           sessionId: Schema.String,
-          followUpDenied: Schema.Boolean,
-          interactionDenied: Schema.Boolean,
         }),
         execute: () =>
           Effect.gen(function* () {
             const ctx = yield* ExtensionContext
-            const followUpExit = yield* Effect.exit(
-              ctx.Session.send({ delivery: "queue", sourceId: "read-tool", content: "nope" }),
-            )
-            const interactionExit = yield* Effect.exit(
-              ctx.Interaction.present({ content: "nope", title: "read tool" }),
-            )
-            return {
-              sessionId: ctx.sessionId,
-              followUpDenied: Exit.isFailure(followUpExit),
-              interactionDenied: Exit.isFailure(interactionExit),
-            }
+            yield* ctx.Session.send({
+              delivery: "queue",
+              sourceId: "read-tool",
+              content: "readonly follow-up",
+            })
+            yield* ctx.Interaction.present({ content: "readonly note", title: "read tool" })
+            return { sessionId: ctx.sessionId }
           }),
       })
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [ReadContextTool] },
-            },
-          ]),
-        ),
-        EventStore.Memory,
-        ApprovalService.Test(),
-        RuntimeEnvironment.Live({
-          cwd: "/nonexistent/gent-test-cwd",
-          home: "/nonexistent/gent-test-home",
+      const extension = defineExtension({
+        id: "test/readonly-facades",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("agent", AgentDefinition.make({ name: AgentName.make("main") }))
+          yield* host.register("tool", ReadContextTool)
         }),
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc-read-extension-context")
-        return yield* runner
-          .capture({ toolName: "read_extension_context" })
-          .pipe(
-            Effect.flatMap((entry) =>
-              runner.runBound({ toolCallId, toolName: "read_extension_context", input: {} }, entry),
-            ),
-          )
-          .pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("session-read-extension-context"),
-                branchId: BranchId.make("branch-read-extension-context"),
-                toolCallId,
-                agentName: AgentName.make("primary"),
-              }),
-            ),
-          )
-      }).pipe(Effect.provide(layer))
-      expect(result.isFailure).toBe(false)
-      expect(result.result).toEqual({
-        sessionId: "session-read-extension-context",
-        followUpDenied: true,
-        interactionDenied: true,
       })
-    }))
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        toolCallStep("read_extension_context", {}),
+        textStep("readonly tool complete"),
+        textStep("queued reply complete"),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [],
+        extensionInputs: [extension],
+        providerLayer,
+      })
+      yield* client.message.send({ sessionId, branchId, content: "Exercise the readonly tool." })
+      const messages = yield* waitFor(
+        client.message.list({ branchId }),
+        (messages) =>
+          messages.some((message) => messagePartsText(message.parts) === "queued reply complete"),
+        3000,
+        "readonly follow-up reply",
+      )
+      expect(
+        messages.flatMap((message) => message.parts).filter((part) => part.type === "tool-result"),
+      ).toMatchObject([{ name: "read_extension_context", isFailure: false, result: { sessionId } }])
+      expect(
+        messages.some(
+          (message) =>
+            message.role === "user" && messagePartsText(message.parts) === "readonly follow-up",
+        ),
+      ).toBe(true)
+      expect(
+        messages.some(
+          (message) =>
+            message.metadata?.customType === "prompt-present" &&
+            message.metadata.hidden === true &&
+            messagePartsText(message.parts) === "# read tool\n\nreadonly note",
+        ),
+      ).toBe(true)
+      yield* controls.assertDone
+    }).pipe(
+      Effect.timeout("4 seconds"),
+      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+    ),
+  )
   test("re-raises interaction pending instead of converting it to a tool result", () =>
     Effect.gen(function* () {
       const PendingTool = tool({

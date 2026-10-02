@@ -980,6 +980,7 @@ describe("session metrics", () => {
   )
   it.live("metrics.costUsd does not drift when pricing changes after emission", () =>
     Effect.gen(function* () {
+      const models = [modelWithPricing]
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
       const result = yield* Effect.gen(function* () {
         const runtime = yield* SessionRuntime
@@ -991,9 +992,14 @@ describe("session metrics", () => {
           content: "one",
         })
         const first = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+        models[0] = new Model({ ...modelWithPricing, pricing: { input: 300, output: 1500 } })
+        const registry = yield* ModelRegistry
+        const repriced = Option.getOrThrow(yield* registry.get(modelWithPricing.id))
+        expect(repriced.pricing?.input).toBe(300)
+        expect(repriced.pricing?.output).toBe(1500)
         const second = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
         return { first, second }
-      }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
+      }).pipe(Effect.provide(makeLayer(providerLayer, models)), Effect.timeout("4 seconds"))
       // Two reads over the same event log must return the same cost. The cost
       // is frozen on StreamEnded at emit time — changes to pricing or the
       // registry between snapshot reads cannot shift historical costs.
@@ -1272,7 +1278,32 @@ describe("branch-scoped resources", () => {
       })
       expect(second).toBe("instance:1")
       expect(nextInstance).toBe(1)
-    }).pipe(Effect.scoped),
+
+      const otherBranch = yield* client.branch.create({ sessionId })
+      const other = yield* client.extension.request({
+        sessionId,
+        branchId: otherBranch.branchId,
+        extensionId,
+        capabilityId: readId,
+        input: "read",
+      })
+      expect(other).toBe("instance:2")
+      expect(nextInstance).toBe(2)
+      expect(events).not.toContain("release:1")
+      expect(events).not.toContain("release:2")
+      yield* client.session.delete({ sessionId })
+      // Observe loop cleanup while the enclosing RPC harness is still live.
+      yield* waitFor(
+        Effect.sync(() => events.filter((event) => event.startsWith("release:")).length),
+        (released) => released === 2,
+        3000,
+        "both branch resources released",
+      )
+      expect(events.filter((event) => event.startsWith("release:")).toSorted()).toEqual([
+        "release:1",
+        "release:2",
+      ])
+    }).pipe(Effect.scoped, Effect.timeout("4 seconds")),
   )
 })
 

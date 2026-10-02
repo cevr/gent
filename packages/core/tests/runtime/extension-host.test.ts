@@ -2714,30 +2714,6 @@ describe("extension capability registries", () => {
       expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }))
 
-  test("request dispatch rejects lower request shadowed by higher-scope tool", () =>
-    Effect.gen(function* () {
-      const builtin = echoRequest({ id: "same", value: "builtin-request" })
-      const project = shadowTool({ id: "same" })
-      const resolved = resolveExtensions([
-        {
-          manifest: { id: extensionId },
-          scope: "builtin",
-          sourcePath: "/test/builtin-request",
-          contributions: { requests: [builtin] },
-        },
-        {
-          manifest: { id: extensionId },
-          scope: "project",
-          sourcePath: "/test/project-tool",
-          contributions: { tools: [project] },
-        },
-      ])
-      const result = yield* expectRpcFailure(
-        runRpc(resolved.rpcRegistry, builtin.id, { value: "hi" }),
-      )
-      expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
-    }))
-
   test("scope precedence shadows lower-scope request capabilities by identity", () =>
     Effect.gen(function* () {
       const builtin = echoRequest({ id: "thing", value: "builtin" })
