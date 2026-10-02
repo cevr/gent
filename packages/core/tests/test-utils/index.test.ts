@@ -8,12 +8,13 @@ import {
   createRpcClient,
   createRpcHarness,
   type E2ELayerConfig,
+  hostProfileRegistry,
 } from "../../src/test-utils/harness"
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import { CurrentWorkspaceId } from "../../src/domain/ids"
 import { workspaceIdForCwd } from "../../src/server/workspace-rpc"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
-import { ExtensionRegistry, SessionProfileCache } from "../../src/runtime/extension-host"
+import { SessionProfileCache } from "../../src/runtime/extension-host"
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
 
 /** The server root with the stub tool runner, the scripted model, and no agents. */
@@ -97,7 +98,7 @@ describe("createE2ELayer agents", () => {
 
   it.scopedLive("registers the configured agents beside extension inputs", () =>
     Effect.gen(function* () {
-      const registry = yield* ExtensionRegistry
+      const registry = yield* hostProfileRegistry
       expect(registry.getResolved().agents.get("reviewer")).toBe(reviewer)
     }).pipe(
       Effect.provide(

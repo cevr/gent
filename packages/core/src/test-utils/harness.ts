@@ -498,6 +498,16 @@ const hostRun = (run: HarnessRun) => ({
 })
 
 /**
+ * The registry of the host cwd's profile, the one a session with no stored
+ * cwd reads. The caller's scope holds the profile's lease.
+ */
+export const hostProfileRegistry = Effect.gen(function* () {
+  const environment = yield* RuntimeEnvironment
+  const profile = yield* (yield* SessionProfileCache).resolve(environment.cwd)
+  return profile.registryService
+})
+
+/**
  * One turn's profile and every model tool binding it captures, as the loop
  * builds them before it dispatches a tool.
  */

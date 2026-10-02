@@ -55,7 +55,7 @@ import * as AiError from "effect/ai/AiError"
 import type { ProviderOptions } from "effect/ai/LanguageModel"
 import * as Prompt from "effect/ai/Prompt"
 import * as Response from "effect/ai/Response"
-import type * as AiTool from "effect/ai/Tool"
+import * as AiTool from "effect/ai/Tool"
 import type * as AiToolkit from "effect/ai/Toolkit"
 
 // ── auth ────────────────────────────────────────────────────────────────────
@@ -1514,12 +1514,21 @@ const makeEncodingToolkit = <Tools extends Record<string, AiTool.Any>>(
     ),
 })
 
-const toolkitFromProviderOptions = (
+/**
+ * The tools a scripted part encodes against: the request's, and the tool a
+ * call names when the request did not declare it. A model can call a tool it
+ * read about but was not given, and a provider sends that name as it is.
+ */
+const toolkitForPart = (
   options: ProviderOptions,
+  part: LanguageModelStreamPart | Response.Part<LanguageModelToolMap>,
 ): AiToolkit.WithHandler<LanguageModelToolMap> => {
   const toolsRecord: LanguageModelToolMap = {}
   for (const tool of options.tools) {
     toolsRecord[tool.name] = tool
+  }
+  if (part.type === "tool-call" && !options.tools.some((tool) => tool.name === part.name)) {
+    toolsRecord[part.name] = AiTool.dynamic(part.name, { parameters: Schema.Unknown })
   }
   return makeEncodingToolkit(toolsRecord)
 }
@@ -1528,13 +1537,13 @@ const encodePart = (
   options: ProviderOptions,
   part: Response.Part<LanguageModelToolMap>,
 ): Response.PartEncoded =>
-  Schema.encodeUnknownSync(Response.Part(toolkitFromProviderOptions(options)))(part)
+  Schema.encodeUnknownSync(Response.Part(toolkitForPart(options, part)))(part)
 
 const encodeStreamPart = (
   options: ProviderOptions,
   part: LanguageModelStreamPart,
 ): Response.StreamPartEncoded =>
-  Schema.encodeUnknownSync(Response.StreamPart(toolkitFromProviderOptions(options)))(part)
+  Schema.encodeUnknownSync(Response.StreamPart(toolkitForPart(options, part)))(part)
 
 export const aiError = (method: string, message: string) =>
   AiError.make({

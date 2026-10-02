@@ -63,6 +63,7 @@ import {
   createRpcClient,
   createRpcHarness,
   fixedSessionProfiles,
+  hostProfileRegistry,
   runtimeHostContext,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
@@ -958,7 +959,14 @@ describe("session metrics", () => {
         const first = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
         models[0] = new Model({ ...modelWithPricing, pricing: { input: 300, output: 1500 } })
         const registry = yield* ModelRegistry
-        const repriced = Option.getOrThrow(yield* registry.get(modelWithPricing.id))
+        const repriced = Option.getOrThrow(
+          yield* registry
+            .get(modelWithPricing.id)
+            .pipe(
+              Effect.provideServiceEffect(ExtensionRegistry, hostProfileRegistry),
+              Effect.scoped,
+            ),
+        )
         expect(repriced.pricing?.input).toBe(300)
         expect(repriced.pricing?.output).toBe(1500)
         const second = (yield* getSessionSnapshot({ sessionId, branchId })).metrics

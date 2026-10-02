@@ -360,7 +360,8 @@ service of the loop behavior and of the server's session wiring: every turn
 resolves its profile through it (`resolveTurnProfile`), so every turn has a
 resource generation (`turnGenerationId`) for binding identity and replay, and
 no launch-registry fallback exists. A session with no stored cwd resolves the
-host cwd's profile. Test roots provide `fixedSessionProfiles(profiles,
+host cwd's profile as it is when it reads, for its turns, its agent admission
+and its route (`resolveRegistryForCwd` in `server/server.ts`). Test roots provide `fixedSessionProfiles(profiles,
 fallbackRegistry)` from `test-utils` when they do not need the live cache.
 Profile tests use the live cache. The tool test layer uses the production composition root. Neither has a
 separate activation implementation.
@@ -382,12 +383,13 @@ The production server uses one live profile owner:
   test running. The harness loads every `extensionInputs`/`extensions` entry
   at builtin scope; a scope test builds its profile from `LoadedExtension`s
   and passes it as `sessionProfileCacheLayer`.
-- `server/server.ts` selects the launch profile from that cache. An RPC that
-  names a session reads that session's profile; one shared lookup
+- `server/server.ts` builds the launch cwd's profile in that cache at startup,
+  so an extension that fails to load stops the start, and then releases the
+  lease: a later edit retires that profile when its last reader ends. An RPC
+  that names a session reads that session's profile; one shared lookup
   (`loadSession`) fails it with `NotFoundError` when the session does not
-  exist, so no call answers from the launch profile instead. Only the
-  launch registry and the launch prompt sections join the server context; an
-  extension's resource services never do. A turn, an extension request and a
+  exist, so no call answers from the launch profile instead. No registry and
+  no extension resource service joins the server context. A turn, an extension request and a
   hook read them from their session's profile (for a session with no stored
   cwd, the profile of the host's cwd), the one owner of a turn's services, so
   a project that disables an extension does not see its resources. Driver
@@ -1088,7 +1090,13 @@ declines every interaction unless `--approve-all` is set (`apps/tui/AGENTS.md`).
 When policy selects `cell` for a native model turn, only `cell` is advertised.
 ResolvedTurnContext keeps separate model and host binding maps. Both derive from
 the same policy result. The full host map supplies cell callbacks and recovery;
-the outer map cannot directly dispatch unadvertised host tools. Tool discovery
+the outer map cannot directly dispatch unadvertised host tools. A model that
+calls such a tool, or any other tool its profile registers but the turn did not
+advertise (a denied one), reads a failed result (`Unknown tool: <id>`) and the
+turn goes on: the reply decodes against every registered tool, while the
+request's `toolChoice` (`oneOf`, the advertised names) keeps its declarations
+as they were (`runtime/turn.ts`). A name no extension registers still fails the
+step's stream, as Effect AI cannot decode it. Tool discovery
 returns the selected declaration's input schema and usage guidelines. External
 drivers and turns that do not select `cell` keep their existing tool surface.
 Cancellation saves a failed outer receipt without replaying source. An active

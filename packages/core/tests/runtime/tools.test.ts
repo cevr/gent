@@ -47,6 +47,7 @@ import {
 import { test } from "bun:test"
 import {
   LanguageModelLayers,
+  multiToolCallStep,
   textStep,
   toolCallStep,
   waitFor,
@@ -933,4 +934,76 @@ describe("extension model surface over RPC", () => {
       ),
     )
   }
+
+  // A model calls a tool it read about but the turn did not advertise (a host
+  // tool behind the cell, a denied one). The call fails as a tool result the
+  // model reads; the turn goes on and the request still names only the
+  // advertised tools.
+  it.scopedLive("a call to a tool the turn did not advertise fails as its result", () =>
+    Effect.gen(function* () {
+      const extension = defineExtension({
+        id: "test/unadvertised-call",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "agent",
+            AgentDefinition.make({ name: AgentName.make("main"), deniedTools: ["blocked"] }),
+          )
+          for (const name of ["bridge", "hidden", "blocked"]) {
+            yield* host.register(
+              "tool",
+              tool({
+                id: name,
+                description: `Run ${name}`,
+                params: Schema.Struct({ value: Schema.String }),
+                output: Schema.String,
+                execute: ({ value }) => Effect.succeed(`${name}:${value}`),
+              }),
+            )
+          }
+          yield* host.on("turnProjection", () =>
+            Effect.succeed({ toolPolicy: { modelSet: ["bridge"] } }),
+          )
+        }),
+      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...multiToolCallStep(
+            { toolName: "hidden", input: { value: "a" } },
+            { toolName: "blocked", input: { value: "b" } },
+          ),
+          assertOptions: (options) => {
+            expect(options.tools.map((entry) => entry.name)).toEqual(["bridge"])
+          },
+        },
+        textStep("finished"),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [],
+        extensionInputs: [extension],
+        providerLayer,
+      })
+      yield* client.message.send({ sessionId, branchId, content: "Use the hidden tool." })
+      const messages = yield* waitFor(
+        client.message.list({ branchId }),
+        (messages) =>
+          messages.some(
+            (message) =>
+              message.role === "assistant" && messagePartsText(message.parts) === "finished",
+          ),
+        3000,
+        "reply after the failed calls",
+      )
+      expect(
+        messages.flatMap((message) => message.parts).filter((part) => part.type === "tool-result"),
+      ).toMatchObject([
+        { name: "hidden", isFailure: true, result: { error: "Unknown tool: hidden" } },
+        { name: "blocked", isFailure: true, result: { error: "Unknown tool: blocked" } },
+      ])
+      yield* controls.assertDone
+    }).pipe(
+      Effect.timeout("4 seconds"),
+      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+    ),
+  )
 })

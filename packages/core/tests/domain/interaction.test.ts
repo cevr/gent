@@ -97,15 +97,22 @@ describe("Interaction Request", () => {
     resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
     take: (requestId) => is.take(requestId).pipe(Effect.catchEager(() => Effect.void)),
   })
+  type ServiceConfig = Parameters<typeof makeInteractionService>[0]
+  /** An interaction service over `storage`; a hook the test does not watch does nothing. */
+  const serviceOver = (
+    storage: InteractionStorageConfig,
+    hooks: Partial<Pick<ServiceConfig, "onPresent" | "onDismiss">> = {},
+  ) =>
+    makeInteractionService({
+      onPresent: hooks.onPresent ?? (() => Effect.void),
+      onDismiss: hooks.onDismiss ?? (() => Effect.void),
+      storage,
+    })
   it.live("an ask parks its call and stores the open request", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
       const storageCallbacks = callbacksFor(is)
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: storageCallbacks,
-      })
+      const interaction = yield* serviceOver(storageCallbacks)
       yield* ensureStorageParents({
         sessionId: SessionId.make("s1"),
         branchId: BranchId.make("b1"),
@@ -153,13 +160,11 @@ describe("Interaction Request", () => {
         })
 
         const presented: InteractionRequestId[] = []
-        const interaction = yield* makeInteractionService({
+        const interaction = yield* serviceOver(storageCallbacks, {
           onPresent: (requestId) =>
             Effect.sync(() => {
               presented.push(requestId)
             }),
-          onDismiss: () => Effect.void,
-          storage: storageCallbacks,
         })
         const exit = yield* Effect.exit(
           asCall(interaction, { sessionId, branchId })(
@@ -181,11 +186,7 @@ describe("Interaction Request", () => {
   it.live("an answer stored after the ask is returned when the call asks again", () =>
     Effect.gen(function* () {
       const storageCallbacks = callbacksFor(yield* InteractionStorage)
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: storageCallbacks,
-      })
+      const interaction = yield* serviceOver(storageCallbacks)
       const sessionId = SessionId.make("s-cold")
       const branchId = BranchId.make("b-cold")
       yield* ensureStorageParents({ sessionId, branchId })
@@ -214,15 +215,11 @@ describe("Interaction Request", () => {
     Effect.gen(function* () {
       // Simulate a fresh service after restart — no in-memory state
       const storageCallbacks = callbacksFor(yield* InteractionStorage)
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: storageCallbacks,
-      })
+      const interaction = yield* serviceOver(storageCallbacks)
       const sessionId = SessionId.make("s-restart")
       const branchId = BranchId.make("b-restart")
       const requestId = InteractionRequestId.make("req-restart-1")
-      // Rehydrate rebuilds the pendingByContext reverse lookup
+      // Rehydrate rebuilds the stored request with its branch as owner
       yield* interaction.rehydrate({
         requestId,
         sessionId,
@@ -236,7 +233,7 @@ describe("Interaction Request", () => {
         approved: true,
         notes: "yes",
       })
-      // Tool re-calls present() — should find stored resolution via context lookup
+      // Tool re-calls present() and takes the stored resolution
       const result = yield* asCall(interaction, { sessionId, branchId })(
         interaction.present({ text: "Approve?" }, { sessionId, branchId }),
       )
@@ -252,11 +249,7 @@ describe("Interaction Request", () => {
       const branchId = BranchId.make("b-cold-resume")
       yield* ensureStorageParents({ sessionId, branchId })
       // Phase 1: original service — present() persists and throws
-      const service1 = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: storageCallbacks,
-      })
+      const service1 = yield* serviceOver(storageCallbacks)
       const error = yield* Effect.flip(
         asCall(service1, { sessionId, branchId })(
           service1.present({ text: "Approve deployment?" }, { sessionId, branchId }),
@@ -271,11 +264,7 @@ describe("Interaction Request", () => {
       const pending = yield* is.listOpen()
       expect(pending.some((r) => r.requestId === requestId)).toBe(true)
       // Phase 2: simulate restart — create a fresh service instance (no in-memory state)
-      const service2 = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: storageCallbacks,
-      })
+      const service2 = yield* serviceOver(storageCallbacks)
       // Load pending request from storage and rehydrate
       const persisted = pending.find((r) => r.requestId === requestId)!
       yield* service2.rehydrate(persisted)
@@ -306,11 +295,7 @@ describe("Interaction Request", () => {
   it.live("the first answer to a request wins; a different later answer is refused", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
-      })
+      const interaction = yield* serviceOver(callbacksFor(is))
       const sessionId = SessionId.make("s-first-wins")
       const branchId = BranchId.make("b-first-wins")
       yield* ensureStorageParents({ sessionId, branchId })
@@ -351,11 +336,7 @@ describe("Interaction Request", () => {
   it.live("two answers at once: one is kept, the other is refused", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
-      })
+      const interaction = yield* serviceOver(callbacksFor(is))
       const sessionId = SessionId.make("s-race")
       const branchId = BranchId.make("b-race")
       yield* ensureStorageParents({ sessionId, branchId })
@@ -393,11 +374,7 @@ describe("Interaction Request", () => {
       const sessionId = SessionId.make("s-two-services")
       const branchId = BranchId.make("b-two-services")
       yield* ensureStorageParents({ sessionId, branchId })
-      const first = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
-      })
+      const first = yield* serviceOver(callbacksFor(is))
       const requestId = yield* pendingId(
         yield* Effect.exit(
           asCall(first, { sessionId, branchId })(
@@ -407,11 +384,7 @@ describe("Interaction Request", () => {
       )
       // The second instance loads the request before any answer, so only
       // storage knows that an answer came.
-      const second = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
-      })
+      const second = yield* serviceOver(callbacksFor(is))
       for (const record of yield* is.listOpen({ sessionId, branchId }))
         yield* second.rehydrate(record)
       yield* first.storeResolution({ sessionId, branchId }, requestId, { approved: false })
@@ -428,11 +401,7 @@ describe("Interaction Request", () => {
     Effect.gen(function* () {
       const is = yield* InteractionStorage
       const storage = callbacksFor(is)
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage,
-      })
+      const interaction = yield* serviceOver(storage)
       const branch = { sessionId: SessionId.make("s-twice"), branchId: BranchId.make("b-twice") }
       yield* ensureStorageParents(branch)
       const run = asCall(
@@ -461,11 +430,7 @@ describe("Interaction Request", () => {
   it.live("an answer is not given to a changed question", () =>
     Effect.gen(function* () {
       const storage = callbacksFor(yield* InteractionStorage)
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage,
-      })
+      const interaction = yield* serviceOver(storage)
       const branch = { sessionId: SessionId.make("s-change"), branchId: BranchId.make("b-change") }
       yield* ensureStorageParents(branch)
       const ask = (text: string) =>
@@ -481,11 +446,7 @@ describe("Interaction Request", () => {
   it.live("an ask outside a tool call is refused and stores nothing", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
-      })
+      const interaction = yield* serviceOver(callbacksFor(is))
       const branch = { sessionId: SessionId.make("s-owner"), branchId: BranchId.make("b-owner") }
       yield* ensureStorageParents(branch)
       const error = yield* Effect.flip(interaction.present({ text: "Approve?" }, branch))
@@ -497,11 +458,7 @@ describe("Interaction Request", () => {
   it.live("an inner ask whose dispatching call runs on another branch has no owner here", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
-      })
+      const interaction = yield* serviceOver(callbacksFor(is))
       const branch = { sessionId: SessionId.make("s-other"), branchId: BranchId.make("b-asked") }
       const elsewhere = { ...branch, branchId: BranchId.make("b-dispatcher") }
       yield* ensureStorageParents(branch)
@@ -523,11 +480,7 @@ describe("Interaction Request", () => {
   it.live("a call whose kept answer no longer fits asks again in its own queued place", () =>
     Effect.gen(function* () {
       const storage = callbacksFor(yield* InteractionStorage)
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage,
-      })
+      const interaction = yield* serviceOver(storage)
       const branch = { sessionId: SessionId.make("s-own"), branchId: BranchId.make("b-own") }
       yield* ensureStorageParents(branch)
       const a = ToolCallId.make("call-a")
@@ -575,11 +528,7 @@ describe("Interaction Request", () => {
       const is = yield* InteractionStorage
       const branch = { sessionId: SessionId.make("s-stale"), branchId: BranchId.make("b-stale") }
       yield* ensureStorageParents(branch)
-      const before = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
-      })
+      const before = yield* serviceOver(callbacksFor(is))
       const stale = yield* pendingId(
         yield* asCall(
           before,
@@ -589,10 +538,8 @@ describe("Interaction Request", () => {
       )
       // The process stops before the turn settles its request.
       const dismissed: InteractionRequestId[] = []
-      const after = yield* makeInteractionService({
-        onPresent: () => Effect.void,
+      const after = yield* serviceOver(callbacksFor(is), {
         onDismiss: (requestId) => Effect.sync(() => dismissed.push(requestId)),
-        storage: callbacksFor(is),
       })
       for (const record of yield* is.listOpen(branch)) yield* after.rehydrate(record)
       const fresh = yield* pendingId(
@@ -610,11 +557,7 @@ describe("Interaction Request", () => {
 
   it.live("every answer to a request that closed without one is refused", () =>
     Effect.gen(function* () {
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(yield* InteractionStorage),
-      })
+      const interaction = yield* serviceOver(callbacksFor(yield* InteractionStorage))
       const branch = { sessionId: SessionId.make("s-late"), branchId: BranchId.make("b-late") }
       yield* ensureStorageParents(branch)
       const closed = yield* pendingId(
@@ -639,11 +582,7 @@ describe("Interaction Request", () => {
 
   it.live("a retried reply after its call took the answer succeeds and changes nothing", () =>
     Effect.gen(function* () {
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(yield* InteractionStorage),
-      })
+      const interaction = yield* serviceOver(callbacksFor(yield* InteractionStorage))
       const branch = { sessionId: SessionId.make("s-retry"), branchId: BranchId.make("b-retry") }
       yield* ensureStorageParents(branch)
       const run = asCall(interaction, branch)
@@ -684,10 +623,8 @@ describe("Interaction Request", () => {
     Effect.gen(function* () {
       const is = yield* InteractionStorage
       const dismissed: InteractionRequestId[] = []
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
+      const interaction = yield* serviceOver(callbacksFor(is), {
         onDismiss: (requestId) => Effect.sync(() => dismissed.push(requestId)),
-        storage: callbacksFor(is),
       })
       const branch = { sessionId: SessionId.make("s-end"), branchId: BranchId.make("b-end") }
       yield* ensureStorageParents(branch)
@@ -775,10 +712,8 @@ describe("Interaction Request", () => {
     Effect.gen(function* () {
       const is = yield* InteractionStorage
       const presented = yield* Queue.unbounded<InteractionRequestId>()
-      const interaction = yield* makeInteractionService({
+      const interaction = yield* serviceOver(callbacksFor(is), {
         onPresent: (requestId) => Queue.offer(presented, requestId),
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
       })
       const branch = { sessionId: SessionId.make("s-inner"), branchId: BranchId.make("b-inner") }
       yield* ensureStorageParents(branch)
@@ -808,10 +743,8 @@ describe("Interaction Request", () => {
       Effect.gen(function* () {
         const is = yield* InteractionStorage
         const presented = yield* Queue.unbounded<InteractionRequestId>()
-        const interaction = yield* makeInteractionService({
+        const interaction = yield* serviceOver(callbacksFor(is), {
           onPresent: (requestId) => Queue.offer(presented, requestId),
-          onDismiss: () => Effect.void,
-          storage: callbacksFor(is),
         })
         const branch = {
           sessionId: SessionId.make("s-in-place"),
@@ -841,10 +774,8 @@ describe("Interaction Request", () => {
     Effect.gen(function* () {
       const is = yield* InteractionStorage
       const presented = yield* Queue.unbounded<InteractionRequestId>()
-      const interaction = yield* makeInteractionService({
+      const interaction = yield* serviceOver(callbacksFor(is), {
         onPresent: (requestId) => Queue.offer(presented, requestId),
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
       })
       const branch = { sessionId: SessionId.make("s-closed"), branchId: BranchId.make("b-closed") }
       yield* ensureStorageParents(branch)
@@ -867,11 +798,7 @@ describe("Interaction Request", () => {
   it.live("a resumed call whose request keeps no answer is told it closed", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
-      })
+      const interaction = yield* serviceOver(callbacksFor(is))
       const branch = { sessionId: SessionId.make("s-resume"), branchId: BranchId.make("b-resume") }
       yield* ensureStorageParents(branch)
       const requestId = InteractionRequestId.make("never-answered")
@@ -894,10 +821,8 @@ describe("Interaction Request", () => {
     Effect.gen(function* () {
       const is = yield* InteractionStorage
       const presented = yield* Queue.unbounded<InteractionRequestId>()
-      const interaction = yield* makeInteractionService({
+      const interaction = yield* serviceOver(callbacksFor(is), {
         onPresent: (requestId) => Queue.offer(presented, requestId),
-        onDismiss: () => Effect.void,
-        storage: callbacksFor(is),
       })
       const branch = { sessionId: SessionId.make("s-owned"), branchId: BranchId.make("b-owned") }
       yield* ensureStorageParents(branch)

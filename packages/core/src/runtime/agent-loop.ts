@@ -472,7 +472,7 @@ export interface AgentLoopState {
     readonly epoch: number
     /** The message whose turn failed; only that message's caller fails. */
     readonly messageId: MessageId
-    readonly error: unknown
+    readonly error: AgentLoopError
   }
   readonly startingState?: LoopState
 }
@@ -1508,15 +1508,15 @@ type AgentLoopBehavior = {
   close: Effect.Effect<void>
 }
 
-const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
+/**
+ * A failure as the loop reports it. A turn, an extension request and a loop
+ * start all end here, so the message is the failure's own reason (a storage
+ * error, a profile that would not build), never a fixed text that hides it.
+ */
+const causeToAgentLoopError = (cause: Cause.Cause<unknown>): AgentLoopError => {
   const error = Cause.squash(cause)
-  if (Schema.is(AgentLoopError)(error)) {
-    return error
-  }
-  return new AgentLoopError({
-    message: "Agent loop turn failed",
-    cause: error,
-  })
+  if (Schema.is(AgentLoopError)(error)) return error
+  return new AgentLoopError({ message: causeChainMessage(error), cause: error })
 }
 
 /**
@@ -1778,7 +1778,7 @@ const makeAgentLoopBehavior = (
     ).pipe(Scope.provide(loopScope))
     // The branch's Resources come from the session's profile, the same one its
     // turns and requests resolve: the extensions set up for the session's cwd,
-    // over that profile's process services. The launch registry would build
+    // over that profile's process services. The host cwd's profile would build
     // another project's Resources. They are built on the first turn or
     // request, not at open, so a control-plane write (a cancel, an answer to
     // no question) never resolves a profile.
@@ -2074,8 +2074,8 @@ const makeAgentLoopBehavior = (
           return []
         }),
       )
-      // A failed turn writes no receipt. Once a later turn has completed, the
-      // failed one is history the branch moved past, so only messages received
+      // A turn that died writes no receipt. Once a later turn has completed,
+      // the dead one is history the branch moved past, so only messages received
       // after the last completion can be the turn a restart cut short.
       const lastCompletion = envelopes.findLastIndex(({ event }) => event._tag === "TurnCompleted")
       // Continuation prompts, handoff markers, and model-change notices are
@@ -2235,12 +2235,8 @@ const waitForMessageReleased = (
     )
   })
 
-const failTurnFailureState = (failure: NonNullable<AgentLoopState["turnFailure"]>) => {
-  if (Schema.is(AgentLoopError)(failure.error)) return Effect.fail(failure.error)
-  return Effect.fail(
-    new AgentLoopError({ message: "Agent loop turn failed", cause: failure.error }),
-  )
-}
+const failTurnFailureState = (failure: NonNullable<AgentLoopState["turnFailure"]>) =>
+  Effect.fail(failure.error)
 
 /** A failure recorded after `baseline` for the turn that carried `messageId`. */
 const hasTurnFailureFor =

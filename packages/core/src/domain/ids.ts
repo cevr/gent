@@ -30,7 +30,8 @@ export type InteractionRequestId = typeof InteractionRequestId.Type
  * Client-generated request ID for end-to-end correlation and transport-retry
  * dedup. Bounded to 128 chars so a malicious/buggy client cannot bloat the
  * in-flight dedup table and the durable operation rows with arbitrary-length
- * keys. Callers in this repo use `crypto.randomUUID()`, which fits.
+ * keys. Callers in this repo make a UUID through the platform random id,
+ * which fits.
  */
 export const RequestId = Schema.String.check(Schema.isMaxLength(128))
 export type RequestId = typeof RequestId.Type

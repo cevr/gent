@@ -27,6 +27,7 @@ import {
   systemPromptBlocks,
   type ToolCapability,
   toWirePrompt,
+  wireToolName,
 } from "../domain/capability.js"
 import {
   assistantMessageIdForTurn,
@@ -1184,7 +1185,15 @@ interface ResolvedTurnContext {
   /** Derived once at resolution; the resolver, retry policy, and catalog lookup share it. */
   modelDriver: EffectiveModelDriver
   agent: AgentDefinition
+  /** The tools the request advertises. */
   tools: ReadonlyArray<ToolCapability>
+  /**
+   * Every tool the profile registers, the advertised ones first. The reply
+   * decodes against them, so a call to one the turn did not advertise (a host
+   * tool behind the cell, a denied one) reaches the runner, which answers it
+   * as a failed result, instead of failing the stream.
+   */
+  replyTools: ReadonlyArray<ToolCapability>
   /** Exact owner and implementation selected for each advertised tool. */
   toolBindings: ReadonlyMap<string, ResolvedToolCapability>
   /** Admitted host tools remain available to extension-owned execution surfaces. */
@@ -1451,6 +1460,10 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     messages,
     agent: dispatchAgent,
     tools,
+    replyTools: [
+      ...tools,
+      ...allTools.filter((tool) => !selectedNames.has(String(getToolId(tool)))),
+    ],
     toolBindings,
     hostToolBindings,
     systemPrompt: systemPromptBlocks(systemPrompt, compileSharedSystemPrompt(sections)),
@@ -1757,7 +1770,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       notices: requestNotices(resolved),
     }),
   )
-  const toolkit = convertTools([...resolved.tools])
   const wireStream = Stream.unwrap(
     resolveAdmittedModel(modelRequest).pipe(
       Effect.map((model) => {
@@ -1765,14 +1777,18 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
           if (params.finalStep) {
             return model.streamText({
               prompt,
-              toolkit,
+              toolkit: convertTools([...resolved.tools]),
               toolChoice: "none",
               disableToolCallResolution: true,
             })
           }
+          // The reply decodes against every tool the profile registers;
+          // `oneOf` keeps the request's declarations to the advertised ones,
+          // in their order, so the request is the same bytes.
           return model.streamText({
             prompt,
-            toolkit,
+            toolkit: convertTools([...resolved.replyTools]),
+            toolChoice: { oneOf: resolved.tools.map((tool) => wireToolName(getToolId(tool))) },
             disableToolCallResolution: true,
           })
         }
