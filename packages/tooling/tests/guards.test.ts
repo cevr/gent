@@ -2043,11 +2043,78 @@ describe("bundled skill files", () => {
     expect(findUnshippedSkillFiles(moduleText, tracked)).toEqual([])
   })
 
+  test("multiline text imports and typed bundle rows still install the skill", () => {
+    const formatted = moduleText
+      .replace("import principlesSkill from", "import\n  principlesSkill\n  from")
+      .replace("export const bundledSkillFiles = [", "export const bundledSkillFiles = ([")
+      .replace(
+        '  ["principles/SKILL.md", principlesSkill],',
+        '  (["principles/SKILL.md", principlesSkill] as const),',
+      )
+      .replace(/\]$/, "] as const) satisfies ReadonlyArray<readonly [string, string]>")
+    expect(findUnshippedSkillFiles(formatted, tracked)).toEqual([])
+    const renamedDefault = moduleText.replace(
+      "import principlesSkill from",
+      "import { default as principlesSkill } from",
+    )
+    expect(findUnshippedSkillFiles(renamedDefault, tracked)).toEqual([])
+  })
+
+  test("a row outside the installer's collection cannot fill a missing bundle row", () => {
+    const noRow = moduleText.replace('  ["principles/SKILL.md", principlesSkill],\n', "")
+    for (const decoy of [
+      'const unrelated = [["principles/SKILL.md", principlesSkill]]',
+      'const example = `["principles/SKILL.md", principlesSkill]`',
+      'function example() { const bundledSkillFiles = [["principles/SKILL.md", principlesSkill]]; return bundledSkillFiles }',
+    ]) {
+      expect(findUnshippedSkillFiles(`${noRow}\n${decoy}`, tracked)).toMatchObject([
+        {
+          file: BUNDLED_SKILLS_MODULE,
+          line: 2,
+          message: expect.stringContaining("never installs"),
+        },
+      ])
+    }
+  })
+
+  test("text posing as an import does not make a tracked file ship", () => {
+    const importLine = moduleText.split("\n")[1] ?? ""
+    const posedImport = moduleText.replace(importLine, `const example = \`\n${importLine}\n\``)
+    expect(findUnshippedSkillFiles(posedImport, tracked)).toMatchObject([
+      { file: `${directory}principles/SKILL.md`, line: 1 },
+    ])
+  })
+
+  test("only imported text can supply an installation row", () => {
+    for (const replacement of ['with { type: "json" }', ""]) {
+      const nonText = moduleText.replaceAll('with { type: "text" }', replacement)
+      expect(findUnshippedSkillFiles(nonText, tracked).map((finding) => finding.file)).toEqual([
+        `${directory}principles/SKILL.md`,
+        `${directory}principles/references/fix-root-causes.md`,
+      ])
+    }
+    const typeOnly = moduleText.replace(
+      moduleText.split("\n")[1] ?? "",
+      'import type principlesSkill from "./skills/bundled/principles/SKILL.md"',
+    )
+    expect(findUnshippedSkillFiles(typeOnly, tracked)).toMatchObject([
+      { file: `${directory}principles/SKILL.md`, line: 1 },
+    ])
+  })
+
   test("a Markdown file with no import is reported at the file", () => {
     const added = `${directory}principles/references/new-principle.md`
     expect(findUnshippedSkillFiles(moduleText, [...tracked, added])).toMatchObject([
       { file: added, line: 1 },
     ])
+  })
+
+  test("another installed copy does not hide the intended skill path", () => {
+    const alsoCopied = moduleText.replace(
+      '  ["principles/SKILL.md", principlesSkill],',
+      '  ["principles/SKILL.md", principlesSkill],\n  ["copy/SKILL.md", principlesSkill],',
+    )
+    expect(findUnshippedSkillFiles(alsoCopied, tracked)).toEqual([])
   })
 
   test("an import with no row, or a row under another path, is reported at the import", () => {

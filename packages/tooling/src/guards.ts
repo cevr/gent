@@ -2,8 +2,10 @@ import { Option, Predicate, Schema } from "effect"
 import picomatch from "picomatch"
 import {
   type Expression,
+  type ModuleExportName,
   type ParseResult,
   parseSync,
+  type Program,
   type Super,
   type TSImportTypeQualifier,
   Visitor,
@@ -58,6 +60,8 @@ interface SourceForms {
    * in a template is no import.
    */
   readonly module: ModuleSyntax
+  /** Text imports and rows of the module's actual bundled-skill collection. */
+  readonly bundledSkills: BundledSkillsSyntax
   /**
    * `codeOnly` with regex bodies blanked too, and the line breaks inside
    * blanked text: every bracket left is structure, and a line end left is a
@@ -133,6 +137,7 @@ interface ParsedText {
   readonly names: ReadonlyArray<CommentBody>
   readonly spans: ReadonlyArray<Span>
   readonly module: ModuleSyntax
+  readonly bundledSkills: BundledSkillsSyntax
 }
 
 /** Whether an import entry is `import * as NS`; oxc types the kinds as a const enum, which the runtime does not carry. */
@@ -322,6 +327,7 @@ const parsedText = (file: string, text: string): ParsedText => {
       .map((span) => ({ ...span, start: span.start - shift, end: span.end - shift }))
       .sort((a, b) => a.start - b.start),
     module: moduleSyntaxOf(result, lineOf, dynamicReads),
+    bundledSkills: bundledSkillsSyntaxOf(result.program, lineOf),
   }
 }
 
@@ -362,7 +368,7 @@ const sourceForms = (file: string, text: string): SourceForms => {
   let cache = sourceFormsCache[parseLanguage(file)]
   if (isJsonFile(file)) cache = sourceFormsCache.json
   return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
-    const { errors, comments, names, spans, module } = parsedText(file, text)
+    const { errors, comments, names, spans, module, bundledSkills } = parsedText(file, text)
     const forms: SourceForms = {
       errors,
       comments,
@@ -370,6 +376,7 @@ const sourceForms = (file: string, text: string): SourceForms => {
       code: blankedSpans(text, spans, ["comment"], false),
       codeOnly: blankedSpans(text, spans, ["comment", "string", "template", "jsx-text"], false),
       module,
+      bundledSkills,
       structure: blankedSpans(
         text,
         spans,
@@ -2362,33 +2369,123 @@ export const findStaleSteeringReceipts = (
  * name, so a `SKILL.md` link to it dangles.
  *
  * Read: the tracked files under `BUNDLED_SKILLS_DIRECTORY` and the text of
- * `BUNDLED_SKILLS_MODULE`, comments blanked. Reported: a Markdown file with no import (at the
+ * `BUNDLED_SKILLS_MODULE`, as parsed code. Reported: a Markdown file with no text import (at the
  * file), and an import whose `bundledSkillFiles` row is missing or names
  * another path (at the import).
  */
 export const BUNDLED_SKILLS_MODULE = "packages/extensions/src/skills.ts"
 const BUNDLED_SKILLS_DIRECTORY = "packages/extensions/src/skills/bundled/"
 
-/** `import name from "./skills/bundled/<path>"`: the binding and the bundled path. */
-const BUNDLED_IMPORT = /^import\s+([A-Za-z_$][\w$]*)\s+from\s+["']\.\/skills\/bundled\/([^"']+)["']/
+interface BundledSkillsSyntax {
+  readonly imported: ReadonlyMap<string, { readonly path: string; readonly line: number }>
+  readonly rows: ReadonlyArray<{ readonly path: string; readonly name: string }>
+}
 
-/** A `bundledSkillFiles` row, `["<path>", name]`, across lines or on one. */
-const BUNDLED_ROW = /\[\s*["']([^"']+)["']\s*,\s*([A-Za-z_$][\w$]*)\s*,?\s*\]/g
+/** Parentheses and TypeScript assertions change no installed value. */
+const runtimeExpression = (node: Expression): Expression => {
+  switch (node.type) {
+    case "ParenthesizedExpression":
+    case "TSAsExpression":
+    case "TSSatisfiesExpression":
+    case "TSTypeAssertion":
+    case "TSNonNullExpression":
+      return runtimeExpression(node.expression)
+    default:
+      return node
+  }
+}
+
+const moduleNameOf = (node: ModuleExportName): string => {
+  if (node.type === "Identifier") return node.name
+  return node.value
+}
+
+const bundledTextImports = (
+  program: Program,
+  lineOf: (index: number) => number,
+): BundledSkillsSyntax["imported"] => {
+  const prefix = "./skills/bundled/"
+  const imported = new Map<string, { readonly path: string; readonly line: number }>()
+  for (const statement of program.body) {
+    if (statement.type !== "ImportDeclaration" || statement.importKind === "type") continue
+    if (!statement.source.value.startsWith(prefix)) continue
+    if (
+      !statement.attributes.some(
+        ({ key, value }) => moduleNameOf(key) === "type" && value.value === "text",
+      )
+    )
+      continue
+    for (const specifier of statement.specifiers) {
+      const isDefault =
+        specifier.type === "ImportDefaultSpecifier" ||
+        (specifier.type === "ImportSpecifier" &&
+          specifier.importKind !== "type" &&
+          moduleNameOf(specifier.imported) === "default")
+      if (isDefault)
+        imported.set(specifier.local.name, {
+          path: statement.source.value.slice(prefix.length),
+          line: lineOf(statement.start),
+        })
+    }
+  }
+  return imported
+}
+
+const bundledSkillRows = (node: Expression): BundledSkillsSyntax["rows"] => {
+  const row = runtimeExpression(node)
+  if (row.type !== "ArrayExpression") return []
+  const [path, value] = row.elements
+  if (!path || path.type === "SpreadElement" || !value || value.type === "SpreadElement") return []
+  const installedPath = runtimeExpression(path)
+  const content = runtimeExpression(value)
+  if (
+    installedPath.type !== "Literal" ||
+    !Predicate.isString(installedPath.value) ||
+    content.type !== "Identifier"
+  )
+    return []
+  return [{ path: installedPath.value, name: content.name }]
+}
+
+const bundledCollectionRows = (program: Program): BundledSkillsSyntax["rows"] => {
+  const rows: Array<BundledSkillsSyntax["rows"][number]> = []
+  for (const statement of program.body) {
+    // Nested declarations and unrelated arrays cannot populate this collection.
+    let declaration = statement
+    if (declaration.type === "ExportNamedDeclaration") {
+      if (!declaration.declaration) continue
+      declaration = declaration.declaration
+    }
+    if (declaration?.type !== "VariableDeclaration") continue
+    for (const { id, init } of declaration.declarations) {
+      if (id.type !== "Identifier" || id.name !== "bundledSkillFiles" || !init) continue
+      const collection = runtimeExpression(init)
+      if (collection.type !== "ArrayExpression") continue
+      rows.push(
+        ...collection.elements.flatMap((element) => {
+          if (!element || element.type === "SpreadElement") return []
+          return bundledSkillRows(element)
+        }),
+      )
+    }
+  }
+  return rows
+}
+
+/** Extract only facts, during the shared parse; retain no tree or second parse. */
+const bundledSkillsSyntaxOf = (
+  program: Program,
+  lineOf: (index: number) => number,
+): BundledSkillsSyntax => ({
+  imported: bundledTextImports(program, lineOf),
+  rows: bundledCollectionRows(program),
+})
 
 export const findUnshippedSkillFiles = (
   moduleText: string,
   trackedFiles: ReadonlyArray<string>,
 ): ReadonlyArray<Finding> => {
-  // A commented-out import or row ships nothing, so neither is read.
-  const code = withoutComments(BUNDLED_SKILLS_MODULE, moduleText)
-  const imported = new Map<string, { readonly path: string; readonly line: number }>()
-  for (const [index, line] of code.split("\n").entries()) {
-    const match = Option.fromNullishOr(BUNDLED_IMPORT.exec(line.trimStart()))
-    if (Option.isSome(match))
-      imported.set(match.value[1] ?? "", { path: match.value[2] ?? "", line: index + 1 })
-  }
-  const rows = new Map<string, string>()
-  for (const match of code.matchAll(BUNDLED_ROW)) rows.set(match[2] ?? "", match[1] ?? "")
+  const { imported, rows } = sourceForms(BUNDLED_SKILLS_MODULE, moduleText).bundledSkills
   const importedPaths = new Set([...imported.values()].map((entry) => entry.path))
   const findings: Array<Finding> = trackedFiles
     .values()
@@ -2401,8 +2498,9 @@ export const findUnshippedSkillFiles = (
     }))
     .toArray()
   for (const [name, entry] of imported) {
-    const listed = Option.fromNullishOr(rows.get(name))
-    if (Option.isSome(listed) && listed.value === entry.path) continue
+    const namedRows = rows.filter((row) => row.name === name)
+    if (namedRows.some((row) => row.path === entry.path)) continue
+    const listed = Option.fromNullishOr(namedRows[0]?.path)
     findings.push({
       file: BUNDLED_SKILLS_MODULE,
       line: entry.line,
