@@ -1951,12 +1951,15 @@ const StepOutcome = Schema.TaggedUnion({
   /**
    * No tool calls: an answer, nothing at all, or output cut off at the output
    * limit or by a full window. `contextOverflow`: the window filled, and the
-   * continuation hands the window off first.
+   * continuation hands the window off first. `blocked`: the provider blocked
+   * the reply (a `content-filter` finish, Anthropic's `refusal`); the same
+   * window would be blocked again, so no continuation follows.
    */
   Answered: {
     empty: Schema.Boolean,
     truncated: Schema.Boolean,
     contextOverflow: Schema.Boolean,
+    blocked: Schema.Boolean,
   },
 })
 type StepOutcome = Schema.Schema.Type<typeof StepOutcome>
@@ -1981,8 +1984,13 @@ export const classifyStep = (collected: CollectedTurnResponse): StepOutcome => {
       collected.windowFull ||
       collected.responseParts.some((part) => part.type === "finish" && part.reason === "length"),
     contextOverflow,
+    blocked: collected.responseParts.some(
+      (part) => part.type === "finish" && part.reason === "content-filter",
+    ),
   })
 }
+
+const PROVIDER_BLOCKED_RESPONSE = "the provider blocked the response"
 
 const MAX_TURN_STEPS = 200
 /** Continuation instructions one turn may persist after a failed, empty, or truncated step. */
@@ -3578,7 +3586,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           // Re-prompt rather than report the fragment as the reply; once
           // continuations are spent, say so. A full window has no room for
           // the continuation, so the step that runs it hands the window off.
-          Answered: ({ empty, truncated, contextOverflow }) => {
+          Answered: ({ empty, truncated, contextOverflow, blocked }) => {
+            // The provider blocked the request, not the answer: a re-prompt
+            // resends the same window to the same filter. The text it kept
+            // stays; the error says why the reply ends there.
+            if (blocked) {
+              return publishEventOrDie(
+                ErrorOccurred.make({
+                  sessionId: scope.sessionId,
+                  branchId: scope.branchId,
+                  error: PROVIDER_BLOCKED_RESPONSE,
+                }),
+              ).pipe(Effect.as(stop({ unanswered: empty })))
+            }
             if (!empty && !truncated) {
               // Steering that arrived while the answer streamed joins this
               // turn. Left for the next one, it would be answered in a turn

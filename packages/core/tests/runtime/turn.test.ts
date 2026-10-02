@@ -73,6 +73,7 @@ import {
 } from "../../src/runtime/provider"
 import {
   type AgentEvent,
+  ErrorOccurred,
   EventEnvelope,
   EventId,
   EventStore,
@@ -444,6 +445,7 @@ describe("classifyStep", () => {
       empty: false,
       truncated: false,
       contextOverflow: false,
+      blocked: false,
     })
   })
 
@@ -454,6 +456,7 @@ describe("classifyStep", () => {
       empty: true,
       truncated: false,
       contextOverflow: false,
+      blocked: false,
     })
   })
 
@@ -466,6 +469,7 @@ describe("classifyStep", () => {
       empty: false,
       truncated: true,
       contextOverflow: false,
+      blocked: false,
     })
   })
 
@@ -478,6 +482,7 @@ describe("classifyStep", () => {
       empty: false,
       truncated: false,
       contextOverflow: false,
+      blocked: false,
     })
   })
 
@@ -488,6 +493,7 @@ describe("classifyStep", () => {
       empty: false,
       truncated: true,
       contextOverflow: true,
+      blocked: false,
     })
     // A window already handed off this turn is only continued.
     expect(classifyStep(collected(parts, { windowFull: true }))).toEqual({
@@ -495,6 +501,21 @@ describe("classifyStep", () => {
       empty: false,
       truncated: true,
       contextOverflow: false,
+      blocked: false,
+    })
+  })
+
+  test("a content-filter finish marks the answer blocked, with or without text", () => {
+    const blockedFinish = finishPart({ finishReason: "content-filter" })
+    expect(classifyStep(collected([blockedFinish]))).toMatchObject({
+      _tag: "Answered",
+      empty: true,
+      blocked: true,
+    })
+    expect(classifyStep(collected([textDeltaPart("partial"), blockedFinish]))).toMatchObject({
+      _tag: "Answered",
+      empty: false,
+      blocked: true,
     })
   })
 })
@@ -1594,6 +1615,87 @@ describe("empty final step", () => {
           expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
         }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, events))),
       )
+    }),
+  )
+})
+
+// ── provider refusal ────────────────────────────────────────────────────────
+
+/**
+ * A provider that blocks a reply (Effect AI maps Anthropic's `refusal` to the
+ * `content-filter` finish) blocked the request, not the model's answer. A
+ * re-prompt resends the same window to the same filter, so the turn stops
+ * with one error that says so and keeps any text the reply had.
+ */
+describe("provider refusal", () => {
+  const sessionId = SessionId.make("refusal-session")
+  const branchId = BranchId.make("refusal-branch")
+
+  const userMessage = (text: string) =>
+    Message.cases.regular.make({
+      id: MessageId.make("refusal-msg-0"),
+      sessionId,
+      branchId,
+      role: "user",
+      parts: [Prompt.textPart({ text })],
+      createdAt: dateFromMillis(1_767_225_600_000),
+    })
+
+  const blockedStep = (text: ReadonlyArray<string>) => ({
+    parts: [
+      ...text.map((delta) => textDeltaPart(delta)),
+      finishPart({ finishReason: "content-filter", usage: { inputTokens: 10, outputTokens: 1 } }),
+    ],
+  })
+
+  const runBlocked = (step: ReturnType<typeof blockedStep>) =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([step])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      return yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(agentLoop, userMessage("say the blocked thing"))
+        expect(yield* controls.callCount).toBe(1)
+        yield* controls.assertDone
+        const stored = yield* (yield* MessageStorage).listMessages(branchId)
+        const events = yield* Ref.get(eventsRef)
+        return { stored, events }
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
+    }).pipe(Effect.timeout("4 seconds"))
+
+  it.live("a refusal with no text stops the turn unanswered with one error and no re-prompt", () =>
+    Effect.gen(function* () {
+      const { stored, events } = yield* runBlocked(blockedStep([]))
+      expect(stored.filter((message) => message.metadata?.customType === "continuation")).toEqual(
+        [],
+      )
+      expect(events.filter(Schema.is(ErrorOccurred)).map((event) => event.error)).toEqual([
+        "the provider blocked the response",
+      ])
+      expect(events.filter((event) => event._tag === "TurnCompleted")).toMatchObject([
+        { unanswered: true },
+      ])
+    }),
+  )
+
+  it.live("a refusal after partial text keeps the text and reports the block", () =>
+    Effect.gen(function* () {
+      const { stored, events } = yield* runBlocked(blockedStep(["Here is the start"]))
+      const assistantTexts = stored
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+      expect(assistantTexts).toEqual(["Here is the start"])
+      expect(stored.filter((message) => message.metadata?.customType === "continuation")).toEqual(
+        [],
+      )
+      expect(events.filter(Schema.is(ErrorOccurred)).map((event) => event.error)).toEqual([
+        "the provider blocked the response",
+      ])
+      const completed = events.filter((event) => event._tag === "TurnCompleted")
+      expect(completed).toHaveLength(1)
+      expect(completed[0]).not.toMatchObject({ unanswered: true })
     }),
   )
 })
