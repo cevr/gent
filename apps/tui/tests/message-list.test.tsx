@@ -39,11 +39,9 @@ import {
   ToolCallId,
   AgentEvent,
   EventEnvelope,
-  type Message as DomainMessage,
 } from "@gent/core/protocol"
 import {
   toolCallReceipts,
-  type MessagePart,
   projectMessagesWithToolInteractions,
   EventId,
 } from "@gent/core/test-utils"
@@ -340,98 +338,8 @@ describe("worked-for row", () => {
   })
 })
 
-// ── tool interaction projection ─────────────────────────────────────────────
-
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
 const absent = undefined
-let messageIndex = 0
-
-// Core's projection owns running calls, pairing, the first-line summary and
-// the 100-character cut (packages/core/tests/domain/message.test.ts). These
-// cases core does not cover yet stay here until core takes them.
-describe("projectMessagesWithToolInteractions", () => {
-  const makeMsg = (role: "user" | "assistant" | "tool", parts: MessagePart[]): DomainMessage =>
-    Message.cases.regular.make({
-      id: MessageId.make(`message-sdk-utilities-${messageIndex++}`),
-      sessionId: SessionId.make("s1"),
-      branchId: BranchId.make("b1"),
-      role,
-      parts,
-      createdAt: dateFromMillis(0),
-      turnDurationMs: absent,
-    })
-
-  type ToolResultValue = string | { readonly files: ReadonlyArray<string> }
-  const toolResult = (id: string, value: ToolResultValue, isError = false): MessagePart =>
-    Prompt.toolResultPart({
-      id: ToolCallId.make(id),
-      name: "test-tool",
-      isFailure: isError,
-      providerExecuted: false,
-      result: value,
-    })
-
-  test("returns empty interactions when no tool calls", () => {
-    const projected = projectMessagesWithToolInteractions([
-      makeMsg("assistant", [Prompt.textPart({ text: "Just text" })]),
-    ])[0]
-    expect(projected?.toolInteractions).toEqual([])
-  })
-
-  test("handles error results", () => {
-    const messages: DomainMessage[] = [
-      makeMsg("assistant", [
-        Prompt.toolCallPart({
-          id: ToolCallId.make("tc1"),
-          name: "read",
-          params: {},
-          providerExecuted: false,
-        }),
-      ]),
-      makeMsg("tool", [toolResult("tc1", "File not found", true)]),
-    ]
-
-    const projected = projectMessagesWithToolInteractions(messages)[0]
-    expect(projected?.toolInteractions[0]).toEqual({
-      id: ToolCallId.make("tc1"),
-      toolName: "read",
-      status: "error",
-      input: {},
-      summary: "File not found",
-      output: "File not found",
-      durationMs: absent,
-    })
-  })
-
-  test("handles object output", () => {
-    const messages: DomainMessage[] = [
-      makeMsg("assistant", [
-        Prompt.toolCallPart({
-          id: ToolCallId.make("tc1"),
-          name: "read",
-          params: {},
-          providerExecuted: false,
-        }),
-      ]),
-      makeMsg("tool", [toolResult("tc1", { files: ["a.ts", "b.ts"] })]),
-    ]
-
-    const result = projectMessagesWithToolInteractions(messages)[0]!.toolInteractions[0]!
-    expect(result.summary).toBe('{"files":["a.ts","b.ts"]}')
-    expect(result.output).toContain('"files"')
-  })
-
-  test("ignores tool results without matching message-local calls", () => {
-    const messages: DomainMessage[] = [
-      makeMsg("user", [Prompt.textPart({ text: "Hello" })]),
-      makeMsg("assistant", [Prompt.textPart({ text: "Hi there" })]),
-      makeMsg("tool", [toolResult("tc1", "orphan")]),
-    ]
-
-    const projected = projectMessagesWithToolInteractions(messages)
-    expect(projected.flatMap((message) => message.toolInteractions)).toEqual([])
-  })
-})
 
 // ── message list render ─────────────────────────────────────────────────────
 

@@ -75,7 +75,6 @@ export {
   TurnCompleted,
 } from "../domain/event.js"
 export {
-  MessagePart,
   projectMessagesWithToolInteractions,
   toolResultMessageIdForTurn,
 } from "../domain/message.js"
