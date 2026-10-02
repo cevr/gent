@@ -1237,6 +1237,24 @@ const makeFakeTransport = (
   })
 const makeTestRuntime = (transport: ClientShellTransport) =>
   makeClientExtensionRuntime({ transport })
+/** One fetch of `sources`: the rows, and each source reported as failed or broken, by title. */
+const runSources = (
+  sources: ReadonlyArray<AutocompleteContribution>,
+  filter: string,
+  runtime: ReturnType<typeof makeTestRuntime>,
+  opening = false,
+) =>
+  Effect.gen(function* () {
+    const failed: Array<string> = []
+    const broke: Array<string> = []
+    const rows = yield* Effect.promise(() =>
+      runAutocompleteContributions(sources, { filter, opening }, runtime, {
+        failed: (source, reason) => failed.push(`${source.prefix}:${reason}`),
+        broke: (source, reason) => broke.push(`${source.title}: ${reason}`),
+      }),
+    )
+    return { rows, failed, broke }
+  })
 /** The extension-side call: yield the transport, request against the active session. */
 const listThings = Effect.gen(function* () {
   const { transport } = yield* ClientContext
@@ -1260,14 +1278,10 @@ describe("autocomplete Effect items() through the client transport", () => {
             ] satisfies ReadonlyArray<AutocompleteItem>
           }),
       }
-      const failures: Array<string> = []
-      const result = yield* Effect.promise(() =>
-        runAutocompleteContributions([contribution], "hello", runtime, (prefix, reason) => {
-          failures.push(`${prefix}: ${reason}`)
-        }),
-      )
-      expect(failures).toEqual([])
-      expect(result.map((entry) => entry.item)).toEqual([{ id: "hello", label: "got:hello" }])
+      const run = yield* runSources([contribution], "hello", runtime)
+      expect(run.failed).toEqual([])
+      expect(run.broke).toEqual([])
+      expect(run.rows.map((entry) => entry.item)).toEqual([{ id: "hello", label: "got:hello" }])
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
@@ -1288,17 +1302,63 @@ describe("autocomplete Effect items() through the client transport", () => {
             return reply.map((label) => ({ id: label, label }))
           }),
       }
-      const failures: Array<string> = []
-      const result = yield* Effect.promise(() =>
-        runAutocompleteContributions([contribution], "filter", runtime, (prefix, reason) => {
-          failures.push(`${prefix}:${reason}`)
-        }),
-      )
-      expect(result).toEqual([])
-      expect(failures.length).toBe(1)
-      expect(failures[0]).toContain("transport down")
+      const run = yield* runSources([contribution], "filter", runtime)
+      expect(run.rows).toEqual([])
+      expect(run.broke).toEqual([])
+      expect(run.failed.length).toBe(1)
+      expect(run.failed[0]).toContain("$:")
+      expect(run.failed[0]).toContain("transport down")
       yield* Effect.promise(() => runtime.dispose())
     }),
+  )
+  it.live(
+    "a source whose code throws or dies is reported as broken, and the rest still answer",
+    () =>
+      Effect.gen(function* () {
+        const runtime = makeTestRuntime(makeFakeTransport())
+        const fine: AutocompleteContribution = {
+          prefix: "%",
+          title: "Fine",
+          items: (filter) => [{ id: `fine-${filter}`, label: "fine" }],
+        }
+        const broken = (
+          title: string,
+          parts: Partial<Pick<AutocompleteContribution, "items" | "onOpen">>,
+        ): AutocompleteContribution => ({
+          prefix: "%",
+          title,
+          items: () => [{ id: title, label: title }],
+          ...parts,
+        })
+        // Extension code that throws: its decode fails.
+        const explode = (said: string) => Schema.decodeUnknownSync(Schema.Literal("fine"))(said)
+        const sources = [
+          fine,
+          broken("dies", { items: () => Effect.die("died") }),
+          broken("throws in its Effect", {
+            items: () => Effect.sync(() => [{ id: explode("threw-inside"), label: "x" }]),
+          }),
+          broken("throws", { items: () => [{ id: explode("threw"), label: "x" }] }),
+          broken("open throws", {
+            onOpen: () => {
+              explode("open-threw")
+            },
+          }),
+        ]
+        const opened = yield* runSources(sources, "x", runtime, true)
+        expect(opened.rows.map((entry) => entry.item.id)).toEqual(["fine-x"])
+        expect(opened.failed).toEqual([])
+        expect(opened.broke).toEqual([
+          "dies: died",
+          'throws in its Effect: SchemaError(Expected "fine")',
+          'throws: SchemaError(Expected "fine")',
+          'open throws: SchemaError(Expected "fine")',
+        ])
+        // `onOpen` runs only when the popup opens.
+        const typed = yield* runSources(sources, "y", runtime)
+        expect(typed.rows.map((entry) => entry.item.id)).toEqual(["fine-y", "open throws"])
+        yield* Effect.promise(() => runtime.dispose())
+      }),
   )
   it.live("an extension request returns the server's reply", () =>
     Effect.gen(function* () {

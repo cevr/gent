@@ -48,6 +48,7 @@ import {
   type CommandSource,
   loadExtensionUi,
   resolveCommands,
+  type ResolvedAutocomplete,
   type ResolvedNoticeRows,
   type ResolvedTuiExtensions,
   type ResolvedWidget,
@@ -125,16 +126,20 @@ interface ExtensionUIContextValue {
   readonly statusLabelItems: Accessor<ReadonlyArray<StatusLabelItem>>
   /**
    * An extension's render code threw: it joins `failures` by name, as a setup
-   * throw does, and its widgets, status labels and renderers draw no more
-   * (the host's own renderer draws in a renderer's place). The first
-   * throw is the one reported.
+   * throw does. Its widgets, status labels and renderers draw no more (the
+   * host's own renderer draws in a renderer's place), and its autocomplete
+   * sources are offered no more. The first throw is the one reported.
    */
   readonly recordRenderFailure: (extensionId: string, reason: string) => void
   /** Whether an extension's render code has thrown. */
   readonly renderFailed: (extensionId: string) => boolean
   /** Extension transcript rows by notice id; the session view merges the rows of its branch. */
   readonly noticeRows: Accessor<ReadonlyArray<ResolvedNoticeRows>>
-  readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
+  /**
+   * Every autocomplete source, with its extension. A source whose code throws
+   * fails its extension (`recordRenderFailure`) and is offered no more.
+   */
+  readonly autocompleteItems: Accessor<ReadonlyArray<ResolvedAutocomplete>>
   /** Client extensions, or contributions, that did not load. */
   readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
   /** Register dynamic autocomplete contributions (e.g. from session controller) */
@@ -301,6 +306,17 @@ export function ExtensionUIProvider(props: {
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
     ReadonlyArray<AutocompleteContribution>
   >([])
+  // The session's own sources (the `/` commands) answer for `@gent/session`,
+  // as its commands do. A source whose code threw is offered no more.
+  const autocompleteItems = createMemo((): ReadonlyArray<ResolvedAutocomplete> =>
+    [
+      ...resolved().autocompleteItems,
+      ...dynamicAutocomplete().map((contribution) => ({
+        ...contribution,
+        extensionId: "@gent/session",
+      })),
+    ].filter((source) => !renderFailed(source.extensionId)),
+  )
 
   // Provider-scoped cleanup registry. Widget setups that detach Solid
   // roots or subscribe to pulses register their disposers here; the
@@ -556,7 +572,7 @@ export function ExtensionUIProvider(props: {
         recordRenderFailure,
         renderFailed,
         noticeRows,
-        autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
+        autocompleteItems,
         failures: () => [
           ...resolved().failures,
           ...resolvedCommands().failures,

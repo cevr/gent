@@ -1149,8 +1149,9 @@ const skillsHarness = (home: string, names: ReadonlyArray<string>) =>
       Effect.gen(function* () {
         const failures: Array<string> = []
         const items = yield* Effect.promise(() =>
-          runAutocompleteContributions([contribution], filter, runtime, (prefix, reason) => {
-            failures.push(`${prefix}: ${reason}`)
+          runAutocompleteContributions([contribution], { filter, opening: false }, runtime, {
+            failed: (source, reason) => failures.push(`${source.prefix}: ${reason}`),
+            broke: (source, reason) => failures.push(`${source.prefix}: ${reason}`),
           }),
         )
         // A failing contribution answers with no rows, which would read as a

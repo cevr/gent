@@ -215,9 +215,15 @@ export interface ResolvedTuiExtensions {
   readonly interactionRenderers: Map<string, ResolvedInteractionRenderer>
   readonly statusLabels: ReadonlyArray<ResolvedStatusLabel>
   readonly noticeRows: ReadonlyArray<ResolvedNoticeRows>
-  readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
+  readonly autocompleteItems: ReadonlyArray<ResolvedAutocomplete>
   readonly failures: ReadonlyArray<ClientExtensionFailure>
 }
+
+/**
+ * An autocomplete source, with the extension that contributed it, named when
+ * its code throws.
+ */
+export type ResolvedAutocomplete = AutocompleteContribution & { readonly extensionId: string }
 
 /** Who holds a key: the extension scope and file that claimed it. */
 interface Claim {
@@ -542,10 +548,6 @@ export const resolveTuiExtensions = (
     if (scopeDiff !== 0) return scopeDiff
     return Order.String(a.id, b.id)
   })
-  const collected = <A>(
-    // eslint-disable-next-line effect/noNullish -- extension contribution buckets may be omitted.
-    bucket: (contributions: ClientContributions) => ReadonlyArray<A> | undefined,
-  ) => sorted.flatMap((ext) => itemsOrEmpty(bucket(ext.contributions)))
 
   const renderers = resolveKeyed(sorted, failures, "renderer", (contributions, extensionId) =>
     itemsOrEmpty(contributions.renderers).flatMap((contribution) =>
@@ -613,7 +615,12 @@ export const resolveTuiExtensions = (
       ),
     ),
     noticeRows: [...noticeRows.values()],
-    autocompleteItems: collected((contributions) => contributions.autocomplete),
+    autocompleteItems: sorted.flatMap((ext) =>
+      itemsOrEmpty(ext.contributions.autocomplete).map((contribution) => ({
+        ...contribution,
+        extensionId: ext.id,
+      })),
+    ),
     failures,
   }
 }
@@ -977,27 +984,48 @@ export interface SourcedAutocompleteItem {
   readonly source: AutocompleteContribution
 }
 
-export const runAutocompleteContributions = (
-  contributions: ReadonlyArray<AutocompleteContribution>,
-  filter: string,
+/** What one fetch of a prefix's sources asks for. */
+interface AutocompleteQuery {
+  readonly filter: string
+  /** The popup opens on the prefix: each source's `onOpen` runs before its `items`. */
+  readonly opening: boolean
+}
+
+/**
+ * How a source that gave no rows is reported. Either way it gives no rows
+ * this time, and the other sources' rows still show.
+ */
+interface AutocompleteReport<C extends AutocompleteContribution> {
+  /** Its `items` Effect failed (a request that failed); it stays offered. */
+  readonly failed: (contribution: C, reason: string) => void
+  /** Its code threw or died (`items`, `onOpen`, a bad reply): a bug in its extension. */
+  readonly broke: (contribution: C, reason: string) => void
+}
+
+export const runAutocompleteContributions = <C extends AutocompleteContribution>(
+  contributions: ReadonlyArray<C>,
+  query: AutocompleteQuery,
   clientRuntime: ClientRuntime,
-  onFailure: (prefix: string, reason: string) => void,
+  report: AutocompleteReport<C>,
 ): Promise<SourcedAutocompleteItem[]> =>
   clientRuntime.runPromise(
     Effect.forEach(
       contributions,
       (contribution) =>
-        Effect.try({
-          try: () => contribution.items(filter),
-          catch: String,
+        Effect.suspend(() => {
+          if (query.opening) contribution.onOpen?.()
+          return toAutocompleteEffect(contribution.items(query.filter))
         }).pipe(
-          Effect.flatMap(toAutocompleteEffect),
           Effect.map((items) => items.map((item) => ({ item, source: contribution }))),
-          Effect.catch((reason) =>
-            Effect.sync(() => {
-              onFailure(contribution.prefix, reason)
-              return [] satisfies SourcedAutocompleteItem[]
-            }),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.sync(() => {
+                const reason = String(Cause.squash(cause))
+                if (Cause.hasDies(cause)) report.broke(contribution, reason)
+                else report.failed(contribution, reason)
+                return [] satisfies SourcedAutocompleteItem[]
+              }),
           ),
         ),
       { concurrency: 16 },
