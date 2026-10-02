@@ -10,6 +10,10 @@ import { randomBytes } from "node:crypto" // held-by: effect/noNodeBuiltinImport
 import { fileURLToPath } from "node:url" // held-by: effect/noNodeBuiltinImport
 import { pathToFileURL } from "url" // held-by: effect/noNodeBuiltinImport
 import "node:crypto" // held-by: effect/noNodeBuiltinImport
+import nodeProcess from "node:process"
+
+export const importedEnv = nodeProcess["env"] // held-by: effect/noNodeBuiltinImport
+export const importedVersion = nodeProcess["version"]
 
 export const cwd = process.cwd() // held-by: effect/noGlobals
 export const fallback = globalThis.process.cwd() // held-by: effect/noGlobals
