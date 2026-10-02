@@ -1,6 +1,6 @@
 /**
  * Process entry: the ```ts, ```typescript and ```tsx blocks of the steering
- * prose compile with the repo's compiler options and Effect diagnostics.
+ * prose compile and lint with the repo's compiler options and Effect policies.
  *
  * The examples package runs it after its own `tsc`, since both check code an
  * author copies. Each block is written as its own module to a scoped temp
@@ -8,7 +8,9 @@
  * its tsconfig extends the context's tsconfig and its `node_modules` is the
  * context's, so a block resolves `effect`, `@gent/core` or `@opentui/solid`
  * the way the code it teaches does. A `tsc` exit other than 0 fails the
- * check, with each diagnostic at its line in the file that holds the block.
+ * check, as does oxlint, with each diagnostic at its original Markdown line.
+ * Extracted modules mirror extension/TUI paths; `lint=test` on the fence
+ * selects the corresponding test scope without changing compile dependencies.
  *
  * The steering files come from the guards' one file set, the git index
  * (`fileSet` in `check-guardrails.ts`), and each is read by its real path, so
@@ -67,6 +69,7 @@ interface GuideBlock {
   readonly line: number
   readonly code: string
   readonly extension: "ts" | "tsx"
+  readonly testCode: boolean
 }
 
 /** The fence languages that compile, and the module extension each is written with. */
@@ -95,13 +98,30 @@ export const guideCodeBlocks = (file: string, text: string): ReadonlyArray<Guide
     const code = lines
       .slice(open + 1, close)
       .map((line) => line.slice(Math.min(indent.length, line.length - line.trimStart().length)))
-    return [{ file, line: open + 2, code: code.join("\n"), extension: extension.value }]
+    return [
+      {
+        file,
+        line: open + 2,
+        code: code.join("\n"),
+        extension: extension.value,
+        testCode: info.split(/\s+/).includes("lint=test"),
+      },
+    ]
   })
 }
 
-/** The module file a block is written to: `b1.ts` for the first, `b2.tsx` for a TSX second. */
-export const guideBlockFile = (index: number, block: GuideBlock): string =>
-  `b${index + 1}.${block.extension}`
+/** Mirror the block's lint audience while keeping its globally numbered diagnostic identity. */
+export const guideBlockFile = (index: number, block: GuideBlock): string => {
+  const tui = guideCodeContextOf(block.file) === TUI_CONTEXT
+  let root = "examples"
+  let directory = "extensions"
+  if (tui) {
+    root = "apps/tui"
+    directory = "src"
+  }
+  if (block.testCode) directory = "tests"
+  return `${root}/${directory}/b${index + 1}.${block.extension}`
+}
 
 const BLOCK_DIAGNOSTIC = /(?:^|[/\\])b(\d+)\.tsx?\((\d+),(\d+)\)/
 
@@ -127,18 +147,45 @@ class GuideCodeError extends Schema.TaggedError<GuideCodeError>()("GuideCodeErro
 
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))
 
+const GuideLintReport = Schema.Struct({
+  diagnostics: Schema.Array(
+    Schema.Struct({
+      message: Schema.String,
+      code: Schema.optional(Schema.String),
+      filename: Schema.String,
+      labels: Schema.optional(
+        Schema.Array(
+          Schema.Struct({ span: Schema.Struct({ line: Schema.Int, column: Schema.Int }) }),
+        ),
+      ),
+    }),
+  ),
+  number_of_files: Schema.Int,
+})
+const decodeLintReport = Schema.decodeUnknownEffect(Schema.fromJsonString(GuideLintReport))
+
 /** One process run in `cwd`: its exit code and its output. The scope kills it. */
 const run = Effect.fn("Tooling.run")(function* (
   command: string,
   args: ReadonlyArray<string>,
   cwd: string,
+  env: Record<string, string> = {},
 ) {
-  const handle = yield* ChildProcess.make(command, args, { cwd, forceKillAfter: "2 seconds" })
-  const [exitCode, output] = yield* Effect.all(
-    [handle.exitCode, Stream.mkString(Stream.decodeText(handle.all))],
-    { concurrency: "unbounded" },
+  const handle = yield* ChildProcess.make(command, args, {
+    cwd,
+    env,
+    extendEnv: true,
+    forceKillAfter: "2 seconds",
+  })
+  const [exitCode, stdout, stderr] = yield* Effect.all(
+    [
+      handle.exitCode,
+      Stream.mkString(Stream.decodeText(handle.stdout)),
+      Stream.mkString(Stream.decodeText(handle.stderr)),
+    ],
+    { concurrency: 3 },
   )
-  return { exitCode: Number(exitCode), output }
+  return { exitCode: Number(exitCode), stdout, stderr, output: stdout + stderr }
 })
 
 /**
@@ -181,7 +228,7 @@ export const requireContextModules = Effect.fn("Tooling.requireContextModules")(
   })
 })
 
-/** Compile one context's blocks in `directory`; the lines of any failure. */
+/** Compile and lint one context's blocks; each failure keeps its module position. */
 export const compileContext = Effect.fn("Tooling.compileContext")(function* (
   repoRoot: string,
   directory: string,
@@ -201,10 +248,66 @@ export const compileContext = Effect.fn("Tooling.compileContext")(function* (
   yield* fs.symlink(modules, path.join(directory, "node_modules"))
   const tsc = path.join(repoRoot, "node_modules", ".bin", "tsc")
   const result = yield* run(tsc, ["-p", directory, "--pretty", "false"], directory)
-  if (result.exitCode === 0) return []
+  const failures: Array<string> = []
+  if (result.exitCode !== 0)
+    failures.push(
+      `tsc exited ${result.exitCode} on the ${context.name} blocks:`,
+      ...result.output.split("\n").filter((line) => line.trim().length > 0),
+    )
+  // Lint owns workspace-import declarations. Add its manifest after compiling:
+  // a generated module name must not redefine a guide's service identity keys.
+  const workspace = path.dirname(context.modules)
+  yield* fs.makeDirectory(path.join(directory, workspace), { recursive: true })
+  yield* fs.copyFile(
+    path.join(repoRoot, workspace, "package.json"),
+    path.join(directory, workspace, "package.json"),
+  )
+  // Standalone snippets can define a value for the reader without using it
+  // in that same block. Every other rule inherits the actual repo policy.
+  yield* fs.writeFileString(
+    path.join(directory, ".oxlintrc.json"),
+    yield* encodeJson({
+      extends: [path.join(repoRoot, ".oxlintrc.json")],
+      rules: { "no-unused-vars": "off" },
+    }),
+  )
+  const lint = yield* run(
+    path.join(repoRoot, "node_modules/.bin/oxlint"),
+    [
+      "--format=json",
+      "--report-unused-disable-directives-severity=error",
+      "-c",
+      path.join(directory, ".oxlintrc.json"),
+      ...names,
+    ],
+    directory,
+    { OXLINT_TSGOLINT_PATH: path.join(repoRoot, "node_modules/.bin/tsgolint") },
+  )
+  const report = yield* decodeLintReport(lint.stdout).pipe(
+    Effect.mapError(
+      (error) =>
+        new GuideCodeError({
+          message: `oxlint exited ${lint.exitCode} without a valid report: ${error.message}\n${lint.output}`,
+        }),
+    ),
+  )
+  if (report.number_of_files !== names.length)
+    return yield* new GuideCodeError({
+      message: `oxlint checked ${report.number_of_files} of ${names.length} ${context.name} blocks`,
+    })
+  if (lint.exitCode === 0) return failures
   return [
-    `tsc exited ${result.exitCode} on the ${context.name} blocks:`,
-    ...result.output.split("\n").filter((line) => line.trim().length > 0),
+    ...failures,
+    `oxlint exited ${lint.exitCode} on the ${context.name} blocks:`,
+    ...report.diagnostics.map((diagnostic) => {
+      const span = Option.fromNullishOr(diagnostic.labels?.[0]?.span)
+      const position = span.pipe(
+        Option.map((value) => `(${value.line},${value.column})`),
+        Option.getOrElse(() => ""),
+      )
+      const code = Option.fromNullishOr(diagnostic.code).pipe(Option.getOrElse(() => "oxlint"))
+      return `${diagnostic.filename}${position}: lint ${code}: ${diagnostic.message}`
+    }),
   ]
 })
 
@@ -227,8 +330,8 @@ const checkGuideCode = Effect.fn("Tooling.checkGuideCode")(function* () {
     const context = guideCodeContextOf(block.file)
     const name = guideBlockFile(index, block)
     byContext.set(context, [...(byContext.get(context) ?? []), name])
-    yield* fs.makeDirectory(path.join(root, context.name), { recursive: true })
-    yield* fs.writeFileString(path.join(root, context.name, name), `${block.code}\nexport {}\n`)
+    yield* fs.makeDirectory(path.dirname(path.join(root, context.name, name)), { recursive: true })
+    yield* fs.writeFileString(path.join(root, context.name, name), `${block.code}\n`)
   }
   const failures = yield* Effect.forEach(
     [...byContext],
@@ -244,9 +347,9 @@ const checkGuideCode = Effect.fn("Tooling.checkGuideCode")(function* () {
 
 const program = checkGuideCode().pipe(
   Effect.catchTag("GuideCodeError", (error) =>
-    Console.error(`The steering prose's code blocks do not compile:\n${error.message}`).pipe(
-      Effect.andThen(Effect.fail("guide code failed")),
-    ),
+    Console.error(
+      `The steering prose's code blocks failed compilation or lint:\n${error.message}`,
+    ).pipe(Effect.andThen(Effect.fail("guide code failed"))),
   ),
 )
 

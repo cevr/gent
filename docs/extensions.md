@@ -391,9 +391,7 @@ import { Context, Layer, Effect, Ref } from "effect"
 class MyService extends Context.Service<MyService, { readonly getData: Effect.Effect<string> }>()(
   "my-service-ext/MyService",
 ) {
-  static Live = Layer.succeed(MyService, {
-    getData: Effect.succeed("data"),
-  })
+  static Live = Layer.succeed(MyService, MyService.of({ getData: Effect.succeed("data") }))
 }
 
 class CounterState extends Context.Service<CounterState, Ref.Ref<number>>()(

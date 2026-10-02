@@ -8,7 +8,7 @@ North stars: effect-native, actor-model, a lean core with maximal expressiveness
 
 ```bash
 bun install
-bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean; also compiles the ts and tsx blocks of the steering docs
+bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean; also compiles and lints the ts and tsx blocks of the steering docs
 bun run lint       # oxlint (gent rules + type-aware lints) and the guards (`bun run guards`)
 bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
 bun run smoke      # Headless mode smoke test
@@ -47,6 +47,7 @@ bun run --cwd apps/tui dev sessions
 - **bun:sqlite** - Can't use vitest (runs in Node). Use `bun test` directly.
 - **Schema.Class JSON roundtrip** - `JSON.parse` returns plain objects. Use `Schema.decodeUnknownSync` to reconstruct instances.
 - **Effect diagnostics** - Effect compiler suggestions are not TypeScript errors. Still fix them.
+- **Steering code fences** - TypeScript examples compile and lint as extension or TUI source. Add `lint=test` to a test-code fence; mark incomplete examples with `<!-- illustrative: reason -->` above the fence.
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
 - **No `any` casts** - oxlint enforces. Causes type drift bugs. Import the owning type instead of redeclaring it.
 - **Package boundary imports** - Use `@gent/core/extensions/api` for extension authoring. Use `@gent/core/protocol` for shared client schemas, projections, and RPC types. Use `@gent/core/host` for what a host composes (platform, config loader, storage, workspace headers, server root, the scripted model). Use `@gent/core/test-utils` in tests only; product code never imports it. Each entry re-exports only names with a real consumer; a `host` name needs a product caller, so a name only tests read belongs in `test-utils`. A test outside core arranges host state through `test-utils` operations (`captureTurnTools`, `runtimeHostContext`, `plantToolCallBinding`, `plantInFlightTurn`, `recordInteractionDecision`, `storedEvents`, `staticToolBinding`), never through core's own Tags, and never imports `packages/core/src/` by relative path. Core implementation tests import their owning `packages/core/src/` modules by relative path. Files inside `packages/core/src/` also use relative imports.
@@ -138,7 +139,7 @@ New extension tests should include at least one RPC acceptance test via `createR
 
 ### Test layers
 
-```typescript
+```typescript lint=test
 import { Effect } from "effect"
 import {
   baseLocalLayer,
