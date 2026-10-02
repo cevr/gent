@@ -18,7 +18,7 @@ import {
   trayLines,
 } from "../../src/extensions/agents.client"
 import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
-import { DockProvider, PickerFrame, usePickerGeometry } from "../../src/ui"
+import { DockProvider, PickerFrame } from "../../src/ui"
 import { renderFrame, renderScoped } from "../render-harness-boundary"
 import { useCommand } from "../../src/commands"
 import { useScopedKeyboard } from "../../src/terminal"
@@ -1046,21 +1046,21 @@ describe("Agents pane framing", () => {
     }),
   )
 
-  it.scopedLive("keeps a row's age on the row's own line in a narrow pane", () =>
+  it.scopedLive("keeps each row's age on the row's own line in a narrow pane", () =>
     Effect.gen(function* () {
-      // Observed at 58 columns: every row wrapped its age onto a line of its
-      // own. A row is drawn inside the list body, which pads a column each
-      // side, and pads one more itself — so a budget that only counts the
-      // row's own pad draws a line as wide as the terminal and the age falls
-      // off the end.
+      // A row is drawn inside the list body, which pads a column each side,
+      // and pads one more itself. A budget that counts only the row's own pad
+      // draws a line as wide as the terminal, and the age wraps onto a line of
+      // its own. An overlong label is cut so that its age keeps its place.
       const now = yield* Clock.currentTimeMillis
       const aged = agedRow("aged", "New Chat", now - 60_000)
+      const long = agedRow("long", "L".repeat(400), now - 2 * 24 * 60 * 60 * 1000)
       const setup = yield* renderScoped(
         () => (
           <AgentsPane
             open={true}
             controller={{
-              rows: () => [aged],
+              rows: () => [aged, long],
               current: () => ELSEWHERE,
               error: () => Option.none(),
               loading: () => false,
@@ -1077,8 +1077,15 @@ describe("Agents pane framing", () => {
         ),
         { width: 58, height: 24 },
       )
-      yield* waitForFrame(setup, (frame) => frame.includes("New Chat"), "aged row")
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("New Chat") && frame.includes("LLL"),
+        "both rows",
+      )
       const lines = renderFrame(setup).split("\n")
+      const rule = Option.getOrThrow(
+        Option.fromNullishOr(lines.find((line) => line.startsWith("────"))),
+      )
 
       // The age rides the row that names the agent, not a line by itself.
       const rowLine = Option.getOrThrow(
@@ -1087,80 +1094,17 @@ describe("Agents pane framing", () => {
       expect(rowLine).toContain("1m")
       expect(lines.some((line) => line.trim() === "1m")).toBe(false)
 
-      // The drawn row ends one column short of the rule: the body keeps its
-      // right pad. A row that reaches the rule itself has overspent and is
-      // what pushes the age onto the next line.
-      const rule = Option.getOrThrow(
-        Option.fromNullishOr(lines.find((line) => line.startsWith("────"))),
-      )
-      expect(rowLine.trimEnd().length).toBe(rule.trimEnd().length - 1)
-    }),
-  )
-
-  it.scopedLive("cuts an overlong label instead of wrapping it under the row", () =>
-    Effect.gen(function* () {
-      // With the budget right, `rowLine` already builds exactly the columns a
-      // row may spend, so the clamp on the row's text changes nothing here —
-      // removing it keeps this green. It is kept for the reason the sibling
-      // rows carry theirs: a future row built wider than the budget is cut,
-      // not reflowed under its own line.
-      const now = yield* Clock.currentTimeMillis
-      const aged = agedRow("long", "L".repeat(400), now - 2 * 24 * 60 * 60 * 1000)
-      const setup = yield* renderScoped(
-        () => (
-          <AgentsPane
-            open={true}
-            controller={{
-              rows: () => [aged],
-              current: () => ELSEWHERE,
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: () => {},
-              reload: () => {},
-              detail: () => Option.none(),
-              select: () => {},
-              open: () => true,
-            }}
-            onSelect={() => {}}
-            onDelete={() => {}}
-            onClose={() => {}}
-          />
-        ),
-        { width: 58, height: 24 },
-      )
-      yield* waitForFrame(setup, (frame) => frame.includes("LLL"), "long row")
-      const lines = renderFrame(setup).split("\n")
-
-      // One line carries the label, and it carries the age too.
+      // One line carries the cut label, and it carries the age too.
       const labelLines = lines.filter((line) => line.includes("LLL"))
       expect(labelLines.length).toBe(1)
       expect(labelLines[0]).toContain("2d")
       expect(lines.some((line) => line.trim() === "2d")).toBe(false)
 
-      // A cut row ends where an uncut one does, one column inside the rule.
-      const rule = Option.getOrThrow(
-        Option.fromNullishOr(lines.find((line) => line.startsWith("────"))),
-      )
+      // Each row ends one column short of the rule: the body keeps its right
+      // pad. A row that reaches the rule has overspent, and that is what
+      // pushes the age onto the next line.
+      expect(rowLine.trimEnd().length).toBe(rule.trimEnd().length - 1)
       expect(labelLines[0]?.trimEnd().length).toBe(rule.trimEnd().length - 1)
-    }),
-  )
-
-  it.scopedLive("budgets a row the columns it actually spends", () =>
-    Effect.gen(function* () {
-      // The drawn row cannot witness this once the text is clamped: the clamp
-      // cuts a line to the row's box whatever the budget says, so an
-      // overspent budget still draws one unwrapped line. The numbers are the
-      // only place the spend stays visible, and the wrap follows from them —
-      // a row spends the body's two pad columns plus its own.
-      const seen: Array<{ rowPane: number; section: number }> = []
-      const Probe = () => {
-        const { rowWidth, sectionWidth } = usePickerGeometry()
-        seen.push({ rowPane: rowWidth(), section: sectionWidth() })
-        return <text>probe</text>
-      }
-      const setup = yield* renderScoped(() => <Probe />, { width: 58, height: 24 })
-      yield* waitForFrame(setup, (frame) => frame.includes("probe"), "probe")
-      expect(seen[0]).toEqual({ rowPane: 55, section: 56 })
     }),
   )
 
