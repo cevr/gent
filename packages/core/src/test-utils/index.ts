@@ -37,17 +37,21 @@ export {
   interruptAtEachStep,
   LanguageModelLayers,
   makeTempDirectoryScoped,
-  multiToolCallStep,
   seedAuthKeys,
   storedCredentialModel,
   type SequenceStep,
-  textStep,
-  toolCallStep,
   systemTextOf,
   turnRequestText,
   waitFor,
 } from "./language-model.js"
-export { finishPart, textDeltaPart, toolCallPart } from "../runtime/provider.js"
+export {
+  finishPart,
+  multiToolCallStep,
+  textDeltaPart,
+  textStep,
+  toolCallPart,
+  toolCallStep,
+} from "../runtime/provider.js"
 export { turnNoticesText } from "../runtime/model-context.js"
 export { type LoadedExtension } from "../domain/extension.js"
 export { ApprovalService } from "../runtime/extension-host.js"

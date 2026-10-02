@@ -71,6 +71,9 @@ import {
   type LanguageModelStreamPart,
   Auth,
   ModelResolver,
+  multiToolCallStep,
+  textStep,
+  toolCallStep,
 } from "../../src/runtime/provider"
 import {
   type AgentEvent,
@@ -114,9 +117,6 @@ import {
 import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
-  multiToolCallStep,
-  textStep,
-  toolCallStep,
   waitFor,
 } from "../../src/test-utils/language-model"
 import {

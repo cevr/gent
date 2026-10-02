@@ -55,13 +55,13 @@ import {
   serializeAuthStore,
   AuthApi,
   ListAuthProvidersPayload,
+  multiToolCallStep,
+  textStep,
+  toolCallStep,
 } from "../../src/runtime/provider"
 import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
-  multiToolCallStep,
-  textStep,
-  toolCallStep,
   waitFor,
 } from "../../src/test-utils/language-model"
 import {

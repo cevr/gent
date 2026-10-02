@@ -34,7 +34,7 @@ import {
 } from "../domain/driver.js"
 import { ExtensionRegistry, resolveExtensions } from "../runtime/extension-host.js"
 import { omitUndefined } from "../domain/guards.js"
-import { ExtensionId, ToolCallId } from "../domain/ids.js"
+import { ExtensionId } from "../domain/ids.js"
 import { ProviderError } from "../domain/errors.js"
 import {
   aiError,
@@ -46,8 +46,8 @@ import {
   type LanguageModelStreamPart,
   makeLanguageModelLayer,
   ScriptedLanguageModel,
+  type ScriptedStep,
   textDeltaPart,
-  toolCallPart,
 } from "../runtime/provider.js"
 
 // ── stored-credential model ─────────────────────────────────────────────────
@@ -296,8 +296,8 @@ interface SignalLanguageModelControls {
   readonly waitForStreamStart: Effect.Effect<void>
 }
 
-export interface SequenceStep {
-  readonly parts: ReadonlyArray<LanguageModelStreamPart>
+/** A scripted step (`textStep`, `toolCallStep`, …), with the sequence's checks and gate. */
+export interface SequenceStep extends ScriptedStep {
   readonly assertRequest?: (request: {
     readonly model: string
     readonly reasoning?: string
@@ -555,51 +555,3 @@ export const LanguageModelLayers = {
   sequence,
   signal,
 }
-
-// ── sequence-steps ──────────────────────────────────────────────────────────
-
-// Step builders for scripted language-model sequences. Each composes the
-// stream-part helpers of `runtime/provider.ts` into one `SequenceStep`.
-
-let _stepCallIdCounter = 0
-const makeStepToolCallId = () => ToolCallId.make(`step-tc-${++_stepCallIdCounter}`)
-export const textStep = (text: string): SequenceStep => ({
-  parts: [
-    textDeltaPart(text),
-    finishPart({
-      finishReason: "stop",
-      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) },
-    }),
-  ],
-})
-
-export const toolCallStep = (
-  toolName: string,
-  // oxlint-disable-next-line effect/noUnknownParameters -- Tool arguments enter the Effect AI codec as unknown JSON data.
-  input: unknown,
-  options?: { toolCallId?: ToolCallId },
-): SequenceStep => ({
-  parts: [
-    toolCallPart(toolName, input, { toolCallId: options?.toolCallId ?? makeStepToolCallId() }),
-    finishPart({
-      finishReason: "tool-calls",
-      usage: { inputTokens: 10, outputTokens: 20 },
-    }),
-  ],
-})
-
-export const multiToolCallStep = (
-  ...calls: ReadonlyArray<{ toolName: string; input: unknown; toolCallId?: ToolCallId }>
-): SequenceStep => ({
-  parts: [
-    ...calls.map((call) =>
-      toolCallPart(call.toolName, call.input, {
-        toolCallId: call.toolCallId ?? makeStepToolCallId(),
-      }),
-    ),
-    finishPart({
-      finishReason: "tool-calls",
-      usage: { inputTokens: 10, outputTokens: 20 * calls.length },
-    }),
-  ],
-})

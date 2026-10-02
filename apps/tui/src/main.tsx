@@ -107,7 +107,7 @@ const gentFlags = {
   isolate: isolateFlag,
   debug: Flag.Boolean("debug").pipe(
     Flag.withDescription(
-      "Start an in-memory server with a seeded session on the scripted model, to exercise the TUI",
+      'Start an in-memory server with a seeded session on the scripted model, to exercise the TUI; a message with "debug tools" plays a multi-step tool turn',
     ),
     Flag.withDefault(false),
   ),

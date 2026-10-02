@@ -38,7 +38,6 @@ import { StorageError } from "../../src/domain/errors.js"
 import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
-  textStep,
   waitFor,
 } from "../../src/test-utils/language-model"
 import {
@@ -98,7 +97,7 @@ import {
 } from "../../src/domain/event"
 import { BunServices } from "@effect/platform-bun"
 import { SqlClient } from "effect/sql"
-import { Auth, ModelResolver } from "../../src/runtime/provider"
+import { Auth, ModelResolver, textStep } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { noBranchTools } from "../../src/runtime/tools"
 import { RpcClient, RpcTest } from "effect/rpc"

@@ -8,7 +8,7 @@ The references are the `ui` rows of [`PRIOR_ARTS.md`](../../PRIOR_ARTS.md): verc
 
 ## How to run
 
-- gent: `bun run --cwd <main checkout>/apps/tui dev --debug` with `GENT_DATA_DIR` and `HOME` under the scratch directory. `--debug` uses the scripted model, so a conversation, streaming, tool calls and errors render with no paid call.
+- gent: `bun run --cwd <main checkout>/apps/tui dev --debug` with `GENT_DATA_DIR` and `HOME` under the scratch directory. `--debug` uses the scripted model, so a conversation, streaming, tool calls and errors render with no paid call. A message that holds `debug tools` plays a six-step tool turn with reasoning: bash, three reads, a grep, an edit, and a bash that exits 2, run for real under `gent-debug-tools/` in the session cwd. Its steps report cache writes and reads, so the status row shows the cache timer (`ANTHROPIC_PROMPT_CACHE_TTL=5m` shortens it).
 - A reference TUI runs with `HOME` (and `XDG_*`) under the scratch directory and no credentials, so it can never reach a paid model. Screens that need a model come from its source and test captures instead. A login prompt is a screen to compare, not a step to complete.
 - One herdr tab per comparison, split into panes of the same size: `herdr pane split`, `herdr pane run <pane> '<cmd>'`, `herdr pane send-keys` / `send-text` to drive, `herdr pane wait-output` to settle, `herdr pane read` to capture. Never `herdr agent`. Close every pane and tab the sweep opened before the report.
 - Capture each screen at two sizes (a normal pane and a narrow one near 60×20) and after a resize.

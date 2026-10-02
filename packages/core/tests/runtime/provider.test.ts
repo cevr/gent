@@ -66,6 +66,7 @@ import * as AiTool from "effect/ai/Tool"
 import type * as AiToolkit from "effect/ai/Toolkit"
 import type { ToolkitInput } from "effect/ai/LanguageModel"
 import * as Prompt from "effect/ai/Prompt"
+import type * as Response from "effect/ai/Response"
 
 // ── provider retry ──────────────────────────────────────────────────────────
 
@@ -2057,6 +2058,119 @@ describe("classifier availability", () => {
       const judge = classifierDriver("judge", listed)
       expect(yield* available([judge], [{ judge: "sk-judge" }, {}, {}])).toEqual([true, true, true])
       expect(listed).toEqual([])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+})
+
+// ── scripted debug model ────────────────────────────────────────────────────
+
+describe("Scripted debug model tool scenario", () => {
+  /** A toolkit advertising `names`, as a turn's request does; the test resolves no call. */
+  const advertisedTool = (name: string) => AiTool.dynamic(name, { parameters: Schema.Unknown })
+  type Advertised = Record<string, ReturnType<typeof advertisedTool>>
+  type Part = Response.StreamPart<Advertised>
+  const advertising = (names: ReadonlyArray<string>): AiToolkit.WithHandler<Advertised> => ({
+    tools: Object.fromEntries(names.map((name) => [name, advertisedTool(name)])),
+    handle: (name) =>
+      Effect.fail(
+        AiError.make({
+          module: "Test",
+          method: "advertising.handle",
+          reason: new AiError.ToolConfigurationError({
+            toolName: String(name),
+            description: "unused",
+          }),
+        }),
+      ),
+  })
+  /** The prompt of the scenario's step `done`: the user's ask, then `done` answered steps. */
+  const promptAfter = (done: number): Prompt.RawInput => [
+    { role: "user", content: "run the debug tools scenario" },
+    ...Array.from({ length: done }, (_, step) => [
+      {
+        role: "assistant" as const,
+        content: [{ type: "tool-call" as const, id: `s${step}`, name: "bash", params: {} }],
+      },
+      {
+        role: "tool" as const,
+        content: [
+          {
+            type: "tool-result" as const,
+            id: `s${step}`,
+            name: "bash",
+            isFailure: false,
+            result: {},
+          },
+        ],
+      },
+    ]).flat(),
+  ]
+  const step = (done: number, tools: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const model = yield* LanguageModel.LanguageModel
+      const parts = yield* model
+        .streamText({
+          prompt: promptAfter(done),
+          toolkit: advertising(tools),
+          disableToolCallResolution: true,
+        })
+        .pipe(Stream.runCollect)
+      return Array.from(parts)
+    }).pipe(Effect.provide(LanguageModelLayers.debug()))
+  const callsOf = (parts: ReadonlyArray<Part>) =>
+    parts.flatMap((part) => {
+      if (part.type !== "tool-call") return []
+      return [{ name: part.name, params: part.params }]
+    })
+
+  it.live("each step calls the advertised tools in turn, with reasoning first", () =>
+    Effect.gen(function* () {
+      const direct = ["read", "grep", "edit", "bash"]
+      const steps = yield* Effect.forEach([0, 1, 2, 3, 4, 5], (done) => step(done, direct))
+      expect(steps.map((parts) => parts[0]?.type)).toEqual(Array(6).fill("reasoning-delta"))
+      expect(steps.map((parts) => callsOf(parts).map((call) => call.name))).toEqual([
+        ["bash"],
+        ["read", "read", "read"],
+        ["grep"],
+        ["edit"],
+        ["bash"],
+        [],
+      ])
+      expect(callsOf(steps[1] ?? []).map((call) => call.params)).toEqual([
+        { path: "gent-debug-tools/a.ts" },
+        { path: "gent-debug-tools/b.ts" },
+        { path: "gent-debug-tools/c.ts" },
+      ])
+      const answer = steps[5]?.find((part) => part.type === "text-delta")
+      expect(answer).toEqual(expect.objectContaining({ delta: expect.stringContaining("d.ts") }))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("a turn narrowed to cell runs each step's ops as cell code", () =>
+    Effect.gen(function* () {
+      const reads = callsOf(yield* step(1, ["cell"]))
+      expect(reads).toEqual([
+        {
+          name: "cell",
+          params: {
+            code: 'await Promise.all([tools.read({"path":"gent-debug-tools/a.ts"}), tools.read({"path":"gent-debug-tools/b.ts"}), tools.read({"path":"gent-debug-tools/c.ts"})])',
+          },
+        },
+      ])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("the first step writes the prompt cache and a later one reads it", () =>
+    Effect.gen(function* () {
+      const usage = (parts: ReadonlyArray<Part>) =>
+        parts.flatMap((part) => {
+          if (part.type !== "finish") return []
+          return [part.usage]
+        })[0]
+      const first = usage(yield* step(0, ["bash"]))
+      const later = usage(yield* step(2, ["grep"]))
+      expect(first?.inputTokens.cacheWrite).toBeGreaterThan(0)
+      expect(later?.inputTokens.cacheRead).toBeGreaterThan(0)
     }).pipe(Effect.timeout("4 seconds")),
   )
 })

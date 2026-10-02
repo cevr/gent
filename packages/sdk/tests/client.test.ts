@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Crypto, Effect, Schema } from "effect"
+import { Crypto, Effect, FileSystem, Option, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { defineExtension, ExtensionHost, request } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
 import { freePort, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
@@ -228,6 +229,67 @@ describe("Gent.server workspace isolation", () => {
           expect(ids(yield* clientHere.session.list())).toContain(here.sessionId)
           expect(ids(yield* clientA.session.list())).not.toContain(here.sessionId)
         }).pipe(Effect.timeout("20 seconds")),
+      ),
+    30_000,
+  )
+})
+
+/** The op receipts a cell result carries. */
+const CellReceipts = Schema.Struct({
+  operations: Schema.Array(Schema.Struct({ tool: Schema.String, summary: Schema.String })),
+})
+
+describe("Gent.provider.mock tool scenario", () => {
+  it.live(
+    "a message asking for debug tools runs real tools over several steps, then answers",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDirectoryScoped("gent-debug-tools-")
+          const server = yield* Gent.server({
+            cwd,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+            extensions: BuiltinExtensions,
+          })
+          const { client } = yield* Gent.client(server, { cwd })
+          const { sessionId, branchId } = yield* client.session.create({ cwd })
+          yield* client.message.send({ sessionId, branchId, content: "debug tools please" })
+
+          const messages = yield* waitFor(
+            client.message.list({ branchId }),
+            (all) => all.some((message) => messagePartsText(message.parts).includes("d.ts failed")),
+            20_000,
+          )
+          // The default surface narrows to cell: each step is one cell whose ops ran for real.
+          const ops = messages
+            .filter((message) => message.role === "tool")
+            .flatMap((message) => message.parts)
+            .flatMap((part) => {
+              if (part.type !== "tool-result") return []
+              return Option.match(Schema.decodeUnknownOption(CellReceipts)(part.result), {
+                onNone: () => [],
+                onSome: (receipts) => receipts.operations,
+              })
+            })
+          expect(ops.map((op) => op.tool)).toEqual([
+            "bash",
+            "read",
+            "read",
+            "read",
+            "grep",
+            "edit",
+            "bash",
+          ])
+          expect(ops.at(-1)?.summary).toBe("exit 2 · 1 line")
+          const fs = yield* FileSystem.FileSystem
+          const edited = yield* fs.readFileString(`${cwd}/gent-debug-tools/a.ts`)
+          expect(edited).toBe('export const greeting = "hello, world"\n// TODO: say goodbye\n')
+          const reasoning = messages.flatMap((message) =>
+            message.parts.filter((part) => part.type === "reasoning"),
+          )
+          expect(reasoning).toHaveLength(6)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("28 seconds")),
       ),
     30_000,
   )
