@@ -9,6 +9,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Path,
   Predicate,
   Queue,
@@ -1858,7 +1859,7 @@ describe("mcp oauth", () => {
   )
 
   it.scopedLive(
-    "two setups that refresh two different logins at once both keep their rotated tokens",
+    "two setups that refresh different logins both retain and reuse their rotated tokens",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -1905,9 +1906,80 @@ describe("mcp oauth", () => {
         )
         expect(oauth.refreshes).toBe(2)
         // Each login holds its rotated refresh token; neither write dropped the other's.
-        const stored = yield* fs.readFileString(authFile)
-        expect(stored).not.toContain('"refresh_token":"refresh-alpha"')
-        expect(stored).not.toContain('"refresh_token":"refresh-beta"')
+        const stored = yield* Schema.decodeEffect(
+          Schema.fromJsonString(
+            Schema.Struct({
+              servers: Schema.Record(
+                Schema.String,
+                Schema.Struct({
+                  tokens: Schema.Struct({
+                    access_token: Schema.String,
+                    token_type: Schema.String,
+                    refresh_token: Schema.String,
+                  }),
+                  expiresAt: Schema.Finite,
+                  client: Schema.Struct({ client_id: Schema.String }),
+                  redirectUri: Schema.String,
+                }),
+              ),
+            }),
+          ),
+        )(yield* fs.readFileString(authFile))
+        expect(Object.keys(stored.servers).sort()).toEqual([
+          `alpha ${oauth.origin}/mcp`,
+          `beta ${oauth.origin}/mcp`,
+        ])
+        const logins = Object.values(stored.servers).sort((left, right) =>
+          Order.String(left.tokens.access_token, right.tokens.access_token),
+        )
+        expect(logins.map((login) => login.tokens)).toEqual([
+          { access_token: "token-1", token_type: "Bearer", refresh_token: "refresh-1" },
+          { access_token: "token-2", token_type: "Bearer", refresh_token: "refresh-2" },
+        ])
+        for (const login of logins) {
+          expect(login.client.client_id).toBe("client-1")
+          expect(login.redirectUri).toBe("http://127.0.0.1:9/callback")
+          expect(login.expiresAt).toBeGreaterThan(now + 30_000)
+        }
+        // A fresh RPC session calls both servers with their persisted credentials.
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: "JSON.stringify({ alpha: await tools.mcp.alpha.whoami(), beta: await tools.mcp.beta.whoami() })",
+          }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedWithoutMcp,
+            McpServers("@test/mcp-reuse", {
+              alpha: { url: `${oauth.origin}/mcp` },
+              beta: { url: `${oauth.origin}/mcp` },
+            }),
+          ],
+          providerLayer,
+          home,
+          cwd: data.directory,
+        }).pipe(Effect.provide(data.layer))
+        yield* client.message.send({ sessionId, branchId, content: "Call both retained logins" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({ isFailure: false })
+        const called = yield* cellDisplay(
+          result,
+          Schema.fromJsonString(Schema.Struct({ alpha: Schema.String, beta: Schema.String })),
+        )
+        const alpha = Option.getOrThrow(
+          Option.fromUndefinedOr(stored.servers[`alpha ${oauth.origin}/mcp`]),
+        )
+        const beta = Option.getOrThrow(
+          Option.fromUndefinedOr(stored.servers[`beta ${oauth.origin}/mcp`]),
+        )
+        expect(called).toEqual({
+          alpha: alpha.tokens.access_token,
+          beta: beta.tokens.access_token,
+        })
+        expect(oauth.refreshes).toBe(2)
+        expect(oauth.failedRefreshes).toBe(0)
       }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
     45_000,
   )
