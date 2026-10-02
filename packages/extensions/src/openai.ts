@@ -180,7 +180,7 @@ export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
  * models.dev, so new releases in these families need no list update here.
  */
 const isOpenAIOAuthModel = (modelName: string): boolean =>
-  (modelName.startsWith("gpt-5") || modelName.startsWith("gpt-6-")) &&
+  (modelName.startsWith("gpt-5") || /^gpt-6(\.\d+)?-/.test(modelName)) &&
   !modelName.endsWith("-chat-latest") &&
   !modelName.endsWith("-pro")
 
@@ -1277,8 +1277,11 @@ const OPENAI_ACCEPTED_EFFORTS: ReadonlyArray<{
   { pattern: /^gpt-5-pro(-|$)/, accepts: ["high"] },
   // GPT-5.2, 5.4 and 5.5 Pro. Anchored, so o1-pro and o3-pro fall to the o-series row.
   { pattern: /^gpt-5\.\d+-pro(-|$)/, accepts: ["medium", "high", "xhigh"] },
-  { pattern: /^gpt-6-astra(-|$)/, accepts: ["low", "medium", "high", "xhigh", "max"] },
-  { pattern: /^gpt-6-(sol|luna)(-|$)/, accepts: ["none", "low", "medium", "high", "xhigh", "max"] },
+  { pattern: /^gpt-6(\.\d+)?-astra(-|$)/, accepts: ["low", "medium", "high", "xhigh", "max"] },
+  {
+    pattern: /^gpt-6(\.\d+)?-(sol|luna)(-|$)/,
+    accepts: ["none", "low", "medium", "high", "xhigh", "max"],
+  },
   { pattern: /^gpt-5\.6(-|$)/, accepts: ["none", "low", "medium", "high", "xhigh", "max"] },
   { pattern: /codex-max|^gpt-5\.[2-9]-codex/, accepts: ["low", "medium", "high", "xhigh"] },
   { pattern: /codex|^o\d/, accepts: ["low", "medium", "high"] },

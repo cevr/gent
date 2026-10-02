@@ -1772,6 +1772,8 @@ describe("OpenAI request hints", () => {
           "gpt-6-astra",
           "gpt-6-sol",
           "gpt-6-luna",
+          "gpt-6.1-astra",
+          "gpt-6.1-sol",
         ]
         const lowest = [
           Option.some("none"),
@@ -1780,6 +1782,8 @@ describe("OpenAI request hints", () => {
           Option.some("low"),
           Option.some("low"),
           Option.some("none"),
+          Option.some("none"),
+          Option.some("low"),
           Option.some("none"),
         ]
         expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), reasoningModels)).toEqual(lowest)
@@ -2976,10 +2980,10 @@ describe("OpenAI sign-in requests", () => {
       expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
     }),
   )
-  it.live("OAuth resolves the GPT-6 family: Astra, Sol and Luna", () =>
+  it.live("OAuth resolves the GPT-6 family: Astra, Sol and Luna, at any point release", () =>
     Effect.gen(function* () {
       const { driver } = yield* makeDriver()
-      for (const modelName of ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
+      for (const modelName of ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"]) {
         const model = yield* driver.resolveModel(modelName, makeOAuthInfo())
         const fetchState = makeFakeFetchState()
         yield* runOne(model, fetchState)
