@@ -20,7 +20,6 @@ import {
   FileSystem,
   Match,
   Option,
-  Predicate,
   Runtime,
   Schema,
   Stdio,
@@ -284,10 +283,27 @@ const stamp = () =>
 const basename = (path: string): string =>
   Option.getOrElse(Option.fromNullishOr(path.split("/").filter(Boolean).at(-1)), () => path)
 
+/**
+ * `storage reset` moves the database and its sidecars away. It owns the
+ * database as a server start does, from the first look at the files to the
+ * last move, so no server opens them in between; while a server holds the
+ * database, it refuses.
+ */
 export const resetStorage = (
   home: string,
-): Effect.Effect<StorageResetResult, never, FileSystem.FileSystem> =>
+): Effect.Effect<StorageResetResult, CliStartupError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
+    const owned = yield* serverLock
+      .hold(home)
+      .pipe(
+        Effect.mapError((error) => new CliStartupError({ message: error.message, cause: error })),
+      )
+    if (!owned) {
+      return yield* new CliStartupError({
+        message:
+          "a server is running for this data directory; stop it with `gent server stop` first",
+      })
+    }
     const fs = yield* FileSystem.FileSystem
     const paths = yield* dataPaths(home)
     const existing = []
@@ -307,7 +323,7 @@ export const resetStorage = (
       archived.push(target)
     }
     return { archiveDir, archived }
-  })
+  }).pipe(Effect.scoped)
 
 const formatIssue = (issue: ExtensionHealthIssue): string =>
   Match.value(issue).pipe(
@@ -1011,31 +1027,9 @@ export const doctor = Command.make("doctor", {}, () =>
   }),
 )
 
-/** A server holds or answers for the database, named or not: the database is in use. */
-const serverHoldsLock = Predicate.or(Predicate.isTagged("Alive"), Predicate.isTagged("Unnamed"))
-
-/** `storage reset` moves the database away, so it refuses while any server uses it. */
-export const refuseResetWhileServing = (
-  home: string,
-): Effect.Effect<void, CliStartupError, FileSystem.FileSystem | GentPlatform> =>
-  Effect.gen(function* () {
-    const status = yield* serverLock
-      .status(home)
-      .pipe(
-        Effect.mapError((error) => new CliStartupError({ message: error.message, cause: error })),
-      )
-    if (!serverHoldsLock(status)) return
-    return yield* new CliStartupError({
-      message: "a server is running for this data directory; stop it with `gent server stop` first",
-    })
-  })
-
 const storageReset = Command.make("reset", {}, () =>
   Effect.gen(function* () {
-    const home = yield* readHome
-    yield* refuseResetWhileServing(home)
-
-    const result = yield* resetStorage(home)
+    const result = yield* resetStorage(yield* readHome)
     if (result.archived.length === 0) {
       yield* Console.log("No storage files found.")
       return
