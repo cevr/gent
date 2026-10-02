@@ -58,6 +58,7 @@ import {
 } from "@gent/core/test-utils"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { Gent, type GentRuntime } from "@gent/sdk"
+import { BuiltinExtensions } from "@gent/extensions"
 import {
   App,
   AppBootstrapError,
@@ -5864,6 +5865,12 @@ describe("debug playground", () => {
             seed: seedDebugSession(cwd),
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
+            // The shipped tools draw the transcript. The provider drivers
+            // would list their models.dev catalog, which a cold home fetches;
+            // the scripted model needs none of them.
+            extensions: BuiltinExtensions.filter(
+              (extension) => !extension.manifest.id.startsWith("@gent/provider-"),
+            ),
           })
           const { client, runtime } = yield* Gent.client(server, { cwd })
           const [session] = yield* client.session.list()

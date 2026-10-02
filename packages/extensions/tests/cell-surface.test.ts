@@ -127,6 +127,7 @@ import {
 } from "../src/delegate.js"
 import { SqlClient } from "effect/sql"
 import { platform, askThenLoseWorker } from "./helpers/cell-kernel.js"
+import { seedCatalog } from "./helpers/catalog-source.js"
 
 // The cell's model surface: the context host, the shipped surface, child
 // cells, branch lifetime, RPC recovery, guidelines, signatures and the catalog.
@@ -608,15 +609,32 @@ const decidingThrough = (
     }),
   ).pipe(Layer.provide(Layer.merge(layer, fetchLayer)))
 
+/** A models.dev document with one Workers AI model: the Cloudflare driver's catalog. */
+const workersAiCatalog = {
+  "cloudflare-workers-ai": {
+    id: "cloudflare-workers-ai",
+    models: {
+      "@cf/meta/llama-3.3-70b-instruct-fp8-fast": {
+        name: "Llama 3.3 70B Instruct fp8 Fast",
+        tool_call: true,
+        limit: { context: 24000, output: 24000 },
+      },
+    },
+  },
+}
+
 /**
  * The shipped Cloudflare driver with no environment credentials, its decision
- * models sending through a fake fetch that captures into `state`.
+ * models sending through a fake fetch that captures into `state`. Deciding
+ * lists the classifier catalogs first, so the home's catalog is seeded: a cold
+ * home would fetch models.dev.
  */
 const capturedCloudflare = (state: FakeFetchState) =>
   defineExtension({
     id: "@test/cloudflare-captured",
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
+      yield* seedCatalog(host.home, workersAiCatalog)
       const driver = buildCloudflareModelDriver(
         { token: Option.none(), accountId: Option.none(), gatewayId: Option.none() },
         yield* catalogSource(host.home),

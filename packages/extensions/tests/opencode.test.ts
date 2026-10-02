@@ -11,7 +11,7 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
+import { FetchHttpClient } from "effect/http"
 import {
   OpenAiClient as OpenAiChatClient,
   OpenAiLanguageModel as OpenAiChatLanguageModel,
@@ -41,7 +41,8 @@ import {
   oneGenerate,
 } from "./helpers/fake-http-client.js"
 import { buildOpenCodeModelDriver, OPENCODE_GATEWAYS, OpenCodeExtension } from "../src/opencode.js"
-import { catalogSource, modelsDevCatalog } from "../src/providers.js"
+import { catalogSource } from "../src/providers.js"
+import { seedCatalog } from "./helpers/catalog-source.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { decideTicket, systemOneBody, TICKET, TICKET_QUESTIONS } from "./helpers/decision-wire.js"
 import { BuiltinExtensions } from "../src/index.js"
@@ -64,7 +65,7 @@ const apiAuth = ProviderAuthInfo.cases.Api.make({ key: API_KEY })
 // ── catalog fixture ─────────────────────────────────────────────────────────
 
 /** The models.dev entries the tests read, as models.dev writes them (2026-10-01). */
-const remotePayload = {
+const remotePayload: Schema.Json = {
   "opencode-go": {
     npm: "@ai-sdk/openai-compatible",
     models: {
@@ -181,29 +182,13 @@ const remotePayload = {
   },
 }
 
-/** An HTTP client that answers the models.dev fetch with the fixture. */
-const catalogHttpLayer = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.succeed(
-      HttpClientResponse.fromWeb(
-        request,
-        new Response(encodeExternalJson(remotePayload), { status: 200 }),
-      ),
-    ),
-  ),
-)
-
 /**
  * A home whose catalog holds the fixture. The catalog keeps one load per
  * home, so a driver pointed at this home reads the fixture from then on.
  */
 const fixtureHome = Effect.gen(function* () {
   const home = yield* makeTempDirectoryScoped("opencode-catalog-")
-  const models = yield* modelsDevCatalog(home).pipe(
-    Effect.provide(Layer.merge(catalogHttpLayer, platformLayer)),
-  )
-  expect(models.length).toBeGreaterThan(0)
+  yield* seedCatalog(home, remotePayload)
   return home
 })
 

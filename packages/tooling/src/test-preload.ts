@@ -25,8 +25,14 @@
  *   `~/.gent`. A test that needs a specific data directory still sets its
  *   own: a home it passes, or `GENT_DATA_DIR` through its config provider or
  *   a child process's environment.
+ * - No test reaches the network. A `fetch` to a host other than this machine
+ *   is refused, and the test it ran under fails. A test that needs a remote
+ *   answer gives one: a fixture HTTP client, or a seeded catalog (the
+ *   models.dev catalog a driver's `listModels` reads, which a cold home
+ *   would otherwise fetch). Requests to `localhost`, `127.0.0.1` and `::1`
+ *   pass: a test server runs there.
  */
-import { afterAll, mock, setDefaultTimeout } from "bun:test"
+import { afterAll, afterEach, expect, mock, setDefaultTimeout } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import * as os from "node:os"
 import { tmpdir } from "node:os"
@@ -54,3 +60,20 @@ for (const specifier of ["node:os", "os"]) {
   void mock.module(specifier, () => ({ ...osWithTestHome, default: osWithTestHome }))
 }
 afterAll(() => rmSync(testHome, { recursive: true, force: true }))
+
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"])
+/** The remote URLs the running test tried to fetch. */
+const refusedFetches: Array<string> = []
+const passedFetch = globalThis.fetch
+const guardedFetch = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const url = new URL(new Request(input).url)
+  // oxlint-disable-next-line effect/noGlobals -- the guard is fetch: a loopback request goes on to the real one
+  if (LOOPBACK_HOSTS.has(url.hostname)) return passedFetch(input, init)
+  refusedFetches.push(url.href)
+  // oxlint-disable-next-line effect/noNewPromise, effect/noNewError -- fetch's own failure shape: a rejected promise with an Error
+  return Promise.reject(new Error(`the test preload refuses a network fetch: ${url.href}`))
+}
+globalThis.fetch = Object.assign(guardedFetch, { preconnect: passedFetch.preconnect })
+afterEach(() => {
+  expect(refusedFetches.splice(0)).toEqual([])
+})

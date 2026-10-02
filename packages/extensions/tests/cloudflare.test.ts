@@ -1,6 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
 import { ConfigProvider, Effect, Layer, Option, Path, Predicate, Schema } from "effect"
-import { HttpClient, HttpClientResponse } from "effect/http"
 import { BunFileSystem } from "@effect/platform-bun"
 import {
   ModelId,
@@ -21,7 +20,8 @@ import {
   type CloudflareEnv,
   CloudflareExtension,
 } from "../src/cloudflare.js"
-import { catalogSource, modelsDevCatalog } from "../src/providers.js"
+import { catalogSource } from "../src/providers.js"
+import { seedCatalog } from "./helpers/catalog-source.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import {
   decideTicket,
@@ -95,26 +95,10 @@ const remotePayload = {
   },
 }
 
-/** An HTTP client that answers the models.dev fetch with the fixture. */
-const catalogHttpLayer = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.succeed(
-      HttpClientResponse.fromWeb(
-        request,
-        new Response(encodeExternalJson(remotePayload), { status: 200 }),
-      ),
-    ),
-  ),
-)
-
 /** A home whose catalog holds the fixture; a driver pointed at it reads the fixture. */
 const fixtureHome = Effect.gen(function* () {
   const home = yield* makeTempDirectoryScoped("cloudflare-catalog-")
-  const models = yield* modelsDevCatalog(home).pipe(
-    Effect.provide(Layer.merge(catalogHttpLayer, platformLayer)),
-  )
-  expect(models.length).toBeGreaterThan(0)
+  yield* seedCatalog(home, remotePayload)
   return home
 })
 

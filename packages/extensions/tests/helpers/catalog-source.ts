@@ -1,6 +1,8 @@
-import { Config, Effect, type FileSystem, Layer, Path } from "effect"
+import { Config, Effect, type FileSystem, Layer, Path, type Schema } from "effect"
+import { HttpClient, HttpClientResponse } from "effect/http"
 import { BunFileSystem } from "@effect/platform-bun"
-import type { CatalogSource } from "../../src/providers.js"
+import { type CatalogSource, modelsDevCatalog } from "../../src/providers.js"
+import { encodeExternalJson } from "./external-wire.js"
 
 const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 
@@ -31,3 +33,35 @@ const source = Effect.runSync(
  * auth methods rather than its catalog.
  */
 export const testCatalogSource = (): CatalogSource => source
+
+/** An HTTP client that answers the models.dev fetch with `payload`. */
+const catalogHttpLayer = (payload: Schema.Json) =>
+  Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          new Response(encodeExternalJson(payload), { status: 200 }),
+        ),
+      ),
+    ),
+  )
+
+/**
+ * Seed `home`'s catalog with `payload`, a models.dev document. The catalog
+ * keeps one load per home and writes it to the home's cache, so a driver
+ * whose `listModels` reads `home` gets the fixture and fetches nothing. A
+ * payload that parses to no model is a broken fixture: the catalog keeps no
+ * empty load, and the next read would fetch.
+ */
+export const seedCatalog = Effect.fn("test.seedCatalog")(function* (
+  home: string,
+  payload: Schema.Json,
+) {
+  const models = yield* modelsDevCatalog(home).pipe(
+    Effect.provide(Layer.merge(catalogHttpLayer(payload), platformLayer)),
+  )
+  if (models.length === 0) return yield* Effect.die("the catalog fixture holds no model")
+  return models
+})
