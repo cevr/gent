@@ -134,8 +134,8 @@ updates this list in the same commit.
     before it continues, and carries a summary of at most 150 words.
     When the newest turn alone overflows, the handoff anchors inside the turn
     at a step boundary and keeps the newest steps that fit half the budget.
-    A summary that cannot be produced degrades to truncation with a visible
-    notice. The budget is the smaller of the model's input cap
+    A summary that cannot be produced (empty, oversized, failed, or blocked
+    by the provider) degrades to truncation with a visible notice. The budget is the smaller of the model's input cap
     (`Model.inputLimit`, from models.dev `limit.input`) and its window less
     the output reserve. The reserve is the model's output cap
     (`Model.outputLimit`, from models.dev `limit.output`) up to 32k, and at

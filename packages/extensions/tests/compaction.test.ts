@@ -94,7 +94,7 @@ const promptText = (prompt: Prompt.Prompt): string =>
 const summaryProvider = (
   text: string,
   capture?: (prompt: Prompt.Prompt) => void,
-  finishReason: "stop" | "length" = "stop",
+  finishReason: "stop" | "length" | "content-filter" = "stop",
 ) =>
   LanguageModelLayers.testStream((options) => {
     if (Predicate.isNotUndefined(capture)) capture(Prompt.make(options.prompt))
@@ -556,12 +556,18 @@ describe("context handoff", () => {
   })
 
   // The oversized summary is refused in "the summary bound uses the projection's token estimate".
-  it.scopedLive("an empty or failed summary is a compaction error", () => {
+  it.scopedLive("an empty, blocked or failed summary is a compaction error", () => {
     const attempt = (layer: Layer.Layer<LanguageModel.LanguageModel>) =>
       Effect.exit(compact()).pipe(Effect.provide(layer), Effect.map(failureOf))
     return Effect.gen(function* () {
       const empty = yield* attempt(summaryProvider("   "))
       expect(Option.map(empty, (error) => error.reason)).toEqual(Option.some("SummaryEmpty"))
+
+      // The provider blocked the summary mid-text: the fragment is not a summary.
+      const blocked = yield* attempt(
+        summaryProvider("The user asked about the lo", () => {}, "content-filter"),
+      )
+      expect(Option.map(blocked, (error) => error.reason)).toEqual(Option.some("SummaryBlocked"))
 
       const failed = yield* attempt(
         LanguageModelLayers.testStream(() =>
@@ -579,7 +585,7 @@ describe("context handoff", () => {
       expect(Option.map(failed, (error) => error.reason)).toEqual(
         Option.some("SummaryGenerationFailed: ModelCompactionTest.streamText: summary failed"),
       )
-      for (const failure of [empty, failed]) {
+      for (const failure of [empty, blocked, failed]) {
         expect(Option.map(failure, Schema.is(ModelCompactionError))).toEqual(Option.some(true))
       }
     }).pipe(Effect.timeout("10 seconds"))
