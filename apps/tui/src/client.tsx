@@ -545,7 +545,13 @@ interface ClientSessionValue {
   // Sync data fetching helpers (return Effects for caller to run)
   listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
   createBranch: Effect.Effect<void, GentClientRpcError>
-  forkBranch: (messageId: MessageId) => Effect.Effect<BranchId, GentClientRpcError>
+  /**
+   * Fork the branch in view at the message, then show the fork. The fork
+   * stays, but a navigation since it was asked for is the reader's newer
+   * choice: the fork is then not shown. A failure is held for the branch
+   * forked from (`setErrorIn`).
+   */
+  forkBranch: (messageId: MessageId) => Effect.Effect<void>
   /** Take back the queue of the branch named, whichever branch is in view. */
   drainQueuedMessages: (target: SessionIdentity) => Effect.Effect<QueueSnapshot, GentClientRpcError>
 
@@ -1186,9 +1192,10 @@ export function ClientProvider(props: ClientProviderProps) {
     finishReplay,
   }
 
-  // Each navigation (a create sent, a session switch) takes the next number.
-  // A create answers late, so it takes the view only while its number is the
-  // latest: a later /new or switch has overtaken it otherwise.
+  // Each navigation (a create sent, a session switch, a branch switch asked
+  // for) takes the next number. A create or a fork answers late, so it takes
+  // the view only while its number is the latest: a later /new or switch has
+  // overtaken it otherwise.
   let navigation = 0
 
   /**
@@ -1249,6 +1256,29 @@ export function ClientProvider(props: ClientProviderProps) {
           }),
         ),
       ),
+    )
+  }
+
+  /**
+   * Ask the server to move `from` to another of its session's branches. The
+   * ask is a navigation from the moment it is made: it overtakes a create or
+   * a fork still waiting. A refusal is held for `from`.
+   */
+  const requestBranchSwitch = (
+    from: SessionIdentity,
+    toBranchId: BranchId,
+  ): Effect.Effect<void> => {
+    navigation++
+    return Effect.gen(function* () {
+      const requestId = yield* randomId
+      yield* client.branch.switch({
+        sessionId: from.sessionId,
+        fromBranchId: from.branchId,
+        toBranchId,
+        requestId,
+      })
+    }).pipe(
+      Effect.catchEager((err) => Effect.sync(() => agentValue.setErrorIn(from, formatError(err)))),
     )
   }
 
@@ -1334,17 +1364,27 @@ export function ClientProvider(props: ClientProviderProps) {
     }),
 
     forkBranch: (messageId) => {
-      const s = session()
+      const from = sessionIdentity()
+      const ownNavigation = navigation
       return Effect.gen(function* () {
         const requestId = yield* randomId
         const result = yield* client.branch.fork({
-          sessionId: s.sessionId,
-          fromBranchId: s.branchId,
+          sessionId: from.sessionId,
+          fromBranchId: from.branchId,
           atMessageId: messageId,
           requestId,
         })
-        return BranchId.make(result.branchId)
-      })
+        const forked = BranchId.make(result.branchId)
+        if (ownNavigation !== navigation) {
+          log.info("forkBranch.overtaken", { sessionId: from.sessionId, branchId: forked })
+          return
+        }
+        yield* requestBranchSwitch(from, forked)
+      }).pipe(
+        Effect.catchEager((err) =>
+          Effect.sync(() => agentValue.setErrorIn(from, formatError(err))),
+        ),
+      )
     },
 
     drainQueuedMessages: ({ sessionId, branchId }) =>
@@ -1353,23 +1393,7 @@ export function ClientProvider(props: ClientProviderProps) {
         return yield* client.queue.drain({ sessionId, branchId, requestId })
       }),
 
-    switchBranch: (branchId) => {
-      const s = session()
-
-      cast(
-        Effect.gen(function* () {
-          const requestId = yield* randomId
-          return yield* client.branch.switch({
-            sessionId: s.sessionId,
-            fromBranchId: s.branchId,
-            toBranchId: branchId,
-            requestId,
-          })
-        }).pipe(
-          Effect.tapError((err) => Effect.sync(() => showError(Option.some(formatError(err))))),
-        ),
-      )
-    },
+    switchBranch: (branchId) => cast(requestBranchSwitch(sessionIdentity(), branchId)),
   }
   // A classifier model answers the cell's `models.decide` and never runs a turn.
   const runnableModels = (): readonly Model[] =>

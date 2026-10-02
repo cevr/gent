@@ -2044,6 +2044,86 @@ describe("App status and activity rows", () => {
       )
     }).pipe(Effect.timeout("4 seconds")),
   )
+  // A fork answers late. Its branch stays, but the reader's later choice of
+  // where to be wins: the fork is not shown, and no switch names another view.
+  // With no move, the switch names the branch forked from.
+  for (const [moveTo, title] of [
+    [Option.none(), "a fork that answers with no move since shows the fork"],
+    [Option.some(pairB), "a fork that answers after a move to another session does not take it"],
+    [
+      Option.some({ sessionId: pairA.sessionId, branchId: BranchId.make("branch-a2") }),
+      "a fork that answers after a move to another branch does not take it",
+    ],
+  ] as const) {
+    it.scopedLive(title, () =>
+      Effect.gen(function* () {
+        const forkAsked = yield* Deferred.make<void>()
+        const answer = yield* Deferred.make<void>()
+        const answered = yield* Deferred.make<void>()
+        interface SwitchAsked {
+          readonly sessionId: SessionId
+          readonly fromBranchId: BranchId
+          readonly toBranchId: BranchId
+        }
+        const switches: Array<SwitchAsked> = []
+        const view = yield* mountSessionPair({
+          message: {
+            list: () =>
+              Effect.succeed([
+                StoredMessage.cases.regular.make({
+                  id: MessageId.make("fork-here"),
+                  sessionId: pairA.sessionId,
+                  branchId: pairA.branchId,
+                  role: "user",
+                  parts: [Prompt.textPart({ text: "fork from this" })],
+                  createdAt: dateFromMillis(1),
+                }),
+              ]),
+          },
+          branch: {
+            fork: () =>
+              Deferred.complete(forkAsked, Effect.void).pipe(
+                Effect.andThen(Deferred.await(answer)),
+                Effect.as({ branchId: BranchId.make("branch-forked") }),
+                Effect.ensuring(Deferred.complete(answered, Effect.void)),
+              ),
+            switch: (input: SwitchAsked) =>
+              Effect.sync(() => {
+                const { sessionId, fromBranchId, toBranchId } = input
+                switches.push({ sessionId, fromBranchId, toBranchId })
+              }),
+          },
+        })
+        yield* Effect.promise(() => view.setup.mockInput.typeText("/fork"))
+        view.setup.mockInput.pressEnter()
+        yield* waitForFrame(
+          view.setup,
+          (frame) => frame.includes("Fork from message"),
+          "the fork pane",
+        )
+        view.setup.mockInput.pressEnter()
+        yield* Deferred.await(forkAsked)
+        if (Option.isSome(moveTo)) yield* view.switchTo(moveTo.value, "Moved")
+        yield* Deferred.complete(answer, Effect.void)
+        yield* Deferred.await(answered)
+        yield* view.settle
+        if (Option.isSome(moveTo)) {
+          expect(switches).toEqual([])
+          expect(view.client.sessionIdentity()).toEqual(moveTo.value)
+        } else {
+          yield* waitForFrame(view.setup, () => switches.length === 1, "the switch to the fork")
+          expect(switches).toEqual([
+            {
+              sessionId: pairA.sessionId,
+              fromBranchId: pairA.branchId,
+              toBranchId: BranchId.make("branch-forked"),
+            },
+          ])
+        }
+        expect(view.client.error()).toEqual(Option.none())
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   // The drain commits on the server before it answers: the text it took
   // belongs to A's draft, even when A's view is gone by then.
   it.scopedLive("a queue taken back after a switch lands in its own session's draft", () =>

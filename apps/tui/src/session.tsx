@@ -3331,16 +3331,7 @@ export function createSessionController(props: {
 
   const onForkSelect = (messageId: MessageId) => {
     dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
-    cast(
-      client.forkBranch(messageId).pipe(
-        Effect.tap((branchId) =>
-          Effect.sync(() => {
-            client.switchBranch(branchId)
-          }),
-        ),
-        client.surfaceError,
-      ),
-    )
+    cast(client.forkBranch(messageId))
   }
 
   const onSubmit = (
