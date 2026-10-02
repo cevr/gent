@@ -743,6 +743,57 @@ describe("Composer renderer", () => {
       yield* press("down", "┃ draft")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // The textarea counts its caret in its own units: a wide character is two,
+  // a letter and its combining mark one. A prompt down recalls still puts the
+  // caret at its end, and the history reads the caret in the same units.
+  it.scopedLive(
+    "a prompt down recalls with wide or combining characters takes the caret at its end",
+    () =>
+      Effect.gen(function* () {
+        for (const prompt of ["中文测试", "e\u0301e\u0301"]) {
+          const submitted: Array<string> = []
+          const setup = yield* renderScoped(() => (
+            <TestComposer onSubmit={(content) => submitted.push(content)} />
+          ))
+          for (const text of ["alpha", prompt]) {
+            yield* Effect.promise(() => setup.mockInput.pasteBracketedText(text))
+            setup.mockInput.pressKey("RETURN")
+            yield* waitForFrame(setup, () => submitted.at(-1) === text, `sent ${text}`)
+          }
+          // Up recalls with the caret at the start, down with it at the end.
+          setup.mockInput.pressArrow("up")
+          yield* waitForFrame(setup, (frame) => frame.includes(`┃ ${prompt}`), "recalled")
+          setup.mockInput.pressArrow("up")
+          yield* waitForFrame(setup, (frame) => frame.includes("┃ alpha"), "the older one")
+          setup.mockInput.pressArrow("down")
+          yield* waitForFrame(setup, (frame) => frame.includes(`┃ ${prompt}`), "down again")
+          yield* Effect.promise(() => setup.mockInput.typeText("z"))
+          setup.mockInput.pressKey("RETURN")
+          yield* waitForFrame(setup, () => submitted.length === 3, "sent again")
+          expect(submitted).toEqual(["alpha", prompt, `${prompt}z`])
+        }
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("up or down inside a recalled wide prompt moves the caret, not the history", () =>
+    Effect.gen(function* () {
+      for (const direction of ["up", "down"] as const) {
+        const setup = yield* renderScoped(() => <TestComposer onSubmit={() => {}} />)
+        for (const prompt of ["alpha", "中文测试"]) {
+          yield* Effect.promise(() => setup.mockInput.pasteBracketedText(prompt))
+          setup.mockInput.pressKey("RETURN")
+          yield* waitForFrame(setup, (frame) => !frame.includes(`┃ ${prompt}`), `sent ${prompt}`)
+        }
+        setup.mockInput.pressArrow("up")
+        yield* waitForFrame(setup, (frame) => frame.includes("┃ 中文测试"), "recalled")
+        // Two characters in: the caret is mid-prompt, four textarea units in.
+        setup.mockInput.pressArrow("right")
+        setup.mockInput.pressArrow("right")
+        setup.mockInput.pressArrow(direction)
+        yield* Effect.promise(() => setup.renderOnce())
+        expect(renderFrame(setup)).toContain("┃ 中文测试")
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // A chip is one unit: a delete at its end takes the whole chip and its
   // stored text, so no fragment of it reaches the model.
   it.scopedLive("backspace or ctrl+w at a paste chip's end removes the whole chip", () =>
@@ -2344,5 +2395,21 @@ describe("Composer slash Enter", () => {
       expect(dispatched).toEqual([])
       yield* waitForFrame(setup, (frame) => frame.includes("@notes.ts"), "inserted")
     }),
+  )
+
+  it.scopedLive(
+    "text typed after a file reference that follows a wide character goes after it",
+    () =>
+      Effect.gen(function* () {
+        const dispatched: Array<Dispatched> = []
+        const setup = yield* mountSlash(dispatched)
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText("看 "))
+        yield* Effect.promise(() => setup.mockInput.typeText("@notes"))
+        yield* waitForFrame(setup, (frame) => frame.includes("notes.ts"), "the popup")
+        setup.mockInput.pressTab()
+        yield* waitForFrame(setup, (frame) => frame.includes("看 @notes.ts"), "inserted")
+        yield* Effect.promise(() => setup.mockInput.typeText("x"))
+        yield* waitForFrame(setup, (frame) => frame.includes("看 @notes.ts x"), "typed after")
+      }).pipe(Effect.timeout("10 seconds")),
   )
 })
