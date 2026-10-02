@@ -83,7 +83,7 @@ import {
   type SessionRuntimeService,
 } from "../../src/runtime/session"
 import * as Prompt from "effect/ai/Prompt"
-import { SessionMutations } from "../../src/domain/extension"
+import { SessionMutations, type SessionMutationsService } from "../../src/domain/extension"
 import {
   AgentDefinition,
   AgentName,
@@ -746,6 +746,17 @@ describe("session queries", () => {
 // oxlint-disable-next-line effect/noNullish -- The command leaves the model unset, as a client sends it.
 const absentModel = undefined
 
+type RolledBackMutationError = Effect.Error<
+  ReturnType<
+    SessionMutationsService[
+      | "createSession"
+      | "forkSessionBranch"
+      | "renameSession"
+      | "switchActiveBranch"
+      | "updateSettings"]
+  >
+>
+
 describe("session command persistence", () => {
   it.live("message.send surfaces runtime failure and does not log message sent", () =>
     Effect.scoped(
@@ -788,89 +799,141 @@ describe("session command persistence", () => {
     ),
   )
 
-  it.live("rolls back session and branch creation when event publication fails", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
+  it.live("rolls back each session mutation when event publication fails", () => {
+    const sessionId = SessionId.make("session-rollback")
+    const branchId = BranchId.make("branch-rollback")
+    const otherBranchId = BranchId.make("branch-rollback-other")
+    const messageId = MessageId.make("message-rollback")
+    const seedSession = Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
-
-      const exit = yield* Effect.exit(mutations.createSession({ cwd: "/nonexistent/rollback" }))
-
-      expect(exit._tag).toBe("Failure")
-      expect(yield* sessions.listSessions).toHaveLength(0)
-      expect(yield* branches.listBranches(SessionId.make("missing"))).toHaveLength(0)
-    }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
-  )
-
-  it.live("rolls back forked branch and copied messages when event publication fails", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const messages = yield* MessageStorage
-      const sessionId = SessionId.make("session-rollback")
-      const branchId = BranchId.make("branch-source")
-      const messageId = MessageId.make("message-source")
-      const now = FIXED_NOW
-
       yield* createActiveSessionFixture({
         sessions,
         branches,
         sessionId,
         branchId,
-        now,
-        name: "rollback",
-      })
-      yield* messages.createMessage(
-        Message.cases.regular.make({
-          id: messageId,
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: "seed" })],
-          createdAt: now,
-        }),
-      )
-
-      const exit = yield* Effect.exit(
-        mutations.forkSessionBranch({
-          sessionId,
-          fromBranchId: branchId,
-          atMessageId: messageId,
-          name: "fork",
-        }),
-      )
-
-      expect(exit._tag).toBe("Failure")
-      expect(yield* branches.listBranches(sessionId)).toHaveLength(1)
-      expect(yield* messages.listMessages(branchId)).toHaveLength(1)
-    }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
-  )
-
-  it.live("rolls back session rename when event publication fails", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const sessionId = SessionId.make("session-rename-rollback")
-      const branchId = BranchId.make("branch-rename-rollback")
-      const now = FIXED_NOW
-
-      yield* createActiveSessionFixture({
-        sessions,
-        branches,
-        sessionId,
-        branchId,
-        now,
+        now: FIXED_NOW,
         name: "before",
       })
-
-      const exit = yield* Effect.exit(mutations.renameSession({ sessionId, name: "after" }))
-
-      expect(exit._tag).toBe("Failure")
-      expect((yield* sessions.getSession(sessionId))?.name).toBe("before")
-    }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
-  )
+    })
+    const rows: ReadonlyArray<{
+      readonly mutation: string
+      readonly arrange: Effect.Effect<
+        void,
+        StorageError,
+        SessionStorage | BranchStorage | MessageStorage
+      >
+      readonly mutate: Effect.Effect<unknown, RolledBackMutationError, SessionMutations>
+      readonly readBack: Effect.Effect<
+        void,
+        StorageError,
+        SessionStorage | BranchStorage | MessageStorage
+      >
+    }> = [
+      {
+        mutation: "create session and branch",
+        arrange: Effect.void,
+        mutate: Effect.flatMap(SessionMutations, (mutations) =>
+          mutations.createSession({ cwd: "/nonexistent/rollback" }),
+        ),
+        readBack: Effect.gen(function* () {
+          expect(yield* (yield* SessionStorage).listSessions).toHaveLength(0)
+          expect(
+            yield* (yield* BranchStorage).listBranches(SessionId.make("missing")),
+          ).toHaveLength(0)
+        }),
+      },
+      {
+        mutation: "fork branch with copied messages",
+        arrange: Effect.gen(function* () {
+          yield* seedSession
+          yield* (yield* MessageStorage).createMessage(
+            Message.cases.regular.make({
+              id: messageId,
+              sessionId,
+              branchId,
+              role: "user",
+              parts: [Prompt.textPart({ text: "seed" })],
+              createdAt: FIXED_NOW,
+            }),
+          )
+        }),
+        mutate: Effect.flatMap(SessionMutations, (mutations) =>
+          mutations.forkSessionBranch({
+            sessionId,
+            fromBranchId: branchId,
+            atMessageId: messageId,
+            name: "fork",
+          }),
+        ),
+        readBack: Effect.gen(function* () {
+          expect(yield* (yield* BranchStorage).listBranches(sessionId)).toHaveLength(1)
+          expect(yield* (yield* MessageStorage).listMessages(branchId)).toHaveLength(1)
+        }),
+      },
+      {
+        mutation: "rename",
+        arrange: seedSession,
+        mutate: Effect.flatMap(SessionMutations, (mutations) =>
+          mutations.renameSession({ sessionId, name: "after" }),
+        ),
+        readBack: Effect.gen(function* () {
+          expect((yield* (yield* SessionStorage).getSession(sessionId))?.name).toBe("before")
+        }),
+      },
+      {
+        mutation: "active branch switch",
+        arrange: Effect.gen(function* () {
+          yield* seedSession
+          yield* (yield* BranchStorage).createBranch(
+            new Branch({ id: otherBranchId, sessionId, createdAt: FIXED_NOW }),
+          )
+        }),
+        mutate: Effect.flatMap(SessionMutations, (mutations) =>
+          mutations.switchActiveBranch({
+            sessionId,
+            fromBranchId: branchId,
+            toBranchId: otherBranchId,
+          }),
+        ),
+        readBack: Effect.gen(function* () {
+          expect((yield* (yield* SessionStorage).getSession(sessionId))?.activeBranchId).toBe(
+            branchId,
+          )
+        }),
+      },
+      {
+        mutation: "reasoning setting",
+        arrange: seedSession,
+        mutate: Effect.flatMap(SessionMutations, (mutations) =>
+          mutations.updateSettings({
+            sessionId,
+            modelId: Option.none(),
+            reasoningLevel: Option.some("high"),
+          }),
+        ),
+        readBack: Effect.gen(function* () {
+          expect(
+            (yield* (yield* SessionStorage).getSession(sessionId))?.reasoningLevel,
+          ).toBeUndefined()
+        }),
+      },
+    ]
+    return Effect.forEach(
+      rows,
+      (row) =>
+        Effect.gen(function* () {
+          yield* row.arrange
+          const exit = yield* Effect.exit(row.mutate)
+          expect({ mutation: row.mutation, exit: exit._tag }).toEqual({
+            mutation: row.mutation,
+            exit: "Failure",
+          })
+          yield* row.readBack
+        }).pipe(Effect.provide(failingSessionMutationsLayer)),
+      { discard: true },
+    ).pipe(Effect.timeout("4 seconds"))
+  })
 
   it.live("a long name is cut whole: an emoji at the limit and a space before it go", () =>
     Effect.gen(function* () {
@@ -977,39 +1040,6 @@ describe("session command persistence", () => {
     }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
-  it.live("rolls back active branch switch when event publication fails", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const sessionId = SessionId.make("session-switch-rollback")
-      const fromBranchId = BranchId.make("branch-switch-from")
-      const toBranchId = BranchId.make("branch-switch-to")
-      const now = FIXED_NOW
-
-      yield* createActiveSessionFixture({
-        sessions,
-        branches,
-        sessionId,
-        branchId: fromBranchId,
-        now,
-        name: "switch",
-      })
-      yield* branches.createBranch(new Branch({ id: toBranchId, sessionId, createdAt: now }))
-
-      const exit = yield* Effect.exit(
-        mutations.switchActiveBranch({
-          sessionId,
-          fromBranchId,
-          toBranchId,
-        }),
-      )
-
-      expect(exit._tag).toBe("Failure")
-      expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(fromBranchId)
-    }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
-  )
-
   it.live("rejects active branch switch to a branch outside the session", () =>
     Effect.gen(function* () {
       const mutations = yield* SessionMutations
@@ -1053,38 +1083,7 @@ describe("session command persistence", () => {
         expect(fail?.error._tag).toBe("NotFoundError")
       }
       expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(fromBranchId)
-    }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
-  )
-
-  it.live("rolls back reasoning setting when event publication fails", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const sessionId = SessionId.make("session-settings-rollback")
-      const branchId = BranchId.make("branch-settings-rollback")
-      const now = FIXED_NOW
-
-      yield* createActiveSessionFixture({
-        sessions,
-        branches,
-        sessionId,
-        branchId,
-        now,
-        name: "settings",
-      })
-
-      const exit = yield* Effect.exit(
-        mutations.updateSettings({
-          sessionId,
-          modelId: Option.none(),
-          reasoningLevel: Option.some("high"),
-        }),
-      )
-
-      expect(exit._tag).toBe("Failure")
-      expect((yield* sessions.getSession(sessionId))?.reasoningLevel).toBeUndefined()
-    }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 })
 
@@ -1188,27 +1187,29 @@ describe("session.create nesting depth", () => {
 // ── session delete ──────────────────────────────────────────────────────────
 
 describe("session.delete", () => {
-  it.live("closes session event streams and removes the session from public queries", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { client } = yield* makeClient()
-        const created = yield* client.session.create({ cwd: process.cwd() })
-        const closed = yield* collectSessionEvents(
-          client.session.events({
-            sessionId: created.sessionId,
-          }),
-        )
+  it.live(
+    "ends a subscription attached before the delete and removes the session from queries",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* makeClient()
+          const created = yield* client.session.create({ cwd: process.cwd() })
+          const closed = yield* collectSessionEvents(
+            client.session.events({
+              sessionId: created.sessionId,
+            }),
+          )
 
-        yield* client.session.delete({ sessionId: created.sessionId })
-        yield* Deferred.await(closed).pipe(Effect.timeout("5 seconds"))
+          yield* client.session.delete({ sessionId: created.sessionId })
+          yield* Deferred.await(closed).pipe(Effect.timeout("5 seconds"))
 
-        const deleted = yield* client.session.get({ sessionId: created.sessionId })
-        const sessions = yield* client.session.list()
+          const deleted = yield* client.session.get({ sessionId: created.sessionId })
+          const sessions = yield* client.session.list()
 
-        expect(deleted).toBeNull()
-        expect(sessions.some((session) => session.id === created.sessionId)).toBe(false)
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
+          expect(deleted).toBeNull()
+          expect(sessions.some((session) => session.id === created.sessionId)).toBe(false)
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
   )
 
   it.live("closes descendant event streams and removes descendants on public delete", () =>
@@ -1407,46 +1408,6 @@ describe("session.delete", () => {
     )
   })
 
-  it.live("cleans runtime state for mutation deletes used by extension hosts", () => {
-    const runtimeTerminated: Array<SessionId> = []
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const mutations = yield* SessionMutations
-        const sessions = yield* SessionStorage
-        const branches = yield* BranchStorage
-        const now = FIXED_NOW
-        const parent = {
-          sessionId: SessionId.make("mutation-delete-parent"),
-          branchId: BranchId.make("mutation-delete-parent-branch"),
-        }
-
-        yield* createActiveSessionFixture({ ...parent, sessions, branches, now })
-        const child = {
-          sessionId: SessionId.make("mutation-delete-child"),
-          branchId: BranchId.make("mutation-delete-child-branch"),
-        }
-        yield* createActiveSessionFixture({
-          ...child,
-          sessions,
-          branches,
-          now,
-          cwd: "/nonexistent/mutation-delete-child",
-          parentSessionId: parent.sessionId,
-          parentBranchId: parent.branchId,
-        })
-
-        yield* mutations.deleteSession(parent.sessionId)
-
-        expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId])
-      }).pipe(
-        Effect.provide(
-          sessionMutationsTestLayer({ runtime: sessionRuntimeProbeLayer(runtimeTerminated) }),
-        ),
-        Effect.timeout("4 seconds"),
-      ),
-    )
-  })
-
   // The runtimes stopped before the delete are the sessions the delete
   // removes: a spawn's handoff goes with the spawn, the root's handoff stays.
   it.live("a delete stops the runtimes of exactly the sessions it removes", () => {
@@ -1597,27 +1558,6 @@ describe("session.delete", () => {
           expectSessionNotFound(queueExit)
         }).pipe(Effect.timeout("4 seconds")),
       ),
-  )
-
-  it.live("terminates an active subscription mid-delete (subscribe-then-delete race)", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { client } = yield* makeClient()
-        const created = yield* client.session.create({ cwd: process.cwd() })
-
-        // Subscribe while the session is alive, then delete it while
-        // the stream is still attached. The subscription must terminate
-        // (either via interruption on loop close, or by the event-store
-        // propagating session-gone). A hang means the principle of
-        // terminal-state-exit-safety is violated.
-        const closed = yield* collectSessionEvents(
-          client.session.events({ sessionId: created.sessionId }),
-        )
-
-        yield* client.session.delete({ sessionId: created.sessionId })
-        yield* Deferred.await(closed).pipe(Effect.timeout("5 seconds"))
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
   )
 })
 
