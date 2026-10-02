@@ -11,6 +11,7 @@
  * - no-tracked-session-record: a TUI reactive scope tracks the session identity, not the record.
  * - no-code-unit-padding: terminal columns use display width, with ASCII-only exemptions.
  * - no-code-unit-text-edit: TUI text is edited, cut and counted by grapheme.
+ * - one-reply-writer: a late TUI reply writes through `repliesInView`, not a counter.
  */
 
 import { existsSync, readFileSync } from "node:fs"
@@ -781,6 +782,99 @@ const plugin: Plugin = {
             if (receiver === undefined) return
             const message = misreads(node, receiver, staticPropertyName(callee))
             if (message !== undefined) context.report({ node, message })
+          },
+        }
+      },
+    },
+    /**
+     * A late reply in the TUI writes through the one reply writer,
+     * `repliesInView` in `apps/tui/src/utils.ts`, never through a counter of
+     * its own.
+     *
+     * A hand-rolled reply generation is a `let` counter that each read
+     * increments and that a later callback compares with the number it
+     * captured (`const own = ++navigation`, then `own !== navigation`). Each
+     * copy answers "is this reply still in view" on its own, and about 22
+     * fixes found a copy that missed a case the others had: a key the server
+     * moved, a read that did not take a number. `repliesInView` answers it once,
+     * for the newest read and the key in view.
+     *
+     * What is reported, in `apps/tui/src/` outside `utils.ts`: a `let` that is
+     * incremented (`++x`, `x++`, `x += …`, `x = x + …`) and compared with
+     * `===` or `!==` inside a function nested in the one that declares it.
+     * A loop counter compared where it is declared is not reported.
+     */
+    "one-reply-writer": {
+      meta: { type: "problem", schema: [] },
+      create(context) {
+        const subject = ruleSubject(context)
+        if (!subject.startsWith("apps/tui/src/") || subject === "apps/tui/src/utils.ts") return {}
+        const FUNCTION_TYPES = new Set([
+          "FunctionDeclaration",
+          "FunctionExpression",
+          "ArrowFunctionExpression",
+        ])
+        const innermostFunction = (node: AstNode): AstNode | undefined => {
+          let at = getNodeField(node, "parent")
+          while (at !== undefined && !FUNCTION_TYPES.has(at.type)) at = getNodeField(at, "parent")
+          return at
+        }
+        /** The binding of a `let` the identifier names. */
+        const letBinding = (node: AstNode | undefined): Variable | undefined => {
+          const binding = lexicalBinding(context, node)
+          const isLet = binding?.defs.some(
+            (def) =>
+              def.type === "Variable" &&
+              def.parent !== null &&
+              getStringField(def.parent, "kind") === "let",
+          )
+          return isLet === true ? binding : undefined
+        }
+        const incremented = new Set<Variable>()
+        const comparedLater = new Set<Variable>()
+        const declaration = (binding: Variable): AstNode | undefined => binding.defs[0]?.node
+        const compare = (node: AstNode, side: AstNode | undefined) => {
+          const binding = letBinding(side)
+          const declared = binding === undefined ? undefined : declaration(binding)
+          if (binding === undefined || declared === undefined) return
+          if (innermostFunction(node) !== innermostFunction(declared)) comparedLater.add(binding)
+        }
+        return {
+          UpdateExpression(node) {
+            if (!isAstNode(node) || getStringField(node, "operator") !== "++") return
+            const binding = letBinding(getNodeField(node, "argument"))
+            if (binding !== undefined) incremented.add(binding)
+          },
+          AssignmentExpression(node) {
+            if (!isAstNode(node)) return
+            const target = getNodeField(node, "left")
+            const binding = letBinding(target)
+            if (binding === undefined) return
+            const operator = getStringField(node, "operator")
+            const value = getNodeField(node, "right")
+            const selfPlus =
+              operator === "=" &&
+              value?.type === "BinaryExpression" &&
+              getStringField(value, "operator") === "+" &&
+              lexicalBinding(context, getNodeField(value, "left")) === binding
+            if (operator === "+=" || selfPlus) incremented.add(binding)
+          },
+          BinaryExpression(node) {
+            if (!isAstNode(node)) return
+            const operator = getStringField(node, "operator")
+            if (operator !== "===" && operator !== "!==") return
+            compare(node, getNodeField(node, "left"))
+            compare(node, getNodeField(node, "right"))
+          },
+          "Program:exit"() {
+            for (const binding of incremented) {
+              const declared = declaration(binding)
+              if (!comparedLater.has(binding) || declared === undefined) continue
+              context.report({
+                message: `\`${binding.name}\` is a hand-rolled reply generation: a later callback compares it with the number a read captured. Take a \`ReplyWriter\` from \`repliesInView\` (apps/tui/src/utils.ts), which drops a reply the view moved past`,
+                node: declared,
+              })
+            }
           },
         }
       },

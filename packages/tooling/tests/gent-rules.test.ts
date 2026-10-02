@@ -189,6 +189,15 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 9,
   },
   {
+    // A late TUI reply writes through `repliesInView`; its owner keeps the counter.
+    rule: "gent/one-reply-writer",
+    invalid: "apps/tui/src/one-reply-writer.invalid.ts",
+    valid: ["apps/tui/src/one-reply-writer.valid.ts", "apps/tui/src/utils.ts"],
+    // the navigation counter (`++`), the listing generation (`+=`) and the
+    // commit epoch (`x = x + 1`)
+    expectedCount: 3,
+  },
+  {
     // A shipped extension reads only the two authoring entries.
     rule: "gent/core-entry-boundary",
     invalid: "packages/extensions/src/core-entry-boundary.invalid.ts",

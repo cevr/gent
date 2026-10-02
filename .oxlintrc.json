@@ -38,6 +38,8 @@
     "gent/no-tracked-session-record": "error",
     // Custom — TUI text is edited, cut and counted by grapheme (apps/tui/src)
     "gent/no-code-unit-text-edit": "error",
+    // Custom — a late TUI reply writes through `repliesInView`, not a counter of its own
+    "gent/one-reply-writer": "error",
 
     // Effect opt-in rules: house policy the preset leaves off.
     "effect/noPositionalLogArguments": "error",
