@@ -37,9 +37,9 @@ Fetch with `okra repo fetch <slug>`; get the path with `okra repo path <slug>`. 
 
 Pass 27 source comparison: `~/.cache/architecture-loop/gent/pass27/pi1.md`.
 
-| Item                      | Remaining question                                                                                                                                                            |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PI27-1 virtual models     | Generic physical routing with honest budgets/accounting; routing policy and matched cost/quality evidence are owner decisions.                                                |
-| PI27-3 cache warming      | Does a bounded streaming-only warmer save task cost against the current one-hour cache? Paid measurement remains deferred. Idle continuation probability must come from gent. |
-| PI27-4 prompt/tool deltas | Capture prefix changes for a real extension change before adding persisted deltas; preserve unsupported-provider fallback and tool admission.                                 |
-| Kernel image models       | Is there a consumer that needs a native image-model call beyond an ordinary extension tool? Classifiers and MCP already exist.                                                |
+| Item                      | Remaining question                                                                                                                                                                                             |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PI27-1 virtual models     | Generic physical routing with honest budgets/accounting; routing policy and matched cost/quality evidence are owner decisions.                                                                                 |
+| PI27-3 cache warming      | Does a bounded streaming-only warmer save task cost against the current one-hour cache? Paid measurement remains deferred. Idle continuation probability must come from gent.                                  |
+| PI27-4 prompt/tool deltas | Pass28 real-extension wire capture confirms prefix changes; compare stable block separation before persistence. Native system-message support excludes captured Sonnet5; preserve fallback and tool admission. |
+| Kernel image models       | Is there a consumer that needs a native image-model call beyond an ordinary extension tool? Classifiers and MCP already exist.                                                                                 |
