@@ -981,15 +981,21 @@ const signalProcessGroup = (pid: number, signal: "TERM" | "KILL" | "0") =>
   )
 
 /**
- * Stop the process group an earlier server left running, when its leader is
- * still the recorded process: SIGTERM, then SIGKILL after `SIGKILL_DELAY_MS`.
- * True when no process of the job runs afterwards.
+ * Stop the process group an earlier server left running: SIGTERM, then
+ * SIGKILL after `SIGKILL_DELAY_MS`. True when no process of the job runs
+ * afterwards.
+ *
+ * The system does not reuse a pid while a process group with that id lives
+ * (POSIX "Process ID Reuse"; Linux keeps the pid allocated while a task holds
+ * it as its group id, macOS skips a pid that names a live group). So when
+ * another process holds the pid, the job's group is gone. When no process
+ * holds it, a group with that id still holds the job's descendants that
+ * outlived the leader, and they stop as the leader's group does.
  */
 const stopStaleProcess = (job: JobProcess) =>
   Effect.gen(function* () {
     const identity = yield* processStartIdentity(job.pid)
-    // Another process took the pid, or none has it: the job's leader is gone.
-    if (Option.getOrUndefined(identity) !== job.startIdentity) return true
+    if (Option.isSome(identity) && identity.value !== job.startIdentity) return true
     if (!(yield* signalProcessGroup(job.pid, "TERM"))) return true
     const deadline = (yield* Clock.currentTimeMillis) + SIGKILL_DELAY_MS
     while ((yield* Clock.currentTimeMillis) < deadline) {
@@ -1692,8 +1698,9 @@ const EXEC_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/exec-tools")
 
 // A job still marked running that an earlier server process started has lost
 // its server. A crash skips the finalizers, so its process may still run:
-// stop each recorded process group whose leader is still the recorded
-// process, then mark the jobs interrupted before the supervisor takes new
+// stop each recorded process group that still holds the job (its leader
+// is the recorded process, or exited and left descendants in the group),
+// then mark the jobs interrupted before the supervisor takes new
 // work. A job this process runs stays running when another profile builds.
 const ReconcileInterruptedJobs = Layer.effectDiscard(
   Effect.gen(function* () {

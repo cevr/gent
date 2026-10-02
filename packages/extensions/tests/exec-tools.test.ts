@@ -2396,81 +2396,108 @@ describe("a background job the server stopped", () => {
     processTestTimeout,
   )
 
-  it.scopedLive.layer(BunPlatformLive)(
-    "a quiet job that outlived a crashed server stops when the next server starts",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const platform = yield* GentPlatform
-        const directory = yield* fs.realPath(yield* makeTempDirectoryScoped("gent-bg-crash-"))
-        const storagePath = `${directory}/gent.db`
-        const pidFile = `${directory}/job.pid`
-        // Quiet: the job writes nothing to the pipe the dead server held, so
-        // no write ends it.
-        const command = `echo $$ > ${pidFile}; sleep 30; touch ${directory}/late`
-        const hostEntry = yield* path.fromFileUrl(
-          new URL("./helpers/background-bash-host.ts", import.meta.url),
-        )
-        const host = yield* ChildProcess.make(yield* platform.execPath, [hostEntry], {
-          cwd: directory,
-          forceKillAfter: "2 seconds",
-          env: { BG_STORAGE_PATH: storagePath, BG_HOME: directory, BG_COMMAND: command },
-          extendEnv: true,
-          stdout: "ignore",
-          stderr: "inherit",
-        })
-        const pid = Number(
-          yield* waitFor(
-            fs.readFileString(pidFile).pipe(Effect.orElseSucceed(() => "")),
-            (text) => text.trim() !== "",
-            10_000,
-            "the job's pid",
-          ),
-        )
-        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
-        // A red run must not leave the job's group behind.
-        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-pid, "SIGKILL")))
-        const storageLayer = SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
-          Layer.provide(BunPlatformLive),
-        )
-        // The host names the job's process in the row before it crashes.
-        yield* waitFor(
-          Effect.gen(function* () {
-            return yield* (yield* BackgroundBashStorage).staleProcesses
-          }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)))),
-          (processes) => processes.some((job) => job.pid === pid),
-          10_000,
-          "the job's recorded process",
-        )
-        yield* host.kill({ killSignal: "SIGKILL" })
-        yield* host.exitCode.pipe(Effect.ignore)
-        // The server died without a finalizer: the job runs on.
-        yield* platform.signal(pid, 0)
-
-        // The next server's background resource builds over the same store.
-        const unread = yield* Effect.gen(function* () {
-          const storage = yield* BackgroundBashStorage
-          return yield* storage.interruptedJobs({
-            sessionId: stubCtx.sessionId,
-            branchId: BranchId.make("test-branch"),
+  // Quiet: a job writes nothing to the pipe the dead server held, so no
+  // write ends it. In the second case the leader exits before the crash and
+  // only its descendant keeps the process group.
+  const crashCases = [
+    {
+      name: "a quiet job that outlived a crashed server stops when the next server starts",
+      command: (directory: string) =>
+        `echo $$ > ${directory}/job.pid; sleep 30; touch ${directory}/late`,
+      leaderExits: false,
+    },
+    {
+      name: "a descendant that outlived its exited leader and a crashed server stops when the next server starts",
+      command: (directory: string) =>
+        `echo $$ > ${directory}/job.pid; (sleep 30; touch ${directory}/late) & while ! test -f ${directory}/go; do sleep 0.05; done`,
+      leaderExits: true,
+    },
+  ]
+  for (const crashCase of crashCases) {
+    it.scopedLive.layer(BunPlatformLive)(
+      crashCase.name,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const platform = yield* GentPlatform
+          const directory = yield* fs.realPath(yield* makeTempDirectoryScoped("gent-bg-crash-"))
+          const storagePath = `${directory}/gent.db`
+          const pidFile = `${directory}/job.pid`
+          const command = crashCase.command(directory)
+          const hostEntry = yield* path.fromFileUrl(
+            new URL("./helpers/background-bash-host.ts", import.meta.url),
+          )
+          const host = yield* ChildProcess.make(yield* platform.execPath, [hostEntry], {
+            cwd: directory,
+            forceKillAfter: "2 seconds",
+            env: { BG_STORAGE_PATH: storagePath, BG_HOME: directory, BG_COMMAND: command },
+            extendEnv: true,
+            stdout: "ignore",
+            stderr: "inherit",
           })
-        }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+          const pid = Number(
+            yield* waitFor(
+              fs.readFileString(pidFile).pipe(Effect.orElseSucceed(() => "")),
+              (text) => text.trim() !== "",
+              10_000,
+              "the job's pid",
+            ),
+          )
+          expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+          // A red run must not leave the job's group behind.
+          yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-pid, "SIGKILL")))
+          const storageLayer = SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
+            Layer.provide(BunPlatformLive),
+          )
+          // The host names the job's process in the row before it crashes.
+          yield* waitFor(
+            Effect.gen(function* () {
+              return yield* (yield* BackgroundBashStorage).staleProcesses
+            }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)))),
+            (processes) => processes.some((job) => job.pid === pid),
+            10_000,
+            "the job's recorded process",
+          )
+          if (crashCase.leaderExits) {
+            // The leader exits after its process is recorded; the job still runs.
+            yield* fs.writeFileString(`${directory}/go`, "")
+            yield* waitFor(
+              platform.signal(pid, 0).pipe(Effect.exit),
+              Exit.isFailure,
+              5_000,
+              "the job's leader exited",
+            )
+          }
+          yield* host.kill({ killSignal: "SIGKILL" })
+          yield* host.exitCode.pipe(Effect.ignore)
+          // The server died without a finalizer: the job's group runs on.
+          yield* platform.signal(-pid, 0)
 
-        // Every process of the job's group is gone, and the notice says it stopped.
-        yield* waitFor(
-          platform.signal(-pid, 0).pipe(Effect.exit),
-          Exit.isFailure,
-          5_000,
-          "the job's process group stopped",
-        )
-        expect(yield* fs.exists(`${directory}/late`)).toBe(false)
-        expect(unread).toMatchObject([
-          { toolCallId: ToolCallId.make("crashed-host-job"), command, mayStillRun: false },
-        ])
-      }).pipe(Effect.timeout("20 seconds")),
-    25_000,
-  )
+          // The next server's background resource builds over the same store.
+          const unread = yield* Effect.gen(function* () {
+            const storage = yield* BackgroundBashStorage
+            return yield* storage.interruptedJobs({
+              sessionId: stubCtx.sessionId,
+              branchId: BranchId.make("test-branch"),
+            })
+          }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+
+          // Every process of the job's group is gone, and the notice says it stopped.
+          yield* waitFor(
+            platform.signal(-pid, 0).pipe(Effect.exit),
+            Exit.isFailure,
+            5_000,
+            "the job's process group stopped",
+          )
+          expect(yield* fs.exists(`${directory}/late`)).toBe(false)
+          expect(unread).toMatchObject([
+            { toolCallId: ToolCallId.make("crashed-host-job"), command, mayStillRun: false },
+          ])
+        }).pipe(Effect.timeout("20 seconds")),
+      25_000,
+    )
+  }
 
   it.scopedLive.layer(BunPlatformLive)(
     "a restart leaves alone a process that took a stale job's pid",
