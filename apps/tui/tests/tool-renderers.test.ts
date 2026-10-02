@@ -99,6 +99,26 @@ describe("group ops", () => {
     })
   })
 
+  // fx counts a command that exits nonzero among a group's failures; the
+  // call itself succeeded, but the command did not.
+  test("a bash op that exits nonzero failed; one that exits 0 or runs on in the background did not", () => {
+    const bash = (output: string): ToolCall => ({
+      ...op("b1", "bash", { command: "ls d.ts" }),
+      output,
+    })
+    const outcome = (output: string) => callOperation(bash(output), place).outcome
+    expect(outcome('{"stdout":"","stderr":"ls: no d.ts\\n","exitCode":2}')).toBe("failed")
+    expect(outcome('{"stdout":"d.ts\\n","stderr":"","exitCode":0}')).toBe("succeeded")
+    expect(outcome('{"stdout":"started","stderr":"","exitCode":0,"status":"background"}')).toBe(
+      "succeeded",
+    )
+    const cell: ToolCall = {
+      ...op("c1", "cell", { code: "…" }),
+      operations: [bash('{"stdout":"","stderr":"","exitCode":1}')],
+    }
+    expect(cellOperations(cell, place).map((operation) => operation.outcome)).toEqual(["failed"])
+  })
+
   test("a cell's live ops read as group ops, in the order they ran", () => {
     const cell: ToolCall = {
       ...op("c1", "cell", { code: "…" }),

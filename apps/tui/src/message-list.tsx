@@ -1008,7 +1008,8 @@ function ToolCallGroup(props: {
   const running = () => props.calls.some((call) => call.status === "running")
   const tick = useSpinnerClock()
   // A call that failed is the group's failure; ops that failed inside a cell
-  // that recovered are a warning; the pulse runs while a call does.
+  // that recovered, or a command that exited nonzero, are a warning; the
+  // pulse runs while a call does.
   const symbol = () => {
     if (failed()) return "✗"
     if (running()) return workingIconFrame(tick())

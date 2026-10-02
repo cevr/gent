@@ -238,7 +238,9 @@ kind, largest first: `● 7 tools · 4 read · 2 edit · 1 command · 1 failed �
 (`formatActivityHeader`). A narrow header drops kinds from the right and keeps
 the count, the failures and the time. The glyph is `●` when done, the pulse
 while a call runs, `✗` in the error colour when a call failed, and `●` in the
-warning colour when only ops failed inside a cell that recovered. The
+warning colour when only ops failed inside a cell that recovered. A bash op
+whose command exits nonzero is a failed op, as fx counts it, though its call
+succeeded (`callOperation`). The
 `ctrl+o` ladder keeps three levels: collapsed draws the header and each failed
 call's frame; preview adds one row per run of one tool and one outcome, in
 past-tense words (`activityRows`, `formatActivityRow`): `├ Read a.ts, b.ts +1`

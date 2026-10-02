@@ -708,11 +708,26 @@ interface OperationLine {
   readonly summary: string
 }
 
+/**
+ * A bash call that returned a command which exited nonzero. The call
+ * succeeded, but the command failed; one still running in the background has
+ * no exit code yet.
+ */
+const commandFailed = (call: ToolCall): boolean =>
+  call.toolName === "bash" &&
+  call.status === "completed" &&
+  Option.exists(
+    parseBashOutput(call.output),
+    (value) => Option.isNone(value.status) && value.exitCode !== 0,
+  )
+
 /** One call as the tool a group counts: its outcome, its arguments, and an edit's line counts. */
 export const callOperation = (call: ToolCall, place: PathPlace): ActivityOperation => {
+  let outcome = callOutcome(call.status)
+  if (commandFailed(call)) outcome = "failed"
   const operation = {
     tool: call.toolName,
-    outcome: callOutcome(call.status),
+    outcome,
     detail: toolArgSummary(call.toolName, call.input, place),
   }
   if (call.toolName !== "edit") return operation
