@@ -1499,7 +1499,7 @@ describe("Subagent tray", () => {
       expect(frame).toContain("working · delegate: child-a task")
       expect(frame).not.toContain("child-b")
       expect(frame).not.toContain("idle")
-      expect(frame).toContain("ctrl+t agents")
+      expect(frame).toContain("ctrl+t sessions")
       // Mounting on a session fetched that session's rows.
       expect(refreshes).toEqual([""])
 
@@ -1537,7 +1537,7 @@ describe("Subagent tray", () => {
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "wide tray")
       // Padding counts display columns: each of these characters takes two.
-      expect(frame).toContain("ctrl+t agents")
+      expect(frame).toContain("ctrl+t sessions")
     }),
   )
 
