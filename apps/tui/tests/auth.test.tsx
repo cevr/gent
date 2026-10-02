@@ -116,13 +116,18 @@ describe("auth-state", () => {
     expect(key.screen).toEqual({ _tag: "Key", provider: "anthropic", value: "" })
   })
 
-  test("typing and backspace edit whichever screen holds text", () => {
+  test("typing and erasing edit whichever screen holds text", () => {
     const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic" })
-    const typed = transitionAuth(key, { _tag: "Type", text: "sk-abc" })
-    const trimmed = transitionAuth(typed, { _tag: "Backspace" })
+    const typed = transitionAuth(key, { _tag: "Type", text: "sk abc👍🏽" })
+    const erase = (state: typeof typed, unit: "grapheme" | "word" | "line") =>
+      transitionAuth(state, { _tag: "Erase", unit })
 
-    expect(typed.screen).toMatchObject({ _tag: "Key", value: "sk-abc" })
-    expect(trimmed.screen).toMatchObject({ _tag: "Key", value: "sk-ab" })
+    expect(typed.screen).toMatchObject({ _tag: "Key", value: "sk abc👍🏽" })
+    // Backspace takes one whole character, never half an emoji.
+    expect(erase(typed, "grapheme").screen).toMatchObject({ _tag: "Key", value: "sk abc" })
+    // Ctrl+W takes the last word, Ctrl+U the whole field, as in the composer.
+    expect(erase(typed, "word").screen).toMatchObject({ _tag: "Key", value: "sk " })
+    expect(erase(typed, "line").screen).toMatchObject({ _tag: "Key", value: "" })
   })
 
   test("typing into the oauth code field edits the code, not the key", () => {
@@ -135,7 +140,7 @@ describe("auth-state", () => {
     const state = loaded()
 
     expect(transitionAuth(state, { _tag: "Type", text: "x" })).toEqual(state)
-    expect(transitionAuth(state, { _tag: "Backspace" })).toEqual(state)
+    expect(transitionAuth(state, { _tag: "Erase", unit: "grapheme" })).toEqual(state)
   })
 
   test("an auto authorization waits for the browser, a code one does not", () => {
@@ -495,7 +500,7 @@ describe("Auth route", () => {
       expect(saved).toEqual([{ provider: "anthropic", sessionId: activeSessionId }])
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.scopedLive("a key held with super or hyper types nothing into the key field", () =>
+  it.scopedLive("the key field ignores super and hyper keys and erases as the composer does", () =>
     Effect.gen(function* () {
       const keys: Array<string> = []
       const client = createMockClient({
@@ -529,10 +534,15 @@ describe("Auth route", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · API key"))
       setup.mockInput.pressKey("a", { super: true })
       setup.mockInput.pressKey("b", { hyper: true })
-      setup.mockInput.pressKey("x")
+      yield* Effect.promise(() => setup.mockInput.typeText("old"))
+      setup.mockInput.pressKey("u", { ctrl: true })
+      yield* Effect.promise(() => setup.mockInput.typeText("sk junk"))
+      setup.mockInput.pressKey("w", { ctrl: true })
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("x👍🏽"))
+      setup.mockInput.pressBackspace()
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("API key saved for anthropic"))
-      expect(keys).toEqual(["x"])
+      expect(keys).toEqual(["sk x"])
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("reads the sign-in methods of the session's own drivers", () =>

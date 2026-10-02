@@ -22,6 +22,9 @@ import { useTheme } from "./theme"
 import { useClient, useRuntime } from "./client"
 import {
   ChromePanel,
+  EraseUnit,
+  eraseKey,
+  eraseText,
   keyHint,
   KeyHints,
   PickerFrame,
@@ -162,7 +165,8 @@ export const AuthEvent = Schema.TaggedUnion({
   },
   /** Text typed or pasted into whichever of `Key` / `OAuth` is open. */
   Type: { text: Schema.String },
-  Backspace: {},
+  /** Backspace, ctrl+w or ctrl+u in whichever of `Key` / `OAuth` is open. */
+  Erase: { unit: EraseUnit },
   /** The browser leg of an `auto` flow failed; fall back to pasting a code. */
   OAuthAutoFailed: { error: Schema.String },
   /**
@@ -242,7 +246,7 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
         error: Option.none(),
       }),
       Type: (event) => editText(state, (current) => current + event.text),
-      Backspace: () => editText(state, (current) => current.slice(0, -1)),
+      Erase: (event) => editText(state, (current) => eraseText(current, event.unit)),
       OAuthAutoFailed: (event) => {
         if (state.screen._tag !== "OAuth") return state
         return {
@@ -1100,8 +1104,9 @@ function AuthTextLine(props: {
         props.onSubmit()
         return true
       }
-      if (event.name === "backspace") {
-        props.onEvent(AuthEvent.cases.Backspace.make({}))
+      const erase = eraseKey(event)
+      if (Option.isSome(erase)) {
+        props.onEvent(AuthEvent.cases.Erase.make({ unit: erase.value }))
         return true
       }
       return Option.match(typedKey(event), {

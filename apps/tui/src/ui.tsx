@@ -780,13 +780,30 @@ export function TrayFrame(props: { children: JSX.Element }) {
  * composer: backspace drops the last whole character, ctrl+w the last word
  * and the spaces after it, ctrl+u the whole line.
  */
-export const lineEdit = (event: ScopedKeyboardEvent): Option.Option<(text: string) => string> => {
-  if (event.name === "backspace") return Option.some(dropLastGrapheme)
+export const lineEdit = (event: ScopedKeyboardEvent): Option.Option<(text: string) => string> =>
+  Option.map(eraseKey(event), (unit) => (text: string) => eraseText(text, unit))
+
+/** How much of the line an erase key takes. */
+export const EraseUnit = Schema.Literals(["grapheme", "word", "line"])
+export type EraseUnit = typeof EraseUnit.Type
+
+/** The erase unit a key names: backspace, ctrl+w or ctrl+u. */
+export const eraseKey = (event: ScopedKeyboardEvent): Option.Option<EraseUnit> => {
+  if (event.name === "backspace") return Option.some("grapheme")
   if (event.ctrl !== true) return Option.none()
-  if (event.name === "w") return Option.some((text) => text.replace(/\S*\s*$/u, ""))
-  if (event.name === "u") return Option.some(() => "")
+  if (event.name === "w") return Option.some("word")
+  if (event.name === "u") return Option.some("line")
   return Option.none()
 }
+
+/** The text less its last unit. */
+export const eraseText = (text: string, unit: EraseUnit): string =>
+  Match.value(unit).pipe(
+    Match.when("grapheme", () => dropLastGrapheme(text)),
+    Match.when("word", () => text.replace(/\S*\s*$/u, "")),
+    Match.when("line", () => ""),
+    Match.exhaustive,
+  )
 
 // ── State ─────────────────────────────────────────────────────────
 //
