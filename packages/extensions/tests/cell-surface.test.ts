@@ -1,6 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
-  Clock,
   Effect,
   Exit,
   Fiber,
@@ -81,7 +80,6 @@ import {
 } from "@gent/core/extensions/api"
 import {
   InteractionStorage,
-  CurrentToolCall,
   ModelContextLedger,
   getToolMetadata,
 } from "@gent/core/extensions/branch-tools"
@@ -469,6 +467,34 @@ const SHIPPED_JEV_DRIVERS: ReadonlySet<string> = new Set([
   OpenCodeExtension.manifest.id,
 ])
 
+/**
+ * Send `content` on a harness branch, wait until an assistant message reads
+ * `reply`, and return every tool result on the branch.
+ */
+const sendAndAwaitReply = Effect.fn("test.sendAndAwaitReply")(function* (
+  harness: Pick<
+    Effect.Success<ReturnType<typeof createRpcHarness>>,
+    "client" | "sessionId" | "branchId"
+  >,
+  content: string,
+  reply: string,
+) {
+  const { client, sessionId, branchId } = harness
+  yield* client.message.send({ sessionId, branchId, content })
+  const messages = yield* waitFor(
+    client.message.list({ branchId }),
+    (all) =>
+      all.some(
+        (message) => message.role === "assistant" && messagePartsText(message.parts) === reply,
+      ),
+    10_000,
+    `assistant reply ${reply}`,
+  )
+  return messages
+    .flatMap((message) => message.parts)
+    .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+})
+
 /** Run `code` as one cell of a fresh session with the judge driver, and return its display. */
 const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
   readonly code: string
@@ -480,7 +506,7 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
     toolCallStep("cell", { code: params.code }),
     textStep("done"),
   ])
-  const { client, sessionId, branchId } = yield* createRpcHarness({
+  const harness = yield* createRpcHarness({
     ...shippedPreset,
     // The shipped Jev drivers read the developer's keys and would reach a provider.
     extensionInputs: [
@@ -490,20 +516,13 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
     ],
     providerLayer,
   })
-  if (params.storeKey) yield* client.auth.setKey({ provider: "judge", key: "judge-key", sessionId })
-  yield* client.message.send({ sessionId, branchId, content: "decide" })
-  const messages = yield* waitFor(
-    client.message.list({ branchId }),
-    (all) =>
-      all.some(
-        (message) => message.role === "assistant" && messagePartsText(message.parts) === "done",
-      ),
-    10_000,
-    "assistant reply done",
-  )
-  const results = messages
-    .flatMap((message) => message.parts)
-    .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+  if (params.storeKey)
+    yield* harness.client.auth.setKey({
+      provider: "judge",
+      key: "judge-key",
+      sessionId: harness.sessionId,
+    })
+  const results = yield* sendAndAwaitReply(harness, "decide", "done")
   expect(results).toMatchObject([{ name: "cell", isFailure: false }])
   return yield* Schema.decodeUnknownEffect(Schema.Struct({ display: Schema.String }))(
     results[0]?.result,
@@ -734,25 +753,12 @@ describe("shipped model surface", () => {
           toolCallStep("cell", { code: "process.cwd()" }),
           textStep("done"),
         ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
+        const harness = yield* createRpcHarness({
           ...shippedPreset,
           providerLayer,
           cwd: sessionCwd,
         })
-        yield* client.message.send({ sessionId, branchId, content: "where does the cell run" })
-        const messages = yield* waitFor(
-          client.message.list({ branchId }),
-          (all) =>
-            all.some(
-              (message) =>
-                message.role === "assistant" && messagePartsText(message.parts) === "done",
-            ),
-          10_000,
-          "assistant reply done",
-        )
-        const results = messages
-          .flatMap((message) => message.parts)
-          .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+        const results = yield* sendAndAwaitReply(harness, "where does the cell run", "done")
         expect(results).toMatchObject([
           { name: "cell", isFailure: false, result: { display: sessionCwd } },
         ])
@@ -776,27 +782,15 @@ describe("shipped model surface", () => {
           cellOnly(toolCallStep("cell", { code: "note.includes('shipped surface')" })),
           textStep("second"),
         ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
+        const harness = yield* createRpcHarness({
           ...shippedPreset,
           providerLayer,
         })
-        const runTurn = Effect.fn("Test.runTurn")(function* (content: string, reply: string) {
-          yield* client.message.send({ sessionId, branchId, content })
-          const completed = yield* waitFor(
-            client.message.list({ branchId }),
-            (messages) =>
-              messages.some(
-                (message) =>
-                  message.role === "assistant" && messagePartsText(message.parts) === reply,
-              ),
-            10_000,
-            `assistant reply ${reply}`,
+        const { client, sessionId, branchId } = harness
+        const runTurn = (content: string, reply: string) =>
+          sendAndAwaitReply(harness, content, reply).pipe(
+            Effect.map((results) => results.filter((part) => part.name === "cell")),
           )
-          return completed
-            .flatMap((message) => message.parts)
-            .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
-            .filter((part) => part.name === "cell")
-        })
 
         const first = yield* runTurn("read through the cell", "first")
         expect(first).toHaveLength(1)
@@ -889,24 +883,11 @@ describe("shipped model surface", () => {
           cellOnly(toolCallStep("cell", { code })),
           textStep("joined"),
         ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
+        const harness = yield* createRpcHarness({
           ...shippedPreset,
           providerLayer,
         })
-        yield* client.message.send({ sessionId, branchId, content: "read both" })
-        const messages = yield* waitFor(
-          client.message.list({ branchId }),
-          (list) =>
-            list.some(
-              (message) =>
-                message.role === "assistant" && messagePartsText(message.parts) === "joined",
-            ),
-          10_000,
-          "assistant reply joined",
-        )
-        const results = messages
-          .flatMap((message) => message.parts)
-          .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+        const results = yield* sendAndAwaitReply(harness, "read both", "joined")
         expect(results).toHaveLength(1)
         expect(results[0]).toMatchObject({
           isFailure: false,
@@ -957,27 +938,14 @@ describe("shipped model surface", () => {
           cellOnly(toolCallStep("cell", { code })),
           textStep("scoped"),
         ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
+        const harness = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [...shippedPreset.extensionInputs, scopedAgent],
           branchTools: CellBranchTools,
           providerLayer,
           admission: { agent: AgentName.make("scoped") },
         })
-        yield* client.message.send({ sessionId, branchId, content: "read the note" })
-        const messages = yield* waitFor(
-          client.message.list({ branchId }),
-          (list) =>
-            list.some(
-              (message) =>
-                message.role === "assistant" && messagePartsText(message.parts) === "scoped",
-            ),
-          10_000,
-          "assistant reply scoped",
-        )
-        const results = messages
-          .flatMap((message) => message.parts)
-          .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+        const results = yield* sendAndAwaitReply(harness, "read the note", "scoped")
         expect(results).toHaveLength(1)
         expect(results[0]).toMatchObject({
           isFailure: false,
@@ -1520,334 +1488,332 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   expect(cancelled?.interrupted).toBe(true)
 })
 
-it.scopedLive(
-  "recovers saved cells through RPC, and reports a call cut short as interrupted instead of running it again",
-  () =>
-    Effect.gen(function* () {
-      for (const state of [
-        "unadmitted",
-        "revoked",
-        "incomplete",
-        "completed",
-        "waiting",
-        "unknown-child",
-      ]) {
-        const deniedTools: string[] = []
-        if (state === "revoked") deniedTools.push("cell")
-        const nativeCalls = yield* Ref.make(0)
-        const cellCalls = yield* Ref.make(0)
-        const approvalCalls = yield* Ref.make(0)
-        const selectedNames = yield* Ref.make<ReadonlyArray<string>>([])
-        const extensions: ReadonlyArray<LoadedExtension> = [
-          {
-            manifest: { id: ExtensionId.make("cell-recovery") },
-            scope: "builtin",
-            sourcePath: "cell-recovery",
-            artifactIdentity: LoadedArtifactIdentity.make("cell-recovery-source"),
-            contributions: {
-              tools: [
-                StartChild,
-                CancelChild,
-                tool({
-                  id: "approve",
-                  description: "Approve inner operation",
-                  params: Schema.Struct({}),
-                  output: Schema.Boolean,
-                  execute: () =>
-                    Effect.gen(function* () {
-                      yield* Ref.update(approvalCalls, (n) => n + 1)
-                      return (yield* (yield* ExtensionContext).Interaction.approve({
-                        text: "Continue inner operation?",
-                      })).approved
-                    }),
-                }),
-                tool({
-                  id: "cell",
-                  description: "Must not replay",
-                  // Stands in for the real cell, so it must declare the same
-                  // property the loop keys recovery off.
-                  dispatches: true,
-                  params: Schema.Struct({ code: Schema.String }),
-                  output: Schema.Finite,
-                  execute: () =>
-                    Effect.gen(function* () {
-                      const call = yield* CurrentToolCall
-                      yield* Ref.set(selectedNames, [...call.toolBindings.keys()].sort())
-                      return yield* Ref.updateAndGet(cellCalls, (n) => n + 1)
-                    }),
-                }),
-                tool({
-                  id: "sibling",
-                  description: "Native sibling",
-                  params: Schema.Struct({}),
-                  output: Schema.Finite,
-                  execute: () => Ref.updateAndGet(nativeCalls, (n) => n + 1),
-                }),
-              ],
+describe("saved cell recovery through RPC", () => {
+  for (const state of [
+    "unadmitted",
+    "revoked",
+    "incomplete",
+    "completed",
+    "waiting",
+    "unknown-child",
+  ]) {
+    it.scopedLive(
+      `a ${state} cell recovers, and a call cut short is reported as interrupted instead of running again`,
+      () =>
+        Effect.gen(function* () {
+          const deniedTools: string[] = []
+          if (state === "revoked") deniedTools.push("cell")
+          const nativeCalls = yield* Ref.make(0)
+          const cellCalls = yield* Ref.make(0)
+          const approvalCalls = yield* Ref.make(0)
+          const extensions: ReadonlyArray<LoadedExtension> = [
+            {
+              manifest: { id: ExtensionId.make("cell-recovery") },
+              scope: "builtin",
+              sourcePath: "cell-recovery",
+              artifactIdentity: LoadedArtifactIdentity.make("cell-recovery-source"),
+              contributions: {
+                tools: [
+                  StartChild,
+                  CancelChild,
+                  tool({
+                    id: "approve",
+                    description: "Approve inner operation",
+                    params: Schema.Struct({}),
+                    output: Schema.Boolean,
+                    execute: () =>
+                      Effect.gen(function* () {
+                        yield* Ref.update(approvalCalls, (n) => n + 1)
+                        return (yield* (yield* ExtensionContext).Interaction.approve({
+                          text: "Continue inner operation?",
+                        })).approved
+                      }),
+                  }),
+                  tool({
+                    id: "cell",
+                    description: "Must not replay",
+                    // Stands in for the real cell, so it must declare the same
+                    // property the loop keys recovery off.
+                    dispatches: true,
+                    params: Schema.Struct({ code: Schema.String }),
+                    output: Schema.Finite,
+                    execute: () => Ref.updateAndGet(cellCalls, (n) => n + 1),
+                  }),
+                  tool({
+                    id: "sibling",
+                    description: "Native sibling",
+                    params: Schema.Struct({}),
+                    output: Schema.Finite,
+                    execute: () => Ref.updateAndGet(nativeCalls, (n) => n + 1),
+                  }),
+                ],
+              },
             },
-          },
-        ]
-        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          textStep("Recovered"),
-          // The orphaned child's own turn, once `delegate.list` restarts it
-          // after the recovery turn. It is gated and never released, so the
-          // child is still at the model when the parent cancels it.
-          { ...textStep("child"), gated: true },
-          // The parent reads the cancelled child's completion message.
-          textStep("Child cancelled"),
-        ])
-        // Keep the real server context to seed the crash gap before actor startup.
-        const context = yield* Layer.build(
-          createE2ELayer({
-            extensions,
-            providerLayer,
-            agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, deniedTools })],
-            branchTools: CellBranchTools,
-            approvalLayer: ApprovalService.Live,
-          }),
-        )
-        const { client } = yield* createRpcClient(Layer.succeedContext(context))
-        const { sessionId, branchId } = yield* client.session.create({})
-        const workspaceId = yield* Effect.gen(function* () {
-          const sql = yield* SqlClient.SqlClient
-          const rows = yield* sql<{
-            readonly workspace_id: string
-          }>`SELECT workspace_id FROM sessions WHERE id = ${sessionId}`
-          return yield* Schema.decodeUnknownEffect(WorkspaceId)(rows[0]?.workspace_id)
-        }).pipe(Effect.provideContext(context))
-        const messageId = MessageId.make("cell-recovery-user")
-        const assistantMessageId = assistantMessageIdForTurn(messageId, 1)
-        const cell = {
-          sessionId,
-          branchId,
-          assistantMessageId,
-          toolCallId: ToolCallId.make("outer-cell"),
-        }
-        const savedResult = Prompt.toolResultPart({
-          id: cell.toolCallId,
-          name: "cell",
-          result: { display: "Saved" },
-          isFailure: false,
-          providerExecuted: false,
-        })
-        yield* Effect.gen(function* () {
-          const messages = yield* MessageStorage
-          const user = Message.cases.regular.make({
-            id: messageId,
-            sessionId,
-            branchId,
-            role: "user",
-            parts: [Prompt.textPart({ text: "Continue" })],
-            createdAt: dateFromMillis(0),
-          })
-          yield* messages.createMessage(user)
-          yield* messages.createMessage(
-            Message.cases.regular.make({
-              id: assistantMessageId,
-              sessionId,
-              branchId,
-              role: "assistant",
-              createdAt: dateFromMillis(1),
-              parts: [
-                Prompt.toolCallPart({
-                  id: cell.toolCallId,
-                  name: "cell",
-                  params: { code: "sideEffect()" },
-                  providerExecuted: false,
-                }),
-                Prompt.toolCallPart({
-                  id: "native-sibling",
-                  name: "sibling",
-                  params: {},
-                  providerExecuted: false,
-                }),
-              ],
+          ]
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            textStep("Recovered"),
+            // The orphaned child's own turn, once `delegate.list` restarts it
+            // after the recovery turn. It is gated and never released, so the
+            // child is still at the model when the parent cancels it.
+            { ...textStep("child"), gated: true },
+            // The parent reads the cancelled child's completion message.
+            textStep("Child cancelled"),
+          ])
+          // Keep the real server context to seed the crash gap before actor startup.
+          const context = yield* Layer.build(
+            createE2ELayer({
+              extensions,
+              providerLayer,
+              agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, deniedTools })],
+              branchTools: CellBranchTools,
+              approvalLayer: ApprovalService.Live,
             }),
           )
-          const cells = (yield* CellStorage).executions
-          if (state !== "unadmitted" && state !== "revoked") yield* cells.claim(cell)
-          if (state === "completed") yield* cells.complete(cell, savedResult)
-          const turn = yield* captureTurnTools(cell)
-          const bindingOf = (name: string) => Option.fromUndefinedOr(turn.toolBindings.get(name))
-          if (state === "unknown-child") {
-            const selected = bindingOf("delegate.start")
-            const identity = Option.flatMap(selected, (entry) =>
-              Option.fromUndefinedOr(entry.binding),
-            )
-            if (Option.isNone(identity)) return yield* Effect.die("Missing child start binding")
-            const prompt = "Admitted before the worker was lost"
-            const admitted = yield* (yield* CellStorage).operations.admit({
-              cell,
-              operationId: "unknown-child-start",
-              binding: identity.value,
-              input: { agent: DEFAULT_AGENT_NAME, prompt },
-            })
-            const toolCallId = admitted.operation.toolCallId
-            const child = yield* client.session.create({
-              parentSessionId: sessionId,
-              parentBranchId: branchId,
-            })
-            yield* seedDelegateRegistry(branchId, [
-              {
-                requestId: RequestId.make(toolCallId),
-                sessionId: child.sessionId,
-                branchId: child.branchId,
-                agentName: DEFAULT_AGENT_NAME,
-                prompt,
-                toolCallId,
-                private: false,
-                submitted: false,
-                delivered: false,
-              },
-            ])
-          }
-          if (state === "unadmitted" || state === "revoked") {
-            const captured = bindingOf("cell")
-            const identity = Option.flatMap(captured, (entry) =>
-              Option.fromUndefinedOr(entry.binding),
-            )
-            if (Option.isNone(identity)) return yield* Effect.die("Missing outer cell binding")
-            yield* plantToolCallBinding({ ...cell, binding: identity.value })
-          }
-          if (state === "waiting") {
-            const selected = bindingOf("approve")
-            if (Option.isNone(selected)) return yield* Effect.die("Missing approval binding")
-            const suspendedHost = yield* makeCellToolHost({
-              cell,
-              ledger: yield* ModelContextLedger.make,
-              toolBindings: new Map([["approve", selected.value]]),
-              profile: turn.profile,
-            })
-            yield* askThenLoseWorker(
-              suspendedHost,
-              CellResponse.cases.HostCall.make({
-                cellId: "1",
-                operationId: "1",
-                name: "approve",
-                input: {},
-              }),
-              cell,
-            )
-          }
-          const binding = bindingOf("sibling")
-          const identity = Option.flatMap(binding, (entry) => Option.fromUndefinedOr(entry.binding))
-          if (Option.isNone(identity)) return yield* Effect.die("Missing sibling binding")
-          yield* plantToolCallBinding({
+          const { client } = yield* createRpcClient(Layer.succeedContext(context))
+          const { sessionId, branchId } = yield* client.session.create({})
+          const workspaceId = yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            const rows = yield* sql<{
+              readonly workspace_id: string
+            }>`SELECT workspace_id FROM sessions WHERE id = ${sessionId}`
+            return yield* Schema.decodeUnknownEffect(WorkspaceId)(rows[0]?.workspace_id)
+          }).pipe(Effect.provideContext(context))
+          const messageId = MessageId.make("cell-recovery-user")
+          const assistantMessageId = assistantMessageIdForTurn(messageId, 1)
+          const cell = {
             sessionId,
             branchId,
             assistantMessageId,
-            toolCallId: ToolCallId.make("native-sibling"),
-            binding: identity.value,
+            toolCallId: ToolCallId.make("outer-cell"),
+          }
+          const savedResult = Prompt.toolResultPart({
+            id: cell.toolCallId,
+            name: "cell",
+            result: { display: "Saved" },
+            isFailure: false,
+            providerExecuted: false,
           })
-          yield* plantInFlightTurn({ sessionId, branchId, message: user })
-        }).pipe(
-          Effect.provideContext(context),
-          Effect.provideService(CurrentWorkspaceId, workspaceId),
-        )
-        const finished = yield* client.session.events({ sessionId, branchId }).pipe(
-          Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
-          Stream.take(1),
-          Stream.runCollect,
-          Effect.forkScoped,
-        )
-        yield* client.session.getSnapshot({ sessionId, branchId })
-        if (state === "waiting") {
-          yield* client.session.watchRuntime({ sessionId, branchId }).pipe(
-            Stream.filter((runtime) => runtime._tag === "WaitingForInteraction"),
-            Stream.take(1),
-            Stream.runDrain,
-          )
-          expect(yield* Ref.get(approvalCalls)).toBe(1)
-          expect(yield* Ref.get(nativeCalls)).toBe(0)
-          const pending = yield* Effect.gen(function* () {
-            return yield* (yield* InteractionStorage).listOpen({ sessionId, branchId })
+          yield* Effect.gen(function* () {
+            const messages = yield* MessageStorage
+            const user = Message.cases.regular.make({
+              id: messageId,
+              sessionId,
+              branchId,
+              role: "user",
+              parts: [Prompt.textPart({ text: "Continue" })],
+              createdAt: dateFromMillis(0),
+            })
+            yield* messages.createMessage(user)
+            yield* messages.createMessage(
+              Message.cases.regular.make({
+                id: assistantMessageId,
+                sessionId,
+                branchId,
+                role: "assistant",
+                createdAt: dateFromMillis(1),
+                parts: [
+                  Prompt.toolCallPart({
+                    id: cell.toolCallId,
+                    name: "cell",
+                    params: { code: "sideEffect()" },
+                    providerExecuted: false,
+                  }),
+                  Prompt.toolCallPart({
+                    id: "native-sibling",
+                    name: "sibling",
+                    params: {},
+                    providerExecuted: false,
+                  }),
+                ],
+              }),
+            )
+            const cells = (yield* CellStorage).executions
+            if (state !== "unadmitted" && state !== "revoked") yield* cells.claim(cell)
+            if (state === "completed") yield* cells.complete(cell, savedResult)
+            const turn = yield* captureTurnTools(cell)
+            const bindingOf = (name: string) => Option.fromUndefinedOr(turn.toolBindings.get(name))
+            if (state === "unknown-child") {
+              const selected = bindingOf("delegate.start")
+              const identity = Option.flatMap(selected, (entry) =>
+                Option.fromUndefinedOr(entry.binding),
+              )
+              if (Option.isNone(identity)) return yield* Effect.die("Missing child start binding")
+              const prompt = "Admitted before the worker was lost"
+              const admitted = yield* (yield* CellStorage).operations.admit({
+                cell,
+                operationId: "unknown-child-start",
+                binding: identity.value,
+                input: { agent: DEFAULT_AGENT_NAME, prompt },
+              })
+              const toolCallId = admitted.operation.toolCallId
+              const child = yield* client.session.create({
+                parentSessionId: sessionId,
+                parentBranchId: branchId,
+              })
+              yield* seedDelegateRegistry(branchId, [
+                {
+                  requestId: RequestId.make(toolCallId),
+                  sessionId: child.sessionId,
+                  branchId: child.branchId,
+                  agentName: DEFAULT_AGENT_NAME,
+                  prompt,
+                  toolCallId,
+                  private: false,
+                  submitted: false,
+                  delivered: false,
+                },
+              ])
+            }
+            if (state === "unadmitted" || state === "revoked") {
+              const captured = bindingOf("cell")
+              const identity = Option.flatMap(captured, (entry) =>
+                Option.fromUndefinedOr(entry.binding),
+              )
+              if (Option.isNone(identity)) return yield* Effect.die("Missing outer cell binding")
+              yield* plantToolCallBinding({ ...cell, binding: identity.value })
+            }
+            if (state === "waiting") {
+              const selected = bindingOf("approve")
+              if (Option.isNone(selected)) return yield* Effect.die("Missing approval binding")
+              const suspendedHost = yield* makeCellToolHost({
+                cell,
+                ledger: yield* ModelContextLedger.make,
+                toolBindings: new Map([["approve", selected.value]]),
+                profile: turn.profile,
+              })
+              yield* askThenLoseWorker(
+                suspendedHost,
+                CellResponse.cases.HostCall.make({
+                  cellId: "1",
+                  operationId: "1",
+                  name: "approve",
+                  input: {},
+                }),
+                cell,
+              )
+            }
+            const binding = bindingOf("sibling")
+            const identity = Option.flatMap(binding, (entry) =>
+              Option.fromUndefinedOr(entry.binding),
+            )
+            if (Option.isNone(identity)) return yield* Effect.die("Missing sibling binding")
+            yield* plantToolCallBinding({
+              sessionId,
+              branchId,
+              assistantMessageId,
+              toolCallId: ToolCallId.make("native-sibling"),
+              binding: identity.value,
+            })
+            yield* plantInFlightTurn({ sessionId, branchId, message: user })
           }).pipe(
             Effect.provideContext(context),
             Effect.provideService(CurrentWorkspaceId, workspaceId),
           )
-          const request = pending[0]
-          if (Predicate.isUndefined(request)) return yield* Effect.die("Missing approval")
-          yield* client.interaction.respondInteraction({
-            sessionId,
-            branchId,
-            requestId: request.requestId,
-            approved: true,
-          })
-        }
-        yield* Fiber.join(finished)
-        const messages = yield* client.message.list({ branchId })
-        expect(
-          messages.some(
-            (message) =>
-              message.role === "assistant" && messagePartsText(message.parts) === "Recovered",
-          ),
-        ).toBe(true)
-        const results = messages.find(
-          (message) => message.id === toolResultMessageIdForTurn(messageId, 1),
-        )?.parts
-        expect(results).toHaveLength(2)
-        const outer = results?.find(
-          (part) => part.type === "tool-result" && part.id === cell.toolCallId,
-        )
-        if (state === "unknown-child") {
-          yield* cancelRecoveredChild(
-            Option.fromUndefinedOr(outer),
-            { sessionId, branchId },
-            controls.waitForCall(1),
-          ).pipe(
-            Effect.provideContext(context),
-            Effect.provideService(CurrentWorkspaceId, workspaceId),
+          const finished = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
           )
-          // The cancelled child reports back, so the parent reads it in one
-          // more turn. Three model calls in all: the recovery turn, the
-          // child's gated turn, and the parent reading the completion. The
-          // recovered cell itself never replayed — that is the two results
-          // asserted above, not a fourth call.
-          const settled = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              current.messages.some(
+          yield* client.session.getSnapshot({ sessionId, branchId })
+          if (state === "waiting") {
+            yield* client.session.watchRuntime({ sessionId, branchId }).pipe(
+              Stream.filter((runtime) => runtime._tag === "WaitingForInteraction"),
+              Stream.take(1),
+              Stream.runDrain,
+            )
+            expect(yield* Ref.get(approvalCalls)).toBe(1)
+            expect(yield* Ref.get(nativeCalls)).toBe(0)
+            const pending = yield* Effect.gen(function* () {
+              return yield* (yield* InteractionStorage).listOpen({ sessionId, branchId })
+            }).pipe(
+              Effect.provideContext(context),
+              Effect.provideService(CurrentWorkspaceId, workspaceId),
+            )
+            const request = pending[0]
+            if (Predicate.isUndefined(request)) return yield* Effect.die("Missing approval")
+            yield* client.interaction.respondInteraction({
+              sessionId,
+              branchId,
+              requestId: request.requestId,
+              approved: true,
+            })
+          }
+          yield* Fiber.join(finished)
+          const messages = yield* client.message.list({ branchId })
+          expect(
+            messages.some(
+              (message) =>
+                message.role === "assistant" && messagePartsText(message.parts) === "Recovered",
+            ),
+          ).toBe(true)
+          const results = messages.find(
+            (message) => message.id === toolResultMessageIdForTurn(messageId, 1),
+          )?.parts
+          expect(results).toHaveLength(2)
+          const outer = results?.find(
+            (part) => part.type === "tool-result" && part.id === cell.toolCallId,
+          )
+          if (state === "unknown-child") {
+            yield* cancelRecoveredChild(
+              Option.fromUndefinedOr(outer),
+              { sessionId, branchId },
+              controls.waitForCall(1),
+            ).pipe(
+              Effect.provideContext(context),
+              Effect.provideService(CurrentWorkspaceId, workspaceId),
+            )
+            // The cancelled child reports back, so the parent reads it in one
+            // more turn. Three model calls in all: the recovery turn, the
+            // child's gated turn, and the parent reading the completion. The
+            // recovered cell itself never replayed — that is the two results
+            // asserted above, not a fourth call.
+            const settled = yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (current) =>
+                current.runtime._tag === "Idle" &&
+                current.messages.some(
+                  (message) => message.metadata?.customType === "child-completion",
+                ),
+              5000,
+              "the cancelled child reported to the parent",
+            )
+            expect(
+              settled.messages.filter(
                 (message) => message.metadata?.customType === "child-completion",
               ),
-            5000,
-            "the cancelled child reported to the parent",
-          )
+            ).toHaveLength(1)
+            expect(yield* controls.callCount).toBe(3)
+          }
+          // A cell with no receipt was in flight too: it is not run again.
+          if (state === "completed") expect(outer).toEqual(savedResult)
+          else if (state === "unadmitted" || state === "revoked")
+            expect(outer).toMatchObject({ isFailure: true, result: { reason: "Interrupted" } })
+          else
+            expect(outer).toMatchObject({
+              isFailure: true,
+              result: { stateLost: true },
+            })
+          if (state === "waiting") {
+            expect(yield* Ref.get(approvalCalls)).toBe(2)
+            expect(outer).toMatchObject({
+              result: {
+                operations: [{ tool: "approve", outcome: "succeeded", summary: "true" }],
+              },
+            })
+          }
+          // The native sibling was in flight when the process died: the model
+          // reads that it was interrupted, and it does not run again.
           expect(
-            settled.messages.filter(
-              (message) => message.metadata?.customType === "child-completion",
-            ),
-          ).toHaveLength(1)
-          expect(yield* controls.callCount).toBe(3)
-        }
-        // A cell with no receipt was in flight too: it is not run again.
-        if (state === "completed") expect(outer).toEqual(savedResult)
-        else if (state === "unadmitted" || state === "revoked")
-          expect(outer).toMatchObject({ isFailure: true, result: { reason: "Interrupted" } })
-        else
-          expect(outer).toMatchObject({
-            isFailure: true,
-            result: { stateLost: true },
-          })
-        if (state === "waiting") {
-          expect(yield* Ref.get(approvalCalls)).toBe(2)
-          expect(outer).toMatchObject({
-            result: {
-              operations: [{ tool: "approve", outcome: "succeeded", summary: "true" }],
-            },
-          })
-        }
-        // The native sibling was in flight when the process died: the model
-        // reads that it was interrupted, and it does not run again.
-        expect(
-          results?.find((part) => part.type === "tool-result" && part.id === "native-sibling"),
-        ).toMatchObject({ isFailure: true, result: { reason: "Interrupted" } })
-        expect(yield* Ref.get(cellCalls)).toBe(0)
-        expect(yield* Ref.get(nativeCalls)).toBe(0)
-      }
-    }).pipe(Effect.timeout("12 seconds")),
-  15000,
-)
+            results?.find((part) => part.type === "tool-result" && part.id === "native-sibling"),
+          ).toMatchObject({ isFailure: true, result: { reason: "Interrupted" } })
+          expect(yield* Ref.get(cellCalls)).toBe(0)
+          expect(yield* Ref.get(nativeCalls)).toBe(0)
+        }).pipe(Effect.timeout("12 seconds")),
+      15000,
+    )
+  }
+})
 
 // ── cell prompt guidelines ──────────────────────────────────────────────────
 
@@ -2255,15 +2221,13 @@ describe("tool signature bound", () => {
       `${getToolId(capability)} renders within the type limit, in one pass over its definitions`,
       () =>
         Effect.gen(function* () {
-          const started = yield* Clock.currentTimeMillis
+          // Expanding a shared definition at every reach doubles the work per
+          // level, so such a renderer does not return here.
           const line = yield* renderToolSignature(capability)
-          const elapsed = (yield* Clock.currentTimeMillis) - started
           const [, input = "", result = ""] =
             /^- tools\["[^"]+"\]\(input: (.*)\): Promise<(.*)> \/\/ /.exec(line) ?? []
           expect(input).toBe("object")
           expect(result).toBe("boolean | null | unknown[]")
-          // Expanding a shared definition at every reach doubles the work per level.
-          expect(elapsed).toBeLessThan(1000)
         }),
     )
   }
@@ -2392,25 +2356,12 @@ describe("host tool catalog budget", () => {
           recordSystem(toolCallStep("cell", { code })),
           recordSystem(textStep("done")),
         ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
+        const harness = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [...shippedPreset.extensionInputs, fixtureNamespace],
           providerLayer,
         })
-        yield* client.message.send({ sessionId, branchId, content: "use the fixture" })
-        const messages = yield* waitFor(
-          client.message.list({ branchId }),
-          (all) =>
-            all.some(
-              (message) =>
-                message.role === "assistant" && messagePartsText(message.parts) === "done",
-            ),
-          10_000,
-          "assistant reply done",
-        )
-        const result = messages
-          .flatMap((message) => message.parts)
-          .find((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+        const [result] = yield* sendAndAwaitReply(harness, "use the fixture", "done")
         expect(result).toMatchObject({
           name: "cell",
           isFailure: false,

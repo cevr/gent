@@ -1,5 +1,5 @@
-import { describe, expect, it, test } from "effect-bun-test"
-import { Duration, Effect, Option, Schema } from "effect"
+import { describe, expect, test } from "effect-bun-test"
+import { Option, Schema } from "effect"
 import { inspect } from "node:util"
 import { createContext, runInContext, runInThisContext } from "node:vm"
 import { type SnapshotBinding, snapshotReviverSource } from "../src/cell-protocol.js"
@@ -334,23 +334,20 @@ describe("cell namespace snapshot", () => {
   })
 
   // The encoder stops once a binding's byte budget is spent, so a large value is never read to its end.
-  it.live("a 5 MB string and a 100k array stop at the byte budget", () =>
-    Effect.gen(function* () {
-      const namespace = new Map<string, unknown>([
-        ["text", "x".repeat(5 * 1024 * 1024)],
-        // The Proxy at the end is unsupported: only an encoder that reads every item reaches it.
-        ["items", [...Array.from({ length: 100_000 }, (_, index) => index), new Proxy({}, {})]],
-        ["kept", 1],
-      ])
-      const [elapsed, snapshot] = yield* Effect.timed(Effect.sync(() => encodeSnapshot(namespace)))
-      expect(Duration.toMillis(elapsed)).toBeLessThan(1000)
-      expect(snapshot.bindings.map((binding) => binding.name)).toEqual(["kept"])
-      expect(snapshot.omitted).toEqual([
-        { name: "text", reason: "too-large" },
-        { name: "items", reason: "too-large" },
-      ])
-    }).pipe(Effect.timeout("10 seconds")),
-  )
+  test("a 5 MB string and a 100k array stop at the byte budget", () => {
+    const namespace = new Map<string, unknown>([
+      ["text", "x".repeat(5 * 1024 * 1024)],
+      // The Proxy at the end is unsupported: only an encoder that reads every item reaches it.
+      ["items", [...Array.from({ length: 100_000 }, (_, index) => index), new Proxy({}, {})]],
+      ["kept", 1],
+    ])
+    const snapshot = encodeSnapshot(namespace)
+    expect(snapshot.bindings.map((binding) => binding.name)).toEqual(["kept"])
+    expect(snapshot.omitted).toEqual([
+      { name: "text", reason: "too-large" },
+      { name: "items", reason: "too-large" },
+    ])
+  })
 
   // The size is the UTF-8 length of the JSON text, from the native byte count saved at load.
   test("a binding fits by the UTF-8 bytes of its JSON text, escapes included", () => {

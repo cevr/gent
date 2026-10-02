@@ -1,24 +1,12 @@
 import { describe, expect, it } from "effect-bun-test"
-import {
-  Context,
-  Deferred,
-  Effect,
-  Exit,
-  Fiber,
-  FileSystem,
-  Layer,
-  Option,
-  Path,
-  Ref,
-  Schema,
-} from "effect"
+import { Deferred, Effect, Exit, Fiber, FileSystem, Option, Path, Ref, Schema } from "effect"
 import { staticToolBinding } from "@gent/core/test-utils"
 import { StorageError } from "@gent/core/extensions/branch-tools"
-import { CellExecution, CellStorage, CellOperationHost, CellWorker } from "../src/cell.js"
+import { CellStorage, CellOperationHost, CellWorker } from "../src/cell.js"
 import { CellEvaluationError } from "../src/cell-protocol.js"
 import {
-  packageDirectory,
   buildCellWorker,
+  openCellOwner,
   sessionId,
   branchId,
   testLayer,
@@ -46,12 +34,7 @@ describe("recorded cell execution", () => {
           [1],
         )
         if (!first || !reset || !next || !read) return yield* Effect.die("Missing cells")
-        const execution = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
+        const execution = yield* openCellOwner(worker)
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const run = (call: Parameters<typeof execution.run>[0]) =>
           execution.run(call).pipe(Effect.provideService(CellOperationHost, host))
@@ -87,10 +70,7 @@ describe("recorded cell execution", () => {
               Effect.ensuring(Deferred.succeed(stopped, true)),
             ),
         })
-        const context = yield* Layer.build(
-          CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-        )
-        const cells = Context.get(context, CellExecution)
+        const cells = yield* openCellOwner(worker)
         const running = yield* cells
           .run(first)
           .pipe(
@@ -147,12 +127,7 @@ describe("recorded cell execution", () => {
           catalog: hostCatalog("mark"),
           call: () => Ref.update(calls, (n) => n + 1).pipe(Effect.as(true)),
         })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(worker)
         yield* cells.stop
         const exit = yield* cells
           .run(late)
@@ -190,17 +165,7 @@ describe("recorded cell execution", () => {
               ),
           },
         })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({
-              worker: unusedWorker,
-              cwd: yield* packageDirectory,
-              sessionId,
-              branchId,
-            }).pipe(Layer.provide(Layer.succeed(CellStorage, gated))),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(unusedWorker, { storage: gated })
         const host = CellOperationHost.of({
           catalog: hostCatalog("mark"),
           call: () => Effect.die("A cell that never started made a host call"),
@@ -252,17 +217,7 @@ describe("recorded cell execution", () => {
             input: { operationId },
           }),
         )
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({
-              worker: unusedWorker,
-              cwd: yield* packageDirectory,
-              sessionId,
-              branchId,
-            }),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(unusedWorker)
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const incomplete = yield* cells
           .run(cell)
@@ -293,14 +248,7 @@ describe("recorded cell execution", () => {
               Effect.fail(new StorageError({ message: "operation list unavailable" })),
           },
         })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }).pipe(
-              Layer.provide(Layer.succeed(CellStorage, broken)),
-            ),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(worker, { storage: broken })
         const host = CellOperationHost.of({
           catalog: hostCatalog("wait"),
           call: () => Deferred.succeed(started, true).pipe(Effect.andThen(Effect.never)),
@@ -337,12 +285,7 @@ describe("recorded cell execution", () => {
               new CellEvaluationError({ phase: "execute", message: refusal, output: "" }),
             ),
         })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(worker)
         const failed = yield* cells
           .run(uncaught)
           .pipe(Effect.provideService(CellOperationHost, host))
@@ -369,12 +312,7 @@ describe("recorded cell execution", () => {
           catalog: hostCatalog("start"),
           call: () => Effect.succeed({}),
         })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(worker)
         const message = (call: typeof unknownTool) =>
           cells.run(call).pipe(
             Effect.provideService(CellOperationHost, host),
@@ -412,12 +350,7 @@ describe("recorded cell execution", () => {
           catalog: hostCatalog("start"),
           call: () => Effect.succeed({}),
         })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(worker)
         // A failure carries its text as `message`; a finished cell as `display`.
         const ReplyText = Schema.Union([
           Schema.Struct({ message: Schema.String }),
@@ -557,12 +490,7 @@ describe("recorded cell execution", () => {
           return yield* Effect.die("Missing test cells")
         }
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-        const open = Effect.gen(function* () {
-          const context = yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          )
-          return Context.get(context, CellExecution)
-        })
+        const open = openCellOwner(worker)
         const cells = yield* open
         const run = (owner: typeof cells, call: typeof define) =>
           owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
@@ -610,9 +538,6 @@ describe("recorded cell execution", () => {
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(testLayer)),
     30_000,
   )
-
-  // The error reader walks a thrown value's prototype chain. A Proxy in that
-  // chain once ran its trap there, and a looping trap held the worker.
 
   // A cell can replace a shared built-in. The worker puts every built-in back
   // after the cell, before the display and the snapshot, and names it. The
@@ -686,12 +611,7 @@ describe("recorded cell execution", () => {
           ])
           if (!bind || !ran || !probe) return yield* Effect.die("Missing test cells")
           const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-          const open = Effect.gen(function* () {
-            const context = yield* Layer.build(
-              CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-            )
-            return Context.get(context, CellExecution)
-          })
+          const open = openCellOwner(worker)
           const cells = yield* open
           const run = (owner: typeof cells, call: typeof bind) =>
             owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
@@ -741,12 +661,7 @@ describe("recorded cell execution", () => {
           ])
           if (!define || !change || !after || !probe) return yield* Effect.die("Missing test cells")
           const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-          const cells = Context.get(
-            yield* Layer.build(
-              CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-            ),
-            CellExecution,
-          )
+          const cells = yield* openCellOwner(worker)
           const run = (call: typeof define) =>
             cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
           yield* run(define)
@@ -837,18 +752,7 @@ describe("recorded cell execution", () => {
           ])
           if (!define || !change || !after) return yield* Effect.die("Missing test cells")
           const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-          const cells = Context.get(
-            yield* Layer.build(
-              CellExecution.Live({
-                worker,
-                cwd: yield* packageDirectory,
-                sessionId,
-                branchId,
-                evaluationTimeoutMs: 3000,
-              }),
-            ),
-            CellExecution,
-          )
+          const cells = yield* openCellOwner(worker, { evaluationTimeoutMs: 3000 })
           const run = (call: typeof define) =>
             cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
           yield* run(define)
@@ -879,18 +783,7 @@ describe("recorded cell execution", () => {
         ])
         if (!define || !change || !after) return yield* Effect.die("Missing test cells")
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({
-              worker,
-              cwd: yield* packageDirectory,
-              sessionId,
-              branchId,
-              evaluationTimeoutMs: 3000,
-            }),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(worker, { evaluationTimeoutMs: 3000 })
         const run = (call: typeof define) =>
           cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
         yield* run(define)
@@ -923,12 +816,7 @@ describe("recorded cell execution", () => {
         ])
         if (!start || !wait || !after) return yield* Effect.die("Missing test cells")
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(worker)
         const DisplayText = Schema.Struct({ display: Schema.String })
         const display = (call: typeof start) =>
           cells.run(call).pipe(
@@ -962,12 +850,7 @@ describe("recorded cell execution", () => {
         ])
         if (!define || !change || !after) return yield* Effect.die("Missing test cells")
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(worker)
         const run = (call: typeof define) =>
           cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
         yield* run(define)
@@ -1039,12 +922,7 @@ describe("recorded cell execution", () => {
           return yield* Effect.die("Missing test cells")
         }
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
+        const cells = yield* openCellOwner(worker)
         const ReplyText = Schema.Union([
           Schema.Struct({ message: Schema.String }),
           Schema.Struct({ display: Schema.String }),
@@ -1111,12 +989,7 @@ describe("recorded cell execution", () => {
         })
         const result = yield* Effect.scoped(
           Effect.gen(function* () {
-            const execution = Context.get(
-              yield* Layer.build(
-                CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-              ),
-              CellExecution,
-            )
+            const execution = yield* openCellOwner(worker)
             const saved = yield* execution.run(first)
             expect(saved.isFailure).toBe(false)
             expect(yield* execution.run(first)).toEqual(saved)
@@ -1132,19 +1005,11 @@ describe("recorded cell execution", () => {
             return saved
           }).pipe(Effect.provideService(CellOperationHost, host)),
         )
-        const replay = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({
-              worker: CellWorker.cases.Script.make({
-                ...worker,
-                scriptPath: path.join(directory, "missing-worker.js"),
-              }),
-              cwd: yield* packageDirectory,
-              sessionId,
-              branchId,
-            }),
-          ),
-          CellExecution,
+        const replay = yield* openCellOwner(
+          CellWorker.cases.Script.make({
+            ...worker,
+            scriptPath: path.join(directory, "missing-worker.js"),
+          }),
         )
         expect(
           yield* replay.run(first).pipe(Effect.provideService(CellOperationHost, host)),
@@ -1184,12 +1049,7 @@ describe("recorded cell execution", () => {
               Effect.ensuring(Deferred.succeed(stopped, true)),
             ),
         })
-        const execution = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
+        const execution = yield* openCellOwner(worker)
         const running = yield* execution
           .run(first)
           .pipe(Effect.provideService(CellOperationHost, host), Effect.forkScoped)
@@ -1197,12 +1057,7 @@ describe("recorded cell execution", () => {
         yield* Fiber.interrupt(running)
         expect(yield* Deferred.isDone(stopped)).toBe(true)
         // The loop closed under the cell; the next loop opens its own execution.
-        const reopened = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
+        const reopened = yield* openCellOwner(worker)
         const unknown = yield* reopened
           .run(first)
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
@@ -1224,18 +1079,7 @@ describe("recorded cell execution", () => {
         yield* fs.rename(worker.scriptPath, savedWorker)
         const [first, next] = yield* setupCalls(["41", "42"])
         if (!first || !next) return yield* Effect.die("Missing test cell")
-        const execution = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({
-              worker,
-              cwd: yield* packageDirectory,
-              sessionId,
-              branchId,
-              maximumFailedLaunches: 1,
-            }),
-          ),
-          CellExecution,
-        )
+        const execution = yield* openCellOwner(worker, { maximumFailedLaunches: 1 })
         const host = CellOperationHost.of({ call: () => Effect.die("Unexpected host operation") })
         const failed = yield* execution
           .run(first)

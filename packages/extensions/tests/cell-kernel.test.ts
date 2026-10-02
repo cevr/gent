@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, FileSystem, Path, Schema } from "effect"
 import { GentPlatform } from "@gent/core/host"
 import {
   type LoadedExtension,
@@ -7,9 +7,7 @@ import {
   LanguageModelLayers,
   textStep,
   toolCallStep,
-  BunGentPlatformLive,
 } from "@gent/core/test-utils"
-import { BunServices } from "@effect/platform-bun"
 import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core/protocol"
 import {
   ExtensionId,
@@ -31,6 +29,7 @@ import {
   packageDirectory,
   buildCellWorker,
   buildCellExecutable,
+  cellResultsAfterTurn,
   platform,
   hostCatalog,
 } from "./helpers/cell-kernel.js"
@@ -306,10 +305,15 @@ describe("cell worker kernel", () => {
         })
         const run = (source: string) =>
           kernel.evaluate(source).pipe(Effect.provideService(CellOperationHost, host))
-        const settle = "await new Promise((resolve) => setTimeout(resolve, 150))"
+        // The cell goes on only once the process handlers saw the error. The
+        // worker's handler comes first and queues the report, which runs on
+        // the next immediate; the cell resumes two immediates later, so the
+        // report always lands while the cell still runs.
+        const reported = (event: "uncaughtException" | "unhandledRejection") =>
+          `await new Promise((resolve) => process.once('${event}', () => setImmediate(() => setImmediate(resolve))))`
         // A timer throws while its own cell runs: that cell's output carries it.
         const own = yield* run(
-          `var kept = 5; setTimeout(() => { throw new Error('own timer') }, 20); ${settle}; 1`,
+          `var kept = 5; setTimeout(() => { throw new Error('own timer') }, 0); ${reported("uncaughtException")}; 1`,
         )
         expect(own.display).toContain("own timer")
         // A timer from cell A throws while cell B runs: B does not claim it,
@@ -317,14 +321,16 @@ describe("cell worker kernel", () => {
         yield* run(
           "var releaseLate = false; setTimeout(function waitForCellB() { if (!releaseLate) { setTimeout(waitForCellB, 0); return; } throw new Error('late timer'); }, 0); 1",
         )
-        const whileLate = yield* run(`releaseLate = true; ${settle}; kept`)
+        const whileLate = yield* run(`releaseLate = true; ${reported("uncaughtException")}; kept`)
         expect(whileLate.display).not.toContain("late timer")
         expect(whileLate.display).toContain("5")
         const afterTimer = yield* run("2")
         expect(afterTimer.display).toMatch(/Uncaught \(from cell \d+\): .*late timer/)
         // A rejection nobody awaits has no known origin: it is never the
         // running cell's error, and the next cell reports it as unknown.
-        const dropped = yield* run(`Promise.reject(new Error('dropped promise')); ${settle}; 2`)
+        const dropped = yield* run(
+          `Promise.reject(new Error('dropped promise')); ${reported("unhandledRejection")}; 2`,
+        )
         expect(dropped.display).not.toContain("dropped promise")
         const afterDropped = yield* run("kept")
         expect(afterDropped.display).toContain(
@@ -333,7 +339,7 @@ describe("cell worker kernel", () => {
         expect(afterDropped.display).toContain("dropped promise")
         // A host call the cell never awaits fails while the cell still runs:
         // an unhandled rejection, so it too waits for the next cell, unattributed.
-        const orphan = yield* run(`tools.broken({}); ${settle}; 3`)
+        const orphan = yield* run(`tools.broken({}); ${reported("unhandledRejection")}; 3`)
         expect(orphan.display).toBe("3")
         const afterOrphan = yield* run("4")
         expect(afterOrphan.display).toContain("Uncaught (origin unknown")
@@ -527,15 +533,6 @@ describe("cell worker kernel", () => {
           .pipe(Effect.provideService(CellOperationHost, host))
         expect(fresh.display).toBe("undefined")
         expect(calls).toBe(1)
-        const crash = yield* kernel
-          .evaluate("process.exit(7)")
-          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
-        if (crash._tag !== "CellKernelError") return yield* crash
-        expect(crash.reason).toBe("process")
-        // Both workers launched, so neither loss counts toward the failed-launch limit.
-        yield* kernel.reset
-        yield* kernel.close
-        expect((yield* kernel.reset.pipe(Effect.flip)).reason).toBe("closed")
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
     10000,
   )
@@ -710,6 +707,7 @@ describe("cell worker kernel", () => {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
           cwd: yield* packageDirectory,
+          maximumFailedLaunches: 1,
         })
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
         const run = (source: string) =>
@@ -718,11 +716,13 @@ describe("cell worker kernel", () => {
         for (let lost = 0; lost < 5; lost++) {
           expect((yield* run("1 + 1")).display).toBe("2")
           const crash = yield* run("process.exit(7)").pipe(Effect.flip)
-          expect(crash._tag).toBe("CellKernelError")
+          if (crash._tag !== "CellKernelError") return yield* crash
+          expect(crash.reason).toBe("process")
           yield* kernel.reset
         }
         expect((yield* run("21 * 2")).display).toBe("42")
         yield* kernel.close
+        expect((yield* kernel.reset.pipe(Effect.flip)).reason).toBe("closed")
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
     10000,
   )
@@ -853,21 +853,15 @@ describe("large host replies", () => {
           }),
           textStep("Read the large results"),
         ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
+        const harness = yield* createRpcHarness({
           extensions,
           providerLayer,
           branchTools: CellBranchTools,
           agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
         })
+        const { client, sessionId, branchId } = harness
         yield* client.message.send({ sessionId, branchId, content: "Read large results" })
-        yield* client.session.events({ sessionId, branchId }).pipe(
-          Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
-          Stream.take(1),
-          Stream.runDrain,
-        )
-        const results = (yield* client.message.list({ branchId }))
-          .flatMap((message) => message.parts)
-          .filter((part) => part.type === "tool-result" && part.name === "cell")
+        const results = yield* cellResultsAfterTurn(harness)
         expect(results).toHaveLength(4)
         // The JSON text of the string result is its characters plus two quotes;
         // its last page ends in ten characters and the closing quote.
@@ -876,10 +870,7 @@ describe("large host replies", () => {
         })
         expect(results[2]).toMatchObject({ result: { display: "[true,true,7]" } })
         expect(results[3]).toMatchObject({ result: { display: "[true,true,7]" } })
-      }).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
-      ),
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platform)),
     30000,
   )
 })
