@@ -808,8 +808,7 @@ describe("continuation", () => {
         textStep("Done with tools."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, makeContMessage("test auto-continue"))
+        yield* runAgentLoop(makeContMessage("test auto-continue"))
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
@@ -821,8 +820,7 @@ describe("continuation", () => {
         textStep("Just text, no tools."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, makeContMessage("text only"))
+        yield* runAgentLoop(makeContMessage("text only"))
         expect(yield* controls.callCount).toBe(1)
         yield* controls.assertDone
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
@@ -837,8 +835,7 @@ describe("continuation", () => {
         textStep("Finally done."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, makeContMessage("multi-hop"))
+        yield* runAgentLoop(makeContMessage("multi-hop"))
         expect(yield* controls.callCount).toBe(4)
         yield* controls.assertDone
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
@@ -853,8 +850,7 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, makeContMessage("turn-events"))
+        yield* runAgentLoop(makeContMessage("turn-events"))
         expect(yield* controls.callCount).toBe(3)
         const events = yield* Ref.get(eventsRef)
         const turnCompleted = events.filter((e) => e._tag === "TurnCompleted")
@@ -885,10 +881,9 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const turn = makeContMessage("steer at step boundary")
-        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, turn))
+        const fiber = yield* Effect.forkChild(runAgentLoop(turn))
         yield* controls.waitForCall(0)
         yield* steerAgentLoop({
           _tag: "Interject",
@@ -927,10 +922,9 @@ describe("continuation", () => {
         textStep("Done after the sender's message."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const turn = makeContMessage("a sender steers this turn")
-        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, turn))
+        const fiber = yield* Effect.forkChild(runAgentLoop(turn))
         yield* controls.waitForCall(0)
         yield* steerAgentLoop({
           _tag: "Interject",
@@ -983,7 +977,7 @@ describe("continuation", () => {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const fiber = yield* Effect.forkChild(
-          runAgentLoop(agentLoop, makeContMessage("a turn the sender does not own")),
+          runAgentLoop(makeContMessage("a turn the sender does not own")),
         )
         yield* controls.waitForCall(0)
         yield* steerAgentLoop({
@@ -1047,7 +1041,7 @@ describe("continuation", () => {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const fiber = yield* Effect.forkChild(
-          runAgentLoop(agentLoop, makeContMessage("a turn the steer would join")),
+          runAgentLoop(makeContMessage("a turn the steer would join")),
         )
         yield* controls.waitForCall(0)
         // The stop's handler runs first; the steer it names is not admitted yet.
@@ -1094,7 +1088,7 @@ describe("continuation", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const message = makeContMessage("a turn a stop names")
-        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+        const fiber = yield* Effect.forkChild(runAgentLoop(message))
         yield* controls.waitForCall(0)
         const stop = { sessionId: contSessionId, branchId: contBranchId, messageId: message.id }
         expect(yield* stopAgentLoopMessage({ ...stop, requestId: "req-stop-running" })).toBe(true)
@@ -1132,7 +1126,7 @@ describe("continuation", () => {
         const parent = { sessionId: SessionId.make("parent"), branchId: BranchId.make("parent") }
         const sibling = { sessionId: SessionId.make("sibling"), branchId: BranchId.make("sibling") }
         const message = makeContMessage("a turn the parent stops")
-        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+        const fiber = yield* Effect.forkChild(runAgentLoop(message))
         yield* controls.waitForCall(0)
         const steer = (requestId: string, text: string, sender: typeof parent) =>
           steerAgentLoop(
@@ -1226,10 +1220,7 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        const fiber = yield* Effect.forkChild(
-          runAgentLoop(agentLoop, makeContMessage("interrupt test")),
-        )
+        const fiber = yield* Effect.forkChild(runAgentLoop(makeContMessage("interrupt test")))
         yield* controls.waitForCall(1)
         yield* steerAgentLoop({
           _tag: "Cancel",
@@ -1258,8 +1249,7 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, makeContMessage("structural guard"))
+        yield* runAgentLoop(makeContMessage("structural guard"))
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone
         const events = yield* Ref.get(eventsRef)
@@ -1275,10 +1265,9 @@ describe("continuation", () => {
         textStep("Final answer."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const msg = makeContMessage("multi-hop persistence")
-        yield* runAgentLoop(agentLoop, msg)
+        yield* runAgentLoop(msg)
         const a1 = yield* messageStorage.getMessage(assistantMessageIdForTurn(msg.id, 1))
         const t1 = yield* messageStorage.getMessage(toolResultMessageIdForTurn(msg.id, 1))
         expect(a1?.role).toBe("assistant")
@@ -1305,15 +1294,14 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const first = makeContMessage("first message")
         const followUp = makeContMessage("follow-up after interrupt")
         // Start first turn — tool call auto-continues to gated step
-        yield* Effect.forkChild(runAgentLoop(agentLoop, first))
+        yield* Effect.forkChild(runAgentLoop(first))
         // Wait for the gated step (second stream call) to start
         yield* controls.waitForCall(1)
         // Queue a follow-up while step 1 is gated
-        yield* submitAgentLoop(agentLoop, followUp)
+        yield* submitAgentLoop(followUp)
         // Interrupt the current turn. `agentLoop.steer` issues
         // `actor.call(Interrupt)` which is serialized request-reply — by the
         // time it returns, the actor has already set `interruptedRef = true`
@@ -1389,10 +1377,9 @@ describe("continuation", () => {
         })
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
             const messageStorage = yield* MessageStorage
             const message = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "write it")
-            yield* runAgentLoop(agentLoop, message)
+            yield* runAgentLoop(message)
             expect(streamCalls).toBe(2)
             expect(latestUserTexts[1]).toContain("Continue from where you stopped")
             const messages = yield* messageStorage.listMessages(BranchId.make("b1"))
@@ -1441,10 +1428,9 @@ describe("continuation", () => {
       })
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
           const messageStorage = yield* MessageStorage
           const message = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "write it")
-          yield* runAgentLoop(agentLoop, message)
+          yield* runAgentLoop(message)
           // Two continuations, then the third partial failure ends the turn.
           expect(streamCalls).toBe(3)
           const messages = yield* messageStorage.listMessages(BranchId.make("b1"))
@@ -1509,8 +1495,7 @@ describe("empty final step", () => {
         textStep("Here is the answer."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+        yield* runAgentLoop(userMessage("do the thing"))
 
         const messageStorage = yield* MessageStorage
         const stored = yield* messageStorage.listMessages(branchId)
@@ -1544,8 +1529,7 @@ describe("empty final step", () => {
         textStep("Here is the answer."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+        yield* runAgentLoop(userMessage("do the thing"))
 
         const messageStorage = yield* MessageStorage
         const stored = yield* messageStorage.listMessages(branchId)
@@ -1578,8 +1562,7 @@ describe("empty final step", () => {
       const events = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+          yield* runAgentLoop(userMessage("do the thing"))
 
           const turnCompleted = (yield* Ref.get(events)).filter(
             (event) => event._tag === "TurnCompleted",
@@ -1604,8 +1587,7 @@ describe("empty final step", () => {
       const events = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+          yield* runAgentLoop(userMessage("do the thing"))
 
           const turnCompleted = (yield* Ref.get(events)).filter(
             (event) => event._tag === "TurnCompleted",
@@ -1652,8 +1634,7 @@ describe("provider refusal", () => {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([step])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       return yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("say the blocked thing"))
+        yield* runAgentLoop(userMessage("say the blocked thing"))
         expect(yield* controls.callCount).toBe(1)
         yield* controls.assertDone
         const stored = yield* (yield* MessageStorage).listMessages(branchId)
@@ -1764,10 +1745,9 @@ describe("max turn steps", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         // The budget is the agent's to lower; three steps prove the same exit
         // the default two hundred do.
-        yield* runAgentLoop(agentLoop, userMessage("loop forever"), {
+        yield* runAgentLoop(userMessage("loop forever"), {
           runSpec: { overrides: { maxSteps: 3 } },
         })
 
@@ -1795,8 +1775,7 @@ describe("max turn steps", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("two steps at most"), {
+        yield* runAgentLoop(userMessage("two steps at most"), {
           runSpec: { overrides: { maxSteps: 2 } },
         })
         const events = yield* Ref.get(eventsRef)
@@ -1831,8 +1810,7 @@ describe("max turn steps", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("two steps at most"), {
+        yield* runAgentLoop(userMessage("two steps at most"), {
           runSpec: { overrides: { maxSteps: 2 } },
         })
         yield* controls.assertDone
@@ -1858,8 +1836,7 @@ describe("max turn steps", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("answer once"), {
+        yield* runAgentLoop(userMessage("answer once"), {
           runSpec: { overrides: { maxSteps: 1 } },
         })
 
@@ -1901,9 +1878,8 @@ describe("max turn steps", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const fiber = yield* Effect.forkChild(
-          runAgentLoop(agentLoop, userMessage("answer once"), {
+          runAgentLoop(userMessage("answer once"), {
             runSpec: { overrides: { maxSteps: 1 } },
           }),
         )
@@ -1934,8 +1910,7 @@ describe("max turn steps", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("who are you"), {
+        yield* runAgentLoop(userMessage("who are you"), {
           agent: AgentName.make("no-such-agent"),
         })
 
@@ -1984,13 +1959,12 @@ describe("native model compaction integration", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         yield* ensureStorageParents({ sessionId, branchId })
         const storage = yield* MessageStorage
         yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
           discard: true,
         })
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "native current turn"))
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "native current turn"))
 
         expect(providerCalls).toBe(2)
         expect(Option.isSome(mainPrompt)).toBe(true)
@@ -2076,7 +2050,6 @@ describe("native model compaction integration", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const admission: SessionAdmission = {
           runSpec: { overrides: { modelId, reasoningEffort: "high" } },
         }
@@ -2085,11 +2058,7 @@ describe("native model compaction integration", () => {
         yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
           discard: true,
         })
-        yield* runAgentLoop(
-          agentLoop,
-          makeMessage(sessionId, branchId, "summarize then answer"),
-          admission,
-        )
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "summarize then answer"), admission)
         // A turn step asks for the output its 128k window reserves; the summary
         // asks for its own small cap.
         const turnOutput = 32_000
@@ -2158,7 +2127,6 @@ describe("native model compaction integration", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         for (const modelId of ["catalog-driver/plain", "catalog-driver/unlisted"]) {
           const admission: SessionAdmission = {
             runSpec: { overrides: { modelId: ModelId.make(modelId), reasoningEffort: "high" } },
@@ -2167,7 +2135,7 @@ describe("native model compaction integration", () => {
           const session = SessionId.make(`${sessionId}-${name}`)
           const branch = BranchId.make(`${branchId}-${name}`)
           yield* ensureStorageParents({ sessionId: session, branchId: branch, admission })
-          yield* runAgentLoop(agentLoop, makeMessage(session, branch, "hello"), admission)
+          yield* runAgentLoop(makeMessage(session, branch, "hello"), admission)
         }
         expect(
           observedHints.map((hints) => Option.fromUndefinedOr(hints.supportsReasoning)),
@@ -2245,10 +2213,9 @@ describe("native model compaction integration", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const admission: SessionAdmission = { runSpec: { overrides: { modelId } } }
         yield* ensureStorageParents({ sessionId, branchId, admission })
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "hello"), admission)
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "hello"), admission)
         const ended = (yield* Ref.get(events)).filter((event) => event._tag === "StreamEnded")
         const costs = ended.map((event) => event.costUsd)
         // 6,000 x $6.25 + 4,000 x $10 per million, not 10,000 x $10.
@@ -2289,18 +2256,13 @@ describe("native model compaction integration", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const admission = { runSpec: { overrides: { contextLength: 6_000 } } }
         yield* ensureStorageParents({ sessionId, branchId, admission })
         const storage = yield* MessageStorage
         yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
           discard: true,
         })
-        yield* runAgentLoop(
-          agentLoop,
-          makeMessage(sessionId, branchId, "small current turn"),
-          admission,
-        )
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "small current turn"), admission)
 
         expect(providerCalls).toBe(2)
         const durable = yield* storage.listMessages(branchId)
@@ -2341,7 +2303,6 @@ describe("native model context projection", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         yield* ensureStorageParents({ sessionId, branchId })
         const messageStorage = yield* MessageStorage
         yield* messageStorage.createMessage(
@@ -2355,7 +2316,7 @@ describe("native model context projection", () => {
           }),
         )
 
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "fresh request"))
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "fresh request"))
 
         expect(Option.isSome(capturedPrompt)).toBe(true)
         if (Option.isNone(capturedPrompt)) return yield* Effect.die("provider did not run")
@@ -2401,10 +2362,9 @@ describe("native model context projection", () => {
         },
       ])
       const run = Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const sessionId = SessionId.make("model-context-tool-session")
         const branchId = BranchId.make("model-context-tool-branch")
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "run parallel tools"))
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "run parallel tools"))
         yield* controls.assertDone
 
         expect(Option.isSome(capturedPrompt)).toBe(true)
@@ -2473,9 +2433,7 @@ describe("native model context projection", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(
-          agentLoop,
           makeMessage(
             SessionId.make("model-context-driver-session"),
             BranchId.make("model-context-driver-branch"),
@@ -2486,7 +2444,6 @@ describe("native model context projection", () => {
         // The catalog cap is under 32k, so the request asks for all of it.
         expect(observedMaxTokens).toEqual(Option.some(16_000))
         yield* runAgentLoop(
-          agentLoop,
           makeMessage(
             SessionId.make("model-context-driver-session"),
             BranchId.make("model-context-driver-branch"),
@@ -3033,12 +2990,10 @@ describe("turn record", () => {
         )
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
-            yield* submitAgentLoop(
-              agentLoop,
-              makeMessage(sessionId, branchId, "child task before restart"),
-              { agent: helperAgent.name, runSpec },
-            )
+            yield* submitAgentLoop(makeMessage(sessionId, branchId, "child task before restart"), {
+              agent: helperAgent.name,
+              runSpec,
+            })
             yield* Deferred.await(firstCalled)
           }).pipe(Effect.provide(layerFor(firstProvider)), Effect.timeout("10 seconds")),
         )
@@ -3131,12 +3086,9 @@ describe("turn record", () => {
         )
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
-            yield* submitAgentLoop(
-              agentLoop,
-              makeMessage(sessionId, branchId, "work under the helper"),
-              { agent: helperAgent.name },
-            )
+            yield* submitAgentLoop(makeMessage(sessionId, branchId, "work under the helper"), {
+              agent: helperAgent.name,
+            })
             yield* Deferred.await(firstCalled)
           }).pipe(
             Effect.provide(layerFor(firstProvider, [...testAgents, helperAgent])),
@@ -3217,12 +3169,9 @@ describe("turn record", () => {
         ])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
-            yield* submitAgentLoop(
-              agentLoop,
-              makeMessage(sessionId, branchId, "dispatch under the helper"),
-              { agent: helperAgent.name },
-            )
+            yield* submitAgentLoop(makeMessage(sessionId, branchId, "dispatch under the helper"), {
+              agent: helperAgent.name,
+            })
             yield* Deferred.await(entered)
           }).pipe(
             Effect.provide(layerFor(firstProvider.layer, [...testAgents, helperAgent])),

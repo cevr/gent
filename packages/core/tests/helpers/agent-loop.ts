@@ -5,7 +5,6 @@ import * as Prompt from "effect/ai/Prompt"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopError,
-  type FollowUpQueueFull,
   entityIdOf,
   type SessionRuntimeState,
 } from "../../src/domain/agent-loop"
@@ -39,7 +38,6 @@ import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../src/domain/extension"
 import { type AgentEvent, EventStore } from "../../src/domain/event"
 import { BranchStorage, SessionStorage } from "../../src/storage/storage"
-import type { StorageError } from "../../src/domain/errors"
 import {
   ensureStorageParents,
   fixedSessionProfiles,
@@ -107,15 +105,6 @@ const ensureAgentLoopStorageParents = (input: {
     ),
   )
 interface AgentLoopService {
-  readonly runOnce: (input: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly prompt: string
-  }) => Effect.Effect<
-    void,
-    AgentLoopError | FollowUpQueueFull | StorageError,
-    BranchStorage | SessionStorage
-  >
   readonly getQueue: (input: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -133,34 +122,11 @@ export const makeAgentLoopService = Effect.gen(function* () {
   const refFor = (sessionId: SessionId, branchId: BranchId) =>
     actorClientFactory(entityIdOf(DefaultWorkspaceId, sessionId, branchId))
   const ensureParents = (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
-    ensureStorageParents(input).pipe(
+    ensureAgentLoopStorageParents(input).pipe(
       Effect.provideService(SessionStorage, sessionStorage),
       Effect.provideService(BranchStorage, branchStorage),
-      Effect.mapError(
-        (cause) =>
-          new AgentLoopError({
-            message: `Failed to ensure storage parents for ${input.sessionId}/${input.branchId}`,
-            cause,
-          }),
-      ),
     )
   return {
-    runOnce: (input) =>
-      Effect.gen(function* () {
-        const message = Message.cases.regular.make({
-          id: MessageId.make(yield* platform.randomId),
-          sessionId: input.sessionId,
-          branchId: input.branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: input.prompt })],
-          createdAt: dateFromMillis(1_767_225_600_000),
-        })
-        yield* ensureStorageParents({ sessionId: input.sessionId, branchId: input.branchId })
-        const ref = yield* refFor(input.sessionId, input.branchId)
-        yield* ref.execute(
-          AgentLoopActor.SubmitAndWait.make({ workspaceId: DefaultWorkspaceId, message }),
-        )
-      }),
     getQueue: (input) =>
       Effect.gen(function* () {
         yield* ensureParents(input)
@@ -188,7 +154,6 @@ export const makeAgentLoopService = Effect.gen(function* () {
   } satisfies AgentLoopService
 })
 export const runAgentLoop = (
-  _agentLoop: AgentLoopService,
   message: Message,
   /** The agent the session runs as; set when the test's first turn creates it. */
   admission?: SessionAdmission,
@@ -211,7 +176,6 @@ export const runAgentLoop = (
     ),
   )
 export const submitAgentLoop = (
-  _agentLoop: AgentLoopService,
   message: Message,
   /** The agent the session runs as; set when the test's first turn creates it. */
   admission?: SessionAdmission,
