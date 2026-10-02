@@ -1585,6 +1585,42 @@ describe("Anthropic stop reason", () => {
   )
 })
 
+describe("Anthropic lost connection", () => {
+  it.live("a stream whose connection drops mid-reply fails as a retryable lost connection", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const model = yield* driver.resolveModel("claude-sonnet-4-5", makeApiAuthInfo("test-key"))
+      const reply = streamReplyEnding("end_turn")
+      const firstEvent = `${reply.body.split("\n\n")[0] ?? ""}\n\n`
+      // The server sends the first event, then the socket closes under the read.
+      const dropped = () => ({
+        ...reply,
+        body: new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            controller.enqueue(new TextEncoder().encode(firstEvent))
+            controller.error("socket closed")
+          },
+        }),
+      })
+      const error = yield* LanguageModel.streamText({ prompt: "hi" }).pipe(
+        Stream.runDrain,
+        Effect.provide(Layer.provideMerge(model, fakeFetchLayer(makeFakeFetchState(), dropped))),
+        Effect.scoped,
+        Effect.flip,
+      )
+      expect(error.reason).toMatchObject({
+        _tag: "NetworkError",
+        reason: "TransportError",
+        description: "connection lost while reading the response",
+      })
+      expect(error.isRetryable).toBe(true)
+      expect(error.message).toContain("connection lost while reading the response")
+    }),
+  )
+})
+
 const runContextRequest = (
   layer: Parameters<typeof oneGenerate>[0],
   state: FakeFetchState,
