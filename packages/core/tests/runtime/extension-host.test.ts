@@ -947,77 +947,96 @@ export default defineExtension({
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
-  // A resolve interrupted right after its build stored the profile: the
-  // entry, its lease and `current` are one step, so the profile still
-  // retires when a later edit supersedes it.
-  it.scopedLive("a resolve interrupted after its build still retires the profile it built", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const launch = yield* fs.makeTempDirectoryScoped()
-      const home = yield* fs.makeTempDirectoryScoped()
-      const open = yield* Ref.make<ReadonlyArray<string>>([])
-      const toggles = ["a", "b"].map((name) =>
-        defineExtension({
-          id: `@gent/test-session-profile/held-${name}`,
-          setup: Effect.gen(function* () {
-            const host = yield* ExtensionHost
-            yield* host.register(
-              "resource",
-              defineResource({
-                id: `@gent/test-session-profile/held-${name}/marker`,
-                scope: "process",
-                layer: Layer.effect(
-                  SessionProfileResourceMarker,
-                  Effect.acquireRelease(
-                    Ref.update(open, (names) => [...names, name]),
-                    () => Ref.update(open, (names) => names.filter((entry) => entry !== name)),
-                  ).pipe(Effect.as(SessionProfileResourceMarker.of({ value: name }))),
-                ),
-              }),
-            )
+  // Interrupting registration must preserve both the new lease and cleanup
+  // of any unused profile it supersedes.
+  for (const scenario of [
+    {
+      name: "a resolve interrupted after its build still retires the profile it built",
+      interruptBuild: 1,
+    },
+    {
+      name: "an interrupted replacement closes the unused profile it supersedes",
+      interruptBuild: 2,
+    },
+  ]) {
+    it.scopedLive(scenario.name, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const launch = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const open = yield* Ref.make<ReadonlyArray<string>>([])
+        const toggles = ["a", "b"].map((name) =>
+          defineExtension({
+            id: `@gent/test-session-profile/held-${name}`,
+            setup: Effect.gen(function* () {
+              const host = yield* ExtensionHost
+              yield* host.register(
+                "resource",
+                defineResource({
+                  id: `@gent/test-session-profile/held-${name}/marker`,
+                  scope: "process",
+                  layer: Layer.effect(
+                    SessionProfileResourceMarker,
+                    Effect.acquireRelease(
+                      Ref.update(open, (names) => [...names, name]),
+                      () => Ref.update(open, (names) => names.filter((entry) => entry !== name)),
+                    ).pipe(Effect.as(SessionProfileResourceMarker.of({ value: name }))),
+                  ),
+                }),
+              )
+            }),
           }),
-        }),
-      )
-      const projectConfig = path.join(launch, ".gent", "config.json")
-      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
-      const disable = (ids: ReadonlyArray<string>) =>
-        // Replaced, as gent and most editors save: two same-size edits in one
-        // millisecond differ only by the new file's inode (`fileVersion`).
-        writeFileAtomic(projectConfig, encodeJson({ disabledExtensions: ids }))
-      // The interrupt lands on the first profile's build log, the last step
-      // of its build.
-      const interrupted = MutableRef.make(false)
-      const interruptAfterBuild = Logger.make(({ message, fiber }) => {
-        let rendered = String(message)
-        if (Array.isArray(message)) rendered = message.join(" ")
-        if (!rendered.includes("session-profile.initialized") || MutableRef.get(interrupted)) return
-        MutableRef.set(interrupted, true)
-        fiber.interruptUnsafe()
-      })
+        )
+        const projectConfig = path.join(launch, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+        const disable = (ids: ReadonlyArray<string>) =>
+          // Replaced, as gent and most editors save: two same-size edits in one
+          // millisecond differ only by the new file's inode (`fileVersion`).
+          writeFileAtomic(projectConfig, encodeJson({ disabledExtensions: ids }))
+        // The initialization log is the existing registration boundary,
+        // while the pending interrupt is still held by the mask.
+        const builds = MutableRef.make(0)
+        const interruptAfterBuild = Logger.make(({ message, fiber }) => {
+          let rendered = String(message)
+          if (Array.isArray(message)) rendered = message.join(" ")
+          if (!rendered.includes("session-profile.initialized")) return
+          MutableRef.update(builds, (count) => count + 1)
+          if (MutableRef.get(builds) === scenario.interruptBuild) fiber.interruptUnsafe()
+        })
 
-      yield* Effect.gen(function* () {
-        const cache = yield* SessionProfileCache
-        yield* disable(["@gent/test-session-profile/held-a"])
-        const first = yield* Effect.scoped(cache.resolve(launch)).pipe(Effect.forkChild)
-        expect(Exit.hasInterrupts(yield* Fiber.await(first))).toBe(true)
-        expect(yield* Ref.get(open)).toEqual(["b"])
-        yield* disable(["@gent/test-session-profile/held-b"])
-        yield* Effect.scoped(cache.resolve(launch))
-        expect(yield* Ref.get(open)).toEqual(["a"])
-      }).pipe(
-        Effect.timeout("10 seconds"),
-        Effect.provide(
-          Layer.mergeAll(
-            makeCacheLayer({ cwd: launch, home, extensions: toggles }),
-            Logger.layer([interruptAfterBuild]),
-            Layer.succeed(References.MinimumLogLevel, "Info"),
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          yield* disable(["@gent/test-session-profile/held-a"])
+          if (scenario.interruptBuild === 2) {
+            yield* Effect.scoped(cache.resolve(launch))
+            expect(yield* Ref.get(open)).toEqual(["b"])
+            yield* disable(["@gent/test-session-profile/held-b"])
+          }
+          const interruptedResolve = yield* Effect.scoped(cache.resolve(launch)).pipe(
+            Effect.forkChild,
+          )
+          expect(Exit.hasInterrupts(yield* Fiber.await(interruptedResolve))).toBe(true)
+          if (scenario.interruptBuild === 1) {
+            expect(yield* Ref.get(open)).toEqual(["b"])
+            yield* disable(["@gent/test-session-profile/held-b"])
+            yield* Effect.scoped(cache.resolve(launch))
+          }
+          expect(yield* Ref.get(open)).toEqual(["a"])
+        }).pipe(
+          Effect.timeout("10 seconds"),
+          Effect.provide(
+            Layer.mergeAll(
+              makeCacheLayer({ cwd: launch, home, extensions: toggles }),
+              Logger.layer([interruptAfterBuild]),
+              Layer.succeed(References.MinimumLogLevel, "Info"),
+            ),
           ),
-        ),
-        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("3".repeat(64))),
-      )
-    }).pipe(Effect.provide(BunPlatformLive)),
-  )
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("3".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+    )
+  }
 
   // A resolve that read the config before an edit takes the place lock
   // after the resolve that read the edit: it must not make the older

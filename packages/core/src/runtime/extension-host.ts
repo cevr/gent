@@ -2424,8 +2424,9 @@ export class SessionProfileCache extends Context.Service<
             // release joins the caller's scope after the lock is let go: a
             // scope that already closed (a loop that closed while one of its
             // fibers resolved) runs the release at once, and the release
-            // takes the lock.
-            const { entry, retired } = yield* Effect.uninterruptibleMask((restore) =>
+            // takes the lock. Retired scopes close after releasing it, within
+            // the same protected transfer, so interruption cannot lose cleanup.
+            const entry = yield* Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
                 yield* restore(lock.take(1))
                 const leased = yield* Effect.gen(function* () {
@@ -2454,10 +2455,10 @@ export class SessionProfileCache extends Context.Service<
                   return { entry, retired }
                 }).pipe(Effect.ensuring(lock.release(1)))
                 yield* Scope.addFinalizer(callerScope, release(leased.entry, lock))
-                return leased
+                yield* closeRetired(leased.retired)
+                return leased.entry
               }),
             )
-            yield* closeRetired(retired)
             return entry.profile
           })
 
