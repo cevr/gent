@@ -1,4 +1,6 @@
-import { Schema } from "effect"
+import { Schema, Schema as S } from "effect"
+import { encodeSync, fromJsonString, Unknown } from "effect/Schema"
+import * as SchemaModule from "effect/Schema"
 
 declare const Item: Schema.Codec<unknown, string>
 declare const m: object
@@ -54,3 +56,11 @@ const encodeTags = Schema.encodeSync(
 export const tagsKey = encodeTags(a)
 const encodeNamed = Schema.encodeSync(Schema.fromJsonString(Schema.Struct({ item: Item })))
 export const namedKey = encodeNamed(a)
+
+// An aliased, a named and a namespace import reach the same encoder.
+const encodeAliased = S.encodeSync(S.fromJsonString(S.Unknown))
+export const aliasedKey = encodeAliased(a)
+const encodeImported = encodeSync(fromJsonString(Unknown))
+export const importedKey = encodeImported(a)
+const encodeNamespace = SchemaModule.encodeSync(SchemaModule.fromJsonString(SchemaModule.Unknown))
+export const namespaceKey = encodeNamespace(a)

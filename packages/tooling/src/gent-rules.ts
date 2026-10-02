@@ -328,32 +328,59 @@ const IDENTITY_WORDS: ReadonlySet<string> = new Set([
 const namesIdentity = (name: string): boolean =>
   name.split(/(?=[A-Z])|_/).some((segment) => IDENTITY_WORDS.has(segment.toLowerCase()))
 
-/** Schemas whose encoded JSON has no keys of its own to order. */
+/** `effect/Schema` exports whose encoded JSON has no keys of its own to order. */
 const STABLE_LEAF_SCHEMAS = new Set([
-  "Schema.String",
-  "Schema.NonEmptyString",
-  "Schema.Number",
-  "Schema.Finite",
-  "Schema.Int",
-  "Schema.Boolean",
-  "Schema.BigInt",
-  "Schema.Null",
-  "Schema.Undefined",
+  "String",
+  "NonEmptyString",
+  "Number",
+  "Finite",
+  "Int",
+  "Boolean",
+  "BigInt",
+  "Null",
+  "Undefined",
 ])
 
-/** Schemas that write their one argument's encoding, or an array of it. */
+/** `effect/Schema` exports that write their one argument's encoding, or an array of it. */
 const STABLE_WRAPPER_SCHEMAS = new Set([
-  "Schema.optional",
-  "Schema.optionalKey",
-  "Schema.NullOr",
-  "Schema.UndefinedOr",
-  "Schema.NullishOr",
-  "Schema.Array",
-  "Schema.NonEmptyArray",
+  "optional",
+  "optionalKey",
+  "NullOr",
+  "UndefinedOr",
+  "NullishOr",
+  "Array",
+  "NonEmptyArray",
 ])
 
-/** Schemas that take an array of member schemas. */
-const STABLE_LIST_SCHEMAS = new Set(["Schema.Tuple", "Schema.Union"])
+/** `effect/Schema` exports that take an array of member schemas. */
+const STABLE_LIST_SCHEMAS = new Set(["Tuple", "Union"])
+
+/**
+ * The `effect/Schema` export a name or member reaches through its import:
+ * `Schema.x` or `S.x` for `Schema` imported from `effect` under any name,
+ * `NS.x` for a namespace import of `effect/Schema`, and `x` for a named
+ * import from it. A local that only shares the spelling reaches none.
+ */
+const schemaExport = (context: Context, node: AstNode | undefined): string | undefined => {
+  if (node === undefined) return undefined
+  if (node.type === "Identifier") {
+    const imported = importedSymbol(context, node)
+    return imported?.source === "effect/Schema" ? imported.name : undefined
+  }
+  if (node.type !== "MemberExpression") return undefined
+  const object = getNodeField(node, "object")
+  const imported = importedSymbol(context, object)
+  const namespace = lexicalBinding(context, object)?.defs.some(
+    (definition) =>
+      definition.type === "ImportBinding" &&
+      definition.node.type === "ImportNamespaceSpecifier" &&
+      definition.parent !== null &&
+      importSourceOf(definition.parent) === "effect/Schema",
+  )
+  if (namespace === true || (imported?.source === "effect" && imported.name === "Schema"))
+    return staticPropertyName(node)
+  return undefined
+}
 
 /**
  * Whether the schema written at `node` encodes every key in its own order:
@@ -362,42 +389,45 @@ const STABLE_LIST_SCHEMAS = new Set(["Schema.Tuple", "Schema.Union"])
  * a struct with a spread or a computed key is open: its keys come in the
  * value's order.
  */
-const encodesStably = (node: AstNode | undefined): boolean => {
+const encodesStably = (context: Context, node: AstNode | undefined): boolean => {
   if (node === undefined) return false
-  if (node.type !== "CallExpression") return STABLE_LEAF_SCHEMAS.has(dottedName(node) ?? "")
-  const callee = dottedName(getNodeField(node, "callee")) ?? ""
+  if (node.type !== "CallExpression")
+    return STABLE_LEAF_SCHEMAS.has(schemaExport(context, node) ?? "")
+  const callee = schemaExport(context, getNodeField(node, "callee")) ?? ""
   const args = callExpressionArgs(node)
-  if (callee === "Schema.Literal" || callee === "Schema.Literals") return true
-  if (STABLE_WRAPPER_SCHEMAS.has(callee)) return args.length === 1 && encodesStably(args[0])
+  const stable = (member: AstNode | undefined) => encodesStably(context, member)
+  if (callee === "Literal" || callee === "Literals") return true
+  if (STABLE_WRAPPER_SCHEMAS.has(callee)) return args.length === 1 && stable(args[0])
   const [members] = args
   if (STABLE_LIST_SCHEMAS.has(callee)) {
     return (
       members?.type === "ArrayExpression" &&
-      (getNodeArrayField(members, "elements") ?? []).every(encodesStably)
+      (getNodeArrayField(members, "elements") ?? []).every(stable)
     )
   }
-  if (callee !== "Schema.Struct" || members?.type !== "ObjectExpression") return false
+  if (callee !== "Struct" || members?.type !== "ObjectExpression") return false
   return (getNodeArrayField(members, "properties") ?? []).every(
     (property) =>
       property.type === "Property" &&
       fieldOf(property, "computed") !== true &&
-      encodesStably(getNodeField(property, "value")),
+      stable(getNodeField(property, "value")),
   )
 }
 
 /**
- * `Schema.encodeSync(Schema.fromJsonString(schema))`: an encoder of a whole
- * value to JSON. A schema written in place whose every key encodes in the
- * schema's own order, whatever the value's key order, is not one.
+ * `Schema.encodeSync(Schema.fromJsonString(schema))`, under any import of
+ * `effect/Schema`: an encoder of a whole value to JSON. A schema written in
+ * place whose every key encodes in the schema's own order, whatever the
+ * value's key order, is not one.
  */
-const isJsonEncoder = (node: AstNode | undefined): boolean => {
+const isJsonEncoder = (context: Context, node: AstNode | undefined): boolean => {
   if (node?.type !== "CallExpression") return false
-  if (dottedName(getNodeField(node, "callee")) !== "Schema.encodeSync") return false
+  if (schemaExport(context, getNodeField(node, "callee")) !== "encodeSync") return false
   const [json] = callExpressionArgs(node)
   if (json?.type !== "CallExpression") return false
-  if (dottedName(getNodeField(json, "callee")) !== "Schema.fromJsonString") return false
+  if (schemaExport(context, getNodeField(json, "callee")) !== "fromJsonString") return false
   const [schema] = callExpressionArgs(json)
-  return !encodesStably(schema)
+  return !encodesStably(context, schema)
 }
 
 /** A `…Fingerprint(...)` call, which returns its fields in a fixed order. */
@@ -890,7 +920,8 @@ const plugin: Plugin = {
      * JSON carries key order, so two spellings of one value encode to two
      * strings: a message built `_tag` first by a streaming placeholder and
      * `_tag` last by a rebuild reads as two messages. So a value encoded by
-     * `Schema.encodeSync(Schema.fromJsonString(...))`, through a bound
+     * `Schema.encodeSync(Schema.fromJsonString(...))` (`Schema` from `effect` under
+     * any name, or `effect/Schema` by namespace or named import), through a bound
      * encoder or one called where it is built, and of any schema but a
      * `Schema.Struct` written in place, is reported when it is
      * compared (`===`, `!==`), looked up or collected (`.has`, `.get`,
@@ -905,13 +936,13 @@ const plugin: Plugin = {
     "no-identity-encode": {
       create(context) {
         if (!isShippedSource(ruleSubject(context))) return {}
-        const encoders = new Set<string>()
+        const encoders = new Set<Variable>()
         const calls: Array<AstNode> = []
         return {
           VariableDeclarator(node) {
-            if (!isAstNode(node) || !isJsonEncoder(getNodeField(node, "init"))) return
-            const name = dottedName(getNodeField(node, "id"))
-            if (name !== undefined) encoders.add(name)
+            if (!isAstNode(node) || !isJsonEncoder(context, getNodeField(node, "init"))) return
+            const binding = lexicalBinding(context, getNodeField(node, "id"))
+            if (binding !== undefined) encoders.add(binding)
           },
           CallExpression(node) {
             if (isAstNode(node)) calls.push(node)
@@ -920,7 +951,9 @@ const plugin: Plugin = {
             for (const call of calls) {
               const callee = getNodeField(call, "callee")
               const name = dottedName(callee)
-              const encodes = isJsonEncoder(callee) || (name !== undefined && encoders.has(name))
+              const binding = lexicalBinding(context, callee)
+              const encodes =
+                isJsonEncoder(context, callee) || (binding !== undefined && encoders.has(binding))
               if (!encodes) continue
               const [value] = callExpressionArgs(call)
               if (isFixedOrder(value) || !decidesIdentity(call)) continue

@@ -300,8 +300,9 @@ const CASES: ReadonlyArray<RuleCase> = [
     // four identity names, a comparison, `.has` and `.add`, three arrays that
     // carry an object, the unsafe side of a mixed comparison, a binding
     // broken across lines, an encoder called where it is built, and three
-    // in-place structs with a field of open or unknown encoding
-    expectedCount: 16,
+    // in-place structs with a field of open or unknown encoding, and an
+    // aliased, a named and a namespace import of the encoder
+    expectedCount: 19,
   },
   {
     // A TUI reactive scope tracks the session identity; a handler, a JSX
