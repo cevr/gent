@@ -25,8 +25,6 @@ import {
   BashParams,
   BashTool,
   runBashCommand,
-  splitCdCommand,
-  stripBackground,
 } from "../src/exec-tools.js"
 import {
   BranchId,
@@ -65,65 +63,6 @@ import { SqlClient } from "effect/sql"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import type * as Prompt from "effect/ai/Prompt"
 import * as AiError from "effect/ai/AiError"
-
-// ── bash command parsing ────────────────────────────────────────────────────
-
-describe("splitCdCommand", () => {
-  test("cd /foo && ls → { cwd: '/foo', command: 'ls' }", () => {
-    const result = splitCdCommand("cd /foo && ls")
-    expect(result).toEqual(Option.some({ cwd: "/foo", command: "ls" }))
-  })
-
-  test("cd with quoted path && cmd → quoted path", () => {
-    const result = splitCdCommand('cd "/path with spaces" && ls -la')
-    expect(result).toEqual(Option.some({ cwd: "/path with spaces", command: "ls -la" }))
-  })
-
-  test("cd /foo; ls → semicolon separator", () => {
-    const result = splitCdCommand("cd /foo; ls")
-    expect(result).toEqual(Option.some({ cwd: "/foo", command: "ls" }))
-  })
-
-  test("plain command → None", () => {
-    expect(Option.isNone(splitCdCommand("ls -la"))).toBe(true)
-  })
-
-  test("a directory word with shell expansion stays in the command for bash", () => {
-    for (const command of [
-      "cd ~/proj && ls",
-      'cd "$HOME/x" && ls',
-      "cd $DIR; ls",
-      "cd `pwd` && ls",
-      "cd src/* && ls",
-    ]) {
-      expect(Option.isNone(splitCdCommand(command)), command).toBe(true)
-    }
-  })
-
-  test("cd - stays in the command for bash", () => {
-    expect(Option.isNone(splitCdCommand("cd - && ls"))).toBe(true)
-  })
-
-  test("a single-quoted directory is literal and still splits", () => {
-    expect(splitCdCommand("cd '$x' && ls")).toEqual(Option.some({ cwd: "$x", command: "ls" }))
-  })
-})
-
-describe("stripBackground", () => {
-  test('"cmd &" → "cmd"', () => {
-    expect(stripBackground("cmd &")).toBe("cmd")
-  })
-
-  test('"cmd  &  " → "cmd"', () => {
-    expect(stripBackground("cmd  &  ")).toBe("cmd")
-  })
-
-  test('"cmd" → "cmd"', () => {
-    expect(stripBackground("cmd")).toBe("cmd")
-  })
-})
-
-// ── bash execution ──────────────────────────────────────────────────────────
 
 const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
   const base = Layer.mergeAll(
@@ -445,6 +384,154 @@ const onQueue =
   }
 const now = dateFromMillis(0)
 
+describe("Bash command semantics", () => {
+  const cases = [
+    { name: "escaped final ampersand", command: "printf %s foo\\&", output: "foo&", exitCode: 0 },
+    { name: "quoted ampersand", command: "printf %s 'foo&'", output: "foo&", exitCode: 0 },
+    { name: "plain command", command: "printf plain", output: "plain", exitCode: 0 },
+    {
+      name: "successful conjunction cd",
+      command: "cd sub && pwd",
+      output: "<cwd>/sub\n",
+      exitCode: 0,
+    },
+    { name: "successful semicolon cd", command: "cd sub; pwd", output: "<cwd>/sub\n", exitCode: 0 },
+    {
+      name: "quoted directory",
+      command: 'cd "path with spaces" && pwd',
+      output: "<cwd>/path with spaces\n",
+      exitCode: 0,
+    },
+    { name: "literal directory", command: "cd '$x' && pwd", output: "<cwd>/$x\n", exitCode: 0 },
+    {
+      name: "failed semicolon cd",
+      command: "cd missing-directory; printf ok",
+      output: "ok",
+      stderr: "missing-directory",
+      exitCode: 0,
+    },
+    {
+      name: "failed conjunction cd",
+      command: "cd missing-directory && printf forbidden",
+      output: "",
+      stderr: "missing-directory",
+      exitCode: 1,
+    },
+    {
+      name: "previous directory",
+      command: "cd sub && cd - >/dev/null; pwd",
+      output: "<cwd>\n",
+      exitCode: 0,
+    },
+    { name: "directory options", command: "cd -P link && pwd", output: "<cwd>/sub\n", exitCode: 0 },
+    { name: "shell background operator", command: "false &", output: "", exitCode: 0 },
+    {
+      name: "shell directory expansion",
+      command:
+        'HOME="$PWD"; DIR=sub; cd ~/sub && pwd; cd "$HOME/sub" && pwd; cd "$HOME"; cd $DIR; pwd; cd `printf %s "$HOME/sub"` && pwd; cd "$HOME"; cd su? && pwd',
+      output: "<cwd>/sub\n<cwd>/sub\n<cwd>/sub\n<cwd>/sub\n<cwd>/sub\n",
+      exitCode: 0,
+    },
+  ]
+  for (const runInBackground of [false, true]) {
+    let mode = "foreground"
+    let reply = "shell finished"
+    if (runInBackground) {
+      mode = "background"
+      reply = "completion received"
+    }
+    for (const entry of cases) {
+      it.scopedLive.layer(BunFileSystem.layer)(
+        `${mode} preserves ${entry.name}`,
+        () =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem
+            const directory = yield* fs.realPath(
+              yield* makeTempDirectoryScoped("gent-shell-semantics-"),
+            )
+            for (const name of ["sub", "path with spaces", "$x"])
+              yield* fs.makeDirectory(`${directory}/${name}`)
+            yield* fs.symlink(`${directory}/sub`, `${directory}/link`)
+            const toolCallId = ToolCallId.make("shell-semantics")
+            const steps = [
+              toolCallStep(
+                "bash",
+                { command: entry.command, run_in_background: runInBackground },
+                { toolCallId },
+              ),
+              textStep("shell finished"),
+            ]
+            if (runInBackground) steps.push(textStep("completion received"))
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence(steps)
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              cwd: directory,
+              home: directory,
+            })
+            yield* client.message.send({
+              sessionId,
+              branchId,
+              content: "Run the shell program unchanged",
+            })
+            const settled = yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (snapshot) =>
+                snapshot.runtime._tag === "Idle" &&
+                snapshot.messages.some((message) =>
+                  message.parts.some((part) => part.type === "text" && part.text === reply),
+                ),
+              10_000,
+              "the shell completion",
+            )
+            const result = settled.messages
+              .flatMap((message) => message.parts)
+              .find((part) => part.type === "tool-result" && part.id === toolCallId)
+            expect(result?.type).toBe("tool-result")
+            if (result?.type !== "tool-result") return
+            expect(result.isFailure).toBe(false)
+            const output = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({
+                stdout: Schema.String,
+                stderr: Schema.String,
+                exitCode: Schema.Finite,
+              }),
+            )(result.result)
+            const expected = entry.output.replaceAll("<cwd>", directory)
+            if (runInBackground) {
+              const notices = settled.messages
+                .filter((message) => message.metadata?.customType === "background-bash")
+                .flatMap((message) =>
+                  message.parts.filter((part) => part.type === "text").map((part) => part.text),
+                )
+              expect(notices).toHaveLength(1)
+              expect(notices[0]).toContain(
+                `Background command completed (exit code ${entry.exitCode})`,
+              )
+              const saved = yield* fs.readFileString(
+                `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`,
+              )
+              if (Predicate.isString(entry.stderr)) {
+                expect(saved).toContain(entry.stderr)
+                // The two pipes can arrive in either order.
+                expect(saved.replace(/bash: line \d+: cd: missing-directory: [^\n]*\n/, "")).toBe(
+                  expected,
+                )
+              } else expect(saved).toBe(expected)
+              expect(output.stdout).toContain(entry.command)
+            } else {
+              expect(output.stdout).toBe(expected)
+              expect(output.exitCode).toBe(entry.exitCode)
+              if (Predicate.isString(entry.stderr)) expect(output.stderr).toContain(entry.stderr)
+              else expect(output.stderr).toBe("")
+            }
+          }).pipe(Effect.timeout("20 seconds")),
+        25_000,
+      )
+    }
+  }
+})
+
 /** The jobs table as it was before interrupted jobs had a read mark. */
 const oldBackgroundBashTable = `
   CREATE TABLE background_bash_jobs (
@@ -641,7 +728,7 @@ describe("BashTool execution", () => {
   )
 
   it.live(
-    "splits cd + command into cwd and executes",
+    "Bash executes a directory change in the command",
     () =>
       Effect.gen(function* () {
         const result = yield* provideBun(

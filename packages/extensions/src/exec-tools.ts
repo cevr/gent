@@ -43,8 +43,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process"
 // Test seam: only tests read these exports. BackgroundBashStorage, its error,
 // BackgroundBashSupervisorLive and BackgroundBashLayer let a test inject a
 // storage fault; addBackgroundBashColumn lets it replay a migration race.
-// BashParams encodes a model's tool input. splitCdCommand and
-// stripBackground are pure transforms with unit tests.
+// BashParams encodes a model's tool input.
 
 // ── background bash storage ─────────────────────────────────────────────────
 
@@ -528,44 +527,6 @@ interface BackgroundBashTarget {
   readonly Session: Pick<ExtensionContextService["Session"], "getSession" | "listBranches" | "send">
   /** The gent data directory, resolved at start: the job fiber has no ExtensionContext. */
   readonly dataDir: string
-}
-
-/** Characters that make bash expand a directory word (`~`, `$VAR`, backticks, globs). */
-const SHELL_EXPANSION = /[~$`*?[{]/
-
-/**
- * Detect `cd dir && cmd` or `cd dir; cmd` and split into cwd + command.
- * Models often emit this despite instructions to use the cwd param.
- * A directory word that bash would expand is left in the command, so bash
- * resolves it; only a single-quoted word is always literal.
- */
-export function splitCdCommand(cmd: string): Option.Option<{ cwd: string; command: string }> {
-  const match = Option.fromNullishOr(
-    cmd.match(/^\s*cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)\s*(.+)$/s),
-  )
-  if (Option.isNone(match)) return Option.none()
-  const expandable = Option.fromNullishOr(match.value[1]).pipe(
-    Option.orElse(() => Option.fromNullishOr(match.value[3])),
-  )
-  // `cd -` names the previous directory, which only bash knows.
-  if (Option.exists(expandable, (word) => word === "-" || SHELL_EXPANSION.test(word))) {
-    return Option.none()
-  }
-  const cwd = Option.fromNullishOr(match.value[2]).pipe(
-    Option.orElse(() => expandable),
-    Option.getOrElse(() => ""),
-  )
-  const command = Option.getOrElse(Option.fromNullishOr(match.value[4]), () => "")
-  if (cwd.length > 0 && command.length > 0) return Option.some({ cwd, command })
-  return Option.none()
-}
-
-/**
- * Strip a trailing `&` so the whole command does not escape tool control.
- * An inner `cmd & other` job is not stripped.
- */
-export function stripBackground(cmd: string): string {
-  return cmd.replace(/\s*&\s*$/, "")
 }
 
 const backgroundJobKey = (target: BackgroundBashTarget): BackgroundBashJobKey =>
@@ -1378,21 +1339,11 @@ export const BashTool = tool({
       600000,
     )
 
-    // Strip background operator
-    let command = stripBackground(params.command)
-
-    // Split cd + command patterns into cwd + command. One server serves
-    // every workspace, so the directory resolves against the session's
-    // cwd, never the server process directory.
-    // A `cd` in the command resolves against `params.cwd`, as bash would.
+    // Bash owns directory changes, expansion and control operators. Only
+    // the explicit cwd parameter resolves against the session directory.
+    const command = params.command
     const path = yield* Path.Path
-    let directory = path.resolve(ctx.cwd, params.cwd ?? ".")
-    const split = splitCdCommand(command)
-    if (Option.isSome(split)) {
-      directory = path.resolve(directory, split.value.cwd)
-      command = split.value.command
-    }
-    const cwd = Option.some(directory)
+    const cwd = Option.some(path.resolve(ctx.cwd, params.cwd ?? "."))
 
     // Background mode — hand the process to the process-scoped supervisor.
     // The tool returns immediately; the resource owns process lifetime and
