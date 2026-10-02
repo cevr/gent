@@ -692,21 +692,35 @@ const queueBackgroundFollowUp = (params: {
 // the read tool, and no other module learns how a command keeps its output.
 
 /**
- * `<data dir>/background-bash/<sessionId>/<branchId>/calls/<digest>.txt`: one
- * file per bash call. The path is absolute: a relative `GENT_DATA_DIR` resolves
- * against the server's cwd, as the database does, and the read tool resolves
- * a relative path against the session cwd instead.
+ * `<data dir>/background-bash/<sessionId>/<branchId>/<sanitized call id>.txt`:
+ * the file of a job row stored without `output_file`, which only an older
+ * build wrote.
  */
-const legacyJobOutputFile = (path: Path.Path, dataDir: string, key: BackgroundBashJobKeyFields) =>
+const sanitizedOutputFile = (path: Path.Path, dataDir: string, key: BackgroundBashJobKeyFields) =>
   path.resolve(
     sessionOutputDirectory(path, dataDir, key.sessionId),
     key.branchId,
     `${key.toolCallId.replace(/[^\w.:-]/g, "_")}.txt`,
   )
 
-// Hash the whole identity, including every UTF-16 code unit. A separate directory
-// keeps new writes from overwriting files whose paths an older build already emitted.
+/** A job row's output file: the one it stored, else `sanitizedOutputFile`. */
+const rowOutputFile = (
+  path: Path.Path,
+  dataDir: string,
+  key: BackgroundBashJobKeyFields,
+  stored?: string,
+) => stored ?? sanitizedOutputFile(path, dataDir, key)
+
 const encodeCallIdentity = Schema.encodeSync(Schema.fromJsonString(ToolCallId))
+/**
+ * `<data dir>/background-bash/<sessionId>/<branchId>/calls/<digest>.txt`: one
+ * file per bash call. The digest is SHA-256 of the whole JSON-encoded call id,
+ * every UTF-16 code unit included; the separate `calls` directory keeps new
+ * writes from overwriting a file an older build named. The path is absolute:
+ * a relative `GENT_DATA_DIR` resolves against the server's cwd, as the
+ * database does, and the read tool resolves a relative path against the
+ * session cwd instead.
+ */
 const jobOutputFile = Effect.fn("ExecTools.jobOutputFile")(function* (
   path: Path.Path,
   dataDir: string,
@@ -1281,8 +1295,7 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const saved = new Map(
     yield* Effect.forEach(stopped.slice(0, maximumNoticeJobs), (job) =>
       savedOutput(
-        job.outputFile ??
-          legacyJobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }),
+        rowOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }, job.outputFile),
       ).pipe(Effect.map((where): readonly [ToolCallId, string] => [job.toolCallId, where])),
     ),
   )
@@ -1301,8 +1314,12 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const outputs = new Map(
     yield* Effect.forEach(finished.slice(0, maximumNoticeJobs), (job) =>
       storedOutputFile(
-        job.state.outputFile ??
-          legacyJobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }),
+        rowOutputFile(
+          path,
+          dataDir,
+          { ...branch, toolCallId: job.toolCallId },
+          job.state.outputFile,
+        ),
         job.state,
       ).pipe(
         Effect.map((file): readonly [ToolCallId, string] => [
@@ -1508,10 +1525,9 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               outputFile: file,
             })
             if (claim._tag === "AlreadyRunning")
-              return claim.outputFile ?? legacyJobOutputFile(path, dataDir, keyFields)
+              return rowOutputFile(path, dataDir, keyFields, claim.outputFile)
             if (claim._tag === "Terminal") {
-              const outputFile =
-                claim.state.outputFile ?? legacyJobOutputFile(path, dataDir, keyFields)
+              const outputFile = rowOutputFile(path, dataDir, keyFields, claim.state.outputFile)
               yield* restore(deliverTerminal({ ...target, outputFile }, claim.state))
               yield* rememberCompleted(key, outputFile)
               return outputFile

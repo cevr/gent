@@ -26,6 +26,6 @@ Cross-session artifacts: verify before ending:
 Files written during a session can fail to persist (interrupted writes, path errors, tool failures). If an artifact is needed in a future session, verify it exists (`ls` or `Read`) before closing. Unverified writes are lost work.
 
 API Research: trust source over docs/agents:
-When migrating between library versions, grep the actual source (via `repo-explorer`) rather than relying on docs or research agent summaries. Docs lag releases; agent output can be wrong on 2/5 API changes. Read the types directly.
+When migrating between library versions, grep the actual source (the `repositories` skill fetches an external repo) rather than relying on docs or research agent summaries. Docs lag releases; agent output can be wrong on 2/5 API changes. Read the types directly.
 
 **See also:** [[test-through-public-interfaces]] — _how_ to verify: through the caller's surface, not internal inspection. This principle says verify; that one says verify from the outside in.
