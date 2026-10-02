@@ -1250,7 +1250,7 @@ function projectTranscriptDisplay(
  * resuming a 23-step session: zero reserved rows and one reserved row both
  * give 0 history rows, two give 235.
  */
-export const SPLIT_FOOTER_RESERVED_OUTPUT_ROWS = 2
+const SPLIT_FOOTER_RESERVED_OUTPUT_ROWS = 2
 
 export const splitFooterHeight = (terminalHeight: number, requestedHeight: number): number => {
   const maximum = Math.max(1, terminalHeight - SPLIT_FOOTER_RESERVED_OUTPUT_ROWS)
