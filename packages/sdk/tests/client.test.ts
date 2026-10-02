@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Crypto, Effect, Schema } from "effect"
+import { FetchHttpClient, HttpClient } from "effect/http"
 import { defineExtension, ExtensionHost, request } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
 import { freePort, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
@@ -27,8 +28,10 @@ const ServerIdentity = Schema.Struct({
 const IdentityKeys = Schema.Record(Schema.String, Schema.Unknown)
 
 const fetchIdentityJson = (baseUrl: string) =>
-  Effect.promise(() => Bun.fetch(`${baseUrl}/_gent/identity`)).pipe(
-    Effect.andThen((response) => Effect.promise(() => response.json())),
+  HttpClient.get(`${baseUrl}/_gent/identity`).pipe(
+    Effect.flatMap((response) => response.json),
+    Effect.provide(FetchHttpClient.layer),
+    Effect.orDie,
   )
 
 const fetchIdentity = (baseUrl: string) =>

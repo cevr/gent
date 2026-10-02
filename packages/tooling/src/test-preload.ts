@@ -25,19 +25,31 @@
  *   `~/.gent`. A test that needs a specific data directory still sets its
  *   own: a home it passes, or `GENT_DATA_DIR` through its config provider or
  *   a child process's environment.
- * - No test reaches the network. A `fetch` to a host other than this machine
- *   is refused, and the test it ran under fails. A test that needs a remote
- *   answer gives one: a fixture HTTP client, or a seeded catalog (the
- *   models.dev catalog a driver's `listModels` reads, which a cold home
- *   would otherwise fetch). Requests to `localhost`, `127.0.0.1` and `::1`
- *   pass: a test server runs there.
+ * - No test reaches the network. A request or connection to a host other
+ *   than this machine is refused before it leaves the process, and the test
+ *   it ran under fails. A test that needs a remote answer gives one: a
+ *   fixture HTTP client, or a seeded catalog (the models.dev catalog a
+ *   driver's `listModels` reads, which a cold home would otherwise fetch).
+ *   Requests to `localhost`, `127.0.0.1` and `::1` pass, and so does a Unix
+ *   socket: a test server runs there. The guard holds every entry point it
+ *   can replace: `fetch` and `fetch.preconnect`; the `node:net` socket's
+ *   `connect`, which `net.connect`, `tls.connect`, `http2.connect` and the
+ *   agents of `node:http` and `node:https` call; `WebSocket`; and
+ *   `Bun.connect`, which the `bun` module's `connect` export reads.
+ *   `Bun.fetch` is a read-only property
+ *   that no preload can replace, so the lint config bans it, and the `bun`
+ *   module's `fetch` export, in test code. Effect's `FetchHttpClient.Fetch`
+ *   reads `globalThis.fetch` once, the first time a fiber reads it: bun runs
+ *   this file before it loads any test module, so the first read gets the
+ *   guard.
  */
 import { afterAll, afterEach, expect, mock, setDefaultTimeout } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
+import { Socket } from "node:net"
 import * as os from "node:os"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { References } from "effect"
+import { Array as Arr, Option, Predicate, References, Schema } from "effect"
 
 /** Longer than every inner `Effect.timeout` a test sets without its own bun timeout. */
 const TEST_TIMEOUT_BACKSTOP_MS = 30_000
@@ -61,19 +73,130 @@ for (const specifier of ["node:os", "os"]) {
 }
 afterAll(() => rmSync(testHome, { recursive: true, force: true }))
 
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"])
-/** The remote URLs the running test tried to fetch. */
-const refusedFetches: Array<string> = []
-const passedFetch = globalThis.fetch
-const guardedFetch = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-  const url = new URL(new Request(input).url)
-  // oxlint-disable-next-line effect/noGlobals -- the guard is fetch: a loopback request goes on to the real one
-  if (LOOPBACK_HOSTS.has(url.hostname)) return passedFetch(input, init)
-  refusedFetches.push(url.href)
-  // oxlint-disable-next-line effect/noNewPromise, effect/noNewError -- fetch's own failure shape: a rejected promise with an Error
-  return Promise.reject(new Error(`the test preload refuses a network fetch: ${url.href}`))
+// ── network guard ───────────────────────────────────────────────────────────
+
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "::1"])
+/** The remote targets the running test tried to reach. */
+const refusedRequests: Array<string> = []
+
+/** True for this machine's name or loopback address, bracketed or not. */
+const isLoopback = (host: string): boolean => LOOPBACK_HOSTS.has(host.replace(/^\[(.*)\]$/u, "$1"))
+
+/** Records a refused target and makes the failure its entry point raises. */
+const refusal = (target: string): Error => {
+  refusedRequests.push(target)
+  return new Error(`the test preload refuses a network request: ${target}`)
 }
-globalThis.fetch = Object.assign(guardedFetch, { preconnect: passedFetch.preconnect })
+
+/** `args` as given when `target` finds no remote host in them; a throw otherwise. */
+const admit = <A extends ReadonlyArray<unknown>>(
+  args: A,
+  target: (args: A) => Option.Option<string>,
+): A =>
+  Option.match(target(args), {
+    onNone: () => args,
+    onSome: (remote) => {
+      throw refusal(remote)
+    },
+  })
+
+/** The remote URL `url` names; none for this machine. */
+const remoteUrl = (url: string | URL): Option.Option<string> => {
+  const parsed = new URL(url)
+  return Option.liftPredicate(parsed.href, () => !isLoopback(parsed.hostname))
+}
+
+/** The fields of a `node:net` socket's or `Bun.connect`'s options that name the peer. */
+const PeerOptions = Schema.Struct({
+  hostname: Schema.optional(Schema.NullOr(Schema.String)),
+  host: Schema.optional(Schema.NullOr(Schema.String)),
+  port: Schema.optional(Schema.NullOr(Schema.Union([Schema.Finite, Schema.String]))),
+  path: Schema.optional(Schema.NullOr(Schema.String)),
+  unix: Schema.optional(Schema.String),
+})
+type PeerOptions = typeof PeerOptions.Type
+const peerOptions = Schema.decodeUnknownOption(PeerOptions)
+
+/**
+ * The remote `tcp://host:port` the options name; none for this machine or a
+ * Unix socket. A `path` names a Unix socket only with no port: a Node request
+ * hands its socket the URL path too.
+ */
+const remotePeer = (options: PeerOptions): Option.Option<string> => {
+  const port = Option.fromNullishOr(options.port)
+  if (Predicate.isString(options.unix)) return Option.none()
+  if (Predicate.isString(options.path) && Option.isNone(port)) return Option.none()
+  const host = Option.getOrElse(
+    Option.firstSomeOf([
+      Option.fromNullishOr(options.hostname),
+      Option.fromNullishOr(options.host),
+    ]),
+    () => "localhost",
+  )
+  const portSuffix = Option.match(port, { onNone: () => "", onSome: (value) => `:${value}` })
+  return Option.liftPredicate(`tcp://${host}${portSuffix}`, () => !isLoopback(host))
+}
+
+// `fetch` and its `preconnect`, which `FetchHttpClient` and every fetch-based
+// SDK reach through `globalThis.fetch`.
+const passedFetch = globalThis.fetch
+const guardedFetch = (input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+  Option.match(remoteUrl(new Request(input).url), {
+    // oxlint-disable-next-line effect/noGlobals -- the guard is fetch: a loopback request goes on to the real one
+    onNone: () => passedFetch(input, init),
+    // fetch's own failure shape: a rejected promise with an Error
+    onSome: (remote) => Promise.reject(refusal(remote)),
+  })
+const guardedPreconnect = (...args: Parameters<typeof passedFetch.preconnect>): void =>
+  passedFetch.preconnect(...admit(args, ([url]) => remoteUrl(url)))
+globalThis.fetch = Object.assign(guardedFetch, { preconnect: guardedPreconnect })
+
+// The `node:net` socket's `connect`. `net.connect`, `net.createConnection`,
+// `tls.connect` and `http2.connect` open their socket through it, and so do
+// the agents of `node:http` and `node:https`: every Node client request.
+/** The remote target of `connect(options, cb?)`, `connect(port, host?, cb?)` or `connect(path, cb?)`. */
+const remoteSocket = (args: ReadonlyArray<unknown>): Option.Option<string> => {
+  // `net.connect` hands the socket its arguments normalized as one `[options, cb]` array.
+  const [first, second] = Option.getOrElse(
+    Option.liftPredicate(args[0], (value): value is ReadonlyArray<unknown> => Arr.isArray(value)),
+    (): ReadonlyArray<unknown> => args,
+  )
+  if (Predicate.isNumber(first) || (Predicate.isString(first) && /^\d+$/u.test(first))) {
+    const host = Option.getOrElse(
+      Option.liftPredicate(second, Predicate.isString),
+      () => "localhost",
+    )
+    return remotePeer({ host, port: first })
+  }
+  // A string that is not a port is a Unix socket path.
+  if (Predicate.isString(first)) return Option.none()
+  return Option.flatMap(peerOptions(first), remotePeer)
+}
+const passedConnect = Socket.prototype.connect
+Object.assign(Socket.prototype, {
+  connect(this: Socket, ...args: ReadonlyArray<unknown>) {
+    return Reflect.apply(passedConnect, this, admit(args, remoteSocket))
+  },
+})
+
+// `WebSocket`.
+const PassedWebSocket = globalThis.WebSocket
+globalThis.WebSocket = class GuardedWebSocket extends PassedWebSocket {
+  constructor(...args: ConstructorParameters<typeof PassedWebSocket>) {
+    super(...admit(args, ([url]) => remoteUrl(url)))
+  }
+}
+
+// `Bun.connect`, which the `bun` module's `connect` export reads too.
+// oxlint-disable-next-line effect/noGlobals -- the guard is Bun.connect: a loopback connection goes on to the real one
+const passedBunConnect = Bun.connect
+Reflect.set(Bun, "connect", (...args: Parameters<typeof passedBunConnect>) =>
+  Option.match(Option.flatMap(peerOptions(args[0]), remotePeer), {
+    onNone: () => Reflect.apply(passedBunConnect, Bun, args),
+    onSome: (remote) => Promise.reject(refusal(remote)),
+  }),
+)
+
 afterEach(() => {
-  expect(refusedFetches.splice(0)).toEqual([])
+  expect(refusedRequests.splice(0)).toEqual([])
 })

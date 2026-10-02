@@ -15,6 +15,7 @@ import {
   Scope,
 } from "effect"
 import * as ChildProcessSpawnerNs from "effect/process/ChildProcessSpawner"
+import { FetchHttpClient, HttpClient } from "effect/http"
 import { dateFromMillis } from "@gent/core/protocol"
 import {
   BunGentPlatformLive,
@@ -321,10 +322,12 @@ describe("Server Lock", () => {
           expect(attached.url).toBe(owner.url)
 
           // The attached server's endpoint names the owner the entry names, build included.
-          const response = yield* Effect.promise(() =>
-            Bun.fetch(`${attached.url.replace("/rpc", "")}/_gent/identity`),
-          )
-          const identity = yield* Effect.promise(() => response.json()).pipe(
+          const identity = yield* HttpClient.get(
+            `${attached.url.replace("/rpc", "")}/_gent/identity`,
+          ).pipe(
+            Effect.flatMap((response) => response.json),
+            Effect.provide(FetchHttpClient.layer),
+            Effect.orDie,
             Effect.flatMap(
               Schema.decodeUnknownEffect(
                 Schema.Struct({

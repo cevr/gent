@@ -5,6 +5,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { hostname } from "node:os"
 import { Effect, Exit, Option, Schema, Scope } from "effect"
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
 import { Gent } from "@gent/sdk"
 import { freePort, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
 import {
@@ -86,10 +87,11 @@ describe("server lifecycle", () => {
           const { url, proc } = yield* spawnServer({ dataDir, port })
 
           const baseUrl = url.replace("/rpc", "")
-          const response = yield* Effect.promise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
-          expect(response.ok).toBe(true)
-
-          const identity = yield* Effect.promise(() => response.json()).pipe(
+          const identity = yield* HttpClient.get(`${baseUrl}/_gent/identity`).pipe(
+            Effect.flatMap(HttpClientResponse.filterStatusOk),
+            Effect.flatMap((response) => response.json),
+            Effect.provide(FetchHttpClient.layer),
+            Effect.orDie,
             Effect.flatMap(Schema.decodeUnknownEffect(ServerIdentity)),
           )
           expect(identity.pid).toBe(proc.pid)

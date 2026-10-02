@@ -198,6 +198,9 @@
       // (`globalThis.Bun`, a computed member, an alias), and the `bun` module
       // ban below holds an import. `node:crypto` stays out
       // everywhere: Effect `Crypto` and `GentPlatform.hash` own ids and digests.
+      // `Bun.fetch` stays out too: it is a read-only property the test
+      // preload's network guard cannot replace, so a request goes through an
+      // Effect `HttpClient` over `globalThis.fetch`, which the guard holds.
       "files": [
         "packages/core/src/runtime/gent-platform-bun.ts",
         "**/*-adapter.ts",
@@ -210,14 +213,24 @@
         "**/*.test.tsx"
       ],
       "rules": {
-        "effect/noGlobals": "error",
+        "effect/noGlobals": [
+          "error",
+          {
+            "members": {
+              "Bun": {
+                "properties": ["fetch"],
+                "use": "an Effect HttpClient (FetchHttpClient.layer): the test preload guards globalThis.fetch, and Bun.fetch cannot be replaced"
+              }
+            }
+          }
+        ],
         "effect/noNodeBuiltinImport": [
           "error",
           {
             "modules": {
               "bun": {
-                "members": ["Glob", "randomUUIDv7"],
-                "use": "Effect FileSystem to list files, GentPlatform.randomId for ids"
+                "members": ["Glob", "randomUUIDv7", "fetch"],
+                "use": "Effect FileSystem to list files, GentPlatform.randomId for ids, an Effect HttpClient for a request"
               },
               "crypto": {
                 "use": "Effect Crypto for random bytes and ids, GentPlatform.hash for digests"
@@ -386,6 +399,22 @@
         "effect/noTernary": "off",
         "effect/noThrowStatement": "off",
         "effect/noUnsafeDictionaryType": "off"
+      }
+    },
+    {
+      // The test preload's network guard replaces fetch, the `node:net`
+      // socket's `connect`, `WebSocket` and `Bun.connect` before any test
+      // module loads, so it is plain Bun at those edges: each guard refuses
+      // with its entry point's own failure (a thrown Error, or a rejected
+      // promise where the entry point returns one), and calls the entry point
+      // it replaced with the caller's `this` and arguments.
+      "files": ["packages/tooling/src/test-preload.ts"],
+      "rules": {
+        "effect/noNewError": "off",
+        "effect/noNewPromise": "off",
+        "effect/noReflectApply": "off",
+        "effect/noThrowStatement": "off",
+        "typescript/unbound-method": "off"
       }
     },
     {
