@@ -264,6 +264,20 @@ const importedSymbol = (context: Context, node: AstNode | undefined) => {
   return undefined
 }
 
+/** Function-name definitions, distinct from parameters with the same spelling. */
+const declaredFunctionBindings = (context: Context, node: AstNode): ReadonlyArray<Variable> => {
+  const fn = (value: AstNode): value is ESTree.Function =>
+    value.type === "FunctionDeclaration" || value.type === "FunctionExpression"
+  if (!fn(node)) return []
+  return context.sourceCode
+    .getDeclaredVariables(node)
+    .filter((binding) =>
+      binding.defs.some(
+        (definition) => definition.type === "FunctionName" && definition.node === node,
+      ),
+    )
+}
+
 /** An ordinary or statically computed string property name. */
 const staticPropertyName = (node: AstNode): string | undefined => {
   const property = getNodeField(node, node.type === "MemberExpression" ? "property" : "key")
@@ -792,10 +806,7 @@ const plugin: Plugin = {
          * initialise (`const admitParent = Effect.fn("x")(function* ...)`).
          */
         const functionBindings = (fn: AstNode): ReadonlyArray<Variable> => {
-          const bindings: Array<Variable> = []
-          const id = getNodeField(fn, "id")
-          const own = lexicalBinding(context, id)
-          if (own !== undefined) bindings.push(own)
+          const bindings = [...declaredFunctionBindings(context, fn)]
           let at = getNodeField(fn, "parent")
           while (at?.type === "CallExpression") at = getNodeField(at, "parent")
           if (at?.type === "VariableDeclarator") {
@@ -1001,6 +1012,7 @@ const plugin: Plugin = {
               (definition) =>
                 definition.type === "Variable" &&
                 definition.node.type === "VariableDeclarator" &&
+                getNodeField(definition.node, "id")?.type === "Identifier" &&
                 definition.parent !== null &&
                 getStringField(definition.parent, "kind") === "const",
             )
@@ -1119,15 +1131,16 @@ const plugin: Plugin = {
         const bind = (id: AstNode | undefined, init: AstNode | undefined) => {
           const binding = lexicalBinding(context, id)
           if (binding === undefined || init === undefined) return
-          if (FUNCTION_TYPES.has(init.type)) named.set(binding, init)
+          if (FUNCTION_TYPES.has(init.type)) {
+            named.set(binding, init)
+            for (const inner of declaredFunctionBindings(context, init)) named.set(inner, init)
+          }
           if (isSessionMember(init)) accessors.add(binding)
         }
 
         return {
           FunctionDeclaration(node) {
-            if (!isAstNode(node)) return
-            const id = getNodeField(node, "id")
-            bind(id, node)
+            for (const binding of declaredFunctionBindings(context, node)) named.set(binding, node)
           },
           VariableDeclarator(node) {
             if (!isAstNode(node)) return

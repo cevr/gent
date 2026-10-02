@@ -314,8 +314,9 @@ const CASES: ReadonlyArray<RuleCase> = [
     // name, a function a tracked scope calls, a createResource source, and a
     // callback an array method runs in a tracked scope, a deps-array source, a
     // function called where it is built, resource source read by name,
-    // aliased/namespace trackers, deps/resource source/batch, and a lexically distinct helper
-    expectedCount: 19,
+    // aliased/namespace trackers, deps/resource source/batch, lexical shadows,
+    // a destructured fetcher and a helper's same-named parameter
+    expectedCount: 21,
   },
 ]
 

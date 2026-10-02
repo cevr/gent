@@ -106,3 +106,11 @@ Solid.createResource(() => client.session(), (session) => session)
 
 // 19. Solid's batch callback runs inside the surrounding tracked scope.
 observe(() => Solid.batch(() => startTracking(client.session())))
+
+// 20. Destructuring a function out of an object keeps the source overload.
+const { destructuredFetcher } = { destructuredFetcher: (id) => id }
+createResource(() => client.session().sessionId, destructuredFetcher)
+
+// 21. A helper declaration is distinct from its same-named parameter.
+function parameterRead(parameterRead) { return client.session() }
+createEffect(() => startTracking(parameterRead(undefined)))

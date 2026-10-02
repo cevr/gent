@@ -56,3 +56,12 @@ export const forkNamedAdmission = Effect.fn("named")(function* (parentSessionId)
   yield* namedAdmission(parentSessionId)
   return new Session({ id, parentSessionId })
 })
+
+// The same declaration/parameter distinction applies to admission helpers.
+function parameterAdmission(parameterAdmission, parentSessionId) {
+  return admitChildSessionDepth(parentSessionId)
+}
+export const forkParameterAdmission = Effect.fn("parameter")(function* (parentSessionId) {
+  yield* parameterAdmission(undefined, parentSessionId)
+  return new Session({ id, parentSessionId })
+})
