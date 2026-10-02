@@ -498,8 +498,13 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   )
 
   // Use .latest for stale-while-revalidate: keeps showing previous results
-  // during refetch instead of flashing "Loading..."
-  const visibleItems = () => Option.getOrElse(Option.fromNullishOr(items.latest), () => [])
+  // during refetch instead of flashing "Loading..." A row whose extension has
+  // failed (in this fetch or since) leaves at once, with the cursor and the
+  // ghost on it: its extension is offered no more.
+  const offered = (entry: SourcedAutocompleteItem) =>
+    !extensionUI.renderFailed(entry.source.extensionId)
+  const visibleItems = () =>
+    Option.getOrElse(Option.fromNullishOr(items.latest), () => []).filter(offered)
   const hasItems = () => visibleItems().length > 0
 
   /**
@@ -515,7 +520,9 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     const top = Option.fromNullishOr(visibleItems()[0])
     props.onGhostChange(
       ghostCompletion(
-        Option.orElse(cursor(), () => top).pipe(Option.map((entry) => entry.item)),
+        Option.orElse(Option.filter(cursor(), offered), () => top).pipe(
+          Option.map((entry) => entry.item),
+        ),
         props.state.filter,
       ),
     )

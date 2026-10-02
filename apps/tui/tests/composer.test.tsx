@@ -50,7 +50,7 @@ import {
   renderFrame,
   renderScoped as renderScopedHarness,
 } from "./render-harness-boundary"
-import { createSignal, ErrorBoundary, type JSX, onMount, Show } from "solid-js"
+import { createEffect, createSignal, ErrorBoundary, type JSX, onMount, Show } from "solid-js"
 import { closedPromptSearch } from "../src/pickers"
 import { type ClientContextValue, type SessionIdentity, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
@@ -1813,6 +1813,113 @@ describe("AutocompletePopup renderer", () => {
       setup.mockInput.pressEnter()
       expect(picked).toEqual(["beta"])
     }),
+  )
+
+  // A failed extension is offered no more: its rows leave the open popup at
+  // once, with the cursor and the ghost on them, before another fetch.
+  const ownedSource = (
+    owner: string,
+    name: string,
+    items: Parameters<typeof autocompleteContribution>[0]["items"],
+  ) => autocompleteContribution({ prefix: "%", title: `Source ${owner} ${name}`, items })
+  interface PopupSeen {
+    readonly picked: Array<string>
+    readonly ghosts: Array<string>
+    ui: Option.Option<ReturnType<typeof useExtensionUI>>
+  }
+  const popupSeen = (): PopupSeen => ({ picked: [], ghosts: [], ui: Option.none() })
+  const popupOverOwners = (
+    extensions: ReadonlyArray<ReturnType<typeof defineClientExtension>>,
+    sourceCount: number,
+    seen: PopupSeen,
+  ) =>
+    renderScoped(
+      () => {
+        const ui = useExtensionUI()
+        seen.ui = Option.some(ui)
+        // Mount once every source is offered, and stay mounted when one fails.
+        const [loaded, setLoaded] = createSignal(false)
+        createEffect(() => {
+          if (ui.autocompleteItems().filter((c) => c.prefix === "%").length >= sourceCount)
+            setLoaded(true)
+        })
+        return (
+          <Show when={loaded()}>
+            <AutocompletePopup
+              state={{ type: "%", filter: "r", triggerPos: 0 }}
+              onSelect={(pick) => seen.picked.push(pick.item.id)}
+              onComplete={() => {}}
+              onClose={() => {}}
+              onGhostChange={(ghost) => seen.ghosts.push(Option.getOrElse(ghost, () => ""))}
+            />
+          </Show>
+        )
+      },
+      { width: 80, height: 24, builtins: [...builtinClientModules, ...extensions] },
+    )
+
+  it.scopedLive("rows of an extension whose other source broke do not show", () =>
+    Effect.gen(function* () {
+      const seen = popupSeen()
+      const owner = defineClientExtension("@test/owner-a", {
+        setup: Effect.succeed(
+          clientContributions(
+            ownedSource("a", "ok", () => [{ id: "ra-alpha", label: "%ra-alpha" }]),
+            ownedSource("a", "broken", () => Effect.die("source broke")),
+          ),
+        ),
+      })
+      const other = defineClientExtension("@test/owner-b", {
+        setup: Effect.succeed(
+          clientContributions(ownedSource("b", "ok", () => [{ id: "rb-beta", label: "%rb-beta" }])),
+        ),
+      })
+      const setup = yield* popupOverOwners([owner, other], 3, seen)
+      const frame = yield* waitForFrame(setup, (next) => next.includes("%rb-beta"), "rows")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(frame).not.toContain("%ra-alpha")
+      expect(seen.ghosts.at(-1)).toBe("rb-beta")
+      setup.mockInput.pressEnter()
+      expect(seen.picked).toEqual(["rb-beta"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a failure while the popup is open drops its rows, cursor and ghost at once", () =>
+    Effect.gen(function* () {
+      const seen = popupSeen()
+      let fetches = 0
+      const owner = defineClientExtension("@test/owner-a", {
+        setup: Effect.succeed(
+          clientContributions(
+            ownedSource("a", "ok", () => {
+              fetches += 1
+              return [{ id: "ra-alpha", label: "%ra-alpha" }]
+            }),
+          ),
+        ),
+      })
+      const other = defineClientExtension("@test/owner-b", {
+        setup: Effect.succeed(
+          clientContributions(ownedSource("b", "ok", () => [{ id: "rb-beta", label: "%rb-beta" }])),
+        ),
+      })
+      const setup = yield* popupOverOwners([owner, other], 2, seen)
+      yield* waitForFrame(
+        setup,
+        (next) => next.includes("%ra-alpha") && next.includes("%rb-beta"),
+        "rows from both owners",
+      )
+      expect(seen.ghosts.at(-1)).toBe("ra-alpha")
+      const ui = yield* Effect.fromOption(seen.ui)
+      ui.recordRenderFailure("@test/owner-a", "a widget threw")
+      const frame = yield* waitForFrame(setup, (next) => !next.includes("%ra-alpha"), "dropped")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(frame).toContain("%rb-beta")
+      expect(fetches).toBe(1)
+      expect(seen.ghosts.at(-1)).toBe("rb-beta")
+      setup.mockInput.pressEnter()
+      expect(seen.picked).toEqual(["rb-beta"])
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   // The popup and the palette share one name column rule: on a narrow

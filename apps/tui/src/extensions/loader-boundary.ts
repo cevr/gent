@@ -977,11 +977,14 @@ const toAutocompleteEffect = (
 
 /**
  * A merged row and the contribution that offered it. Several contributions
- * may share a prefix; a pick inserts and records through its own source.
+ * may share a prefix; a pick inserts and records through its own source, and
+ * the popup drops the row once that source's extension fails.
  */
-export interface SourcedAutocompleteItem {
+export interface SourcedAutocompleteItem<
+  C extends AutocompleteContribution = ResolvedAutocomplete,
+> {
   readonly item: AutocompleteItem
-  readonly source: AutocompleteContribution
+  readonly source: C
 }
 
 /** What one fetch of a prefix's sources asks for. */
@@ -1007,7 +1010,7 @@ export const runAutocompleteContributions = <C extends AutocompleteContribution>
   query: AutocompleteQuery,
   clientRuntime: ClientRuntime,
   report: AutocompleteReport<C>,
-): Promise<SourcedAutocompleteItem[]> =>
+): Promise<SourcedAutocompleteItem<C>[]> =>
   clientRuntime.runPromise(
     Effect.forEach(
       contributions,
@@ -1024,7 +1027,7 @@ export const runAutocompleteContributions = <C extends AutocompleteContribution>
                 const reason = String(Cause.squash(cause))
                 if (Cause.hasDies(cause)) report.broke(contribution, reason)
                 else report.failed(contribution, reason)
-                return [] satisfies SourcedAutocompleteItem[]
+                return [] satisfies SourcedAutocompleteItem<C>[]
               }),
           ),
         ),
@@ -1032,7 +1035,7 @@ export const runAutocompleteContributions = <C extends AutocompleteContribution>
     ).pipe(
       Effect.map((results) => {
         const seen = new Set<string>()
-        const deduped: SourcedAutocompleteItem[] = []
+        const deduped: SourcedAutocompleteItem<C>[] = []
         for (const batch of results) {
           for (const entry of batch) {
             if (seen.has(entry.item.id)) continue
