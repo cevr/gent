@@ -47,3 +47,12 @@ export const forkRenamed = Effect.fn("renamed")(function* (parentSessionId) {
 
 // A local class with the same name is not the domain Session constructor.
 export const unrelated = (Session) => new Session({ id, parentSessionId })
+
+// Calling the wrapper's outer binding retains the named expression's admission.
+const namedAdmission = Effect.fn("namedAdmission")(function* namedAdmission(parentSessionId) {
+  yield* admitChildSessionDepth(parentSessionId)
+})
+export const forkNamedAdmission = Effect.fn("named")(function* (parentSessionId) {
+  yield* namedAdmission(parentSessionId)
+  return new Session({ id, parentSessionId })
+})

@@ -788,17 +788,21 @@ const plugin: Plugin = {
           return last
         }
         /**
-         * The name a function is bound to: its own name, or the variable its
-         * wrapping calls initialise (`const admitParent = Effect.fn("x")(function* ...)`).
+         * A function's private name and the outer variable its wrapping calls
+         * initialise (`const admitParent = Effect.fn("x")(function* ...)`).
          */
-        const boundFunction = (fn: AstNode): Variable | undefined => {
+        const functionBindings = (fn: AstNode): ReadonlyArray<Variable> => {
+          const bindings: Array<Variable> = []
           const id = getNodeField(fn, "id")
-          if (id?.type === "Identifier") return lexicalBinding(context, id)
+          const own = lexicalBinding(context, id)
+          if (own !== undefined) bindings.push(own)
           let at = getNodeField(fn, "parent")
           while (at?.type === "CallExpression") at = getNodeField(at, "parent")
-          if (at?.type !== "VariableDeclarator") return undefined
-          const variable = getNodeField(at, "id")
-          return lexicalBinding(context, variable)
+          if (at?.type === "VariableDeclarator") {
+            const outer = lexicalBinding(context, getNodeField(at, "id"))
+            if (outer !== undefined && !bindings.includes(outer)) bindings.push(outer)
+          }
+          return bindings
         }
         const namesParent = (literal: AstNode | undefined): boolean =>
           literal?.type === "ObjectExpression" &&
@@ -842,10 +846,11 @@ const plugin: Plugin = {
               grew = false
               for (const call of calls) {
                 if (!admitting.has(call.binding)) continue
-                const binding = boundFunction(innermostFunction(call.node))
-                if (binding === undefined || admitting.has(binding)) continue
-                admitting.add(binding)
-                grew = true
+                for (const binding of functionBindings(innermostFunction(call.node))) {
+                  if (admitting.has(binding)) continue
+                  admitting.add(binding)
+                  grew = true
+                }
               }
             }
             for (const writer of writers) {
