@@ -117,8 +117,8 @@ export const ruleSubject = (context: Pick<Context, "filename" | "cwd">): string 
 }
 
 const isExtensionFilename = (filename: string): boolean => {
-  if (/\/extensions\/(?:api|branch-tools)\.ts$/.test(filename)) return false
-  if (filename.endsWith("apps/tui/src/extensions/loader-boundary.ts")) return false
+  if (/^packages\/core\/src\/extensions\/(?:api|branch-tools)\.ts$/.test(filename)) return false
+  if (filename === "apps/tui/src/extensions/loader-boundary.ts") return false
   return /(?:packages\/core\/src\/extensions|packages\/extensions\/src|apps\/tui\/src\/extensions|examples\/extensions)\//.test(
     filename,
   )
@@ -581,7 +581,7 @@ const plugin: Plugin = {
     "core-entry-boundary": {
       create(context) {
         const filename = context.filename
-        const extensionFile = isExtensionFilename(filename)
+        const extensionFile = isExtensionFilename(ruleSubject(context))
         const productFile = !isTestSupport(ruleSubject(context))
         const outsideCore = !/\/packages\/core\//.test(filename)
         if (!extensionFile && !productFile && !outsideCore) return {}

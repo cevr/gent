@@ -12,11 +12,12 @@ pre-commit:
     # oxlint first, then the formatter, on the same staged files, so the
     # formatter has the last word; each stages what it rewrote. oxlint and
     # oxfmt check a path named on the command line even when
-    # `.oxlintignore` lists it, so the group excludes the rule fixtures here;
-    # an `.invalid` fixture breaks its rule on purpose.
+    # `.oxlintignore` lists it, so the group excludes both deliberate fixture
+    # roots here; the rule fixtures and Gamut app contain intentional errors.
     - name: lint+fmt
       exclude:
         - "packages/tooling/fixtures/**"
+        - "testbeds/gamut/fixture/**"
       group:
         piped: true
         jobs:

@@ -225,6 +225,20 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 3,
   },
   {
+    // Only core's actual authoring entry receives the entry exemption.
+    rule: "gent/core-entry-boundary",
+    invalid: "examples/extensions/api.ts",
+    valid: ["packages/core/src/extensions/api.ts"],
+    expectedCount: 2,
+  },
+  {
+    // An extension's filename gives it no host privilege.
+    rule: "gent/core-entry-boundary",
+    invalid: "examples/extensions/branch-tools.ts",
+    valid: ["packages/core/src/extensions/branch-tools.ts"],
+    expectedCount: 2,
+  },
+  {
     // Product code never reads the test entry; tests may.
     rule: "gent/core-entry-boundary",
     invalid: "packages/sdk/src/core-entry-boundary.invalid.ts",
@@ -337,6 +351,65 @@ const expectedRows = CASES.map((c) => ({
 }))
 
 effectDescribe("custom lint rules", () => {
+  it.scopedLive(
+    "staged fixer routing excludes broken fixtures while keeping the gamut driver",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const repo = yield* path.fromFileUrl(new URL("../../..", import.meta.url))
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-hook-routing-" })
+        const fixturePaths = [
+          "packages/tooling/fixtures/examples/extensions/api.ts",
+          "testbeds/gamut/fixture/src/domain/money.ts",
+        ]
+        const productPaths = ["testbeds/gamut/gamut.ts", "testbeds/gamut/tests/gamut.test.ts"]
+        const files = [...fixturePaths, ...productPaths]
+        yield* Effect.forEach(files, (file) =>
+          fs
+            .makeDirectory(path.dirname(path.join(root, file)), { recursive: true })
+            .pipe(Effect.andThen(fs.writeFileString(path.join(root, file), ""))),
+        )
+        const config = yield* fs.readFileString(path.join(repo, "lefthook.yml"))
+        // Keep the actual job hierarchy and exclusions. Observe the operands
+        // instead of running source fixers against deliberately invalid files.
+        yield* fs.writeFileString(
+          path.join(root, "lefthook.yml"),
+          config.replace(/^([ \t]*run:).*\{staged_files\}.*$/gm, "$1 echo {staged_files}"),
+        )
+        const init = yield* ChildProcess.make("git", ["init", "--quiet"], {
+          cwd: root,
+          forceKillAfter: OXLINT_KILL_GRACE,
+        })
+        expect(Number(yield* init.exitCode)).toBe(0)
+        const handle = yield* ChildProcess.make(
+          path.join(repo, "node_modules/.bin/lefthook"),
+          [
+            "run",
+            "pre-commit",
+            "--job=lint+fmt",
+            "--no-auto-install",
+            "--no-stage-fixed",
+            "--no-tty",
+            ...files.flatMap((file) => ["--file", file]),
+          ],
+          { cwd: root, forceKillAfter: OXLINT_KILL_GRACE },
+        )
+        const [exitCode, stdout, stderr] = yield* Effect.all(
+          [
+            handle.exitCode,
+            Stream.mkString(Stream.decodeText(handle.stdout)),
+            Stream.mkString(Stream.decodeText(handle.stderr)),
+          ],
+          { concurrency: 3 },
+        )
+        expect(Number(exitCode), stderr).toBe(0)
+        for (const file of fixturePaths) expect(stdout).not.toContain(file)
+        for (const file of productPaths) expect(stdout).toContain(file)
+      }).pipe(Effect.timeout(FIXTURE_LINT_BOUND), Effect.provide(BunServices.layer)),
+    FIXTURE_LINT_BACKSTOP_MS,
+  )
+
   // The two runs go together: each is bounded by OXLINT_RUN_BOUND plus
   // OXLINT_KILL_GRACE, the test by FIXTURE_LINT_BOUND, and bun by
   // FIXTURE_LINT_BACKSTOP_MS, each longer than the one before, so a stuck run
