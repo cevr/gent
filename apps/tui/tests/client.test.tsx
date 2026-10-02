@@ -1291,6 +1291,58 @@ describe("ClientProvider session lifecycle", () => {
       expect(listings).toBe(2)
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // The catalog is a session's profile: another session's may lack a model
+  // A runs. While B's catalog loads, and after its load fails, A's models are
+  // never offered as B's.
+  it.scopedLive("a session's model catalog is never offered for the next session", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const onlyInFirst = Model.make({
+        id: ModelId.make("anthropic/first-only"),
+        name: "First only",
+        provider: ProviderId.make("anthropic"),
+      })
+      const secondAsked = yield* Deferred.make<void>()
+      const answer = yield* Deferred.make<void>()
+      const mockClient = createMockClient({
+        model: {
+          list: (input: { readonly sessionId: SessionId }) => {
+            if (input.sessionId === FIRST.sessionId) return Effect.succeed([onlyInFirst])
+            return Deferred.succeed(secondAsked, void 0).pipe(
+              Effect.andThen(Deferred.await(answer)),
+              Effect.andThen(
+                Effect.fail({ _tag: "DriverError", driver: "anthropic", reason: "offline" }),
+              ),
+            )
+          },
+        },
+        driver: {
+          list: () =>
+            Effect.succeed({ drivers: [{ id: "anthropic" }], overrides: {}, agents: [testAgent] }),
+        },
+      })
+      yield* renderScoped(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+        client: mockClient,
+        initialSession: {
+          id: FIRST.sessionId,
+          activeBranchId: FIRST.branchId,
+          name: "First",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
+      const client = yield* requireClientSessionState(ctx)
+      yield* waitUntil(() => client.models().length === 1, "the first session's catalog")
+      client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
+      yield* Deferred.await(secondAsked)
+      expect(client.models()).toEqual([])
+      expect(client.modelCatalog()).toEqual(Option.none())
+      yield* Deferred.succeed(answer, void 0)
+      yield* waitUntil(() => Option.isSome(client.modelCatalog()), "the failed load settles")
+      expect(client.modelCatalog()).toEqual(Option.some([]))
+      expect(client.models()).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("a classifier model in the catalog is not offered as a chat model", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

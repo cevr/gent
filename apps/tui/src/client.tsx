@@ -545,8 +545,15 @@ interface ClientSessionValue {
   // Sync data fetching helpers (return Effects for caller to run)
   listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
   createBranch: Effect.Effect<void, GentClientRpcError>
-  forkBranch: (messageId: MessageId) => Effect.Effect<BranchId, GentClientRpcError>
-  drainQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
+  /**
+   * Fork the branch in view at the message, then show the fork. The fork
+   * stays, but a navigation since it was asked for is the reader's newer
+   * choice: the fork is then not shown. A failure is held for the branch
+   * forked from (`setErrorIn`).
+   */
+  forkBranch: (messageId: MessageId) => Effect.Effect<void>
+  /** Take back the queue of the branch named, whichever branch is in view. */
+  drainQueuedMessages: (target: SessionIdentity) => Effect.Effect<QueueSnapshot, GentClientRpcError>
 
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId) => void
@@ -591,7 +598,10 @@ interface ClientAgentValue {
   modelInfo: () => Option.Option<Model>
   /** The chat models a registered driver can run, in registry order; empty until both load. */
   models: () => readonly Model[]
-  /** `models`, or `None` until the catalog's first load settles; a failed load settles empty. */
+  /**
+   * `models`, or `None` until the session in view's first catalog load
+   * settles; a failed load settles empty. Each session reads its own catalog.
+   */
   modelCatalog: () => Option.Option<ReadonlyArray<Model>>
 
   /** Show a local error. It leaves the turn as it is; the next turn start clears it. */
@@ -862,19 +872,36 @@ export function ClientProvider(props: ClientProviderProps) {
     if (input.clearExtensionHealth) setExtensionHealth(EMPTY_EXTENSION_HEALTH)
   }
 
-  const [modelStore, setModelStore] = createStore<{
+  interface ModelCatalog {
+    /** The session whose profile listed it. */
+    owner: SessionId
     modelsById: Record<string, Model>
     agentsByName: Record<string, AgentDefinition>
     /** Ids of the registered model drivers; a model needs one to run. */
     driverIds: readonly string[]
-    /** The first catalog load has answered, with the catalog or with a failure. */
+    /** The owner's first catalog load has answered, with the catalog or with a failure. */
     settled: boolean
-  }>({
+  }
+  const emptyCatalog = (owner: SessionId): ModelCatalog => ({
+    owner,
     modelsById: {},
     agentsByName: {},
     driverIds: [],
     settled: false,
   })
+  const [modelStore, setModelStore] = createStore<ModelCatalog>(
+    emptyCatalog(props.initialSession.sessionId),
+  )
+  /**
+   * The catalog of the session in view. Another session's profile may lack
+   * a model this one runs, or list one it lacks, so a catalog is offered only
+   * for its owner: until the session in view has its own, it has none.
+   */
+  const catalog = (): ModelCatalog => {
+    const sessionId = activeSessionId()
+    if (modelStore.owner === sessionId) return modelStore
+    return emptyCatalog(sessionId)
+  }
 
   createEffect(() => {
     const unsubscribe = runtime.lifecycle.subscribe((nextState) => {
@@ -981,7 +1008,13 @@ export function ClientProvider(props: ClientProviderProps) {
                 const agentsByName: Record<string, AgentDefinition> = {}
                 for (const agent of drivers.agents) agentsByName[agent.name] = agent
                 const driverIds = drivers.drivers.map((driver) => driver.id)
-                setModelStore({ modelsById, agentsByName, driverIds, settled: true })
+                setModelStore({
+                  owner: sessionId,
+                  modelsById,
+                  agentsByName,
+                  driverIds,
+                  settled: true,
+                })
               }),
             ),
           ),
@@ -991,8 +1024,10 @@ export function ClientProvider(props: ClientProviderProps) {
                 const error = formatError(err)
                 log.error("model.list.failed", { error })
                 setAgentStore({ error: Option.some(error) })
-                // A reader waiting for the catalog goes on with what it holds.
-                setModelStore({ settled: true })
+                // A reader waiting for the catalog goes on with what the
+                // session holds: its own catalog, never another session's.
+                if (modelStore.owner === sessionId) setModelStore({ settled: true })
+                else setModelStore({ ...emptyCatalog(sessionId), settled: true })
               }),
             ),
           ),
@@ -1185,9 +1220,10 @@ export function ClientProvider(props: ClientProviderProps) {
     finishReplay,
   }
 
-  // Each navigation (a create sent, a session switch) takes the next number.
-  // A create answers late, so it takes the view only while its number is the
-  // latest: a later /new or switch has overtaken it otherwise.
+  // Each navigation (a create sent, a session switch, a branch switch asked
+  // for) takes the next number. A create or a fork answers late, so it takes
+  // the view only while its number is the latest: a later /new or switch has
+  // overtaken it otherwise.
   let navigation = 0
 
   /**
@@ -1248,6 +1284,29 @@ export function ClientProvider(props: ClientProviderProps) {
           }),
         ),
       ),
+    )
+  }
+
+  /**
+   * Ask the server to move `from` to another of its session's branches. The
+   * ask is a navigation from the moment it is made: it overtakes a create or
+   * a fork still waiting. A refusal is held for `from`.
+   */
+  const requestBranchSwitch = (
+    from: SessionIdentity,
+    toBranchId: BranchId,
+  ): Effect.Effect<void> => {
+    navigation++
+    return Effect.gen(function* () {
+      const requestId = yield* randomId
+      yield* client.branch.switch({
+        sessionId: from.sessionId,
+        fromBranchId: from.branchId,
+        toBranchId,
+        requestId,
+      })
+    }).pipe(
+      Effect.catchEager((err) => Effect.sync(() => agentValue.setErrorIn(from, formatError(err)))),
     )
   }
 
@@ -1333,48 +1392,44 @@ export function ClientProvider(props: ClientProviderProps) {
     }),
 
     forkBranch: (messageId) => {
-      const s = session()
+      const from = sessionIdentity()
+      const ownNavigation = navigation
       return Effect.gen(function* () {
         const requestId = yield* randomId
         const result = yield* client.branch.fork({
-          sessionId: s.sessionId,
-          fromBranchId: s.branchId,
+          sessionId: from.sessionId,
+          fromBranchId: from.branchId,
           atMessageId: messageId,
           requestId,
         })
-        return BranchId.make(result.branchId)
-      })
-    },
-
-    drainQueuedMessages: Effect.gen(function* () {
-      const { sessionId, branchId } = session()
-      const requestId = yield* randomId
-      return yield* client.queue.drain({ sessionId, branchId, requestId })
-    }),
-
-    switchBranch: (branchId) => {
-      const s = session()
-
-      cast(
-        Effect.gen(function* () {
-          const requestId = yield* randomId
-          return yield* client.branch.switch({
-            sessionId: s.sessionId,
-            fromBranchId: s.branchId,
-            toBranchId: branchId,
-            requestId,
-          })
-        }).pipe(
-          Effect.tapError((err) => Effect.sync(() => showError(Option.some(formatError(err))))),
+        const forked = BranchId.make(result.branchId)
+        if (ownNavigation !== navigation) {
+          log.info("forkBranch.overtaken", { sessionId: from.sessionId, branchId: forked })
+          return
+        }
+        yield* requestBranchSwitch(from, forked)
+      }).pipe(
+        Effect.catchEager((err) =>
+          Effect.sync(() => agentValue.setErrorIn(from, formatError(err))),
         ),
       )
     },
+
+    drainQueuedMessages: ({ sessionId, branchId }) =>
+      Effect.gen(function* () {
+        const requestId = yield* randomId
+        return yield* client.queue.drain({ sessionId, branchId, requestId })
+      }),
+
+    switchBranch: (branchId) => cast(requestBranchSwitch(sessionIdentity(), branchId)),
   }
   // A classifier model answers the cell's `models.decide` and never runs a turn.
-  const runnableModels = (): readonly Model[] =>
-    Object.values(modelStore.modelsById).filter(
-      (model) => modelStore.driverIds.includes(model.provider) && model.kind !== "classifier",
+  const runnableModels = (): readonly Model[] => {
+    const { modelsById, driverIds } = catalog()
+    return Object.values(modelsById).filter(
+      (model) => driverIds.includes(model.provider) && model.kind !== "classifier",
     )
+  }
   // The agent's name, held as a memo. Every session snapshot writes a new
   // `Option` for the agent (a reconnect refetches one), and a write of the
   // same name is not a new agent: the effects keyed on it (the auth gate, the
@@ -1390,10 +1445,11 @@ export function ClientProvider(props: ClientProviderProps) {
       const pinned = Option.fromUndefinedOr(session().modelId)
       if (Option.isSome(pinned)) return pinned.value
       if (Option.isSome(agentStore.resolvedModelId)) return agentStore.resolvedModelId.value
+      const { agentsByName } = catalog()
       const agentDef = Option.flatMap(agentStore.agent, (agent) =>
-        Option.fromNullishOr(modelStore.agentsByName[agent]),
+        Option.fromNullishOr(agentsByName[agent]),
       )
-      const defaultAgentDef = Option.fromNullishOr(modelStore.agentsByName[DEFAULT_AGENT_NAME])
+      const defaultAgentDef = Option.fromNullishOr(agentsByName[DEFAULT_AGENT_NAME])
       const resolved = Option.orElse(agentDef, () => defaultAgentDef)
       if (Option.isSome(resolved)) return resolveAgentModel(resolved.value)
       return DEFAULT_MODEL_ID
@@ -1410,10 +1466,10 @@ export function ClientProvider(props: ClientProviderProps) {
     isError: () => Option.isSome(agentStore.error),
     error: () => agentStore.error,
     sessionMetrics,
-    modelInfo: () => Option.fromNullishOr(modelStore.modelsById[agentValue.model()]),
+    modelInfo: () => Option.fromNullishOr(catalog().modelsById[agentValue.model()]),
     models: runnableModels,
     modelCatalog: () => {
-      if (!modelStore.settled) return Option.none()
+      if (!catalog().settled) return Option.none()
       return Option.some(runnableModels())
     },
     setErrorIn: (target, error) => {
