@@ -285,8 +285,8 @@ describe("Server Lock", () => {
           ...entry,
           rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
         })
-        yield* serverLockFile.write(home, entryWithEndpoint)
         yield* holdAsAnotherServer(home)
+        yield* serverLockFile.write(home, entryWithEndpoint)
 
         const server = yield* Gent.server({
           cwd: `${process.cwd()}/other-workspace`,
@@ -339,46 +339,6 @@ describe("Server Lock", () => {
           expect(identity.buildFingerprint).toBe(ownerEntry.buildFingerprint)
         }).pipe(Effect.timeout("20 seconds")),
       ),
-  )
-
-  it.scopedLive("a lock that names another database is replaced, not attached", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        const ownDb = (yield* dataPaths(home)).dbPath
-        const buildFingerprint = yield* ownBuildFingerprint
-        const entry = makeEntry({ dbPath: `${ownDb}.other`, buildFingerprint })
-        const foreignOwner = yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
-            Bun.serve({
-              port: 0,
-              fetch: () =>
-                Response.json({
-                  serverId: entry.serverId,
-                  pid: entry.pid,
-                  hostname: entry.hostname,
-                  dbPath: entry.dbPath,
-                  buildFingerprint: entry.buildFingerprint,
-                }),
-            }),
-          ),
-          (server) => Effect.promise(() => server.stop(true)),
-        )
-        yield* serverLockFile.write(
-          home,
-          new ServerLockEntry({ ...entry, rpcUrl: `${new URL(foreignOwner.url).origin}/rpc` }),
-        )
-
-        const { result: server } = yield* Gent.server({
-          cwd: home,
-          state: Gent.state.sqlite({ home }),
-          provider: Gent.provider.mock(),
-        }).pipe(withSignalTrap)
-        expect(server._tag).toBe("Owned")
-        expect(Option.getOrThrow(yield* serverLockFile.read(home)).dbPath).toBe(ownDb)
-      }),
-    ),
   )
 
   it.scopedLive("a fixed-port server takes the lock and names itself in the entry", () =>
@@ -471,7 +431,8 @@ describe("Server Lock", () => {
 
 /**
  * Write `entry` as the lock, pointed at an identity endpoint that answers with
- * the entry's own identity, changed by `overrides`.
+ * the entry's own identity, changed by `overrides`. A holder names itself after
+ * it takes the lock, so a caller holds the lock first.
  */
 const lockWithIdentity = (
   home: string,
@@ -503,34 +464,6 @@ const lockWithIdentity = (
   })
 
 describe("Server Lock Ownership", () => {
-  // The lock names a pid no gent server owns: a reused pid. The case of the
-  // new process's own pid is the end of "a crashed server's lock is released
-  // by the OS, even while its pid is reused".
-  it.scopedLive("a lock whose pid now belongs to another live process does not block startup", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const pid = process.ppid
-        const home = yield* makeTmpHomeScoped
-        const dbPath = (yield* dataPaths(home)).dbPath
-        const buildFingerprint = yield* ownBuildFingerprint
-        yield* serverLockFile.write(
-          home,
-          makeEntry({ pid, dbPath, buildFingerprint, rpcUrl: "http://127.0.0.1:1/rpc" }),
-        )
-        const { result, signals } = yield* Gent.server({
-          cwd: home,
-          state: Gent.state.sqlite({ home }),
-          provider: Gent.provider.mock(),
-        }).pipe(withSignalTrap)
-        expect(result._tag).toBe("Owned")
-        expect(signals).toEqual([])
-        expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).not.toBe(
-          "test-server-1",
-        )
-      }).pipe(Effect.timeout("20 seconds")),
-    ),
-  )
-
   it.scopedLive(
     "two concurrent starts on one database give one owner and one attached client",
     () =>
@@ -548,6 +481,59 @@ describe("Server Lock Ownership", () => {
           expect(servers.map((server) => server._tag).toSorted()).toEqual(["Attached", "Owned"])
           expect(servers[0].url).toBe(servers[1].url)
         }),
+      ),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a start that waits on a starting owner attaches to it and never probes a crashed server's entry",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const ownDb = (yield* dataPaths(home)).dbPath
+          // The crashed server's address answers, but not as a gent server.
+          let probes = 0
+          const crashedAddress = yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun HTTP fixture
+              Bun.serve({
+                port: 0,
+                fetch: () => {
+                  probes += 1
+                  return new Response("gone", { status: 404 })
+                },
+              }),
+            ),
+            (server) => Effect.promise(() => server.stop(true)),
+          )
+          yield* serverLockFile.write(
+            home,
+            makeEntry({
+              serverId: "crashed-server",
+              pid: 999_999,
+              dbPath: `${ownDb}.other`,
+              rpcUrl: `${new URL(crashedAddress.url).origin}/rpc`,
+            }),
+          )
+          // A starting owner takes the lock; it names itself only once it listens.
+          yield* holdAsAnotherServer(home)
+          expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
+          const waiting = yield* Effect.forkScoped(
+            Gent.server({
+              cwd: home,
+              state: Gent.state.sqlite({ home }),
+              provider: Gent.provider.mock(),
+            }),
+          )
+          const owner = yield* lockWithIdentity(
+            home,
+            makeEntry({ dbPath: ownDb, buildFingerprint: yield* ownBuildFingerprint }),
+            {},
+          )
+          const started = yield* Fiber.join(waiting)
+          expect([started._tag, started.url, probes]).toEqual(["Attached", owner.rpcUrl, 0])
+        }).pipe(Effect.timeout("20 seconds")),
       ),
     30_000,
   )
@@ -572,10 +558,12 @@ describe("Server Lock Ownership", () => {
         // A live pid under a free kernel lock is a server that is gone.
         yield* serverLockFile.write(home, makeEntry())
         expect((yield* serverLock.status(home))._tag).toBe("Stale")
+        // Taking the lock removes the stale entry; the new holder names itself after.
         const { release } = yield* holdAsAnotherServer(home)
+        expect((yield* serverLock.status(home))._tag).toBe("Unnamed")
+        yield* serverLockFile.write(home, makeEntry())
         expect((yield* serverLock.status(home))._tag).toBe("Alive")
         yield* serverLockFile.remove(home, "test-server-1")
-        expect((yield* serverLock.status(home))._tag).toBe("Unnamed")
         yield* release
         expect((yield* serverLock.status(home))._tag).toBe("None")
         yield* serverLockFile.write(home, makeEntry({ hostname: "alien-host" }))
@@ -654,10 +642,10 @@ describe("Server Lock Ownership", () => {
           const dbPath = (yield* dataPaths(home)).dbPath
           // The pid is alive, but the endpoint names another process: a server
           // that cannot be confirmed may still hold the database.
+          yield* holdAsAnotherServer(home)
           const holder = yield* lockWithIdentity(home, makeEntry({ dbPath, buildFingerprint }), {
             pid: 99999999,
           })
-          yield* holdAsAnotherServer(home)
           const { result, signals } = yield* Gent.server({
             cwd: home,
             state: Gent.state.sqlite({ home }),
@@ -677,12 +665,12 @@ describe("Server Lock Ownership", () => {
         const home = yield* makeTmpHomeScoped
         // Another build is open on the same database: a TUI, perhaps with a turn in flight.
         const dbPath = (yield* dataPaths(home)).dbPath
+        yield* holdAsAnotherServer(home)
         const holder = yield* lockWithIdentity(
           home,
           makeEntry({ dbPath, buildFingerprint: "another-build" }),
           {},
         )
-        yield* holdAsAnotherServer(home)
         const { result, signals } = yield* Gent.server({
           cwd: home,
           state: Gent.state.sqlite({ home }),
@@ -705,12 +693,12 @@ describe("Server Lock Ownership", () => {
         Effect.gen(function* () {
           const home = yield* makeTmpHomeScoped
           const dbPath = (yield* dataPaths(home)).dbPath
+          yield* holdAsAnotherServer(home)
           const holder = yield* lockWithIdentity(
             home,
             makeEntry({ dbPath, buildFingerprint: "unknown" }),
             {},
           )
-          yield* holdAsAnotherServer(home)
           yield* gitFindsNoRepository
           const { result, signals } = yield* Gent.server({
             cwd: home,
@@ -802,6 +790,9 @@ describe("Server Lock Ownership", () => {
           }).pipe(withSignalTrap)
           expect(result._tag).toBe("Owned")
           expect(signals).toEqual([])
+          expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).not.toBe(
+            "test-server-1",
+          )
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
@@ -824,8 +815,8 @@ describe("serverLock.stop", () => {
         ...entry,
         rpcUrl: `${new URL(endpoint.url).origin}/rpc`,
       })
-      yield* serverLockFile.write(home, locked)
       const held = yield* holdAsAnotherServer(home)
+      yield* serverLockFile.write(home, locked)
       // The server exits: its kernel lock goes, and its endpoint stops answering.
       const release = held.release.pipe(
         Effect.andThen(
@@ -980,8 +971,8 @@ describe("serverLock.stop", () => {
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        yield* serverLockFile.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
         yield* holdAsAnotherServer(home)
+        yield* serverLockFile.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("NotOwned")
         expect(signals).toEqual([])

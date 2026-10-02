@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Schema, Schema as S } from "effect"
 
 declare const entry: object
 declare const result: object
@@ -45,3 +45,19 @@ const nestedKey = Schema.encodeSync(
 export const nested = new Set<string>().has(
   nestedKey({ kind: "a", tags: [], pair: [true, null], inner: {} }),
 )
+
+// An aliased import of a stable struct is as stable as the plain spelling.
+const aliasedKey = S.encodeSync(S.fromJsonString(S.Struct({ id: S.String })))
+export const aliasedIdentity = aliasedKey({ id: "a" })
+
+// A local named `Schema` is not effect's, and an encoder that shares a name
+// with one in another scope is not that encoder.
+interface Codec {
+  readonly encodeSync: (schema: unknown) => (value: unknown) => string
+  readonly fromJsonString: (schema: unknown) => unknown
+}
+export const shadowed = (Schema: Codec) => {
+  const encodeJson = Schema.encodeSync(Schema.fromJsonString(undefined))
+  return encodeJson(entry) === "{}"
+}
+export const otherScope = (encodeJson: (value: unknown) => string) => encodeJson(entry) === "{}"

@@ -267,6 +267,24 @@ const holdKernelLock = (
   })
 
 /**
+ * Own the database for the life of the current scope: take the kernel lock,
+ * then remove the entry on disk. Holding the lock proves no server runs on
+ * the database, so the entry names a server that is gone; removed at once, it
+ * is never probed by a start that waits on this owner. False when another
+ * connection holds the lock, and the entry is left to its holder.
+ */
+const holdServerLock = (
+  home: string,
+): Effect.Effect<boolean, GentConnectionError, Scope.Scope | FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    if (!(yield* holdKernelLock(home))) return false
+    const fs = yield* FileSystem.FileSystem
+    const entry = (yield* dataPaths(home)).serverLock
+    yield* fs.remove(entry).pipe(Effect.ignore)
+    return true
+  })
+
+/**
  * True while some connection holds the kernel lock. The probe releases what it
  * takes. A holder creates the lock file before it locks it, so no file means
  * no holder, and the probe creates nothing.
@@ -481,7 +499,7 @@ export const serverLock = {
   status: lockStatus,
   probe: (entry: ServerLockEntry) => probeServerLockEntryIdentity(entry),
   stop: stopLocked,
-  hold: holdKernelLock,
+  hold: holdServerLock,
 }
 
 // ── server handle ───────────────────────────────────────────────────────────
@@ -704,8 +722,9 @@ const resolveServerInternal = (
     const paths = yield* dataPaths(home)
     const dbPath = paths.dbPath
 
-    // An entry that failed the identity probe once. The owner writes its entry
-    // only after it listens, so a second failure on the same entry is final.
+    // An entry that failed the identity probe once. The holder removed any
+    // older entry when it took the lock and writes its own only after it
+    // listens, so a second failure on the same entry is final.
     let unanswered = Option.none<string>()
     const attachOrBlock = (holder: ServerLockEntry) => {
       if (!mayAttach) {

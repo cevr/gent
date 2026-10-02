@@ -300,8 +300,9 @@ const CASES: ReadonlyArray<RuleCase> = [
     // four identity names, a comparison, `.has` and `.add`, three arrays that
     // carry an object, the unsafe side of a mixed comparison, a binding
     // broken across lines, an encoder called where it is built, and three
-    // in-place structs with a field of open or unknown encoding
-    expectedCount: 16,
+    // in-place structs with a field of open or unknown encoding, and an
+    // aliased, a named and a namespace import of the encoder
+    expectedCount: 19,
   },
   {
     // A TUI reactive scope tracks the session identity; a handler, a JSX
@@ -353,7 +354,9 @@ const expectedRows = CASES.map((c) => ({
   valid: c.valid.map(() => 0),
 }))
 
-effectDescribe("custom lint rules", () => {
+// ── pre-commit fixer routing ────────────────────────────────────────────────
+
+effectDescribe("pre-commit fixer routing", () => {
   it.scopedLive(
     "staged fixer routing excludes broken fixtures while keeping the gamut driver",
     () =>
@@ -412,7 +415,11 @@ effectDescribe("custom lint rules", () => {
       }).pipe(Effect.timeout(FIXTURE_LINT_BOUND), Effect.provide(BunServices.layer)),
     FIXTURE_LINT_BACKSTOP_MS,
   )
+})
 
+// ── each rule fires on its fixtures ─────────────────────────────────────────
+
+effectDescribe("custom lint rules", () => {
   // The two runs go together: each is bounded by OXLINT_RUN_BOUND plus
   // OXLINT_KILL_GRACE, the test by FIXTURE_LINT_BOUND, and bun by
   // FIXTURE_LINT_BACKSTOP_MS, each longer than the one before, so a stuck run
