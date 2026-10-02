@@ -2104,6 +2104,101 @@ describe("a background completion the full follow-up queue refused", () => {
 // ── background bash across a restart ───────────────────────────────────────
 
 describe("a background job the server stopped", () => {
+  for (const entry of [
+    { name: "completion", failed: false },
+    { name: "failure", failed: true },
+  ]) {
+    it.scopedLive.layer(BunServices.layer)(
+      `interruption after durable ${entry.name} keeps the undelivered outcome`,
+      () =>
+        Effect.gen(function* () {
+          const directory = yield* makeTempDirectoryScoped("gent-background-delivery-")
+          const terminal = yield* Deferred.make<void>()
+          const notices = yield* Ref.make<ReadonlyArray<string>>([])
+          const ctx = withSession(
+            { ...stubCtx, home: directory, toolCallId: ToolCallId.make(`delivery-${entry.name}`) },
+            {
+              ...stubCtx.Session,
+              getSession: () =>
+                Effect.succeed(
+                  new Session({
+                    id: stubCtx.sessionId,
+                    activeBranchId: stubCtx.branchId,
+                    createdAt: now,
+                    updatedAt: now,
+                  }),
+                ),
+              listBranches: Effect.succeed([
+                new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
+              ]),
+              send: onQueue((notice) => Ref.update(notices, (all) => [...all, notice.sourceId])),
+            },
+          )
+          const storageLayer = SqliteStorage.LiveWithSql(
+            `${directory}/storage.db`,
+            Layer.empty,
+            {},
+          ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+          const interruptAfterCommit = (commit: Effect.Effect<void, BackgroundBashStorageError>) =>
+            Effect.withFiber((fiber) =>
+              commit.pipe(
+                Effect.tap(() => Effect.sync(() => fiber.interruptUnsafe())),
+                Effect.ensuring(Deferred.succeed(terminal, void 0)),
+              ),
+            )
+          const interruptedStorage = Layer.effect(
+            BackgroundBashStorage,
+            Effect.gen(function* () {
+              const storage = yield* BackgroundBashStorage
+              return BackgroundBashStorage.of({
+                ...storage,
+                markCompleted: (key, result) =>
+                  interruptAfterCommit(storage.markCompleted(key, result)),
+                markFailed: (key, message) =>
+                  interruptAfterCommit(storage.markFailed(key, message)),
+              })
+            }),
+          ).pipe(Layer.provideMerge(BackgroundBashStorage.Live))
+          const processLayer = BackgroundBashSupervisorLive.pipe(
+            Layer.provideMerge(interruptedStorage),
+            Layer.provideMerge(Layer.merge(storageLayer, BunServices.layer)),
+          )
+          const scope = yield* Scope.make()
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+          const profile = yield* Layer.buildWithScope(processLayer, scope)
+          let cwd = directory
+          let status = "completed"
+          let message = "saved-output"
+          if (entry.failed) {
+            cwd = `${directory}/missing-directory`
+            status = "failed"
+            message = "missing-directory"
+          }
+          yield* runToolWithCtx(
+            BashTool,
+            { command: "printf saved-output", cwd, run_in_background: true },
+            ctx,
+          ).pipe(Effect.provideContext(profile))
+          yield* Deferred.await(terminal)
+          yield* Scope.close(scope, Exit.void)
+          expect(yield* Ref.get(notices)).toEqual([])
+          const pending = yield* BackgroundBashStorage.pipe(
+            Effect.flatMap((storage) =>
+              storage.undeliveredJobs({ sessionId: ctx.sessionId, branchId: ctx.branchId }),
+            ),
+            Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))),
+          )
+          expect(pending).toHaveLength(1)
+          expect(pending[0]).toMatchObject({
+            toolCallId: ctx.toolCallId,
+            state: { status, command: "printf saved-output" },
+          })
+          expect(pending[0]?.state.message).toContain(message)
+        }).pipe(withProcessTimeout),
+      processTestTimeout,
+    )
+  }
+
   it.scopedLive.layer(BunServices.layer)(
     "interruption after a durable start claim leaves a scope-owned job",
     () =>

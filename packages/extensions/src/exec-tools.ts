@@ -131,16 +131,15 @@ interface BackgroundBashStorageService {
     BackgroundBashStorageError
   >
   /**
-   * Records whether a settled job's follow-up message was sent. A refused
-   * send (a full follow-up queue, for one) marks the job, and the branch's
-   * next turn reads it as a notice; a later accepted send, a replay after a
-   * restart for one, clears the mark, so the model does not get it twice.
+   * Settled jobs start with a pending delivery mark. An accepted follow-up
+   * clears it; a refused send keeps it, and the next turn reads a notice.
+   * Recording a refusal also marks older rows that predate this contract.
    */
   readonly recordDelivery: (
     key: BackgroundBashJobKeyFields,
     delivered: boolean,
   ) => Effect.Effect<void, BackgroundBashStorageError>
-  /** The branch's settled jobs whose follow-up was refused and no answered turn has read, oldest first. */
+  /** The branch's settled jobs whose follow-up was not delivered and no answered turn has read, oldest first. */
   readonly undeliveredJobs: (
     branch: BackgroundBashBranch,
   ) => Effect.Effect<
@@ -276,7 +275,8 @@ export class BackgroundBashStorage extends Context.Service<
           SET status = ${status},
               completed_at = ${completedAt},
               exit_code = ${Option.getOrNull(exitCode)},
-              message = ${message}
+              message = ${message},
+              undelivered_at = COALESCE(undelivered_at, ${completedAt})
           WHERE session_id = ${key.sessionId}
             AND branch_id = ${key.branchId}
             AND tool_call_id = ${key.toolCallId}
@@ -1023,8 +1023,8 @@ const storedOutputFile = (file: string, state: BackgroundBashTerminalState) =>
 // session must not spend a turn with no user present, so the job wakes
 // nobody: every step of the branch's next turn shows it as a turn notice,
 // and the turn that answered with it shown marks it read on its row. A job
-// whose message the follow-up queue refused is shown the same way, with its
-// outcome, so no finished job goes unreported.
+// whose follow-up was refused or interrupted before admission is shown the
+// same way, with its outcome, so no finished job goes unreported.
 
 const maximumNoticeJobs = 10
 const maximumNoticeCommandChars = 200
@@ -1116,7 +1116,7 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const undelivered = jobNotice(finished, {
     id: "exec-tools-undelivered",
     intro:
-      "# Background commands finished\n\nThese background commands finished while the follow-up queue was full, so no message reported them. Tell the user what they returned.",
+      "# Background commands finished\n\nThese background commands finished before a follow-up reported them. Tell the user what they returned.",
     line: (job) => {
       let outcome = "failed"
       if (job.state.status === "completed") outcome = `exit code ${job.state.exitCode ?? 0}`
@@ -1211,9 +1211,9 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
 
     /**
      * Queues the settled job's message and records the outcome, the one
-     * writer of the row's delivery mark: a refused send marks the row, and
-     * the branch's next turn reads the job as a notice; an accepted send (a
-     * replay of a refused one, for one) clears it.
+     * writer that clears the terminal update's pending delivery mark after
+     * admission succeeds. A refused or interrupted send leaves a notice for
+     * the next turn; replay uses the same stable follow-up identity.
      */
     const deliverTerminal = (
       target: BackgroundBashTarget,
