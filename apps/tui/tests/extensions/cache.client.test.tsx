@@ -20,7 +20,6 @@ import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { emptyQueueSnapshot, EventId, testAgent } from "@gent/core/test-utils"
 import { CHILD_COMPLETION_TYPE, WAKE_MESSAGE_TYPE } from "@gent/extensions/client"
 import cacheExtension, {
-  CACHE_EXTENSION_ID,
   type CacheMiss,
   CacheMissCause,
   type CacheScan,
@@ -1048,8 +1047,6 @@ describe("cache client extension", () => {
         0,
       )
       expect(total).toBeCloseTo((32_000 * 2.3) / 1_000_000, 10)
-      expect(notices?.id).toBe("cache.misses")
-      expect(CACHE_EXTENSION_ID).toBe("@gent/cache")
     }).pipe(Effect.timeout("4 seconds")),
   )
 

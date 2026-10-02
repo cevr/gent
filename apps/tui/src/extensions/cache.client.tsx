@@ -48,7 +48,7 @@ import {
  * large enough to matter; the status row shows the branch's total.
  */
 
-export const CACHE_EXTENSION_ID = "@gent/cache"
+const CACHE_EXTENSION_ID = "@gent/cache"
 
 /** A miss at or under this is cache breakpoint granularity, not a lost prefix. */
 const NOISE_FLOOR_TOKENS = 1024
