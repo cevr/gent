@@ -3233,8 +3233,8 @@ describe("startup recovery", () => {
       },
     },
     {
-      // A turn that failed writes no `TurnCompleted`. Once a later turn has
-      // completed, the failed one is history: reopening must not answer it.
+      // A turn that died writes no `TurnCompleted`. Once a later turn has
+      // completed, the dead one is history: reopening must not answer it.
       name: "startup does not replay a failed turn that newer completed turns followed",
       seed: (sessionId, branchId) => {
         const failed = userMessage(sessionId, branchId, "msg-failed", "the turn that failed", 0)

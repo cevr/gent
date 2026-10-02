@@ -2074,8 +2074,8 @@ const makeAgentLoopBehavior = (
           return []
         }),
       )
-      // A failed turn writes no receipt. Once a later turn has completed, the
-      // failed one is history the branch moved past, so only messages received
+      // A turn that died writes no receipt. Once a later turn has completed,
+      // the dead one is history the branch moved past, so only messages received
       // after the last completion can be the turn a restart cut short.
       const lastCompletion = envelopes.findLastIndex(({ event }) => event._tag === "TurnCompleted")
       // Continuation prompts, handoff markers, and model-change notices are
