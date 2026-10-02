@@ -2,7 +2,7 @@
 
 Subprocess tests: the TUI on a real pty (`tests/e2e.test.ts`, `tests/scrollback.test.ts`) and the server process lifecycle (`tests/server-lifecycle.test.ts`). Run them with `bun run test:e2e` from the root.
 
-`src/pty-fixture.ts` owns the pty: `Bun.Terminal` with `Bun.spawn`, in the caller's scope, with `@xterm/headless` as the screen. Bun's pty is not the child's controlling terminal (Bun 1.4.2), so the fixture spawns the child in its own session and process group and sends that group SIGWINCH on each resize, as the kernel does for a terminal's foreground group.
+`src/pty-fixture.ts` owns the pty: zigpty in the caller's scope, with `@xterm/headless` as the screen. zigpty makes the pty the child's controlling terminal, so a resize reaches the child as SIGWINCH and ctrl+c in cooked mode as SIGINT. `Bun.Terminal` (Bun 1.4.2) does not: its child has no controlling terminal and gets neither signal (`stty size` follows a resize only because it reads the size directly). Switch to it when Bun fixes that.
 
 ## Drive scripts
 
@@ -33,7 +33,7 @@ bun packages/e2e/src/drive.ts <script.json>
 }
 ```
 
-- `command` runs on the pty; `cwd` and `out` resolve against the script's directory. `env` values are used as written (give absolute paths) and laid over `PATH`, `TERM`, `COLORTERM` and `LANG` only, so no key from the caller's environment reaches the program unless the script names it.
+- `command` runs on the pty; `cwd` and `out` resolve against the script's directory. `env` values are used as written (give absolute paths) and laid over `PATH`, `COLORTERM` and `LANG` only (zigpty adds `TERM`), so no key from the caller's environment reaches the program unless the script names it.
 - Steps: `send` text, `keys` a name from `keys` in `src/pty-fixture.ts` (other text goes as is), `wait` ms, `waitFor` a regex on the screen (default 15 s; a miss is logged, the script goes on), `settle` until quiet for that many ms (default 500; no quiet within 15 s fails the script), `resize` cols rows, `cap` / `capAll` the screen without / with scrollback, `cells` the cursor row's first 16 cells, `raw` the bytes so far, `sh` a shell command in `cwd`.
 - Each capture prints and lands in `out/<name>.txt` (`raw`: `<name>.raw`). The screen is a live emulator that follows each resize and answers the program's terminal queries, so a capture after a resize reads as a terminal window would.
 - At the end the program gets ctrl+c, then SIGKILL after a second; the script prints `exit=<code>`.
