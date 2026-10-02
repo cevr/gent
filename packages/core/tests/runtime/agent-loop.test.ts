@@ -3716,8 +3716,8 @@ describe("agent-loop actor commands", () => {
         const secondFiber = yield* Effect.forkChild(call("serialize-b", "b"))
         // The permit is held by the first command, so the second cannot even
         // enter the capability body until the first releases it.
-        const earlySecond = yield* Fiber.join(secondFiber).pipe(Effect.timeoutOption("1 millis"))
-        expect(earlySecond._tag).toBe("None")
+        yield* Effect.yieldNow.pipe(Effect.repeat({ times: 20 }))
+        expect(secondFiber.pollUnsafe()).toBeUndefined()
         expect(entered).toBe(1)
         expect(completed).toBe(0)
         yield* Deferred.succeed(releaseFirst, void 0)
@@ -3777,8 +3777,8 @@ describe("agent-loop actor commands", () => {
         )
         // The running turn owns the mutation permit, so the side mutation
         // cannot start until the turn releases it.
-        const earlyRequest = yield* Fiber.join(requestFiber).pipe(Effect.timeoutOption("1 millis"))
-        expect(earlyRequest._tag).toBe("None")
+        yield* Effect.yieldNow.pipe(Effect.repeat({ times: 20 }))
+        expect(requestFiber.pollUnsafe()).toBeUndefined()
         expect(executed).toBe(false)
         yield* Deferred.succeed(streamReleased, void 0)
         yield* Fiber.join(submitFiber)
@@ -3878,8 +3878,8 @@ describe("agent-loop actor commands", () => {
             input: "blocked until turn completes",
           }),
         )
-        const earlyRecord = yield* Fiber.join(recordFiber).pipe(Effect.timeoutOption("1 millis"))
-        expect(earlyRecord._tag).toBe("None")
+        yield* Effect.yieldNow.pipe(Effect.repeat({ times: 20 }))
+        expect(recordFiber.pollUnsafe()).toBeUndefined()
         yield* sessionRuntime.terminateSession(sessionId).pipe(Effect.timeout("1 second"))
         yield* Fiber.join(submitFiber).pipe(Effect.ignore)
         yield* Fiber.join(recordFiber).pipe(Effect.ignore)
@@ -4992,235 +4992,123 @@ describe("interaction", () => {
       )
     }),
   )
-  it.live("reuses a completed sibling tool after another sibling parks", () =>
-    Effect.gen(function* () {
-      const firstCalls = yield* Ref.make(0)
-      const secondCalls = yield* Ref.make(0)
-      const secondStarted = yield* Deferred.make<void>()
-      const secondResumed = yield* Deferred.make<void>()
-      const firstTool = tool({
-        id: "sibling-first-tool",
-        description: "Completes before the sibling parks",
-        params: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        execute: (params: { value: string }) =>
-          Effect.gen(function* () {
-            yield* ExtensionContext
-            yield* Ref.update(firstCalls, (count) => count + 1)
-            return { value: params.value }
-          }),
-      })
-      const secondTool = tool({
-        id: "sibling-second-tool",
-        description: "Parks once before completing",
-        params: Schema.Struct({ value: Schema.String }),
-        output: Schema.String,
-        execute: (params: { value: string }) =>
-          Effect.gen(function* () {
-            const ctx = yield* ExtensionContext
-            const count = yield* Ref.getAndUpdate(secondCalls, (value) => value + 1)
-            if (count === 0) {
-              yield* Deferred.succeed(secondStarted, void 0)
-              return yield* new InteractionPendingError({
-                requestId: InteractionRequestId.make("req-sibling-tools"),
-                sessionId: ctx.sessionId,
-                branchId: ctx.branchId,
-              })
-            }
-            yield* Deferred.succeed(secondResumed, void 0)
-            return params.value
-          }),
-      })
-      let streamCallIndex = 0
-      const provider = LanguageModelLayers.testStream(() => {
-        const index = streamCallIndex++
-        if (index === 0) {
+  for (const order of [
+    { name: "declared after the pending sibling", declared: ["second", "first"] },
+    { name: "declared before the pending sibling", declared: ["first", "second"] },
+  ] as const) {
+    it.live(`reuses a completed sibling tool ${order.name}`, () =>
+      Effect.gen(function* () {
+        const firstCalls = yield* Ref.make(0)
+        const secondCalls = yield* Ref.make(0)
+        const secondStarted = yield* Deferred.make<void>()
+        const secondResumed = yield* Deferred.make<void>()
+        const firstTool = tool({
+          id: "sibling-first-tool",
+          description: "Completes while its sibling parks",
+          params: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          execute: (params: { value: string }) =>
+            Effect.gen(function* () {
+              yield* ExtensionContext
+              yield* Ref.update(firstCalls, (count) => count + 1)
+              return { value: params.value }
+            }),
+        })
+        const secondTool = tool({
+          id: "sibling-second-tool",
+          description: "Parks once before completing",
+          params: Schema.Struct({ value: Schema.String }),
+          output: Schema.String,
+          execute: (params: { value: string }) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              const count = yield* Ref.getAndUpdate(secondCalls, (value) => value + 1)
+              if (count === 0) {
+                yield* Deferred.succeed(secondStarted, void 0)
+                return yield* new InteractionPendingError({
+                  requestId: InteractionRequestId.make("req-sibling-tools"),
+                  sessionId: ctx.sessionId,
+                  branchId: ctx.branchId,
+                })
+              }
+              yield* Deferred.succeed(secondResumed, void 0)
+              return params.value
+            }),
+        })
+        const toolIds = { first: getToolId(firstTool), second: getToolId(secondTool) }
+        let streamCallIndex = 0
+        const provider = LanguageModelLayers.testStream(() => {
+          const index = streamCallIndex++
+          if (index === 0) {
+            return Effect.succeed(
+              Stream.fromIterable([
+                ...order.declared.map((key) =>
+                  toolCallPart(
+                    toolIds[key],
+                    { value: key },
+                    { toolCallId: ToolCallId.make(`tc-sibling-${key}`) },
+                  ),
+                ),
+                finishPart({ finishReason: "tool-calls" }),
+              ] satisfies LanguageModelStreamPart[]),
+            )
+          }
           return Effect.succeed(
             Stream.fromIterable([
-              toolCallPart(
-                getToolId(secondTool),
-                { value: "second" },
-                { toolCallId: ToolCallId.make("tc-sibling-second") },
-              ),
-              toolCallPart(
-                getToolId(firstTool),
-                { value: "first" },
-                { toolCallId: ToolCallId.make("tc-sibling-first") },
-              ),
-              finishPart({ finishReason: "tool-calls" }),
+              textDeltaPart("siblings complete"),
+              finishPart({ finishReason: "stop" }),
             ] satisfies LanguageModelStreamPart[]),
           )
-        }
-        return Effect.succeed(
-          Stream.fromIterable([
-            textDeltaPart("siblings complete"),
-            finishPart({ finishReason: "stop" }),
-          ] satisfies LanguageModelStreamPart[]),
-        )
-      })
-      const layer = makeLiveToolLayer(provider, [firstTool, secondTool])
-      const message = makeIntMessage("sibling interaction")
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          const fiber = yield* Effect.forkChild(runAgentLoop(message))
-          yield* waitForPhase(
-            agentLoop,
-            { sessionId: intSessionId, branchId: intBranchId },
-            "WaitingForInteraction",
-          )
-          yield* Deferred.await(secondStarted)
-          expect(Ref.getUnsafe(firstCalls)).toBe(1)
-          expect(Ref.getUnsafe(secondCalls)).toBe(1)
-
-          yield* respondAgentLoopInteraction({
-            sessionId: intSessionId,
-            branchId: intBranchId,
-            requestId: InteractionRequestId.make("req-sibling-tools"),
-          })
-          yield* Deferred.await(secondResumed).pipe(Effect.timeout("1 second"))
-          yield* Fiber.join(fiber)
-
-          expect(Ref.getUnsafe(firstCalls)).toBe(1)
-          expect(Ref.getUnsafe(secondCalls)).toBe(2)
-          const messageStorage = yield* MessageStorage
-          const result = yield* messageStorage.getMessage(toolResultMessageIdForTurn(message.id, 1))
-          expect(result).not.toBeUndefined()
-          if (Predicate.isNotUndefined(result)) {
-            expect(result.parts).toHaveLength(2)
-            expect(result.parts.map((part) => part.type === "tool-result" && part.id)).toEqual([
-              "tc-sibling-second",
-              "tc-sibling-first",
-            ])
-            const firstResult = result.parts.find(
-              (part) => part.type === "tool-result" && part.id === "tc-sibling-first",
+        })
+        const layer = makeLiveToolLayer(provider, [firstTool, secondTool])
+        const message = makeIntMessage("sibling interaction")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            const fiber = yield* Effect.forkChild(runAgentLoop(message))
+            yield* waitForPhase(
+              agentLoop,
+              { sessionId: intSessionId, branchId: intBranchId },
+              "WaitingForInteraction",
             )
-            expect(Predicate.isUndefined(firstResult)).toBe(false)
-            if (Predicate.isNotUndefined(firstResult)) {
-              expect(firstResult.type).toBe("tool-result")
-              if (firstResult.type === "tool-result") {
+            yield* Deferred.await(secondStarted)
+            expect(Ref.getUnsafe(firstCalls)).toBe(1)
+            expect(Ref.getUnsafe(secondCalls)).toBe(1)
+
+            yield* respondAgentLoopInteraction({
+              sessionId: intSessionId,
+              branchId: intBranchId,
+              requestId: InteractionRequestId.make("req-sibling-tools"),
+            })
+            yield* Deferred.await(secondResumed).pipe(Effect.timeout("1 second"))
+            yield* Fiber.join(fiber)
+
+            expect(Ref.getUnsafe(firstCalls)).toBe(1)
+            expect(Ref.getUnsafe(secondCalls)).toBe(2)
+            const messageStorage = yield* MessageStorage
+            const result = yield* messageStorage.getMessage(
+              toolResultMessageIdForTurn(message.id, 1),
+            )
+            expect(result).not.toBeUndefined()
+            if (Predicate.isNotUndefined(result)) {
+              expect(result.parts.map((part) => part.type === "tool-result" && part.id)).toEqual(
+                order.declared.map((key) => `tc-sibling-${key}`),
+              )
+              const firstResult = result.parts.find(
+                (part) => part.type === "tool-result" && part.id === "tc-sibling-first",
+              )
+              expect(firstResult?.type).toBe("tool-result")
+              if (firstResult?.type === "tool-result") {
                 expect(firstResult.result).toEqual({ value: "first" })
               }
             }
-          }
-        })
-          .pipe(Effect.provide(layer))
-          .pipe(Effect.timeout("2 seconds")),
-      )
-    }),
-  )
-  it.live("reuses a completed sibling declared before the pending sibling", () =>
-    Effect.gen(function* () {
-      const firstCalls = yield* Ref.make(0)
-      const secondCalls = yield* Ref.make(0)
-      const secondStarted = yield* Deferred.make<void>()
-      const secondResumed = yield* Deferred.make<void>()
-      const firstTool = tool({
-        id: "sibling-reverse-first",
-        description: "Completes before the pending sibling",
-        params: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        execute: (params: { value: string }) =>
-          Effect.gen(function* () {
-            yield* ExtensionContext
-            yield* Ref.update(firstCalls, (count) => count + 1)
-            return { value: params.value }
-          }),
-      })
-      const secondTool = tool({
-        id: "sibling-reverse-second",
-        description: "Parks after the completed sibling",
-        params: Schema.Struct({ value: Schema.String }),
-        output: Schema.String,
-        execute: (params: { value: string }) =>
-          Effect.gen(function* () {
-            const ctx = yield* ExtensionContext
-            const count = yield* Ref.getAndUpdate(secondCalls, (value) => value + 1)
-            if (count === 0) {
-              yield* Deferred.succeed(secondStarted, void 0)
-              return yield* new InteractionPendingError({
-                requestId: InteractionRequestId.make("req-sibling-reverse"),
-                sessionId: ctx.sessionId,
-                branchId: ctx.branchId,
-              })
-            }
-            yield* Deferred.succeed(secondResumed, void 0)
-            return params.value
-          }),
-      })
-      let streamCallIndex = 0
-      const provider = LanguageModelLayers.testStream(() => {
-        const index = streamCallIndex++
-        if (index === 0) {
-          return Effect.succeed(
-            Stream.fromIterable([
-              toolCallPart(
-                getToolId(firstTool),
-                { value: "first-reverse" },
-                { toolCallId: ToolCallId.make("tc-sibling-reverse-first") },
-              ),
-              toolCallPart(
-                getToolId(secondTool),
-                { value: "second-reverse" },
-                { toolCallId: ToolCallId.make("tc-sibling-reverse-second") },
-              ),
-              finishPart({ finishReason: "tool-calls" }),
-            ] satisfies LanguageModelStreamPart[]),
-          )
-        }
-        return Effect.succeed(
-          Stream.fromIterable([
-            textDeltaPart("reverse siblings complete"),
-            finishPart({ finishReason: "stop" }),
-          ] satisfies LanguageModelStreamPart[]),
-        )
-      })
-      const layer = makeLiveToolLayer(provider, [firstTool, secondTool])
-      const message = makeIntMessage("reverse sibling interaction")
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          const fiber = yield* Effect.forkChild(runAgentLoop(message))
-          yield* waitForPhase(
-            agentLoop,
-            { sessionId: intSessionId, branchId: intBranchId },
-            "WaitingForInteraction",
-          )
-          yield* Deferred.await(secondStarted)
-          expect(Ref.getUnsafe(firstCalls)).toBe(1)
-          expect(Ref.getUnsafe(secondCalls)).toBe(1)
-
-          yield* respondAgentLoopInteraction({
-            sessionId: intSessionId,
-            branchId: intBranchId,
-            requestId: InteractionRequestId.make("req-sibling-reverse"),
           })
-          yield* Deferred.await(secondResumed).pipe(Effect.timeout("1 second"))
-          yield* Fiber.join(fiber)
-
-          expect(Ref.getUnsafe(firstCalls)).toBe(1)
-          expect(Ref.getUnsafe(secondCalls)).toBe(2)
-          const result = yield* MessageStorage.pipe(
-            Effect.flatMap((storage) =>
-              storage.getMessage(toolResultMessageIdForTurn(message.id, 1)),
-            ),
-          )
-          expect(result).not.toBeUndefined()
-          if (Predicate.isNotUndefined(result)) {
-            const firstResult = result.parts.find(
-              (part) => part.type === "tool-result" && part.id === "tc-sibling-reverse-first",
-            )
-            expect(firstResult?.type).toBe("tool-result")
-            if (firstResult?.type === "tool-result") {
-              expect(firstResult.result).toEqual({ value: "first-reverse" })
-            }
-          }
-        })
-          .pipe(Effect.provide(layer))
-          .pipe(Effect.timeout("2 seconds")),
-      )
-    }),
-  )
+            .pipe(Effect.provide(layer))
+            .pipe(Effect.timeout("2 seconds")),
+        )
+      }),
+    )
+  }
   it.live("does not rerun a tool when its persisted structured result is corrupt", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0)
@@ -5450,37 +5338,17 @@ describe("turn scheduling", () => {
     "concurrent sessions run independently",
     () =>
       Effect.gen(function* () {
-        const gate = yield* Deferred.make<void>()
-        const firstStarted = yield* Deferred.make<void>()
-        let calls = 0
-        const providerLayer = LanguageModelLayers.testStream(() => {
-          calls += 1
-          if (calls === 1) {
-            return Effect.succeed(
-              Stream.fromEffect(
-                Effect.gen(function* () {
-                  yield* Deferred.succeed(firstStarted, void 0)
-                  yield* Deferred.await(gate)
-                  return finishPart({ finishReason: "stop" })
-                }),
-              ).pipe(
-                Stream.flatMap(() =>
-                  Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-                ),
-              ),
-            )
-          }
-          return Effect.succeed(
-            Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-          )
-        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("ok"), gated: true },
+          textStep("ok"),
+        ])
         const layer = makeLayer(providerLayer)
         yield* Effect.scoped(
           Effect.gen(function* () {
             const messageA = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "hello")
             const messageB = makeMessage(SessionId.make("s2"), BranchId.make("b2"), "world")
             const fiberA = yield* Effect.forkChild(runAgentLoop(messageA))
-            yield* Deferred.await(firstStarted)
+            yield* controls.waitForCall(0)
             const fiberB = yield* Effect.forkChild(runAgentLoop(messageB))
             // A's model stays open until the gate opens below, so B finishing
             // here is B running without A. B waiting on A never finishes, and
@@ -5489,8 +5357,9 @@ describe("turn scheduling", () => {
             expect(Exit.isSuccess(finishedB)).toBe(true)
             const statusA = fiberA.pollUnsafe()
             expect(statusA).toBeUndefined()
-            yield* Deferred.succeed(gate, void 0)
+            yield* controls.emitAll(0)
             yield* Fiber.join(fiberA)
+            yield* controls.assertDone
           }).pipe(Effect.provide(layer)),
         )
       }).pipe(Effect.timeout("10 seconds")),
@@ -5498,30 +5367,10 @@ describe("turn scheduling", () => {
   )
   it.live("a second send to a busy branch is queued and runs after the first turn", () =>
     Effect.gen(function* () {
-      const gate = yield* Deferred.make<void>()
-      const firstStarted = yield* Deferred.make<void>()
-      let calls = 0
-      const providerLayer = LanguageModelLayers.testStream(() => {
-        calls += 1
-        if (calls === 1) {
-          return Effect.succeed(
-            Stream.fromEffect(
-              Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, void 0)
-                yield* Deferred.await(gate)
-                return finishPart({ finishReason: "stop" })
-              }),
-            ).pipe(
-              Stream.flatMap(() =>
-                Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-              ),
-            ),
-          )
-        }
-        return Effect.succeed(
-          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-        )
-      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...textStep("ok"), gated: true },
+        textStep("ok"),
+      ])
       const baseStorageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
       const layer = actorTestRoot({ provider: providerLayer, storage: baseStorageLayer })
       yield* Effect.scoped(
@@ -5530,54 +5379,32 @@ describe("turn scheduling", () => {
           const fiberA = yield* Effect.forkChild(
             runAgentLoop(makeMessage(SessionId.make("s1"), BranchId.make("b1"), "first")),
           )
-          yield* Deferred.await(firstStarted)
+          yield* controls.waitForCall(0)
           const fiberB = yield* Effect.forkChild(
             submitAgentLoop(makeMessage(SessionId.make("s1"), BranchId.make("b1"), "second")),
           )
-          const queuedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
-          expect(queuedB._tag).toBe("Some")
-          expect(calls).toBe(1)
-          yield* Deferred.succeed(gate, void 0)
+          // Admission returns once B is queued, while A still holds the model open.
+          yield* Fiber.join(fiberB).pipe(Effect.timeout("2 seconds"))
+          expect(yield* controls.callCount).toBe(1)
+          yield* controls.emitAll(0)
           yield* Fiber.join(fiberA)
           yield* waitForPhase(
             agentLoop,
             { sessionId: SessionId.make("s1"), branchId: BranchId.make("b1") },
             "Idle",
           )
-          expect(calls).toBe(2)
+          expect(yield* controls.callCount).toBe(2)
+          yield* controls.assertDone
         }).pipe(Effect.provide(layer)),
       )
     }),
   )
   it.live("interrupt scoped to session/branch", () =>
     Effect.gen(function* () {
-      const gateA = yield* Deferred.make<void>()
-      const gateB = yield* Deferred.make<void>()
-      const startedA = yield* Deferred.make<void>()
-      const startedB = yield* Deferred.make<void>()
-      let calls = 0
-      const providerLayer = LanguageModelLayers.testStream(() => {
-        calls += 1
-        let gate = gateB
-        let started = startedB
-        if (calls === 1) {
-          gate = gateA
-          started = startedA
-        }
-        return Effect.succeed(
-          Stream.fromEffect(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, void 0)
-              yield* Deferred.await(gate)
-              return finishPart({ finishReason: "stop" })
-            }),
-          ).pipe(
-            Stream.flatMap(() =>
-              Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-            ),
-          ),
-        )
-      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...textStep("ok"), gated: true },
+        { ...textStep("ok"), gated: true },
+      ])
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -5585,8 +5412,8 @@ describe("turn scheduling", () => {
           const messageB = makeMessage(SessionId.make("s2"), BranchId.make("b2"), "beta")
           const fiberA = yield* Effect.forkChild(runAgentLoop(messageA))
           const fiberB = yield* Effect.forkChild(runAgentLoop(messageB))
-          yield* Deferred.await(startedA)
-          yield* Deferred.await(startedB)
+          yield* controls.waitForCall(0)
+          yield* controls.waitForCall(1)
           // No writer sends `Interrupt` now; a stored steer row with it still cancels.
           yield* steerAgentLoop({
             _tag: "Interrupt",
@@ -5594,12 +5421,12 @@ describe("turn scheduling", () => {
             branchId: BranchId.make("b1"),
             requestId: "req-interrupt-s1",
           })
-          const finishedA = yield* Fiber.join(fiberA).pipe(Effect.timeoutOption("200 millis"))
-          expect(finishedA._tag).toBe("Some")
+          // A ends on the interrupt alone: both model gates stay shut.
+          yield* Fiber.join(fiberA).pipe(Effect.timeout("2 seconds"))
           const statusB = fiberB.pollUnsafe()
           expect(statusB).toBeUndefined()
-          yield* Deferred.succeed(gateA, void 0)
-          yield* Deferred.succeed(gateB, void 0)
+          yield* controls.emitAll(0)
+          yield* controls.emitAll(1)
           yield* Fiber.join(fiberB)
         }).pipe(Effect.provide(layer)),
       )
@@ -5613,26 +5440,8 @@ describe("a failed turn", () => {
       const providerLayer = scriptedProvider([
         [textDeltaPart("not committed"), finishPart({ finishReason: "stop" })],
       ])
-      const failingPublisherLayer = Layer.succeed(
-        EventStore,
-        EventStore.of({
-          subscribe: () => Stream.empty,
-          removeSession: () => Effect.void,
-          append: (event: AgentEvent) => {
-            if (event._tag === "MessageReceived" && event.message.role === "assistant") {
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
-            }
-            return Effect.gen(function* () {
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: () => Effect.void,
-        }),
+      const failingPublisherLayer = failingAppendStore(
+        (event) => event._tag === "MessageReceived" && event.message.role === "assistant",
       )
       yield* Effect.gen(function* () {
         const messageStorage = yield* MessageStorage
@@ -5657,27 +5466,9 @@ describe("a failed turn", () => {
       const record = (event: AgentEvent) => Ref.update(seen, (events) => [...events, event])
       // The assistant line's append fails: a storage failure inside a turn
       // phase, which the model stream never sees.
-      const failingPublisherLayer = Layer.succeed(
-        EventStore,
-        EventStore.of({
-          subscribe: () => Stream.empty,
-          removeSession: () => Effect.void,
-          append: (event: AgentEvent) => {
-            if (event._tag === "MessageReceived" && event.message.role === "assistant") {
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
-            }
-            return Effect.gen(function* () {
-              yield* record(event)
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: record,
-        }),
+      const failingPublisherLayer = failingAppendStore(
+        (event) => event._tag === "MessageReceived" && event.message.role === "assistant",
+        record,
       )
       yield* Effect.gen(function* () {
         const messageStorage = yield* MessageStorage
@@ -5752,53 +5543,19 @@ describe("a failed turn", () => {
       const branchId = BranchId.make("foreign-failure-branch")
       const first = makeMessage(sessionId, branchId, "first fails")
       const second = makeMessage(sessionId, branchId, "second waits")
-      const firstStarted = yield* Deferred.make<void>()
-      const gate = yield* Deferred.make<void>()
-      let streamCalls = 0
-      const providerLayer = LanguageModelLayers.testStream(() => {
-        streamCalls += 1
-        const parts = Stream.fromIterable([
-          textDeltaPart("ok"),
-          finishPart({ finishReason: "stop" }),
-        ])
-        if (streamCalls > 1) return Effect.succeed(parts)
-        return Effect.succeed(
-          Stream.fromEffect(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(firstStarted, void 0)
-              yield* Deferred.await(gate)
-            }),
-          ).pipe(Stream.flatMap(() => parts)),
-        )
-      })
-      const failFirstAssistant = Layer.succeed(
-        EventStore,
-        EventStore.of({
-          subscribe: () => Stream.empty,
-          removeSession: () => Effect.void,
-          append: (event: AgentEvent) => {
-            if (
-              event._tag === "MessageReceived" &&
-              event.message.id === assistantMessageIdForTurn(first.id, 1)
-            ) {
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
-            }
-            return Effect.gen(function* () {
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: () => Effect.void,
-        }),
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...textStep("ok"), gated: true },
+        textStep("ok"),
+      ])
+      const failFirstAssistant = failingAppendStore(
+        (event) =>
+          event._tag === "MessageReceived" &&
+          event.message.id === assistantMessageIdForTurn(first.id, 1),
       )
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(first)))
-        yield* Deferred.await(firstStarted)
+        yield* controls.waitForCall(0)
         const secondFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(second)))
         yield* waitForOption(
           () =>
@@ -5807,12 +5564,12 @@ describe("a failed turn", () => {
               .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 1))),
           "second message queued",
         )
-        yield* Deferred.succeed(gate, void 0)
+        yield* controls.emitAll(0)
         const firstExit = yield* Fiber.join(firstFiber)
         const secondExit = yield* Fiber.join(secondFiber)
         expect(firstExit._tag).toBe("Failure")
         expect(secondExit._tag).toBe("Success")
-        expect(streamCalls).toBe(2)
+        expect(yield* controls.callCount).toBe(2)
       }).pipe(
         Effect.timeout("4 seconds"),
         Effect.provide(makeLayerWithEventStore(providerLayer, failFirstAssistant)),
@@ -5873,52 +5630,20 @@ describe("a failed turn", () => {
       const first = makeMessage(sessionId, branchId, "first completes")
       const second = makeMessage(sessionId, branchId, "second is never saved")
       const third = makeMessage(sessionId, branchId, "third runs")
-      const firstStarted = yield* Deferred.make<void>()
-      const gate = yield* Deferred.make<void>()
-      let streamCalls = 0
       let secondAttempts = 0
-      const providerLayer = LanguageModelLayers.testStream(() => {
-        streamCalls += 1
-        const parts = Stream.fromIterable([
-          textDeltaPart("ok"),
-          finishPart({ finishReason: "stop" }),
-        ])
-        if (streamCalls > 1) return Effect.succeed(parts)
-        return Effect.succeed(
-          Stream.fromEffect(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(firstStarted, void 0)
-              yield* Deferred.await(gate)
-            }),
-          ).pipe(Stream.flatMap(() => parts)),
-        )
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...textStep("ok"), gated: true },
+        textStep("ok"),
+      ])
+      const failSecondUserMessage = failingAppendStore((event) => {
+        const fails = event._tag === "MessageReceived" && event.message.id === second.id
+        if (fails) secondAttempts += 1
+        return fails
       })
-      const failSecondUserMessage = Layer.succeed(
-        EventStore,
-        EventStore.of({
-          subscribe: () => Stream.empty,
-          removeSession: () => Effect.void,
-          append: (event: AgentEvent) => {
-            if (event._tag === "MessageReceived" && event.message.id === second.id) {
-              secondAttempts += 1
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
-            }
-            return Effect.gen(function* () {
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: () => Effect.void,
-        }),
-      )
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(first)))
-        yield* Deferred.await(firstStarted)
+        yield* controls.waitForCall(0)
         const secondFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(second)))
         yield* waitForOption(
           () =>
@@ -5935,13 +5660,13 @@ describe("a failed turn", () => {
               .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 2))),
           "third message queued",
         )
-        yield* Deferred.succeed(gate, void 0)
+        yield* controls.emitAll(0)
         expect((yield* Fiber.join(firstFiber))._tag).toBe("Success")
         expect((yield* Fiber.join(secondFiber))._tag).toBe("Failure")
         expect((yield* Fiber.join(thirdFiber))._tag).toBe("Success")
         // The failed admission runs once; it is not taken again.
         expect(secondAttempts).toBe(1)
-        expect(streamCalls).toBe(2)
+        expect(yield* controls.callCount).toBe(2)
       }).pipe(
         Effect.timeout("4 seconds"),
         Effect.provide(makeLayerWithEventStore(providerLayer, failSecondUserMessage)),
@@ -5953,27 +5678,7 @@ describe("a failed turn", () => {
       const providerLayer = scriptedProvider([
         [textDeltaPart("committed before finalize"), finishPart({ finishReason: "stop" })],
       ])
-      const failingPublisherLayer = Layer.succeed(
-        EventStore,
-        EventStore.of({
-          subscribe: () => Stream.empty,
-          removeSession: () => Effect.void,
-          append: (event: AgentEvent) => {
-            if (event._tag === "TurnCompleted") {
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
-            }
-            return Effect.gen(function* () {
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: () => Effect.void,
-        }),
-      )
+      const failingPublisherLayer = failingAppendStore((event) => event._tag === "TurnCompleted")
       yield* Effect.gen(function* () {
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
@@ -6867,6 +6572,35 @@ const scriptedProvider = (
     ),
   )
 }
+
+/**
+ * An event store that fails each append `fails` picks and keeps no other
+ * event. `observe` sees each event it appends or publishes.
+ */
+const failingAppendStore = (
+  fails: (event: AgentEvent) => boolean,
+  observe: (event: AgentEvent) => Effect.Effect<void> = () => Effect.void,
+) =>
+  Layer.succeed(
+    EventStore,
+    EventStore.of({
+      subscribe: () => Stream.empty,
+      removeSession: () => Effect.void,
+      append: (event: AgentEvent) => {
+        if (fails(event)) return Effect.fail(new EventStoreError({ message: "append failed" }))
+        return Effect.gen(function* () {
+          yield* observe(event)
+          return EventEnvelope.make({
+            id: EventId.make(0),
+            event,
+            createdAt: yield* Clock.currentTimeMillis,
+          })
+        })
+      },
+      deliver: () => Effect.void,
+      publish: observe,
+    }),
+  )
 
 const retryableStreamError = () =>
   AiError.make({
