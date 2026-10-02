@@ -6,6 +6,7 @@ import {
   type ManagedRuntime,
   Option,
   type Path,
+  Predicate,
   Schema,
   Scope,
 } from "effect"
@@ -628,7 +629,8 @@ export const sessionQuery = <A>(opts: {
 //   - autocomplete: collected (no winner), scope-ordered
 
 /** Widget placement slots in the session view */
-export type WidgetSlot = "below-messages" | "above-input" | "below-input"
+export const WidgetSlot = Schema.Literals(["below-messages", "above-input", "below-input"])
+export type WidgetSlot = typeof WidgetSlot.Type
 
 /** Props passed to an interaction renderer component */
 export interface InteractionRendererProps {
@@ -797,24 +799,72 @@ export interface ClientContributions {
   readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
 }
 
+/** A function value; the host calls it, so its parameters are not checked here. */
+type HostCalledFunction = (...args: ReadonlyArray<never>) => void
+
+const ContributedFunction = Schema.declare((value: unknown): value is HostCalledFunction =>
+  Predicate.isFunction(value),
+)
+
+const bucketOf = <Fields extends Schema.Struct.Fields>(fields: Fields) =>
+  Schema.UndefinedOr(Schema.Array(Schema.Struct(fields)))
+
 /**
- * Every contribution bucket. The loader fails an extension that returns any
- * other key, so a renamed bucket fails loudly instead of dropping its items.
+ * Every contribution bucket, with the shape of each entry as the host reads
+ * it. The loader fails an extension that returns any other key, so a renamed
+ * bucket fails loudly instead of dropping its items, and one whose bucket has
+ * another shape, so a malformed entry fails its own extension before the
+ * host resolves every extension's contributions together.
  */
 const CONTRIBUTION_BUCKETS = {
-  renderers: true,
-  messageRenderers: true,
-  widgets: true,
-  commands: true,
-  interactionRenderers: true,
-  statusLabels: true,
-  noticeRows: true,
-  autocomplete: true,
-} satisfies Record<keyof ClientContributions, true>
+  renderers: bucketOf({ toolNames: Schema.Array(Schema.String), component: ContributedFunction }),
+  messageRenderers: bucketOf({
+    customType: Schema.String,
+    component: ContributedFunction,
+    prompt: Schema.optional(ContributedFunction),
+  }),
+  widgets: bucketOf({
+    id: Schema.String,
+    slot: WidgetSlot,
+    priority: Schema.optional(Schema.Finite),
+    component: ContributedFunction,
+  }),
+  commands: bucketOf({
+    id: Schema.String,
+    title: Schema.String,
+    description: Schema.optional(Schema.String),
+    category: Schema.optional(Schema.String),
+    keybind: Schema.optional(Schema.String),
+    slash: Schema.optional(Schema.String),
+    aliases: Schema.optional(Schema.Array(Schema.String)),
+    onSelect: ContributedFunction,
+    onSlash: Schema.optional(ContributedFunction),
+  }),
+  interactionRenderers: bucketOf({ metadataType: Schema.String, component: ContributedFunction }),
+  statusLabels: bucketOf({
+    priority: Schema.optional(Schema.Finite),
+    produce: ContributedFunction,
+  }),
+  noticeRows: bucketOf({ id: Schema.String, rows: ContributedFunction }),
+  autocomplete: bucketOf({
+    prefix: Schema.String,
+    title: Schema.String,
+    items: ContributedFunction,
+    formatInsertion: Schema.optional(ContributedFunction),
+    onSelect: Schema.optional(ContributedFunction),
+    onOpen: Schema.optional(ContributedFunction),
+  }),
+} satisfies Record<keyof ClientContributions, Schema.Top>
 
-/** The first key a setup returned that is not a contribution bucket. */
-export const unknownContributionKey = (keys: ReadonlyArray<string>): Option.Option<string> =>
-  Option.fromUndefinedOr(keys.find((key) => !Object.hasOwn(CONTRIBUTION_BUCKETS, key)))
+const isContributionBucket = (key: string): key is keyof typeof CONTRIBUTION_BUCKETS =>
+  Object.hasOwn(CONTRIBUTION_BUCKETS, key)
+
+/** The schema of the bucket a setup's key names; `None` when the key is no bucket. */
+export const contributionBucketSchema = (key: string): Option.Option<Schema.Top> =>
+  Option.map(
+    Option.liftPredicate(key, isContributionBucket),
+    (bucket) => CONTRIBUTION_BUCKETS[bucket],
+  )
 
 type MutableClientContributions = {
   -readonly [Key in keyof ClientContributions]: ClientContributions[Key]
