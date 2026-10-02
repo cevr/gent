@@ -283,10 +283,11 @@ const CASES: ReadonlyArray<RuleCase> = [
     valid: [
       "packages/core/src/server/child-session-writer-admits.valid.ts",
       "packages/core/src/storage/child-session-writer-admits.valid.ts",
+      "packages/core/src/test-utils/child-session-writer-admits.valid.ts",
     ],
-    // no admission, a sibling's admission, a nested arrow, a method shorthand,
-    // and an admission after the write
-    expectedCount: 5,
+    // no admission, sibling/nested/late admission, renamed constructor,
+    // two static string keys and a shadowed admission helper
+    expectedCount: 9,
   },
   {
     // Shipped source only: a test may compare whole encodes.

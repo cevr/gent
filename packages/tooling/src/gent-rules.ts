@@ -14,7 +14,7 @@
 
 import { existsSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import type { Context, ESTree, Plugin, Range } from "@oxlint/plugins"
+import type { Context, ESTree, Plugin, Range, Variable } from "@oxlint/plugins"
 
 /**
  * The view a structural walk takes of any ESTree node: a `type` tag and the
@@ -229,6 +229,48 @@ const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
   const args = fieldOf(node, "arguments")
   if (!Array.isArray(args)) return []
   return args.filter(isAstNode)
+}
+
+/** The nearest lexical binding of an identifier, including import aliases. */
+const lexicalBinding = (context: Context, node: AstNode | undefined): Variable | undefined => {
+  const identifier = (value: AstNode): value is ESTree.IdentifierReference =>
+    value.type === "Identifier"
+  if (node === undefined || !identifier(node)) return undefined
+  let scope: ReturnType<typeof context.sourceCode.getScope> | null =
+    context.sourceCode.getScope(node)
+  while (scope !== null) {
+    const binding = scope.set.get(node.name)
+    if (binding !== undefined) return binding
+    scope = scope.upper
+  }
+  return undefined
+}
+
+/** The original named import and its module, never a shadowing local name. */
+const importedSymbol = (context: Context, node: AstNode | undefined) => {
+  const binding = lexicalBinding(context, node)
+  for (const definition of binding?.defs ?? []) {
+    if (definition.type !== "ImportBinding" || definition.node.type !== "ImportSpecifier") continue
+    const imported = getNodeField(definition.node, "imported")
+    const name =
+      imported === undefined
+        ? undefined
+        : (getStringField(imported, "name") ?? getStringField(imported, "value"))
+    const source = definition.parent === null ? undefined : importSourceOf(definition.parent)
+    if (name !== undefined && source !== undefined) {
+      return { name, source: resolvedRelativeSource(context.filename, source) ?? source }
+    }
+  }
+  return undefined
+}
+
+/** An ordinary or statically computed string property name. */
+const staticPropertyName = (node: AstNode): string | undefined => {
+  const property = getNodeField(node, node.type === "MemberExpression" ? "property" : "key")
+  if (property === undefined) return undefined
+  if (fieldOf(node, "computed") !== true && property.type === "Identifier")
+    return getStringField(property, "name")
+  return getStringField(property, "value")
 }
 
 /**
@@ -705,7 +747,8 @@ const plugin: Plugin = {
      *
      * `DEFAULT_MAX_AGENT_RUN_DEPTH` is enforced in one place,
      * `admitChildSessionDepth` (`packages/core/src/runtime/session.ts`). A
-     * `new Session({ ... parentSessionId ... })` row is a child-session
+     * `new Session({ ... parentSessionId ... })` row from the owning domain
+     * module (including a renamed import or static string key) is a child-session
      * writer, and a writer that skips the admission nests sessions without
      * bound.
      *
@@ -713,7 +756,8 @@ const plugin: Plugin = {
      * function -- a declaration, a function expression, an arrow, or a method
      * -- calls `admitChildSessionDepth`, or calls a same-file function whose
      * own body does (`admitParent` in `server.ts` checks the parent, then
-     * admits). An admission in an outer function does not cover a writer in a
+     * admits). Imported and same-file helpers are resolved by lexical binding;
+     * a shadowing local name grants no admission. An admission in an outer function does not cover a writer in a
      * nested one: the nested function can run where the outer one never
      * admitted.
      *
@@ -746,53 +790,60 @@ const plugin: Plugin = {
          * The name a function is bound to: its own name, or the variable its
          * wrapping calls initialise (`const admitParent = Effect.fn("x")(function* ...)`).
          */
-        const boundName = (fn: AstNode): string | undefined => {
+        const boundFunction = (fn: AstNode): Variable | undefined => {
           const id = getNodeField(fn, "id")
-          if (id?.type === "Identifier") return getStringField(id, "name")
+          if (id?.type === "Identifier") return lexicalBinding(context, id)
           let at = getNodeField(fn, "parent")
           while (at?.type === "CallExpression") at = getNodeField(at, "parent")
           if (at?.type !== "VariableDeclarator") return undefined
           const variable = getNodeField(at, "id")
-          return variable?.type === "Identifier" ? getStringField(variable, "name") : undefined
+          return lexicalBinding(context, variable)
         }
         const namesParent = (literal: AstNode | undefined): boolean =>
           literal?.type === "ObjectExpression" &&
-          (getNodeArrayField(literal, "properties") ?? []).some((property) => {
-            const key = getNodeField(property, "key")
-            return (
-              property.type === "Property" &&
-              key?.type === "Identifier" &&
-              getStringField(key, "name") === "parentSessionId"
-            )
-          })
+          (getNodeArrayField(literal, "properties") ?? []).some(
+            (property) =>
+              property.type === "Property" && staticPropertyName(property) === "parentSessionId",
+          )
 
-        const calls: Array<{ readonly node: AstNode; readonly name: string }> = []
+        const calls: Array<{ readonly node: AstNode; readonly binding: Variable }> = []
+        const admitting = new Set<Variable>()
         const writers: Array<AstNode> = []
         return {
           CallExpression(node) {
             if (!isAstNode(node)) return
             const callee = getNodeField(node, "callee")
             if (callee?.type !== "Identifier") return
-            const name = getStringField(callee, "name")
-            if (name !== undefined) calls.push({ node, name })
+            const binding = lexicalBinding(context, callee)
+            if (binding === undefined) return
+            calls.push({ node, binding })
+            const imported = importedSymbol(context, callee)
+            if (
+              imported?.name === "admitChildSessionDepth" &&
+              /\/packages\/core\/src\/runtime\/session(?:\.[cm]?[jt]s)?$/.test(imported.source)
+            )
+              admitting.add(binding)
           },
           NewExpression(node) {
             if (!isAstNode(node)) return
             const callee = getNodeField(node, "callee")
-            if (callee?.type !== "Identifier" || getStringField(callee, "name") !== "Session")
+            const imported = importedSymbol(context, callee)
+            if (
+              imported?.name !== "Session" ||
+              !/\/packages\/core\/src\/domain\/message(?:\.[cm]?[jt]s)?$/.test(imported.source)
+            )
               return
             if (namesParent(callExpressionArgs(node)[0])) writers.push(node)
           },
           "Program:exit"() {
-            const admitting = new Set(["admitChildSessionDepth"])
             let grew = true
             while (grew) {
               grew = false
               for (const call of calls) {
-                if (!admitting.has(call.name)) continue
-                const name = boundName(innermostFunction(call.node))
-                if (name === undefined || admitting.has(name)) continue
-                admitting.add(name)
+                if (!admitting.has(call.binding)) continue
+                const binding = boundFunction(innermostFunction(call.node))
+                if (binding === undefined || admitting.has(binding)) continue
+                admitting.add(binding)
                 grew = true
               }
             }
@@ -800,7 +851,7 @@ const plugin: Plugin = {
               const scope = innermostFunction(writer)
               const admitted = calls.some(
                 (call) =>
-                  admitting.has(call.name) &&
+                  admitting.has(call.binding) &&
                   call.node.range[0] < writer.range[0] &&
                   innermostFunction(call.node) === scope,
               )

@@ -1,6 +1,7 @@
-// Each writer below builds a child session row without the depth admission in
-// its own function. Identifiers are undeclared on purpose: the rule reads
-// the syntax only.
+import { Session, Session as StoredSession } from "../domain/message.js"
+import { admitChildSessionDepth } from "../runtime/session.js"
+// Each writer skips depth admission in its own function. Other identifiers
+// stay undeclared: the rule checks syntax, not type correctness.
 
 // 1. A writer whose function never admits.
 export const forkUnadmitted = Effect.fn("fork")(function* (parentSessionId) {
@@ -41,3 +42,16 @@ export const forkLate = Effect.fn("late")(function* (parentSessionId) {
   yield* admitChildSessionDepth(parentSessionId)
   return session
 })
+
+// 6. Renaming the real constructor does not remove the admission requirement.
+export const forkRenamed = () => new StoredSession({ id, parentSessionId })
+
+// 7–8. Static string keys name the same parent field.
+export const forkStringKey = () => new Session({ id, "parentSessionId": parent })
+export const forkComputedKey = () => new Session({ id, ["parentSessionId"]: parent })
+
+// 9. A parameter that shadows the imported helper is not depth admission.
+export const forkShadowed = (admitChildSessionDepth) => {
+  admitChildSessionDepth(parentSessionId)
+  return new Session({ id, parentSessionId })
+}
