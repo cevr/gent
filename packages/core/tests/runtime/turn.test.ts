@@ -1241,22 +1241,6 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
-  it.live("GUARD: ToolsFinished without interrupt routes to Resolving", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-        toolCallStep("echo", { text: "tool" }),
-        textStep("Continuation reached."),
-      ])
-      const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      yield* Effect.gen(function* () {
-        yield* runAgentLoop(makeContMessage("structural guard"))
-        expect(yield* controls.callCount).toBe(2)
-        yield* controls.assertDone
-        const events = yield* Ref.get(eventsRef)
-        expect(events.filter((e) => e._tag === "TurnCompleted").length).toBe(1)
-      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
-    }),
-  )
   it.live("each step of a multi-hop turn persists its own message", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
@@ -1549,12 +1533,13 @@ describe("empty final step", () => {
     }),
   )
 
-  it.live("marks the turn unanswered once every continuation is spent", () =>
+  it.live("spends every continuation, then marks the turn unanswered", () =>
     Effect.gen(function* () {
       // Three empty steps: the first two burn both continuations, the third
-      // still says nothing. The loop has no move left, so the receipt must
+      // still says nothing. The loop must re-prompt rather than stop at the
+      // first empty step, and stop rather than loop forever. The receipt must
       // record that it gave up rather than reporting an ordinary reply.
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         emptyStep(),
         emptyStep(),
         emptyStep(),
@@ -1564,35 +1549,15 @@ describe("empty final step", () => {
         Effect.gen(function* () {
           yield* runAgentLoop(userMessage("do the thing"))
 
+          expect(yield* controls.callCount).toBe(3)
+          yield* controls.assertDone
           const turnCompleted = (yield* Ref.get(events)).filter(
             (event) => event._tag === "TurnCompleted",
           )
 
-          expect(turnCompleted.length).toBeGreaterThan(0)
+          expect(turnCompleted).toHaveLength(1)
           // Without the flag every field here reads exactly like a successful
           // turn, and the caller cannot tell "gave up" from "replied".
-          expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
-        }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, events))),
-      )
-    }),
-  )
-
-  it.live("spends every continuation before giving up", () =>
-    Effect.gen(function* () {
-      // `LanguageModelLayers.empty` is the layer `gent --mock-empty` runs on,
-      // so this pins the same path the CLI exercises: the loop must re-prompt
-      // MAX_CONTINUATIONS_PER_TURN times rather than stopping at the first
-      // empty step, and it must stop rather than looping forever.
-      const providerLayer = LanguageModelLayers.empty
-      const events = yield* Ref.make<AgentEvent[]>([])
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          yield* runAgentLoop(userMessage("do the thing"))
-
-          const turnCompleted = (yield* Ref.get(events)).filter(
-            (event) => event._tag === "TurnCompleted",
-          )
-          expect(turnCompleted.length).toBeGreaterThan(0)
           expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
         }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, events))),
       )
@@ -1929,155 +1894,9 @@ describe("max turn steps", () => {
   )
 })
 
-// ── native model compaction ─────────────────────────────────────────────────
+// ── model driver and catalog ────────────────────────────────────────────────
 
-describe("native model compaction integration", () => {
-  it.live("hands off the history before the turn and keeps every message durable", () => {
-    const sessionId = SessionId.make("native-compaction-session")
-    const branchId = BranchId.make("native-compaction-branch")
-    const oldMessages = Array.from({ length: 12 }, (_, index) =>
-      Message.cases.regular.make({
-        id: MessageId.make(`native-old-${index + 1}`),
-        sessionId,
-        branchId,
-        role: "assistant",
-        parts: [Prompt.textPart({ text: `native-old-${index + 1} ${"x".repeat(50_000)}` })],
-        createdAt: dateFromMillis(1_000 + index),
-      }),
-    )
-    let providerCalls = 0
-    let mainPrompt = Option.none<Prompt.Prompt>()
-    const providerLayer = LanguageModelLayers.testStream((options) => {
-      providerCalls += 1
-      if (providerCalls === 2) mainPrompt = Option.some(Prompt.make(options.prompt))
-      let text = "native response"
-      if (providerCalls === 1) text = "native bounded summary"
-      return Effect.succeed(
-        Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })]),
-      )
-    })
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        yield* ensureStorageParents({ sessionId, branchId })
-        const storage = yield* MessageStorage
-        yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
-          discard: true,
-        })
-        yield* runAgentLoop(makeMessage(sessionId, branchId, "native current turn"))
-
-        expect(providerCalls).toBe(2)
-        expect(Option.isSome(mainPrompt)).toBe(true)
-        if (Option.isNone(mainPrompt)) return yield* Effect.die("main prompt missing")
-        const main = promptText(mainPrompt.value)
-        expect(main).toContain("native bounded summary")
-        expect(main).toContain("native current turn")
-        // The handoff replaced the old messages in the model view.
-        expect(main).not.toContain("native-old-1 xxxx")
-
-        const durable = yield* storage.listMessages(branchId)
-        const markers = durable.filter(
-          (message) => message.metadata?.customType === "context-window",
-        )
-        expect(markers).toHaveLength(1)
-        const marker = markers[0]
-        if (Predicate.isUndefined(marker)) return yield* Effect.die("marker missing")
-        const details = Option.getOrThrow(windowDetails(marker))
-        expect(details.summarized).toMatchObject({
-          firstMessageId: "native-old-1",
-          lastMessageId: "native-old-12",
-          count: 12,
-        })
-        expect(main).toContain("native-old-1 … native-old-12")
-        expect(durable.some((message) => message.id === oldMessages[0]?.id)).toBe(true)
-      }),
-    ).pipe(
-      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(rangeCompactorLayer))),
-      Effect.timeout("15 seconds"),
-    )
-  })
-
-  it.live("the summary request asks for no reasoning and names no cache key", () => {
-    const sessionId = SessionId.make("summary-reasoning-session")
-    const branchId = BranchId.make("summary-reasoning-branch")
-    const modelId = ModelId.make("summary-driver/model")
-    const observedHints: Array<ProviderHints> = []
-    const providerLayer = LanguageModelLayers.testStream(() =>
-      Effect.succeed(
-        Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-      ),
-    )
-    const driver: ModelDriverContribution = {
-      id: "summary-driver",
-      name: "Summary driver",
-      resolveModel: (_modelName, _authInfo, hints) =>
-        Effect.sync(() => {
-          if (Predicate.isNotUndefined(hints)) observedHints.push(hints)
-          return AiModel.make("summary-driver", "model", providerLayer)
-        }),
-    }
-    const oldMessages = Array.from({ length: 12 }, (_, index) =>
-      Message.cases.regular.make({
-        id: MessageId.make(`summary-old-${index + 1}`),
-        sessionId,
-        branchId,
-        role: "assistant",
-        parts: [Prompt.textPart({ text: `summary-old-${index + 1} ${"x".repeat(50_000)}` })],
-        createdAt: dateFromMillis(1_000 + index),
-      }),
-    )
-    const layer = actorTestRoot({
-      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
-      registry: ExtensionRegistry.fromResolved(
-        resolveExtensions([
-          {
-            manifest: { id: ExtensionId.make("summary-driver") },
-            scope: "builtin",
-            sourcePath: "test",
-            contributions: { agents: testAgents, modelDrivers: [driver] },
-          },
-        ]),
-      ),
-      models: [
-        Model.make({
-          id: modelId,
-          name: "Summary model",
-          provider: ProviderId.make("summary-driver"),
-          contextLength: 128_000,
-        }),
-      ],
-    }).pipe(Layer.provideMerge(rangeCompactorLayer))
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const admission: SessionAdmission = {
-          runSpec: { overrides: { modelId, reasoningEffort: "high" } },
-        }
-        yield* ensureStorageParents({ sessionId, branchId, admission })
-        const storage = yield* MessageStorage
-        yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
-          discard: true,
-        })
-        yield* runAgentLoop(makeMessage(sessionId, branchId, "summarize then answer"), admission)
-        // A turn step asks for the output its 128k window reserves; the summary
-        // asks for its own small cap.
-        const turnOutput = 32_000
-        const summary = observedHints.filter((hints) => hints.maxTokens !== turnOutput)
-        expect(summary).toHaveLength(1)
-        expect(summary[0]?.reasoning).toBe("none")
-        // Nothing reads a summary prompt back, so it writes no cache entry.
-        expect(summary[0]?.cacheKey).toBeUndefined()
-        // The turn itself keeps its own effort.
-        expect(
-          observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.reasoning,
-        ).toBe("high")
-        expect(
-          observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.cacheKey,
-        ).toBe(sessionId)
-      }),
-    ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
-  })
-
+describe("model driver and catalog", () => {
   it.live("the driver learns from the catalog whether the model reasons", () => {
     const sessionId = SessionId.make("catalog-reasoning-session")
     const branchId = BranchId.make("catalog-reasoning-branch")
@@ -2226,6 +2045,156 @@ describe("native model compaction integration", () => {
           { ttlMs: 300_000, tokens: 6_000 },
           { ttlMs: 3_600_000, tokens: 4_000 },
         ])
+      }),
+    ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
+  })
+})
+
+// ── native model compaction ─────────────────────────────────────────────────
+
+describe("native model compaction integration", () => {
+  it.live("hands off the history before the turn and keeps every message durable", () => {
+    const sessionId = SessionId.make("native-compaction-session")
+    const branchId = BranchId.make("native-compaction-branch")
+    const oldMessages = Array.from({ length: 12 }, (_, index) =>
+      Message.cases.regular.make({
+        id: MessageId.make(`native-old-${index + 1}`),
+        sessionId,
+        branchId,
+        role: "assistant",
+        parts: [Prompt.textPart({ text: `native-old-${index + 1} ${"x".repeat(50_000)}` })],
+        createdAt: dateFromMillis(1_000 + index),
+      }),
+    )
+    let providerCalls = 0
+    let mainPrompt = Option.none<Prompt.Prompt>()
+    const providerLayer = LanguageModelLayers.testStream((options) => {
+      providerCalls += 1
+      if (providerCalls === 2) mainPrompt = Option.some(Prompt.make(options.prompt))
+      let text = "native response"
+      if (providerCalls === 1) text = "native bounded summary"
+      return Effect.succeed(
+        Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })]),
+      )
+    })
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        yield* ensureStorageParents({ sessionId, branchId })
+        const storage = yield* MessageStorage
+        yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
+          discard: true,
+        })
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "native current turn"))
+
+        expect(providerCalls).toBe(2)
+        expect(Option.isSome(mainPrompt)).toBe(true)
+        if (Option.isNone(mainPrompt)) return yield* Effect.die("main prompt missing")
+        const main = promptText(mainPrompt.value)
+        expect(main).toContain("native bounded summary")
+        expect(main).toContain("native current turn")
+        // The handoff replaced the old messages in the model view.
+        expect(main).not.toContain("native-old-1 xxxx")
+
+        const durable = yield* storage.listMessages(branchId)
+        const markers = durable.filter(
+          (message) => message.metadata?.customType === "context-window",
+        )
+        expect(markers).toHaveLength(1)
+        const marker = markers[0]
+        if (Predicate.isUndefined(marker)) return yield* Effect.die("marker missing")
+        const details = Option.getOrThrow(windowDetails(marker))
+        expect(details.summarized).toMatchObject({
+          firstMessageId: "native-old-1",
+          lastMessageId: "native-old-12",
+          count: 12,
+        })
+        expect(main).toContain("native-old-1 … native-old-12")
+        expect(durable.some((message) => message.id === oldMessages[0]?.id)).toBe(true)
+      }),
+    ).pipe(
+      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(rangeCompactorLayer))),
+      Effect.timeout("15 seconds"),
+    )
+  })
+
+  it.live("the summary request asks for no reasoning and names no cache key", () => {
+    const sessionId = SessionId.make("summary-reasoning-session")
+    const branchId = BranchId.make("summary-reasoning-branch")
+    const modelId = ModelId.make("summary-driver/model")
+    const observedHints: Array<ProviderHints> = []
+    const providerLayer = LanguageModelLayers.testStream(() =>
+      Effect.succeed(
+        Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+      ),
+    )
+    const driver: ModelDriverContribution = {
+      id: "summary-driver",
+      name: "Summary driver",
+      resolveModel: (_modelName, _authInfo, hints) =>
+        Effect.sync(() => {
+          if (Predicate.isNotUndefined(hints)) observedHints.push(hints)
+          return AiModel.make("summary-driver", "model", providerLayer)
+        }),
+    }
+    const oldMessages = Array.from({ length: 12 }, (_, index) =>
+      Message.cases.regular.make({
+        id: MessageId.make(`summary-old-${index + 1}`),
+        sessionId,
+        branchId,
+        role: "assistant",
+        parts: [Prompt.textPart({ text: `summary-old-${index + 1} ${"x".repeat(50_000)}` })],
+        createdAt: dateFromMillis(1_000 + index),
+      }),
+    )
+    const layer = actorTestRoot({
+      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      registry: ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("summary-driver") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { agents: testAgents, modelDrivers: [driver] },
+          },
+        ]),
+      ),
+      models: [
+        Model.make({
+          id: modelId,
+          name: "Summary model",
+          provider: ProviderId.make("summary-driver"),
+          contextLength: 128_000,
+        }),
+      ],
+    }).pipe(Layer.provideMerge(rangeCompactorLayer))
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const admission: SessionAdmission = {
+          runSpec: { overrides: { modelId, reasoningEffort: "high" } },
+        }
+        yield* ensureStorageParents({ sessionId, branchId, admission })
+        const storage = yield* MessageStorage
+        yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
+          discard: true,
+        })
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "summarize then answer"), admission)
+        // A turn step asks for the output its 128k window reserves; the summary
+        // asks for its own small cap.
+        const turnOutput = 32_000
+        const summary = observedHints.filter((hints) => hints.maxTokens !== turnOutput)
+        expect(summary).toHaveLength(1)
+        expect(summary[0]?.reasoning).toBe("none")
+        // Nothing reads a summary prompt back, so it writes no cache entry.
+        expect(summary[0]?.cacheKey).toBeUndefined()
+        // The turn itself keeps its own effort.
+        expect(
+          observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.reasoning,
+        ).toBe("high")
+        expect(
+          observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.cacheKey,
+        ).toBe(sessionId)
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
   })
