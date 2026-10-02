@@ -6,6 +6,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Option } from "effect"
 import {
+  keys,
   ptyWaitFor,
   screenWaitFor,
   seedAndSpawn,
@@ -17,11 +18,6 @@ import { exitWithin } from "../src/server-process-fixture"
 
 const TEST_TIMEOUT = 30_000
 
-const ENTER = "\r"
-const ESC = "\x1b"
-const CTRL_C = "\x03"
-const CTRL_D = "\x04"
-const UP = "\x1b[A"
 const ESC_KEY_DECODE_MS = 650
 
 /** A repaint burst is over once the child writes nothing for this long. */
@@ -52,12 +48,12 @@ describe("E2E: Basics", () => {
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn()
         yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
-        ctx.pty.write(ESC)
+        ctx.pty.write(keys.esc)
         // oxlint-disable-next-line effect/noFixedWaitInTests -- a lone ESC counts as a key only after the escape-sequence timeout, and nothing on screen marks it
         yield* Effect.sleep(`${ESC_KEY_DECODE_MS} millis`)
-        ctx.pty.write(CTRL_C)
+        ctx.pty.write(keys["ctrl+c"])
         yield* ptyWaitFor(ctx, "ctrl+c again to exit", { timeout: 5_000 })
-        ctx.pty.write(CTRL_C)
+        ctx.pty.write(keys["ctrl+c"])
         expect(yield* exitWithin(ctx.pty.exited, "10 seconds")).toEqual(Option.some(0))
       }),
     TEST_TIMEOUT,
@@ -69,7 +65,7 @@ describe("E2E: Basics", () => {
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn()
         yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
-        ctx.pty.write(CTRL_D)
+        ctx.pty.write(keys["ctrl+d"])
         expect(yield* exitWithin(ctx.pty.exited, "10 seconds")).toEqual(Option.some(0))
       }),
     TEST_TIMEOUT,
@@ -89,10 +85,10 @@ describe("E2E: Auth", () => {
         yield* ptyWaitFor(ctx, "Claude Code", { timeout: 10_000 })
         yield* ptyWaitFor(ctx, "Manually enter API key", { timeout: 10_000 })
         expect(ctx.output).toContain("· method")
-        ctx.pty.write(UP)
+        ctx.pty.write(keys.up)
         // The selection moves in a repaint; Enter goes to the row it lands on.
         yield* settlePty(ctx, REPAINT)
-        ctx.pty.write(ENTER)
+        ctx.pty.write(keys.enter)
         yield* ptyWaitFor(ctx, "API key ›", { timeout: 5_000 })
       }),
     TEST_TIMEOUT,
@@ -109,7 +105,7 @@ describe("E2E: Slash Commands", () => {
         ctx.pty.write("/")
         yield* ptyWaitFor(ctx, "Commands", { timeout: 5_000 })
         yield* ptyWaitFor(ctx, "/new", { timeout: 5_000 })
-        ctx.pty.write(ESC)
+        ctx.pty.write(keys.esc)
         // The output keeps the frames that drew the popup; the screen must not.
         yield* screenWaitFor(ctx, (visible) => !visible.some((row) => row.includes("Commands")), {
           timeout: 5_000,
@@ -133,14 +129,14 @@ describe("E2E: Shell Mode", () => {
         ctx.pty.write("!")
         yield* ptyWaitFor(ctx, "$", { timeout: 5_000 })
         ctx.pty.write("echo first-$((1+1))")
-        ctx.pty.write(ENTER)
+        ctx.pty.write(keys.enter)
         yield* ptyWaitFor(ctx, "first-2", { timeout: 5_000 })
         // A command leaves shell mode: the next one starts with its own `!`.
         yield* settlePty(ctx, REPAINT)
         ctx.pty.write("!")
         yield* settlePty(ctx, REPAINT)
         ctx.pty.write("echo second-$((2+1))")
-        ctx.pty.write(ENTER)
+        ctx.pty.write(keys.enter)
         yield* ptyWaitFor(ctx, "second-3", { timeout: 5_000 })
       }),
     TEST_TIMEOUT,
@@ -160,9 +156,9 @@ describe("E2E: Session", () => {
         ctx.pty.write("hi")
         // Enter must reach the composer after the text it submits is drawn.
         yield* settlePty(ctx, REPAINT)
-        ctx.pty.write(ENTER)
+        ctx.pty.write(keys.enter)
         yield* ptyWaitFor(ctx, "Generating", { timeout: 10_000 })
-        ctx.pty.write(CTRL_C)
+        ctx.pty.write(keys["ctrl+c"])
       }),
     TEST_TIMEOUT,
   )
@@ -186,7 +182,7 @@ describe("E2E: Skill Popup", () => {
         ctx.pty.write("$t")
         yield* screenWaitFor(ctx, showsSkillsPopup, { timeout: 10_000, label: "the skills popup" })
         yield* ptyWaitFor(ctx, "test-skill", { timeout: 10_000 })
-        ctx.pty.write(ESC)
+        ctx.pty.write(keys.esc)
         // The output keeps the frames that drew the popup; the screen must not.
         yield* screenWaitFor(ctx, (visible) => !showsSkillsPopup(visible), {
           timeout: 5_000,

@@ -20,6 +20,7 @@ import {
   countRows,
   gridText,
   historyText,
+  keys,
   ptyWaitFor,
   screenWaitFor,
   seedAndSpawn,
@@ -31,8 +32,6 @@ import {
 
 const TEST_TIMEOUT = 120_000
 const EFFECT_TIMEOUT = "110 seconds"
-
-const ENTER = "\r"
 
 /** A short screen, so a handful of turns is already taller than it. */
 const SHORT_SCREEN = { cols: 80, rows: 14 }
@@ -63,7 +62,7 @@ const submitMessages = (ctx: TestContext, count: number) =>
     for (let index = 1; index <= count; index++) {
       ctx.pty.write(messageText(index))
       yield* settlePty(ctx, TYPED)
-      ctx.pty.write(ENTER)
+      ctx.pty.write(keys.enter)
       yield* screenWaitFor(
         ctx,
         (visible) => visible.some((row) => row.trimEnd() === `┃ ${messageText(index)}`),
@@ -203,12 +202,12 @@ describe("E2E: Scrollback ownership", () => {
         yield* settlePty(ctx, TYPED)
         ctx.pty.write("/new")
         yield* settlePty(ctx, TYPED)
-        ctx.pty.write(ENTER)
+        ctx.pty.write(keys.enter)
         yield* settlePty(ctx, SETTLE)
         const prompt = ["longg", "row two", "row three", "row four", "row five"]
         ctx.pty.write(prompt.join("\n"))
         yield* settlePty(ctx, TYPED)
-        ctx.pty.write(ENTER)
+        ctx.pty.write(keys.enter)
         yield* ptyWaitFor(ctx, "Retried 2/3", { timeout: 25_000 })
         const grid = yield* settleAndCapture(ctx, { quietMs: 1_500, timeoutMs: 25_000 })
         const rows = [...grid.history, ...grid.visible].map((row) => row.trimEnd())
