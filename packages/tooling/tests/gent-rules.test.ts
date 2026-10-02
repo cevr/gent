@@ -353,7 +353,9 @@ const expectedRows = CASES.map((c) => ({
   valid: c.valid.map(() => 0),
 }))
 
-effectDescribe("custom lint rules", () => {
+// ── pre-commit fixer routing ────────────────────────────────────────────────
+
+effectDescribe("pre-commit fixer routing", () => {
   it.scopedLive(
     "staged fixer routing excludes broken fixtures while keeping the gamut driver",
     () =>
@@ -412,7 +414,11 @@ effectDescribe("custom lint rules", () => {
       }).pipe(Effect.timeout(FIXTURE_LINT_BOUND), Effect.provide(BunServices.layer)),
     FIXTURE_LINT_BACKSTOP_MS,
   )
+})
 
+// ── each rule fires on its fixtures ─────────────────────────────────────────
+
+effectDescribe("custom lint rules", () => {
   // The two runs go together: each is bounded by OXLINT_RUN_BOUND plus
   // OXLINT_KILL_GRACE, the test by FIXTURE_LINT_BOUND, and bun by
   // FIXTURE_LINT_BACKSTOP_MS, each longer than the one before, so a stuck run

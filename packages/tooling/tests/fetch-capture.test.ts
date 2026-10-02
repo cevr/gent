@@ -90,18 +90,34 @@ describe("the capture preload's scratch check", () => {
     }).pipe(Effect.timeout("20 seconds")),
   )
 
-  captureTest("a path that climbs out with `..` or ends in a slash is read as it resolves", () =>
+  captureTest("a path that climbs out with `..` is read as it resolves", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-capture-" })
       const run = yield* startCapture(root, {
-        CAP_DIR: `${root}/probe/cap`,
+        ...scratchEnv(`${root}/probe`),
         HOME: `${root}/probe/home/../../outside`,
-        GENT_AUTH_DIRECTORY: `${root}/probe/auth/`,
-        GENT_DATA_DIR: `${root}/probe/data`,
       })
       expect(run.output).not.toContain("STARTED")
       expect(run.output).toContain("HOME must name a directory under")
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  captureTest("a path that ends in a slash is read as it resolves", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-capture-" })
+      const nested = yield* startCapture(root, {
+        ...scratchEnv(`${root}/probe`),
+        GENT_AUTH_DIRECTORY: `${root}/probe/auth/`,
+      })
+      expect(nested.output).toContain("STARTED")
+      const scratch = yield* startCapture(root, {
+        ...scratchEnv(`${root}/probe`),
+        GENT_DATA_DIR: `${root}/probe/`,
+      })
+      expect(scratch.output).not.toContain("STARTED")
+      expect(scratch.output).toContain("GENT_DATA_DIR must name a directory under")
     }).pipe(Effect.timeout("20 seconds")),
   )
 })

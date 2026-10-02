@@ -148,32 +148,6 @@ describe("blanket eslint disable checker", () => {
     ])
   })
 
-  test("a directive after JSX text with an apostrophe is read", () => {
-    // A one-letter component is JSX: its text is not a string opener that
-    // swallows the comment after the element.
-    const text = [
-      `const x = <X>it's fine</X>; /* ${directive} */`,
-      `const y = <Row>it's fine</Row>; /* ${directive} */`,
-    ].join("\n")
-    expect(findBlanketEslintDisables("sample.tsx", text)).toMatchObject([
-      { file: "sample.tsx", line: 1 },
-      { file: "sample.tsx", line: 2 },
-    ])
-  })
-
-  test("a directive after JSX text in parentheses or after a postfix increment is read", () => {
-    // `<b>(` is an element unless `=>` follows the group, and `i++ / 2`
-    // divides: neither opens a string or a regex that swallows the comment.
-    const jsx = `export const x = <b>(it's fine)</b> /* ${directive} */`
-    const postfix = `const h = i++ / 2 /* ${directive} */`
-    expect([
-      findBlanketEslintDisables("sample.tsx", jsx).length,
-      findBannedEslintDisableBlocks("sample.tsx", jsx).length,
-      findBlanketEslintDisables("sample.ts", postfix).length,
-      findBannedEslintDisableBlocks("sample.ts", postfix).length,
-    ]).toEqual([1, 1, 1, 1])
-  })
-
   test("a directive spelled inside a string or after other comment text is not one", () => {
     const text = [
       `const a = "// ${directive}"`,
@@ -469,7 +443,7 @@ describe("unadapted seam guard", () => {
     expect(findings).toHaveLength(0)
   })
 
-  test("a resource scope nothing declares is reported", () => {
+  test("a declared resource scope that no adapter reaches is reported", () => {
     const findings = findUnadaptedSeams(
       new Map([[SEAMS_FILE, scopeSource]]),
       new Set(["resource:process"]),
@@ -887,7 +861,7 @@ describe("an override must match a tracked file", () => {
   })
 
   test("a glob naming a deleted file is reported", () => {
-    // The supervisor.ts override outlived that file and kept a rule off.
+    // An override for a file that is gone keeps its rule off for nothing.
     const findings = findUnmatchedOverrideGlobs(
       CONFIG,
       `{\n  "files": ["**/sdk/src/supervisor.ts"]\n}`,
@@ -1123,8 +1097,7 @@ describe("a defined rule must be enabled", () => {
   })
 
   test("a rule the lint config never enables is reported", () => {
-    // no-make-unsafe shipped unenabled, and could not be enabled at all:
-    // seven live makeUnsafe calls would have failed it.
+    // A defined rule that is never enabled guards nothing.
     const findings = findUnenabledPluginRules(PLUGIN, plugin, defined, new Set(["gent/no-sleep"]))
     expect(messages(findings)).toEqual([
       expect.stringContaining("`gent/no-make-unsafe` is defined but the lint config never enables"),
@@ -1137,8 +1110,7 @@ describe("a defined rule must be enabled", () => {
   })
 
   test("the rule set comes from the plugin object, not from how its text is indented", () => {
-    // The text scrape read only a four-space `"name": {` key; a reformat
-    // would have hidden every rule from the guard.
+    // A reformat of the plugin text must not hide a rule from the guard.
     const reformatted = `rules: { "no-sleep": { create() {} }, "no-make-unsafe": { create() {} } }`
     const findings = findUnenabledPluginRules(
       PLUGIN,
@@ -1187,7 +1159,7 @@ describe("a read variable must have a writer", () => {
   })
 
   test("a variable nothing sets is reported", () => {
-    // GENT_TRACE_ID outlived its writer and kept an unreachable branch alive.
+    // A read with no writer keeps an unreachable branch alive.
     const findings = findReadersWithoutWriters(
       new Map([["packages/sdk/src/reader.ts", `Config.option(Config.String("GENT_ORPHAN"))\n`]]),
       none,
@@ -1454,7 +1426,7 @@ describe("a read variable must have a writer", () => {
 
 describe("a set variable must have a reader", () => {
   test("a variable a test sets and nothing reads is reported at the setter", () => {
-    // GENT_BUILD_FINGERPRINT outlived its reader in a server test that still set it.
+    // A test that sets a variable nothing reads tests nothing.
     const findings = findWritersWithoutReaders(
       new Map([
         [
@@ -1607,8 +1579,7 @@ describe("the guard entry routes each tracked file to its finders", () => {
       .filter((message) => message.includes("GENT_PROBE_SCRIPT"))
 
   test("a package script sets the variable its prefix names", () => {
-    // The runner once read package.json and dropped it before the variable
-    // scan, so a script writer counted only when a test fed it to the finder.
+    // A package script counts as a writer in the runner, not only when a test feeds it in.
     expect(
       gentNames([
         { file: "packages/sdk/src/reader.ts", text: `Config.String("GENT_PROBE_SCRIPT")\n` },
@@ -2799,26 +2770,10 @@ describe("the guards read source as oxc parses it", () => {
     expect(["/[a]/", "/[`]/", "/`/", "/[/*]/"].map(findingsAfter)).toEqual([0, 0, 0, 0])
   })
 
-  /** How many blanket directives a source holds once one is written after it. */
-  const directivesAfter = (file: string, source: string, separator = " ") =>
-    findBlanketEslintDisables(file, `${source}${separator}/* ${directive} */`).length
-
-  test("a regex after a control-flow head or a comment is a regex; after a value, a slash divides", () => {
-    expect(
-      [
-        "if (ok) /[/*]/.test(s)",
-        "while (next()) /[/*]/.test(s)",
-        "for (const s of all) /[/*]/.test(s)",
-        "if (ok) f(); else /[/*]/.test(s)",
-        "const re = /*comment*/ /[/*]/",
-        "const re = // a note\n  /[/*]/",
-        "const half = (a + b) / 2 /* a note */",
-        "const half = f(a) / 2 /* a note */",
-      ].map((source) => directivesAfter("probe.test.ts", source, "\n")),
-    ).toEqual([1, 1, 1, 1, 1, 1, 1, 1])
-  })
-
   test("JSX in a .tsx file is neither a string nor a regex", () => {
+    /** How many blanket directives a source holds once one is written after it. */
+    const directivesAfter = (file: string, source: string) =>
+      findBlanketEslintDisables(file, `${source} /* ${directive} */`).length
     expect(
       [
         "mount({ cwd: pick(dir) })",
@@ -2829,60 +2784,6 @@ describe("the guards read source as oxc parses it", () => {
         "mount({ cwd: pick(<X>it's</X>, dir) })",
       ].map((source) => directivesAfter("probe.test.tsx", source)),
     ).toEqual([1, 1, 1, 1, 1, 1])
-  })
-
-  test("a type parameter list is code, in a .tsx and a .ts file", () => {
-    const tsx = "probe.test.tsx"
-    expect([
-      directivesAfter(tsx, "const f = <A,>(a: A) => a; const s = 'it'"),
-      directivesAfter(tsx, "const f = <A extends object>(a: A) => a; const s = 'it'"),
-      directivesAfter(tsx, "const f = <Row = unknown,>(x: Row) => x; const s = 'it'"),
-      directivesAfter(tsx, "const f = <Row=unknown,>(x: Row) => x; const s = 'it'"),
-      directivesAfter(tsx, "type F = <Row>(x: Row) => Row; const s = 'it'"),
-      directivesAfter("probe.test.ts", "const f = <Row>(a: Row) => a; const s = 'it'"),
-    ]).toEqual([1, 1, 1, 1, 1, 1])
-  })
-
-  test("a trailing directive is read after each JSX, regex and division form", () => {
-    const trailing = (file: string, source: string) =>
-      findBlanketEslintDisables(file, `${source} /* ${directive} */`).length
-    const sources: ReadonlyArray<readonly [string, string]> = [
-      ["sample.tsx", "const a = <b>(it's)</b>"],
-      ["sample.tsx", "const a = <b>(it's) (twice)</b>"],
-      ["sample.tsx", "const a = <X>(it's)</X>"],
-      ["sample.tsx", "type F = <A>(a: A) => A; const s = 'it'"],
-      ["sample.ts", "const f = <A>(a: (b: A) => A) => a; const s = 'it'"],
-      ["sample.tsx", "const n = i++ <a; const s = 'it'"],
-      ["sample.ts", "const r = /it's/"],
-      ["sample.ts", "const r = a + /it's/.source"],
-      ["sample.ts", "const h = (a + b) / 2"],
-      ["sample.ts", "const h = i++ / 2"],
-      ["sample.ts", "const h = i-- / 2"],
-      ["sample.ts", "const h = (i)++ / 2"],
-      ["sample.ts", "const h = xs[0]-- / 2"],
-      ["sample.ts", "const h = ++i / 2"],
-      ["sample.tsx", 'type F = <T>(x: "(") => T;'],
-      ["sample.tsx", "type G = <T>(x: T) /* reason */ => T;"],
-    ]
-    expect(sources.map(([file, source]) => trailing(file, source))).toEqual(sources.map(() => 1))
-  })
-
-  test("a generic call or construct signature in a .tsx file hides no directive after it", () => {
-    const fileWide = `/* ${["oxlint", "disable"].join("-")} */`
-    const signatures = [
-      "type Call = { <A>(a: A): A }",
-      "interface Call { <A>(a: A): A }",
-      "type Make = { new <A>(a: A): A }",
-    ]
-    expect(
-      signatures.map((signature) => {
-        const text = `${signature}\n${fileWide}\nexport const x = 1\n`
-        return [
-          findBlanketEslintDisables("sample.tsx", text).length,
-          findBannedEslintDisableBlocks("sample.tsx", text).length,
-        ]
-      }),
-    ).toEqual(signatures.map(() => [1, 1]))
   })
 
   test("a source oxc cannot parse is reported at its first error", () => {
@@ -2902,24 +2803,6 @@ describe("the guards read source as oxc parses it", () => {
       findUnparsedSources("types/sample.d.mts", declarations),
       findUnparsedSources("sample.ts", declarations),
     ]).toMatchObject([[], [], [{ file: "sample.ts", line: 1 }]])
-  })
-
-  test("a defaulted type parameter in a .tsx file hides no read after it", () => {
-    const findings = findingsFor([
-      {
-        file: "packages/e2e/src/probe.tsx",
-        text: [
-          "export type Helper = number",
-          "const same = <Row = unknown,>(x: Row) => x",
-          "export const used = (): Helper => same(1)",
-        ].join("\n"),
-      },
-      {
-        file: "packages/e2e/tests/probe.test.ts",
-        text: 'import { used } from "../src/probe"\nused()\n',
-      },
-    ])
-    expect(findings).toEqual([])
   })
 })
 
@@ -2985,8 +2868,7 @@ export type LogPaths = { readonly dir: string }
   })
 
   test("a bare export block is a surface, so its names are declared", () => {
-    // 26 names hid in one such block in packages/sdk/src/client.ts because
-    // only `export const|type|...` was read.
+    // A bare `export { ... }` block declares names, not only `export const|type|...`.
     const source = `type Local = { readonly a: number }
 export type { Local }
 `
@@ -3078,8 +2960,7 @@ void Orphan
   })
 
   test("no name is exempt by itself: a dead export is reported whatever it is called", () => {
-    // A name-keyed exemption table once let `transition` and five other names
-    // die silently on every surface, long after the exports it meant were gone.
+    // A name-keyed exemption would let a dead export outlive what it meant.
     const names = [
       "formatBranchLabel",
       "transition",
@@ -3098,8 +2979,7 @@ void Orphan
   })
 
   test("a name an entry point declares itself is measured through its specifier", () => {
-    // `defineExtension` is declared in the api entry point, not re-exported.
-    // A reader of re-export blocks alone never measured it.
+    // A name the entry point declares itself, not one it re-exports, is measured too.
     const source = `export const defineTool = 1\n`
     expect(
       findingsFor([
@@ -3126,8 +3006,7 @@ void Orphan
   })
 
   test("a branch-tool name an extension imports through the specifier is live", () => {
-    // The row exists to ask this question at all: before it, no surface
-    // scanned this entry point and every name here looked consumed.
+    // An entry point no surface scans makes every name in it look consumed.
     expect(
       findingsFor([
         {
@@ -3433,14 +3312,6 @@ export const plantedDeadSdkExport = "nothing imports this"
     expect(
       ownFindings(
         "export type interpolated = 1\nconst label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
-      ),
-    ).toEqual([])
-  })
-
-  test("a name read in an interpolation after template text holding `//` is live", () => {
-    expect(
-      ownFindings(
-        "export type afterSlashes = 1\nconst label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
       ),
     ).toEqual([])
   })

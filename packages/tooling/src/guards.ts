@@ -648,7 +648,7 @@ export const findCoreFeatureIndependenceFindings = (
  *   - registration domains -- the keys of `RegistrationDomainMap`, reached
  *     as `host.register("<domain>", ...)`
  *   - hook kinds -- the keys of `ExtensionHookSignatures`, reached as
- *     `host.on("<kind>", ...)` or `hook("<kind>", ...)`
+ *     `host.on("<kind>", ...)`
  *   - context facets -- the service members of `ExtensionContextService`,
  *     reached as `ctx.<Facet>`
  *   - resource scopes -- the members of `ResourceScope`, reached as
