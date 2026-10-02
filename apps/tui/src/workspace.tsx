@@ -23,9 +23,18 @@ interface EnvContextValue {
   writeTerminal: (text: string) => void
 }
 
-const EnvContext = createContext<EnvContextValue>()
+interface EnvValue extends EnvContextValue {
+  /**
+   * True for the first exit the process starts, false for every one after
+   * it. The guard lives here, with the shutdown it guards, so an exit from a
+   * view that remounted, or from the fatal screen, never leaves twice.
+   */
+  beginExit: () => boolean
+}
 
-export function useEnv(): EnvContextValue {
+const EnvContext = createContext<EnvValue>()
+
+export function useEnv(): EnvValue {
   return useRequiredContext(EnvContext, "useEnv must be used within EnvProvider")
 }
 
@@ -35,7 +44,16 @@ interface EnvProviderProps {
 }
 
 export function EnvProvider(props: EnvProviderProps) {
-  return <EnvContext.Provider value={props.env}>{props.children}</EnvContext.Provider>
+  let exiting = false
+  const value: EnvValue = {
+    ...props.env,
+    beginExit: () => {
+      if (exiting) return false
+      exiting = true
+      return true
+    },
+  }
+  return <EnvContext.Provider value={value}>{props.children}</EnvContext.Provider>
 }
 
 // ── workspace provider ──────────────────────────────────────────────────────

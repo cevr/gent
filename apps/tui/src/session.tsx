@@ -2866,16 +2866,14 @@ const ARMED_CUE = {
  * is about to leave the screen. It is printed after the renderer is
  * destroyed, so it lands in the terminal the reader keeps. An in-memory
  * store ends with the process, so it has nothing to resume. A second exit
- * while that runs does nothing.
+ * from any view does nothing: the guard is the process's (`beginExit`).
  */
 export const useExit = () => {
   const client = useClient()
   const renderer = useRenderer()
   const env = useEnv()
-  let leavingNow = false
   return () => {
-    if (leavingNow) return
-    leavingNow = true
+    if (!env.beginExit()) return
     const leaving = client.activeSessionId()
     client.runtime.cast(
       leaveTerminal(renderer, env.writeTerminal).pipe(

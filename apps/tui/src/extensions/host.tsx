@@ -51,7 +51,7 @@ import {
 } from "./loader-boundary"
 import { useWorkspace } from "../workspace"
 import { useClient } from "../client"
-import type { SessionId } from "@gent/core/protocol"
+import type { BranchId, SessionId } from "@gent/core/protocol"
 
 // ── per-provider client runtime ─────────────────────────────────────────────
 
@@ -320,6 +320,13 @@ export function ExtensionUIProvider(props: {
   // lost, and a command held for it waits for that answer. A refusal is an
   // answer and settles this connection.
   const [listingRequest, setListingRequest] = createSignal(0)
+  // The last server command failure on the status row. It answers the
+  // command the reader ran, so the next server command takes it back
+  // (`dismissErrorIn`); a later error of another kind stays.
+  let standingFailure = Option.none<{
+    readonly target: { readonly sessionId: SessionId; readonly branchId: BranchId }
+    readonly text: string
+  }>()
   const refreshCommands = () => {
     setServerListed(Option.none())
     setListingRequest((request) => request + 1)
@@ -348,6 +355,10 @@ export function ExtensionUIProvider(props: {
                 for (const c of cmds) {
                   const run = (args: string) => {
                     const { sessionId: sid, branchId: bid } = client.sessionIdentity()
+                    Option.map(standingFailure, (failure) =>
+                      client.dismissErrorIn(failure.target, failure.text),
+                    )
+                    standingFailure = Option.none()
                     client.runtime.cast(
                       client.client.extension
                         .request({
@@ -361,12 +372,14 @@ export function ExtensionUIProvider(props: {
                           // The reader ran the command, so a failure shows on the
                           // status row of the session it ran in.
                           Effect.catchEager((error) =>
-                            Effect.sync(() =>
-                              client.setErrorIn(
-                                { sessionId: sid, branchId: bid },
-                                `/${c.name} failed: ${formatError(error)}`,
-                              ),
-                            ).pipe(
+                            Effect.sync(() => {
+                              const failure = {
+                                target: { sessionId: sid, branchId: bid },
+                                text: `/${c.name} failed: ${formatError(error)}`,
+                              }
+                              client.setErrorIn(failure.target, failure.text)
+                              standingFailure = Option.some(failure)
+                            }).pipe(
                               Effect.andThen(Effect.logWarning("slash.command.failed")),
                               Effect.annotateLogs({
                                 extensionId: c.extensionId,

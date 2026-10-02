@@ -289,6 +289,57 @@ describe("Auth route", () => {
       expect(calls).toEqual([{ agentName: "helper:google", sessionId: activeSessionId }])
     }),
   )
+  // Esc while the key is on its way drops the save's note, not the key: the
+  // list the reader stepped back to still learns the key is stored.
+  it.scopedLive("esc during a key save still shows the stored key in the list", () =>
+    Effect.gen(function* () {
+      const asked = yield* Deferred.make<void>()
+      const answer = yield* Deferred.make<void>()
+      let source: "stored" | "none" = "none"
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.sync(() => [
+              {
+                provider: ProviderId.make("anthropic"),
+                hasKey: source === "stored",
+                required: false,
+                source,
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ anthropic: [apiMethodRoute] }),
+          setKey: () =>
+            Deferred.complete(asked, Effect.void).pipe(
+              Effect.andThen(Deferred.await(answer)),
+              Effect.andThen(
+                Effect.sync(() => {
+                  source = "stored"
+                }),
+              ),
+            ),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, { client })
+      yield* waitForFrame(setup, (frame) => frame.includes("[none]"), "the list")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · API key"))
+      yield* Effect.promise(() => setup.mockInput.typeText("new-key"))
+      setup.mockInput.pressEnter()
+      yield* Deferred.await(asked)
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic · method"), "one step back")
+      yield* Deferred.complete(answer, Effect.void)
+      yield* waitUntil(() => source === "stored", "the key stored")
+      // The reader stays where they stepped back to; the list is read again under it.
+      const methods = yield* waitForFrame(setup, (frame) => frame.includes("anthropic · method"))
+      expect(methods).not.toContain("API key saved")
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (next) => next.includes("[stored]"), "the stored key")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // The success flash clears itself after a while. A pane that closes first
   // stops that clock with it, so nothing writes to the closed pane later.
   it.scopedLive("closing the pane stops its success flash", () =>

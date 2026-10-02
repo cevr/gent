@@ -106,7 +106,7 @@ import {
   statusLabelContribution,
   widgetContribution,
 } from "../src/extensions/client-facets"
-import { NOTICE_ROWS_BOUND, useSessionController } from "../src/session"
+import { NOTICE_ROWS_BOUND, useExit, useSessionController } from "../src/session"
 import { seedDebugSession } from "../src/ops"
 
 // ── app bootstrap ───────────────────────────────────────────────────────────
@@ -2057,6 +2057,34 @@ describe("App status and activity rows", () => {
         }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // The session view remounts per identity and the fatal screen has its own
+  // exit: an exit from a second view while the first one leaves is the same exit.
+  it.scopedLive("two views that exit leave the terminal once", () =>
+    Effect.gen(function* () {
+      const written: string[] = []
+      const exits: Array<() => void> = []
+      function ExitProbe() {
+        exits.push(useExit())
+        return <text>probe</text>
+      }
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ExitProbe />
+            <ExitProbe />
+          </>
+        ),
+        { writeTerminal: (text) => written.push(text) },
+      )
+      const { shutdowns } = yield* countShutdowns(setup)
+      expect(exits).toHaveLength(2)
+      for (const exit of exits) exit()
+      yield* waitUntil(() => written.some((text) => text.includes("to resume")), "the resume hint")
+      for (let frame = 0; frame < 3; frame++) yield* Effect.yieldNow
+      expect(shutdowns()).toBe(1)
+      expect(written.filter((text) => text.includes("to resume"))).toHaveLength(1)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("a session cost under a cent reads as the turn row spells it, not as free", () =>
     Effect.gen(function* () {
       const client = createMockClient({
@@ -3432,7 +3460,7 @@ describe("App slash commands", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   // A server command the server refuses says so on the status row.
-  it.scopedLive("a server slash command that fails shows why", () =>
+  it.scopedLive("a server slash command that fails shows why until the next one runs", () =>
     Effect.gen(function* () {
       const setup = yield* renderScoped(() => <App />, {
         client: createMockClient({
@@ -3448,8 +3476,19 @@ describe("App slash commands", () => {
                   extensionId: "@test/server-audit",
                   capabilityId: "audit",
                 },
+                {
+                  name: "note",
+                  displayName: "Note",
+                  description: "Take a note",
+                  extensionId: "@test/server-note",
+                  capabilityId: "note",
+                },
               ]),
-            request: () => Effect.fail(new ProviderAuthError({ message: "audit refused" })),
+            request: (input: { readonly capabilityId: string }) =>
+              Effect.suspend(() => {
+                if (input.capabilityId === "note") return Effect.void
+                return Effect.fail(new ProviderAuthError({ message: "audit refused" }))
+              }),
           },
         }),
         runtime: createMockRuntime(),
@@ -3465,6 +3504,13 @@ describe("App slash commands", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       yield* typeCommand("/audit now")(setup)
       yield* waitForFrame(setup, (frame) => frame.includes("audit refused"), "the failure")
+      yield* typeCommand("/note")(setup)
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => !next.includes("audit refused") && next.includes("ready ·"),
+        "the failure gone",
+      )
+      expect(frame).not.toContain("/audit failed")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("the slash popup shows a server command's description", () =>

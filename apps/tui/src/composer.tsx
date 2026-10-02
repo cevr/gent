@@ -297,7 +297,7 @@ interface StatusRowProps {
    * How many of `labels`, counted from the end, are laid out from the right
    * edge inward instead of after the left group.
    *
-   * The reader glances at the right-hand labels (effort, context, cost)
+   * The reader glances at the right-hand labels (context, cost)
    * without reading the row, so their position is fixed and the left group
    * is what gives way when the row runs out of columns.
    */
