@@ -52,7 +52,6 @@ import {
   respondFirstWith,
 } from "./helpers/fake-http-client.js"
 import {
-  type CapturedRequest,
   fakeFetchLayer,
   type FakeFetchState,
   freePort,
@@ -108,10 +107,12 @@ const toStoredCredentials = (creds: OpenAICredentials): StoredOAuthCredentials =
  * The gent auth store as core runs it: one lock per provider, shared by
  * every profile. `update` is what a refresh uses; `write` is the sign-in
  * callback's `ctx.persist`. `failNext` makes the next write fail.
+ * `requested` holds the refresh token of each write once it asks for the lock.
  */
 const makeFakeAuthStore = (state: PersistState, initial: Option.Option<StoredOAuthCredentials>) => {
   let stored = initial
   const writes: Array<StoredOAuthCredentials> = []
+  const requested: Array<string> = []
   const lock = Semaphore.makeUnsafe(1)
   const put = (next: StoredOAuthCredentials) =>
     Effect.suspend(() => {
@@ -134,15 +135,18 @@ const makeFakeAuthStore = (state: PersistState, initial: Option.Option<StoredOAu
       if (Option.isSome(pair[1])) yield* put(pair[1].value)
       return pair[0]
     }).pipe(lock.withPermits(1))
-  const write = (next: StoredOAuthCredentials) => put(next).pipe(lock.withPermits(1))
+  const write = (next: StoredOAuthCredentials) =>
+    Effect.suspend(() => {
+      requested.push(next.refresh)
+      return put(next).pipe(lock.withPermits(1))
+    })
   const read = () => stored
   // The credential a `resolveModel` call receives: the stored one plus `update`.
   const authInfo = (): ProviderAuthInfo => ProviderAuthInfo.cases.Oauth.make({ update })
-  return { update, write, read, authInfo, writes }
+  return { update, write, read, authInfo, writes, requested }
 }
 const makeAuthInfo = (state: PersistState, credentials: OpenAICredentials): ProviderAuthInfo =>
   makeFakeAuthStore(state, Option.some(toStoredCredentials(credentials))).authInfo()
-// A credential cache over a fresh cell.
 // A ChatGPT sign-in held in its own fake store.
 const oauthInfo = (stored: StoredOAuthCredentials): ProviderAuthInfo =>
   makeFakeAuthStore({ lastWritten: Option.none(), failNext: false }, Option.some(stored)).authInfo()
@@ -151,6 +155,7 @@ const updateOf = (authInfo: ProviderAuthInfo): UpdateStoredOAuth => {
   if (authInfo._tag === "Oauth") return authInfo.update
   return () => Effect.die(new Error("an API key has no OAuth store"))
 }
+// A credential cache over a fresh cell.
 const credentialCache = (io: OpenAICredentialIO, authInfo: ProviderAuthInfo) =>
   SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
     Effect.flatMap((cellRef) => makeOpenAICredentialCache(cellRef, io, updateOf(authInfo))),
@@ -160,6 +165,38 @@ const FAR_FUTURE = 10 * 60 * 1000
 const EMPTY_PERSISTED_CREDENTIALS = Option.none<StoredOAuthCredentials>()
 const runWithTestClock = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
   Effect.scoped(eff).pipe(Effect.provide(TestClock.layer()))
+/** The message of the error an exit failed with; empty for a success. */
+const errorMessage = (exit: Exit.Exit<unknown, { readonly message: string }>): string => {
+  if (!Exit.isFailure(exit)) return ""
+  return Option.match(Cause.findErrorOption(exit.cause), {
+    onNone: () => "",
+    onSome: (error) => error.message,
+  })
+}
+type PendingCallbacks = Parameters<typeof buildOpenAIModelDriver>[1]
+/**
+ * The OpenAI driver as the extension's setup builds it: its own credential
+ * cell (empty unless `cell` is given), the pending logins, no environment key.
+ */
+const makeDriver = (
+  options: {
+    readonly cell?: CredentialCacheCell<OpenAICredentials>
+    readonly pending?: PendingCallbacks
+  } = {},
+) =>
+  Effect.gen(function* () {
+    const cellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+      options.cell ?? EMPTY_CREDENTIAL_CELL,
+    )
+    const driver = buildOpenAIModelDriver(
+      cellRef,
+      options.pending ?? new Map(),
+      Option.none(),
+      testCatalogSource(),
+      yield* hostCrypto,
+    )
+    return { driver, cellRef }
+  })
 // ── Tests ──
 describe("OpenAI credential cache — initial seed from authInfo", () => {
   it.live("seed creds from authInfo are returned without invoking refresh", () =>
@@ -190,35 +227,6 @@ describe("OpenAI credential cache — initial seed from authInfo", () => {
       )
     }),
   )
-  it.live("missing access AND refresh in authInfo + no cell creds → ProviderAuthError", () =>
-    Effect.gen(function* () {
-      const state: IOState = {
-        refreshResult: () =>
-          Effect.fail(new ProviderAuthError({ message: "should not be called" })),
-      }
-      // authInfo with empty access AND empty refresh seeds EMPTY cell.
-      const authInfo = oauthInfo({
-        access: "",
-        refresh: "",
-        expires: 0,
-      })
-      const cache = credentialCache(makeIO(state), authInfo)
-      const result = yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* cache
-          return yield* Effect.exit(svc.getFresh)
-        }),
-      )
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        const errOpt = Cause.findErrorOption(result.cause)
-        expect(Option.isSome(errOpt)).toBe(true)
-        if (Option.isSome(errOpt)) {
-          expect(errOpt.value.message).toContain("unavailable")
-        }
-      }
-    }),
-  )
 })
 describe("OpenAI credential cache — token endpoint timeout", () => {
   it.live("a token endpoint that never answers fails the refresh instead of holding the lock", () =>
@@ -233,15 +241,7 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
         },
         { preconnect: () => {} },
       )
-      const cellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        cellRef,
-        new Map(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       const store = makeFakeAuthStore(
         { lastWritten: Option.none(), failNext: false },
         Option.some({ access: "stale-access", refresh: "stale-refresh", expires: 0 }),
@@ -369,14 +369,7 @@ describe("OpenAI credential cache — durable persist failure", () => {
           return yield* Effect.exit(svc.getFresh)
         }),
       )
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        const errOpt = Cause.findErrorOption(result.cause)
-        expect(Option.isSome(errOpt)).toBe(true)
-        if (Option.isSome(errOpt)) {
-          expect(errOpt.value.message).toContain("Failed to persist refreshed OpenAI credentials")
-        }
-      }
+      expect(errorMessage(result)).toContain("Failed to persist refreshed OpenAI credentials")
       expect(Option.isNone(persistState.lastWritten)).toBe(true)
     }),
   )
@@ -407,14 +400,7 @@ describe("OpenAI credential cache — durable persist failure", () => {
         Effect.gen(function* () {
           const svc = yield* cache
           const failure = yield* Effect.exit(svc.getFresh)
-          expect(failure._tag).toBe("Failure")
-          if (failure._tag === "Failure") {
-            const errOpt = Cause.findErrorOption(failure.cause)
-            expect(Option.isSome(errOpt)).toBe(true)
-            if (Option.isSome(errOpt)) {
-              expect(errOpt.value.message).toContain("typed persist failure")
-            }
-          }
+          expect(errorMessage(failure)).toContain("typed persist failure")
           const retry = yield* svc.getFresh
           expect(retry.access).toBe("fresh-access")
           expect(refreshCount).toBe(1)
@@ -474,16 +460,7 @@ describe("OpenAI credential cache — invalidate preserves durable refresh token
         Effect.gen(function* () {
           const svc = yield* cache
           const failure = yield* Effect.exit(svc.getFresh)
-          expect(failure._tag).toBe("Failure")
-          if (failure._tag === "Failure") {
-            const errOpt = Cause.findErrorOption(failure.cause)
-            expect(Option.isSome(errOpt)).toBe(true)
-            if (Option.isSome(errOpt)) {
-              expect(errOpt.value.message).toContain(
-                "Failed to persist refreshed OpenAI credentials",
-              )
-            }
-          }
+          expect(errorMessage(failure)).toContain("Failed to persist refreshed OpenAI credentials")
           expect(callTokens[0]).toBe("seed-refresh")
           expect(Option.isNone(persistState.lastWritten)).toBe(true)
           // The rotated credential is the one the cell holds.
@@ -509,6 +486,7 @@ describe("OpenAI credential cache — invalidate preserves durable refresh token
         refreshResult: () =>
           Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
+      // An authInfo with empty access and refresh leaves the cell empty.
       const authInfo = oauthInfo({ access: "", refresh: "", expires: 0 })
       const cache = credentialCache(makeIO(state), authInfo)
       yield* runWithTestClock(
@@ -517,21 +495,12 @@ describe("OpenAI credential cache — invalidate preserves durable refresh token
           // Invalidate before any successful refresh — cell is empty.
           yield* svc.invalidate(makeCreds("never-held", 0))
           const result = yield* Effect.exit(svc.getFresh)
-          expect(result._tag).toBe("Failure")
-          if (result._tag === "Failure") {
-            const errOpt = Cause.findErrorOption(result.cause)
-            expect(Option.isSome(errOpt)).toBe(true)
-            if (Option.isSome(errOpt)) {
-              expect(errOpt.value.message).toContain("unavailable")
-            }
-          }
+          expect(errorMessage(result)).toContain("unavailable")
         }),
       )
     }),
   )
 })
-// Suppress unused-warning for Layer (intentional helper import)
-void Layer
 
 // ── device-code login ───────────────────────────────────────────────────────
 
@@ -726,15 +695,7 @@ describe("OpenAI device-code login", () => {
 
   it.live("registers the device-code method between the browser and API-key methods", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        new Map(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       const methods = Option.fromNullishOr(driver.auth?.methods).pipe(Option.getOrElse(() => []))
       expect(methods.map((method) => `${method.type}:${method.label}`)).toEqual([
         "oauth:ChatGPT Pro/Plus (browser)",
@@ -795,118 +756,116 @@ const noopRefreshIO = (): OpenAICredentialIO => ({
 // outgoing JSON bodies (via `bodyJsonUnsafe`/`bodyText` → Uint8Array).
 const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 const runOk = <A, E, R>(eff: Effect.Effect<A, E, R>) => Effect.scoped(eff.pipe(Effect.orDie))
+/** A fake client that answers every request with `status`. */
+const answering = (status: number, body = "ok"): FakeClientState => ({
+  captured: [],
+  responder: () => new Response(body, { status }),
+})
+/**
+ * The Codex client as the driver builds it, over the fake client: the
+ * credential cache for `authInfo` (a fresh "k1-access" sign-in unless given),
+ * the Codex transform, and the SDK's step under the Codex base.
+ */
+const codexClientOver = (
+  state: FakeClientState,
+  authInfo: ProviderAuthInfo = validAuthInfo({ access: "k1-access" }),
+  io: OpenAICredentialIO = noopRefreshIO(),
+) =>
+  credentialCache(io, authInfo).pipe(
+    Effect.map((creds) => underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))),
+  )
+/** The `/responses` post the Responses SDK makes. */
+const postResponses = (client: HttpClient.HttpClient, headers: Record<string, string> = {}) =>
+  client.post("/responses", { headers, body: jsonBody({ model: "gpt-5.4" }) })
+/**
+ * The ProviderAuthError a Codex request failed with. The client surface
+ * carries it as the standard transport error type: an HttpClientError whose
+ * request-build (EncodeError) reason has the ProviderAuthError as its cause.
+ * So the wrapped client signature stays `With<HttpClientError, never>`, and
+ * upstream error classifiers can still see the auth failure.
+ */
+const providerAuthFailure = (exit: Exit.Exit<unknown, HttpClientError>) =>
+  Effect.gen(function* () {
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (!Exit.isFailure(exit)) return yield* Effect.die(new Error("expected failure"))
+    const failReason = exit.cause.reasons.find(
+      (r): r is Cause.Fail<HttpClientError> => r._tag === "Fail",
+    )
+    expect(failReason).toBeDefined()
+    const failReasonOption = Option.fromUndefinedOr(failReason)
+    if (Option.isNone(failReasonOption)) {
+      return yield* Effect.die(new Error("expected fail reason"))
+    }
+    const err = failReasonOption.value.error
+    expect(err).toBeInstanceOf(HttpClientError)
+    expect(err.reason).toBeInstanceOf(EncodeError)
+    if (!(err.reason instanceof EncodeError)) {
+      return yield* Effect.die(new Error("expected request-build error"))
+    }
+    const reason = err.reason
+    expect(Schema.is(ProviderAuthError)(reason.cause)).toBe(true)
+    if (!Schema.is(ProviderAuthError)(reason.cause)) {
+      return yield* Effect.die(new Error("expected provider auth error"))
+    }
+    return { message: reason.cause.message, description: reason.description }
+  })
 // ── Tests ──
 describe("codexClient — auth headers", () => {
   it.scopedLive("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildCodexClient(creds)
-      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
-      yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
-      expect(fakeState.captured).toHaveLength(1)
-      expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
+      const state = answering(200)
+      const response = yield* runOk(postResponses(yield* codexClientOver(state)))
+      // A 200 is the answer: one request, no retry.
+      expect(response.status).toBe(200)
+      expect(state.captured).toHaveLength(1)
+      expect(state.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
     }),
   )
   it.scopedLive("overrides any pre-existing Authorization header", () =>
     Effect.gen(function* () {
       // Defensive: if anything upstream injected a placeholder Bearer,
       // the transform must replace it with the OAuth value.
-      const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildCodexClient(creds)
-      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
-      yield* runOk(
-        wrapped.post("/responses", {
-          headers: { authorization: "Bearer placeholder" },
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
-      expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
+      const state = answering(200)
+      const client = yield* codexClientOver(state)
+      yield* runOk(postResponses(client, { authorization: "Bearer placeholder" }))
+      expect(state.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
     }),
   )
   it.scopedLive("sets ChatGPT-Account-Id when present in credentials", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache(
-        noopRefreshIO(),
+      const state = answering(200)
+      const client = yield* codexClientOver(
+        state,
         validAuthInfo({ access: "k1-access", accountId: "acct-123" }),
       )
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildCodexClient(creds)
-      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
-      yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
-      expect(fakeState.captured[0]!.headers["chatgpt-account-id"]).toBe("acct-123")
+      yield* runOk(postResponses(client))
+      expect(state.captured[0]!.headers["chatgpt-account-id"]).toBe("acct-123")
     }),
   )
   it.scopedLive("omits ChatGPT-Account-Id when accountId absent", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildCodexClient(creds)
-      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
-      yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
-      expect(fakeState.captured[0]!.headers["chatgpt-account-id"]).toBeUndefined()
+      const state = answering(200)
+      yield* runOk(postResponses(yield* codexClientOver(state)))
+      expect(state.captured[0]!.headers["chatgpt-account-id"]).toBeUndefined()
     }),
   )
   it.scopedLive("sets default originator + user-agent when upstream omits them", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildCodexClient(creds)
-      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
-      yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
-      expect(fakeState.captured[0]!.headers["originator"]).toBe("gent")
-      expect(fakeState.captured[0]!.headers["user-agent"]).toBe("gent")
+      const state = answering(200)
+      yield* runOk(postResponses(yield* codexClientOver(state)))
+      expect(state.captured[0]!.headers["originator"]).toBe("gent")
+      expect(state.captured[0]!.headers["user-agent"]).toBe("gent")
     }),
   )
   it.scopedLive("preserves upstream originator + user-agent when already set", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildCodexClient(creds)
-      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
+      const state = answering(200)
+      const client = yield* codexClientOver(state)
       yield* runOk(
-        wrapped.post("/responses", {
-          headers: { originator: "custom-app", "user-agent": "custom-ua/1.0" },
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
+        postResponses(client, { originator: "custom-app", "user-agent": "custom-ua/1.0" }),
       )
-      expect(fakeState.captured[0]!.headers["originator"]).toBe("custom-app")
-      expect(fakeState.captured[0]!.headers["user-agent"]).toBe("custom-ua/1.0")
+      expect(state.captured[0]!.headers["originator"]).toBe("custom-app")
+      expect(state.captured[0]!.headers["user-agent"]).toBe("custom-ua/1.0")
     }),
   )
   it.scopedLive("preserves request method, url, and body for non-Codex paths", () =>
@@ -915,19 +874,14 @@ describe("codexClient — auth headers", () => {
       // non-Codex endpoints. Those must pass through untouched (auth
       // headers still applied — see other tests). Use the embeddings
       // path here as a non-Codex example.
-      const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildCodexClient(creds)
-      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
+      const state = answering(200)
+      const client = yield* codexClientOver(state)
       yield* runOk(
-        wrapped.post("/embeddings", {
+        client.post("/embeddings", {
           body: jsonBody({ model: "text-embedding-3-small", input: "hello" }),
         }),
       )
-      const seen = fakeState.captured[0]!
+      const seen = state.captured[0]!
       expect(seen.method).toBe("POST")
       expect(seen.url).toBe("https://chatgpt.com/backend-api/codex/embeddings")
       expect(seen.body).toBeDefined()
@@ -940,63 +894,23 @@ describe("codexClient — auth headers", () => {
   )
   it.scopedLive("surfaces ProviderAuthError from getFresh as HttpClientError", () =>
     Effect.gen(function* () {
-      // When credentials are unavailable, the typed ProviderAuthError
-      // must reach the client surface as the standard transport error
-      // type — that keeps the base client signature
-      // satisfied (`With<HttpClientError, never>`).
       const refreshFails: OpenAICredentialIO = {
         refresh: () => Effect.fail(new ProviderAuthError({ message: "no usable refresh token" })),
       }
-      // authInfo with stale access + non-empty refresh forces refresh.
-      const stalAuthInfo = oauthInfo({
+      // An expired authInfo with a refresh token forces a refresh.
+      const staleAuthInfo = oauthInfo({
         access: "stale-access",
         refresh: "stale-refresh",
-        expires: 0, // already expired → forces refresh
+        expires: 0,
       })
-      const creds = yield* credentialCache(refreshFails, stalAuthInfo)
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildCodexClient(creds)
-      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
-      const result = yield* Effect.scoped(
-        wrapped
-          .post("/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          })
-          .pipe(Effect.exit),
-      )
-      expect(result._tag).toBe("Failure")
+      const state = answering(200)
+      const client = yield* codexClientOver(state, staleAuthInfo, refreshFails)
+      const result = yield* Effect.scoped(postResponses(client).pipe(Effect.exit))
       // Capture stays empty — the request never hit the wire.
-      expect(fakeState.captured).toHaveLength(0)
-      // The failure surface must be the standard transport error type
-      // (HttpClientError with a TransportError reason) so the wrapped
-      // client signature stays `With<HttpClientError, never>`. The
-      // original ProviderAuthError must be reachable as the cause so
-      // upstream error classifiers can still see it.
-      if (result._tag !== "Failure") return yield* Effect.die(new Error("expected failure"))
-      const failReason = result.cause.reasons.find(
-        (r): r is Cause.Fail<HttpClientError> => r._tag === "Fail",
-      )
-      expect(failReason).toBeDefined()
-      const failReasonOption = Option.fromUndefinedOr(failReason)
-      if (Option.isNone(failReasonOption)) {
-        return yield* Effect.die(new Error("expected fail reason"))
-      }
-      const err = failReasonOption.value.error
-      expect(err).toBeInstanceOf(HttpClientError)
-      expect(err.reason).toBeInstanceOf(EncodeError)
-      if (!(err.reason instanceof EncodeError)) {
-        return yield* Effect.die(new Error("expected request-build error"))
-      }
-      const reason = err.reason
-      expect(Schema.is(ProviderAuthError)(reason.cause)).toBe(true)
-      if (!Schema.is(ProviderAuthError)(reason.cause)) {
-        return yield* Effect.die(new Error("expected provider auth error"))
-      }
-      expect(reason.cause.message).toBe("no usable refresh token")
-      expect(reason.description).toBe("no usable refresh token")
+      expect(state.captured).toHaveLength(0)
+      const failure = yield* providerAuthFailure(result)
+      expect(failure.message).toBe("no usable refresh token")
+      expect(failure.description).toBe("no usable refresh token")
     }),
   )
   it.scopedLive("calls getFresh per-request (rotated cell wins on second call)", () =>
@@ -1019,53 +933,30 @@ describe("codexClient — auth headers", () => {
           return Effect.fail(new ProviderAuthError({ message: "should not be called twice" }))
         },
       }
-      const stalAuthInfo = oauthInfo({
+      const staleAuthInfo = oauthInfo({
         access: "seed-access",
         refresh: "seed-refresh",
         expires: 0, // forces refresh on first getFresh
       })
-      const creds = yield* credentialCache(rotateIO, stalAuthInfo)
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildCodexClient(creds)
-      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
-      yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
-      yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
-      expect(fakeState.captured).toHaveLength(2)
+      const state = answering(200)
+      const client = yield* codexClientOver(state, staleAuthInfo, rotateIO)
+      yield* runOk(postResponses(client))
+      yield* runOk(postResponses(client))
+      expect(state.captured).toHaveLength(2)
       // First call refreshes seed → rotated; second hits cache and reuses.
-      expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer rotated-access")
-      expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer rotated-access")
+      expect(state.captured[0]!.headers["authorization"]).toBe("Bearer rotated-access")
+      expect(state.captured[1]!.headers["authorization"]).toBe("Bearer rotated-access")
     }),
   )
 })
 describe("codexClient — URL/body/beta rewrite", () => {
-  // Helpers local to the rewrite tests — keep the auth-header tests above untouched.
-  const okResponse = (): FakeClientState => ({
-    captured: [],
-    responder: () => new Response("ok", { status: 200 }),
-  })
-  const buildWrapped = (state: FakeClientState) =>
-    Effect.gen(function* () {
-      const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
-      return underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
-    })
   it.scopedLive("does NOT rewrite paths that are not exactly responses", () =>
     Effect.gen(function* () {
       // Exact path equality avoids rewriting sub-resources and other APIs.
-      const state = okResponse()
-      const wrapped = yield* buildWrapped(state)
+      const state = answering(200)
+      const client = yield* codexClientOver(state)
       for (const url of ["/responses/foo", "/chat/completions"]) {
-        yield* runOk(wrapped.post(url, { body: jsonBody({ model: "gpt-5.4" }) }))
+        yield* runOk(client.post(url, { body: jsonBody({ model: "gpt-5.4" }) }))
       }
       expect(state.captured.map((request) => request.url)).toEqual([
         "https://chatgpt.com/backend-api/codex/responses/foo",
@@ -1077,13 +968,8 @@ describe("codexClient — URL/body/beta rewrite", () => {
   )
   it.scopedLive("sets OpenAI-Beta header on Codex-bound paths", () =>
     Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* buildWrapped(state)
-      yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
+      const state = answering(200)
+      yield* runOk(postResponses(yield* codexClientOver(state)))
       expect(state.captured[0]!.headers["openai-beta"]).toBe("responses=experimental")
     }),
   )
@@ -1096,14 +982,9 @@ describe("codexClient — URL/body/beta rewrite", () => {
         // let Codex reject our traffic if the SDK ever starts injecting a
         // different beta token. Append the required token if missing;
         // preserve every other token unchanged.
-        const state = okResponse()
-        const wrapped = yield* buildWrapped(state)
-        yield* runOk(
-          wrapped.post("/responses", {
-            headers: { "openai-beta": "custom=value" },
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        )
+        const state = answering(200)
+        const client = yield* codexClientOver(state)
+        yield* runOk(postResponses(client, { "openai-beta": "custom=value" }))
         expect(state.captured[0]!.headers["openai-beta"]).toBe(
           "custom=value, responses=experimental",
         )
@@ -1111,24 +992,19 @@ describe("codexClient — URL/body/beta rewrite", () => {
   )
   it.scopedLive("does not duplicate responses=experimental when it's already present", () =>
     Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* buildWrapped(state)
-      yield* runOk(
-        wrapped.post("/responses", {
-          headers: { "openai-beta": "custom=value, responses=experimental" },
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
+      const state = answering(200)
+      const client = yield* codexClientOver(state)
+      yield* runOk(postResponses(client, { "openai-beta": "custom=value, responses=experimental" }))
       expect(state.captured[0]!.headers["openai-beta"]).toBe("custom=value, responses=experimental")
     }),
   )
   it.scopedLive("structured input_text system/developer content lifts into instructions", () =>
     Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* buildWrapped(state)
+      const state = answering(200)
+      const client = yield* codexClientOver(state)
       const structured = { role: "system", content: [{ type: "input_text", text: "structured" }] }
       yield* runOk(
-        wrapped.post("/responses", {
+        client.post("/responses", {
           body: jsonBody({
             model: "gpt-5.4",
             input: [
@@ -1146,8 +1022,8 @@ describe("codexClient — URL/body/beta rewrite", () => {
   )
   it.scopedLive("later context updates preserve the instruction prefix and tool history", () =>
     Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* buildWrapped(state)
+      const state = answering(200)
+      const client = yield* codexClientOver(state)
       const history = [
         { role: "user", content: "Read the file." },
         { type: "function_call", call_id: "stable-call", name: "cell", arguments: "{}" },
@@ -1155,7 +1031,7 @@ describe("codexClient — URL/body/beta rewrite", () => {
       ]
       const update = { role: "system", content: "Today's date is now: 2026-09-09" }
       for (const tail of [history, [...history, update]]) {
-        yield* wrapped.post("/responses", {
+        yield* client.post("/responses", {
           body: jsonBody({
             model: "gpt-5.6-luna",
             instructions: "Fixed provider instructions.",
@@ -1178,14 +1054,14 @@ describe("codexClient — URL/body/beta rewrite", () => {
   )
   it.scopedLive("a turn notice arrives after the conversation as the host, not the user", () =>
     Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* buildWrapped(state)
+      const state = answering(200)
+      const client = yield* codexClientOver(state)
       const conversation = [{ role: "user", content: "What is running?" }]
       const notice = Option.getOrThrow(
         turnNoticesText([{ id: "stopped", content: "# Stopped children\n\n- one", keys: [] }]),
       )
       for (const tail of [conversation, [...conversation, { role: "system", content: notice }]]) {
-        yield* wrapped.post("/responses", {
+        yield* client.post("/responses", {
           body: jsonBody({
             model: "gpt-5.6-luna",
             input: [{ role: "system", content: "Fixed session instructions." }, ...tail],
@@ -1208,10 +1084,10 @@ describe("codexClient — URL/body/beta rewrite", () => {
   )
   it.scopedLive("drops sampling limits the Codex backend rejects", () =>
     Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* buildWrapped(state)
+      const state = answering(200)
+      const client = yield* codexClientOver(state)
       yield* runOk(
-        wrapped.post("/responses", {
+        client.post("/responses", {
           body: jsonBody({
             model: "gpt-5.6-luna",
             max_output_tokens: 4096,
@@ -1231,10 +1107,10 @@ describe("codexClient — URL/body/beta rewrite", () => {
     "rewrites JSON body: lifts system/developer items into top-level instructions, sets store=false",
     () =>
       Effect.gen(function* () {
-        const state = okResponse()
-        const wrapped = yield* buildWrapped(state)
+        const state = answering(200)
+        const client = yield* codexClientOver(state)
         yield* runOk(
-          wrapped.post("/responses", {
+          client.post("/responses", {
             body: jsonBody({
               model: "gpt-5.4",
               input: [
@@ -1254,28 +1130,14 @@ describe("codexClient — URL/body/beta rewrite", () => {
         expect(parsed["model"]).toBe("gpt-5.4")
       }),
   )
-  it.scopedLive("Codex-bound body with no instructions gets a non-empty default", () =>
-    Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* buildWrapped(state)
-      yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4", input: [] }),
-        }),
-      )
-      const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
-      expect(parsed["instructions"]).toBe("You are a helpful assistant.")
-      expect(parsed["store"]).toBe(false)
-    }),
-  )
   it.scopedLive(
     "body with input but no system/developer items: default instructions injected, store=false set",
     () =>
       Effect.gen(function* () {
-        const state = okResponse()
-        const wrapped = yield* buildWrapped(state)
+        const state = answering(200)
+        const client = yield* codexClientOver(state)
         yield* runOk(
-          wrapped.post("/responses", {
+          client.post("/responses", {
             body: jsonBody({
               model: "gpt-5.4",
               input: [{ role: "user", content: "hi" }],
@@ -1290,41 +1152,20 @@ describe("codexClient — URL/body/beta rewrite", () => {
   )
   it.scopedLive("non-Codex path: body untouched even when it carries an input array", () =>
     Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* buildWrapped(state)
+      const state = answering(200)
+      const client = yield* codexClientOver(state)
       const original = {
         model: "text-embedding-3-small",
         input: [{ role: "system", content: "should-not-be-lifted" }],
       }
       yield* runOk(
-        wrapped.post("/embeddings", {
+        client.post("/embeddings", {
           body: jsonBody(original),
         }),
       )
       const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
       expect(parsed).toEqual(original)
       expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/embeddings")
-    }),
-  )
-  it.scopedLive("auth headers still apply on Codex-rewritten requests", () =>
-    Effect.gen(function* () {
-      // Belt-and-suspenders: the URL/body rewrite path must not strip
-      // the OAuth Bearer / ChatGPT-Account-Id added by the auth-header
-      // preprocess.
-      const creds = yield* credentialCache(
-        noopRefreshIO(),
-        validAuthInfo({ access: "k1-access", accountId: "acc-123" }),
-      )
-      const state = okResponse()
-      const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
-      yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
-      expect(state.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
-      expect(state.captured[0]!.headers["chatgpt-account-id"]).toBe("acc-123")
-      expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
     }),
   )
 })
@@ -1362,12 +1203,11 @@ describe("codexClient — 401 recovery", () => {
       }
       // Empty access on authInfo forces an initial refresh (otherwise the
       // cache hits with the seed token and never calls our IO).
-      const stalAuthInfo = oauthInfo({
+      const staleAuthInfo = oauthInfo({
         access: "",
         refresh: "seed-refresh",
         expires: 0,
       })
-      const creds = yield* credentialCache(rotateIO, stalAuthInfo)
       const state: FakeClientState = {
         captured: [],
         // First call returns 401, second returns 200.
@@ -1376,12 +1216,8 @@ describe("codexClient — 401 recovery", () => {
           new Response("ok", { status: 200 }),
         ),
       }
-      const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
-      const response = yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
+      const client = yield* codexClientOver(state, staleAuthInfo, rotateIO)
+      const response = yield* runOk(postResponses(client))
       expect(response.status).toBe(200)
       expect(state.captured).toHaveLength(2)
       // First attempt used the stale token; the retry used the rotated.
@@ -1404,22 +1240,14 @@ describe("codexClient — 401 recovery", () => {
             accountId: Option.none(),
           }),
       }
-      const stalAuthInfo = oauthInfo({
+      const staleAuthInfo = oauthInfo({
         access: "",
         refresh: "seed",
         expires: 0,
       })
-      const creds = yield* credentialCache(noopRotateIO, stalAuthInfo)
-      const state: FakeClientState = {
-        captured: [],
-        responder: () => new Response("unauthorized", { status: 401 }),
-      }
-      const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
-      const response = yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
+      const state = answering(401, "unauthorized")
+      const client = yield* codexClientOver(state, staleAuthInfo, noopRotateIO)
+      const response = yield* runOk(postResponses(client))
       expect(response.status).toBe(401)
       // Exactly two attempts: original + one retry.
       expect(state.captured).toHaveLength(2)
@@ -1429,43 +1257,11 @@ describe("codexClient — 401 recovery", () => {
     Effect.gen(function* () {
       // 500 (or any non-401) must pass through verbatim — only 401 is
       // the auth-recovery signal.
-      const noopRotateIO: OpenAICredentialIO = {
-        refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
-      }
-      const validInfo = validAuthInfo({ access: "fresh-access" })
-      const creds = yield* credentialCache(noopRotateIO, validInfo)
-      const state: FakeClientState = {
-        captured: [],
-        responder: () => new Response("server error", { status: 500 }),
-      }
-      const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
-      const response = yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
+      const state = answering(500, "server error")
+      const client = yield* codexClientOver(state, validAuthInfo({ access: "fresh-access" }))
+      const response = yield* runOk(postResponses(client))
       expect(response.status).toBe(500)
       // No retry on 500 → exactly one attempt.
-      expect(state.captured).toHaveLength(1)
-    }),
-  )
-  it.scopedLive("200 OK never triggers retry", () =>
-    Effect.gen(function* () {
-      const noopRotateIO: OpenAICredentialIO = {
-        refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
-      }
-      const creds = yield* credentialCache(noopRotateIO, validAuthInfo({ access: "fresh-access" }))
-      const state: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
-      const response = yield* runOk(
-        wrapped.post("/responses", {
-          body: jsonBody({ model: "gpt-5.4" }),
-        }),
-      )
-      expect(response.status).toBe(200)
       expect(state.captured).toHaveLength(1)
     }),
   )
@@ -1476,10 +1272,9 @@ describe("codexClient — 401 recovery", () => {
         // Edge case: first wire call returns 401 with a valid initial
         // token. Invalidate fires, retry triggers a re-read of creds, and
         // the rotation IO fails with ProviderAuthError on the second
-        // refresh. The caller must see HttpClientError with
-        // TransportError.cause = ProviderAuthError — same surface as the
-        // pre-wire credential failure path. This locks in that the recovery
-        // chain doesn't swallow auth errors that surface during the retry.
+        // refresh. The caller must see the same HttpClientError surface as
+        // a credential failure before the wire: the recovery chain does not
+        // swallow an auth error that surfaces during the retry.
         let refreshCount = 0
         const rotateThenFailIO: OpenAICredentialIO = {
           refresh: () =>
@@ -1496,46 +1291,16 @@ describe("codexClient — 401 recovery", () => {
               return Effect.fail(new ProviderAuthError({ message: "rotation failed mid-recovery" }))
             }),
         }
-        const stalAuthInfo = oauthInfo({
+        const staleAuthInfo = oauthInfo({
           access: "",
           refresh: "seed-refresh",
           expires: 0,
         })
-        const creds = yield* credentialCache(rotateThenFailIO, stalAuthInfo)
-        const state: FakeClientState = {
-          captured: [],
-          responder: () => new Response("unauthorized", { status: 401 }),
-        }
-        const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
-        const result = yield* Effect.scoped(
-          wrapped
-            .post("/responses", {
-              body: jsonBody({ model: "gpt-5.4" }),
-            })
-            .pipe(Effect.exit),
-        )
-        expect(result._tag).toBe("Failure")
-        if (result._tag !== "Failure") return yield* Effect.die(new Error("expected failure"))
-        const failReason = result.cause.reasons.find(
-          (r): r is Cause.Fail<HttpClientError> => r._tag === "Fail",
-        )
-        expect(failReason).toBeDefined()
-        const failReasonOption = Option.fromUndefinedOr(failReason)
-        if (Option.isNone(failReasonOption)) {
-          return yield* Effect.die(new Error("expected fail reason"))
-        }
-        const err = failReasonOption.value.error
-        expect(err).toBeInstanceOf(HttpClientError)
-        expect(err.reason).toBeInstanceOf(EncodeError)
-        if (!(err.reason instanceof EncodeError)) {
-          return yield* Effect.die(new Error("expected request-build error"))
-        }
-        const reason = err.reason
-        expect(Schema.is(ProviderAuthError)(reason.cause)).toBe(true)
-        if (!Schema.is(ProviderAuthError)(reason.cause)) {
-          return yield* Effect.die(new Error("expected provider auth error"))
-        }
-        expect(reason.cause.message).toBe("rotation failed mid-recovery")
+        const state = answering(401, "unauthorized")
+        const client = yield* codexClientOver(state, staleAuthInfo, rotateThenFailIO)
+        const result = yield* Effect.scoped(postResponses(client).pipe(Effect.exit))
+        const failure = yield* providerAuthFailure(result)
+        expect(failure.message).toBe("rotation failed mid-recovery")
         // Exactly one wire call: the original 401. The retry never reaches
         // the wire because preprocess (creds.getFresh) fails first.
         expect(state.captured).toHaveLength(1)
@@ -1569,7 +1334,6 @@ const makeDurableCell = (creds: OpenAICredentials): CredentialCacheCell<OpenAICr
   at: NOW_MS,
   invalidated: false,
 })
-const noopCallbacks = () => new Map()
 const openaiResponsesBody = {
   id: "resp-test-1",
   object: "response",
@@ -1616,15 +1380,7 @@ const runStream = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchSta
 describe("OpenAI cache routing", () => {
   it.live("API-key requests preserve cache routing for generation and streaming", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       const codec = Schema.fromJsonString(
         Schema.Struct({ prompt_cache_key: Schema.optional(Schema.String) }),
       )
@@ -1662,72 +1418,43 @@ describe("OpenAI cache routing", () => {
     }),
   )
 
-  it.live("OAuth requests retain the supplied cache key across calls", () =>
+  // ChatGPT routes cache affinity by the Responses `session-id` header, not
+  // by `prompt_cache_key` (codex-rs `core/src/client.rs`, `responses_session_id`).
+  it.live("OAuth requests keep the supplied cache key and name it in the session-id header", () =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-        makeDurableCell({
+      const { driver } = yield* makeDriver({
+        cell: makeDurableCell({
           access: "cache-test-token",
           refresh: "r",
           expires: FAR_FUTURE_MS,
           accountId: Option.none(),
         }),
+      })
+      const codec = Schema.fromJsonString(
+        Schema.Struct({ prompt_cache_key: Schema.optional(Schema.String) }),
       )
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
-      const codec = Schema.fromJsonString(Schema.Struct({ prompt_cache_key: Schema.String }))
+      const cacheKeys = [
+        Option.some("same-session"),
+        Option.some("same-session"),
+        Option.some("other-session"),
+        Option.none<string>(),
+      ]
       const fetchState = makeFakeFetchState()
-      for (const cacheKey of ["same-session", "same-session", "other-session"]) {
-        const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo(), { cacheKey })
+      for (const cacheKey of cacheKeys) {
+        const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo(), {
+          cacheKey: Option.getOrUndefined(cacheKey),
+        })
         yield* runOne(model, fetchState)
       }
       const keys = yield* Effect.forEach(fetchState.captured, (request) =>
         Schema.decodeEffect(codec)(Option.getOrThrow(Option.fromUndefinedOr(request.body))).pipe(
-          Effect.map((body) => body.prompt_cache_key),
+          Effect.map((body) => Option.fromUndefinedOr(body.prompt_cache_key)),
         ),
       )
-      expect(keys).toEqual(["same-session", "same-session", "other-session"])
-    }),
-  )
-
-  // ChatGPT routes cache affinity by the Responses `session-id` header, not
-  // by `prompt_cache_key` (codex-rs `core/src/client.rs`, `responses_session_id`).
-  it.live("OAuth requests name their session in the session-id header", () =>
-    Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-        makeDurableCell({
-          access: "cache-test-token",
-          refresh: "r",
-          expires: FAR_FUTURE_MS,
-          accountId: Option.none(),
-        }),
-      )
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
-      const fetchState = makeFakeFetchState()
-      for (const cacheKey of ["same-session", "same-session", "other-session"]) {
-        const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo(), { cacheKey })
-        yield* runOne(model, fetchState)
-      }
-      const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
-      yield* runOne(model, fetchState)
+      expect(keys).toEqual(cacheKeys)
       expect(
         fetchState.captured.map((request) => Option.fromUndefinedOr(request.headers["session-id"])),
-      ).toEqual([
-        Option.some("same-session"),
-        Option.some("same-session"),
-        Option.some("other-session"),
-        Option.none(),
-      ])
+      ).toEqual(cacheKeys)
     }),
   )
 })
@@ -1791,21 +1518,14 @@ describe("OpenAI reasoning replay", () => {
 
   it.live("a later step sends the encrypted reasoning item back on both paths", () =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-        makeDurableCell({
+      const { driver } = yield* makeDriver({
+        cell: makeDurableCell({
           access: "replay-token",
           refresh: "r",
           expires: FAR_FUTURE_MS,
           accountId: Option.none(),
         }),
-      )
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      })
       for (const authInfo of [makeApiAuthInfo("sk-replay"), makeOAuthInfo()]) {
         const model = yield* driver.resolveModel("gpt-5.4", authInfo, { reasoning: "high" })
         const state = makeFakeFetchState()
@@ -1837,21 +1557,14 @@ describe("OpenAI reasoning replay", () => {
   // `store: false` request gets reasoning it cannot send back.
   it.live("a request that reasons without store asks for encrypted reasoning on both paths", () =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-        makeDurableCell({
+      const { driver } = yield* makeDriver({
+        cell: makeDurableCell({
           access: "include-token",
           refresh: "r",
           expires: FAR_FUTURE_MS,
           accountId: Option.none(),
         }),
-      )
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      })
       const included = (authInfo: ProviderAuthInfo, hints: ProviderHints) =>
         Effect.gen(function* () {
           const model = yield* driver.resolveModel("gpt-6-sol", authInfo, hints)
@@ -1909,24 +1622,14 @@ describe("OpenAI reasoning replay", () => {
         }
         const reasoningSent = (state: FakeFetchState) =>
           state.captured.map((req) => req.body?.includes('"rs_1"') === true)
-        const credentialCellRef = yield* SynchronizedRef.make<
-          CredentialCacheCell<OpenAICredentials>
-        >(
-          makeDurableCell({
-            access: "replay-token",
-            refresh: "r",
-            expires: FAR_FUTURE_MS,
-            accountId: Option.none(),
-          }),
-        )
+        const cell = makeDurableCell({
+          access: "replay-token",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        })
         for (const authInfo of [makeApiAuthInfo("sk-replay"), makeOAuthInfo()]) {
-          const driver = buildOpenAIModelDriver(
-            credentialCellRef,
-            noopCallbacks(),
-            Option.none(),
-            testCatalogSource(),
-            yield* hostCrypto,
-          )
+          const { driver } = yield* makeDriver({ cell })
           const generate = (state: FakeFetchState) =>
             Effect.gen(function* () {
               const model = yield* driver.resolveModel("gpt-5.4", authInfo, { reasoning: "high" })
@@ -1953,21 +1656,14 @@ describe("OpenAI reasoning replay", () => {
 
   it.live("another 400 on a request with reasoning is not retried and keeps its message", () =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-        makeDurableCell({
+      const { driver } = yield* makeDriver({
+        cell: makeDurableCell({
           access: "replay-token",
           refresh: "r",
           expires: FAR_FUTURE_MS,
           accountId: Option.none(),
         }),
-      )
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      })
       const other = encodeExternalJson({
         error: {
           message: "Input exceeds the context window.",
@@ -2032,21 +1728,14 @@ describe("OpenAI request hints", () => {
     catalog: ProviderHints = {},
   ) =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-        makeDurableCell({
+      const { driver } = yield* makeDriver({
+        cell: makeDurableCell({
           access: "hint-test-token",
           refresh: "r",
           expires: FAR_FUTURE_MS,
           accountId: Option.none(),
         }),
-      )
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      })
       const fetchState = makeFakeFetchState()
       for (const modelName of models) {
         const model = yield* driver.resolveModel(modelName, authInfo, {
@@ -2193,15 +1882,7 @@ describe("OpenAI request hints", () => {
 describe("buildOpenAIModelDriver — OAuth callback state", () => {
   it.live("stale callback state fails instead of reporting success", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       const callback = Option.fromUndefinedOr(driver.auth?.callback)
       if (Option.isNone(callback)) {
         return yield* Effect.die(new Error("OpenAI driver callback missing"))
@@ -2223,18 +1904,10 @@ describe("buildOpenAIModelDriver — OAuth callback state", () => {
   )
 })
 describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
-  type PendingCallbacks = Parameters<typeof buildOpenAIModelDriver>[1]
-  const makeDriver = (pending: PendingCallbacks) =>
+  /** The login hooks of a driver over `pending`. */
+  const loginHooks = (pending: PendingCallbacks) =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        pending,
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver({ pending })
       const authorize = Option.fromUndefinedOr(driver.auth?.authorize)
       const callback = Option.fromUndefinedOr(driver.auth?.callback)
       if (Option.isNone(authorize) || Option.isNone(callback)) {
@@ -2261,7 +1934,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
   it.live("drops an abandoned login after five minutes", () =>
     Effect.gen(function* () {
       const pending: PendingCallbacks = new Map()
-      const { authorize } = yield* makeDriver(pending)
+      const { authorize } = yield* loginHooks(pending)
       const fetchState = makeFakeFetchState()
       yield* runWithTestClock(
         Effect.gen(function* () {
@@ -2312,7 +1985,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
         const port = yield* freePort
         const pending: PendingCallbacks = new Map()
         const authorizationId = "interrupted-publication"
-        const { authorize } = yield* makeDriver(pending)
+        const { authorize } = yield* loginHooks(pending)
         yield* Effect.addFinalizer(() => dropLogin(pending, authorizationId))
         yield* runWithTestClock(
           Effect.gen(function* () {
@@ -2365,7 +2038,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       // Hold the redirect port so the login's own server cannot bind it.
       const held = yield* heldPort
       const pending: PendingCallbacks = new Map()
-      const { authorize, callback } = yield* makeDriver(pending)
+      const { authorize, callback } = yield* loginHooks(pending)
       yield* authorize(authContext(0, "blocked")).pipe(
         Effect.provideService(OAuthRedirectPort, held.port),
       )
@@ -2382,7 +2055,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     Effect.gen(function* () {
       const port = yield* freePort
       const pending: PendingCallbacks = new Map()
-      const { authorize, callback } = yield* makeDriver(pending)
+      const { authorize, callback } = yield* loginHooks(pending)
       const authorization = yield* authorize(authContext(0, "escaped")).pipe(
         Effect.provideService(OAuthRedirectPort, port),
       )
@@ -2424,7 +2097,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     Effect.gen(function* () {
       const held = yield* heldPort
       const pending: PendingCallbacks = new Map()
-      const { authorize, callback } = yield* makeDriver(pending)
+      const { authorize, callback } = yield* loginHooks(pending)
       const authorization = yield* authorize(authContext(0, "pasted")).pipe(
         Effect.provideService(OAuthRedirectPort, held.port),
       )
@@ -2450,7 +2123,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     Effect.gen(function* () {
       const port = yield* freePort
       const pending: PendingCallbacks = new Map()
-      const { authorize, callback } = yield* makeDriver(pending)
+      const { authorize, callback } = yield* loginHooks(pending)
       const authorization = yield* authorize(authContext(0, "stale-tab")).pipe(
         Effect.provideService(OAuthRedirectPort, port),
       )
@@ -2487,7 +2160,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     Effect.gen(function* () {
       const port = yield* freePort
       const pending: PendingCallbacks = new Map()
-      const { authorize, callback } = yield* makeDriver(pending)
+      const { authorize, callback } = yield* loginHooks(pending)
       const authorization = yield* authorize(authContext(0, "both")).pipe(
         Effect.provideService(OAuthRedirectPort, port),
       )
@@ -2523,8 +2196,14 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       const pasted = yield* Effect.forkChild(
         callback({ ...context, code: `pasted-code#${state}` }).pipe(Effect.provide(slowTokens)),
       )
-      // The paste reaches the exchange, or its wait for it, before the answer.
-      yield* Effect.yieldNow.pipe(Effect.repeat({ times: 50 }))
+      // The paste enters the login before the exchange answers: the login
+      // then counts two callers.
+      yield* waitFor(
+        Effect.sync(() => pending.get("both")?.inFlight),
+        (callers) => callers === 2,
+        2_000,
+        "the pasted code in the login",
+      )
       yield* Deferred.succeed(releaseExchange, void 0)
       const results = yield* Effect.all([Fiber.await(browser), Fiber.await(pasted)]).pipe(
         Effect.timeout("3 seconds"),
@@ -2567,7 +2246,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     () =>
       Effect.gen(function* () {
         const pending: PendingCallbacks = new Map()
-        const { authorize, callback } = yield* makeDriver(pending)
+        const { authorize, callback } = yield* loginHooks(pending)
         let approved = false
         const fetchState = makeFakeFetchState()
         const endpoints = fakeFetchLayer(
@@ -2611,7 +2290,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
   it.live("two callers whose polls finish together trade the code once and both succeed", () =>
     Effect.gen(function* () {
       const pending: PendingCallbacks = new Map()
-      const { authorize, callback } = yield* makeDriver(pending)
+      const { authorize, callback } = yield* loginHooks(pending)
       const fetchState = makeFakeFetchState()
       const endpoints = fakeFetchLayer(
         fetchState,
@@ -2648,7 +2327,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
   it.live("a device caller still polling stops when another caller finishes the login", () =>
     Effect.gen(function* () {
       const pending: PendingCallbacks = new Map()
-      const { authorize, callback } = yield* makeDriver(pending)
+      const { authorize, callback } = yield* loginHooks(pending)
       const fetchState = makeFakeFetchState()
       const endpoints = fakeFetchLayer(
         fetchState,
@@ -2700,7 +2379,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
   it.live("a caller stopped once its exchange started still stores the credential", () =>
     Effect.gen(function* () {
       const pending: PendingCallbacks = new Map()
-      const { callback } = yield* makeDriver(pending)
+      const { callback } = yield* loginHooks(pending)
       const grantWaiting = yield* Deferred.make<void>()
       const exchangeStarted = yield* Deferred.make<void>()
       const releaseExchange = yield* Deferred.make<void>()
@@ -2743,11 +2422,11 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       expect(yield* Deferred.isDone(finished)).toBe(false)
       const trader = yield* Effect.forkChild(callback(context))
       yield* Deferred.await(exchangeStarted)
-      const stopping = yield* Effect.forkChild(Fiber.interrupt(trader))
-      // The interrupt reaches the trader before its exchange answers.
-      yield* Effect.yieldNow.pipe(Effect.repeat({ times: 50 }))
+      // Esc: the interrupt reaches the trader at once, before its exchange
+      // answers; `Fiber.interrupt` is this call and then a wait for the exit.
+      yield* Effect.withFiber((self) => Effect.sync(() => trader.interruptUnsafe(self.id)))
       yield* Deferred.succeed(releaseExchange, void 0)
-      yield* Fiber.join(stopping)
+      yield* Fiber.await(trader)
       expect(persisted).toEqual(["oauth"])
       expect(pending.has("traded")).toBe(false)
       expect(yield* Effect.exit(Deferred.await(finished))).toEqual(Exit.void)
@@ -2755,12 +2434,12 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     }).pipe(Effect.timeout("3 seconds")),
   )
 
-  // A caller entering the login interrupts its timer. The timer once took
-  // the login and could then be stopped before it failed `finished`.
+  // A caller entering the login interrupts its timer. A timer that already
+  // took the login runs on uninterruptibly, so it still fails `finished`.
   it.live("a timer stopped after it took the login still fails the login", () =>
     Effect.gen(function* () {
       const pending: PendingCallbacks = new Map()
-      const { callback } = yield* makeDriver(pending)
+      const { callback } = yield* loginHooks(pending)
       const closing = yield* Deferred.make<void>()
       const releaseClose = yield* Deferred.make<void>()
       const finished = yield* Deferred.make<void, ProviderAuthError>()
@@ -2791,10 +2470,10 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
           yield* TestClock.adjust("5 minutes")
           yield* Deferred.await(closing)
           expect(pending.has("expiring")).toBe(false)
-          const stopping = yield* Effect.forkChild(Fiber.interrupt(timer.value))
-          yield* Effect.yieldNow.pipe(Effect.repeat({ times: 50 }))
+          // The interrupt reaches the timer at once, while it closes the login.
+          yield* Effect.withFiber((self) => Effect.sync(() => timer.value.interruptUnsafe(self.id)))
           yield* Deferred.succeed(releaseClose, void 0)
-          yield* Fiber.join(stopping)
+          yield* Fiber.await(timer.value)
           expect(yield* Deferred.isDone(finished)).toBe(true)
           const outcome = yield* Effect.exit(Deferred.await(finished))
           expect(String(outcome)).toContain("OpenAI login expired")
@@ -2808,15 +2487,7 @@ describe("buildOpenAIModelDriver — token endpoint outage", () => {
     "a 503 from the token endpoint fails the attempt as retryable, and the retry succeeds",
     () =>
       Effect.gen(function* () {
-        const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-        const driver = buildOpenAIModelDriver(
-          credentialCellRef,
-          noopCallbacks(),
-          Option.none(),
-          testCatalogSource(),
-          yield* hostCrypto,
-        )
+        const { driver } = yield* makeDriver()
         let tokenEndpointDown = true
         const fetchState = makeFakeFetchState()
         const fetchLayer = fakeFetchLayer(fetchState, (request) => {
@@ -2857,15 +2528,7 @@ describe("buildOpenAIModelDriver — token endpoint outage", () => {
 describe("buildOpenAIModelDriver — revoked sign-in", () => {
   it.live("a rejected refresh token tells the user to sign in again with /auth", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       const fetchState = makeFakeFetchState()
       const fetchLayer = fakeFetchLayer(fetchState, (request) => {
         if (!request.url.endsWith("/oauth/token")) return openaiResponsesHappyResponse()
@@ -2901,15 +2564,7 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
   )
   it.live("a sign-in revoked mid-turn tells the user to sign in again with /auth", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       // The held token passes the resolve-time check; the server then
       // revokes it: the model request gets a 401 and the refresh a 400.
       const fetchState = makeFakeFetchState()
@@ -2957,7 +2612,6 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
   )
 })
 describe("buildOpenAIModelDriver — a new sign-in replaces the held account", () => {
-  type PendingCallbacks = Parameters<typeof buildOpenAIModelDriver>[1]
   const oldAccount: OpenAICredentials = {
     access: "old-access",
     refresh: "old-refresh",
@@ -3017,17 +2671,8 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
 
   it.live("serves the new account and never refreshes with the old token", () =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-        makeDurableCell(oldAccount),
-      )
       const pending: PendingCallbacks = new Map()
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        pending,
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver({ cell: makeDurableCell(oldAccount), pending })
       const store = makeStore()
       yield* signIn(driver, pending, store.write)
       const authInfo = store.authInfo()
@@ -3065,16 +2710,8 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
 
   it.live("a sign-in after a revoked token works without a restart", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
       const pending: PendingCallbacks = new Map()
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        pending,
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver({ pending })
       const fetchState = makeFakeFetchState()
       const fetchLayer = fakeFetchLayer(fetchState, (request) => {
         if (!request.url.endsWith("/oauth/token")) return openaiResponsesHappyResponse()
@@ -3137,17 +2774,11 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
             return rotatedFrom(refreshToken)
           }),
         )
-        const cellA = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-          makeDurableCell(oldAccount),
-        )
         const pending: PendingCallbacks = new Map()
-        const driverA = buildOpenAIModelDriver(
-          cellA,
+        const { driver: driverA } = yield* makeDriver({
+          cell: makeDurableCell(oldAccount),
           pending,
-          Option.none(),
-          testCatalogSource(),
-          yield* hostCrypto,
-        )
+        })
         // The new sign-in expires inside the freshness margin, so profile B refreshes it.
         yield* signIn(driverA, pending, store.write, { ...newSignIn, expires: 30_000 })
 
@@ -3182,24 +2813,23 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
             return rotatedFrom(refreshToken)
           }),
         )
-        const cellA = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-          makeDurableCell(oldAccount),
-        )
         const pending: PendingCallbacks = new Map()
-        const driverA = buildOpenAIModelDriver(
-          cellA,
+        const { driver: driverA } = yield* makeDriver({
+          cell: makeDurableCell(oldAccount),
           pending,
-          Option.none(),
-          testCatalogSource(),
-          yield* hostCrypto,
-        )
+        })
 
         const refreshing = yield* Effect.forkChild(profileB.getFresh)
         yield* Deferred.await(refreshStarted)
         const signingIn = yield* Effect.forkChild(signIn(driverA, pending, store.write))
-        yield* Effect.yieldNow
-        yield* Effect.yieldNow
-        // The sign-in waits for the refresh that holds the store.
+        // The sign-in's write has asked for the store, and waits for the
+        // refresh that holds it.
+        yield* waitFor(
+          Effect.sync(() => store.requested),
+          (requested) => requested.includes("new-refresh"),
+          2_000,
+          "the sign-in's store write",
+        ).pipe(TestClock.withLive)
         expect(Option.map(store.read(), (stored) => stored.refresh)).toEqual(
           Option.some("old-refresh"),
         )
@@ -3258,17 +2888,11 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
         const failed = yield* Effect.exit(profileB.getFresh)
         expect(Exit.isFailure(failed)).toBe(true)
 
-        const cellA = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-          makeDurableCell(oldAccount),
-        )
         const pending: PendingCallbacks = new Map()
-        const driverA = buildOpenAIModelDriver(
-          cellA,
+        const { driver: driverA } = yield* makeDriver({
+          cell: makeDurableCell(oldAccount),
           pending,
-          Option.none(),
-          testCatalogSource(),
-          yield* hostCrypto,
-        )
+        })
         yield* signIn(driverA, pending, store.write)
 
         // The retry finds the sign-in, not the credential the rotation replaced.
@@ -3285,121 +2909,52 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
 })
 
 describe("OpenAI sign-in requests", () => {
-  it.live("a request sends the token the extension holds", () =>
-    Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
-      // The extension holds one credential cell for every `resolveModel`;
-      // the request reads its token from that cell, not from `authInfo`.
-      yield* SynchronizedRef.set(
-        credentialCellRef,
-        makeDurableCell({
-          access: "seeded-bearer-token",
-          refresh: "r",
-          expires: FAR_FUTURE_MS,
-          accountId: Option.none(),
-        }),
-      )
-      const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      expect(fetchState.captured.length).toBeGreaterThan(0)
-      const lastReq = fetchState.captured[fetchState.captured.length - 1]!
-      expect(lastReq.headers["authorization"]).toBe("Bearer seeded-bearer-token")
-    }),
-  )
-  it.live("a sign-in request goes to the Codex backend with the responses beta", () =>
-    Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      yield* SynchronizedRef.set(
-        credentialCellRef,
-        makeDurableCell({
-          access: "t",
-          refresh: "r",
-          expires: FAR_FUTURE_MS,
-          accountId: Option.none(),
-        }),
-      )
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
-      const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      const lastReq = fetchState.captured.at(-1)!
-      // The Responses SDK posts `/responses` under the Codex base URL.
-      expect(lastReq.url).toBe("https://chatgpt.com/backend-api/codex/responses")
-      // Codex requires the `responses=experimental` beta token. The
-      // transform merges it into any existing OpenAI-Beta value. The SDK
-      // does not set its own OpenAI-Beta header, so this should be the
-      // only token.
-      const beta = lastReq.headers["openai-beta"] ?? ""
-      expect(beta).toContain("responses=experimental")
-    }),
-  )
-  it.live("a sign-in request carries the sign-in bearer and no API key", () =>
-    Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      yield* SynchronizedRef.set(
-        credentialCellRef,
-        makeDurableCell({
-          access: "t",
-          refresh: "r",
-          expires: FAR_FUTURE_MS,
-          accountId: Option.none(),
-        }),
-      )
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
-      const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      const headers = fetchState.captured.at(-1)!.headers
-      // The Codex client is built with no `apiKey`, so the SDK sets no
-      // Authorization of its own: the one header is the sign-in token.
-      expect(headers["authorization"]).toBe("Bearer t")
-      // x-api-key should never appear on the OAuth path.
-      expect(headers["x-api-key"]).toBeUndefined()
-    }),
+  it.live(
+    "a sign-in request sends the held token to the Codex backend with the responses beta and no API key",
+    () =>
+      Effect.gen(function* () {
+        const { driver, cellRef } = yield* makeDriver()
+        // The extension holds one credential cell for every `resolveModel`;
+        // the request reads its token from that cell, not from `authInfo`.
+        yield* SynchronizedRef.set(
+          cellRef,
+          makeDurableCell({
+            access: "seeded-bearer-token",
+            refresh: "r",
+            expires: FAR_FUTURE_MS,
+            accountId: Option.none(),
+          }),
+        )
+        const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
+        const fetchState = makeFakeFetchState()
+        yield* runOne(model, fetchState)
+        expect(fetchState.captured.length).toBeGreaterThan(0)
+        const lastReq = fetchState.captured.at(-1)!
+        // The Codex client is built with no `apiKey`, so the SDK sets no
+        // Authorization of its own: the one header is the sign-in token.
+        expect(lastReq.headers["authorization"]).toBe("Bearer seeded-bearer-token")
+        // x-api-key should never appear on the OAuth path.
+        expect(lastReq.headers["x-api-key"]).toBeUndefined()
+        // The Responses SDK posts `/responses` under the Codex base URL.
+        expect(lastReq.url).toBe("https://chatgpt.com/backend-api/codex/responses")
+        // Codex requires the `responses=experimental` beta token. The
+        // transform merges it into any existing OpenAI-Beta value. The SDK
+        // does not set its own OpenAI-Beta header, so this should be the
+        // only token.
+        const beta = lastReq.headers["openai-beta"] ?? ""
+        expect(beta).toContain("responses=experimental")
+      }),
   )
   it.live("a token refreshed between two turns is the one the second turn sends", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      yield* SynchronizedRef.set(
-        credentialCellRef,
-        makeDurableCell({
+      const { driver, cellRef } = yield* makeDriver({
+        cell: makeDurableCell({
           access: "first-token",
           refresh: "r",
           expires: FAR_FUTURE_MS,
           accountId: Option.none(),
         }),
-      )
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      })
       const model1 = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
       const fetchState1 = makeFakeFetchState()
       yield* runOne(model1, fetchState1)
@@ -3407,7 +2962,7 @@ describe("OpenAI sign-in requests", () => {
       // A refresh between turns writes the one cell every `resolveModel`
       // shares, so the next turn sends the new token.
       yield* SynchronizedRef.set(
-        credentialCellRef,
+        cellRef,
         makeDurableCell({
           access: "second-token",
           refresh: "r",
@@ -3423,15 +2978,7 @@ describe("OpenAI sign-in requests", () => {
   )
   it.live("OAuth resolves the GPT-6 family: Astra, Sol and Luna", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       for (const modelName of ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
         const model = yield* driver.resolveModel(modelName, makeOAuthInfo())
         const fetchState = makeFakeFetchState()
@@ -3448,15 +2995,7 @@ describe("OpenAI sign-in requests", () => {
   )
   it.live("OAuth resolveModel rejects models the Codex backend does not serve", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       const error = yield* driver.resolveModel("gpt-3.5-turbo", makeOAuthInfo()).pipe(Effect.flip)
       expect(error.message).toMatch(/not available with ChatGPT OAuth/)
     }),
@@ -3465,33 +3004,24 @@ describe("OpenAI sign-in requests", () => {
 describe("OpenAI sign-in — a rejected token", () => {
   it.live("a 401 marks the held token for refresh and keeps its refresh token", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      yield* SynchronizedRef.set(
-        credentialCellRef,
-        makeDurableCell({
+      const { driver, cellRef } = yield* makeDriver({
+        cell: makeDurableCell({
           access: "stale-token",
           refresh: "r",
           expires: FAR_FUTURE_MS,
           accountId: Option.none(),
         }),
-      )
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      })
       const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
       // 401 triggers tapError(invalidate). The retry's preprocess sees
       // the invalidated cell and attempts a live refresh. Effect.exit preserves
       // the failure so the post-condition assertions still run.
-      const responder = (req: CapturedRequest) => {
-        void req
-        return { status: 401, body: "unauthorized", headers: { "content-type": "text/plain" } }
-      }
+      const responder = () => ({
+        status: 401,
+        body: "unauthorized",
+        headers: { "content-type": "text/plain" },
+      })
       const exit = yield* oneGenerate(model, fetchState, responder).pipe(Effect.orDie, Effect.exit)
       expect(exit._tag).toBe("Failure")
       // The first attempt sent the held token to the Codex backend.
@@ -3499,7 +3029,7 @@ describe("OpenAI sign-in — a rejected token", () => {
       expect(fetchState.captured[0]!.headers["authorization"]).toBe("Bearer stale-token")
       expect(fetchState.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
       // The 401 marked the held token for refresh and kept its refresh token.
-      const finalCell = yield* SynchronizedRef.get(credentialCellRef)
+      const finalCell = yield* SynchronizedRef.get(cellRef)
       expect(finalCell._tag).toBe("Durable")
       if (finalCell._tag !== "Durable") {
         return yield* Effect.die(new Error("expected durable credential cell"))
@@ -3513,15 +3043,7 @@ describe("OpenAI sign-in — a rejected token", () => {
 describe("OpenAI API-key requests", () => {
   it.live("an API-key request goes to the public API with the key as its bearer", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -3538,15 +3060,7 @@ describe("OpenAI API-key requests", () => {
     "an API-key request to a reasoning model uses the Responses shape: output cap, no temperature, a reasoning summary",
     () =>
       Effect.gen(function* () {
-        const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-        const driver = buildOpenAIModelDriver(
-          credentialCellRef,
-          noopCallbacks(),
-          Option.none(),
-          testCatalogSource(),
-          yield* hostCrypto,
-        )
+        const { driver } = yield* makeDriver()
         // The compaction summary's hints (core turn.ts) plus a user-set agent temperature.
         const model = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), {
           maxTokens: 768,
@@ -3581,15 +3095,7 @@ describe("OpenAI API-key requests", () => {
     "an organization OpenAI refuses summaries to gets one retry without the summary, later requests on that key leave it out, and another key still asks",
     () =>
       Effect.gen(function* () {
-        const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-        const driver = buildOpenAIModelDriver(
-          credentialCellRef,
-          noopCallbacks(),
-          Option.none(),
-          testCatalogSource(),
-          yield* hostCrypto,
-        )
+        const { driver } = yield* makeDriver()
         const hints: ProviderHints = { reasoning: "high" }
         // The documented refusal: developers.openai.com/api/docs/guides/reasoning.
         const refusal = encodeExternalJson({
@@ -3625,15 +3131,7 @@ describe("OpenAI API-key requests", () => {
   )
   it.live("any other 400 is not retried and keeps the summary", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       const state = makeFakeFetchState()
       const model = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), {
         reasoning: "high",
@@ -3646,21 +3144,22 @@ describe("OpenAI API-key requests", () => {
         body: other,
         headers: { "content-type": "application/json" },
       })).pipe(Effect.exit)
+      const summaries = (fetchState: FakeFetchState) =>
+        fetchState.captured.map((req) => req.body?.includes('"summary"') === true)
       expect(exit._tag).toBe("Failure")
-      expect(state.captured.length).toBe(1)
+      expect(summaries(state)).toEqual([true])
+      // The 400 is not a refusal, so the key is not recorded: the next request asks again.
+      const later = makeFakeFetchState()
+      const again = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), {
+        reasoning: "high",
+      })
+      yield* oneGenerate(again, later, () => openaiResponsesHappyResponse())
+      expect(summaries(later)).toEqual([true])
     }),
   )
   it.live("an API-key request to a model that does not reason keeps its temperature", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver } = yield* makeDriver()
       const model = yield* driver.resolveModel("gpt-4.1", makeApiAuthInfo("sk-test-1234"), {
         temperature: 0.3,
         supportsReasoning: false,
@@ -3675,19 +3174,11 @@ describe("OpenAI API-key requests", () => {
   )
   it.live("API-key path does not touch the OAuth credential cell Ref", () =>
     Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(
-        credentialCellRef,
-        noopCallbacks(),
-        Option.none(),
-        testCatalogSource(),
-        yield* hostCrypto,
-      )
+      const { driver, cellRef } = yield* makeDriver()
       const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
-      expect(yield* SynchronizedRef.get(credentialCellRef)).toBe(EMPTY_CREDENTIAL_CELL)
+      expect(yield* SynchronizedRef.get(cellRef)).toBe(EMPTY_CREDENTIAL_CELL)
     }),
   )
 })
