@@ -546,7 +546,8 @@ interface ClientSessionValue {
   listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
   createBranch: Effect.Effect<void, GentClientRpcError>
   forkBranch: (messageId: MessageId) => Effect.Effect<BranchId, GentClientRpcError>
-  drainQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
+  /** Take back the queue of the branch named, whichever branch is in view. */
+  drainQueuedMessages: (target: SessionIdentity) => Effect.Effect<QueueSnapshot, GentClientRpcError>
 
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId) => void
@@ -1346,11 +1347,11 @@ export function ClientProvider(props: ClientProviderProps) {
       })
     },
 
-    drainQueuedMessages: Effect.gen(function* () {
-      const { sessionId, branchId } = session()
-      const requestId = yield* randomId
-      return yield* client.queue.drain({ sessionId, branchId, requestId })
-    }),
+    drainQueuedMessages: ({ sessionId, branchId }) =>
+      Effect.gen(function* () {
+        const requestId = yield* randomId
+        return yield* client.queue.drain({ sessionId, branchId, requestId })
+      }),
 
     switchBranch: (branchId) => {
       const s = session()

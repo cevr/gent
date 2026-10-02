@@ -598,6 +598,62 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
 
 type TestSetup = Effect.Success<ReturnType<typeof renderScoped>>
 
+const pairA = { sessionId: SessionId.make("session-a"), branchId: BranchId.make("branch-a") }
+const pairB = { sessionId: SessionId.make("session-b"), branchId: BranchId.make("branch-b") }
+
+/**
+ * The session view on A, with B one switch away: a test starts an action in
+ * A, moves to B before A's server answers, and reads where the answer lands.
+ */
+const mountSessionPair = (overrides: Parameters<typeof createMockClient>[0]) =>
+  Effect.gen(function* () {
+    const client = createMockClient({
+      auth: { listProviders: () => Effect.succeed([]) },
+      ...overrides,
+      branch: { getTree: () => Effect.succeed([]), ...overrides?.["branch"] },
+    })
+    let ctx = Option.none<ClientContextValue>()
+    const setup = yield* renderScoped(
+      () => (
+        <>
+          <App />
+          <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+        </>
+      ),
+      {
+        client,
+        runtime: createMockRuntime(),
+        initialSession: {
+          id: pairA.sessionId,
+          activeBranchId: pairA.branchId,
+          name: "Session A",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      },
+    )
+    yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session A")
+    const clientCtx = yield* requireClient(ctx)
+    const switchTo = (pair: typeof pairA, name: string) =>
+      Effect.gen(function* () {
+        clientCtx.switchSession(pair.sessionId, pair.branchId, name)
+        yield* waitForFrame(
+          setup,
+          (frame) =>
+            clientCtx.sessionIdentity().sessionId === pair.sessionId && frame.includes("ready ·"),
+          name,
+        )
+      })
+    /** A few frames for anything a late answer would draw. */
+    const settle = Effect.gen(function* () {
+      for (let frame = 0; frame < 3; frame++) {
+        yield* Effect.yieldNow
+        yield* Effect.promise(() => setup.renderOnce())
+      }
+    })
+    return { setup, client: clientCtx, switchTo, settle }
+  })
+
 const ESC_CUE = "esc again to clear"
 const CTRL_C_CUE = "ctrl+c again to exit"
 
@@ -1987,6 +2043,56 @@ describe("App status and activity rows", () => {
         "the restored draft",
       )
     }).pipe(Effect.timeout("4 seconds")),
+  )
+  // The drain commits on the server before it answers: the text it took
+  // belongs to A's draft, even when A's view is gone by then.
+  it.scopedLive("a queue taken back after a switch lands in its own session's draft", () =>
+    Effect.gen(function* () {
+      const drainAsked = yield* Deferred.make<void>()
+      const answer = yield* Deferred.make<void>()
+      const answered = yield* Deferred.make<void>()
+      const drained: Array<SessionId> = []
+      const view = yield* mountSessionPair({
+        queue: {
+          drain: (input: { readonly sessionId: SessionId }) =>
+            Deferred.complete(drainAsked, Effect.void).pipe(
+              Effect.andThen(Deferred.await(answer)),
+              Effect.andThen(
+                Effect.sync(() => {
+                  drained.push(input.sessionId)
+                  return {
+                    steering: [],
+                    followUp: [
+                      {
+                        _tag: "FollowUp" satisfies "FollowUp",
+                        id: MessageId.make("queued-in-a"),
+                        content: "queued in A",
+                        createdAt: 0,
+                      },
+                    ],
+                  }
+                }),
+              ),
+              Effect.ensuring(Deferred.complete(answered, Effect.void)),
+            ),
+        },
+      })
+      view.setup.mockInput.pressArrow("up", { meta: true })
+      yield* Deferred.await(drainAsked)
+      yield* view.switchTo(pairB, "Session B")
+      yield* Deferred.complete(answer, Effect.void)
+      yield* Deferred.await(answered)
+      yield* view.settle
+      expect(drained).toEqual([pairA.sessionId])
+      expect(renderFrame(view.setup)).not.toContain("queued in A")
+      expect(view.client.error()).toEqual(Option.none())
+      yield* view.switchTo(pairA, "Session A")
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("queued in A"),
+        "the queued text back in A's draft",
+      )
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a running turn's activity row shows esc cancel", () =>
     Effect.gen(function* () {

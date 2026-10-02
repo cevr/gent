@@ -543,6 +543,12 @@ interface ComposerMemory {
   readonly refusals: ComposerRefusals
   readonly history: PromptHistoryStore
   /**
+   * Text taken back from a branch's queue replaces that branch's draft: in
+   * its composer when one is on screen, in its kept draft when not. The drain
+   * has committed by then, so the text must not depend on the view that asked.
+   */
+  readonly restore: (branchId: BranchId, text: string) => void
+  /**
    * The `-p` prompt, if this is the session the startup flags named and no
    * one took it yet. A session view that mounts again gets nothing: the
    * prompt goes out once, and a failed send gives it to the draft.
@@ -705,10 +711,23 @@ export function ComposerMemoryProvider(props: ParentProps<ComposerMemoryProvider
       return content
     })
   }
+  const restore = (branchId: BranchId, text: string): void => {
+    // Queued text is a message, so the draft is one too.
+    const draft: ComposerDraft = { draft: text, mode: "editing" }
+    const live = Option.fromUndefinedOr(links.get(branchId))
+    if (Option.isSome(live)) {
+      live.value.apply(draft)
+      return
+    }
+    drafts.set(branchId, draft)
+    // A composer on screen reports its own edit; a kept draft reports here.
+    refusals.changed(branchId, text)
+  }
   const value: ComposerMemory = {
     drafts,
     refusals,
     history: makePromptHistoryStore(),
+    restore,
     takePrompt,
   }
   return (
@@ -2778,7 +2797,7 @@ export function createSessionController(props: {
   const command = useCommand()
   const ext = useExtensionUI()
   const refusals = useComposerRefusals()
-  const { takePrompt } = useComposerMemory()
+  const { takePrompt, restore } = useComposerMemory()
   const { cast } = useRuntime()
   const exit = useExit()
   // ── exit and cancel ladder: the armed key ──
@@ -3227,22 +3246,23 @@ export function createSessionController(props: {
     openPalette: command.openPalette,
   })
 
+  // The queue and the draft it comes back to are this branch's, whichever
+  // session is in view when the drain answers.
   const onRestoreQueue = () => {
+    const origin: SessionIdentity = { sessionId: props.sessionId, branchId: props.branchId }
     cast(
-      client.drainQueuedMessages.pipe(
+      client.drainQueuedMessages(origin).pipe(
         Effect.tap(({ steering, followUp }) =>
           Effect.sync(() => {
             const text = queuedDraftText({ steering, followUp })
             if (Option.isNone(text)) return
-            onComposerInteraction(
-              ComposerInteractionEvent.cases.RestoreDraft.make({
-                text: text.value,
-              }),
-            )
+            restore(origin.branchId, text.value)
             updateControllerState(clearQueue)
           }),
         ),
-        client.surfaceError,
+        Effect.catchEager((error) =>
+          Effect.sync(() => client.setErrorIn(origin, formatError(error))),
+        ),
       ),
     )
   }
