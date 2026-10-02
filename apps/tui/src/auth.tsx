@@ -554,14 +554,19 @@ export function Auth(props: AuthProps) {
   /**
    * A finished sign-in leaves its screen before the reload: a code typed
    * while the catalog reloads has no OAuth screen to go to, so it never
-   * asks the server for the login it already finished.
+   * asks the server for the login it already finished. The model catalog
+   * is read again whether or not the reader is still here.
    */
   const signedIn = (token: ReplyWriter, message: string) =>
-    whileCurrent(token, () => {
-      send(AuthEvent.cases.Close.make({}))
-      flashSuccess(message)
-      loadAuth(token)
-    })
+    Effect.sync(() => clientCtx.credentialsChanged()).pipe(
+      Effect.andThen(
+        whileCurrent(token, () => {
+          send(AuthEvent.cases.Close.make({}))
+          flashSuccess(message)
+          loadAuth(token)
+        }),
+      ),
+    )
 
   // ── Loading ───────────────────────────────────────────────────────
 
@@ -657,10 +662,12 @@ export function Auth(props: AuthProps) {
    * A key was stored or removed. While its action is current the pane says
    * so and goes back to the list. A reader who stepped back meanwhile
    * (`back`) stays where they are, but the catalog still changed: it is read
-   * again under the newest action and only its rows change.
+   * again under the newest action and only its rows change. The model
+   * catalog is read again either way.
    */
   const keyChanged = (token: ReplyWriter, note: Option.Option<string>) =>
     Effect.sync(() => {
+      clientCtx.credentialsChanged()
       if (!token.live()) {
         loadAuth(actions.newest(), true)
         return
@@ -796,6 +803,7 @@ export function Auth(props: AuthProps) {
             }
             // "done" means the server finished it during `authorize`.
             if (result.value.method === "done") {
+              clientCtx.credentialsChanged()
               flashSuccess(`Authenticated ${label(provider)}`)
               loadAuth(token)
               return
@@ -1015,8 +1023,9 @@ export function Auth(props: AuthProps) {
     if (enforced()) return
     Option.map(Option.fromNullishOr(props.onClose), (onClose) => onClose())
   }
-  // An empty list is still loading, unless its load failed: then it says how to retry.
-  const listLoading = () => Option.isNone(state().error)
+  // A list with no providers at all is still loading, unless its load failed: then it says
+  // how to retry. A search that matches none of the loaded providers reads `No matches`.
+  const listLoading = () => Option.isNone(state().error) && allProviders(catalog()).length === 0
   const retryRow = () =>
     Option.map(state().error, () => <text style={{ fg: theme.textMuted }}> Press r to retry.</text>)
   const keyMask = (value: string) => "*".repeat(graphemeCount(value))

@@ -578,7 +578,15 @@ describe("Auth route", () => {
     Effect.gen(function* () {
       const saved: Array<{ provider: string; key: string; metadata?: Record<string, string> }> = []
       const regionPrompt = { key: "REGION_ID", label: "REGION_ID", env: "REGION_ID" }
+      let catalogReads = 0
       const client = createMockClient({
+        model: {
+          list: () =>
+            Effect.sync(() => {
+              catalogReads += 1
+              return []
+            }),
+        },
         auth: {
           listProviders: () =>
             Effect.succeed([
@@ -635,11 +643,35 @@ describe("Auth route", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("REGION_ID"))
       yield* Effect.promise(() => setup.mockInput.typeText("eu"))
+      const readsBeforeSave = catalogReads
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("saved for Regional"))
       expect(saved).toEqual([
         { provider: "regional", key: "sk-regional", metadata: { REGION_ID: "eu" } },
       ])
+      // The new key serves Regional's models: the model catalog is read again.
+      yield* waitUntil(() => catalogReads > readsBeforeSave, "the catalog read after the save")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("a search that matches no provider says so instead of loading", () =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              { provider: ProviderId.make("anthropic"), hasKey: true, required: false },
+            ]),
+          listMethods: () => Effect.succeed({ anthropic: [apiMethodRoute] }),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      yield* Effect.promise(() => setup.mockInput.typeText("groq"))
+      const searched = yield* waitForFrame(setup, (frame) => frame.includes("No matches"))
+      expect(searched).not.toContain("Loading…")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("the key field ignores super and hyper keys and erases as the composer does", () =>
