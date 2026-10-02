@@ -26,7 +26,7 @@ import {
   sessionFixture,
 } from "./render-harness-boundary"
 import { waitForFrame, waitUntil } from "./helpers-boundary"
-import { ProviderAuthError } from "@gent/core/extensions/api"
+import { omitUndefined, ProviderAuthError } from "@gent/core/extensions/api"
 
 // ── auth state ──────────────────────────────────────────────────────────────
 
@@ -38,6 +38,8 @@ const provider = {
 
 const apiMethod = { type: "api", label: "API Key" } satisfies AuthMethod
 const oauthMethod = { type: "oauth", label: "OAuth" } satisfies AuthMethod
+const accountPrompt = { key: "accountId", label: "Account ID", placeholder: "e.g. 0123abcd" }
+const gatewayPrompt = { key: "gatewayId", label: "Gateway ID" }
 
 const methods = {
   anthropic: [apiMethod, oauthMethod],
@@ -110,14 +112,20 @@ describe("auth-state", () => {
 
   test("choosing a provider then an api method opens an empty key field", () => {
     const method = transitionAuth(loaded(), { _tag: "OpenMethod", provider: "anthropic" })
-    const key = transitionAuth(method, { _tag: "OpenKey", provider: "anthropic" })
+    const key = transitionAuth(method, { _tag: "OpenKey", provider: "anthropic", prompts: [] })
 
     expect(method.screen).toEqual({ _tag: "Method", provider: "anthropic" })
-    expect(key.screen).toEqual({ _tag: "Key", provider: "anthropic", value: "" })
+    expect(key.screen).toEqual({
+      _tag: "Key",
+      provider: "anthropic",
+      value: "",
+      prompts: [],
+      entered: [],
+    })
   })
 
   test("typing and erasing edit whichever screen holds text", () => {
-    const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic" })
+    const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic", prompts: [] })
     const typed = transitionAuth(key, { _tag: "Type", text: "sk abc👍🏽" })
     const erase = (state: typeof typed, unit: "grapheme" | "word" | "line") =>
       transitionAuth(state, { _tag: "Erase", unit })
@@ -128,6 +136,40 @@ describe("auth-state", () => {
     // Ctrl+W takes the last word, Ctrl+U the whole field, as in the composer.
     expect(erase(typed, "word").screen).toMatchObject({ _tag: "Key", value: "sk " })
     expect(erase(typed, "line").screen).toMatchObject({ _tag: "Key", value: "" })
+  })
+
+  test("a method with prompts asks each after the key, and back goes one step", () => {
+    const prompts = [accountPrompt, gatewayPrompt]
+    const type = (state: AuthState, text: string) => transitionAuth(state, { _tag: "Type", text })
+    const next = (state: AuthState) => transitionAuth(state, { _tag: "Next" })
+    const back = (state: AuthState) => transitionAuth(state, { _tag: "Back" })
+    const key = type(
+      transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic", prompts }),
+      "cf-tok",
+    )
+    const account = type(next(key), "acct-1")
+    const gateway = next(account)
+
+    expect(next(key).screen).toMatchObject({ _tag: "Key", value: "", entered: ["cf-tok"] })
+    expect(gateway.screen).toMatchObject({ _tag: "Key", value: "", entered: ["cf-tok", "acct-1"] })
+    // The last field has nothing after it: the pane saves instead.
+    expect(next(gateway)).toEqual(gateway)
+    // Esc gives the field before back with the text it held.
+    expect(back(gateway).screen).toMatchObject({ value: "acct-1", entered: ["cf-tok"] })
+    expect(back(back(gateway)).screen).toMatchObject({ value: "cf-tok", entered: [] })
+    expect(back(back(back(gateway))).screen).toEqual({ _tag: "Method", provider: "anthropic" })
+  })
+
+  test("an empty key does not go on to the prompts", () => {
+    const key = transitionAuth(loaded(), {
+      _tag: "OpenKey",
+      provider: "anthropic",
+      prompts: [accountPrompt],
+    })
+    const blank = transitionAuth(key, { _tag: "Type", text: "  " })
+
+    expect(transitionAuth(key, { _tag: "Next" })).toEqual(key)
+    expect(transitionAuth(blank, { _tag: "Next" })).toEqual(blank)
   })
 
   test("typing into the oauth code field edits the code, not the key", () => {
@@ -162,7 +204,7 @@ describe("auth-state", () => {
   })
 
   test("a failed browser callback on another screen changes nothing", () => {
-    const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic" })
+    const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic", prompts: [] })
 
     expect(transitionAuth(key, { _tag: "OAuthAutoFailed", error: "late" })).toEqual(key)
   })
@@ -194,7 +236,7 @@ describe("auth-state", () => {
   // "esc back" goes one step: a sign-in screen to its provider's methods,
   // the methods to the provider list.
   test("back from a sign-in screen opens its provider's methods", () => {
-    const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic" })
+    const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic", prompts: [] })
     const oauth = transitionAuth(openOAuth(autoAuthorization), {
       _tag: "OAuthAutoFailed",
       error: "callback failed",
@@ -547,6 +589,79 @@ describe("Auth route", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("API key saved for anthropic"))
       expect(keys).toEqual(["sk x"])
     }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive(
+    "a method's prompts follow the key on the same line, esc steps back, and one save sends all",
+    () =>
+      Effect.gen(function* () {
+        const saved: Array<{ key: string; metadata?: Record<string, string> }> = []
+        const client = createMockClient({
+          auth: {
+            listProviders: () =>
+              Effect.succeed([
+                {
+                  provider: ProviderId.make("cloudflare"),
+                  hasKey: false,
+                  required: false,
+                  source: "none",
+                  authType: absent,
+                },
+              ]),
+            listMethods: () =>
+              Effect.succeed({
+                cloudflare: [{ ...apiMethodRoute, prompts: [accountPrompt, gatewayPrompt] }],
+              }),
+            setKey: (input: {
+              provider: string
+              key: string
+              metadata?: Record<string, string>
+              sessionId?: string
+            }) =>
+              Effect.sync(() => {
+                saved.push({ key: input.key, ...omitUndefined({ metadata: input.metadata }) })
+              }),
+          },
+        })
+        const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+          client,
+          runtime: createMockRuntime(),
+          kittyKeyboard: true,
+        })
+        yield* waitForFrame(setup, (frame) => frame.includes("cloudflare"))
+        setup.mockInput.pressEnter()
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => frame.includes("Sign in · cloudflare · API key"))
+        yield* Effect.promise(() => setup.mockInput.typeText("cf-tok"))
+        setup.mockInput.pressEnter()
+        // The account prompt shows its label, and its placeholder while empty.
+        yield* waitForFrame(
+          setup,
+          (frame) =>
+            frame.includes("Sign in · cloudflare · Account ID") && frame.includes("e.g. 0123abcd"),
+        )
+        // An answer is not a secret: it shows as typed, and backspace takes a whole character.
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText("acct-1👍🏽"))
+        setup.mockInput.pressBackspace()
+        yield* waitForFrame(setup, (frame) => frame.includes("Account ID › acct-1│"))
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => frame.includes("Gateway ID ›"))
+        // Esc goes back one step, to the account as typed.
+        setup.mockInput.pressEscape()
+        yield* waitForFrame(setup, (frame) => frame.includes("Account ID › acct-1│"))
+        setup.mockInput.pressEscape()
+        yield* waitForFrame(setup, (frame) => frame.includes("API key › ******│"))
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => frame.includes("Account ID › "))
+        yield* Effect.promise(() => setup.mockInput.typeText("acct-2"))
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => frame.includes("Gateway ID ›"))
+        expect(saved).toEqual([])
+        // An empty answer is no answer: the gateway is optional.
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => frame.includes("API key saved for cloudflare"))
+        expect(saved).toEqual([{ key: "cf-tok", metadata: { accountId: "acct-2" } }])
+      }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a key longer than the field shows its tail after an ellipsis", () =>
     Effect.gen(function* () {

@@ -3,6 +3,7 @@ import { Effect, Fiber, Match, Option, Schema } from "effect"
 import {
   AuthAuthorization,
   AuthMethod,
+  AuthPrompt,
   AuthProviderInfo,
   type SessionId,
 } from "@gent/core/protocol"
@@ -42,6 +43,7 @@ import {
   plural,
   repliesInView,
   type ReplyWriter,
+  truncate,
   truncateStart,
   type UiError,
 } from "./utils"
@@ -97,11 +99,20 @@ const emptyCatalog: AuthCatalog = { providers: [], methods: {} }
  * failure and every completed action returns to. `Method` names the
  * provider a reader chose. `Key` and `OAuth` are the two ways a provider
  * is authorised, and each holds the text the reader types into it.
+ *
+ * `Key` asks the key, then each of its method's `prompts` in turn, on one
+ * line: `entered` holds the fields already answered (the key first), and
+ * `value` the one the line shows now.
  */
 const AuthScreen = Schema.TaggedUnion({
   List: {},
   Method: { provider: Schema.String },
-  Key: { provider: Schema.String, value: Schema.String },
+  Key: {
+    provider: Schema.String,
+    value: Schema.String,
+    prompts: Schema.Array(AuthPrompt),
+    entered: Schema.Array(Schema.String),
+  },
   OAuth: {
     provider: Schema.String,
     methodIndex: Schema.Finite,
@@ -117,6 +128,18 @@ const AuthScreen = Schema.TaggedUnion({
 type AuthScreen = Schema.Schema.Type<typeof AuthScreen>
 /** The OAuth screen: an authorization the reader completes. */
 type OAuthScreen = Extract<AuthScreen, { readonly _tag: "OAuth" }>
+/** The key screen: an API key, then its method's prompts. */
+type KeyScreen = Extract<AuthScreen, { readonly _tag: "Key" }>
+
+/** The prompt the key line asks now; none while it asks for the key itself. */
+const keyPrompt = (screen: KeyScreen): Option.Option<AuthPrompt> =>
+  Option.flatMap(
+    Option.liftPredicate(screen.entered.length - 1, (index) => index >= 0),
+    (index) => Option.fromUndefinedOr(screen.prompts[index]),
+  )
+
+/** True while a prompt follows the field the line shows. */
+const promptFollows = (screen: KeyScreen): boolean => screen.entered.length < screen.prompts.length
 
 export interface AuthState {
   /**
@@ -163,8 +186,13 @@ export const AuthEvent = Schema.TaggedUnion({
   Failed: { error: Schema.String },
   /** A provider was chosen from the list. */
   OpenMethod: { provider: Schema.String },
-  /** An `api` method was chosen: type a key. */
-  OpenKey: { provider: Schema.String },
+  /** An `api` method was chosen: type a key, then answer its prompts. */
+  OpenKey: { provider: Schema.String, prompts: Schema.Array(AuthPrompt) },
+  /**
+   * Enter on the key line while a prompt follows: the text is kept and the
+   * next prompt opens empty. A blank key does not go on.
+   */
+  Next: {},
   /** An `oauth` method returned an authorization to complete. */
   OpenOAuth: {
     provider: Schema.String,
@@ -186,8 +214,9 @@ export const AuthEvent = Schema.TaggedUnion({
   /** An action that finished: back to the list, error cleared. */
   Close: {},
   /**
-   * Escape, one step: a sign-in screen goes to its provider's methods, the
-   * methods go to the list. The error clears.
+   * Escape, one step: a prompt goes to the field before it, with its text; a
+   * sign-in screen goes to its provider's methods, the methods go to the
+   * list. The error clears.
    */
   Back: {},
 })
@@ -238,9 +267,27 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
       OpenMethod: (event) => methods(state, event.provider),
       OpenKey: (event) => ({
         ...state,
-        screen: AuthScreen.cases.Key.make({ provider: event.provider, value: "" }),
+        screen: AuthScreen.cases.Key.make({
+          provider: event.provider,
+          value: "",
+          prompts: event.prompts,
+          entered: [],
+        }),
         error: Option.none(),
       }),
+      Next: () => {
+        const screen = state.screen
+        if (screen._tag !== "Key" || !promptFollows(screen)) return state
+        if (screen.entered.length === 0 && screen.value.trim() === "") return state
+        return {
+          ...state,
+          screen: AuthScreen.cases.Key.make({
+            ...screen,
+            value: "",
+            entered: [...screen.entered, screen.value],
+          }),
+        }
+      },
       OpenOAuth: (event) => ({
         ...state,
         screen: AuthScreen.cases.OAuth.make({
@@ -275,7 +322,19 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
       Back: () =>
         Match.value(state.screen).pipe(
           Match.tags({
-            Key: (screen) => methods(state, screen.provider),
+            Key: (screen) =>
+              Option.match(Option.fromUndefinedOr(screen.entered.at(-1)), {
+                onNone: () => methods(state, screen.provider),
+                onSome: (before) => ({
+                  ...state,
+                  screen: AuthScreen.cases.Key.make({
+                    ...screen,
+                    value: before,
+                    entered: screen.entered.slice(0, -1),
+                  }),
+                  error: Option.none(),
+                }),
+              }),
             OAuth: (screen) => methods(state, screen.provider),
           }),
           Match.orElse(() => list(state, Option.none())),
@@ -567,16 +626,46 @@ export function Auth(props: AuthProps) {
     )
   }
 
-  const submitKey = (provider: string, value: string) => {
-    const key = value.trim()
+  /**
+   * Enter on the key line: the next prompt while one follows, else one save
+   * of the key and the prompts' answers. An empty answer is no answer: the
+   * driver reads the prompt's variable or does without.
+   */
+  const submitKey = (screen: KeyScreen) => {
+    if (promptFollows(screen)) {
+      send(AuthEvent.cases.Next.make({}))
+      return
+    }
+    // The key is the first field; each prompt's answer follows in order.
+    const [first, ...answers] = [...screen.entered, screen.value].map((field) => field.trim())
+    const key = first ?? ""
     if (key.length === 0) return
+    const provider = screen.provider
+    // A method without prompts sends no answers at all.
+    const metadata = Option.liftPredicate(
+      Object.fromEntries(
+        screen.prompts.flatMap((prompt, index) => {
+          const answer = answers[index] ?? ""
+          if (answer.length === 0) return []
+          return [[prompt.key, answer] as const]
+        }),
+      ),
+      () => screen.prompts.length > 0,
+    )
     const token = begin()
     clientCtx.log.info("auth:submit-key", { provider })
     cast(
-      clientCtx.client.auth.setKey({ provider, key, sessionId }).pipe(
-        Effect.tap(() => keyChanged(token, Option.some(`API key saved for ${label(provider)}`))),
-        Effect.catchEager(failed(token)),
-      ),
+      clientCtx.client.auth
+        .setKey({
+          provider,
+          key,
+          sessionId,
+          ...omitUndefined({ metadata: Option.getOrUndefined(metadata) }),
+        })
+        .pipe(
+          Effect.tap(() => keyChanged(token, Option.some(`API key saved for ${label(provider)}`))),
+          Effect.catchEager(failed(token)),
+        ),
     )
   }
 
@@ -634,7 +723,7 @@ export function Auth(props: AuthProps) {
     clientCtx.log.info("auth:start-method", { provider, method: method.type })
 
     if (method.type === "api") {
-      send(AuthEvent.cases.OpenKey.make({ provider }))
+      send(AuthEvent.cases.OpenKey.make({ provider, prompts: method.prompts ?? [] }))
       return
     }
 
@@ -874,6 +963,21 @@ export function Auth(props: AuthProps) {
   const retryRow = () =>
     Option.map(state().error, () => <text style={{ fg: theme.textMuted }}> Press r to retry.</text>)
   const keyMask = (value: string) => "*".repeat(graphemeCount(value))
+  /** The key line names its field: the key, or the prompt it asks now. */
+  const keyFieldName = (current: KeyScreen) =>
+    Option.match(keyPrompt(current), {
+      onNone: () => "API key",
+      onSome: (prompt) => prompt.label,
+    })
+  /** The key is masked; a prompt's answer is not a secret and shows as typed. */
+  const keyFieldText = (current: KeyScreen) => {
+    if (Option.isSome(keyPrompt(current))) return current.value
+    return keyMask(current.value)
+  }
+  const keyFieldKeys = (current: KeyScreen) => {
+    if (promptFollows(current)) return [keyHint("enter", "next"), KeyHints.back]
+    return [KeyHints.submit, KeyHints.back]
+  }
   const codeLabel = (method: string) => {
     if (method === "code") return "Paste code:"
     return "Paste code (optional):"
@@ -1043,14 +1147,17 @@ export function Auth(props: AuthProps) {
           <PickerFrame
             error={Option.none()}
             height={pickerHeight(1, dimensions().height)}
-            title={`Sign in · ${label(current().provider)} · API key`}
-            keys={[KeyHints.submit, KeyHints.back]}
+            title={`Sign in · ${label(current().provider)} · ${keyFieldName(current())}`}
+            keys={keyFieldKeys(current())}
           >
             <AuthTextLine
-              label="API key ›"
-              text={keyMask(current().value)}
+              label={`${keyFieldName(current())} ›`}
+              text={keyFieldText(current())}
+              placeholder={Option.flatMap(keyPrompt(current()), (prompt) =>
+                Option.fromUndefinedOr(prompt.placeholder),
+              )}
               onEvent={send}
-              onSubmit={() => submitKey(current().provider, current().value)}
+              onSubmit={() => submitKey(current())}
               onCancel={back}
             />
           </PickerFrame>
@@ -1085,6 +1192,8 @@ export function Auth(props: AuthProps) {
 function AuthTextLine(props: {
   readonly label: string
   readonly text: string
+  /** Shown muted after the caret while the line is empty. */
+  readonly placeholder?: Option.Option<string>
   readonly shown?: boolean
   readonly onEvent: (event: AuthEvent) => void
   readonly onSubmit: () => void
@@ -1097,10 +1206,16 @@ function AuthTextLine(props: {
   /** The text that fits after the label and before the caret: its tail, cut with an ellipsis. */
   const visibleText = () => {
     // The label, its space and the caret take their columns first.
-    const room = Math.max(1, sectionWidth() - props.label.length - 2)
+    const room = Math.max(1, sectionWidth() - textWidth(props.label) - 2)
     if (textWidth(props.text) <= room) return props.text
     return "…" + truncateStart(props.text, room - 1)
   }
+  /** The placeholder while the line is empty, cut to the room after the caret. */
+  const placeholder = () =>
+    Option.getOrElse(Option.fromUndefinedOr(props.placeholder), () => Option.none<string>()).pipe(
+      Option.filter(() => props.text === ""),
+      Option.map((text) => truncate(text, sectionWidth() - textWidth(props.label) - 3)),
+    )
   useScopedKeyboard(
     (event) => {
       if (Option.exists(Option.fromUndefinedOr(props.onKey), (onKey) => onKey(event))) return true
@@ -1142,6 +1257,7 @@ function AuthTextLine(props: {
           <span style={{ fg: theme.textMuted }}>{props.label} </span>
           {visibleText()}
           <span style={{ fg: theme.primary }}>│</span>
+          <span style={{ fg: theme.textMuted }}>{Option.getOrElse(placeholder(), () => "")}</span>
         </text>
       </ChromePanel.Section>
     </Show>
