@@ -8,7 +8,7 @@ Design operations so they converge to the correct state regardless of how many t
 
 - Convergent startup: scan for existing state, clean stale artifacts, adopt live sessions
 - Content-based cleanup: compare by content equivalence, not creation order
-- Self-healing locks: use PID-based stale lock detection
+- Self-healing locks: use a lock the OS releases when its holder dies (flock, an exclusive SQLite lock). A bare PID can be reused by another process
 - Idempotent scheduling: failed work respawns cleanly, fresh input regenerated after each cycle
 
 **The Test:**
