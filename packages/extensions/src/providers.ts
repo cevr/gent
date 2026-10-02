@@ -619,6 +619,20 @@ export const rewriteJsonBody =
 export const RESPONSES_PROMPT_CACHE_TTL = Duration.minutes(30)
 
 /**
+ * Whether a Responses request asks the model for low text verbosity: the
+ * models that accept one (GPT-6, the first GPT-5 family and GPT-5.1 to 5.6),
+ * as Codex (`models-manager/models.json`, `default_verbosity`) and opencode
+ * (`plugin/verbosity.ts`) send. Chat and codex variants, older models and the
+ * o-series get none, so the API's `medium` applies.
+ */
+export const takesLowVerbosity = (modelName: string): boolean => {
+  const id = modelName.toLowerCase()
+  if (id.startsWith("gpt-6")) return true
+  if (/-chat|-image|codex/.test(id)) return false
+  return /^gpt-5\.[1-6](-|$)/.test(id) || /^gpt-5(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/.test(id)
+}
+
+/**
  * A Responses request with `store: false` keeps no reasoning on the server,
  * so a reasoning item can go back to the model only with its
  * `encrypted_content`, and a reply carries that only when `include` asks for

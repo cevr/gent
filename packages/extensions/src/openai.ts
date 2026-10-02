@@ -74,6 +74,7 @@ import {
   rewriteJsonBody,
   replaceHeldCredential,
   RESPONSES_PROMPT_CACHE_TTL,
+  takesLowVerbosity,
   withEncryptedReasoning,
   modelReasons,
   withHeaders,
@@ -1320,6 +1321,7 @@ const buildOpenAiResponsesConfig = (
   hints: Option.Option<ProviderHints>,
 ): OpenAiResponsesConfig => {
   let config: OpenAiResponsesConfig = { store: false }
+  if (takesLowVerbosity(modelName)) config = { ...config, text: { verbosity: "low" } }
   if (Option.isSome(hints)) {
     const cacheKey = Option.fromUndefinedOr(hints.value.cacheKey)
     if (Option.isSome(cacheKey)) config = { ...config, prompt_cache_key: cacheKey.value }

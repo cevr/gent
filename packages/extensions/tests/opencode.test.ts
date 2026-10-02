@@ -434,16 +434,19 @@ describe("OpenCode reasoning", () => {
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
-  it.live("Responses sends the effort with a summary, and the session as the cache key", () =>
-    Effect.gen(function* () {
-      const { go } = yield* fixtureDrivers
-      const state = makeFakeFetchState()
-      yield* generate(go, "gpt-5.6-luna", state, { cacheKey: "s", reasoning: "high" })
-      const body = yield* bodyOf(lastRequest(state))
-      expect(body["reasoning"]).toEqual({ effort: "high", summary: "auto" })
-      expect(body["prompt_cache_key"]).toBe("s")
-      expect(body["store"]).toBe(false)
-    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  it.live(
+    "Responses sends the effort with a summary, the session as the cache key, and low verbosity",
+    () =>
+      Effect.gen(function* () {
+        const { go } = yield* fixtureDrivers
+        const state = makeFakeFetchState()
+        yield* generate(go, "gpt-5.6-luna", state, { cacheKey: "s", reasoning: "high" })
+        const body = yield* bodyOf(lastRequest(state))
+        expect(body["reasoning"]).toEqual({ effort: "high", summary: "auto" })
+        expect(body["prompt_cache_key"]).toBe("s")
+        expect(body["store"]).toBe(false)
+        expect(body["text"]).toMatchObject({ verbosity: "low" })
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
   // `@effect/ai-openai` asks for the encrypted reasoning only for the model

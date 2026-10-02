@@ -2059,7 +2059,7 @@ describe("OpenAI reasoning replay", () => {
   )
 })
 
-describe("OpenAI reasoning hints", () => {
+describe("OpenAI request hints", () => {
   const sentEffort = (body: string): Option.Option<unknown> => {
     const parsed = Schema.decodeOption(
       Schema.fromJsonString(
@@ -2070,7 +2070,17 @@ describe("OpenAI reasoning hints", () => {
     )(body)
     return Option.flatMap(parsed, (value) => Option.fromUndefinedOr(value.reasoning?.effort))
   }
-  const effortsFor = (
+  const sentVerbosity = (body: string): Option.Option<unknown> => {
+    const parsed = Schema.decodeOption(
+      Schema.fromJsonString(
+        Schema.Struct({
+          text: Schema.optional(Schema.Struct({ verbosity: Schema.optional(Schema.String) })),
+        }),
+      ),
+    )(body)
+    return Option.flatMap(parsed, (value) => Option.fromUndefinedOr(value.text?.verbosity))
+  }
+  const bodiesFor = (
     authInfo: ProviderAuthInfo,
     models: ReadonlyArray<string>,
     reasoning: ProviderHints["reasoning"] = "none",
@@ -2102,9 +2112,18 @@ describe("OpenAI reasoning hints", () => {
         yield* runOne(model, fetchState)
       }
       return fetchState.captured.map((request) =>
-        sentEffort(Option.getOrThrow(Option.fromUndefinedOr(request.body))),
+        Option.getOrThrow(Option.fromUndefinedOr(request.body)),
       )
     })
+  const effortsFor = (
+    authInfo: ProviderAuthInfo,
+    models: ReadonlyArray<string>,
+    reasoning: ProviderHints["reasoning"] = "none",
+    catalog: ProviderHints = {},
+  ) =>
+    bodiesFor(authInfo, models, reasoning, catalog).pipe(
+      Effect.map((bodies) => bodies.map(sentEffort)),
+    )
 
   it.live(
     "a request for no reasoning names the lowest effort the model accepts, on both paths",
@@ -2190,6 +2209,38 @@ describe("OpenAI reasoning hints", () => {
       expect(yield* effortsFor(makeOAuthInfo(), ["gpt-5-mini"], "max")).toEqual([
         Option.some("high"),
       ])
+    }),
+  )
+
+  it.live("models that take a verbosity ask for low output, on both paths", () =>
+    Effect.gen(function* () {
+      // Codex (`models-manager/models.json`, `default_verbosity`) and opencode
+      // (`plugin/verbosity.ts`) send low to the same models.
+      const models = [
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5.4",
+        "gpt-5.6-sol",
+        "gpt-5.2-pro",
+        "gpt-6-astra",
+        "gpt-6-sol",
+        // Chat and codex variants, older models and the o-series take none.
+        "gpt-5-chat-latest",
+        "gpt-5.1-codex",
+        "gpt-4.1",
+        "o3",
+      ]
+      const low = Option.some("low")
+      const none = Option.none()
+      const apiBodies = yield* bodiesFor(makeApiAuthInfo("hint-test-key"), models)
+      expect(apiBodies.map(sentVerbosity)).toEqual([...Array(7).fill(low), ...Array(4).fill(none)])
+      // The ChatGPT sign-in path reads the same rule.
+      const oauthBodies = yield* bodiesFor(makeOAuthInfo(), [
+        "gpt-5.4",
+        "gpt-6-sol",
+        "gpt-5.1-codex",
+      ])
+      expect(oauthBodies.map(sentVerbosity)).toEqual([low, low, none])
     }),
   )
 })

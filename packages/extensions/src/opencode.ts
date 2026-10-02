@@ -36,6 +36,7 @@ import {
   readOptionalEnv,
   rewriteJsonBody,
   RESPONSES_PROMPT_CACHE_TTL,
+  takesLowVerbosity,
   withEncryptedReasoning,
   modelReasons,
   withPromptCacheTtl,
@@ -267,16 +268,18 @@ type ResponsesConfig = Required<Parameters<typeof OpenAiResponsesLanguageModel.l
 
 /**
  * The Responses request: not stored, the session as the prompt cache key
- * (OpenCode sets `promptCacheKey` for its gateways), and the effort the
- * catalog accepts with a reasoning summary. The body asks for the encrypted
+ * (OpenCode sets `promptCacheKey` for its gateways), the model's text
+ * verbosity, and the effort the catalog accepts with a reasoning summary. The body asks for the encrypted
  * reasoning (`withEncryptedReasoning`).
  */
 const responsesConfig = (
+  modelName: string,
   hints: Option.Option<ProviderHints>,
   wire: Option.Option<ModelWire>,
   sessionId: string,
 ): ResponsesConfig => {
   let config: ResponsesConfig = { store: false, prompt_cache_key: sessionId }
+  if (takesLowVerbosity(modelName)) config = { ...config, text: { verbosity: "low" } }
   const maxTokens = Option.flatMap(hints, (value) => Option.fromNullishOr(value.maxTokens))
   if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
   const temperature = temperatureFor(hints)
@@ -595,7 +598,12 @@ const responsesModel = (
   }).pipe(Layer.provide(FetchHttpClient.layer))
   return OpenAiResponsesLanguageModel.layer({
     model: resolution.modelName,
-    config: responsesConfig(resolution.hints, resolution.wire, resolution.sessionId),
+    config: responsesConfig(
+      resolution.modelName,
+      resolution.hints,
+      resolution.wire,
+      resolution.sessionId,
+    ),
   }).pipe(Layer.provide(client))
 }
 
