@@ -80,6 +80,26 @@ export function truncate(value: string, width: number): string {
 }
 
 /**
+ * The text less its last character as the reader sees it: one grapheme, so a
+ * backspace takes a toned emoji, a flag or a ZWJ family whole.
+ */
+export function dropLastGrapheme(value: string): string {
+  let last = 0
+  for (const { index } of graphemes.segment(value)) last = index
+  return value.slice(0, last)
+}
+
+/** The first `count` graphemes, ending in `…` when the text has more. */
+export function headGraphemes(value: string, count: number): string {
+  let kept = 0
+  for (const { index } of graphemes.segment(value)) {
+    if (kept === count) return `${value.slice(0, index)}…`
+    kept += 1
+  }
+  return value
+}
+
+/**
  * At least `width` display columns: padded with spaces by display width, never
  * cut. `String.padEnd` counts code units, so it over-pads a wide (CJK) name
  * and under-pads a joined emoji.

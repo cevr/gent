@@ -16,6 +16,7 @@ import {
   ClientContext,
   clientContributions,
   defineClientExtension,
+  dropLastGrapheme,
   messageRendererContribution,
   pastedLine,
   keyHint,
@@ -238,7 +239,7 @@ export function ForkPane(props: {
       return true
     }
     if (event.name === "backspace") {
-      setDraft((current) => [...current].slice(0, -1).join(""))
+      setDraft(dropLastGrapheme)
       return true
     }
     if (event.ctrl === true || event.meta === true) return false

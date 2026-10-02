@@ -21,6 +21,7 @@ import {
   formatOperationLabels,
   formatPreviewFooter,
   getString,
+  headGraphemes,
   formatBytes,
   parseBashOutput,
   plural,
@@ -1505,10 +1506,6 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
   }
 
   const content = () => Option.flatMap(output(), (value) => Option.fromNullishOr(value.content))
-  const renderContent = (value: string): string => {
-    if (value.length > 500) return value.slice(0, 500) + "…"
-    return value
-  }
 
   const Status = () => (
     <>
@@ -1545,7 +1542,10 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
       <Show when={Option.getOrUndefined(content())}>
         <box paddingLeft={2}>
           <text style={{ fg: theme.textMuted }}>
-            {Option.match(content(), { onNone: () => "", onSome: renderContent })}
+            {Option.match(content(), {
+              onNone: () => "",
+              onSome: (value) => headGraphemes(value, 500),
+            })}
           </text>
         </box>
       </Show>

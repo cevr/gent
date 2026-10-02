@@ -316,6 +316,15 @@ describe("select list filter", () => {
         // One backspace takes the whole emoji, never half of its surrogate pair.
         setup.mockInput.pressBackspace()
         yield* waitForFrame(setup, () => seen.at(-1) === "é", "one character deleted")
+        // A character drawn from several code points (a skin tone, a flag) goes whole too.
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText("👍🏽🇺🇸"))
+        yield* waitForFrame(setup, () => seen.at(-1) === "é👍🏽🇺🇸", "emoji pasted")
+        setup.mockInput.pressBackspace()
+        yield* waitForFrame(setup, () => seen.at(-1) !== "é👍🏽🇺🇸", "flag deleted")
+        expect(seen.at(-1)).toBe("é👍🏽")
+        setup.mockInput.pressBackspace()
+        yield* waitForFrame(setup, () => seen.at(-1) !== "é👍🏽", "thumb deleted")
+        expect(seen.at(-1)).toBe("é")
         expect(renderFrame(setup)).toContain("› é")
       }),
     )

@@ -78,6 +78,7 @@ export { useTheme } from "./theme"
 export { pastedLine, typedText, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 export { textWidth } from "./bun-adapter"
 export {
+  dropLastGrapheme,
   fitWidth,
   formatAge,
   formatCost,

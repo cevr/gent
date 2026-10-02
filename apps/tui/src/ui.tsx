@@ -24,7 +24,7 @@ import {
   useTerminalDimensions,
 } from "./terminal"
 import { useTheme } from "./theme"
-import { truncate, useRequiredContext } from "./utils"
+import { dropLastGrapheme, truncate, useRequiredContext } from "./utils"
 import { textWidth } from "./bun-adapter"
 import type { MessageRowProps } from "./extensions/client-facets"
 
@@ -832,9 +832,7 @@ export function transitionSelectList(
         Anchor: (event) => ({ ...state, selectedIndex: event.selectedIndex }),
         Backspace: () => {
           if (state.query.length === 0) return state
-          // A character, not a UTF-16 unit: half an emoji is no query.
-          const query = [...state.query].slice(0, -1).join("")
-          return { query, selectedIndex: 0, moved: false }
+          return { query: dropLastGrapheme(state.query), selectedIndex: 0, moved: false }
         },
         MoveUp: (event) => ({
           ...state,

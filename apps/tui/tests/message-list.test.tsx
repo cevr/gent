@@ -2832,6 +2832,39 @@ describe("read_session row", () => {
       }),
     )
 
+  it.scopedLive("a long read is cut after 500 characters, never inside an emoji", () =>
+    Effect.gen(function* () {
+      // 499 characters of short lines, then a toned emoji as the 500th.
+      const content = `${"ab\n".repeat(166)}a👍🏽TAIL`
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        sessionId: "session-read-1234",
+        content,
+        messageCount: 4,
+      })
+      const items: SessionItem[] = [
+        assistantToolMessage("assistant-read-session", {
+          id: "call-read-session",
+          toolName: "read_session",
+          status: "completed",
+          input: { sessionId: "session-read-1234" },
+          summary: absent,
+          output,
+        }),
+      ]
+      const setup = yield* renderScoped(
+        () => <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />,
+        { width: 100, height: 200 },
+      )
+      const cutLine = (text: string) =>
+        Option.fromNullishOr(
+          text.split("\n").find((line) => line.trim().startsWith("a") && line.includes("…")),
+        ).pipe(Option.map((line) => line.trim()))
+      const frame = yield* waitForFrame(setup, (text) => Option.isSome(cutLine(text)), "the cut")
+      expect(cutLine(frame)).toEqual(Option.some("a👍🏽…"))
+      expect(frame).not.toContain("TAIL")
+    }),
+  )
+
   // A cell draws each op as a collapsed sub-row. A click on the row's header
   // opens it, and the open row shows what the read returned.
   it.scopedLive("a read_session op opened by a click shows the session it read", () =>
