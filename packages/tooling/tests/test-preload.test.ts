@@ -12,6 +12,16 @@ import { ChildProcess } from "effect/process"
  */
 const preloadTest = it.scopedLive.layer(BunServices.layer)
 
+/** How long the child may ignore SIGTERM from the closing scope before it gets SIGKILL. */
+const CHILD_KILL_GRACE = "5 seconds"
+
+/**
+ * The bound on the child run; the child takes about a second. With the kill
+ * grace it ends inside 25 s, before bun's 30 s backstop from the preload, so
+ * the bound fires and the scope stops the child, not bun's timeout.
+ */
+const CHILD_RUN_BOUND = "20 seconds"
+
 /**
  * The entry points the guard holds, each tried against a remote host. The
  * remote host is `0.0.0.0`: the guard does not name it as this machine, yet
@@ -156,7 +166,7 @@ describe("the test preload's network guard", () => {
         yield* fs.writeFileString(file, probeFile)
         const handle = yield* ChildProcess.make("bun", ["test", "--preload", preload, file], {
           cwd: tooling,
-          forceKillAfter: "5 seconds",
+          forceKillAfter: CHILD_KILL_GRACE,
           env: {
             PATH: yield* Config.String("PATH"),
             TMPDIR: sandbox,
@@ -188,6 +198,6 @@ describe("the test preload's network guard", () => {
           expect(output).toContain(`"${scheme}://0.0.0.0:`)
         }
         expect(Number(exitCode)).toBe(1)
-      }).pipe(Effect.timeout("60 seconds")),
+      }).pipe(Effect.timeout(CHILD_RUN_BOUND)),
   )
 })
