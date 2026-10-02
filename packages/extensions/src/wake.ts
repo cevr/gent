@@ -16,6 +16,7 @@ import {
   type PlatformError,
   Predicate,
   Schema,
+  Semaphore,
 } from "effect"
 import type { ChildProcessSpawner } from "effect/process"
 import {
@@ -154,6 +155,8 @@ class WakeError extends Schema.TaggedError<WakeError>()("WakeError", {
 // ── Timers: one branch-scoped resource ──
 
 interface WakeAlarmsService {
+  /** Serializes publication, installation, re-arm and cancellation; waits interruptibly, then completes the transfer. */
+  readonly withLifecycle: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   /**
    * Forks `work` into the branch scope under `wakeId`, so a closed branch
    * cancels it. Work already running under that id is left alone.
@@ -175,6 +178,7 @@ export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
     // The map is bound to the branch scope, so closing the branch interrupts
     // every timer, and a fired timer drops its own key.
     const running = yield* FiberMap.make<string, void>()
+    const lifecycle = yield* Semaphore.make(1)
     const schedule: WakeAlarmsService["schedule"] = (wakeId, work) =>
       FiberMap.run(running, wakeId, work, { onlyIfMissing: true }).pipe(Effect.asVoid)
     // One lookup: the interrupted fiber drops its own key when it ends.
@@ -188,6 +192,7 @@ export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
         ),
       )
     return WakeAlarms.of({
+      withLifecycle: (work) => work.pipe(Effect.uninterruptible, lifecycle.withPermits(1)),
       schedule,
       cancel,
       pending: Effect.sync(() => [...running].map(([wakeId]) => wakeId)),
@@ -561,44 +566,52 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: PendingWakeEntry) {
  * ended between an unlocked read and the arm was armed again and fired twice.
  */
 export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
-  yield* store.modify((current: ReadonlyArray<WakeEntry>) =>
-    Effect.gen(function* () {
-      yield* Effect.logDebug("wake.rearm").pipe(Effect.annotateLogs({ pending: current.length }))
-      for (const entry of current) {
-        if (entry._tag !== "notice") yield* armEntry(entry)
-      }
-      // The file stays as read: returning it skips the write.
-      return { next: current, result: current.length }
-    }),
-  )
+  const alarms = yield* WakeAlarms
+  yield* store
+    .modify((current: ReadonlyArray<WakeEntry>) =>
+      Effect.gen(function* () {
+        yield* Effect.logDebug("wake.rearm").pipe(Effect.annotateLogs({ pending: current.length }))
+        for (const entry of current) {
+          if (entry._tag !== "notice") yield* armEntry(entry)
+        }
+        // The file stays as read: returning it skips the write.
+        return { next: current, result: current.length }
+      }),
+    )
+    .pipe(alarms.withLifecycle)
 })
 
 const storeAndArm = Effect.fn("WakeTool.storeAndArm")(function* (entry: PendingWakeEntry) {
-  yield* store.update((current) => [...current, entry])
-  yield* armEntry(entry)
+  const alarms = yield* WakeAlarms
+  yield* Effect.gen(function* () {
+    yield* store.update((current) => [...current, entry])
+    yield* armEntry(entry)
+  }).pipe(alarms.withLifecycle)
 })
 
 /** Drops entries from the file and interrupts their timers; returns each removed id once. */
 const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEntry) => boolean) {
   const alarms = yield* WakeAlarms
-  const removed = yield* store.modify((current: ReadonlyArray<WakeEntry>) =>
-    Effect.succeed({
-      next: current.filter(keep),
-      // A repeating notify alarm and its unread notices share one id.
-      result: [
-        ...new Set(
-          current
-            .values()
-            .filter((entry) => !keep(entry))
-            .map((entry) => entry.wakeId),
-        ),
-      ],
-    }),
-  )
-  // A stored entry may have no timer yet (before the loop's open re-arms it); an
-  // interrupted timer leaves the file alone, which is why it is cleaned here first.
-  yield* Effect.forEach(removed, (wakeId) => alarms.cancel(wakeId), { discard: true })
-  return removed
+  return yield* Effect.gen(function* () {
+    const removed = yield* store.modify((current: ReadonlyArray<WakeEntry>) =>
+      Effect.succeed({
+        next: current.filter(keep),
+        // A repeating notify alarm and its unread notices share one id.
+        result: [
+          ...new Set(
+            current
+              .values()
+              .filter((entry) => !keep(entry))
+              .map((entry) => entry.wakeId),
+          ),
+        ],
+      }),
+    )
+    // A stored entry may have no timer yet (before the loop's open re-arms it); an
+    // interrupted timer leaves the file alone, which is why it is cleaned here first.
+    yield* Effect.forEach(removed, (wakeId) => alarms.cancel(wakeId), { discard: true })
+    return removed
+  }).pipe(alarms.withLifecycle)
 })
 
 // ── Tools ──
