@@ -428,7 +428,7 @@ const namingLostConnection = (
 /**
  * The `HttpClient` every model client sends through: `FetchHttpClient`, with
  * a connection lost mid-body reported as one (see `asLostConnection`). The
- * Anthropic, OpenAI, OpenCode and TypeSafe model clients build on it.
+ * Anthropic, OpenAI, OpenCode, Cloudflare and TypeSafe model clients build on it.
  */
 export const ModelHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.effect(
   HttpClient.HttpClient,

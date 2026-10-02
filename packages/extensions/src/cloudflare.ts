@@ -1,11 +1,5 @@
 import { Effect, Layer, Option, Predicate, Redacted, Schema } from "effect"
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpClientError,
-  HttpClientRequest,
-  HttpClientResponse,
-} from "effect/http"
+import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { Model as AiModel } from "effect/ai"
 import type { OpenAiLanguageModel as OpenAiChatLanguageModel } from "@effect/ai-openai-compat"
 import type * as ChatSdkModule from "@effect/ai-openai-compat"
@@ -28,6 +22,7 @@ import {
   type CatalogSource,
   catalogSource,
   driverListModels,
+  ModelHttpClient,
   readOptionalEnv,
 } from "./providers.js"
 import { type ClassifierEntry, classifierModel, typeSafeDecisionModel } from "./typesafe.js"
@@ -173,7 +168,7 @@ const chatModel = (
     apiKey: Redacted.make(account.token),
     apiUrl: `${accountRoot(account)}/v1`,
     transformClient: gatewayHeader(account.gatewayId),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
+  }).pipe(Layer.provide(ModelHttpClient))
   return OpenAiLanguageModel.layer({ model: modelName, config: chatConfig(hints) }).pipe(
     Layer.provide(client),
   )

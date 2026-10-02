@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
-import { ConfigProvider, Effect, Layer, Option, Path, Predicate, Schema } from "effect"
+import { ConfigProvider, Effect, Layer, Option, Path, Predicate, Schema, Stream } from "effect"
+import { LanguageModel } from "effect/ai"
 import { BunFileSystem } from "@effect/platform-bun"
 import {
   ModelId,
@@ -33,6 +34,7 @@ import {
 } from "./helpers/decision-wire.js"
 import {
   type CapturedRequest,
+  fakeFetchLayer,
   type FakeFetchState,
   makeFakeFetchState,
   oneGenerate,
@@ -244,6 +246,45 @@ describe("Cloudflare chat", () => {
       }
       const noToken = yield* Effect.flip((yield* fixtureDriver()).resolveModel(LLAMA))
       expect(noToken.message).toContain("CLOUDFLARE_API_TOKEN")
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("a stream whose connection drops mid-reply fails as a retryable lost connection", () =>
+    Effect.gen(function* () {
+      const driver = yield* fixtureDriver()
+      const model = yield* driver.resolveModel(LLAMA, signedIn({ accountId: "acct-1" }))
+      const firstChunk = `data: ${encodeExternalJson({
+        id: "chatcmpl-1",
+        object: "chat.completion.chunk",
+        created: 1_700_000_000,
+        model: LLAMA,
+        choices: [
+          { index: 0, delta: { role: "assistant", content: "o" }, finish_reason: externalWireNull },
+        ],
+      })}\n\n`
+      // The server sends the first chunk, then the socket closes under the read.
+      const dropped = () => ({
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body: new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            controller.enqueue(new TextEncoder().encode(firstChunk))
+            controller.error("socket closed")
+          },
+        }),
+      })
+      const error = yield* LanguageModel.streamText({ prompt: "hi" }).pipe(
+        Stream.runDrain,
+        Effect.provide(Layer.provideMerge(model, fakeFetchLayer(makeFakeFetchState(), dropped))),
+        Effect.scoped,
+        Effect.flip,
+      )
+      expect(error.reason).toMatchObject({
+        _tag: "NetworkError",
+        reason: "TransportError",
+        description: "connection lost while reading the response",
+      })
+      expect(error.isRetryable).toBe(true)
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 })
