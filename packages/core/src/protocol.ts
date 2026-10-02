@@ -57,6 +57,7 @@ export {
   userMessageIdForRequest,
 } from "./domain/agent-loop.js"
 export {
+  coldHandoffThresholdTokens,
   CONTEXT_WINDOW_MESSAGE_TYPE,
   MODEL_CHANGE_MESSAGE_TYPE,
   modelInputCeilingTokens,

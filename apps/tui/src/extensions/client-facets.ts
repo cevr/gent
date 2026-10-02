@@ -167,6 +167,12 @@ export interface ClientTransport {
    */
   readonly modelCatalog: () => Option.Option<ReadonlyArray<Model>>
   /**
+   * The model id the session in view runs its next step on: its own setting,
+   * else what the server resolved, as the status row names it. Reactive: a
+   * model switch changes it before any request goes out.
+   */
+  readonly selectedModel: () => string
+  /**
    * Read live detail for one loop, by explicit key rather than the active
    * session: the caller is asking about a row, which is usually not the
    * session the shell is on.
@@ -207,7 +213,7 @@ export interface ClientTransport {
  */
 export type ClientShellTransport = Pick<
   ClientTransport,
-  "currentSession" | "onExtensionStateChanged" | "onSessionEvent" | "modelCatalog"
+  "currentSession" | "onExtensionStateChanged" | "onSessionEvent" | "modelCatalog" | "selectedModel"
 > & {
   readonly client: GentNamespacedClient
 }
@@ -223,6 +229,7 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   onExtensionStateChanged: payload.onExtensionStateChanged,
   onSessionEvent: payload.onSessionEvent,
   modelCatalog: payload.modelCatalog,
+  selectedModel: payload.selectedModel,
   agentDetail: (key) => agentDetailAt(payload, key),
   deleteSession: (sessionId) =>
     shellRead(payload, "session.delete", (client) => client.session.delete({ sessionId })).pipe(
@@ -735,13 +742,21 @@ export interface StatusLabelItem {
   readonly color: StatusLabelColor
 }
 
+/** Where a status label sits: the left group, or the right group before the gauge and cost. */
+export type StatusLabelAnchor = "left" | "right"
+
 /**
  * Text on the composer's status row. The row is one line: the host's labels,
- * then every extension label by priority, then the right-anchored gauge and cost.
+ * then every left extension label by priority, then the right group: the
+ * right-anchored extension labels by priority, the context gauge and the
+ * cost. The right group is laid out first and keeps its place on a narrow
+ * row; the left group truncates. A glance number (a countdown) anchors right.
  */
 const StatusLabelContribution = Schema.Struct({
   /** Lower = earlier; default 100. */
   priority: Schema.optional(Schema.Finite),
+  /** `right`: in the right group, before the gauge; absent, in the left group. */
+  anchor: Schema.optional(Schema.Literal("right")),
   produce: contributed<() => ReadonlyArray<StatusLabelItem>>(),
 })
 type StatusLabelContribution = typeof StatusLabelContribution.Type

@@ -1520,6 +1520,7 @@ describe("loadTuiExtensions", () => {
           onExtensionStateChanged: () => () => {},
           onSessionEvent: () => () => {},
           modelCatalog: () => Option.none(),
+          selectedModel: () => "test/model",
         },
       })
       return Effect.gen(function* () {
@@ -1542,8 +1543,15 @@ describe("loadTuiExtensions", () => {
         const prefixes = new Set(resolved.autocompleteItems.map((entry) => entry.prefix))
         expect(prefixes.has("$")).toBe(true)
         expect(prefixes.has("@")).toBe(true)
-        // The builtin status labels: the goal (40) and the cache waste total (60).
-        expect(resolved.statusLabels.map((label) => label.priority)).toEqual([40, 60])
+        // The builtin status labels: the goal (40), the cache timer (55, in
+        // the right group) and the cache waste total (60).
+        expect(
+          resolved.statusLabels.map((label) => [label.priority, label.anchor] as const),
+        ).toEqual([
+          [40, "left"],
+          [55, "right"],
+          [60, "left"],
+        ])
       }).pipe(Effect.provide(BunServices.layer))
     },
   )

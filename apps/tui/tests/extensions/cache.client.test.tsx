@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Option, Stream } from "effect"
+import { describe, expect, it, test } from "effect-bun-test"
+import { Clock, Deferred, Effect, Option, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { createSignal } from "solid-js"
 import {
   AgentEvent,
@@ -20,9 +21,14 @@ import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { emptyQueueSnapshot, EventId, testAgent } from "@gent/core/test-utils"
 import { CHILD_COMPLETION_TYPE, WAKE_MESSAGE_TYPE } from "@gent/extensions/client"
 import cacheExtension, {
+  CacheClock,
+  cacheClock,
+  cacheClockLabel,
   type CacheMiss,
   CacheMissCause,
+  type CacheRefresh,
   type CacheScan,
+  handsOffCold,
   makeCacheScan,
   missCostUsd,
   missText,
@@ -33,7 +39,7 @@ import type { AnyExtensionClientModule, NoticeRow } from "../../src/extensions/c
 import { App } from "../../src/app"
 import { provideClientServices } from "../extension-test-harness-boundary"
 import { createMockClient, createMockRuntime, renderScoped } from "../render-harness-boundary"
-import { waitForFrame, waitForTerminal } from "../helpers-boundary"
+import { waitForFrame, waitForTerminal, waitUntil } from "../helpers-boundary"
 
 // ── history builder ─────────────────────────────────────────────────────────
 
@@ -252,7 +258,31 @@ const makeHistory = () => {
         compacted: true,
       }),
     )
-  return { envelopes, input, step, interrupted, tool, approval, compaction }
+  /** A projection that compacted nothing: the window the step saw. */
+  const projected = (createdAt: number, estimatedTokens: number) =>
+    at(
+      createdAt,
+      AgentEvent.cases.ModelContextProjected.make({
+        sessionId,
+        branchId,
+        estimatedTokens,
+        availableInputTokens: 180_000,
+        contextLimitTokens: 200_000,
+        omittedMessages: 0,
+        compacted: false,
+      }),
+    )
+  return {
+    envelopes,
+    input,
+    step,
+    interrupted,
+    tool,
+    approval,
+    compaction,
+    projected,
+    retry,
+  }
 }
 
 /** The first step caches a 30k prefix; every scenario starts from it. */
@@ -829,27 +859,48 @@ const twoMissHistory = () => {
 
 const rowsOf = (rows: Option.Option<ReadonlyArray<NoticeRow>>) => Option.getOrThrow(rows)
 
-/** The client extension with a catalog the test sets, fed one history. */
-const setupWithCatalog = (initial: Option.Option<ReadonlyArray<Model>>) =>
+/**
+ * The client extension with a catalog the test sets, fed one history. The
+ * session runs `selected` (Sonnet unless the test switches it); the timer
+ * reads `clock`, a test clock at 0 unless the test passes its own.
+ */
+const setupWithCatalog = (
+  initial: Option.Option<ReadonlyArray<Model>>,
+  opts: { readonly clock?: TestClock.TestClock } = {},
+) =>
   Effect.gen(function* () {
     const subscribers = new Set<(envelope: EventEnvelope) => void>()
     const session = { sessionId, branchId }
     const [catalog, setCatalog] = createSignal(initial)
-    const contributions = yield* provideClientServices(cacheExtension.setup, {
-      currentSession: () => session,
-      sessionEventSubscribers: subscribers,
-      modelCatalog: catalog,
-    })
+    const [selected, setSelected] = createSignal<string>(SONNET)
+    const clock = opts.clock ?? (yield* TestClock.make())
+    const contributions = yield* provideClientServices(
+      cacheExtension.setup.pipe(Effect.provideService(Clock.Clock, clock)),
+      {
+        currentSession: () => session,
+        sessionEventSubscribers: subscribers,
+        modelCatalog: catalog,
+        selectedModel: selected,
+      },
+    )
     const deliver = (envelopes: ReadonlyArray<EventEnvelope>) => {
       for (const envelope of envelopes) for (const cb of subscribers) cb(envelope)
     }
     const [notices] = contributions.noticeRows ?? []
-    const [label] = contributions.statusLabels ?? []
+    const [label, timer] = contributions.statusLabels ?? []
     return {
       deliver,
       setCatalog,
+      setSelected,
       rows: () => Option.flatten(Option.fromUndefinedOr(notices?.rows(session))),
       label: () => label?.produce() ?? [],
+      /** The timer's text, or `none` when it draws nothing. */
+      timer: () => {
+        const items = timer?.produce() ?? []
+        if (items.length === 0) return "none"
+        return items.map((item) => `${item.text} [${String(item.color)}]`).join(" ")
+      },
+      timerAnchor: timer?.anchor,
     }
   })
 
@@ -1126,6 +1177,8 @@ const IDLE_ROW = "cache expired after 14m idle · 30k tokens re-billed ~$0.07"
 const renderResumed = (opts: {
   readonly catalog: Effect.Effect<ReadonlyArray<Model>>
   readonly extension: AnyExtensionClientModule
+  /** Terminal columns; 100 unless the test measures the status row. */
+  readonly width?: number
 }) =>
   Effect.gen(function* () {
     const history = twoMissHistory()
@@ -1150,7 +1203,19 @@ const renderResumed = (opts: {
             resolvedModelId: SONNET,
             agent: AgentName.make("main"),
             runtime: { _tag: "Idle" satisfies "Idle", queue: emptyQueueSnapshot() },
-            metrics: { turns: 3, durationMs: 0, costUsd: 0.15, lastInputTokens: 34_000 },
+            metrics: {
+              turns: 3,
+              durationMs: 0,
+              costUsd: 0.15,
+              lastInputTokens: 34_000,
+              context: {
+                estimatedTokens: 62_000,
+                availableInputTokens: 200_000,
+                contextLimitTokens: 200_000,
+                omittedMessages: 0,
+                compactions: 0,
+              },
+            },
           }),
         events: () => {
           opened = true
@@ -1163,7 +1228,7 @@ const renderResumed = (opts: {
       client,
       runtime: createMockRuntime(),
       builtins: [opts.extension],
-      width: 100,
+      width: opts.width ?? 100,
       height: 30,
       initialSession: {
         id: sessionId,
@@ -1175,3 +1240,334 @@ const renderResumed = (opts: {
     })
     return { rendered, feedOpened: () => opened }
   })
+
+// ── cache timer ─────────────────────────────────────────────────────────────
+
+const HOUR = 60 * MINUTE
+
+/** A refresh at time 0 on Sonnet, a root step on an explicit cache. */
+const refreshAt = (overrides: Partial<CacheRefresh> = {}): Option.Option<CacheRefresh> =>
+  Option.some({
+    startedAt: 0,
+    model: SONNET,
+    catalogModel: SONNET,
+    child: false,
+    estimated: false,
+    ...overrides,
+  })
+
+/** The label a clock reads as, `none` when there is no clock. */
+const labelAt = (
+  refresh: Option.Option<CacheRefresh>,
+  lifetime: Option.Option<number>,
+  now: number,
+  opts: { readonly selected?: string; readonly compactsNext?: boolean } = {},
+): string =>
+  Option.match(cacheClock(refresh, lifetime, opts.selected ?? SONNET, now), {
+    onNone: () => "none",
+    onSome: (clock) => {
+      const item = cacheClockLabel(clock, {
+        estimated: Option.exists(refresh, (last) => last.estimated),
+        compactsNext: opts.compactsNext ?? false,
+      })
+      return `${item.text} [${String(item.color)}]`
+    },
+  })
+
+describe("cache clock", () => {
+  test("reads the time left by the lifetime and the model in view", () => {
+    const hour = Option.some(HOUR)
+    const table: ReadonlyArray<readonly [string, string]> = [
+      [labelAt(refreshAt(), hour, 18 * MINUTE), "cache 42m [textMuted]"],
+      // The last fifth of the hour turns to the warning color.
+      [labelAt(refreshAt(), hour, 47 * MINUTE), "cache 13m [textMuted]"],
+      [labelAt(refreshAt(), hour, 48 * MINUTE), "cache 12m [warning]"],
+      // Minutes round up: a minute and some left reads 2m.
+      [labelAt(refreshAt(), hour, 58 * MINUTE + 30 * SECOND), "cache 2m [warning]"],
+      [labelAt(refreshAt(), hour, 59 * MINUTE + 30 * SECOND), "cache <1m [warning]"],
+      [labelAt(refreshAt(), hour, HOUR), "cache cold [textMuted]"],
+      [labelAt(refreshAt(), hour, 61 * MINUTE), "cache cold [textMuted]"],
+      // A measured lifetime is a guess: the count is marked.
+      [
+        labelAt(refreshAt({ estimated: true }), Option.some(30 * MINUTE), 2 * MINUTE),
+        "cache ~28m [textMuted]",
+      ],
+      // Another model holds nothing of the prefix: cold at once.
+      [labelAt(refreshAt(), hour, MINUTE, { selected: OPUS }), "cache cold [textMuted]"],
+      // A lapsed cache on a large window: the next turn hands it off first.
+      [
+        labelAt(refreshAt(), hour, 2 * HOUR, { compactsNext: true }),
+        "cache cold · next turn compacts [warning]",
+      ],
+      // A switch never hands off: the loop's cold check needs the same model.
+      [
+        labelAt(refreshAt(), hour, MINUTE, { selected: OPUS, compactsNext: true }),
+        "cache cold [textMuted]",
+      ],
+      // A retry still waiting to go out has the whole lifetime left.
+      [labelAt(refreshAt({ startedAt: 5 * SECOND }), hour, 0), "cache 60m [textMuted]"],
+      // No lifetime, or no refresh: nothing to count.
+      [labelAt(refreshAt(), Option.none(), MINUTE), "none"],
+      [labelAt(Option.none(), hour, MINUTE), "none"],
+    ]
+    for (const [actual, expected] of table) expect(actual).toBe(expected)
+  })
+
+  test("a five-minute child cache warns in its last minute", () => {
+    const five = Option.some(5 * MINUTE)
+    expect(labelAt(refreshAt(), five, 3 * MINUTE + 59 * SECOND)).toBe("cache 2m [textMuted]")
+    expect(labelAt(refreshAt(), five, 4 * MINUTE)).toBe("cache 1m [warning]")
+    expect(labelAt(refreshAt(), five, 4 * MINUTE + 30 * SECOND)).toBe("cache <1m [warning]")
+  })
+
+  test("the next turn compacts on a window at the loop's cold threshold", () => {
+    const window = (estimatedTokens: number, availableInputTokens: number) =>
+      Option.some({ estimatedTokens, availableInputTokens })
+    // A large budget hands off from 64k; a small one from half its budget.
+    expect(handsOffCold(window(64_000, 180_000))).toBe(true)
+    expect(handsOffCold(window(63_999, 180_000))).toBe(false)
+    expect(handsOffCold(window(30_000, 60_000))).toBe(true)
+    expect(handsOffCold(window(29_000, 60_000))).toBe(false)
+    expect(handsOffCold(Option.none())).toBe(false)
+  })
+
+  test("the clock tags are the schema's", () => {
+    expect(CacheClock.cases.Expired.make({})._tag).toBe("Expired")
+  })
+})
+
+/** The refresh the scan holds after `envelopes`. */
+const refreshAfter = (envelopes: ReadonlyArray<EventEnvelope>) => {
+  const scan = makeCacheScan()
+  for (const envelope of envelopes) scan.fold(envelope)
+  return Option.map(scan.refresh(), (last) => last.startedAt)
+}
+
+describe("cache scan refresh", () => {
+  test("the lifetime runs from the last request's start", () => {
+    expect(refreshAfter(cachedFirstStep().envelopes)).toEqual(Option.some(SECOND))
+  })
+
+  test("a retry moves the start to when the retry went out", () => {
+    const history = makeHistory()
+    history.input(0, "t1")
+    history.step({
+      start: SECOND,
+      end: 30 * SECOND,
+      turn: "t1",
+      usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+      retries: [{ at: 5 * SECOND, delayMs: 10 * SECOND }],
+    })
+    expect(refreshAfter(history.envelopes)).toEqual(Option.some(15 * SECOND))
+  })
+
+  test("an interrupted request with no usage still restarts the clock", () => {
+    const history = cachedFirstStep()
+    history.input(MINUTE, "t2")
+    history.interrupted(MINUTE + SECOND, MINUTE + 5 * SECOND, "t2")
+    expect(refreshAfter(history.envelopes)).toEqual(Option.some(MINUTE + SECOND))
+  })
+
+  test("a request in flight counts from its own start", () => {
+    const history = cachedFirstStep()
+    history.input(MINUTE, "t2")
+    history.step({
+      start: MINUTE + SECOND,
+      end: 2 * MINUTE,
+      turn: "t2",
+      usage: { inputTokens: 31_000, cacheReadTokens: 30_000 },
+    })
+    // Without its StreamEnded the second request is still running.
+    expect(refreshAfter(history.envelopes.slice(0, -1))).toEqual(Option.some(MINUTE + SECOND))
+  })
+
+  test("a compaction clears the clock until the next request goes out", () => {
+    const history = cachedFirstStep()
+    history.compaction(MINUTE)
+    expect(refreshAfter(history.envelopes)).toEqual(Option.none())
+    history.step({
+      start: MINUTE + SECOND,
+      end: 2 * MINUTE,
+      turn: "t1",
+      usage: { inputTokens: 8_000, cacheWriteTokens: 8_000 },
+    })
+    expect(refreshAfter(history.envelopes)).toEqual(Option.some(MINUTE + SECOND))
+  })
+
+  test("a branch that never reported cache activity has no clock", () => {
+    const history = makeHistory()
+    history.input(0, "t1")
+    history.step({ start: SECOND, end: 10 * SECOND, turn: "t1", usage: { inputTokens: 30_000 } })
+    expect(refreshAfter(history.envelopes)).toEqual(Option.none())
+  })
+})
+
+describe("cache timer label", () => {
+  it.scopedLive("the label counts down on the client clock, then reads cold", () =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make()
+      const extension = yield* setupWithCatalog(Option.some(models), { clock })
+      expect(extension.timerAnchor).toBe("right")
+      expect(extension.timer()).toBe("none")
+      // The first request went out at 1s and wrote the 5-minute cache.
+      yield* clock.adjust("1 second")
+      extension.deliver(cachedFirstStep().envelopes)
+      yield* waitUntil(() => extension.timer() === "cache 5m [textMuted]", "a fresh cache")
+      // Each step moves the test clock once, to a tick of the timer's 5-second
+      // fiber: the label shows the clock as of its last tick.
+      yield* clock.adjust("64 seconds")
+      yield* waitUntil(() => extension.timer() === "cache 4m [textMuted]", "a minute later")
+      yield* clock.adjust("210 seconds")
+      yield* waitUntil(() => extension.timer() === "cache <1m [warning]", "the last half minute")
+      yield* clock.adjust("30 seconds")
+      yield* waitUntil(() => extension.timer() === "cache cold [textMuted]", "the lifetime ran out")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a model switch reads cold before any request goes out", () =>
+    Effect.gen(function* () {
+      const extension = yield* setupWithCatalog(Option.some(models))
+      extension.deliver(cachedFirstStep().envelopes)
+      expect(extension.timer()).toBe("cache 5m [textMuted]")
+      extension.setSelected(OPUS)
+      expect(extension.timer()).toBe("cache cold [textMuted]")
+      extension.setSelected(SONNET)
+      expect(extension.timer()).toBe("cache 5m [textMuted]")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a child's step counts the child lifetime, a root's the root's", () =>
+    Effect.gen(function* () {
+      const lifetimes = models.map(
+        (model) =>
+          new Model({ ...model, promptCacheTtlMs: HOUR, childPromptCacheTtlMs: 5 * MINUTE }),
+      )
+      const firstStep = (child: boolean) => {
+        const history = makeHistory()
+        history.input(0, "t1")
+        history.step({
+          start: 0,
+          end: 10 * SECOND,
+          turn: "t1",
+          usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+          child,
+        })
+        return history.envelopes
+      }
+      /** Six minutes after the step started, the timer reads `expected`. */
+      const sixMinutesOn = (child: boolean, expected: string) =>
+        Effect.gen(function* () {
+          const clock = yield* TestClock.make()
+          const extension = yield* setupWithCatalog(Option.some(lifetimes), { clock })
+          extension.deliver(firstStep(child))
+          yield* clock.adjust("6 minutes")
+          yield* waitUntil(() => extension.timer() === expected, `${expected} six minutes on`)
+        })
+      yield* sixMinutesOn(true, "cache cold [textMuted]")
+      yield* sixMinutesOn(false, "cache 54m [textMuted]")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a reads-only provider's lifetime is marked as a guess", () =>
+    Effect.gen(function* () {
+      const extension = yield* setupWithCatalog(Option.some(models))
+      extension.setSelected(GPT)
+      const history = makeHistory()
+      history.input(0, "t1")
+      history.step({
+        start: 0,
+        end: 5 * SECOND,
+        turn: "t1",
+        usage: { inputTokens: 30_000 },
+        model: GPT,
+      })
+      // Nothing reported yet: the provider has not shown it caches.
+      extension.deliver(history.envelopes)
+      expect(extension.timer()).toBe("none")
+      history.step({
+        start: 10 * SECOND,
+        end: 20 * SECOND,
+        turn: "t1",
+        usage: { inputTokens: 31_000, cacheReadTokens: 29_000 },
+        model: GPT,
+      })
+      extension.deliver(history.envelopes)
+      expect(extension.timer()).toBe("cache ~5m [textMuted]")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a lapsed cache on a large window says the next turn compacts", () =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make()
+      const extension = yield* setupWithCatalog(Option.some(models), { clock })
+      const history = cachedFirstStep()
+      history.projected(11 * SECOND, 70_000)
+      extension.deliver(history.envelopes)
+      yield* clock.adjust("6 minutes")
+      yield* waitUntil(
+        () => extension.timer() === "cache cold · next turn compacts [warning]",
+        "a lapsed large window",
+      )
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a catalog that names no lifetime, or no catalog, draws no timer", () =>
+    Effect.gen(function* () {
+      const unnamed = models.map(
+        ({ id, name, provider, pricing }) => new Model({ id, name, provider, pricing }),
+      )
+      const extension = yield* setupWithCatalog(Option.some(unnamed))
+      extension.deliver(cachedFirstStep().envelopes)
+      expect(extension.timer()).toBe("none")
+      extension.setCatalog(Option.none())
+      expect(extension.timer()).toBe("none")
+      extension.setCatalog(Option.some(models))
+      expect(extension.timer()).toBe("cache 5m [textMuted]")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+})
+
+/** The status row: the last line that names the context gauge. */
+const statusLine = (frame: string): string =>
+  frame
+    .split("\n")
+    .filter((line) => line.includes("ctx "))
+    .at(-1) ?? ""
+
+describe("cache timer on the status row", () => {
+  it.scopedLive("a resumed session whose last request is old reads cold, never a count", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderResumed({
+        catalog: Effect.succeed(models),
+        extension: cacheExtension,
+      })
+      const frame = yield* waitForFrame(
+        setup.rendered,
+        (text) => statusLine(text).includes("cache cold"),
+        "cold timer",
+        4000,
+      )
+      expect(statusLine(frame)).not.toMatch(/cache \d/)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  for (const width of [60, 120]) {
+    it.scopedLive(`the timer sits before the gauge and keeps its place at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const setup = yield* renderResumed({
+          catalog: Effect.succeed(models),
+          extension: cacheExtension,
+          width,
+        })
+        const frame = yield* waitForFrame(
+          setup.rendered,
+          (text) => statusLine(text).includes("cache cold · ctx 31% · $0.15"),
+          "timer, gauge and cost",
+          4000,
+        )
+        // The right group ends the row: the left group gave way, not the timer.
+        expect(statusLine(frame).trimEnd().endsWith("cache cold · ctx 31% · $0.15")).toBe(true)
+      }).pipe(Effect.timeout("8 seconds")),
+    )
+  }
+})

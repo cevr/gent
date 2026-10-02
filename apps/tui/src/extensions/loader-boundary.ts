@@ -36,6 +36,7 @@ import {
   type AnyExtensionClientModule,
   type AutocompleteContribution,
   type AutocompleteItem,
+  type StatusLabelAnchor,
   type StatusLabelItem,
   type ClientContributions,
   type ClientRuntime,
@@ -179,6 +180,7 @@ interface ResolvedStatusLabel {
   /** The extension that contributed it, named when it fails. */
   readonly extensionId: string
   readonly priority: number
+  readonly anchor: StatusLabelAnchor
   readonly produce: () => ReadonlyArray<StatusLabelItem>
 }
 
@@ -610,6 +612,7 @@ export const resolveTuiExtensions = (
         itemsOrEmpty(ext.contributions.statusLabels).map((contribution) => ({
           extensionId: ext.id,
           priority: priorityOrDefault(contribution.priority),
+          anchor: contribution.anchor ?? "left",
           produce: contribution.produce,
         })),
       ),

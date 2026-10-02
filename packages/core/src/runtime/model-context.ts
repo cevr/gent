@@ -1600,7 +1600,12 @@ export interface PromptCache {
  */
 const COLD_HANDOFF_MAX_THRESHOLD_TOKENS = 64_000
 
-const coldHandoffThresholdTokens = (availableInputTokens: number): number =>
+/**
+ * The window size at which a turn that starts on a lapsed prompt cache hands
+ * off first. The TUI's cache label reads it (`@gent/core/protocol`) to say
+ * the next turn compacts.
+ */
+export const coldHandoffThresholdTokens = (availableInputTokens: number): number =>
   Math.min(COLD_HANDOFF_MAX_THRESHOLD_TOKENS, Math.floor(availableInputTokens / 2))
 
 /**

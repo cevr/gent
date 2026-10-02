@@ -22,6 +22,7 @@ import {
   makeClientContextLayer,
   type MessageRendererEntry,
   type PaneOwner,
+  type StatusLabelAnchor,
   type StatusLabelItem,
 } from "./client-facets.js"
 import {
@@ -120,10 +121,11 @@ interface ExtensionUIContextValue {
   readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
   readonly interactionRenderers: Accessor<ReadonlyMap<string, InteractionRendererComponent>>
   /**
-   * Every status label's items, by priority. A `produce` that throws fails
-   * its extension (`recordRenderFailure`) and draws nothing.
+   * The items of every status label with this anchor, by priority. A
+   * `produce` that throws fails its extension (`recordRenderFailure`) and
+   * draws nothing.
    */
-  readonly statusLabelItems: Accessor<ReadonlyArray<StatusLabelItem>>
+  readonly statusLabelItems: (anchor: StatusLabelAnchor) => ReadonlyArray<StatusLabelItem>
   /**
    * An extension's render code threw: it joins `failures` by name, as a setup
    * throw does. Its widgets, status labels and renderers draw no more (the
@@ -270,9 +272,9 @@ export function ExtensionUIProvider(props: {
         [...drawable(boundedRenderers().tools)].map(([name, entry]) => [name, entry.component]),
       ),
   )
-  const statusLabelItems = () =>
+  const statusLabelItems = (anchor: StatusLabelAnchor) =>
     resolved()
-      .statusLabels.filter((label) => !renderFailed(label.extensionId))
+      .statusLabels.filter((label) => label.anchor === anchor && !renderFailed(label.extensionId))
       .flatMap((label) => guarded(label.extensionId, label.produce, () => []))
   const noticeRows = createMemo((): ReadonlyArray<ResolvedNoticeRows> =>
     resolved()
@@ -343,6 +345,7 @@ export function ExtensionUIProvider(props: {
       onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
       onSessionEvent: (cb) => client.onSessionEvent(cb),
       modelCatalog: client.modelCatalog,
+      selectedModel: client.model,
     },
     workspace: {
       cwd: workspace.cwd,
