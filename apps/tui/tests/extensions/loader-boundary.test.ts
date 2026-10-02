@@ -832,6 +832,63 @@ export default {
       }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive(
+    "an entry field that throws after its check fails only its extension, and a class instance's buckets still load",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const root = yield* fs.makeTempDirectoryScoped({
+          prefix: "gent-client-nested-getter-",
+        })
+        const userDir = path.join(root, "home/.gent/extensions")
+        const projectDir = path.join(root, "project/.gent/extensions")
+        yield* fs.makeDirectory(userDir, { recursive: true })
+        // The component reads as a function once, then throws.
+        yield* fs.writeFileString(
+          path.join(userDir, "nested.client.ts"),
+          `
+import { Effect } from "effect";
+let reads = 0;
+const widget = {
+  id: "nested",
+  slot: "below-input",
+  get component() {
+    reads++;
+    if (reads > 1) throw new Error("nested broken");
+    return () => null;
+  },
+};
+export default { id: "@user/nested", setup: Effect.succeed({ widgets: [widget] }) };
+`,
+        )
+        // Buckets as prototype getters of a class instance.
+        yield* fs.writeFileString(
+          path.join(userDir, "instance.client.ts"),
+          `
+import { Effect } from "effect";
+class Contributions {
+  get widgets() {
+    return [{ id: "instance", slot: "below-input", component: () => null }];
+  }
+}
+export default { id: "@user/instance", setup: Effect.succeed(new Contributions()) };
+`,
+        )
+        const good: ExtensionClientModule = {
+          id: "@test/builtin-beside-nested",
+          setup: Effect.succeed(
+            autocompleteContribution({ prefix: "!", title: "good", items: () => [] }),
+          ),
+        }
+        const result = yield* loadTuiExtensions({ builtins: [good], userDir, projectDir, runtime })
+        expect(result.autocompleteItems.map((c) => c.prefix)).toEqual(["!"])
+        expect(result.widgets.map((w) => w.id)).toEqual(["instance"])
+        expect(result.failures.map((failure) => failure.id)).toEqual(["@user/nested"])
+        expect(result.failures[0]?.reason).toContain("nested broken")
+      }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   // The compiled binary has no node_modules. A client extension outside the
   // repository resolves its imports, and compiles its JSX, only because the
   // loader binds them to the modules the TUI runs. A relative module the

@@ -677,55 +677,46 @@ const withinLoadTimeout =
     )
 
 /**
- * What is wrong with a setup's buckets, if anything. A key outside the known
- * buckets fails by name, so a renamed bucket never drops its items silently;
- * a known bucket of another shape fails by name too.
- */
-const bucketsProblem = (
-  buckets: ReadonlyArray<readonly [string, unknown]>,
-): Option.Option<string> => {
-  for (const [key, bucket] of buckets) {
-    const schema = contributionBucketSchema(key)
-    if (Option.isNone(schema)) return Option.some(`unknown contribution "${key}"`)
-    if (!Schema.is(schema.value)(bucket)) return Option.some(`malformed contribution "${key}"`)
-  }
-  return Option.none()
-}
-
-/**
  * A setup's result as plain contributions, inside this extension's own
- * failure. Every read of the extension's object (a getter can throw) happens
- * here, and the decode builds new objects, so the resolution every extension
- * shares never touches the extension's own object.
+ * failure. A key the object owns outside the known buckets fails by name, so
+ * a renamed bucket never drops its items silently. Each known bucket is read
+ * once by property access (a class instance's getter counts), checked by name,
+ * and decoded to new objects, so the resolution every extension shares never
+ * touches the extension's own object. Anything that throws on the way (a
+ * getter, a proxy, a field the decode reads again) fails only this extension.
  */
 const readContributions = (
   id: string,
   // eslint-disable-next-line effect/noUnknownParameters -- a user setup's result is parsed at this module boundary.
   value: unknown,
-): Effect.Effect<ClientContributions, ClientExtensionFailure> => {
-  const guarded = <A>(read: () => A) =>
-    Effect.try({
-      try: read,
-      catch: (cause): ClientExtensionFailure => ({
-        id,
-        reason: `reading contributions failed: ${String(cause)}`,
-      }),
-    })
-  return Effect.gen(function* () {
+): Effect.Effect<ClientContributions, ClientExtensionFailure> =>
+  Effect.gen(function* () {
     if (!Predicate.isObject(value)) {
       return yield* Effect.fail({ id, reason: "setup must return contributions" })
     }
-    const buckets: ReadonlyArray<readonly [string, unknown]> = yield* guarded(() =>
-      Object.entries(value),
+    const unknownKey = Option.fromUndefinedOr(
+      Object.keys(value).find((key) => Option.isNone(contributionBucketSchema(key))),
     )
-    const problem = yield* guarded(() => bucketsProblem(buckets))
-    if (Option.isSome(problem)) return yield* Effect.fail({ id, reason: problem.value })
-    const decoded = yield* guarded(() =>
-      Schema.decodeExit(ClientContributionsData)(Object.fromEntries(buckets)),
-    )
+    if (Option.isSome(unknownKey)) {
+      return yield* Effect.fail({ id, reason: `unknown contribution "${unknownKey.value}"` })
+    }
+    const buckets: Array<readonly [string, unknown]> = []
+    for (const key of Object.keys(ClientContributionsData.fields)) {
+      if (Predicate.hasProperty(value, key)) buckets.push([key, value[key]])
+    }
+    for (const [key, bucket] of buckets) {
+      const schema = contributionBucketSchema(key)
+      if (Option.isSome(schema) && !Schema.is(schema.value)(bucket)) {
+        return yield* Effect.fail({ id, reason: `malformed contribution "${key}"` })
+      }
+    }
+    const decoded = Schema.decodeExit(ClientContributionsData)(Object.fromEntries(buckets))
     return yield* Effect.mapError(decoded, () => ({ id, reason: "malformed contributions" }))
-  })
-}
+  }).pipe(
+    Effect.catchDefect((defect) =>
+      Effect.fail({ id, reason: `reading contributions failed: ${String(defect)}` }),
+    ),
+  )
 
 /** Run one extension's setup; any failure, defect or timeout becomes a recorded failure. */
 const setupExtension = (
