@@ -45,7 +45,7 @@ import {
   runAutocompleteContributions,
 } from "../../src/extensions/loader-boundary"
 import type { ToolRenderer, ToolRendererProps } from "../../src/tool-renderers"
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
+import { writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- the logger callback is synchronous, so it writes the gate file directly.
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
@@ -194,42 +194,6 @@ describe("resolveTuiExtensions", () => {
 
     expect(resolved.widgets.map((entry) => entry.id)).toEqual(["status", "secondary"])
     expect(resolved.widgets[0]?.slot).toBe("above-input")
-  })
-
-  test("higher-scope commands keep the visible slash and keybind affordances", () => {
-    const resolved = resolveTuiExtensions([
-      make(
-        "builtin-command",
-        "builtin",
-        clientCommandContribution({
-          id: "cmd-old",
-          title: "Old",
-          slash: "deploy",
-          keybind: "ctrl+k",
-          onSelect: () => {},
-        }),
-      ),
-      make(
-        "project-command",
-        "project",
-        clientCommandContribution({
-          id: "cmd-new",
-          title: "New",
-          slash: "deploy",
-          keybind: "ctrl+k",
-          onSelect: () => {},
-        }),
-      ),
-    ])
-
-    const { commands } = resolveCommands(resolved.commandSources)
-    const oldCommand = commands.find((command) => command.id === "cmd-old")
-    const newCommand = commands.find((command) => command.id === "cmd-new")
-
-    expect(newCommand?.slash).toBe("deploy")
-    expect(newCommand?.keybind).toBe("ctrl+k")
-    expect(oldCommand?.slash).toBeUndefined()
-    expect(oldCommand?.keybind).toBeUndefined()
   })
 
   test("interaction renderers resolve by metadata type with scope precedence", () => {
@@ -456,31 +420,42 @@ describe("resolveTuiExtensions", () => {
     }
   })
 
-  test("a project extension overrides a builtin slash", () => {
+  test("a project extension takes a builtin's slash and keybind", () => {
     let winner = ""
-    const { commands, failures } = resolveCommands([
-      {
-        id: "@gent/session",
-        scope: "builtin",
-        source: "builtin:@gent/session",
-        commands: [
-          cmd({ id: "session.model", slash: "model", onSelect: () => (winner = "builtin") }),
-        ],
-      },
-      {
-        id: "@test/model",
-        scope: "project",
-        source: "/project/model.client.ts",
-        commands: [
-          cmd({ id: "project.model", slash: "model", onSelect: () => (winner = "project") }),
-        ],
-      },
+    const resolved = resolveTuiExtensions([
+      make(
+        "@gent/session",
+        "builtin",
+        clientCommandContribution({
+          id: "session.model",
+          title: "Model",
+          slash: "model",
+          keybind: "ctrl+k",
+          onSelect: () => (winner = "builtin"),
+        }),
+      ),
+      make(
+        "@test/model",
+        "project",
+        clientCommandContribution({
+          id: "project.model",
+          title: "Project model",
+          slash: "model",
+          keybind: "ctrl+k",
+          onSelect: () => (winner = "project"),
+        }),
+      ),
     ])
+    const { commands, failures } = resolveCommands(resolved.commandSources)
     expect(executeSlashCommand("model", "", commands)).toBe(true)
     expect(winner).toBe("project")
     expect(failures).toEqual([])
-    // The builtin keeps its palette row; only the slash moved.
-    expect(commands.find((command) => command.id === "session.model")?.slash).toBeUndefined()
+    const project = commands.find((command) => command.id === "project.model")
+    expect(project?.keybind).toBe("ctrl+k")
+    // The builtin keeps its palette row; the slash and the keybind moved.
+    const builtin = commands.find((command) => command.id === "session.model")
+    expect(builtin?.slash).toBeUndefined()
+    expect(builtin?.keybind).toBeUndefined()
   })
 
   test("a server slash that a session command already holds is dropped and reported", () => {
@@ -597,8 +572,8 @@ describe("resolveTuiExtensions", () => {
 // ── extension effect setup ──────────────────────────────────────────────────
 
 /**
- * Lock: `loadTuiExtensions` runs Effect-typed `setup` values through the
- * provided `runtime: ManagedRuntime`. Only the Effect setup shape is accepted.
+ * `loadTuiExtensions` runs each Effect `setup` on the client runtime it gets.
+ * A `setup` that is not an Effect fails its extension.
  */
 
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
@@ -1087,10 +1062,9 @@ export default tui.defineClientExtension("@user/client-entries", {
     Effect.gen(function* () {
       const fxSetup: Effect.Effect<ClientContributions, never, FileSystem.FileSystem | Path.Path> =
         Effect.gen(function* () {
-          // Prove we can reach a FileSystem from the runtime.
+          // The runtime gives the setup both platform services.
           const fs = yield* FileSystem.FileSystem
           const path = yield* Path.Path
-          // Touch both services so unused imports don't get optimized away.
           expect(Predicate.isFunction(fs.readFileString)).toBe(true)
           expect(Predicate.isFunction(path.join)).toBe(true)
           return autocompleteContribution({
@@ -1102,8 +1076,8 @@ export default tui.defineClientExtension("@user/client-entries", {
       const ext: ExtensionClientModule = { id: "@test/effect", setup: fxSetup }
       const result = yield* loadTuiExtensions({
         builtins: [ext],
-        userDir: "/nonexistent/gent-test-u-c9-1-fx",
-        projectDir: "/nonexistent/gent-test-p-c9-1-fx",
+        userDir: "/nonexistent/gent-test-user-setup-services",
+        projectDir: "/nonexistent/gent-test-project-setup-services",
         runtime,
       })
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
@@ -1127,8 +1101,8 @@ export default tui.defineClientExtension("@user/client-entries", {
       }
       const result = yield* loadTuiExtensions({
         builtins: [good, broken],
-        userDir: "/nonexistent/gent-test-u-c9-1-fx-failure",
-        projectDir: "/nonexistent/gent-test-p-c9-1-fx-failure",
+        userDir: "/nonexistent/gent-test-user-setup-failure",
+        projectDir: "/nonexistent/gent-test-project-setup-failure",
         runtime,
       })
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
@@ -1160,44 +1134,6 @@ export default tui.defineClientExtension("@user/client-entries", {
       expect(result.failures[0]?.reason).toContain("setup timed out")
     }).pipe(Effect.timeout("5 seconds")),
   )
-  // Regression lock — discovered (not pre-imported) modules with an
-  // Effect-valued `setup` must pass `importExtension`'s shape validator.
-  // Rejecting Effect values silently drops the entire discovered population.
-  describe("discovered Effect-setup modules", () => {
-    it.scopedLive("a user extension found in the user directory contributes its rows", () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-client-discovery-" })
-        const userDir = path.join(root, "user")
-        const projectDir = path.join(root, "project")
-        yield* fs.makeDirectory(userDir, { recursive: true })
-        yield* fs.makeDirectory(projectDir, { recursive: true })
-        // Effect-valued `setup` — exactly the accepted shape.
-        yield* fs.writeFileString(
-          path.join(userDir, "discovered.client.ts"),
-          `
-import { Effect } from "effect"
-import { autocompleteContribution } from "@gent/tui/extensions"
-
-export default {
-  id: "@test/discovered-effect",
-  setup: Effect.gen(function* () {
-    return autocompleteContribution({
-        prefix: "#",
-        title: "discovered",
-        items: () => [{ id: "z", label: "z" }],
-      })
-  }),
-}
-`.trim(),
-        )
-        const result = yield* loadTuiExtensions({ userDir, projectDir, runtime })
-        expect(result.autocompleteItems.map((c) => c.prefix)).toContain("#")
-      }).pipe(Effect.provide(BunServices.layer)),
-    )
-  })
-
   // Each import is a build and an import, up to the load timeout. Two files
   // whose imports finish only once both have started load only when the
   // imports overlap; one at a time, the first waits out its timeout. The
@@ -1267,15 +1203,10 @@ export default defineClientExtension("@test/overlap", {
 // ── autocomplete effect items ───────────────────────────────────────────────
 
 /**
- *  lock: autocomplete `items()` returning an Effect that yields
- * `ClientContext` flows through a `ManagedRuntime` providing the context
- * layer, mirroring how `autocomplete-popup-boundary.ts` dispatches
- * Effect-typed results to the resource.
- *
- * This proves the contribution-time adapter path:
- * Effect items() → runtime.runPromise → typed transport → decoded reply.
- * Success returns the items; a failed request is reported by the helper and
- * turns into no rows.
+ * An autocomplete `items()` can return an Effect that reads `ClientContext`.
+ * `runAutocompleteContributions` runs it on the client runtime: a typed
+ * request goes through the transport and the reply is decoded. Success
+ * returns the items; a failed request is reported and gives no rows.
  */
 
 class AutocompleteTestError extends Schema.TaggedError<AutocompleteTestError>()(
@@ -1312,7 +1243,7 @@ const listThings = Effect.gen(function* () {
   return yield* transport.request(ref(ListThingsRpc), {})
 })
 describe("autocomplete Effect items() through the client transport", () => {
-  it.live("Effect items yielding ClientContext resolves via runtime.runPromise", () =>
+  it.live("Effect items that read ClientContext return their rows", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport()
       const runtime = makeTestRuntime(transport)
@@ -1433,7 +1364,7 @@ describe("autocomplete Effect items() through the client transport", () => {
  *
  * Keep one end-to-end story per user-visible outcome:
  * discovery, override precedence, disabled gating, invalid-file tolerance,
- * overlay state, autocomplete visibility, and startup with an active session.
+ * autocomplete visibility, and startup with an active session.
  */
 const testRuntime = makeClientExtensionRuntime({ transport: makeUnreachableTransport() })
 /** Run the loader on a client runtime, the stub one unless the test gives its own. */
@@ -1444,28 +1375,30 @@ const loadTuiExtensions = (
 const encodeTrustGrant = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ trustedProjects: Schema.Array(Schema.String) })),
 )
+const commandModule = (id: string, command: string) =>
+  `import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('${id}', { setup: Effect.succeed(clientCommandContribution({ id: '${command}', title: '${command}', onSelect: () => {} })) })`
 // A scoped system temp directory: the loader binds `effect` and the public
 // entries, so the files resolve them with no node_modules above.
 const integrationFixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
   const fixtureDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-client-integration-" })
-  const fixtureUserDir = join(fixtureDir, "user")
-  const fixtureProjectDir = join(fixtureDir, "project")
-  yield* Effect.sync(() => {
-    mkdirSync(fixtureUserDir, { recursive: true })
-    mkdirSync(fixtureProjectDir, { recursive: true })
-    writeFileSync(
-      join(fixtureDir, "config.json"),
-      encodeTrustGrant({ trustedProjects: [realpathSync(join(fixtureProjectDir, "../.."))] }),
-    )
-    mkdirSync(join(fixtureUserDir, "custom-read"), { recursive: true })
-    writeFileSync(
-      join(fixtureUserDir, "custom-read", "index.ts"),
-      `export default { manifest: { id: "custom-read" }, setup: () => [] }`,
-    )
-    writeFileSync(
-      join(fixtureUserDir, "custom-read", "client.ts"),
-      `import { Effect } from "effect"
+  const fixtureUserDir = path.join(fixtureDir, "user")
+  const fixtureProjectDir = path.join(fixtureDir, "project")
+  /** Write `text` at `file` and make its parent directories. */
+  const write = (file: string, text: string) =>
+    fs
+      .makeDirectory(path.dirname(file), { recursive: true })
+      .pipe(Effect.andThen(fs.writeFileString(file, text)))
+  // The project root is two levels above the project extension directory.
+  const projectRoot = yield* fs.realPath(path.join(fixtureProjectDir, "../.."))
+  yield* write(
+    path.join(fixtureDir, "config.json"),
+    encodeTrustGrant({ trustedProjects: [projectRoot] }),
+  )
+  yield* write(
+    path.join(fixtureUserDir, "custom-read", "client.ts"),
+    `import { Effect } from "effect"
 import {
   defineClientExtension,
   clientContributions,
@@ -1481,10 +1414,10 @@ export default defineClientExtension("@test/custom-read", {
     clientCommandContribution({ id: "test-cmd", title: "Test Command", category: "test", onSelect: () => {} }),
   )),
 })`,
-    )
-    writeFileSync(
-      join(fixtureProjectDir, "override-bash.client.ts"),
-      `import { Effect } from "effect"
+  )
+  yield* write(
+    path.join(fixtureProjectDir, "override-bash.client.ts"),
+    `import { Effect } from "effect"
 import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
 
 export default defineClientExtension("@test/override-bash", {
@@ -1492,72 +1425,79 @@ export default defineClientExtension("@test/override-bash", {
     rendererContribution(["bash"], () => "project-bash-override"),
   ),
 })`,
-    )
-    writeFileSync(
-      join(fixtureUserDir, "alpha.client.ts"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/alpha', { setup: Effect.succeed(clientCommandContribution({ id: 'alpha', title: 'Alpha', onSelect: () => {} })) })",
-    )
-    writeFileSync(
-      join(fixtureUserDir, "zeta.client.ts"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/zeta', { setup: Effect.succeed(clientCommandContribution({ id: 'zeta', title: 'Zeta', onSelect: () => {} })) })",
-    )
-    writeFileSync(
-      join(fixtureUserDir, ".hidden.client.tsx"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/hidden', { setup: Effect.succeed(clientCommandContribution({ id: 'hidden', title: 'Hidden', onSelect: () => {} })) })",
-    )
-    writeFileSync(
-      join(fixtureUserDir, "_internal.client.tsx"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/internal', { setup: Effect.succeed(clientCommandContribution({ id: 'internal', title: 'Internal', onSelect: () => {} })) })",
-    )
-    mkdirSync(join(fixtureUserDir, "__tests__"), { recursive: true })
-    writeFileSync(
-      join(fixtureUserDir, "__tests__", "client.tsx"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/spec-only', { setup: Effect.succeed(clientCommandContribution({ id: 'spec-only', title: 'Spec Only', onSelect: () => {} })) })",
-    )
-    writeFileSync(
-      join(fixtureProjectDir, "prebuilt.client.mjs"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/prebuilt', { setup: Effect.succeed(clientCommandContribution({ id: 'prebuilt', title: 'Prebuilt', onSelect: () => {} })) })",
-    )
-  })
-  return { fixtureDir, fixtureUserDir, fixtureProjectDir }
+  )
+  yield* write(path.join(fixtureUserDir, "alpha.client.ts"), commandModule("@test/alpha", "alpha"))
+  yield* write(path.join(fixtureUserDir, "zeta.client.ts"), commandModule("@test/zeta", "zeta"))
+  yield* write(
+    path.join(fixtureUserDir, ".hidden.client.tsx"),
+    commandModule("@test/hidden", "hidden"),
+  )
+  yield* write(
+    path.join(fixtureUserDir, "_internal.client.tsx"),
+    commandModule("@test/internal", "internal"),
+  )
+  yield* write(
+    path.join(fixtureUserDir, "__tests__", "client.tsx"),
+    commandModule("@test/spec-only", "spec-only"),
+  )
+  yield* write(
+    path.join(fixtureProjectDir, "prebuilt.client.mjs"),
+    commandModule("@test/prebuilt", "prebuilt"),
+  )
+  return { fixtureDir, fixtureUserDir, fixtureProjectDir, write }
 }).pipe(Effect.provide(BunServices.layer))
 describe("loadTuiExtensions", () => {
-  it.scopedLive("loads builtin surfaces when no user or project extensions exist", () =>
-    Effect.gen(function* () {
-      const { fixtureDir } = yield* integrationFixture
-      const emptyUser = join(fixtureDir, "empty-user")
-      const emptyProject = join(fixtureDir, "empty-project")
-      mkdirSync(emptyUser, { recursive: true })
-      mkdirSync(emptyProject, { recursive: true })
-      const resolved = yield* loadTuiExtensions({
-        builtins: builtinClientModules,
-        userDir: emptyUser,
-        projectDir: emptyProject,
+  it.scopedLive(
+    "with an active session and no user or project extensions, the builtin surfaces load",
+    () => {
+      const activeSessionRuntime = makeClientExtensionRuntime({
+        transport: {
+          client: createMockClient({ extension: { request: () => Effect.void } }),
+          currentSession: () => ({
+            sessionId: SessionId.make("test-session-id"),
+            branchId: BranchId.make("test-branch-id"),
+          }),
+          onExtensionStateChanged: () => () => {},
+          onSessionEvent: () => () => {},
+          modelCatalog: () => Option.none(),
+        },
       })
-      expect(resolved.renderers.has("read")).toBe(true)
-      expect(resolved.renderers.has("bash")).toBe(true)
-      expect(resolved.interactionRenderers.has("handoff")).toBe(true)
-      rmSync(emptyUser, { recursive: true, force: true })
-      rmSync(emptyProject, { recursive: true, force: true })
-    }),
+      return Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const { fixtureDir } = yield* integrationFixture
+        const emptyUser = join(fixtureDir, "empty-user")
+        const emptyProject = join(fixtureDir, "empty-project")
+        yield* fs.makeDirectory(emptyUser)
+        yield* fs.makeDirectory(emptyProject)
+        yield* Effect.addFinalizer(() => Effect.promise(() => activeSessionRuntime.dispose()))
+        const resolved = yield* loadTuiExtensions({
+          builtins: builtinClientModules,
+          userDir: emptyUser,
+          projectDir: emptyProject,
+          runtime: activeSessionRuntime,
+        })
+        expect(resolved.renderers.has("read")).toBe(true)
+        expect(resolved.renderers.has("bash")).toBe(true)
+        expect(resolved.interactionRenderers.has("handoff")).toBe(true)
+        const prefixes = new Set(resolved.autocompleteItems.map((entry) => entry.prefix))
+        expect(prefixes.has("$")).toBe(true)
+        expect(prefixes.has("@")).toBe(true)
+        // The builtin status labels: the goal (40) and the cache waste total (60).
+        expect(resolved.statusLabels.map((label) => label.priority)).toEqual([40, 60])
+      }).pipe(Effect.provide(BunServices.layer))
+    },
   )
   it.scopedLive("disabling @gent/interaction-tools drops the handoff renderer with its tool", () =>
     Effect.gen(function* () {
       const { fixtureDir } = yield* integrationFixture
-      const emptyUser = join(fixtureDir, "empty-user-handoff")
-      const emptyProject = join(fixtureDir, "empty-project-handoff")
-      mkdirSync(emptyUser, { recursive: true })
-      mkdirSync(emptyProject, { recursive: true })
       const resolved = yield* loadTuiExtensions({
         builtins: builtinClientModules,
-        userDir: emptyUser,
-        projectDir: emptyProject,
+        userDir: join(fixtureDir, "no-user"),
+        projectDir: join(fixtureDir, "no-project"),
         disabled: ["@gent/interaction-tools"],
       })
       expect(resolved.interactionRenderers.has("handoff")).toBe(false)
       expect(resolved.interactionRenderers.has("ask-user")).toBe(false)
-      rmSync(emptyUser, { recursive: true, force: true })
-      rmSync(emptyProject, { recursive: true, force: true })
     }),
   )
   it.scopedLive("user extensions can add visible renderer, widget, and command surfaces", () =>
@@ -1597,10 +1537,9 @@ describe("loadTuiExtensions", () => {
   )
   it.scopedLive("project scope overrides builtin and user tool renderers", () =>
     Effect.gen(function* () {
-      const { fixtureDir, fixtureProjectDir } = yield* integrationFixture
+      const { fixtureDir, fixtureProjectDir, write } = yield* integrationFixture
       const userOverrideDir = join(fixtureDir, "user-bash")
-      mkdirSync(userOverrideDir, { recursive: true })
-      writeFileSync(
+      yield* write(
         join(userOverrideDir, "override.client.ts"),
         `import { Effect } from "effect"
 import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
@@ -1631,15 +1570,13 @@ export default defineClientExtension("@test/user-bash", {
           expanded: false,
         }),
       ).toBe("project-bash-override")
-      rmSync(userOverrideDir, { recursive: true, force: true })
     }),
   )
   it.scopedLive("disabled extensions are removed before setup runs", () =>
     Effect.gen(function* () {
-      const { fixtureDir } = yield* integrationFixture
+      const { fixtureDir, write } = yield* integrationFixture
       const disabledDir = join(fixtureDir, "disabled-user")
-      mkdirSync(disabledDir, { recursive: true })
-      writeFileSync(
+      yield* write(
         join(disabledDir, "bomb.client.ts"),
         `import { Effect } from "effect"
 export default {
@@ -1658,15 +1595,13 @@ export default {
       expect(resolved.interactionRenderers.has("handoff")).toBe(true)
       // The bomb never ran: a setup that ran would fail it by name.
       expect(resolved.failures).toEqual([])
-      rmSync(disabledDir, { recursive: true, force: true })
     }),
   )
   it.scopedLive("invalid extension files are skipped without breaking the builtin bundle", () =>
     Effect.gen(function* () {
-      const { fixtureDir } = yield* integrationFixture
+      const { fixtureDir, write } = yield* integrationFixture
       const badDir = join(fixtureDir, "bad-ext")
-      mkdirSync(badDir, { recursive: true })
-      writeFileSync(join(badDir, "bad.client.ts"), "export default { not: 'an extension' }")
+      yield* write(join(badDir, "bad.client.ts"), "export default { not: 'an extension' }")
       const resolved = yield* loadTuiExtensions({
         builtins: builtinClientModules,
         userDir: badDir,
@@ -1676,15 +1611,13 @@ export default {
       expect(resolved.failures).toEqual([
         { id: join(badDir, "bad.client.ts"), reason: "missing id" },
       ])
-      rmSync(badDir, { recursive: true, force: true })
     }),
   )
   it.scopedLive("a same-scope collision drops the later contribution and keeps every builtin", () =>
     Effect.gen(function* () {
-      const { fixtureDir } = yield* integrationFixture
+      const { fixtureDir, write } = yield* integrationFixture
       const collisionDir = join(fixtureDir, "collision-tool")
-      mkdirSync(collisionDir, { recursive: true })
-      writeFileSync(
+      yield* write(
         join(collisionDir, "a.client.ts"),
         `import { Effect } from "effect"
 import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
@@ -1693,7 +1626,7 @@ export default defineClientExtension("@test/a", {
   setup: Effect.succeed(rendererContribution(["my_tool"], () => "a")),
 })`,
       )
-      writeFileSync(
+      yield* write(
         join(collisionDir, "b.client.ts"),
         `import { Effect } from "effect"
 import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
@@ -1715,18 +1648,16 @@ export default defineClientExtension("@test/b", {
       expect(resolved.failures).toHaveLength(1)
       expect(resolved.failures[0]?.id).toBe("@test/b")
       expect(resolved.failures[0]?.reason).toContain('renderer "my_tool"')
-      rmSync(collisionDir, { recursive: true, force: true })
     }),
   )
   // The server fails every extension that shares an id within a scope; the
   // client applies the same rule, so neither half of a duplicate loads.
   it.scopedLive("two files with one id in a scope both fail and neither loads", () =>
     Effect.gen(function* () {
-      const { fixtureDir } = yield* integrationFixture
+      const { fixtureDir, write } = yield* integrationFixture
       const duplicateDir = join(fixtureDir, "duplicate-id")
-      mkdirSync(duplicateDir, { recursive: true })
       for (const name of ["one", "two"]) {
-        writeFileSync(
+        yield* write(
           join(duplicateDir, `${name}.client.ts`),
           `import { Effect } from "effect"
 import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
@@ -1747,67 +1678,8 @@ export default defineClientExtension("@test/dup", {
         { id: "@test/dup", reason: 'Duplicate extension id "@test/dup" in scope "user"' },
         { id: "@test/dup", reason: 'Duplicate extension id "@test/dup" in scope "user"' },
       ])
-      rmSync(duplicateDir, { recursive: true, force: true })
     }),
   )
-  it.scopedLive("builtin autocomplete sources stay visible", () =>
-    Effect.gen(function* () {
-      const { fixtureDir } = yield* integrationFixture
-      const emptyUser = join(fixtureDir, "empty-user-ac")
-      const emptyProject = join(fixtureDir, "empty-project-ac")
-      mkdirSync(emptyUser, { recursive: true })
-      mkdirSync(emptyProject, { recursive: true })
-      const resolved = yield* loadTuiExtensions({
-        builtins: builtinClientModules,
-        userDir: emptyUser,
-        projectDir: emptyProject,
-      })
-      const prefixes = new Set(resolved.autocompleteItems.map((entry) => entry.prefix))
-      expect(prefixes.has("$")).toBe(true)
-      expect(prefixes.has("@")).toBe(true)
-      rmSync(emptyUser, { recursive: true, force: true })
-      rmSync(emptyProject, { recursive: true, force: true })
-    }),
-  )
-  it.scopedLive("startup with an active session does not break transport-only widgets", () => {
-    const activeSessionRuntime = makeClientExtensionRuntime({
-      transport: {
-        client: createMockClient({ extension: { request: () => Effect.void } }),
-        currentSession: () => ({
-          sessionId: SessionId.make("test-session-id"),
-          branchId: BranchId.make("test-branch-id"),
-        }),
-        onExtensionStateChanged: () => () => {},
-        onSessionEvent: () => () => {},
-        modelCatalog: () => Option.none(),
-      },
-    })
-    return Effect.gen(function* () {
-      const { fixtureDir } = yield* integrationFixture
-      const emptyUser = join(fixtureDir, "active-session-user")
-      const emptyProject = join(fixtureDir, "active-session-project")
-      mkdirSync(emptyUser, { recursive: true })
-      mkdirSync(emptyProject, { recursive: true })
-      yield* Effect.gen(function* () {
-        const resolved = yield* loadTuiExtensions({
-          builtins: builtinClientModules,
-          userDir: emptyUser,
-          projectDir: emptyProject,
-          runtime: activeSessionRuntime,
-        })
-        // The builtin status labels: the goal (40) and the cache waste total (60).
-        expect(resolved.statusLabels.map((label) => label.priority)).toEqual([40, 60])
-      }).pipe(
-        Effect.ensuring(
-          Effect.gen(function* () {
-            rmSync(emptyUser, { recursive: true, force: true })
-            rmSync(emptyProject, { recursive: true, force: true })
-            yield* Effect.promise(() => activeSessionRuntime.dispose())
-          }),
-        ),
-      )
-    })
-  })
 })
 
 // ── tool renderer reach ─────────────────────────────────────────────────────
