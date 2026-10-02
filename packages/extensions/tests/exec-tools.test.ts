@@ -3,6 +3,7 @@ import {
   Cause,
   Clock,
   ConfigProvider,
+  Context,
   Deferred,
   Effect,
   Exit,
@@ -941,7 +942,6 @@ describe("BashTool execution", () => {
           ctx,
         ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
         expect(retried.exitCode).toBe(0)
-
         const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
         expect(message.sourceId).toBe("bash:tc-terminal-retry:complete")
         expect(message.content).toContain("Background command completed (exit code 0)")
@@ -1212,6 +1212,7 @@ describe("BashTool execution", () => {
           ctx,
         ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
         expect(retried.exitCode).toBe(0)
+        expect(startedOutputFile(retried.stdout)).toBe(startedOutputFile(started.stdout))
 
         // The replay path is synchronous: a Terminal claim would queue its
         // message before `start` returns.
@@ -1228,6 +1229,7 @@ describe("BashTool execution", () => {
           {
             toolCallId: ToolCallId.make("tc-restart"),
             command: "sleep 2; printf should-not-arrive",
+            outputFile: startedOutputFile(started.stdout),
           },
         ])
       }).pipe(withProcessTimeout),
@@ -1554,6 +1556,104 @@ describe("ExecToolsExtension (bash) via model turn", () => {
 })
 
 describe("background job output", () => {
+  for (const recover of [false, true]) {
+    let behavior = "a retry"
+    if (recover) behavior = "an interruption notice"
+    it.scopedLive.layer(BunServices.layer)(
+      `${behavior} never assigns an older colliding file to a job whose output has not opened`,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const directory = yield* makeTempDirectoryScoped("gent-output-ownership-")
+          const storagePath = `${directory}/gent.db`
+          const noticed = yield* Deferred.make<string>()
+          const providerLayer = LanguageModelLayers.testStream((options) =>
+            Deferred.succeed(noticed, turnRequestText(options.prompt).notices).pipe(
+              Effect.as(
+                Stream.fromIterable([
+                  textDeltaPart("Reported."),
+                  finishPart({ finishReason: "stop" }),
+                ]),
+              ),
+            ),
+          )
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            storagePath,
+            home: directory,
+            cwd: directory,
+          })
+          const ctx = testToolContext({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make("call/a"),
+            home: directory,
+            cwd: directory,
+          })
+          const folder = `${directory}/.gent/background-bash/${sessionId}/${branchId}`
+          const legacy = `${folder}/call_a.txt`
+          // An older call `call?a` emitted this file, before the new call was claimed.
+          yield* fs.makeDirectory(folder, { recursive: true })
+          yield* fs.writeFileString(legacy, "older-call-output")
+          const opening = yield* Deferred.make<string>()
+          const release = yield* Deferred.make<void>()
+          const heldFs: FileSystem.FileSystem = {
+            ...fs,
+            open: (file, options) => {
+              if (file.startsWith(`${folder}/calls/`))
+                return Deferred.succeed(opening, file).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(fs.open(file, options)),
+                )
+              return fs.open(file, options)
+            },
+          }
+          const storageLayer = SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
+            Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
+          )
+          const scope = yield* Scope.make()
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+          const profile = Context.add(
+            yield* Layer.buildWithScope(makeProcessLayer(storageLayer), scope),
+            FileSystem.FileSystem,
+            heldFs,
+          )
+          const start = () =>
+            runToolWithCtx(
+              BashTool,
+              { command: "printf new-call-output", run_in_background: true },
+              ctx,
+            ).pipe(Effect.provideContext(profile))
+          const first = yield* start()
+          const canonical = yield* Deferred.await(opening)
+          expect(startedOutputFile(first.stdout)).toBe(canonical)
+          expect(yield* fs.exists(canonical)).toBe(false)
+          if (recover) {
+            yield* Scope.close(scope, Exit.void)
+            // Both the process memo and a fresh terminal-row replay retain ownership.
+            expect(startedOutputFile((yield* start()).stdout)).toBe(canonical)
+            const replay = yield* runToolWithCtx(
+              BashTool,
+              { command: "printf should-not-run", run_in_background: true },
+              ctx,
+            ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+            expect(startedOutputFile(replay.stdout)).toBe(canonical)
+            yield* client.message.send({ sessionId, branchId, content: "Report the interruption" })
+            const notice = yield* Deferred.await(noticed)
+            expect(notice).toContain("# Interrupted background commands")
+            expect(notice).toContain("call call/a · no output was saved")
+            expect(notice).not.toContain(legacy)
+          } else {
+            const retry = yield* start()
+            expect(startedOutputFile(retry.stdout)).toBe(canonical)
+          }
+          expect(yield* fs.readFileString(legacy)).toBe("older-call-output")
+        }).pipe(Effect.timeout("15 seconds")),
+      20_000,
+    )
+  }
+
   for (const runInBackground of [false, true]) {
     let mode = "foreground"
     if (runInBackground) mode = "background"

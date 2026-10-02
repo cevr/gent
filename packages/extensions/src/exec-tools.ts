@@ -77,6 +77,7 @@ interface BackgroundBashJobKeyFields {
 interface BackgroundBashStartInput extends BackgroundBashJobKeyFields {
   readonly command: string
   readonly cwd: Option.Option<string>
+  readonly outputFile?: string
 }
 
 const BackgroundBashTerminalState = Schema.Struct({
@@ -84,12 +85,13 @@ const BackgroundBashTerminalState = Schema.Struct({
   command: Schema.String,
   exitCode: Schema.optional(Schema.Finite),
   message: Schema.optional(Schema.String),
+  outputFile: Schema.optional(Schema.String),
 })
 type BackgroundBashTerminalState = typeof BackgroundBashTerminalState.Type
 
 const BackgroundBashClaim = Schema.TaggedUnion({
   Started: {},
-  AlreadyRunning: {},
+  AlreadyRunning: { outputFile: Schema.optional(Schema.String) },
   Terminal: {
     state: BackgroundBashTerminalState,
   },
@@ -101,6 +103,7 @@ const BackgroundBashJobRow = Schema.Struct({
   status: BackgroundBashStatus,
   exit_code: Schema.NullOr(Schema.Finite),
   message: Schema.NullOr(Schema.String),
+  output_file: Schema.NullOr(Schema.String),
 })
 type BackgroundBashJobRow = typeof BackgroundBashJobRow.Type
 
@@ -127,10 +130,12 @@ interface BackgroundBashStorageService {
   /** Marks the running jobs an earlier server process started as interrupted. */
   readonly reconcileInterrupted: Effect.Effect<void, BackgroundBashStorageError>
   /** The branch's jobs that did not finish and no answered turn has read, oldest first. */
-  readonly interruptedJobs: (
-    branch: BackgroundBashBranch,
-  ) => Effect.Effect<
-    ReadonlyArray<{ readonly toolCallId: ToolCallId; readonly command: string }>,
+  readonly interruptedJobs: (branch: BackgroundBashBranch) => Effect.Effect<
+    ReadonlyArray<{
+      readonly toolCallId: ToolCallId
+      readonly command: string
+      readonly outputFile?: string
+    }>,
     BackgroundBashStorageError
   >
   /**
@@ -172,6 +177,7 @@ const terminalState = (row: BackgroundBashJobRow): BackgroundBashTerminalState =
     command: row.command,
     exitCode: Option.getOrUndefined(Option.fromNullishOr(row.exit_code)),
     message: Option.getOrUndefined(Option.fromNullishOr(row.message)),
+    outputFile: Option.getOrUndefined(Option.fromNullishOr(row.output_file)),
   }
 }
 
@@ -234,6 +240,7 @@ export class BackgroundBashStorage extends Context.Service<
               owner_generation TEXT,
               notice_read_at INTEGER,
               undelivered_at INTEGER,
+              output_file TEXT,
               PRIMARY KEY (session_id, branch_id, tool_call_id)
             )
           `,
@@ -248,6 +255,9 @@ export class BackgroundBashStorage extends Context.Service<
         yield* addBackgroundBashColumn(columns, "owner_generation", "TEXT")
         yield* addBackgroundBashColumn(columns, "notice_read_at", "INTEGER")
         yield* addBackgroundBashColumn(columns, "undelivered_at", "INTEGER")
+        // NULL belongs to the earlier sanitized layout. New claims retain
+        // their exact artifact pointer even if opening the file fails or stops.
+        yield* addBackgroundBashColumn(columns, "output_file", "TEXT")
         // The server process that owns the jobs this layer starts: every
         // profile in one process shares it, a restarted server has another.
         const generation = yield* Effect.sync(() => String(performance.timeOrigin))
@@ -256,7 +266,7 @@ export class BackgroundBashStorage extends Context.Service<
           key: BackgroundBashJobKeyFields,
         ) {
           const rows = yield* sql<BackgroundBashJobRow>`
-          SELECT command, status, exit_code, message
+          SELECT command, status, exit_code, message, output_file
           FROM background_bash_jobs
           WHERE session_id = ${key.sessionId}
             AND branch_id = ${key.branchId}
@@ -293,7 +303,11 @@ export class BackgroundBashStorage extends Context.Service<
                 const existing = yield* selectJob(input)
                 if (Option.isSome(existing)) {
                   if (existing.value.status === "running")
-                    return BackgroundBashClaim.cases.AlreadyRunning.make({})
+                    return BackgroundBashClaim.cases.AlreadyRunning.make({
+                      outputFile: Option.getOrUndefined(
+                        Option.fromNullishOr(existing.value.output_file),
+                      ),
+                    })
                   return BackgroundBashClaim.cases.Terminal.make({
                     state: terminalState(existing.value),
                   })
@@ -309,7 +323,8 @@ export class BackgroundBashStorage extends Context.Service<
                     cwd,
                     status,
                     started_at,
-                    owner_generation
+                    owner_generation,
+                    output_file
                   )
                   VALUES (
                     ${input.sessionId},
@@ -319,7 +334,8 @@ export class BackgroundBashStorage extends Context.Service<
                     ${Option.getOrNull(input.cwd)},
                     'running',
                     ${startedAt},
-                    ${generation}
+                    ${generation},
+                    ${Option.getOrNull(Option.fromUndefinedOr(input.outputFile))}
                   )
                 `
                 return BackgroundBashClaim.cases.Started.make({})
@@ -361,8 +377,12 @@ export class BackgroundBashStorage extends Context.Service<
 
           interruptedJobs: Effect.fn("BackgroundBashStorage.interruptedJobs")(
             function* (branch) {
-              const rows = yield* sql<{ readonly tool_call_id: string; readonly command: string }>`
-                SELECT tool_call_id, command
+              const rows = yield* sql<{
+                readonly tool_call_id: string
+                readonly command: string
+                readonly output_file: BackgroundBashJobRow["output_file"]
+              }>`
+                SELECT tool_call_id, command, output_file
                 FROM background_bash_jobs
                 WHERE session_id = ${branch.sessionId}
                   AND branch_id = ${branch.branchId}
@@ -373,6 +393,7 @@ export class BackgroundBashStorage extends Context.Service<
               return rows.map((row) => ({
                 toolCallId: ToolCallId.make(row.tool_call_id),
                 command: row.command,
+                outputFile: Option.getOrUndefined(Option.fromNullishOr(row.output_file)),
               }))
             },
             Effect.mapError(mapError("Failed to read interrupted background bash jobs")),
@@ -408,7 +429,7 @@ export class BackgroundBashStorage extends Context.Service<
           undeliveredJobs: Effect.fn("BackgroundBashStorage.undeliveredJobs")(
             function* (branch) {
               const rows = yield* sql<BackgroundBashJobRow & { readonly tool_call_id: string }>`
-                SELECT tool_call_id, command, status, exit_code, message
+                SELECT tool_call_id, command, status, exit_code, message, output_file
                 FROM background_bash_jobs
                 WHERE session_id = ${branch.sessionId}
                   AND branch_id = ${branch.branchId}
@@ -625,20 +646,6 @@ const jobOutputFile = Effect.fn("ExecTools.jobOutputFile")(function* (
     "calls",
     `${Hex.encode(digest)}.txt`,
   )
-})
-
-/** Old rows still name their existing sanitized file; new writes use the canonical filename. */
-const retainedJobOutputFile = Effect.fn("ExecTools.retainedJobOutputFile")(function* (
-  path: Path.Path,
-  dataDir: string,
-  key: BackgroundBashJobKeyFields,
-) {
-  const file = yield* jobOutputFile(path, dataDir, key)
-  const legacy = legacyJobOutputFile(path, dataDir, key)
-  const fs = yield* FileSystem.FileSystem
-  if (yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))) return file
-  if (yield* fs.exists(legacy).pipe(Effect.orElseSucceed(() => false))) return legacy
-  return file
 })
 
 /** `<data dir>/background-bash/<sessionId>`: every output file one session's calls kept. */
@@ -1124,10 +1131,10 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const stopped = yield* storage.interruptedJobs(branch)
   const saved = new Map(
     yield* Effect.forEach(stopped.slice(0, maximumNoticeJobs), (job) =>
-      retainedJobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }).pipe(
-        Effect.flatMap(savedOutput),
-        Effect.map((where): readonly [ToolCallId, string] => [job.toolCallId, where]),
-      ),
+      savedOutput(
+        job.outputFile ??
+          legacyJobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }),
+      ).pipe(Effect.map((where): readonly [ToolCallId, string] => [job.toolCallId, where])),
     ),
   )
   const interrupted = jobNotice(stopped, {
@@ -1141,8 +1148,11 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const finished = yield* storage.undeliveredJobs(branch)
   const outputs = new Map(
     yield* Effect.forEach(finished.slice(0, maximumNoticeJobs), (job) =>
-      retainedJobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }).pipe(
-        Effect.flatMap((file) => storedOutputFile(file, job.state)),
+      storedOutputFile(
+        job.state.outputFile ??
+          legacyJobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }),
+        job.state,
+      ).pipe(
         Effect.map((file): readonly [ToolCallId, string] => [
           job.toolCallId,
           storedJobOutput(job.state.message ?? "", file)(maximumNoticeOutputChars),
@@ -1214,9 +1224,9 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
     // row outlives them, so without this a repeated start of a finished job
     // would replay its notice; the fibers themselves need no map, because the
     // durable claim answers AlreadyRunning and scope close interrupts them.
-    const completed = yield* Ref.make<ReadonlySet<BackgroundBashJobKey>>(new Set())
-    const rememberCompleted = (key: BackgroundBashJobKey) =>
-      Ref.update(completed, (keys) => new Set(keys).add(key))
+    const completed = yield* Ref.make<ReadonlyMap<BackgroundBashJobKey, string>>(new Map())
+    const rememberCompleted = (key: BackgroundBashJobKey, file: string) =>
+      Ref.update(completed, (keys) => new Map(keys).set(key, file))
 
     const runBackgroundJob = Effect.fn("BackgroundBashSupervisor.runBackgroundJob")(function* (
       job: BackgroundBashJob,
@@ -1303,20 +1313,14 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         const file = yield* jobOutputFile(path, dataDir, keyFields).pipe(
           Effect.catchTag("PlatformError", (e) => new BackgroundBashError({ message: e.message })),
         )
-        const retainedFile = () =>
-          retainedJobOutputFile(path, dataDir, keyFields).pipe(
-            Effect.catchTag(
-              "PlatformError",
-              (e) => new BackgroundBashError({ message: e.message }),
-            ),
-          )
         const target: BackgroundBashTarget = {
           ...keyFields,
           Session: ctx.Session,
           outputFile: file,
         }
         const key = backgroundJobKey(target)
-        if ((yield* Ref.get(completed)).has(key)) return yield* retainedFile()
+        const completedFile = (yield* Ref.get(completed)).get(key)
+        if (Predicate.isNotUndefined(completedFile)) return completedFile
         // Commit the claim and install its worker owner without an interruption gap.
         // Permit acquisition and terminal replay remain interruptible; the child
         // fork is interruptible independently of this transfer mask.
@@ -1326,12 +1330,15 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               ...keyFields,
               command: job.command,
               cwd: job.cwd,
+              outputFile: file,
             })
-            if (claim._tag === "AlreadyRunning") return yield* restore(retainedFile())
+            if (claim._tag === "AlreadyRunning")
+              return claim.outputFile ?? legacyJobOutputFile(path, dataDir, keyFields)
             if (claim._tag === "Terminal") {
-              const outputFile = yield* restore(retainedFile())
+              const outputFile =
+                claim.state.outputFile ?? legacyJobOutputFile(path, dataDir, keyFields)
               yield* restore(deliverTerminal({ ...target, outputFile }, claim.state))
-              yield* rememberCompleted(key)
+              yield* rememberCompleted(key, outputFile)
               return outputFile
             }
 
@@ -1360,7 +1367,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
                 if (Cause.hasInterruptsOnly(cause)) return Effect.void
                 return queueFailure(job, target, `Internal error: ${Cause.pretty(cause)}`)
               }),
-              Effect.ensuring(rememberCompleted(key)),
+              Effect.ensuring(rememberCompleted(key, file)),
               Effect.updateContext(
                 (
                   _: Context.Context<
