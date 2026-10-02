@@ -54,7 +54,9 @@ import {
   type ExtensionStatusScope,
   makeTempDirectoryScoped,
   testAgent,
+  waitFor,
 } from "@gent/core/test-utils"
+import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { Gent, type GentRuntime } from "@gent/sdk"
 import {
   App,
@@ -100,8 +102,12 @@ import {
   clientContributions,
   defineClientExtension,
   type AnyExtensionClientModule,
+  type ClientContributions,
+  interactionRendererContribution,
+  messageRendererContribution,
   type NoticeRow,
   noticeRowContribution,
+  rendererContribution,
   statusLabelContribution,
   widgetContribution,
 } from "../src/extensions/client-facets"
@@ -1267,50 +1273,226 @@ describe("App session view and fatal screen", () => {
       expect(frame).not.toContain("Fatal error")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // A client extension's render code fails that extension, by name, as a
-  // setup throw does: the session view stays and takes keys.
-  for (const surface of ["widget", "status label"] as const) {
-    it.scopedLive(`a ${surface} whose render throws fails its extension and the view stays`, () =>
-      Effect.gen(function* () {
-        const [broken, setBroken] = createSignal(false)
-        // Throws once `broken` turns true: its decode fails.
-        const explode = () => Schema.decodeUnknownSync(Schema.Literal("fine"))("render broke")
-        const Breaks = () => (
-          <Show when={broken()}>
-            <text>{explode()}</text>
-          </Show>
-        )
-        const contribution = () => {
-          if (surface === "widget")
-            return widgetContribution({ id: "breaks", slot: "below-input", component: Breaks })
-          return statusLabelContribution({
-            produce: () => {
-              if (broken()) explode()
-              return [{ text: "breaks-label", color: "info" as const }]
+  // A client extension's code that the view runs while it draws fails that
+  // extension, by name, as a setup throw does: the session view stays and
+  // takes keys, and the host's own renderer draws in a renderer's place.
+  // Each contribution bucket names its case below, or why it has none: a new
+  // bucket does not compile until it is placed.
+  const renderThrowCoverage = {
+    widgets: ["widget"],
+    statusLabels: ["status label"],
+    noticeRows: ["notice row"],
+    messageRenderers: ["message renderer", "message prompt"],
+    renderers: ["tool renderer"],
+    interactionRenderers: ["interaction renderer"],
+    // A command runs on a key, outside the draw.
+    commands: [],
+    // `runAutocompleteContributions` catches a throw from `items`.
+    autocomplete: [],
+  } as const satisfies Record<keyof ClientContributions, ReadonlyArray<string>>
+  const breaksSession = sessionNamed("session-breaks", "branch-breaks", "Breaks")
+  const breaksEnvelope = (id: number, event: EventEnvelope["event"]) =>
+    EventEnvelope.make({ id: EventId.make(id), createdAt: id, event })
+  const breaksAnswerId = MessageId.make("breaks-answer")
+  const breaksUserMessage = AgentEvent.cases.MessageReceived.make({
+    message: StoredMessage.cases.regular.make({
+      id: MessageId.make("breaks-message"),
+      sessionId: breaksSession.sessionId,
+      branchId: breaksSession.branchId,
+      role: "user",
+      parts: [Prompt.textPart({ text: "plain breaks text" })],
+      createdAt: dateFromMillis(1),
+      metadata: { customType: "breaks-row" },
+    }),
+  })
+  const breaksEvents = {
+    widget: [],
+    "status label": [],
+    "notice row": [],
+    "message renderer": [breaksUserMessage],
+    "message prompt": [breaksUserMessage],
+    "tool renderer": [
+      AgentEvent.cases.MessageReceived.make({
+        message: StoredMessage.cases.regular.make({
+          id: breaksAnswerId,
+          sessionId: breaksSession.sessionId,
+          branchId: breaksSession.branchId,
+          role: "assistant",
+          parts: [Prompt.textPart({ text: "calling the tool" })],
+          createdAt: dateFromMillis(1),
+        }),
+      }),
+      AgentEvent.cases.ToolCallStarted.make({
+        sessionId: breaksSession.sessionId,
+        branchId: breaksSession.branchId,
+        toolCallId: ToolCallId.make("breaks-call"),
+        toolName: "breaks_tool",
+        input: { command: "plain breaks input" },
+        assistantMessageId: breaksAnswerId,
+      }),
+    ],
+    "interaction renderer": [
+      AgentEvent.cases.InteractionPresented.make({
+        sessionId: breaksSession.sessionId,
+        branchId: breaksSession.branchId,
+        requestId: InteractionRequestId.make("breaks-request"),
+        text: "plain breaks question",
+        metadata: { type: "breaks-ask" },
+      }),
+    ],
+  } satisfies Record<
+    (typeof renderThrowCoverage)[keyof ClientContributions][number],
+    ReadonlyArray<EventEnvelope["event"]>
+  >
+  // The text the host draws in place of the extension's.
+  const breaksFallback = (surface: keyof typeof breaksEvents) => {
+    switch (surface) {
+      case "message renderer":
+        return Option.some("plain breaks text")
+      case "tool renderer":
+        return Option.some("breaks_tool")
+      case "interaction renderer":
+        return Option.some("plain breaks question")
+      default:
+        return Option.none<string>()
+    }
+  }
+  for (const surface of Object.values(renderThrowCoverage).flat()) {
+    it.scopedLive(
+      `an extension's ${surface} that throws while the view draws fails its extension and the view stays`,
+      () =>
+        Effect.gen(function* () {
+          const [broken, setBroken] = createSignal(false)
+          // Throws once `broken` turns true: its decode fails.
+          const explode = () => Schema.decodeUnknownSync(Schema.Literal("fine"))("render broke")
+          const Breaks = () => (
+            <Show when={broken()} fallback={<text>breaks-drawn</text>}>
+              <text>{explode()}</text>
+            </Show>
+          )
+          const contribution = () => {
+            switch (surface) {
+              case "widget":
+                return widgetContribution({ id: "breaks", slot: "below-input", component: Breaks })
+              case "status label":
+                return statusLabelContribution({
+                  produce: () => {
+                    if (broken()) explode()
+                    return [{ text: "breaks-drawn", color: "info" as const }]
+                  },
+                })
+              case "notice row":
+                return noticeRowContribution({
+                  id: "breaks",
+                  rows: () => {
+                    if (broken()) explode()
+                    return Option.some([
+                      {
+                        key: "breaks",
+                        createdAt: 1,
+                        glyph: "•",
+                        color: "info",
+                        text: "breaks-drawn",
+                      },
+                    ])
+                  },
+                })
+              case "message renderer":
+                return messageRendererContribution("breaks-row", Breaks)
+              case "message prompt":
+                return messageRendererContribution("breaks-row", () => <text>breaks-drawn</text>, {
+                  prompt: (content) => {
+                    if (broken()) explode()
+                    return content
+                  },
+                })
+              case "tool renderer":
+                return rendererContribution(["breaks_tool"], Breaks)
+              case "interaction renderer":
+                return interactionRendererContribution(Breaks, "breaks-ask")
+            }
+          }
+          const extension = defineClientExtension("@test/breaks", {
+            setup: Effect.succeed(clientContributions(contribution())),
+          })
+          const responded: Array<boolean> = []
+          const { setup } = yield* mountApp({
+            builtins: [...builtinClientModules, extension],
+            width: 120,
+            initialSession: breaksSession,
+            client: {
+              session: {
+                events: () =>
+                  Stream.concat(
+                    Stream.make(
+                      breaksEnvelope(
+                        0,
+                        AgentEvent.cases.StreamSynchronized.make({
+                          sessionId: breaksSession.sessionId,
+                          branchId: breaksSession.branchId,
+                          lastEventId: EventId.make(0),
+                        }),
+                      ),
+                      ...breaksEvents[surface].map((event, index) =>
+                        breaksEnvelope(index + 1, event),
+                      ),
+                    ),
+                    Stream.never,
+                  ),
+              },
+              interaction: {
+                respondInteraction: (input: { readonly approved: boolean }) =>
+                  Effect.sync(() => {
+                    responded.push(input.approved)
+                  }),
+              },
             },
           })
-        }
-        const extension = defineClientExtension("@test/breaks", {
-          setup: Effect.succeed(clientContributions(contribution())),
-        })
-        const { setup } = yield* mountApp({
-          builtins: [...builtinClientModules, extension],
-          width: 120,
-          initialSession: sessionNamed("session-breaks", "branch-breaks", "Breaks"),
-        })
-        yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
-        setBroken(true)
-        const frame = yield* waitForFrame(
-          setup,
-          (current) =>
-            current.includes("@test/breaks: render failed") && current.includes("ready ·"),
-          "the failure named",
-        )
-        expect(frame).not.toContain("Fatal error")
-        expect(frame).toContain("ready ·")
-        yield* Effect.promise(() => setup.mockInput.typeText("still here"))
-        yield* waitForFrame(setup, (current) => current.includes("┃ still here"), "the draft")
-      }).pipe(Effect.timeout("10 seconds")),
+          if (surface === "tool renderer") {
+            // ctrl+o opens the collapsed call to its full rows.
+            yield* waitForFrame(setup, (frame) => frame.includes("1 tool call"), "the call")
+            setup.mockInput.pressKey("o", { ctrl: true })
+            setup.mockInput.pressKey("o", { ctrl: true })
+          }
+          yield* waitForFrame(
+            setup,
+            (frame) => frame.includes("breaks-drawn"),
+            "the extension draws",
+          )
+          setBroken(true)
+          // A session whose last message is the reader's runs a turn: no `ready`.
+          const idle = !surface.startsWith("message") && surface !== "interaction renderer"
+          const frame = yield* waitForFrame(
+            setup,
+            (current) =>
+              current.includes("@test/breaks: render failed") &&
+              (!idle || current.includes("ready ·")),
+            "the failure named",
+          )
+          expect(frame).not.toContain("Fatal error")
+          const fallback = breaksFallback(surface)
+          if (Option.isSome(fallback)) {
+            yield* waitForFrame(
+              setup,
+              (current) => current.includes(fallback.value) && !current.includes("breaks-drawn"),
+              "the host's renderer in its place",
+            )
+          }
+          if (surface === "interaction renderer") {
+            // The host's prompt answers the ask.
+            setup.mockInput.pressEnter()
+            yield* waitFor(
+              Effect.succeed(responded),
+              (answers) => answers.length === 1,
+              5_000,
+              "the prompt answered",
+            )
+            expect(responded).toEqual([true])
+            return
+          }
+          yield* Effect.promise(() => setup.mockInput.typeText("still here"))
+          yield* waitForFrame(setup, (current) => current.includes("┃ still here"), "the draft")
+        }).pipe(Effect.timeout("10 seconds")),
     )
   }
   // A host render throw replaces the whole view: a server reply the client

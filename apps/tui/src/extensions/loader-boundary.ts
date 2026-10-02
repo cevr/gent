@@ -190,14 +190,29 @@ export interface ResolvedNoticeRows {
   readonly rows: (session: ActiveExtensionSession) => Option.Option<ReadonlyArray<NoticeRow>>
 }
 
+/** A tool renderer, with the extension that contributed it, named when its render fails. */
+interface ResolvedToolRenderer {
+  readonly extensionId: string
+  readonly component: ToolRenderer
+}
+
+/** A message row renderer, with the extension that contributed it, named when its render fails. */
+type ResolvedMessageRenderer = MessageRendererEntry & { readonly extensionId: string }
+
+/** An interaction renderer, with the extension that contributed it, named when its render fails. */
+interface ResolvedInteractionRenderer {
+  readonly extensionId: string
+  readonly component: InteractionRendererComponent
+}
+
 export interface ResolvedTuiExtensions {
-  readonly renderers: Map<string, ToolRenderer>
+  readonly renderers: Map<string, ResolvedToolRenderer>
   /** Keyed by `metadata.customType`, matched exactly. */
-  readonly messageRenderers: Map<string, MessageRendererEntry>
+  readonly messageRenderers: Map<string, ResolvedMessageRenderer>
   readonly widgets: ReadonlyArray<ResolvedWidget>
   /** Each extension's commands, in scope order; `resolveCommands` decides the owners. */
   readonly commandSources: ReadonlyArray<CommandSource>
-  readonly interactionRenderers: Map<string, InteractionRendererComponent>
+  readonly interactionRenderers: Map<string, ResolvedInteractionRenderer>
   readonly statusLabels: ReadonlyArray<ResolvedStatusLabel>
   readonly noticeRows: ReadonlyArray<ResolvedNoticeRows>
   readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
@@ -532,21 +547,25 @@ export const resolveTuiExtensions = (
     bucket: (contributions: ClientContributions) => ReadonlyArray<A> | undefined,
   ) => sorted.flatMap((ext) => itemsOrEmpty(bucket(ext.contributions)))
 
-  const renderers = resolveKeyed(sorted, failures, "renderer", (contributions) =>
+  const renderers = resolveKeyed(sorted, failures, "renderer", (contributions, extensionId) =>
     itemsOrEmpty(contributions.renderers).flatMap((contribution) =>
       contribution.toolNames.map((name) => ({
         key: name.toLowerCase(),
-        value: contribution.component,
+        value: { extensionId, component: contribution.component },
         name,
       })),
     ),
   )
-  const messageRenderers = resolveKeyed(sorted, failures, "message renderer", (contributions) =>
-    itemsOrEmpty(contributions.messageRenderers).map((contribution) => ({
-      key: contribution.customType,
-      value: contribution,
-      name: contribution.customType,
-    })),
+  const messageRenderers = resolveKeyed(
+    sorted,
+    failures,
+    "message renderer",
+    (contributions, extensionId) =>
+      itemsOrEmpty(contributions.messageRenderers).map((contribution) => ({
+        key: contribution.customType,
+        value: { ...contribution, extensionId },
+        name: contribution.customType,
+      })),
   )
   const widgets = resolveKeyed(sorted, failures, "widget", (contributions, extensionId) =>
     itemsOrEmpty(contributions.widgets).map((contribution) => ({
@@ -566,10 +585,10 @@ export const resolveTuiExtensions = (
     sorted,
     failures,
     "interaction renderer",
-    (contributions) =>
+    (contributions, extensionId) =>
       itemsOrEmpty(contributions.interactionRenderers).map((contribution) => ({
         key: contribution.metadataType,
-        value: contribution.component,
+        value: { extensionId, component: contribution.component },
         name: contribution.metadataType,
       })),
   )

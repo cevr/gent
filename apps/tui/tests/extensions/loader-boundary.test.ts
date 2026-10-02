@@ -143,7 +143,7 @@ describe("resolveTuiExtensions", () => {
     const bashRenderer = Option.fromNullishOr(resolved.renderers.get("bash"))
     expect(Option.isSome(bashRenderer)).toBe(true)
     if (Option.isNone(bashRenderer)) return
-    expect(bashRenderer.value(toolProps)).toBe("project")
+    expect(bashRenderer.value.component(toolProps)).toBe("project")
   })
 
   // Same-scope order is code-unit order, as on the server, so both ends pick
@@ -156,7 +156,7 @@ describe("resolveTuiExtensions", () => {
     const bashRenderer = Option.fromNullishOr(resolved.renderers.get("bash"))
     expect(Option.isSome(bashRenderer)).toBe(true)
     if (Option.isNone(bashRenderer)) return
-    expect(bashRenderer.value(toolProps)).toBe("upper")
+    expect(bashRenderer.value.component(toolProps)).toBe("upper")
     expect(resolved.failures.map((failure) => failure.id)).toEqual(["@test/a"])
   })
 
@@ -216,8 +216,8 @@ describe("resolveTuiExtensions", () => {
     expect(Option.isSome(defaultRenderer)).toBe(true)
     expect(Option.isSome(askRenderer)).toBe(true)
     if (Option.isNone(defaultRenderer) || Option.isNone(askRenderer)) return
-    expect(defaultRenderer.value(interactionProps)).toBe("prompt")
-    expect(askRenderer.value(interactionProps)).toBe("project-ask")
+    expect(defaultRenderer.value.component(interactionProps)).toBe("prompt")
+    expect(askRenderer.value.component(interactionProps)).toBe("project-ask")
   })
 
   test("message renderers key by exact custom type; a higher scope replaces, a same-scope claim is dropped", () => {
@@ -1558,7 +1558,7 @@ export default defineClientExtension("@test/user-bash", {
       const bashRenderer = Option.fromNullishOr(resolved.renderers.get("bash"))
       if (Option.isNone(bashRenderer)) return yield* Effect.die("expected bash renderer")
       expect(
-        bashRenderer.value({
+        bashRenderer.value.component({
           toolCall: {
             id: "test",
             toolName: "bash",
@@ -1644,7 +1644,7 @@ export default defineClientExtension("@test/b", {
       expect(resolved.renderers.has("bash")).toBe(true)
       const myTool = Option.fromNullishOr(resolved.renderers.get("my_tool"))
       if (Option.isNone(myTool)) return yield* Effect.die("expected my_tool renderer")
-      expect(myTool.value(toolProps)).toBe("a")
+      expect(myTool.value.component(toolProps)).toBe("a")
       expect(resolved.failures).toHaveLength(1)
       expect(resolved.failures[0]?.id).toBe("@test/b")
       expect(resolved.failures[0]?.reason).toContain('renderer "my_tool"')

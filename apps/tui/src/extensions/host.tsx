@@ -8,9 +8,11 @@ import {
   ManagedRuntime,
   Option,
   type Path,
+  Predicate,
   Scope,
 } from "effect"
 import {
+  type ActiveExtensionSession,
   type AutocompleteContribution,
   type ClientActivitySnapshot,
   type AnyExtensionClientModule,
@@ -24,6 +26,7 @@ import {
 } from "./client-facets.js"
 import {
   type Accessor,
+  createComponent,
   createContext,
   createEffect,
   createMemo,
@@ -38,7 +41,7 @@ import {
 import { formatError, isConnectionLoss, useRequiredContext } from "../utils"
 // A static import: Bun's bundler reaches the builtins only through it in the compiled binary.
 import { builtinClientModules } from "./builtins"
-import { ToolRenderersProvider } from "../tool-renderers"
+import { type ToolRenderer, ToolRenderersProvider } from "../tool-renderers"
 import type { Command } from "../commands"
 import {
   type ClientExtensionFailure,
@@ -105,7 +108,7 @@ interface ExtensionUIContextValue {
    */
   readonly setPaneOwner: (owner: Option.Option<PaneOwner>) => void
   /** Message-row renderers by `metadata.customType`. */
-  readonly messageRenderers: Accessor<Map<string, MessageRendererEntry>>
+  readonly messageRenderers: Accessor<ReadonlyMap<string, MessageRendererEntry>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
   /**
    * Every command the reader can run: the session's own, the client
@@ -114,7 +117,7 @@ interface ExtensionUIContextValue {
   readonly commands: Accessor<ReadonlyArray<Command>>
   /** The session view supplies its own commands; they resolve at builtin scope. */
   readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
-  readonly interactionRenderers: Accessor<Map<string, InteractionRendererComponent>>
+  readonly interactionRenderers: Accessor<ReadonlyMap<string, InteractionRendererComponent>>
   /**
    * Every status label's items, by priority. A `produce` that throws fails
    * its extension (`recordRenderFailure`) and draws nothing.
@@ -122,7 +125,8 @@ interface ExtensionUIContextValue {
   readonly statusLabelItems: Accessor<ReadonlyArray<StatusLabelItem>>
   /**
    * An extension's render code threw: it joins `failures` by name, as a setup
-   * throw does, and its widgets and status labels draw no more. The first
+   * throw does, and its widgets, status labels and renderers draw no more
+   * (the host's own renderer draws in a renderer's place). The first
    * throw is the one reported.
    */
   readonly recordRenderFailure: (extensionId: string, reason: string) => void
@@ -186,18 +190,98 @@ export function ExtensionUIProvider(props: {
       { id: extensionId, reason: `render failed: ${reason}` },
     ])
   }
+  /**
+   * `run`, an extension's code the view calls while it draws: a throw fails
+   * the extension (`recordRenderFailure`) and gives `fallback`.
+   */
+  const guarded = <A,>(extensionId: string, run: () => A, fallback: () => A): A =>
+    Exit.match(Effect.runSyncExit(Effect.try(run)), {
+      onSuccess: (value) => value,
+      onFailure: (cause) => {
+        recordRenderFailure(extensionId, String(Cause.squash(cause)))
+        return fallback()
+      },
+    })
+  // The host hands out each renderer inside the extension boundary, made
+  // once per load so a renderer keeps its identity. Once one throws, its
+  // extension's renderers leave the maps, and each caller draws its own
+  // renderer in their place.
+  const boundedRenderers = createMemo(() => {
+    const boundEach = <P extends object>(
+      entries: ReadonlyMap<
+        string,
+        { readonly extensionId: string; readonly component: (props: P) => JSX.Element }
+      >,
+    ) =>
+      new Map(
+        [...entries].map(([key, entry]) => [
+          key,
+          {
+            extensionId: entry.extensionId,
+            component: bounded(entry.extensionId, entry.component),
+          },
+        ]),
+      )
+    const messages = new Map(
+      [...resolved().messageRenderers].map(([type, entry]) => {
+        const component = bounded(entry.extensionId, entry.component)
+        const prompt = entry.prompt
+        if (Predicate.isUndefined(prompt)) return [type, { ...entry, component }]
+        const guardedPrompt = (content: string) =>
+          guarded(
+            entry.extensionId,
+            () => prompt(content),
+            () => content,
+          )
+        return [type, { ...entry, component, prompt: guardedPrompt }]
+      }),
+    )
+    return {
+      messages,
+      interactions: boundEach(resolved().interactionRenderers),
+      tools: boundEach(resolved().renderers),
+    }
+  })
+  /** The renderers of every extension whose render has not thrown, by key. */
+  const drawable = <V extends { readonly extensionId: string }>(
+    entries: ReadonlyMap<string, V>,
+  ): ReadonlyMap<string, V> =>
+    new Map([...entries].filter(([, entry]) => !renderFailed(entry.extensionId)))
+  const messageRenderers = createMemo((): ReadonlyMap<string, MessageRendererEntry> =>
+    drawable(boundedRenderers().messages),
+  )
+  const interactionRenderers = createMemo(
+    (): ReadonlyMap<string, InteractionRendererComponent> =>
+      new Map(
+        [...drawable(boundedRenderers().interactions)].map(([type, entry]) => [
+          type,
+          entry.component,
+        ]),
+      ),
+  )
+  const toolRenderers = createMemo(
+    (): ReadonlyMap<string, ToolRenderer> =>
+      new Map(
+        [...drawable(boundedRenderers().tools)].map(([name, entry]) => [name, entry.component]),
+      ),
+  )
   const statusLabelItems = () =>
     resolved()
       .statusLabels.filter((label) => !renderFailed(label.extensionId))
-      .flatMap((label) =>
-        Exit.match(Effect.runSyncExit(Effect.try(label.produce)), {
-          onSuccess: (items) => items,
-          onFailure: (cause) => {
-            recordRenderFailure(label.extensionId, String(Cause.squash(cause)))
-            return []
-          },
-        }),
-      )
+      .flatMap((label) => guarded(label.extensionId, label.produce, () => []))
+  const noticeRows = createMemo((): ReadonlyArray<ResolvedNoticeRows> =>
+    resolved()
+      .noticeRows.filter((source) => !renderFailed(source.extensionId))
+      .map((source) => ({
+        ...source,
+        rows: (session: ActiveExtensionSession) =>
+          guarded(
+            source.extensionId,
+            () => source.rows(session),
+            () => Option.some([]),
+          ),
+      })),
+  )
   const [sessionCommands, setSessionCommands] = createSignal<ReadonlyArray<Command>>([])
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<CommandSource>>([])
   // The session and connection whose server slash commands have answered,
@@ -459,15 +543,15 @@ export function ExtensionUIProvider(props: {
         loaded,
         commandsSettled,
         refreshCommands,
-        messageRenderers: () => resolved().messageRenderers,
+        messageRenderers,
         widgets: () => resolved().widgets.filter((widget) => !renderFailed(widget.extensionId)),
         commands: () => resolvedCommands().commands,
         setSessionCommands,
-        interactionRenderers: () => resolved().interactionRenderers,
+        interactionRenderers,
         statusLabelItems,
         recordRenderFailure,
         renderFailed,
-        noticeRows: () => resolved().noticeRows,
+        noticeRows,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
         failures: () => [
           ...resolved().failures,
@@ -480,9 +564,7 @@ export function ExtensionUIProvider(props: {
         clientRuntime,
       }}
     >
-      <ToolRenderersProvider value={() => resolved().renderers}>
-        {props.children}
-      </ToolRenderersProvider>
+      <ToolRenderersProvider value={toolRenderers}>{props.children}</ToolRenderersProvider>
     </ExtensionUIContext.Provider>
   )
 }
@@ -530,5 +612,17 @@ export function ExtensionRenderBoundary(props: {
     >
       {props.children}
     </ErrorBoundary>
+  )
+}
+
+/** An extension's renderer inside the extension boundary of `extensionId`. */
+function bounded<P extends object>(
+  extensionId: string,
+  Component: (props: P) => JSX.Element,
+): (props: P) => JSX.Element {
+  return (props) => (
+    <ExtensionRenderBoundary extensionId={extensionId}>
+      {createComponent(Component, props)}
+    </ExtensionRenderBoundary>
   )
 }

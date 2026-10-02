@@ -1663,7 +1663,10 @@ export function Composer(props: ComposerProps) {
     return Option.some(cs.interaction)
   }
 
-  /** The renderer for `metadata.type`; the host's `PromptRenderer` draws the rest. */
+  /**
+   * The renderer for `metadata.type`; the host's `PromptRenderer` draws the rest,
+   * and takes the place of an extension's renderer that threw.
+   */
   const interactionRenderer = (interaction: InteractionPresented): InteractionRendererComponent =>
     decodeMetadata(interaction.metadata).pipe(
       Option.flatMap((metadata) => decodeString(metadata["type"])),
@@ -1675,13 +1678,17 @@ export function Composer(props: ComposerProps) {
     <ComposerContext.Provider value={contextValue}>
       <Show when={Option.getOrUndefined(activeInteraction())} keyed>
         {(interaction) => {
-          const Renderer = interactionRenderer(interaction)
-          return Renderer({
+          const props = {
             event: interaction,
             resolve: (result: ApprovalResult) => {
               controller.resolveInteraction(result)
             },
-          })
+          }
+          return (
+            <Show when={interactionRenderer(interaction)} keyed>
+              {(Renderer) => Renderer(props)}
+            </Show>
+          )
         }}
       </Show>
 
