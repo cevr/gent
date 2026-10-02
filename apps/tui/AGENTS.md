@@ -246,7 +246,11 @@ call's frame; preview adds one row per run of one tool and one outcome, in
 past-tense words (`activityRows`, `formatActivityRow`): `├ Read a.ts, b.ts +1`
 (the subjects that fit, then a count), `├ Edited x.ts +12 / -3` (the diff
 counts in the success and error colours), `└ Ran bun test · failed`, and the
-running op last as `Running …`; one line a row, never a second. Full opens a
+running op last as `Running …`; one line a row, never a second. Under the
+rows preview draws the head of the last call's output, but only once the run
+has ended: while a turn can still add a step, the last call changes each step,
+and a body that came and went would shrink the live tail and leave blank rows
+in native scrollback. Full opens a
 row per call with its renderer body and its line counts. Inside a cell's body
 a run of one tool's ops folds into one frame (`read 30 files`), its body a
 tight list and a click opening each op's frame; the transcript view (full

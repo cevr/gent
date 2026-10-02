@@ -5326,6 +5326,8 @@ describe("tool runs across steps", () => {
       readonly after?: ReadonlyArray<AssistantSegment>
       readonly tool?: string
       readonly stdout?: string
+      /** What the cell's last expression showed: the preview draws it under the rows. */
+      readonly display?: string
     } = {},
   ): ListMessage => {
     const tool = options.tool ?? "bash"
@@ -5335,7 +5337,7 @@ describe("tool runs across steps", () => {
       status: "completed",
       input: { code: "await tools.bash({ command: 'x' })" },
       summary: absent,
-      output: encodeJson({ display: "", bindings: [], truncated: false }),
+      output: encodeJson({ display: options.display ?? "", bindings: [], truncated: false }),
       operations: commands.map((command, index) => ({
         id: `${id}-op-${index}`,
         toolName: tool,
@@ -5391,6 +5393,51 @@ describe("tool runs across steps", () => {
       const preview = yield* draw(items, "preview")
       expect(preview).toContain("└ Ran git status, bun test, bun run lint, git diff")
     }),
+  )
+
+  // The preview's output head belongs to the run's last call. While a step may
+  // still join, that call changes with each step: a head drawn for one step
+  // and dropped at the next would shrink the live tail, and the rows it
+  // pushed into scrollback come back blank. So the head waits for the run's end.
+  it.scopedLive("the preview draws the last call's output only once the run has ended", () =>
+    Effect.gen(function* () {
+      const open: SessionItem[] = [
+        clientPrompt("head-prompt", "look around"),
+        step("o1", ["ls"], { display: "FIRST-STEP-OUTPUT" }),
+        step("o2", ["git status"], { display: "SECOND-STEP-OUTPUT" }),
+      ]
+      const [streaming, setStreaming] = createSignal(true)
+      const committed: string[] = []
+      const setup = yield* renderScoped(
+        () => (
+          <Transcript
+            items={open}
+            streaming={streaming()}
+            disclosure="preview"
+            onRenderer={(renderer) =>
+              renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                committed.push(committedTextOf(event))
+              })
+            }
+          />
+        ),
+        { width: 100, height: 40 },
+      )
+      // The screen and the rows already handed to native history.
+      const shown = () =>
+        Effect.promise(() => setup.renderOnce()).pipe(
+          Effect.map(() => [...committed, renderFrame(setup)].join("\n")),
+        )
+      // A turn runs and no answer ended the run: a step may still join it.
+      const running = yield* shown()
+      expect(running).toContain("● 2 tools · 2 commands")
+      expect(running).not.toContain("STEP-OUTPUT")
+      // A turn that ends with no answer (an interrupt) ends the run.
+      setStreaming(false)
+      const ended = yield* shown()
+      expect(ended).toContain("SECOND-STEP-OUTPUT")
+      expect(ended).not.toContain("FIRST-STEP-OUTPUT")
+    }).pipe(Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("answer text between steps ends a run, and a new one starts after it", () =>

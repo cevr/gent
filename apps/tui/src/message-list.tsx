@@ -590,9 +590,14 @@ interface RunState {
  * over reasoning; without it a run is one message's consecutive calls, as the
  * transcript view (full detail) draws them. A queued follow-up and a pending
  * retry sit at the transcript's end only until they take their place, so
- * they end nothing.
+ * they end nothing. Only a running turn adds steps, so with none the last
+ * run has ended too.
  */
-const projectToolRuns = (items: ReadonlyArray<SessionItem>, acrossSteps: boolean): ToolRuns => {
+const projectToolRuns = (
+  items: ReadonlyArray<SessionItem>,
+  acrossSteps: boolean,
+  turnRunning: boolean,
+): ToolRuns => {
   const drafts: RunState[] = []
   const absorbed = new Set<string>()
   let current = Option.none<RunState>()
@@ -633,6 +638,7 @@ const projectToolRuns = (items: ReadonlyArray<SessionItem>, acrossSteps: boolean
     }
     if (!acrossSteps) close()
   }
+  if (!turnRunning) close()
   return toolRunsOf(drafts, absorbed)
 }
 
@@ -966,6 +972,7 @@ function AssistantMessage(props: {
                       onSome: (value) => value.reasoning,
                     })}
                     renderReasoning={reasoningMarkdownBlock}
+                    runOpen={Option.exists(run, (value) => value.open)}
                     disclosure={props.disclosure}
                     fullDetail={props.fullDetail}
                   />
@@ -995,6 +1002,8 @@ function ToolCallGroup(props: {
   /** Reasoning from between the run's steps, by the id of the call it came before: the full level draws it. */
   reasoning: ReadonlyMap<string, ReadonlyArray<string>>
   renderReasoning: (content: string) => JSX.Element
+  /** A later step may still join the group's run, so its last call is not yet its last. */
+  runOpen: boolean
   disclosure: DisclosureLevel
   fullDetail: boolean
 }) {
@@ -1036,9 +1045,13 @@ function ToolCallGroup(props: {
     return props.calls.filter((call) => call.status === "error")
   }
   // Preview shows the head of the last finished call beneath the rows: a cell
-  // or bash row its output text, any other call its renderer body.
+  // or bash row its output text, any other call its renderer body. An open
+  // run's last call changes with each step, and a head drawn for one step and
+  // dropped at the next would shrink the live tail (its freed rows reach
+  // scrollback blank), so the head waits for the run's end.
   const previewed = createMemo(() => {
-    if (props.fullDetail || props.disclosure !== "preview") return Option.none<ToolCall>()
+    if (props.fullDetail || props.disclosure !== "preview" || props.runOpen)
+      return Option.none<ToolCall>()
     return Option.filter(
       Option.fromNullishOr(props.calls.at(-1)),
       (last) => last.status === "completed",
@@ -1243,9 +1256,10 @@ export function MessageList(props: MessageListProps) {
   // see every item, else the runs of the items given here.
   const shared = useContext(ToolRunsContext)
   const runs = createMemo((): ToolRuns => {
-    if (props.fullDetail === true) return projectToolRuns(props.items, false)
+    // On its own the list knows no running turn: it draws a settled transcript.
+    if (props.fullDetail === true) return projectToolRuns(props.items, false, false)
     return Option.match(shared, {
-      onNone: () => projectToolRuns(props.items, true),
+      onNone: () => projectToolRuns(props.items, true, false),
       onSome: (read) => read(),
     })
   })
@@ -1893,7 +1907,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const [displayBoundary, setDisplayBoundary] = createSignal(captureTranscriptDisplay([]))
   const displayedItems = createMemo(() => projectTranscriptDisplay(props.items, displayBoundary()))
   /** The tool runs across the displayed items: each item draws alone, so its run comes from here. */
-  const toolRuns = createMemo(() => projectToolRuns(displayedItems(), true))
+  const toolRuns = createMemo(() => projectToolRuns(displayedItems(), true, props.streaming))
   let viewport = Option.none<ScrollBoxRenderable>()
   let settlingNative = false
   let leftRegion = Option.none<RegionPlace>()
