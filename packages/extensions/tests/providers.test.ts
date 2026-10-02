@@ -198,6 +198,27 @@ const stampedCache = Effect.fn("test.stampedCache")(function* (models: ReadonlyA
   return yield* Schema.encodeEffect(StampedCacheJson)({ format, models })
 })
 
+/** An Anthropic driver on macOS in `home`, with no credentials and an empty env. */
+const anthropicDriverIn = Effect.fn("test.anthropicDriverIn")(function* (
+  home: string,
+  promptCacheTtl: "5m" | "1h",
+) {
+  const platform = yield* Effect.context<
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
+  >()
+  return buildAnthropicModelDriver(
+    yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
+    Option.none(),
+    Context.add(
+      platform,
+      AnthropicPlatform,
+      AnthropicPlatform.of({ platform: "darwin", home, env: {} }),
+    ),
+    { home, platform },
+    promptCacheTtl,
+  )
+})
+
 describe("models.dev catalog", () => {
   it.scopedLive("serves a fresh cache from disk without fetching", () =>
     Effect.gen(function* () {
@@ -251,25 +272,7 @@ describe("models.dev catalog", () => {
             claude("claude-sonnet-6", 1_000_000),
           ]),
         )
-        const platform = yield* Effect.context<
-          | FileSystem.FileSystem
-          | Path.Path
-          | ChildProcessSpawner.ChildProcessSpawner
-          | Crypto.Crypto
-        >()
-        const driver = buildAnthropicModelDriver(
-          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
-            EMPTY_CREDENTIAL_CELL,
-          ),
-          Option.none(),
-          Context.add(
-            platform,
-            AnthropicPlatform,
-            AnthropicPlatform.of({ platform: "darwin", home, env: {} }),
-          ),
-          { home, platform },
-          "1h",
-        )
+        const driver = yield* anthropicDriverIn(home, "1h")
         const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
         const windows = (yield* listModels()).map(
           (model) => `${model.id} ${String(model.contextLength)}`,
@@ -328,27 +331,9 @@ describe("models.dev catalog", () => {
             }),
           ]),
         )
-        const platform = yield* Effect.context<
-          | FileSystem.FileSystem
-          | Path.Path
-          | ChildProcessSpawner.ChildProcessSpawner
-          | Crypto.Crypto
-        >()
         const lifetimes = (promptCacheTtl: "5m" | "1h") =>
           Effect.gen(function* () {
-            const driver = buildAnthropicModelDriver(
-              yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
-                EMPTY_CREDENTIAL_CELL,
-              ),
-              Option.none(),
-              Context.add(
-                platform,
-                AnthropicPlatform,
-                AnthropicPlatform.of({ platform: "darwin", home, env: {} }),
-              ),
-              { home, platform },
-              promptCacheTtl,
-            )
+            const driver = yield* anthropicDriverIn(home, promptCacheTtl)
             const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
             // The USD cost of the writes a response's usage reports, each at its lifetime's rate.
             const lifetimeWriteCostUsd = (model: Model, fiveMinutes: number, oneHour: number) => {
