@@ -1735,7 +1735,6 @@ describe("max turn steps", () => {
           runSpec: { overrides: { maxSteps: 2 } },
         })
         yield* controls.assertDone
-        // A failed `assertOptions` fails the stream, not the test: read the outcome.
         const events = yield* Ref.get(eventsRef)
         expect(events.some((event) => event._tag === "ErrorOccurred")).toBe(false)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))

@@ -677,7 +677,6 @@ describe("SessionRuntime", () => {
             expect(latestUserText(options)).toBe("first")
           },
         },
-        textStep("should not run"),
       ])
       const layer = makeRuntimeLayer(providerLayer)
       yield* Effect.gen(function* () {
@@ -725,6 +724,7 @@ describe("SessionRuntime", () => {
             (message) => message.role === "user",
           ),
         ).toHaveLength(1)
+        yield* controls.assertDone
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
