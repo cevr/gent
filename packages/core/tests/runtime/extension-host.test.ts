@@ -2253,7 +2253,7 @@ describe("extension activation isolation", () => {
     }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.scopedLive("live Profile isolates setup and scheduler failures", () =>
+  it.scopedLive("live Profile isolates setup failures", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
@@ -4361,7 +4361,6 @@ describe("resolveExtensions — slash command discovery", () => {
  *   - Resource shape: defineResource produces a contribution with
  *     the typed scope literal flowing through the shape.
  *   - Resource layer assembly merges services and runs lifecycle effects.
- *   - Scheduled jobs are their own contribution shape, not Resource metadata.
  *
  * @module
  */
@@ -4685,8 +4684,9 @@ describe("runtime hooks", () => {
  *  - explicit prompt slots (later scope applies after earlier scope)
  *  - alphabetical tie-break on extension id within the same scope
  *
- * Providers and turn executors share the keyed-contribution code path
- * (`compileContributions` in registry.ts) — the tools test exercises that path.
+ * Agents and model drivers resolve through the keyed bucket compiler
+ * (`compileBucket` in `runtime/extension-host.ts`); tools and requests through
+ * the capability compiler beside it.
  */
 
 const toolReturning = (name: string, label: string): ToolCapability<{}, string, never> =>

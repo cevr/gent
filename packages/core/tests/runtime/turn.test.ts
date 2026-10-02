@@ -1198,7 +1198,7 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
-  it.live("interrupt during tool execution stops continuation", () =>
+  it.live("a cancel during the continuation step ends the turn interrupted", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
@@ -1247,7 +1247,7 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
-  it.live("GUARD: multi-hop persists distinct messages per step", () =>
+  it.live("each step of a multi-hop turn persists its own message", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
@@ -1261,23 +1261,18 @@ describe("continuation", () => {
         yield* runAgentLoop(agentLoop, msg)
         const a1 = yield* messageStorage.getMessage(assistantMessageIdForTurn(msg.id, 1))
         const t1 = yield* messageStorage.getMessage(toolResultMessageIdForTurn(msg.id, 1))
-        expect(a1).toBeDefined()
-        expect(t1).toBeDefined()
-        expect(a1!.role).toBe("assistant")
-        expect(t1!.role).toBe("tool")
+        expect(a1?.role).toBe("assistant")
+        expect(t1?.role).toBe("tool")
         const a2 = yield* messageStorage.getMessage(assistantMessageIdForTurn(msg.id, 2))
         const t2 = yield* messageStorage.getMessage(toolResultMessageIdForTurn(msg.id, 2))
-        expect(a2).toBeDefined()
-        expect(t2).toBeDefined()
-        expect(a2!.role).toBe("assistant")
-        expect(t2!.role).toBe("tool")
+        expect(a2?.role).toBe("assistant")
+        expect(t2?.role).toBe("tool")
         const a3 = yield* messageStorage.getMessage(assistantMessageIdForTurn(msg.id, 3))
         const t3 = yield* messageStorage.getMessage(toolResultMessageIdForTurn(msg.id, 3))
-        expect(a3).toBeDefined()
-        expect(a3!.role).toBe("assistant")
+        expect(a3?.role).toBe("assistant")
         expect(t3).toBeUndefined()
-        expect(new Set([a1!.id, a2!.id, a3!.id]).size).toBe(3)
-        expect(new Set([t1!.id, t2!.id]).size).toBe(2)
+        expect(new Set([a1?.id, a2?.id, a3?.id]).size).toBe(3)
+        expect(new Set([t1?.id, t2?.id]).size).toBe(2)
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -1487,7 +1482,7 @@ describe("empty final step", () => {
   it.live("stores an assistant message even when the last step is empty", () =>
     Effect.gen(function* () {
       // Third step answers the re-prompt the loop should issue after the
-      // empty one. Without the fix the loop never asks, and it goes unused.
+      // empty one. A loop that does not re-prompt never reads it.
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "hello" }),
         emptyStep(),
@@ -1832,9 +1827,8 @@ describe("max turn steps", () => {
    * The same failure at the loop's other give-up exit.
    *
    * `resolveTurnContext` publishes `ErrorOccurred` and returns undefined for an
-   * agent no extension defines (`turn-resolve.ts:134`). `runTurnStep` turned
-   * that into a `Stop` with every flag false, so the turn published a
-   * `TurnCompleted` indistinguishable from a reply.
+   * agent no extension defines (`turn.ts`). The turn must then mark its
+   * `TurnCompleted` unanswered, so it never reads as a reply.
    */
   it.live("a turn for an unknown agent is marked unanswered", () =>
     Effect.gen(function* () {
@@ -3532,7 +3526,7 @@ describe("turn record", () => {
           db.close()
         })
 
-        // Second process: the stale row says step 0 with nothing pending. If
+        // Second process: the stale row says step 1 with nothing pending. If
         // the resolver believes it, the turn re-issues the step whose tool call
         // already ran, and the probe fires a second time.
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])

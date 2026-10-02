@@ -857,8 +857,8 @@ describe("turn stream lifecycle", () => {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
-          SessionId.make("model-parity-session"),
-          BranchId.make("model-parity-branch"),
+          SessionId.make("stream-lifecycle-session"),
+          BranchId.make("stream-lifecycle-branch"),
           "hello",
         )
         yield* runAgentLoop(agentLoop, message)
@@ -875,7 +875,7 @@ describe("turn stream lifecycle", () => {
             scriptedProvider([
               [
                 reasoningDeltaPart("thinking"),
-                textDeltaPart("hello from parity"),
+                textDeltaPart("hello from the stream"),
                 finishPart({
                   finishReason: "stop",
                   usage: { inputTokens: 3, outputTokens: 5 },
@@ -886,7 +886,7 @@ describe("turn stream lifecycle", () => {
           ),
         ),
       )
-      expect(modelDraft.text).toBe("hello from parity")
+      expect(modelDraft.text).toBe("hello from the stream")
       expect(modelDraft.reasoning).toBe("thinking")
       expect(modelDraft.toolCalls).toEqual([])
       // Context projection is logged apart from the stream lifecycle.
@@ -1219,7 +1219,7 @@ describe("tool projection reconciliation", () => {
   )
 })
 
-// ── model context projection ────────────────────────────────────────────────
+// ── model resolution failure ──────────────────────────────────────────────────
 
 describe("model resolution failure", () => {
   it.live("a credential failure shows the user its own message, not the error tag", () => {
@@ -2075,7 +2075,7 @@ describe("admitted turn withdrawal", () => {
  * second seam firing afterwards could only correct what the first already did.
  *
  * The hook runs after `TurnCompleted` is appended and delivered
- * (`agent-loop.turn-execution.ts:732`), so these tests poll with `waitFor`
+ * (`emitTurnAfter` in `runtime/turn.ts`), so these tests poll with `waitFor`
  * rather than waiting on that event.
  */
 
@@ -2714,7 +2714,7 @@ describe("loop open hooks", () => {
 // ── recovery race ───────────────────────────────────────────────────────────
 
 /**
- * Regression: per-entity `handle` rebuild in `agent-loop.actor.ts` must
+ * Regression: per-entity `handle` rebuild in `runtime/agent-loop.ts` must
  * serialize against `concurrency: "unbounded"` mailbox dispatch.
  *
  * `ensureStarted` reads `lifecycleRef`, and `openLoop` yields on its first
@@ -2775,7 +2775,7 @@ const gatedQueueStorageLayer = <E>(
 
 describe("agent-loop recovery race", () => {
   it.live(
-    "recovery start failure closes without re-entering startup semaphore",
+    "a recovered loop whose first queue write fails closes, and the operation fails instead of hanging",
     () =>
       Effect.gen(function* () {
         const sessionId = SessionId.make("recovery-start-fail-session")
@@ -2861,7 +2861,7 @@ describe("agent-loop recovery race", () => {
   )
 
   it.live(
-    "second op blocks on startup semaphore until first op finishes reopen",
+    "an operation that arrives during a loop reopen waits until the reopen ends",
     () =>
       Effect.gen(function* () {
         const sessionId = SessionId.make("recovery-race-session")
@@ -4504,7 +4504,7 @@ describe("interaction", () => {
       eventStore: recordingEventStore(events),
       toolRunner: ToolRunner.Live,
     })
-  it.live("tool triggers InteractionPendingError and machine parks", () =>
+  it.live("a tool that asks parks the turn until the answer", () =>
     Effect.gen(function* () {
       const callCount = yield* Ref.make(0)
       const resolution = yield* Deferred.make<void>()
@@ -4891,7 +4891,7 @@ describe("interaction", () => {
       )
     }),
   )
-  it.live("respondInteraction is no-op when not in WaitingForInteraction", () =>
+  it.live("an answer to a loop that waits for none changes nothing", () =>
     Effect.gen(function* () {
       const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.succeed(
@@ -4917,7 +4917,7 @@ describe("interaction", () => {
       )
     }),
   )
-  it.live("GUARD: interaction resume executes tool without new LLM call", () =>
+  it.live("an answered interaction runs the tool again without a new model call", () =>
     Effect.gen(function* () {
       const callCount = yield* Ref.make(0)
       const resolution = yield* Deferred.make<void>()
@@ -5622,7 +5622,7 @@ describe("turn scheduling", () => {
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
-  it.live("same session/branch serializes loop creation", () =>
+  it.live("a second send to a busy branch is queued and runs after the first turn", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
@@ -6107,7 +6107,6 @@ describe("a failed turn", () => {
       )
     }),
   )
-  /** The last user message a model call answers. */
   it.live("rolls back turn duration when TurnCompleted append fails", () =>
     Effect.gen(function* () {
       const providerLayer = scriptedProvider([
@@ -6511,7 +6510,7 @@ describe("queued follow-ups", () => {
       )
     }),
   )
-  it.live("getQueue reads without draining", () =>
+  it.live("reading the queue leaves its items queued", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()

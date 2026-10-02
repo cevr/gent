@@ -847,7 +847,7 @@ describe("Sessions", () => {
       expect(cascadedIds).toEqual([])
     }).pipe(Effect.provide(testSqliteStorage(Layer.empty, {}))),
   )
-  // Observable post-state contract (sqlite-storage.ts:1204-1209):
+  // Observable post-state contract of `deleteSession` (storage.ts):
   // when `deleteSession(parent)` races with concurrent
   // `createSession(child of parent)`, the durable state must satisfy:
   //   1. parent is gone;

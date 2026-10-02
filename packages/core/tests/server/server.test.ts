@@ -1623,10 +1623,10 @@ describe("session.delete", () => {
 /**
  * What `client.session.events` delivers around a real turn.
  *
- * `domain/event-stream-delivery.test.ts` proves the store's replay, cursor and
- * branch filter with synthetic events; `extension-commands-rpc.test.ts` proves
- * the RPC stream marks the replay-to-live move. This file covers what neither
- * can: which events a real turn leaves in the replay buffer, that the stream
+ * `tests/domain/event.test.ts` proves the store's replay, cursor and branch
+ * filter with synthetic events; `tests/server/rpc.test.ts` proves the RPC
+ * stream marks the replay-to-live move. These tests cover what neither can:
+ * which events a real turn leaves in the replay buffer, that the stream
  * stays live past `TurnCompleted`, and that chunks published during the
  * replay-to-live handoff are not dropped.
  */
@@ -1866,10 +1866,8 @@ describe("session event stream", () => {
 /**
  * The queue as a client reads it, while a turn is still in flight.
  *
- * `session-idempotency.test.ts` covers `queue.drain` for steering entries and
- * `runtime/session-runtime.test.ts` covers follow-up draining at the service
- * level. This file covers the public pair neither does: two follow-ups queued
- * mid-turn, read back in order through `queue.get` and returned in the same
+ * `tests/runtime/session.test.ts` covers draining at the service level. These
+ * tests cover the public pair: two follow-ups queued mid-turn, read back in order through `queue.get` and returned in the same
  * order by `queue.drain`, and the follow-up queue reaching a client through
  * the `watchRuntime` stream rather than a poll.
  */
@@ -2068,8 +2066,7 @@ describe("session queue and runtime watch", () => {
 /**
  * The public read surface a client sees around one session.
  *
- * `message-send.test.ts` proves a turn persists; this proves the queries a
- * client reads it back through -- `session.list`, `session.get`,
+ * The queries a client reads a session back through -- `session.list`, `session.get`,
  * `session.getSnapshot`, `queue.get` and `message.list` -- agree with each
  * other and with the session that was just created, and that two sessions on
  * two working directories stay apart.

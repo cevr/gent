@@ -1232,7 +1232,8 @@ export const compileToolPolicy = (
   // 1. Agent allow/deny filtering
   let tools = filterToolsForAgent(allTools, agent)
 
-  // 2. Extension `include` fragments
+  // 2. Extension `include` fragments. An include may add a tool the agent's
+  // allow list leaves out; only the deny list holds against it (step 3).
   for (const projection of extensionProjections) {
     tools = applyToolProjection(tools, projection, allToolsByName)
   }

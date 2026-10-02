@@ -88,9 +88,9 @@ const errorFromResult = (result: Prompt.ToolResultPart): string =>
   Schema.decodeUnknownSync(ErrorResult)(result.result).error
 
 describe("tool execution", () => {
-  const test = it.live.layer(BunServices.layer)
+  const liveTest = it.live.layer(BunServices.layer)
 
-  test("runs model capability directly and returns json output", () =>
+  liveTest("runs model capability directly and returns json output", () =>
     Effect.gen(function* () {
       const EchoTool = tool({
         id: "echo",
@@ -142,9 +142,10 @@ describe("tool execution", () => {
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ echoed: "hello" })
-    }))
+    }),
+  )
 
-  test("executes the captured implementation after the registry replaces it", () =>
+  liveTest("executes the captured implementation after the registry replaces it", () =>
     Effect.gen(function* () {
       const makeReplacementTool = (value: string) =>
         tool({
@@ -251,9 +252,10 @@ describe("tool execution", () => {
           result: { error: "Unknown tool: replaceable" },
         },
       ])
-    }))
+    }),
+  )
 
-  test("provides host authority through ExtensionContext service", () =>
+  liveTest("provides host authority through ExtensionContext service", () =>
     Effect.gen(function* () {
       const Output = Schema.Struct({
         sessionId: Schema.String,
@@ -328,8 +330,9 @@ describe("tool execution", () => {
         hasInteraction: true,
         hasSessionSend: true,
       })
-    }))
-  test("returns error result when tool fails", () =>
+    }),
+  )
+  liveTest("returns error result when tool fails", () =>
     Effect.gen(function* () {
       const FailTool = tool({
         id: "fail",
@@ -382,8 +385,9 @@ describe("tool execution", () => {
       expect(result.isFailure).toBe(true)
       const error = errorFromResult(result)
       expect(error).toContain("Tool 'fail' failed")
-    }))
-  test("returns structured error on invalid input", () =>
+    }),
+  )
+  liveTest("returns structured error on invalid input", () =>
     Effect.gen(function* () {
       const StrictTool = tool({
         id: "strict",
@@ -437,8 +441,9 @@ describe("tool execution", () => {
       const error = errorFromResult(result)
       expect(error).toContain("Tool 'strict' input failed:")
       expect(error).toContain("path")
-    }))
-  test("uses the provided tool context without reconstructing it", () =>
+    }),
+  )
+  liveTest("uses the provided tool context without reconstructing it", () =>
     Effect.gen(function* () {
       const InspectTool = tool({
         id: "inspect",
@@ -509,8 +514,9 @@ describe("tool execution", () => {
         branchId: BranchId.make("branch-inspect"),
         agentName: AgentName.make("secondary"),
       })
-    }))
-  test("provides the selected capability context while executing the tool", () =>
+    }),
+  )
+  liveTest("provides the selected capability context while executing the tool", () =>
     Effect.gen(function* () {
       const ContextTool = tool({
         id: "context_tool",
@@ -573,8 +579,9 @@ describe("tool execution", () => {
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ value: "selected-profile" })
-    }))
-  test("read tools execute with ordinary profile Effect services", () =>
+    }),
+  )
+  liveTest("a readonly tool reads every service its capability context provides", () =>
     Effect.gen(function* () {
       const ReadContextTool = tool({
         id: "read_context_tool",
@@ -583,7 +590,7 @@ describe("tool execution", () => {
         params: Schema.Struct({}),
         output: Schema.Struct({
           readValue: Schema.String,
-          writeUnavailable: Schema.Boolean,
+          writeTokenProvided: Schema.Boolean,
         }),
         execute: () =>
           Effect.gen(function* () {
@@ -591,7 +598,7 @@ describe("tool execution", () => {
             const writeToken = yield* Effect.serviceOption(ToolWriteToken)
             return {
               readValue: yield* readToken.read,
-              writeUnavailable: writeToken._tag === "None",
+              writeTokenProvided: writeToken._tag === "Some",
             }
           }),
       })
@@ -618,7 +625,7 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
       const capabilityContext = Context.empty().pipe(
         Context.add(ToolReadToken, { read: Effect.succeed("read-ok") }),
-        Context.add(ToolWriteToken, { write: Effect.succeed("write-leak") }),
+        Context.add(ToolWriteToken, { write: Effect.succeed("write-from-capability-context") }),
       )
       let erasedCapabilityContext: Context.Context<never> = Context.empty()
       if (Context.isContext(capabilityContext)) erasedCapabilityContext = capabilityContext
@@ -645,8 +652,9 @@ describe("tool execution", () => {
           )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
-      expect(result.result).toEqual({ readValue: "read-ok", writeUnavailable: false })
-    }))
+      expect(result.result).toEqual({ readValue: "read-ok", writeTokenProvided: true })
+    }),
+  )
   it.scopedLive("readonly tools can queue follow-ups and present notes through real facades", () =>
     Effect.gen(function* () {
       const ReadContextTool = tool({
@@ -718,7 +726,7 @@ describe("tool execution", () => {
       Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
     ),
   )
-  test("re-raises interaction pending instead of converting it to a tool result", () =>
+  liveTest("re-raises interaction pending instead of converting it to a tool result", () =>
     Effect.gen(function* () {
       const PendingTool = tool({
         id: "pending",
@@ -809,7 +817,8 @@ describe("tool execution", () => {
           input: {},
         }),
       ])
-    }))
+    }),
+  )
 
   const isToolTerminal = Predicate.or(
     Predicate.isTagged("ToolCallSucceeded"),
@@ -877,7 +886,7 @@ describe("tool execution", () => {
       return summaries
     })
 
-  test("a success carries the tool's own summary over the wire input and output", () =>
+  liveTest("a success carries the tool's own summary over the wire input and output", () =>
     Effect.gen(function* () {
       const CountTool = tool({
         id: "count",
@@ -896,9 +905,10 @@ describe("tool execution", () => {
       expect(summaries).toEqual([
         { tag: "ToolCallSucceeded", summary: '3 words in "one two three"' },
       ])
-    }).pipe(Effect.timeout("5 seconds")))
+    }).pipe(Effect.timeout("5 seconds")),
+  )
 
-  test("a failure, or a summary that throws, keeps the head of the output", () =>
+  liveTest("a failure, or a summary that throws, keeps the head of the output", () =>
     Effect.gen(function* () {
       const ThrowingTool = tool({
         id: "throwing",
@@ -926,7 +936,8 @@ describe("tool execution", () => {
       expect(failed).toHaveLength(1)
       expect(failed[0]?.tag).toBe("ToolCallFailed")
       expect(failed[0]?.summary).not.toBe("never shown")
-    }).pipe(Effect.timeout("5 seconds")))
+    }).pipe(Effect.timeout("5 seconds")),
+  )
 })
 
 // ── turn interruption ────────────────────────────────────────────────────────
@@ -1091,7 +1102,7 @@ describe("compileToolPolicy", () => {
     expect(tools).toEqual([])
   })
 
-  test("extension projection include adds tools when they are allowed", () => {
+  test("an extension include adds a tool the agent's allowedTools leaves out", () => {
     const agent = AgentDefinition.make({
       name: AgentName.make("primary"),
       allowedTools: ["read", "grep", "lookup"],

@@ -132,6 +132,17 @@ describe("ref(capability)", () => {
     expect(String(ref(rpc.Read).capabilityId)).toBe("protocol.read")
   })
 
+  test("reading an unbound request ref names the setup registration that binds it", () => {
+    const unbound = request({
+      id: "test.unbound",
+      input: Schema.Struct({}),
+      output: Schema.String,
+      execute: () => Effect.succeed("ok"),
+    })
+
+    expect(() => ref(unbound).extensionId).toThrow('host.register("request", ...)')
+  })
+
   test("ref accessor only accepts request capabilities", () => {
     const capability = tool({
       id: "test.tool",

@@ -728,58 +728,56 @@ describe("SessionRuntime", () => {
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
-  it.scopedLive(
-    "dispatch RespondInteraction resumes a waiting interaction through the live loop",
-    () =>
-      Effect.gen(function* () {
-        const callCount = yield* Ref.make(0)
-        const resolution = yield* Deferred.make<void>()
-        const toolDef = makeInteractionTool(callCount, resolution)
-        const layer = makeLiveToolRuntimeLayer(makeInteractionProviderLayer(), [toolDef])
-        yield* Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const { sessionId, branchId } = yield* createSessionBranch
-          yield* sessionRuntime.sendUserMessage({
-            sessionId,
-            branchId,
-            content: "trigger interaction",
-          })
-          yield* waitFor(
-            Effect.gen(function* () {
-              const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
-              const state = yield* Stream.runHead(stream)
-              if (state._tag === "Some") {
-                return state.value
-              }
-              return Option.getOrUndefined(state)
-            }),
-            (current) => current?._tag === "WaitingForInteraction",
-            5000,
-            "waiting interaction state",
-          )
-          yield* sessionRuntime.respondInteraction({
-            sessionId,
-            branchId,
-            requestId: InteractionRequestId.make("req-test-1"),
-          })
-          yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
-          const state = yield* waitFor(
-            Effect.gen(function* () {
-              const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
-              const state = yield* Stream.runHead(stream)
-              if (state._tag === "Some") {
-                return state.value
-              }
-              return Option.getOrUndefined(state)
-            }),
-            (current) => current?._tag === "Idle",
-            5000,
-            "idle after interaction response",
-          )
-          expect(state?._tag).toBe("Idle")
-          expect(Ref.getUnsafe(callCount)).toBe(2)
-        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
-      }),
+  it.scopedLive("an answer resumes a waiting interaction through the live loop", () =>
+    Effect.gen(function* () {
+      const callCount = yield* Ref.make(0)
+      const resolution = yield* Deferred.make<void>()
+      const toolDef = makeInteractionTool(callCount, resolution)
+      const layer = makeLiveToolRuntimeLayer(makeInteractionProviderLayer(), [toolDef])
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const { sessionId, branchId } = yield* createSessionBranch
+        yield* sessionRuntime.sendUserMessage({
+          sessionId,
+          branchId,
+          content: "trigger interaction",
+        })
+        yield* waitFor(
+          Effect.gen(function* () {
+            const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
+            const state = yield* Stream.runHead(stream)
+            if (state._tag === "Some") {
+              return state.value
+            }
+            return Option.getOrUndefined(state)
+          }),
+          (current) => current?._tag === "WaitingForInteraction",
+          5000,
+          "waiting interaction state",
+        )
+        yield* sessionRuntime.respondInteraction({
+          sessionId,
+          branchId,
+          requestId: InteractionRequestId.make("req-test-1"),
+        })
+        yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
+        const state = yield* waitFor(
+          Effect.gen(function* () {
+            const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
+            const state = yield* Stream.runHead(stream)
+            if (state._tag === "Some") {
+              return state.value
+            }
+            return Option.getOrUndefined(state)
+          }),
+          (current) => current?._tag === "Idle",
+          5000,
+          "idle after interaction response",
+        )
+        expect(state?._tag).toBe("Idle")
+        expect(Ref.getUnsafe(callCount)).toBe(2)
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
+    }),
   )
 })
 

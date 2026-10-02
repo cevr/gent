@@ -217,8 +217,8 @@ describe("ExtensionRpcs", () => {
         const { client, sessionId } = yield* clientWithConfig
         const before = yield* client.driver.list({ sessionId })
         expect(before).toBeInstanceOf(DriverListResult)
-        // Built-in agents extension contributes the "anthropic" model driver
-        // (and friends); the registered list is non-empty.
+        // The preset's `testTurnExtension` contributes the test driver, so the
+        // registered list is non-empty.
         expect(before.drivers.length).toBeGreaterThan(0)
         expect(before.agents.map((agent) => agent.name)).toContain(DEFAULT_AGENT_NAME)
       }).pipe(Effect.timeout("4 seconds")),

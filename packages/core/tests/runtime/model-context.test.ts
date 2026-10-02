@@ -198,7 +198,7 @@ describe("projectModelContext", () => {
     expect(projection.omittedMessageIds).toEqual([MessageId.make("old")])
   })
 
-  test("a window with no prompt left anchors on its newest handoff marker", () => {
+  test("a window whose newest handoff marker and later steps exceed the budget fails as BudgetExceeded", () => {
     const messages = [
       message("marker", "user", [text("m".repeat(40))], { customType: "context-window" }),
       message("a1", "assistant", [text("a".repeat(4_000))]),
@@ -1624,7 +1624,6 @@ describe("model context ledger", () => {
         yield* ledger.schedule(newWindow)
         const pending = yield* ledger.pendingDirective
         expect(Option.map(pending, (directive) => directive._tag)).toEqual(Option.some("NewWindow"))
-        // A failed projection leaves the directive for the retry.
         expect(Option.isSome(yield* ledger.pendingDirective)).toBe(true)
         yield* ledger.acknowledgeDirective(newWindow)
         expect(Option.isNone(yield* ledger.pendingDirective)).toBe(true)

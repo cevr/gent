@@ -177,10 +177,8 @@ import type { LoopInbox } from "./agent-loop.js"
 
 /**
  * Build the per-turn prompt sections (base + agent addendum + tool list +
- * tool guidelines + extension extras). Returns the
- * unsorted section list so prompt slots can rewrite specific sections
- * (e.g. codemode replacing `tool-list` / `tool-guidelines`) before final
- * compilation.
+ * tool guidelines + extension extras). Returns the unsorted section list;
+ * `compileSystemPrompt` sorts it by priority.
  */
 export const buildTurnPromptSections = (
   baseSections: ReadonlyArray<PromptSection>,
