@@ -274,19 +274,18 @@ const makeFixture = Effect.gen(function* () {
   const server = path.join(directory, "server.cjs")
   const log = path.join(directory, "starts.log")
   yield* fs.writeFileString(server, FIXTURE_SERVER)
+  /** One line per start: its extra arguments, as JSON. */
   const startLines = fs.readFileString(log).pipe(
     Effect.map((text) => text.split("\n").filter((line) => line !== "")),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   )
   const starts = Effect.map(startLines, (lines) => lines.length)
-  /** Each start's extra arguments, as JSON. */
-  const startArgs = startLines
   const stdio = (env: Readonly<Record<string, string>> = {}) => ({
     command: process.execPath,
     args: [server],
     env: { MCP_FIXTURE_LOG: log, ...env },
   })
-  return { directory, server, starts, startArgs, stdio }
+  return { directory, server, starts, startLines, stdio }
 })
 
 const toolList = (contributions: { readonly tools?: ReadonlyArray<ToolCapability> }) =>
@@ -357,6 +356,36 @@ const cellResultAfterDone = (
         .find((part): part is Prompt.ToolResultPart => part.type === "tool-result"),
     ),
   )
+
+/**
+ * A session over the shipped extensions and `servers` whose model runs `code`
+ * in one cell, sent once `beforeSend` has run; the harness and the cell's
+ * result. `recordSystem` wraps the cell step, as `systemRecorder` gives it.
+ */
+const runMcpCell = <E = never, R = never>(
+  servers: ReturnType<typeof McpServers>,
+  code: string,
+  options: {
+    readonly recordSystem?: (step: SequenceStep) => SequenceStep
+    readonly beforeSend?: Effect.Effect<void, E, R>
+  } = {},
+) =>
+  Effect.gen(function* () {
+    const step = toolCallStep("cell", { code })
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      options.recordSystem?.(step) ?? step,
+      textStep("done"),
+    ])
+    const harness = yield* createRpcHarness({
+      ...shippedPreset,
+      extensionInputs: [...shippedWithoutMcp, servers],
+      providerLayer,
+    })
+    yield* options.beforeSend ?? Effect.void
+    const { client, sessionId, branchId } = harness
+    yield* client.message.send({ sessionId, branchId, content: "run" })
+    return { ...harness, result: yield* cellResultAfterDone(client, branchId) }
+  })
 
 /** The `display` of a cell result, decoded by `schema`. */
 const cellDisplay = <A>(
@@ -485,7 +514,7 @@ describe("mcp config", () => {
           home: path.join(fixture.directory, "home"),
           cwd: fixture.directory,
         }).pipe(Effect.provide(withVariable("a$&b$'c$$d$1")))
-        expect(yield* fixture.startArgs).toEqual([encodeJson(["a$&b$'c$$d$1", "a$&b$'c$$d$1"])])
+        expect(yield* fixture.startLines).toEqual([encodeJson(["a$&b$'c$$d$1", "a$&b$'c$$d$1"])])
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     30_000,
   )
@@ -920,20 +949,10 @@ describe("mcp over streamable http", () => {
     () =>
       Effect.gen(function* () {
         const { port } = yield* serveHttpFixture
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code: "await tools.mcp.remote.whoami()" }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            McpServers("@test/mcp-http", { remote: httpEntry(port) }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "ask the HTTP server" })
-        const result = yield* cellResultAfterDone(client, branchId)
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-http", { remote: httpEntry(port) }),
+          "await tools.mcp.remote.whoami()",
+        )
         expect(result).toMatchObject({
           name: "cell",
           isFailure: false,
@@ -957,20 +976,10 @@ describe("mcp over streamable http", () => {
           "const second = await tools.mcp.remote.whoami()",
           "JSON.stringify({ first, second })",
         ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            McpServers("@test/mcp-http-session", { remote: httpEntry(port) }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "ask twice" })
-        const result = yield* cellResultAfterDone(client, branchId)
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-http-session", { remote: httpEntry(port) }),
+          code,
+        )
         expect(result).toMatchObject({
           name: "cell",
           isFailure: false,
@@ -996,7 +1005,10 @@ describe("mcp over streamable http", () => {
           "let second = 'ran'; try { await tools.mcp.remote.whoami() } catch (error) { second = error.message }",
           "JSON.stringify({ first, second })",
         ].join("; ")
-        const result = yield* runHttpCell(port, code)
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-http-gone", { remote: httpEntry(port) }),
+          code,
+        )
         const shown = yield* cellDisplay(
           result,
           Schema.fromJsonString(Schema.Struct({ first: Schema.String, second: Schema.String })),
@@ -1025,7 +1037,13 @@ describe("mcp over streamable http", () => {
         ].join("\n")
         const first = yield* serveHttpFixture
         const second = yield* serveHttpFixture
-        const result = yield* runHttpCell(first.port, code, second.port)
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-http-refused", {
+            refused401: httpEntry(first.port),
+            refused403: httpEntry(second.port),
+          }),
+          code,
+        )
         const status = yield* cellDisplay(result, StatusDisplay)
         expect(
           status.servers.map((server) => [server.name, server.health, server.reason ?? ""]),
@@ -1040,30 +1058,6 @@ describe("mcp over streamable http", () => {
     25_000,
   )
 })
-
-/**
- * A session whose model runs `code` in one cell over the HTTP fixture at
- * `port` as `remote`, or, with `other`, over two fixtures as `refused401`
- * and `refused403`; the cell's result.
- */
-const runHttpCell = (port: number, code: string, other?: number) =>
-  Effect.gen(function* () {
-    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-      toolCallStep("cell", { code }),
-      textStep("done"),
-    ])
-    const servers = Option.match(Option.fromUndefinedOr(other), {
-      onNone: () => ({ remote: httpEntry(port) }),
-      onSome: (second) => ({ refused401: httpEntry(port), refused403: httpEntry(second) }),
-    })
-    const { client, sessionId, branchId } = yield* createRpcHarness({
-      ...shippedPreset,
-      extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-http-cell", servers)],
-      providerLayer,
-    })
-    yield* client.message.send({ sessionId, branchId, content: "run" })
-    return yield* cellResultAfterDone(client, branchId)
-  })
 
 // ── sse ─────────────────────────────────────────────────────────────────────
 
@@ -1136,20 +1130,10 @@ describe("mcp over sse", () => {
           "const auto = await tools.mcp.auto.whoami()",
           "JSON.stringify({ pinned, auto })",
         ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            McpServers("@test/mcp-sse", { pinned: { ...sse, type: "sse" }, auto: sse }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "ask both" })
-        const result = yield* cellResultAfterDone(client, branchId)
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-sse", { pinned: { ...sse, type: "sse" }, auto: sse }),
+          code,
+        )
         expect(result).toMatchObject({
           name: "cell",
           isFailure: false,
@@ -1239,33 +1223,21 @@ describe("mcp status", () => {
       Effect.gen(function* () {
         const fixture = yield* makeFixture
         const sse = yield* serveSseFixture
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", {
-            code: "await tools.mcp.fixture.count(); JSON.stringify(await tools.mcp.status())",
+        const { client, sessionId, branchId, result } = yield* runMcpCell(
+          McpServers("@test/mcp-status", {
+            dead: { command: "/nonexistent/gent-probe-x", timeoutMs: 2000 },
+            fixture: fixture.stdio(),
+            locked: {
+              url: `http://127.0.0.1:${sse.port}/sse`,
+              headers: { Authorization: "Bearer wrong-token" },
+            },
+            missing: {
+              url: "http://127.0.0.1:9/mcp",
+              headers: { authorization: "${GENT_MCP_UNSET}" },
+            },
           }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            McpServers("@test/mcp-status", {
-              dead: { command: "/nonexistent/gent-probe-x", timeoutMs: 2000 },
-              fixture: fixture.stdio(),
-              locked: {
-                url: `http://127.0.0.1:${sse.port}/sse`,
-                headers: { Authorization: "Bearer wrong-token" },
-              },
-              missing: {
-                url: "http://127.0.0.1:9/mcp",
-                headers: { authorization: "${GENT_MCP_UNSET}" },
-              },
-            }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "status" })
-        const result = yield* cellResultAfterDone(client, branchId)
+          "await tools.mcp.fixture.count(); JSON.stringify(await tools.mcp.status())",
+        )
         expect(result).toMatchObject({ name: "cell", isFailure: false })
         const status = yield* cellDisplay(result, StatusDisplay)
         expect(status.servers.map((server) => [server.name, server.health])).toEqual([
@@ -1656,22 +1628,6 @@ const makeDataDir = Effect.gen(function* () {
 const oauthServers = (oauth: OAuthFixtureState) =>
   McpServers("@test/mcp-oauth", { secure: { url: `${oauth.origin}/mcp` } })
 
-/** A session whose model runs `code` in one cell; the cell's result. */
-const runOAuthCell = (oauth: OAuthFixtureState, code: string) =>
-  Effect.gen(function* () {
-    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-      toolCallStep("cell", { code }),
-      textStep("done"),
-    ])
-    const { client, sessionId, branchId } = yield* createRpcHarness({
-      ...shippedPreset,
-      extensionInputs: [...shippedWithoutMcp, oauthServers(oauth)],
-      providerLayer,
-    })
-    yield* client.message.send({ sessionId, branchId, content: "who am I" })
-    return yield* cellResultAfterDone(client, branchId)
-  })
-
 /** A session with no model turns: `request` runs `/mcp <input>`, `shown` waits for a message. */
 const commandSession = (oauth: OAuthFixtureState) =>
   Effect.gen(function* () {
@@ -1763,7 +1719,7 @@ const revokeThenCall = (oauth: OAuthFixtureState) =>
       "const second = await tools.mcp.secure.whoami()",
       "JSON.stringify({ first, refused, second })",
     ].join("; ")
-    const result = yield* runOAuthCell(oauth, code)
+    const { result } = yield* runMcpCell(oauthServers(oauth), code)
     expect(result).toMatchObject({ name: "cell", isFailure: false })
     return yield* cellDisplay(
       result,
@@ -1799,9 +1755,10 @@ describe("mcp oauth", () => {
         const info = yield* fs.stat(authFile)
         expect(Number(info.mode) & 0o777).toBe(0o600)
         // A new session registers the listed tools and calls with the stored token.
-        const called = yield* runOAuthCell(oauth, "await tools.mcp.secure.whoami()").pipe(
-          Effect.provide(data.layer),
-        )
+        const { result: called } = yield* runMcpCell(
+          oauthServers(oauth),
+          "await tools.mcp.secure.whoami()",
+        ).pipe(Effect.provide(data.layer))
         expect(called).toMatchObject({ isFailure: false, result: { display: "token-1" } })
       }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
     45_000,
@@ -2172,25 +2129,13 @@ describe("mcp binary content", () => {
           `const files = require('node:fs').readdirSync(${encodeJson(blobs)}).sort()`,
           "JSON.stringify({ ...result, contents, named, again, touched, rewritten, huge: { omitted: huge.omitted, note: huge.note }, files })",
         ].join("; ")
-        const result = yield* Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("cell", { code }),
-            textStep("done"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...shippedPreset,
-            extensionInputs: [
-              ...shippedWithoutMcp,
-              McpServers("@test/mcp-binary", {
-                fixture: fixture.stdio({ MCP_FIXTURE_BINARY: "1" }),
-                remote: httpEntry(port),
-              }),
-            ],
-            providerLayer,
-          })
-          yield* client.message.send({ sessionId, branchId, content: "fetch the picture" })
-          return yield* cellResultAfterDone(client, branchId)
-        }).pipe(
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-binary", {
+            fixture: fixture.stdio({ MCP_FIXTURE_BINARY: "1" }),
+            remote: httpEntry(port),
+          }),
+          code,
+        ).pipe(
           Effect.provide(
             ConfigProvider.layer(
               ConfigProvider.fromUnknown({
@@ -2368,20 +2313,10 @@ describe("mcp tools in the cell", () => {
           "const echoed = await tools.mcp.fixture.echo({ text: 'hi' })",
           "JSON.stringify({ echoed, id: spec.id, schema: spec.parameters.description.length })",
         ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            McpServers("@test/mcp-many", { fixture: fixture.stdio({ MCP_FIXTURE_MANY: "600" }) }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "use one of many tools" })
-        const result = yield* cellResultAfterDone(client, branchId)
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-many", { fixture: fixture.stdio({ MCP_FIXTURE_MANY: "600" }) }),
+          code,
+        )
         expect(result).toMatchObject({
           name: "cell",
           isFailure: false,
@@ -2407,22 +2342,15 @@ describe("mcp tools in the cell", () => {
           "const counts = [await tools.mcp.fixture.count(), await tools.mcp.fixture.count()]",
           "JSON.stringify({ echoed, structured, failed, invalid: invalid.length > 0, counts })",
         ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          recordSystem(toolCallStep("cell", { code })),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            McpServers("@test/mcp-cell", { fixture: fixture.stdio() }),
-          ],
-          providerLayer,
-        })
-        // Setup listed the tools on a connection it closed.
-        expect(yield* fixture.starts).toBe(1)
-        yield* client.message.send({ sessionId, branchId, content: "use the fixture server" })
-        const result = yield* cellResultAfterDone(client, branchId)
+        const { client, sessionId, branchId, result } = yield* runMcpCell(
+          McpServers("@test/mcp-cell", { fixture: fixture.stdio() }),
+          code,
+          {
+            recordSystem,
+            // Setup listed the tools on a connection it closed.
+            beforeSend: Effect.map(fixture.starts, (starts) => expect(starts).toBe(1)),
+          },
+        )
         expect(result).toMatchObject({
           name: "cell",
           isFailure: false,
@@ -2483,20 +2411,11 @@ describe("mcp tools in the cell", () => {
           "let broken = ''; try { await tools.mcp.fixture.badstats() } catch (error) { broken = error.message }",
           "JSON.stringify({ signature, stats, broken })",
         ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          recordSystem(toolCallStep("cell", { code })),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            McpServers("@test/mcp-typed", { fixture: fixture.stdio({ MCP_FIXTURE_TYPED: "1" }) }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "count the issues" })
-        const result = yield* cellResultAfterDone(client, branchId)
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-typed", { fixture: fixture.stdio({ MCP_FIXTURE_TYPED: "1" }) }),
+          code,
+          { recordSystem },
+        )
         const typed =
           "tools.mcp.fixture.stats(input?: {}): Promise<{ open: number; labels: string[] }>"
         expect(systems[0] ?? "").toContain(`- ${typed} // Count open issues.`)
@@ -2534,20 +2453,13 @@ describe("mcp tools in the cell", () => {
           "const echoed = await tools.mcp.fixture.echo({ text: 'still here' })",
           "JSON.stringify({ stale, echoed })",
         ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-stale", servers)],
-          providerLayer,
+        const { result } = yield* runMcpCell(McpServers("@test/mcp-stale", servers), code, {
+          beforeSend: Effect.gen(function* () {
+            expect(yield* fixture.starts).toBe(1)
+            // The server drops `count` after setup cached it.
+            yield* fs.writeFileString(hide, "")
+          }),
         })
-        expect(yield* fixture.starts).toBe(1)
-        // The server drops `count` after setup cached it.
-        yield* fs.writeFileString(hide, "")
-        yield* client.message.send({ sessionId, branchId, content: "count" })
-        const result = yield* cellResultAfterDone(client, branchId)
         expect(result).toMatchObject({ name: "cell", isFailure: false })
         const { display } = yield* Schema.decodeUnknownEffect(
           Schema.Struct({ display: Schema.String }),
@@ -2577,19 +2489,12 @@ describe("mcp tools in the cell", () => {
         const servers = {
           fixture: { ...fixture.stdio({ MCP_FIXTURE_EMPTY_LIST: empty }), cwd: fixture.directory },
         }
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code: "await tools.mcp.fixture.echo({ text: 'kept' })" }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-empty", servers)],
-          providerLayer,
-        })
-        // The server answers an empty list from now on, as one with broken auth can.
-        yield* fs.writeFileString(empty, "")
-        yield* client.message.send({ sessionId, branchId, content: "echo" })
-        const result = yield* cellResultAfterDone(client, branchId)
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-empty", servers),
+          "await tools.mcp.fixture.echo({ text: 'kept' })",
+          // The server answers an empty list from now on, as one with broken auth can.
+          { beforeSend: fs.writeFileString(empty, "") },
+        )
         expect(result).toMatchObject({
           name: "cell",
           isFailure: false,
@@ -2615,17 +2520,11 @@ describe("mcp tools in the cell", () => {
         const servers = {
           fixture: { ...fixture.stdio({ MCP_FIXTURE_HIDE_COUNT: hide }), cwd: fixture.directory },
         }
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code: "await tools.mcp.fixture.hide()" }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-changed", servers)],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "hide count" })
-        expect(yield* cellResultAfterDone(client, branchId)).toMatchObject({
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-changed", servers),
+          "await tools.mcp.fixture.hide()",
+        )
+        expect(result).toMatchObject({
           name: "cell",
           isFailure: false,
         })
@@ -2660,17 +2559,11 @@ describe("mcp tools in the cell", () => {
             cwd: fixture.directory,
           },
         }
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code: "await tools.mcp.fixture.swap()" }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-swap", servers)],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "swap" })
-        expect(yield* cellResultAfterDone(client, branchId)).toMatchObject({ isFailure: false })
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-swap", servers),
+          "await tools.mcp.fixture.swap()",
+        )
+        expect(result).toMatchObject({ isFailure: false })
         const lines = yield* waitFor(
           fs
             .readFileString(log)
@@ -2717,17 +2610,7 @@ describe("mcp tools in the cell", () => {
             "let stale = ''; try { await tools.mcp.fixture.count() } catch (error) { stale = error.message }",
             "stale",
           ].join("; ")
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("cell", { code }),
-            textStep("done"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...shippedPreset,
-            extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-unknown", servers)],
-            providerLayer,
-          })
-          yield* client.message.send({ sessionId, branchId, content: "count" })
-          const result = yield* cellResultAfterDone(client, branchId)
+          const { result } = yield* runMcpCell(McpServers("@test/mcp-unknown", servers), code)
           expect(yield* cellDisplay(result, Schema.String)).toContain("no longer lists count")
           yield* waitFor(
             collectTestContributions(McpServers("@test/mcp-unknown", servers).setup, {
@@ -2753,23 +2636,13 @@ describe("mcp tools in the cell", () => {
           "const second = await tools.mcp.fixture.echo({ text: 'b' })",
           "JSON.stringify({ first, second })",
         ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            // Setup is start 1; the first call's connect is start 2, which exits.
-            McpServers("@test/mcp-retry", {
-              fixture: { ...fixture.stdio({ MCP_FIXTURE_FAIL_ON_START: "2" }), timeoutMs: 5000 },
-            }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "echo twice" })
-        const result = yield* cellResultAfterDone(client, branchId)
+        const { result } = yield* runMcpCell(
+          // Setup is start 1; the first call's connect is start 2, which exits.
+          McpServers("@test/mcp-retry", {
+            fixture: { ...fixture.stdio({ MCP_FIXTURE_FAIL_ON_START: "2" }), timeoutMs: 5000 },
+          }),
+          code,
+        )
         expect(result).toMatchObject({
           name: "cell",
           isFailure: false,
@@ -2792,22 +2665,12 @@ describe("mcp tools in the cell", () => {
           "for (let index = 0; index < 3; index++) { let value = 'failed'; for (let attempt = 0; attempt < 2 && value === 'failed'; attempt++) { try { value = await tools.mcp.fixture.count() } catch (error) {} } counts.push(value) }",
           "JSON.stringify(counts)",
         ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            McpServers("@test/mcp-exit", {
-              fixture: { ...fixture.stdio({ MCP_FIXTURE_EXIT_AFTER_CALL: "1" }), timeoutMs: 5000 },
-            }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "count three times" })
-        const result = yield* cellResultAfterDone(client, branchId)
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-exit", {
+            fixture: { ...fixture.stdio({ MCP_FIXTURE_EXIT_AFTER_CALL: "1" }), timeoutMs: 5000 },
+          }),
+          code,
+        )
         // Each call reaches a new process, which served one call and exited.
         expect(result).toMatchObject({
           name: "cell",
@@ -2843,26 +2706,16 @@ describe("mcp tools in the cell", () => {
           "const other = await tools.mcp.other.env({ name: 'GENT_MCP_HOST_ONLY' })",
           "JSON.stringify({ host, declared, empty, port, dated, other })",
         ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code }),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            McpServers("@test/mcp-env", {
-              fixture: fixture.stdio({
-                MCP_FIXTURE_ENV_TOOL: "1",
-                GENT_MCP_DECLARED: "from the entry",
-              }),
-              other: fixture.stdio({ MCP_FIXTURE_ENV_TOOL: "1" }),
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-env", {
+            fixture: fixture.stdio({
+              MCP_FIXTURE_ENV_TOOL: "1",
+              GENT_MCP_DECLARED: "from the entry",
             }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "read the environment" })
-        const result = yield* cellResultAfterDone(client, branchId)
+            other: fixture.stdio({ MCP_FIXTURE_ENV_TOOL: "1" }),
+          }),
+          code,
+        )
         expect(result).toMatchObject({
           name: "cell",
           isFailure: false,
