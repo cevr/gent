@@ -1,7 +1,9 @@
 import {
   type ActivityCall,
+  activityRows,
   decodeToolOutputOption,
   formatActivityHeader,
+  formatActivityRow,
   formatCellRowLabel,
   formatCost,
   formatDuration,
@@ -76,8 +78,10 @@ import {
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import {
   bashOutputRows,
+  callOperation,
   cellOperations,
   failureReason,
+  FoldOperationsProvider,
   GenericToolRenderer,
   RegisteredToolCall,
   type ToolCall,
@@ -311,13 +315,14 @@ const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
 
 const PREVIEW_LINES = 20
 
-const toActivityCall = (call: ToolCall, place: PathPlace): ActivityCall => ({
-  toolName: call.toolName,
-  status: call.status,
-  operations: cellOperations(call, place),
-  code: getString(call.input, "code"),
-  durationMs: call.durationMs,
-})
+/** A call as its group counts it: a cell by its ops, any other call as the one tool it is. */
+const toActivityCall = (call: ToolCall, place: PathPlace): ActivityCall => {
+  const base = { toolName: call.toolName, status: call.status, durationMs: call.durationMs }
+  if (call.toolName !== "cell") {
+    return { ...base, operations: [callOperation(call, place)], code: "" }
+  }
+  return { ...base, operations: cellOperations(call, place), code: getString(call.input, "code") }
+}
 
 const cellResultText = (call: ToolCall) =>
   Option.match(decodeToolOutputOption(CellFailure, call.output), {
@@ -810,25 +815,38 @@ function ToolCallGroup(props: {
 }) {
   const { theme } = useTheme()
   const { pathPlace } = useClient()
+  const dimensions = useTerminalDimensions()
+  const activity = createMemo(() => props.calls.map((call) => toActivityCall(call, pathPlace())))
   const failed = () => props.calls.some((call) => call.status === "error")
+  const opsFailed = () =>
+    activity().some((call) => call.operations.some((operation) => operation.outcome === "failed"))
   const running = () => props.calls.some((call) => call.status === "running")
   const tick = useSpinnerClock()
+  // A call that failed is the group's failure; ops that failed inside a cell
+  // that recovered are a warning; the pulse runs while a call does.
   const symbol = () => {
     if (failed()) return "✗"
     if (running()) return workingIconFrame(tick())
-    return "✓"
+    return "●"
   }
   const groupColor = () => {
     if (failed()) return theme.error
+    if (opsFailed()) return theme.warning
     return theme.textMuted
   }
-  const header = createMemo(() =>
-    formatActivityHeader(props.calls.map((call) => toActivityCall(call, pathPlace()))),
-  )
+  // The columns right of the group's glyph or connector.
+  const lineWidth = () => dimensions().width - ANSWER_INDENT - 2
+  const header = createMemo(() => formatActivityHeader(activity(), lineWidth()))
   // The transcript view and the full level both open every row; collapsed keeps only failures.
   const rowsOpen = () => props.fullDetail || props.disclosure === "full"
+  // Preview draws a row per run of one tool, in past-tense words.
+  const toolRows = createMemo(() => {
+    if (props.fullDetail || props.disclosure !== "preview") return []
+    return activityRows(activity())
+  })
+  // A failed call draws its frame, with its id and reason, at every level.
   const visibleCalls = () => {
-    if (rowsOpen() || props.disclosure === "preview") return props.calls
+    if (rowsOpen()) return props.calls
     return props.calls.filter((call) => call.status === "error")
   }
   // Preview shows the head of the last finished call beneath the rows: a cell
@@ -853,10 +871,38 @@ function ToolCallGroup(props: {
     <Show when={props.calls.length > 0}>
       <box flexDirection="column">
         <Show when={!props.fullDetail}>
-          <text style={{ fg: groupColor() }}>
+          <text wrapMode="none" truncate style={{ fg: groupColor() }}>
             {symbol()} {header()}
           </text>
         </Show>
+        <For each={toolRows()}>
+          {(row, index) => {
+            const text = () => formatActivityRow(row, lineWidth())
+            const connector = () => {
+              if (index() === toolRows().length - 1) return "└"
+              return "├"
+            }
+            const color = () => {
+              if (row.outcome === "failed" || row.outcome === "incomplete") return theme.error
+              return theme.textMuted
+            }
+            return (
+              <text wrapMode="none" truncate style={{ fg: color() }}>
+                {connector()} {text().head}
+                <Show when={Option.getOrUndefined(text().diff)}>
+                  {(diff) => (
+                    <>
+                      <span style={{ fg: theme.success }}> +{diff().added}</span>
+                      <span style={{ fg: color() }}> / </span>
+                      <span style={{ fg: theme.error }}>-{diff().removed}</span>
+                    </>
+                  )}
+                </Show>
+                {text().tail}
+              </text>
+            )
+          }}
+        </For>
         <Show when={visibleCalls().length > 0}>
           <For each={visibleCalls()}>
             {(call, index) => {
@@ -993,43 +1039,45 @@ interface MessageListProps {
 
 export function MessageList(props: MessageListProps) {
   return (
-    <box flexDirection="column">
-      <For each={props.items}>
-        {(item) =>
-          (() => {
-            if (!isMessageItem(item)) {
-              return <SessionEventIndicator event={item} />
-            }
-            return (
-              <Show
-                when={item.role === "user"}
-                fallback={
-                  <AssistantMessage
+    <FoldOperationsProvider value={props.fullDetail !== true}>
+      <box flexDirection="column">
+        <For each={props.items}>
+          {(item) =>
+            (() => {
+              if (!isMessageItem(item)) {
+                return <SessionEventIndicator event={item} />
+              }
+              return (
+                <Show
+                  when={item.role === "user"}
+                  fallback={
+                    <AssistantMessage
+                      content={item.content}
+                      reasoning={item.reasoning}
+                      images={item.images}
+                      segments={item.segments}
+                      disclosure={props.disclosure}
+                      fullDetail={props.fullDetail === true}
+                      syntaxStyle={props.syntaxStyle}
+                    />
+                  }
+                >
+                  <UserMessage
                     content={item.content}
-                    reasoning={item.reasoning}
                     images={item.images}
-                    segments={item.segments}
-                    disclosure={props.disclosure}
+                    interjection={item._tag === "interjection-message"}
+                    pendingMode={item.pendingMode}
+                    customType={item.metadata?.customType}
+                    details={item.metadata?.details}
                     fullDetail={props.fullDetail === true}
-                    syntaxStyle={props.syntaxStyle}
                   />
-                }
-              >
-                <UserMessage
-                  content={item.content}
-                  images={item.images}
-                  interjection={item._tag === "interjection-message"}
-                  pendingMode={item.pendingMode}
-                  customType={item.metadata?.customType}
-                  details={item.metadata?.details}
-                  fullDetail={props.fullDetail === true}
-                />
-              </Show>
-            )
-          })()
-        }
-      </For>
-    </box>
+                </Show>
+              )
+            })()
+          }
+        </For>
+      </box>
+    </FoldOperationsProvider>
   )
 }
 

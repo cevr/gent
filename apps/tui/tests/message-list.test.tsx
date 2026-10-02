@@ -64,9 +64,11 @@ import {
 } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
+import { useTheme } from "../src/theme"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import {
   BUILTIN_TOOL_RENDERERS,
+  FoldOperationsProvider,
   ToolRenderersProvider,
   EditToolRenderer,
   GenericToolRenderer,
@@ -1734,8 +1736,11 @@ describe("cell rows", () => {
         (next) => next.includes("#call-cell-7") && next.includes("hello from a.txt"),
         "cell renderer",
       )
-      // The compact tree says what the cell did: ops counted in the header, named in the row.
-      expect(frame).toContain("1 cell · 2 ops · 1 failed")
+      // The header counts the ops by kind; the preview rows name them in
+      // past-tense words; the open row names them as the cell ran them.
+      expect(frame).toContain("● 2 tools · 1 read · 1 edit · 1 failed")
+      expect(frame).toContain("├ Read")
+      expect(frame).toContain("└ Wrote · failed")
       expect(frame).toContain("└ cell read · ✕ write")
       // The detail frame shows each receipt, the display value, and bindings.
       expect(frame).toContain("✓ read 12 lines")
@@ -1781,7 +1786,8 @@ describe("cell rows", () => {
         { width: 80, height: 40 },
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("└ bash seq 25 · ↓ 25 lines")
+      expect(frame).toContain("● 1 tool · 1 command")
+      expect(frame).toContain("└ Ran seq 25")
       expect(frame).toContain("row 1")
       expect(frame).toContain("row 20")
       expect(frame).not.toContain("row 21")
@@ -1821,21 +1827,22 @@ describe("cell rows", () => {
           (frame) => frame.includes("… +5 lines (ctrl+o)"),
           "cell preview",
         )
-        const row = Option.getOrThrow(
-          Option.fromUndefinedOr(preview.split("\n").find((line) => line.includes("└ cell"))),
-        ).trim()
-        expect(row).toContain("↑ 2 ↓ 25 lines")
-        // The preview row names no call id; the open rows add it at the end of the same words.
-        expect(row).not.toContain("#call-stable")
-        const isOpenRow = (line: string) =>
-          line.trim().startsWith(row) && line.trim().endsWith("#call-stable")
+        // The preview rows name the ops in past-tense words and no call id.
+        expect(preview).toContain("└ Wrote · failed")
+        expect(preview).not.toContain("#call-stable")
         yield* Effect.sync(() => setDisclosure("full"))
         const full = yield* waitForFrame(
           setup,
           (frame) => frame.includes("CELL-OUTPUT-025") && frame.includes("note.content"),
           "full cell output",
         )
-        expect(full.split("\n").some(isOpenRow)).toBe(true)
+        // The open row names the cell, its line counts, and its id at the end.
+        const row = Option.getOrThrow(
+          Option.fromUndefinedOr(full.split("\n").find((line) => line.includes("└ cell"))),
+        ).trim()
+        expect(row).toContain("↑ 2 ↓ 25 lines")
+        expect(row).toEndWith("#call-stable")
+        const isOpenRow = (line: string) => line.trim() === row
         expect(full.match(/#call-stable/g)).toHaveLength(1)
         expect(full).not.toContain("… +5 lines")
         yield* Effect.sync(() => {
@@ -1844,7 +1851,7 @@ describe("cell rows", () => {
         })
         const transcript = yield* waitForFrame(
           setup,
-          (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("1 cell ·"),
+          (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("2 tools ·"),
           "full transcript from preview",
         )
         expect(transcript.split("\n").some(isOpenRow)).toBe(true)
@@ -1856,6 +1863,59 @@ describe("cell rows", () => {
       }),
   )
 
+  it.scopedLive("the glyph warns when only ops failed, and errs when a call failed", () =>
+    Effect.gen(function* () {
+      const cellWith = (id: string, status: ToolCall["status"], opStatus: ToolCall["status"]) =>
+        assistantToolMessage(`assistant-${id}`, {
+          id,
+          toolName: "cell",
+          status,
+          input: { code: "await tools.bash({ command: 'x' })" },
+          summary: absent,
+          output: absent,
+          operations: [
+            { id: `${id}-op`, toolName: "bash", status: opStatus, input: { command: "x" } },
+          ],
+        })
+      let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+      const setup = yield* renderScoped(
+        () => {
+          colors = Option.some(useTheme().theme)
+          return (
+            <box flexDirection="column">
+              <MessageList
+                items={[cellWith("glyph-done", "completed", "completed")]}
+                disclosure="collapsed"
+                syntaxStyle={syntaxStyle}
+              />
+              <MessageList
+                items={[cellWith("glyph-warn", "completed", "error")]}
+                disclosure="collapsed"
+                syntaxStyle={syntaxStyle}
+              />
+              <MessageList
+                items={[cellWith("glyph-fail", "error", "error")]}
+                disclosure="collapsed"
+                syntaxStyle={syntaxStyle}
+              />
+            </box>
+          )
+        },
+        { width: 60, height: 30 },
+      )
+      const theme = Option.getOrThrow(colors)
+      const glyphs = setup
+        .captureSpans()
+        .lines.flatMap((line) => line.spans.filter((span) => /^\s*[●✗] \d+ tool/.test(span.text)))
+        .map((span) => ({ glyph: span.text.trim().slice(0, 1), fg: span.fg }))
+      expect(glyphs.map((entry) => entry.glyph)).toEqual(["●", "●", "✗"])
+      expect(glyphs[0]?.fg.equals(theme.textMuted)).toBe(true)
+      expect(glyphs[1]?.fg.equals(theme.warning)).toBe(true)
+      expect(glyphs[2]?.fg.equals(theme.error)).toBe(true)
+      expect(renderFrame(setup)).toContain("● 1 tool · 1 command · 1 failed")
+    }),
+  )
+
   it.scopedLive("collapsed keeps the group header and hides finished rows and output", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
@@ -1864,8 +1924,8 @@ describe("cell rows", () => {
         { width: 80, height: 20 },
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("1 tool call · 1 bash")
-      expect(frame).not.toContain("└ bash")
+      expect(frame).toContain("1 tool · 1 command")
+      expect(frame).not.toContain("└ Ran")
       expect(frame).not.toContain("row 1")
     }),
   )
@@ -1888,9 +1948,10 @@ describe("bash row line counts", () => {
           status: "background",
         }),
       ]
+      // The open rows (the full level) count lines; the preview rows name the command only.
       const setup = yield* renderScoped(
-        () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
-        { width: 80, height: 40 },
+        () => <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />,
+        { width: 80, height: 60 },
       )
       const rows = renderFrame(setup)
         .split("\n")
@@ -1911,11 +1972,11 @@ describe("bash row line counts", () => {
         () => (
           <MessageList
             items={[assistantToolMessage("assistant-cut", cutBashCall)]}
-            disclosure="preview"
+            disclosure="full"
             syntaxStyle={syntaxStyle}
           />
         ),
-        { width: 80, height: 20 },
+        { width: 80, height: 30 },
       )
       const row = renderFrame(list)
         .split("\n")
@@ -2207,10 +2268,13 @@ describe("transcript block spacing", () => {
       () =>
         Effect.gen(function* () {
           const CellToolRenderer = builtinRenderer("cell")
+          // The transcript view draws each op on its own, the two commands too.
           const setup = yield* renderScoped(
             () => (
               <ToolRenderersProvider value={builtinRenderers}>
-                <CellToolRenderer expanded={expanded} toolCall={twoOpCell} />
+                <FoldOperationsProvider value={false}>
+                  <CellToolRenderer expanded={expanded} toolCall={twoOpCell} />
+                </FoldOperationsProvider>
               </ToolRenderersProvider>
             ),
             { width: 100, height: 40 },
@@ -2235,6 +2299,52 @@ describe("transcript block spacing", () => {
         }),
     )
   }
+
+  it.scopedLive("a run of one tool's ops folds into one frame that a click opens", () =>
+    Effect.gen(function* () {
+      const CellToolRenderer = builtinRenderer("cell")
+      const reads: ReadonlyArray<ToolCall> = Array.from({ length: 30 }, (_, index) => ({
+        id: `fold-read-${index}`,
+        toolName: "read",
+        status: "completed",
+        input: { path: `/workspace/src/file-${index}.ts` },
+        summary: `file-${index}.ts · 3 lines`,
+        output: encodeJson({ content: "1\ta\n2\tb\n3\tc", lineCount: 3 }),
+      }))
+      const foldedCell: ToolCall = {
+        ...twoOpCell,
+        id: "cell-thirty-reads",
+        operations: [...reads, ...(twoOpCell.operations ?? [])],
+      }
+      const setup = yield* renderScoped(
+        () => (
+          <ToolRenderersProvider value={builtinRenderers}>
+            <CellToolRenderer expanded={true} toolCall={foldedCell} />
+          </ToolRenderersProvider>
+        ),
+        { width: 100, height: 120 },
+      )
+      const frame = renderFrame(setup)
+      // Thirty reads draw one frame, its body a tight list; the two commands another.
+      expect(frame.match(/● read 30 files/g)).toHaveLength(1)
+      expect(frame.match(/● bash 2 commands/g)).toHaveLength(1)
+      expect(frame).toContain("✓ /workspace/src/file-0.ts file-0.ts · 3 lines")
+      expect(frame).toContain("✓ /workspace/src/file-29.ts")
+      // The list has no blank line between its rows.
+      const lines = frame.split("\n").map((line) => line.trim())
+      const first = lines.findIndex((line) => line.includes("file-0.ts · 3 lines"))
+      expect(lines[first + 1]).toContain("file-1.ts")
+      // A click on the folded frame's header opens each read as its own frame.
+      const row = lines.findIndex((line) => line.startsWith("● read 30 files"))
+      yield* Effect.promise(() => setup.mockMouse.click(4, row))
+      const opened = yield* waitForFrame(
+        setup,
+        (next) => next.includes("● read /workspace/src/file-0.ts"),
+        "the folded reads opened",
+      )
+      expect(opened).toContain("● read /workspace/src/file-29.ts")
+    }),
+  )
 
   it.scopedLive(
     "native history keeps one blank line between committed blocks in full disclosure",
@@ -5064,7 +5174,7 @@ describe("tool group rows", () => {
     Effect.gen(function* () {
       const call = readCall("call-read-path", `${cwd}/apps/tui/src/app.tsx`)
       const rows = yield* groupRows([assistantToolMessage("assistant-read-path", call)], 80)
-      expect(callLabels(rows)).toEqual(["└ read apps/tui/src/app.tsx"])
+      expect(callLabels(rows)).toEqual(["└ Read apps/tui/src/app.tsx"])
       const ReadToolRenderer = builtinRenderer("read")
       const frame = yield* renderScoped(
         () => <ReadToolRenderer expanded={false} toolCall={call} />,
@@ -5092,7 +5202,7 @@ describe("tool group rows", () => {
         80,
         "/work/other",
       )
-      expect(callLabels(rows)).toEqual([`└ read ${cwd}/config.ts`, "└ read src/app.tsx"])
+      expect(callLabels(rows)).toEqual([`└ Read ${cwd}/config.ts`, "└ Read src/app.tsx"])
       const ReadToolRenderer = builtinRenderer("read")
       const frame = yield* renderScoped(
         () => <ReadToolRenderer expanded={false} toolCall={inSession} />,
@@ -5111,7 +5221,7 @@ describe("tool group rows", () => {
     Effect.gen(function* () {
       const call = readCall("call-read-outside", "/etc/hosts")
       const rows = yield* groupRows([assistantToolMessage("assistant-read-outside", call)], 80)
-      expect(callLabels(rows)).toEqual(["└ read /etc/hosts"])
+      expect(callLabels(rows)).toEqual(["└ Read /etc/hosts"])
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -5142,8 +5252,8 @@ describe("tool group rows", () => {
       }
       for (const width of [59, 60, 61]) {
         const lines = yield* groupRows([assistantToolMessage("assistant-long-row", call)], width)
-        const row = lines.findIndex((line) => line.includes("└ bash"))
-        expect(lines[row]).toContain("└ bash echo sanity-")
+        const row = lines.findIndex((line) => line.includes("└ Ran"))
+        expect(lines[row]).toContain("└ Ran echo sanity-")
         expect(lines.join("\n")).not.toContain("dbg-review")
         expect(lines.slice(row + 1).join("\n")).not.toContain("semantics")
       }
