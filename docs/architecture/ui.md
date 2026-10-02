@@ -11,6 +11,7 @@ The references are the `ui` rows of [`PRIOR_ARTS.md`](../../PRIOR_ARTS.md): verc
 - gent: `bun run --cwd <main checkout>/apps/tui dev --debug` with `GENT_DATA_DIR` and `HOME` under the scratch directory. `--debug` uses the scripted model, so a conversation, streaming, tool calls and errors render with no paid call.
 - A reference TUI runs with `HOME` (and `XDG_*`) under the scratch directory and no credentials, so it can never reach a paid model. Screens that need a model come from its source and test captures instead. A login prompt is a screen to compare, not a step to complete.
 - One herdr tab per comparison, split into panes of the same size: `herdr pane split`, `herdr pane run <pane> '<cmd>'`, `herdr pane send-keys` / `send-text` to drive, `herdr pane wait-output` to settle, `herdr pane read` to capture. Never `herdr agent`. Close every pane and tab the sweep opened before the report.
+- A repeatable check (a key sequence, a resize, a capture at each step) can run as a drive script instead: `bun packages/e2e/src/drive.ts <script.json>` runs any command on the e2e pty fixture with a live emulator and saves each capture (format in [`packages/e2e/README.md`](../../packages/e2e/README.md)). The same command and scratch environment rules hold.
 - Capture each screen at two sizes (a normal pane and a narrow one near 60×20) and after a resize.
 
 ## Checklist (one row per moment, gent against each reference)

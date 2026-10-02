@@ -1,19 +1,55 @@
 import { makeTempDirectoryScoped, seedAuthKeys, waitFor } from "@gent/core/test-utils"
 import { Terminal } from "@xterm/headless"
 import {
+  Array as Arr,
   Clock,
+  Console,
   type Duration,
   Effect,
   FileSystem,
   Option,
+  Path,
   Predicate,
   Schema,
   type Scope,
 } from "effect"
-import { spawn, type IPty } from "zigpty"
+import { constVoid } from "effect/Function"
 import { exitWithin, tuiDirectory } from "./server-process-fixture"
 
-const CTRL_C = "\x03"
+// ── Keys ──
+
+/** The bytes a terminal in its default modes sends for each key a test or a drive script presses. */
+export const keys = {
+  enter: "\r",
+  esc: "\x1b",
+  tab: "\t",
+  up: "\x1b[A",
+  down: "\x1b[B",
+  right: "\x1b[C",
+  left: "\x1b[D",
+  home: "\x1b[H",
+  backspace: "\x7f",
+  "alt+up": "\x1b[1;3A",
+  "alt+backspace": "\x1b\x7f",
+  "alt+backspace-csiu": "\x1b[127;3u",
+  "ctrl+a": "\x01",
+  "ctrl+c": "\x03",
+  "ctrl+d": "\x04",
+  "ctrl+e": "\x05",
+  "ctrl+j": "\n",
+  "ctrl+o": "\x0f",
+  "ctrl+p": "\x10",
+  "ctrl+t": "\x14",
+  "ctrl+u": "\x15",
+  "ctrl+w": "\x17",
+  "ctrl+backspace": "\x1b[127;5u",
+  "ctrl+backspace-legacy": "\x08",
+  "shift+enter": "\x1b[13;2u",
+  "super+a": "\x1b[97;9u",
+  "hyper+a": "\x1b[97;17u",
+} as const satisfies Record<string, string>
+
+// ── PTY ──
 
 const DEFAULT_COLS = 120
 const DEFAULT_ROWS = 40
@@ -23,79 +59,158 @@ interface PtySize {
   readonly rows: number
 }
 
-export interface TestContext {
-  readonly pty: IPty
+/** One child process on its own pseudo-terminal. */
+export interface PtySession {
   /** Everything the child has written so far. It grows whenever the terminal repaints. */
   readonly output: string
   readonly size: PtySize
-  readonly resize: (size: PtySize) => void
+  readonly pid: number
+  /** The child's exit code. A child a signal ends reads 128 plus the signal number. */
+  readonly exited: Promise<number>
+  readonly write: (data: string) => void
+  /** Resize the pty and tell the child's process group, as a terminal window does. */
+  readonly resize: (size: PtySize) => Effect.Effect<void>
 }
+
+interface PtyCommand {
+  readonly command: ReadonlyArray<string>
+  readonly cwd: string
+  readonly env: Environment
+  readonly size: PtySize
+}
+
+/**
+ * Keys a terminal emulator leaves to the program it runs: a multiplexer's
+ * own marks, and `COLUMNS`/`LINES`, which would go stale at the first resize.
+ * The pty carries the size.
+ */
+const HOST_TERMINAL_KEYS = new Set([
+  "TMUX",
+  "TMUX_PANE",
+  "STY",
+  "WINDOW",
+  "WINDOWID",
+  "TERMCAP",
+  "COLUMNS",
+  "LINES",
+])
+
+type Environment = Readonly<Record<string, string>>
+
+/** An environment a terminal emulator would hand its child: `inherited` without the host terminal's keys, then `overrides`. */
+const terminalEnv = (inherited: NodeJS.ProcessEnv, overrides: Environment) => ({
+  TERM: "xterm-256color",
+  ...Object.fromEntries(
+    Object.entries(inherited).filter(
+      (entry): entry is [string, string] =>
+        Predicate.isString(entry[1]) && !HOST_TERMINAL_KEYS.has(entry[0]),
+    ),
+  ),
+  ...overrides,
+})
 
 const ignoreSyncDefect = (evaluate: () => void): Effect.Effect<void> =>
   Effect.sync(evaluate).pipe(Effect.ignoreCause)
 
 /**
- * Start the TUI in a pty that belongs to the caller's scope. Closing the scope
- * sends ctrl+c, waits for the exit, and kills a child that outlives the wait.
+ * Start `command` on a new pty (`Bun.Terminal`) that belongs to the caller's
+ * scope. Closing the scope sends ctrl+c, waits for the exit, kills a child
+ * that outlives the wait, and then closes the pty. `onText` sees each chunk
+ * the child writes, decoded as it arrives.
  */
+const openPty = (
+  spec: PtyCommand,
+  onText: (text: string) => void = constVoid,
+): Effect.Effect<PtySession, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    // A streaming decoder keeps a character the child wrote across two reads whole.
+    const decoder = new TextDecoder()
+    let output = ""
+    let currentSize = spec.size
+    const terminal = yield* Effect.acquireRelease(
+      Effect.sync(
+        () =>
+          new Bun.Terminal({
+            name: "xterm-256color",
+            cols: spec.size.cols,
+            rows: spec.size.rows,
+            data: (_terminal, bytes) => {
+              const text = decoder.decode(bytes, { stream: true })
+              output += text
+              onText(text)
+            },
+          }),
+      ),
+      (terminal) => ignoreSyncDefect(() => terminal.close()),
+    )
+    const child = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        // oxlint-disable-next-line effect/noGlobals -- the fixture runs the real program on a real pty
+        Bun.spawn([...spec.command], {
+          terminal,
+          cwd: spec.cwd,
+          env: { ...spec.env },
+          // Its own session and process group, as a terminal emulator gives
+          // it, so the fixture can signal the group without reaching the
+          // test runner. Bun.Terminal (Bun 1.4.2) does not make the pty the
+          // child's controlling terminal, so the kernel itself sends no
+          // SIGWINCH on a resize and no SIGINT for a ctrl+c in cooked mode.
+          detached: true,
+        }),
+      ),
+      (child) =>
+        Effect.gen(function* () {
+          yield* ignoreSyncDefect(() => terminal.write(keys["ctrl+c"]))
+          if (Option.isNone(yield* exitWithin(child.exited, "1 second"))) {
+            yield* ignoreSyncDefect(() => process.kill(-child.pid, "SIGKILL"))
+            yield* exitWithin(child.exited, "2 seconds")
+          }
+        }),
+    )
+    const session: PtySession = {
+      get output() {
+        return output
+      },
+      get size() {
+        return currentSize
+      },
+      pid: child.pid,
+      exited: child.exited,
+      write: (data) => {
+        terminal.write(data)
+      },
+      resize: (next) =>
+        Effect.sync(() => {
+          currentSize = next
+          terminal.resize(next.cols, next.rows)
+        }).pipe(
+          // What the kernel does for a controlling terminal's foreground group.
+          Effect.andThen(ignoreSyncDefect(() => process.kill(-child.pid, "SIGWINCH"))),
+        ),
+    }
+    return session
+  })
+
+// ── TUI under test ──
+
+/** Start the TUI from this checkout, isolated in `tempDir`. */
 const spawnWithDir = (
   tempDir: string,
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
   size: PtySize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
-): Effect.Effect<TestContext, never, Scope.Scope> =>
-  Effect.acquireRelease(
-    Effect.sync(() => {
-      const mainPath = `${tuiDirectory}/src/main.tsx`
-
-      let output = ""
-      let currentSize = size
-
-      const pty = spawn("bun", [mainPath, "--isolate", ...extraArgs], {
-        name: "xterm-256color",
-        cols: size.cols,
-        rows: size.rows,
-        cwd: tuiDirectory,
-        env: {
-          // oxlint-disable-next-line effect/noGlobals -- the fixture hands the test's environment to the real TUI process
-          ...Bun.env,
-          GENT_DATA_DIR: tempDir,
-          GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
-          COLUMNS: String(size.cols),
-          LINES: String(size.rows),
-          ...extraEnv,
-        },
-      })
-
-      pty.onData((data) => {
-        output += data
-      })
-
-      const context: TestContext = {
-        pty,
-        get output() {
-          return output
-        },
-        get size() {
-          return currentSize
-        },
-        resize: (next: PtySize) => {
-          currentSize = next
-          pty.resize(next.cols, next.rows)
-        },
-      }
-      return context
+): Effect.Effect<PtySession, never, Scope.Scope> =>
+  openPty({
+    command: ["bun", `${tuiDirectory}/src/main.tsx`, "--isolate", ...extraArgs],
+    cwd: tuiDirectory,
+    // oxlint-disable-next-line effect/noGlobals -- the fixture hands the test's environment to the real TUI process
+    env: terminalEnv(Bun.env, {
+      GENT_DATA_DIR: tempDir,
+      GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
+      ...extraEnv,
     }),
-    ({ pty }) =>
-      Effect.gen(function* () {
-        yield* ignoreSyncDefect(() => pty.write(CTRL_C))
-        if (Option.isNone(yield* exitWithin(pty.exited, "1 second"))) {
-          yield* ignoreSyncDefect(() => process.kill(pty.pid, "SIGKILL"))
-          yield* exitWithin(pty.exited, "2 seconds")
-        }
-        yield* ignoreSyncDefect(() => pty.close())
-      }),
-  )
+    size,
+  })
 
 export const seedAndSpawn = (extraArgs: string[] = [], size?: PtySize) =>
   Effect.gen(function* () {
@@ -108,9 +223,9 @@ export const seedAndSpawn = (extraArgs: string[] = [], size?: PtySize) =>
  * Send the TUI a signal from outside, as `kill` does, and wait for its exit
  * code. `None`: it outlived `within`.
  */
-export const signalAndExit = (ctx: TestContext, signal: NodeJS.Signals, within: Duration.Input) =>
-  ignoreSyncDefect(() => process.kill(ctx.pty.pid, signal)).pipe(
-    Effect.andThen(exitWithin(ctx.pty.exited, within)),
+export const signalAndExit = (ctx: PtySession, signal: NodeJS.Signals, within: Duration.Input) =>
+  ignoreSyncDefect(() => process.kill(ctx.pid, signal)).pipe(
+    Effect.andThen(exitWithin(ctx.exited, within)),
   )
 
 export const spawnNoAuth = Effect.gen(function* () {
@@ -137,7 +252,7 @@ export const seedSkillAndSpawn = Effect.gen(function* () {
 })
 
 /** Wait until the output, colors stripped, has contained `text` at some point. */
-export const ptyWaitFor = (ctx: TestContext, text: string, opts: { timeout: number }) =>
+export const ptyWaitFor = (ctx: PtySession, text: string, opts: { timeout: number }) =>
   waitFor(
     Effect.sync(() => Bun.stripANSI(ctx.output)),
     (output) => output.includes(text),
@@ -151,7 +266,7 @@ export const ptyWaitFor = (ctx: TestContext, text: string, opts: { timeout: numb
  * parsed grid shows only what a reader sees.
  */
 export const screenWaitFor = (
-  ctx: TestContext,
+  ctx: PtySession,
   predicate: (visible: ReadonlyArray<string>) => boolean,
   opts: { timeout: number; label: string },
 ) =>
@@ -189,7 +304,7 @@ const SETTLE_POLL_MS = 50
  * when the quiet window never opens.
  */
 export const settlePty = (
-  ctx: Pick<TestContext, "output">,
+  ctx: Pick<PtySession, "output">,
   options: SettleOptions = {},
 ): Effect.Effect<void, PtySettleError> =>
   Effect.gen(function* () {
@@ -249,6 +364,30 @@ export const historyText = (grid: TerminalGrid): ReadonlyArray<string> =>
 export const countRows = (rows: ReadonlyArray<string>, needle: string): number =>
   rows.filter((row) => row.includes(needle)).length
 
+const newEmulator = (size: PtySize) =>
+  new Terminal({ cols: size.cols, rows: size.rows, scrollback: 100_000, allowProposedApi: true })
+
+/** Wait until `emulator` has processed every write so far. */
+const drained = (emulator: Terminal, bytes = ""): Effect.Effect<void> =>
+  Effect.callback<void>((resume) => {
+    emulator.write(bytes, () => resume(Effect.void))
+  })
+
+/** Rows `from` (inclusive) to `to` (exclusive) of the active buffer. */
+const readRows = (emulator: Terminal, from: number, to: number): string[] => {
+  const buffer = emulator.buffer.active
+  const rows: string[] = []
+  for (let y = from; y < to; y++) {
+    rows.push(
+      Option.match(Option.fromNullishOr(buffer.getLine(y)), {
+        onNone: () => "",
+        onSome: (line) => line.translateToString(false),
+      }),
+    )
+  }
+  return rows
+}
+
 /**
  * Replay raw pty bytes through a headless VT emulator and read the grid back.
  *
@@ -257,38 +396,275 @@ export const countRows = (rows: ReadonlyArray<string>, needle: string): number =
  * line feed at its bottom row pushes the top row into scrollback. `baseY` is
  * where that scrollback ends and the screen begins.
  */
-const parseTerminal = (bytes: string, size: PtySize): Effect.Effect<TerminalGrid, never, never> =>
-  Effect.callback<TerminalGrid>((resume) => {
-    const terminal = new Terminal({
-      cols: size.cols,
-      rows: size.rows,
-      scrollback: 100_000,
-      allowProposedApi: true,
-    })
-    terminal.write(bytes, () => {
-      const buffer = terminal.buffer.active
-      const readRow = (y: number): string => {
-        const line = buffer.getLine(y)
-        if (Predicate.isUndefined(line)) return ""
-        return line.translateToString(false)
-      }
-      const history: string[] = []
-      for (let y = 0; y < buffer.baseY; y++) history.push(readRow(y))
-      const visible: string[] = []
-      for (let y = buffer.baseY; y < buffer.length; y++) visible.push(readRow(y))
-      terminal.dispose()
-      resume(Effect.succeed({ history, visible, cols: size.cols, rows: size.rows }))
-    })
-  })
+const parseTerminal = (bytes: string, size: PtySize): Effect.Effect<TerminalGrid> =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => newEmulator(size)),
+    (emulator) =>
+      drained(emulator, bytes).pipe(
+        Effect.map(() => {
+          const buffer = emulator.buffer.active
+          return {
+            history: readRows(emulator, 0, buffer.baseY),
+            visible: readRows(emulator, buffer.baseY, buffer.length),
+            cols: size.cols,
+            rows: size.rows,
+          }
+        }),
+      ),
+    (emulator) => ignoreSyncDefect(() => emulator.dispose()),
+  )
 
 /**
  * Settle, then replay everything captured by then into a grid. The output is
  * read after the quiet window, not when the capture is built.
  */
 export const settleAndCapture = (
-  ctx: Pick<TestContext, "output" | "size">,
+  ctx: Pick<PtySession, "output" | "size">,
   options: SettleOptions = {},
 ): Effect.Effect<TerminalGrid, PtySettleError> =>
   settlePty(ctx, options).pipe(
     Effect.andThen(Effect.suspend(() => parseTerminal(ctx.output, ctx.size))),
   )
+
+// ── Live screen ──
+
+/** A session whose output also feeds a live emulator that follows each resize, as a terminal window does. */
+interface LivePtySession extends PtySession {
+  readonly screen: Terminal
+}
+
+/**
+ * Start `command` on a pty with a live emulator on the other side. Unlike the
+ * replay above, which reads all output at the current size, the emulator saw
+ * each byte at the size it was written for, so history across a resize reads
+ * as a real terminal's would. It also answers the child's terminal queries
+ * (device attributes, cursor position).
+ */
+const openLivePty = (spec: PtyCommand): Effect.Effect<LivePtySession, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const screen = yield* Effect.acquireRelease(
+      Effect.sync(() => newEmulator(spec.size)),
+      (emulator) => ignoreSyncDefect(() => emulator.dispose()),
+    )
+    const pty = yield* openPty(spec, (text) => screen.write(text))
+    yield* Effect.acquireRelease(
+      Effect.sync(() => screen.onData((reply) => pty.write(reply))),
+      (subscription) => ignoreSyncDefect(() => subscription.dispose()),
+    )
+    const session: LivePtySession = {
+      get output() {
+        return pty.output
+      },
+      get size() {
+        return pty.size
+      },
+      pid: pty.pid,
+      exited: pty.exited,
+      write: pty.write,
+      resize: (next) =>
+        Effect.sync(() => screen.resize(next.cols, next.rows)).pipe(
+          Effect.andThen(pty.resize(next)),
+        ),
+      screen,
+    }
+    return session
+  })
+
+/** Which rows a capture reads: the screen as drawn now, or all of it with the scrollback above. */
+const captureRanges = {
+  viewport: (screen: Terminal) => [
+    screen.buffer.active.viewportY,
+    screen.buffer.active.viewportY + screen.rows,
+  ],
+  all: (screen: Terminal) => [0, screen.buffer.active.length],
+} satisfies Record<string, (screen: Terminal) => readonly [number, number]>
+
+/** The rows of `scope`, trailing blanks trimmed. */
+const screenRows = (session: LivePtySession, scope: keyof typeof captureRanges): string[] => {
+  const [from, to] = captureRanges[scope](session.screen)
+  return readRows(session.screen, from, to).map((row) => row.trimEnd())
+}
+
+/** The cursor and the first 16 cells of its row: `x:[characters]/width` for each. */
+const cursorCells = (session: LivePtySession): string => {
+  const buffer = session.screen.buffer.active
+  const line = Option.fromNullishOr(buffer.getLine(buffer.viewportY + buffer.cursorY))
+  const cells = Array.from({ length: 16 }, (_, x) =>
+    Option.match(
+      Option.flatMap(line, (row) => Option.fromNullishOr(row.getCell(x))),
+      {
+        onNone: () => `${x}:-`,
+        onSome: (cell) => `${x}:[${cell.getChars()}]/${cell.getWidth()}`,
+      },
+    ),
+  )
+  return `cursor=${buffer.cursorX},${buffer.cursorY} ${cells.join(" ")}`
+}
+
+// ── Drive scripts ──
+
+/**
+ * One step of a drive script. `send` writes text, `keys` writes a named key
+ * from `keys` (or the text itself), `wait` sleeps, `waitFor` polls the screen
+ * for a regex (default 15 s, logs a miss and goes on), `settle` waits for a
+ * quiet window, `resize` resizes, `cap` / `capAll` save the screen (with
+ * scrollback), `cells` saves the cursor row's cells, `raw` saves the raw
+ * output, and `sh` runs a shell command.
+ */
+const DriveStep = Schema.Union([
+  Schema.Tuple([Schema.Literal("send"), Schema.String]),
+  Schema.Tuple([Schema.Literal("keys"), Schema.String]),
+  Schema.Tuple([Schema.Literal("wait"), Schema.Finite]),
+  Schema.Tuple([Schema.Literal("waitFor"), Schema.String, Schema.optionalKey(Schema.Finite)]),
+  Schema.Tuple([Schema.Literal("settle"), Schema.optionalKey(Schema.Finite)]),
+  Schema.Tuple([Schema.Literal("resize"), Schema.Int, Schema.Int]),
+  Schema.Tuple([Schema.Literals(["cap", "capAll", "cells", "raw"]), Schema.String]),
+  Schema.Tuple([Schema.Literal("sh"), Schema.String]),
+])
+type DriveStep = typeof DriveStep.Type
+
+/**
+ * A live check as data: the program to run, the pty size, where captures go,
+ * and the steps. `env` is laid over a minimal terminal environment (`PATH`,
+ * `TERM`, `COLORTERM`, `LANG`), never over the caller's, so no credential
+ * reaches the program unless the script names it. `cwd` and `out` resolve
+ * against the script's directory.
+ */
+export const DriveScript = Schema.Struct({
+  command: Schema.NonEmptyArray(Schema.String),
+  cwd: Schema.optionalKey(Schema.String),
+  env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  cols: Schema.Int,
+  rows: Schema.Int,
+  out: Schema.String,
+  steps: Schema.Array(DriveStep),
+})
+type DriveScript = typeof DriveScript.Type
+
+const WAIT_FOR_DEFAULT_MS = 15_000
+
+/**
+ * Run `script` on a live pty, print each capture and save it under
+ * `script.out`. Returns the exit code, `None` when the program outlived the
+ * cleanup (ctrl+c, then SIGKILL).
+ */
+export const runDriveScript = (
+  script: DriveScript & { readonly cwd: string },
+): Effect.Effect<Option.Option<number>, PtySettleError, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    yield* fs.makeDirectory(script.out, { recursive: true }).pipe(Effect.orDie)
+    const started = yield* Clock.currentTimeMillis
+    const elapsed = Clock.currentTimeMillis.pipe(Effect.map((now) => now - started))
+
+    // The scope ends with the cleanup, which has waited for the exit already;
+    // the code is read after it.
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const session = yield* openLivePty({
+          command: script.command,
+          cwd: script.cwd,
+          env: terminalEnv(
+            // oxlint-disable-next-line effect/noGlobals -- a drive script runs its program with only the caller's PATH
+            { PATH: Bun.env["PATH"], COLORTERM: "truecolor", LANG: "C.UTF-8" },
+            script.env ?? {},
+          ),
+          size: { cols: script.cols, rows: script.rows },
+        })
+        const save = (name: string, extension: string, text: string) =>
+          fs.writeFileString(path.join(script.out, `${name}.${extension}`), text).pipe(Effect.orDie)
+        const capture = (name: string, scope: "viewport" | "all") =>
+          Effect.gen(function* () {
+            yield* drained(session.screen)
+            const { screen } = session
+            const buffer = screen.buffer.active
+            const header =
+              `# ${name} ${screen.cols}x${screen.rows} buffer=${buffer.type} ` +
+              `cursor=${buffer.cursorX},${buffer.cursorY} t=${yield* elapsed}ms`
+            const numbered = screenRows(session, scope).map(
+              (row, index) => `${String(index + 1).padStart(3, "0")}|${row}`,
+            )
+            const text = `${header}\n${numbered.join("\n")}\n`
+            yield* Console.log(text)
+            yield* save(name, "txt", text)
+          })
+        const visibleScreen = drained(session.screen).pipe(
+          Effect.map(() => screenRows(session, "viewport").join("\n")),
+        )
+
+        const runStep = (step: DriveStep): Effect.Effect<void, PtySettleError> => {
+          switch (step[0]) {
+            case "send":
+              return Effect.sync(() => session.write(step[1]))
+            case "keys": {
+              const name = step[1]
+              const bytes = Arr.findFirst(Object.entries(keys), ([key]) => key === name)
+              return Effect.sync(() =>
+                session.write(
+                  Option.match(bytes, { onNone: () => name, onSome: ([, value]) => value }),
+                ),
+              )
+            }
+            case "wait":
+              return Effect.sleep(`${step[1]} millis`)
+            case "waitFor": {
+              const pattern = new RegExp(step[1])
+              return waitFor(
+                visibleScreen,
+                (text) => pattern.test(text),
+                step[2] ?? WAIT_FOR_DEFAULT_MS,
+                step[1],
+              ).pipe(
+                Effect.as("hit"),
+                Effect.orElseSucceed(() => "TIMEOUT"),
+                Effect.flatMap((result) =>
+                  Effect.flatMap(elapsed, (ms) =>
+                    Console.log(`waitFor ${step[1]}: ${result} ${ms}ms`),
+                  ),
+                ),
+              )
+            }
+            case "settle":
+              return settlePty(session, { quietMs: step[1] ?? 500 })
+            case "resize":
+              return session.resize({ cols: step[1], rows: step[2] })
+            case "cap":
+              return capture(step[1], "viewport")
+            case "capAll":
+              return capture(step[1], "all")
+            case "cells":
+              return drained(session.screen).pipe(
+                Effect.map(() => `# ${step[1]} ${cursorCells(session)}`),
+                Effect.tap((text) => Console.log(text)),
+                Effect.flatMap((text) => save(step[1], "txt", `${text}\n`)),
+              )
+            case "raw":
+              return Effect.suspend(() => save(step[1], "raw", session.output))
+            case "sh":
+              return Effect.acquireUseRelease(
+                Effect.sync(() =>
+                  // oxlint-disable-next-line effect/noGlobals -- a drive script's setup command runs as a plain shell process
+                  Bun.spawn(["/bin/sh", "-c", step[1]], {
+                    cwd: script.cwd,
+                    stdio: ["ignore", "ignore", "inherit"],
+                  }),
+                ),
+                (shell) =>
+                  exitWithin(shell.exited, "30 seconds").pipe(
+                    Effect.flatMap((code) =>
+                      Console.log(
+                        `sh: ${step[1]} -> exit ${Option.getOrElse(code, () => "timeout")}`,
+                      ),
+                    ),
+                  ),
+                (shell) => ignoreSyncDefect(() => shell.kill("SIGKILL")),
+              )
+          }
+        }
+
+        for (const step of script.steps) yield* runStep(step)
+        return session
+      }),
+    ).pipe(Effect.flatMap((ended) => exitWithin(ended.exited, "100 millis")))
+  })

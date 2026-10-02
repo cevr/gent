@@ -99,7 +99,7 @@ packages/core/src/       # Everything non-UI
 packages/extensions/     # Shipped extensions (providers, tools, MCP, cell, delegate)
 packages/sdk/            # Client wrappers
 packages/tooling/        # gent lint rules and guards
-packages/e2e/            # PTY and server-process lifecycle tests
+packages/e2e/            # PTY and server-process lifecycle tests, drive scripts for live checks
 apps/tui/                # @opentui/solid TUI
 ```
 

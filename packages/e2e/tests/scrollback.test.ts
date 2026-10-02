@@ -20,19 +20,18 @@ import {
   countRows,
   gridText,
   historyText,
+  keys,
   ptyWaitFor,
   screenWaitFor,
   seedAndSpawn,
   settleAndCapture,
   settlePty,
   signalAndExit,
-  type TestContext,
+  type PtySession,
 } from "../src/pty-fixture"
 
 const TEST_TIMEOUT = 120_000
 const EFFECT_TIMEOUT = "110 seconds"
-
-const ENTER = "\r"
 
 /** A short screen, so a handful of turns is already taller than it. */
 const SHORT_SCREEN = { cols: 80, rows: 14 }
@@ -57,13 +56,13 @@ class TranscriptReadinessError extends Schema.TaggedError<TranscriptReadinessErr
  * is deterministic and no network is involved. A running turn animates its
  * footer, so the output going quiet is the turn finishing.
  */
-const submitMessages = (ctx: TestContext, count: number) =>
+const submitMessages = (ctx: PtySession, count: number) =>
   Effect.gen(function* () {
     yield* ptyWaitFor(ctx, "ready", { timeout: 25_000 })
     for (let index = 1; index <= count; index++) {
-      ctx.pty.write(messageText(index))
+      ctx.write(messageText(index))
       yield* settlePty(ctx, TYPED)
-      ctx.pty.write(ENTER)
+      ctx.write(keys.enter)
       yield* screenWaitFor(
         ctx,
         (visible) => visible.some((row) => row.trimEnd() === `┃ ${messageText(index)}`),
@@ -122,7 +121,7 @@ describe("E2E: Scrollback ownership", () => {
         // A resize re-lays out the transcript and replays it. The replay must
         // not drop rows, and must not add a second copy of any of them.
         const beforeResize = ctx.output.length
-        ctx.resize({ cols: SHORT_SCREEN.cols, rows: 24 })
+        yield* ctx.resize({ cols: SHORT_SCREEN.cols, rows: 24 })
         yield* waitFor(
           Effect.sync(() => ctx.output.length),
           (length) => length > beforeResize,
@@ -201,14 +200,14 @@ describe("E2E: Scrollback ownership", () => {
         const ctx = yield* seedAndSpawn(["--debug"], { cols: 80, rows: 24 })
         yield* ptyWaitFor(ctx, "ready", { timeout: 25_000 })
         yield* settlePty(ctx, TYPED)
-        ctx.pty.write("/new")
+        ctx.write("/new")
         yield* settlePty(ctx, TYPED)
-        ctx.pty.write(ENTER)
+        ctx.write(keys.enter)
         yield* settlePty(ctx, SETTLE)
         const prompt = ["longg", "row two", "row three", "row four", "row five"]
-        ctx.pty.write(prompt.join("\n"))
+        ctx.write(prompt.join("\n"))
         yield* settlePty(ctx, TYPED)
-        ctx.pty.write(ENTER)
+        ctx.write(keys.enter)
         yield* ptyWaitFor(ctx, "Retried 2/3", { timeout: 25_000 })
         const grid = yield* settleAndCapture(ctx, { quietMs: 1_500, timeoutMs: 25_000 })
         const rows = [...grid.history, ...grid.visible].map((row) => row.trimEnd())

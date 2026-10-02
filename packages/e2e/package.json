@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "drive": "bun src/drive.ts",
     "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../tooling/src/test-preload.ts --timeout=30000 --max-concurrency=1 tests"
   },
   "dependencies": {
@@ -12,8 +13,7 @@
     "@gent/sdk": "workspace:*"
   },
   "devDependencies": {
-    "@xterm/headless": "^6.0.0",
-    "zigpty": "^0.2.1"
+    "@xterm/headless": "^6.0.0"
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",
