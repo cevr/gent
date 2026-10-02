@@ -11,7 +11,7 @@ import * as Prompt from "effect/ai/Prompt"
 import type * as Response from "effect/ai/Response"
 import * as AiTool from "effect/ai/Tool"
 import type { TurnNotice } from "./extension.js"
-import { clipSummary, summarizeOutput } from "./message.js"
+import { clipSummary, summarizeToolResult } from "./message.js"
 
 // ── prompt ──────────────────────────────────────────────────────────────────
 
@@ -559,7 +559,7 @@ export const toolResultSummary = (
   input: unknown,
   result: { readonly isFailure: boolean; readonly result: unknown },
 ): string => {
-  const fallback = () => summarizeOutput(result.result)
+  const fallback = () => summarizeToolResult(result)
   if (result.isFailure) return fallback()
   const summarize = Option.flatMap(tool, (found) =>
     Option.fromUndefinedOr(getToolMetadata(found).summary),

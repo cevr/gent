@@ -41,7 +41,7 @@ import {
   responseUsage,
   type SessionAdmission,
   stringifyOutput,
-  summarizeOutput,
+  summarizeToolResult,
   openedByClient,
 } from "../domain/message.js"
 import {
@@ -1023,7 +1023,7 @@ const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProjections
         branchId: params.branchId,
         toolCallId,
         toolName: part.name,
-        summary: summarizeOutput(part.result),
+        summary: summarizeToolResult(part),
         output: stringifyOutput(part.result),
         resultJson: encodeToolOutput(part.result),
         assistantMessageId: params.assistantMessageId,

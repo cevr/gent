@@ -160,6 +160,17 @@ describe("tool summary", () => {
   })
 })
 
+describe("line count", () => {
+  test("a final newline ends the last line and does not start one", () => {
+    expect(lineCount("")).toBe(0)
+    expect(lineCount("\n")).toBe(1)
+    expect(lineCount("hello\n")).toBe(1)
+    expect(lineCount("a\nb\n")).toBe(2)
+    expect(lineCount("a\n\n")).toBe(2)
+    expect(lineCount("a\nb\nc")).toBe(3)
+  })
+})
+
 describe("code-point-safe cuts", () => {
   // An emoji at every offset around each bound: a cut that splits it leaves a
   // lone surrogate, which a provider refuses.
@@ -1692,5 +1703,75 @@ describe("message part projection", () => {
       ]),
     ]
     expect(latestAssistantText(emptyFirstItem)).toBe("the answer")
+  })
+
+  const callThenResult = (
+    id: string,
+    result: Prompt.ToolResultPart["result"],
+    isFailure = false,
+  ) => [
+    makeMessage(`a-${id}`, "assistant", [
+      Prompt.toolCallPart({ id, name: "read", params: {}, providerExecuted: false }),
+    ]),
+    makeMessage(`t-${id}`, "tool", [
+      Prompt.toolResultPart({ id, name: "read", result, isFailure, providerExecuted: false }),
+    ]),
+  ]
+
+  test("a failed result projects an error interaction that shows its text", () => {
+    const [projected] = projectMessagesWithToolInteractions(
+      callThenResult("tc-failed", "File not found", true),
+    )
+    expect(projected?.toolInteractions).toEqual([
+      {
+        id: ToolCallId.make("tc-failed"),
+        toolName: "read",
+        status: "error",
+        input: {},
+        summary: "File not found",
+        output: "File not found",
+        durationMs: absent,
+      },
+    ])
+  })
+
+  test("a failed call's summary is its error text, not the JSON that carries it", () => {
+    const error = `Tool 'read' failed: ${"no such file ".repeat(12)}`
+    const [projected] = projectMessagesWithToolInteractions(
+      callThenResult("tc-failed-json", { error }, true),
+    )
+    expect(projected?.toolInteractions[0]?.summary).toBe(clipSummary(error))
+  })
+
+  test("an object result summarizes as one line of JSON and shows its full text", () => {
+    const [projected] = projectMessagesWithToolInteractions(
+      callThenResult("tc-object", { files: ["a.ts", "b.ts"] }),
+    )
+    const interaction = projected?.toolInteractions[0]
+    expect(interaction?.summary).toBe('{"files":["a.ts","b.ts"]}')
+    expect(interaction?.output).toContain('"files"')
+  })
+
+  test("a result with no call before it projects no interaction", () => {
+    const projected = projectMessagesWithToolInteractions([
+      makeMessage("a-orphan", "assistant", [Prompt.textPart({ text: "Hi there" })]),
+      makeMessage("t-orphan", "tool", [
+        Prompt.toolResultPart({
+          id: "tc-orphan",
+          name: "read",
+          result: "orphan",
+          isFailure: false,
+          providerExecuted: false,
+        }),
+      ]),
+    ])
+    expect(projected.flatMap((message) => message.toolInteractions)).toEqual([])
+  })
+
+  test("an assistant answer with no tool call has no tool interactions", () => {
+    const [projected] = projectMessagesWithToolInteractions([
+      makeMessage("a-text-only", "assistant", [Prompt.textPart({ text: "Just text" })]),
+    ])
+    expect(projected?.toolInteractions).toEqual([])
   })
 })

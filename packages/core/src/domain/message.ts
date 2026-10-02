@@ -709,12 +709,28 @@ export const clipSummary = (text: string): string =>
   clipChars(text.trim().split("\n")[0]?.trimEnd() ?? "", 100, "...")
 
 // oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
-export const summarizeOutput = (value: unknown): string => {
+const summarizeOutput = (value: unknown): string => {
   if (Predicate.isString(value)) return clipSummary(value)
   return Option.match(tryStringifyJson(value), {
     onNone: () => String(value),
     onSome: clipSummary,
   })
+}
+
+/** The body the tool runner stores for a failed call (`{ error }`, sometimes a `reason`). */
+const isFailureBody = Schema.is(Schema.Struct({ error: Schema.String }))
+
+/**
+ * One-line summary of a tool result. A failure reads as its error text, not
+ * the JSON that carries it: a clipped `{"error":"...` line cannot be parsed
+ * back or read.
+ */
+export const summarizeToolResult = (result: {
+  readonly isFailure: boolean
+  readonly result: unknown
+}): string => {
+  if (result.isFailure && isFailureBody(result.result)) return clipSummary(result.result.error)
+  return summarizeOutput(result.result)
 }
 
 // ── message-part-display ────────────────────────────────────────────────────
@@ -793,7 +809,7 @@ const messagePartToolResult = (part: MessagePart): Option.Option<ToolResultPartP
     id: part.id,
     toolName: part.name,
     value: part.result,
-    summary: summarizeOutput(part.result),
+    summary: summarizeToolResult(part),
     text: stringifyOutput(part.result),
     isError: part.isFailure,
   })

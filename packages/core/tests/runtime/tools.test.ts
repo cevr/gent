@@ -908,7 +908,7 @@ describe("tool execution", () => {
     }).pipe(Effect.timeout("5 seconds")),
   )
 
-  liveTest("a failure, or a summary that throws, keeps the head of the output", () =>
+  liveTest("a failure reads as its error text; a summary that throws keeps the output's head", () =>
     Effect.gen(function* () {
       const ThrowingTool = tool({
         id: "throwing",
@@ -935,7 +935,7 @@ describe("tool execution", () => {
       expect(thrown).toEqual([{ tag: "ToolCallSucceeded", summary: '{"note":"kept"}' }])
       expect(failed).toHaveLength(1)
       expect(failed[0]?.tag).toBe("ToolCallFailed")
-      expect(failed[0]?.summary).not.toBe("never shown")
+      expect(failed[0]?.summary).toMatch(/^Tool 'failing' failed: .*disk full/)
     }).pipe(Effect.timeout("5 seconds")),
   )
 })
