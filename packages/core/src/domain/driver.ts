@@ -30,10 +30,32 @@ export type DriverFailureId = typeof DriverFailureId.Type
 
 // ── Auth method wire types ──
 
-/** How a provider signs in: an API key or an OAuth login. */
+/**
+ * One text field an API sign-in asks for after the key, such as an account
+ * id. The answer is not a secret: the store keeps it beside the key as
+ * `metadata[key]`. When `env` names a variable that is set, `/auth` does not
+ * ask: the driver reads the variable instead.
+ */
+export const AuthPrompt = Schema.Struct({
+  key: Schema.String,
+  label: Schema.String,
+  placeholder: Schema.optional(Schema.String),
+  env: Schema.optional(Schema.String),
+})
+export type AuthPrompt = typeof AuthPrompt.Type
+
+/** The answers to an API sign-in's prompts, by prompt key. */
+export const AuthMetadata = Schema.Record(Schema.String, Schema.String)
+export type AuthMetadata = typeof AuthMetadata.Type
+
+/**
+ * How a provider signs in: an API key or an OAuth login. An API method may
+ * ask `prompts` after the key, in order.
+ */
 export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
   type: Schema.Literals(["api", "oauth"]),
   label: Schema.String,
+  prompts: Schema.optional(Schema.Array(AuthPrompt)),
 }) {}
 
 export const AuthAuthorizationMethod = Schema.Literals(["auto", "code", "done"])
@@ -138,11 +160,13 @@ const UpdateStoredOAuth = Schema.declare<UpdateStoredOAuth>((value): value is Up
 
 /**
  * The stored credential a driver receives in `resolveModel` and
- * `listModels`. An OAuth sign-in carries no token copy: the store is the
- * one source, read and written through `update`.
+ * `listModels`. An API key carries the answers to its method's prompts
+ * (`metadata`, absent for a key stored without any). An OAuth sign-in carries
+ * no token copy: the store is the one source, read and written through
+ * `update`.
  */
 export const ProviderAuthInfo = Schema.TaggedUnion({
-  Api: { key: Schema.String },
+  Api: { key: Schema.String, metadata: Schema.optional(AuthMetadata) },
   Oauth: { update: UpdateStoredOAuth },
 })
 export type ProviderAuthInfo = Schema.Schema.Type<typeof ProviderAuthInfo>

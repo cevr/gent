@@ -833,6 +833,97 @@ describe("auth.listProviders", () => {
     ),
   )
 })
+describe("auth sign-in prompts", () => {
+  it.live(
+    "a prompt whose variable is set is not asked, and the key's answers reach the driver",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // The server reads env through the ConfigProvider: the region is set, the account is not.
+          const envLayer = ConfigProvider.layer(
+            ConfigProvider.fromEnv({ env: { PROMPTED_REGION: "eu" } }),
+          )
+          const accountPrompt = {
+            key: "accountId",
+            label: "Account ID",
+            placeholder: "e.g. 0123abcd",
+            env: "PROMPTED_ACCOUNT_ID",
+          }
+          // The driver names its one model after the key and the answers it receives.
+          const prompted: LoadedExtension = {
+            manifest: { id: ExtensionId.make("@test/prompted") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: {
+              modelDrivers: [
+                {
+                  id: "prompted",
+                  name: "Prompted",
+                  resolveModel: () => Effect.succeed(stubModel),
+                  listModels: (authInfo) => {
+                    if (Predicate.isUndefined(authInfo) || authInfo._tag !== "Api") {
+                      return Effect.succeed([])
+                    }
+                    const answers = Object.entries(authInfo.metadata ?? {}).map(
+                      ([key, value]) => `${key}=${value}`,
+                    )
+                    return Effect.succeed([
+                      Model.make({
+                        id: ModelId.make("prompted/model"),
+                        name: [authInfo.key, ...answers].join(" "),
+                        provider: ProviderId.make("prompted"),
+                      }),
+                    ])
+                  },
+                  auth: {
+                    methods: [
+                      AuthMethod.make({
+                        type: "api",
+                        label: "Prompted key",
+                        prompts: [
+                          accountPrompt,
+                          { key: "region", label: "Region", env: "PROMPTED_REGION" },
+                        ],
+                      }),
+                    ],
+                  },
+                },
+              ],
+            },
+          }
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              agents: e2ePreset.agents,
+              providerLayer,
+              extensions: [prompted],
+            }).pipe(Layer.provide(envLayer)),
+          )
+          const { sessionId } = yield* client.session.create({})
+          const listedName = client.model
+            .list({ sessionId })
+            .pipe(
+              Effect.map((models) =>
+                models.filter((model) => model.provider === "prompted").map((model) => model.name),
+              ),
+            )
+
+          const methods = yield* client.auth.listMethods({ sessionId })
+          expect(methods["prompted"]?.map((method) => method.prompts)).toEqual([[accountPrompt]])
+
+          yield* client.auth.setKey({ provider: "prompted", key: "pk-plain", sessionId })
+          expect(yield* listedName).toEqual(["pk-plain"])
+          yield* client.auth.setKey({
+            provider: "prompted",
+            key: "pk-answered",
+            metadata: { accountId: "acct-7" },
+            sessionId,
+          })
+          expect(yield* listedName).toEqual(["pk-answered accountId=acct-7"])
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
+  )
+})
 describe("auth persistence RPC failures", () => {
   it.live("each auth call surfaces its store failure", () => {
     const rows: ReadonlyArray<{

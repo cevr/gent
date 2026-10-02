@@ -729,6 +729,40 @@ describe("Auth", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    // A sign-in's prompt answers are an additive field: a key stored before
+    // them still reads, without any.
+    it.scopedLive("keeps an API key's prompt answers, and reads a key stored without them", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${dir}/older`, '{"_tag":"Api","type":"api","key":"sk-older"}')
+        const stored = yield* Effect.gen(function* () {
+          const auth = yield* Auth
+          yield* auth.set(
+            "cloudflare",
+            AuthInfo.cases.Api.make({
+              type: "api",
+              key: "cf-token",
+              metadata: { accountId: "acct-1", gatewayId: "gw-1" },
+            }),
+          )
+          return [yield* auth.get("cloudflare"), yield* auth.get("older")] as const
+        }).pipe(Effect.provide(Auth.Live(dir)))
+        const reread = yield* Effect.gen(function* () {
+          return yield* (yield* Auth).get("cloudflare")
+        }).pipe(Effect.provide(Auth.Live(dir)))
+
+        const withAnswers = AuthInfo.cases.Api.make({
+          type: "api",
+          key: "cf-token",
+          metadata: { accountId: "acct-1", gatewayId: "gw-1" },
+        })
+        expect(stored[0]).toEqual(withAnswers)
+        expect(reread).toEqual(withAnswers)
+        expect(stored[1]).toEqual({ _tag: "Api", type: "api", key: "sk-older" })
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive("discards a corrupt entry and returns undefined", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem

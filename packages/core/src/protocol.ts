@@ -7,7 +7,7 @@ export {
   ReasoningEffort,
   resolveAgentModel,
 } from "./domain/agent.js"
-export { AuthMethod } from "./domain/driver.js"
+export { AuthMethod, AuthPrompt } from "./domain/driver.js"
 export { AuthAuthorization, AuthProviderInfo } from "./runtime/provider.js"
 export { AgentEvent, EventEnvelope, InteractionPresented } from "./domain/event.js"
 // One decision schema; the client names its type `ApprovalResult`.

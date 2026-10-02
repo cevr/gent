@@ -22,7 +22,7 @@ import {
   InteractionDecisionConflictError,
   InteractionRequestMismatchError,
 } from "../domain/interaction.js"
-import { AuthMethod, DriverError, ProviderAuthError } from "../domain/driver.js"
+import { AuthMetadata, AuthMethod, DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
 import { SessionRuntimeError } from "../runtime/session.js"
 import {
@@ -236,11 +236,12 @@ export type UpdateSessionSettingsInput = typeof UpdateSessionSettingsInput.Type
 /**
  * A key for a sign-in, stored under the driver that owns it, as the session's
  * profile resolves the owner. A session that does not exist fails and stores
- * nothing.
+ * nothing. `metadata` holds the answers to the method's prompts, kept beside the key.
  */
 export const SetAuthKeyInput = Schema.Struct({
   provider: Schema.String,
   key: Schema.String,
+  metadata: Schema.optional(AuthMetadata),
   sessionId: SessionId,
 })
 export type SetAuthKeyInput = typeof SetAuthKeyInput.Type

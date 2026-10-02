@@ -27,6 +27,7 @@ import { AgentsViewExtension } from "./agents-view.js"
 import { AnthropicExtension } from "./anthropic.js"
 import { OpenAIExtension } from "./openai.js"
 import { OpenCodeExtension } from "./opencode.js"
+import { CloudflareExtension } from "./cloudflare.js"
 import { TypeSafeExtension } from "./typesafe.js"
 import { SkillsExtension } from "./skills.js"
 import { WorkflowsExtension } from "./workflows.js"
@@ -93,6 +94,7 @@ export const BuiltinExtensions: ReadonlyArray<
   OpenAIExtension,
   TypeSafeExtension,
   OpenCodeExtension,
+  CloudflareExtension,
 ].map((extension) => {
   if (Option.isNone(BuiltinArtifactIdentity)) return extension
   return {

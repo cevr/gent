@@ -37,6 +37,7 @@ import { causeMessage } from "../domain/guards.js"
 import { wireToolName } from "../domain/capability.js"
 import {
   AuthAuthorizationMethod,
+  AuthMetadata,
   AuthMethod,
   DEFAULT_RETRY_POLICY,
   type ModelDriverContribution,
@@ -82,7 +83,9 @@ export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuth
 /**
  * `AuthInfo`: the variants persisted in the store.
  *
- * - `Api`   — bearer/API key; presented to the model driver as `key`.
+ * - `Api`   — bearer/API key; presented to the model driver as `key`, with
+ *             the answers to its method's prompts as `metadata` (absent in a
+ *             record stored without any).
  * - `Oauth` — refreshable bearer token + expiry; driver may rotate.
  *
  * There is no "ambient auth owned by the driver" variant. Drivers that own
@@ -94,6 +97,7 @@ export const AuthInfo = Schema.TaggedUnion({
   Api: {
     type: Schema.Literal("api"),
     key: Schema.String,
+    metadata: Schema.optional(AuthMetadata),
   },
   Oauth: {
     type: Schema.Literal("oauth"),
@@ -624,7 +628,12 @@ const toProviderAuthInfo = (
   providerId: string,
   info: AuthInfo,
 ): ProviderAuthInfo => {
-  if (info.type === "api") return ProviderAuthInfo.cases.Api.make({ key: info.key })
+  if (info.type === "api") {
+    if (Predicate.isUndefined(info.metadata)) {
+      return ProviderAuthInfo.cases.Api.make({ key: info.key })
+    }
+    return ProviderAuthInfo.cases.Api.make({ key: info.key, metadata: info.metadata })
+  }
   return ProviderAuthInfo.cases.Oauth.make({
     update: <A, E>(
       f: (
@@ -667,6 +676,17 @@ const storedOAuthFields = (stored: AuthInfo): Option.Option<StoredOAuthCredentia
 // Login reads the drivers of the `ExtensionRegistry` in context: the caller
 // provides the registry of the session's own profile.
 
+/**
+ * The method as `/auth` asks it: a prompt whose variable is set is left out,
+ * since the driver reads the variable when the stored key has no answer.
+ */
+const askedMethod = (method: AuthMethod): Effect.Effect<AuthMethod> => {
+  if (Predicate.isUndefined(method.prompts)) return Effect.succeed(method)
+  return Effect.filter(method.prompts, (prompt) =>
+    Effect.map(envCredentialSet(Option.fromUndefinedOr(prompt.env)), (set) => !set),
+  ).pipe(Effect.map((prompts) => AuthMethod.make({ ...method, prompts })))
+}
+
 /** The login methods of each driver that has one. */
 export const listAuthMethods = Effect.fn("ProviderLogin.listMethods")(function* () {
   const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
@@ -675,7 +695,7 @@ export const listAuthMethods = Effect.fn("ProviderLogin.listMethods")(function* 
     // A driver that uses another's sign-in signs in through that one.
     if (credentialOwner(modelDrivers, provider.id) !== provider.id) continue
     if (!Predicate.isUndefined(provider.auth) && provider.auth.methods.length > 0) {
-      result[provider.id] = provider.auth.methods
+      result[provider.id] = yield* Effect.forEach(provider.auth.methods, askedMethod)
     }
   }
   return result
