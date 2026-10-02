@@ -605,6 +605,29 @@ const pairB = { sessionId: SessionId.make("session-b"), branchId: BranchId.make(
  * The session view on A, with B one switch away: a test starts an action in
  * A, moves to B before A's server answers, and reads where the answer lands.
  */
+/** A queue drain that answers `content` once the test completes `answer`. */
+const gatedDrain = (content: string) =>
+  Effect.gen(function* () {
+    const asked = yield* Deferred.make<void>()
+    const answer = yield* Deferred.make<void>()
+    const drain = () =>
+      Deferred.complete(asked, Effect.void).pipe(
+        Effect.andThen(Deferred.await(answer)),
+        Effect.as({
+          steering: [],
+          followUp: [
+            {
+              _tag: "FollowUp" satisfies "FollowUp",
+              id: MessageId.make("queued"),
+              content,
+              createdAt: 0,
+            },
+          ],
+        }),
+      )
+    return { asked, answer, drain }
+  })
+
 const mountSessionPair = (overrides: Parameters<typeof createMockClient>[0]) =>
   Effect.gen(function* () {
     const client = createMockClient({
@@ -2124,6 +2147,127 @@ describe("App status and activity rows", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // A session's catalog loads again when the reader returns to it. Until it
+  // settles, the session has no models yet, which is not the same as none:
+  // the picker says it is loading, and `/model <query>` says so too.
+  for (const [surface, typed, expected] of [
+    ["picker", "/model", "Loading the session's models"],
+    ["slash command", "/model sonnet", "Models are still loading"],
+  ] as const) {
+    it.scopedLive(`the ${surface} on a returning session's loading catalog says it loads`, () =>
+      Effect.gen(function* () {
+        const reload = yield* Deferred.make<void>()
+        let readsOfA = 0
+        const view = yield* mountSessionPair({
+          model: {
+            list: (input: { readonly sessionId: SessionId }) =>
+              Effect.suspend(() => {
+                const sonnet = Model.make({
+                  id: ModelId.make("anthropic/sonnet"),
+                  name: "Sonnet",
+                  provider: ProviderId.make("anthropic"),
+                })
+                if (input.sessionId !== pairA.sessionId) return Effect.succeed([sonnet])
+                readsOfA += 1
+                if (readsOfA === 1) return Effect.succeed([sonnet])
+                return Deferred.await(reload).pipe(Effect.as([sonnet]))
+              }),
+          },
+          driver: {
+            list: () =>
+              Effect.succeed({
+                drivers: [{ id: "anthropic" }],
+                overrides: {},
+                agents: [testAgent],
+              }),
+          },
+        })
+        yield* waitForFrame(view.setup, () => view.client.models().length === 1, "A's catalog")
+        yield* view.switchTo(pairB, "Session B")
+        yield* view.switchTo(pairA, "Session A")
+        yield* waitForFrame(view.setup, () => readsOfA === 2, "A's catalog read again")
+        yield* typeCommand(typed)(view.setup)
+        const frame = yield* waitForFrame(
+          view.setup,
+          (next) => next.includes(expected),
+          "the loading note",
+        )
+        expect(frame).not.toContain("No model matches")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // Two forks out at once: the one asked for last is the reader's choice,
+  // whichever answers first.
+  for (const order of [
+    ["older", "newer"],
+    ["newer", "older"],
+  ] as const) {
+    it.scopedLive(`of two forks the newer is shown when the ${order[0]} answers first`, () =>
+      Effect.gen(function* () {
+        const asked = { older: yield* Deferred.make<void>(), newer: yield* Deferred.make<void>() }
+        const answer = { older: yield* Deferred.make<void>(), newer: yield* Deferred.make<void>() }
+        const answered = {
+          older: yield* Deferred.make<void>(),
+          newer: yield* Deferred.make<void>(),
+        }
+        const switched: Array<BranchId> = []
+        let forks = 0
+        const view = yield* mountSessionPair({
+          message: {
+            list: () =>
+              Effect.succeed([
+                StoredMessage.cases.regular.make({
+                  id: MessageId.make("fork-here"),
+                  sessionId: pairA.sessionId,
+                  branchId: pairA.branchId,
+                  role: "user",
+                  parts: [Prompt.textPart({ text: "fork from this" })],
+                  createdAt: dateFromMillis(1),
+                }),
+              ]),
+          },
+          branch: {
+            fork: () =>
+              Effect.suspend(() => {
+                forks += 1
+                let which: "older" | "newer" = "newer"
+                if (forks === 1) which = "older"
+                return Deferred.complete(asked[which], Effect.void).pipe(
+                  Effect.andThen(Deferred.await(answer[which])),
+                  Effect.as({ branchId: BranchId.make(`branch-${which}`) }),
+                  Effect.ensuring(Deferred.complete(answered[which], Effect.void)),
+                )
+              }),
+            switch: (input: { readonly toBranchId: BranchId }) =>
+              Effect.sync(() => {
+                switched.push(input.toBranchId)
+              }),
+          },
+        })
+        const forkFromPane = Effect.gen(function* () {
+          yield* Effect.promise(() => view.setup.mockInput.typeText("/fork"))
+          view.setup.mockInput.pressEnter()
+          yield* waitForFrame(
+            view.setup,
+            (frame) => frame.includes("Fork from message"),
+            "the fork pane",
+          )
+          view.setup.mockInput.pressEnter()
+        })
+        yield* forkFromPane
+        yield* Deferred.await(asked.older)
+        yield* forkFromPane
+        yield* Deferred.await(asked.newer)
+        for (const which of order) {
+          yield* Deferred.complete(answer[which], Effect.void)
+          yield* Deferred.await(answered[which])
+          yield* view.settle
+        }
+        yield* waitForFrame(view.setup, () => switched.length > 0, "a switch")
+        expect(switched).toEqual([BranchId.make("branch-newer")])
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   // The drain commits on the server before it answers: the text it took
   // belongs to A's draft, even when A's view is gone by then.
   it.scopedLive("a queue taken back after a switch lands in its own session's draft", () =>
@@ -2174,6 +2318,42 @@ describe("App status and activity rows", () => {
       )
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // Text the reader typed is never lost to a restore: the queued text goes
+  // ahead of the draft, as a refused send does. The draft can change while
+  // the drain is out, in the composer on screen or in a kept draft.
+  for (const [where, title] of [
+    ["now", "alt+up keeps the draft and puts the queued text ahead of it"],
+    ["waiting", "text typed while the drain is out stays behind the queued text"],
+    ["returned", "a kept draft edited after a return stays behind the queued text"],
+  ] as const) {
+    it.scopedLive(title, () =>
+      Effect.gen(function* () {
+        const drain = yield* gatedDrain("queued in A")
+        const view = yield* mountSessionPair({ queue: { drain: drain.drain } })
+        const typeIn = (text: string) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => view.setup.mockInput.typeText(text))
+            yield* waitForFrame(view.setup, (frame) => frame.includes(text), text)
+          })
+        if (where === "now") yield* typeIn("my own draft")
+        view.setup.mockInput.pressArrow("up", { meta: true })
+        yield* Deferred.await(drain.asked)
+        if (where === "waiting") yield* typeIn("my own draft")
+        if (where === "returned") {
+          yield* view.switchTo(pairB, "Session B")
+          yield* view.switchTo(pairA, "Session A")
+          yield* typeIn("my own draft")
+        }
+        yield* Deferred.complete(drain.answer, Effect.void)
+        const frame = yield* waitForFrame(
+          view.setup,
+          (next) => next.includes("queued in A") && next.includes("my own draft"),
+          "the queued text and the draft",
+        )
+        expect(frame.indexOf("queued in A")).toBeLessThan(frame.indexOf("my own draft"))
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   it.scopedLive("a running turn's activity row shows esc cancel", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
