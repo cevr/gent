@@ -76,16 +76,11 @@ const find = (rows: ReadonlyArray<AgentRow>, session: string, branch: string) =>
 
 describe("agents view projection", () => {
   describe("row identity", () => {
-    test("keys on session and branch together, so branches of one session are distinct rows", () => {
-      const a = rowKey({ sessionId: sid("s1"), branchId: bid("b1") })
-      const b = rowKey({ sessionId: sid("s1"), branchId: bid("b2") })
-      expect(a).not.toBe(b)
-    })
-
-    test("a session and branch that concatenate alike still key apart", () => {
-      const a = rowKey({ sessionId: sid("s"), branchId: bid("1 b") })
-      const b = rowKey({ sessionId: sid("s 1"), branchId: bid("b") })
-      expect(a).not.toBe(b)
+    test("keys on session and branch together: branches of one session, and pairs that concatenate alike, are distinct rows", () => {
+      const key = (session: string, branch: string) =>
+        rowKey({ sessionId: sid(session), branchId: bid(branch) })
+      expect(key("s1", "b1")).not.toBe(key("s1", "b2"))
+      expect(key("s", "1 b")).not.toBe(key("s 1", "b"))
     })
   })
 

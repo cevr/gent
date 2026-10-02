@@ -121,19 +121,10 @@ describe("goals", () => {
             textStep("second pass"),
             textStep("budget report"),
           ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-          })
-          const command = (input: string) =>
-            client.extension.request({
-              sessionId,
-              branchId,
-              extensionId: GOAL_EXTENSION_ID,
-              capabilityId: "goal-command",
-              input,
-            })
-          const readGoal = () => goalOn({ client, sessionId, branchId })
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const { client, sessionId, branchId } = harness
+          const command = (input: string) => goalCommandOn(harness, input)
+          const readGoal = () => goalOn(harness)
 
           yield* command("--budget 15 Write the pelican poem")
           const created = yield* readGoal()
