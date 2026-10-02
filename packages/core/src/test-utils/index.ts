@@ -37,6 +37,7 @@ export {
   fakeFetchLayer,
   freePort,
   type FakeFetchState,
+  interruptAtEachStep,
   LanguageModelLayers,
   makeFakeFetchState,
   makeTempDirectoryScoped,

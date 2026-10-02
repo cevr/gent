@@ -11,13 +11,16 @@ import {
   Exit,
   Ref,
   Fiber,
-  Scheduler,
   Schema,
   Scope,
 } from "effect"
 import * as ChildProcessSpawnerNs from "effect/process/ChildProcessSpawner"
 import { dateFromMillis } from "@gent/core/protocol"
-import { BunGentPlatformLive, makeTempDirectoryScoped } from "@gent/core/test-utils"
+import {
+  BunGentPlatformLive,
+  interruptAtEachStep,
+  makeTempDirectoryScoped,
+} from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
 import {
   buildFingerprint as ownBuildFingerprint,
@@ -574,11 +577,9 @@ describe("Server Lock Ownership", () => {
 
   it.scopedLive("an interrupted status probe releases its temporary kernel lock", () =>
     provideFs(
-      Effect.gen(function* () {
-        // Interrupt at each scheduler boundary where real SQLite reports the
-        // probe's lock held. The next offset ends once the probe completes;
-        // the test does not depend on how many steps an implementation uses.
-        for (let offset = 1; offset <= 64; offset++) {
+      // Interrupt at each step where real SQLite reports the probe's lock held.
+      interruptAtEachStep(
+        Effect.gen(function* () {
           const home = yield* makeTmpHomeScoped
           const paths = yield* dataPaths(home)
           yield* (yield* FileSystem.FileSystem).makeDirectory(paths.dataDir, { recursive: true })
@@ -586,49 +587,29 @@ describe("Server Lock Ownership", () => {
             Effect.sync(() => new Database(paths.serverKernelLock, { create: true })),
             (db) => Effect.sync(() => db.close()),
           )
-          const scheduler = new Scheduler.MixedScheduler()
-          let heldSteps = 0
-          let interrupted = false
-          const cancelOnLock: Scheduler.Scheduler = {
-            executionMode: scheduler.executionMode,
-            makeDispatcher: () => scheduler.makeDispatcher(),
-            shouldYield: (fiber) => {
-              if (!interrupted) {
-                let held = false
-                // oxlint-disable-next-line effect/noTryCatch -- real SQLite lock observation at a synchronous scheduler boundary
-                try {
-                  observer.exec("BEGIN EXCLUSIVE")
-                  observer.exec("ROLLBACK")
-                } catch (error) {
-                  expect(
-                    Schema.is(Schema.Struct({ code: Schema.Literal("SQLITE_BUSY") }))(error),
-                  ).toBe(true)
-                  held = true
-                }
-                if (held && ++heldSteps === offset) {
-                  interrupted = true
-                  // The runtime exposes this hook to synchronous schedulers.
-                  fiber.interruptUnsafe()
-                }
+          return {
+            program: serverLock.status(home),
+            at: () => {
+              // oxlint-disable-next-line effect/noTryCatch -- real SQLite lock observation at a synchronous scheduler boundary
+              try {
+                observer.exec("BEGIN EXCLUSIVE")
+                observer.exec("ROLLBACK")
+                return false
+              } catch (error) {
+                expect(
+                  Schema.is(Schema.Struct({ code: Schema.Literal("SQLITE_BUSY") }))(error),
+                ).toBe(true)
+                return true
               }
-              return scheduler.shouldYield(fiber)
             },
+            invariant: (outcome, interrupted) =>
+              Effect.gen(function* () {
+                expect(yield* serverLock.hold(home)).toBe(true)
+                expect(Exit.isFailure(outcome)).toBe(interrupted)
+              }),
           }
-          const probe = yield* serverLock
-            .status(home)
-            .pipe(Effect.provideService(Scheduler.Scheduler, cancelOnLock), Effect.forkChild)
-          const outcome = yield* Fiber.await(probe)
-          expect(yield* serverLock.hold(home)).toBe(true)
-          if (!interrupted) {
-            expect(Exit.isSuccess(outcome)).toBe(true)
-            return
-          }
-          expect(Exit.isFailure(outcome)).toBe(true)
-        }
-        return yield* Effect.die(
-          new Error("status probe never completed within the scheduler-boundary limit"),
-        )
-      }),
+        }),
+      ),
     ),
   )
 
