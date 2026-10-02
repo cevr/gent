@@ -747,6 +747,15 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       message: cutHead(failureText(cause), maximumCellDisplayLength),
       output: rendered(),
     })
+  let running = Option.none<number>()
+  /** Check invocation origin before starting a host Effect; retained functions use their caller's origin. */
+  const invokeHost = (effect: Effect.Effect<Schema.Json, CellEvaluationError>) => {
+    const origin = cellOrigin.getStore()
+    if (Predicate.isUndefined(origin) || !Option.contains(running, origin)) {
+      return runPromise(Effect.fail(failure("execute", "Host call from a completed cell")))
+    }
+    return runPromise(effect)
+  }
   // The catalog is data the host already validated. The namespace reads it on every access,
   // so a changed catalog changes the callable paths without rebuilding anything.
   let catalog: ReadonlyArray<CellCatalogListing> = []
@@ -754,9 +763,9 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     entries: () => catalog,
     ids: () => catalog.map((entry) => entry.name),
     find: (id) => Option.fromUndefinedOr(catalog.find((candidate) => candidate.name === id)),
-    details: (id) => runPromise(host.describe(id)),
+    details: (id) => invokeHost(host.describe(id)),
     call: (id, input) =>
-      runPromise(
+      invokeHost(
         Schema.decodeUnknownEffect(Schema.Json)(inputOrEmpty(input)).pipe(
           Effect.mapError((cause) => failure("execute", cause)),
           Effect.flatMap((decoded) => host.call(id, decoded)),
@@ -767,7 +776,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // host call under the namespace's name, its input checked as JSON first.
   // oxlint-disable-next-line effect/noUnknownParameters -- cell code passes any JavaScript value
   const namespaceCall = (name: string, input: unknown) =>
-    runPromise(
+    invokeHost(
       Schema.decodeUnknownEffect(Schema.Json)(input).pipe(
         Effect.mapError((cause) => failure("execute", cause)),
         Effect.flatMap((decoded) => host.call(name, decoded)),
@@ -916,7 +925,6 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // After a cell ran, its timers and promises outlive it and a reset, so such
   // an error may be cell code and waits for the next cell.
   let cellNumber = 0
-  let running = Option.none<number>()
   let strays: Array<string> = []
 
   /**

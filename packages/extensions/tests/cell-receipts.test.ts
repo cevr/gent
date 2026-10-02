@@ -587,6 +587,61 @@ describe("cell approvals", () => {
 
 describe("cell receipts", () => {
   it.scopedLive(
+    "a completed cell's continuation cannot acquire the next cell's effects or receipts",
+    () =>
+      Effect.gen(function* () {
+        const cell = yield* approvalCell
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: `var releaseMark; var staleResult;
+var pendingMark = new Promise(resolve => { releaseMark = resolve }).then(() => tools.mark("stale"))
+  .then(() => { staleResult = "accepted" }, error => { staleResult = error.message });
+var markCurrent = () => tools.mark("current"); "armed"`,
+          }),
+          toolCallStep("cell", {
+            code: "releaseMark(); await pendingMark; await markCurrent(); staleResult",
+          }),
+          textStep("Continuation checked"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          extensions: cell.extensions,
+          providerLayer,
+          branchTools: CellBranchTools,
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "Check cell operation origins" })
+        yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runDrain,
+        )
+        const results = (yield* client.message.list({ branchId }))
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result")
+          .filter((part) => part.name === "cell")
+        expect(results).toHaveLength(2)
+        expect(results.map((result) => result.isFailure)).toEqual([false, false])
+        const receipts = yield* Effect.forEach(results, (result) =>
+          Schema.decodeUnknownEffect(
+            Schema.Struct({
+              display: Schema.String,
+              operations: Schema.optional(Schema.Array(Schema.Struct({ summary: Schema.String }))),
+            }),
+          )(result.result),
+        )
+        expect(receipts[0]?.operations).toBeUndefined()
+        expect(receipts[1]?.operations?.map((op) => op.summary)).toEqual(["marked current"])
+        expect(yield* Ref.get(cell.marks)).toEqual(["current"])
+        expect(receipts[1]?.display).toContain("completed cell")
+        yield* controls.assertDone
+      }).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      ),
+    18000,
+  )
+
+  it.scopedLive(
     "a cell with ten or more host calls lists its receipts in call order",
     () =>
       Effect.gen(function* () {
