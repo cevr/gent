@@ -41,6 +41,8 @@ import {
   modelReasons,
   withPromptCacheTtl,
   writesPromptCache,
+  MessagesTransientStreamEvent,
+  ResponsesTransientStreamEvent,
 } from "./providers.js"
 
 // Test seam: only tests read OPENCODE_GATEWAYS and buildOpenCodeModelDriver,
@@ -737,7 +739,15 @@ export const buildOpenCodeModelDriver = (
       onSome: (credentialFrom) => ({ credentialFrom }),
     }),
     envCredential: ENV_CREDENTIAL,
-    retry: DEFAULT_RETRY_POLICY,
+    retry: {
+      ...DEFAULT_RETRY_POLICY,
+      // A gateway model speaks Messages or Responses. Chat Completions names
+      // no stream error event the SDK passes on as a part.
+      transientStreamEvent: Schema.Union([
+        MessagesTransientStreamEvent,
+        ResponsesTransientStreamEvent,
+      ]),
+    },
     resolveModel: (modelName, authInfo, hintsInput) =>
       Effect.gen(function* () {
         const apiKey = yield* gatewayApiKey(gateway, Option.fromNullishOr(authInfo), envApiKey)

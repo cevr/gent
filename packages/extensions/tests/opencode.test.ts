@@ -1,11 +1,22 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Crypto, Effect, Layer, Option, Order, Path, Predicate, Redacted, Schema } from "effect"
+import {
+  Crypto,
+  Effect,
+  Layer,
+  Option,
+  Order,
+  Path,
+  Predicate,
+  Redacted,
+  Schema,
+  Stream,
+} from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
 import {
   OpenAiClient as OpenAiChatClient,
   OpenAiLanguageModel as OpenAiChatLanguageModel,
 } from "@effect/ai-openai-compat"
-import { Prompt } from "effect/ai"
+import { LanguageModel, Prompt } from "effect/ai"
 import { BunCrypto, BunFileSystem } from "@effect/platform-bun"
 import {
   defineExtension,
@@ -18,6 +29,7 @@ import {
 import {
   type CapturedRequest,
   createRpcHarness,
+  fakeFetchLayer,
   type FakeFetchState,
   LanguageModelLayers,
   makeFakeFetchState,
@@ -410,6 +422,86 @@ describe("OpenCode request wiring", () => {
         expect(error.message).toContain("OPENCODE_API_KEY")
       }
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+})
+
+// ── retry ───────────────────────────────────────────────────────────────────
+
+/**
+ * A stream the gateway accepts and then ends with an `error` event before
+ * any output, in the wire format the request's path names.
+ */
+const streamErrorReply = (request: CapturedRequest) => {
+  const sse = (events: ReadonlyArray<Schema.JsonObject & { readonly type: string }>) => ({
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+    body: events
+      .map((event) => `event: ${event.type}\ndata: ${encodeExternalJson(event)}\n\n`)
+      .join(""),
+  })
+  if (new URL(request.url).pathname.endsWith("/messages")) {
+    return sse([
+      {
+        type: "error",
+        error: { type: "overloaded_error", message: "Overloaded" },
+        request_id: "req_1",
+      },
+    ])
+  }
+  return sse([
+    {
+      type: "error",
+      code: "server_error",
+      message: "The server had an error",
+      param: externalWireNull,
+      sequence_number: 0,
+    },
+  ])
+}
+
+describe("OpenCode retry", () => {
+  it.live(
+    "an overload or server error inside the stream is transient on Messages and Responses",
+    () =>
+      Effect.gen(function* () {
+        const drivers = yield* fixtureDrivers
+        // One Messages and one Responses model on each gateway (the routes above).
+        const cases = [
+          { gateway: "zen", model: "claude-opus-5" },
+          { gateway: "zen", model: "gpt-5.4" },
+          { gateway: "go", model: "minimax-m3" },
+          { gateway: "go", model: "gpt-5.6-luna" },
+        ] as const
+        const transient = yield* Effect.forEach(cases, ({ gateway, model: modelName }) =>
+          Effect.gen(function* () {
+            const driver = drivers[gateway]
+            const model = yield* driver.resolveModel(modelName, apiAuth, { cacheKey: "s" })
+            const errors: Array<unknown> = []
+            yield* LanguageModel.streamText({ prompt: "hi" }).pipe(
+              Stream.runForEach((part) =>
+                Effect.sync(() => {
+                  if (part.type === "error") errors.push(part.error)
+                }),
+              ),
+              Effect.provide(
+                Layer.provideMerge(model, fakeFetchLayer(makeFakeFetchState(), streamErrorReply)),
+              ),
+              Effect.scoped,
+            )
+            // The loop retries an error part whose payload the driver's policy names.
+            return {
+              model: modelName,
+              errors: errors.length,
+              transient: errors.every(
+                Schema.is(driver.retry?.transientStreamEvent ?? Schema.Never),
+              ),
+            }
+          }),
+        )
+        expect(transient.map((row) => [row.model, row.errors, row.transient])).toEqual(
+          cases.map(({ model }) => [model, 1, true]),
+        )
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 })
 

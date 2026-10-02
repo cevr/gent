@@ -1252,6 +1252,25 @@ const isHostContextUpdateText = Schema.is(
   Schema.String.check(Schema.isStartingWith(HOST_CONTEXT_UPDATE_OPEN)),
 )
 
+// ── transient stream events ─────────────────────────────────────────────────
+//
+// An accepted request can still end with an `error` event inside the stream.
+// The SDK passes that event on as an error part, and the loop retries it when
+// it matches the driver's `RetryPolicy.transientStreamEvent`. One shape per
+// wire format: the native drivers and the OpenCode gateways, which speak the
+// same formats through the same SDKs, name the same events. The two shapes
+// are disjoint (`type` against `code`).
+
+/** A Messages stream error a retry can clear: the SDK's part carries `event.error`. */
+export const MessagesTransientStreamEvent = Schema.Struct({
+  type: Schema.Literals(["overloaded_error", "api_error", "rate_limit_error"]),
+})
+
+/** A Responses stream error a retry can clear: the SDK's part carries the event and its `code`. */
+export const ResponsesTransientStreamEvent = Schema.Struct({
+  code: Schema.Literals(["server_error", "rate_limit_exceeded"]),
+})
+
 // ── messages prompt cache ───────────────────────────────────────────────────
 //
 // The block rule both Messages drivers (Anthropic, and the OpenCode gateways'

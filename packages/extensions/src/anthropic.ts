@@ -60,6 +60,7 @@ import {
   requestJsonObject,
   withHeaders,
   writesPromptCache,
+  MessagesTransientStreamEvent,
 } from "./providers.js"
 import { ChildProcessSpawner } from "effect/process"
 import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/http"
@@ -2534,10 +2535,7 @@ export const buildAnthropicModelDriver = (
   cacheWritesByLifetime: anthropicCacheWritesByLifetime,
   retry: {
     ...DEFAULT_RETRY_POLICY,
-    // An accepted request can still end with an error event inside the stream; Anthropic names its type.
-    transientStreamEvent: Schema.Struct({
-      type: Schema.Literals(["overloaded_error", "api_error", "rate_limit_error"]),
-    }),
+    transientStreamEvent: MessagesTransientStreamEvent,
   },
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {

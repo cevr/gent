@@ -78,6 +78,7 @@ import {
   withEncryptedReasoning,
   modelReasons,
   withHeaders,
+  ResponsesTransientStreamEvent,
 } from "./providers.js"
 import type {
   OpenAiClient as OpenAiResponsesClient,
@@ -1790,10 +1791,7 @@ export const buildOpenAIModelDriver = (
     envCredential: "OPENAI_API_KEY",
     retry: {
       ...DEFAULT_RETRY_POLICY,
-      // An accepted request can still end with an error event inside the stream; OpenAI names its code.
-      transientStreamEvent: Schema.Struct({
-        code: Schema.Literals(["server_error", "rate_limit_exceeded"]),
-      }),
+      transientStreamEvent: ResponsesTransientStreamEvent,
     },
     resolveModel: (modelName, authInfo, hints) =>
       Effect.gen(function* () {
