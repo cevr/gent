@@ -131,6 +131,23 @@ describe("formatSkillsForPrompt, directory grouping", () => {
     expect(result).toContain("<directory>/<name>/SKILL.md")
     expect(result).toContain("$skill:local")
   })
+
+  test("a user-invoked-only skill is named without its description, on its directory's own line", () => {
+    const userOnly = (skill: SkillEntry): SkillEntry => ({ ...skill, userInvokedOnly: true })
+    const result = formatSkillsForPrompt([
+      inDirectory("bun", "global", "/home/u/.claude/skills", "Bun runtime guidance."),
+      userOnly(inDirectory("handoff", "global", "/home/u/.claude/skills", "Hand off the work.")),
+      userOnly(makeSkill("triage", "global", "Triage the issues.")),
+    ])
+    expect(result).toContain(
+      'Directory "/home/u/.claude/skills":\n- bun: Bun runtime guidance.\nUser-invoked only, read on `$name` alone: handoff\n',
+    )
+    expect(result).toContain(
+      'Directory "/test/global":\nUser-invoked only, read on `$name` alone: triage (triage.md)',
+    )
+    expect(result).not.toContain("Hand off the work.")
+    expect(result).not.toContain("Triage the issues.")
+  })
 })
 
 describe("parseSkillFile", () => {
@@ -184,6 +201,16 @@ Content here`
     const result = parseSkillFile(content, "file")
     expect(result.name).toBe("quoted")
     expect(result.description).toBe("Single: quoted")
+  })
+
+  test("disable-model-invocation marks the skill user-invoked only", () => {
+    const marked = (value: string) =>
+      parseSkillFile(`---\nname: handoff\ndisable-model-invocation: ${value}\n---\nBody`, "handoff")
+    expect(marked("true")).toEqual({ name: "handoff", description: "Body", userInvokedOnly: true })
+    expect(marked('"true"').userInvokedOnly).toBe(true)
+    for (const value of ["false", '"false"', "yes-please"]) {
+      expect(marked(value)).toEqual({ name: "handoff", description: "Body" })
+    }
   })
 
   test("a frontmatter with no name uses the file name and keeps its description", () => {
