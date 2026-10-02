@@ -481,6 +481,8 @@ describe("Bash command semantics", () => {
     },
     { name: "directory options", command: "cd -P link && pwd", output: "<cwd>/sub\n", exitCode: 0 },
     { name: "shell background operator", command: "false &", output: "", exitCode: 0 },
+    // A status other than 0 and 1 comes back as given, not folded into a failure.
+    { name: "exact exit status", command: "exit 2", output: "", exitCode: 2 },
     {
       name: "shell directory expansion",
       command:
