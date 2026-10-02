@@ -1,11 +1,19 @@
-import { Effect, Layer, Option, Redacted } from "effect"
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
+import { Effect, Layer, Option, Predicate, Redacted, Schema } from "effect"
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/http"
 import { Model as AiModel } from "effect/ai"
 import type { OpenAiLanguageModel as OpenAiChatLanguageModel } from "@effect/ai-openai-compat"
 import type * as ChatSdkModule from "@effect/ai-openai-compat"
 import {
   AuthMethod,
   defineExtension,
+  DriverError,
+  DriverFailureId,
   ExtensionHost,
   Model,
   ModelId,
@@ -22,6 +30,7 @@ import {
   driverListModels,
   readOptionalEnv,
 } from "./providers.js"
+import { type ClassifierEntry, classifierModel, typeSafeDecisionModel } from "./typesafe.js"
 
 // Test seam: only tests read buildCloudflareModelDriver, which lets a test
 // run the driver against a fake fetch and a fixture catalog.
@@ -199,6 +208,152 @@ const listWorkersAiModels = (catalog: CatalogSource) =>
     ),
   )
 
+// ── clef decisions ──────────────────────────────────────────────────────────
+
+/**
+ * Cloudflare's classifier models, Clef (27B) and Clef Flash (9B): the cell's
+ * `models.decide`, priced per million input tokens as the Workers AI model
+ * pages list them. The pages name no output price; 0 here. models.dev lists
+ * neither model.
+ */
+const CLASSIFIERS: ReadonlyArray<ClassifierEntry> = [
+  { name: "clef", label: "Clef", pricing: { input: 0.24, output: 0 } },
+  { name: "clef-flash", label: "Clef Flash", pricing: { input: 0.09, output: 0 } },
+]
+
+/**
+ * Clef takes TypeSafe's System One body unchanged, its `model` field
+ * `clef` or `clef-flash`, at the model's own Workers AI path. The TypeSafe
+ * client posts to `{apiUrl}/systemone`; the request goes to
+ * `/run/@cf/cloudflare/{model}` under the account instead.
+ */
+const clefRunPath =
+  (modelName: string) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+    HttpClient.mapRequest(client, (request) =>
+      HttpClientRequest.setUrl(
+        request,
+        request.url.replace(/\/systemone$/, `/run/@cf/cloudflare/${modelName}`),
+      ),
+    )
+
+/**
+ * The Workers AI REST envelope, `{ result, success, errors, messages }`. The
+ * Clef page shows no REST response, so the driver takes a bare System One
+ * answer too.
+ */
+const WorkersAiEnvelope = Schema.Struct({
+  success: Schema.Boolean,
+  result: Schema.optional(Schema.Json),
+  errors: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        message: Schema.String,
+        code: Schema.optional(Schema.Union([Schema.Finite, Schema.String])),
+      }),
+    ),
+  ),
+})
+type WorkersAiEnvelope = typeof WorkersAiEnvelope.Type
+const decodeEnvelope = Schema.decodeUnknownOption(Schema.fromJsonString(WorkersAiEnvelope))
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+
+/** Headers that describe the body read, not the one written in its place. */
+const BODY_HEADERS: ReadonlySet<string> = new Set(["content-length", "content-encoding"])
+
+/** The response with `body` in place of the one read; its status and other headers stay. */
+const withBody = (
+  response: HttpClientResponse.HttpClientResponse,
+  body: string,
+): HttpClientResponse.HttpClientResponse =>
+  HttpClientResponse.fromWeb(
+    response.request,
+    new Response(body, {
+      status: response.status,
+      headers: Object.fromEntries(
+        Object.entries(response.headers).filter(([name]) => !BODY_HEADERS.has(name)),
+      ),
+    }),
+  )
+
+const isOk = (response: HttpClientResponse.HttpClientResponse): boolean =>
+  response.status >= 200 && response.status < 300
+
+const statusFailure = (response: HttpClientResponse.HttpClientResponse, description: string) =>
+  new HttpClientError.HttpClientError({
+    reason: new HttpClientError.StatusCodeError({
+      request: response.request,
+      response,
+      description,
+    }),
+  })
+
+/**
+ * An envelope's failure as the status failure the TypeSafe client reads: the
+ * first error's `message` and `code` in the body, where the client looks for
+ * them. A failure Workers AI sent with a 2xx status keeps that status.
+ */
+const envelopeFailure = (
+  response: HttpClientResponse.HttpClientResponse,
+  envelope: WorkersAiEnvelope,
+) => {
+  const first = Option.fromUndefinedOr(envelope.errors?.[0])
+  const message = Option.match(first, {
+    onNone: () => "Workers AI reported a failure with no message",
+    onSome: (error) => error.message,
+  })
+  const code = Option.flatMap(first, (error) => Option.fromUndefinedOr(error.code))
+  const body = encodeJson({
+    message,
+    ...Option.match(code, { onNone: () => ({}), onSome: (value) => ({ code: String(value) }) }),
+  })
+  return statusFailure(withBody(response, body), message)
+}
+
+/**
+ * System One's answer from a Workers AI response: the envelope's `result`,
+ * or the body as it came when it is no envelope. A failed envelope fails with
+ * its first error.
+ */
+const systemOneAnswer = (response: HttpClientResponse.HttpClientResponse) =>
+  Effect.gen(function* () {
+    const text = yield* response.text
+    const envelope = decodeEnvelope(text)
+    if (Option.isNone(envelope)) {
+      if (isOk(response)) return withBody(response, text)
+      return yield* statusFailure(withBody(response, text), "non 2xx status code")
+    }
+    const result = Option.fromUndefinedOr(envelope.value.result).pipe(
+      Option.filter(() => envelope.value.success && isOk(response)),
+      Option.filter(Predicate.isNotNull),
+    )
+    if (Option.isNone(result)) return yield* envelopeFailure(response, envelope.value)
+    return withBody(response, encodeJson(result.value))
+  })
+
+/**
+ * The client's responses as System One bodies. The TypeSafe client fails a
+ * non-2xx status before this client sees it; the failure's body is read here
+ * too, so a Workers AI error names its own message.
+ */
+const unwrapEnvelope = (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+  HttpClient.transformResponse(client, (effect) =>
+    effect.pipe(
+      Effect.catchIf(
+        (
+          error,
+        ): error is HttpClientError.HttpClientError & {
+          readonly reason: HttpClientError.StatusCodeError
+        } => error.reason._tag === "StatusCodeError",
+        (error) => Effect.succeed(error.reason.response),
+      ),
+      Effect.flatMap(systemOneAnswer),
+    ),
+  )
+
+const isClassifier = (modelName: string): boolean =>
+  CLASSIFIERS.some((entry) => entry.name === modelName)
+
 // ── driver ──────────────────────────────────────────────────────────────────
 
 /** The Cloudflare driver. `env` holds the variables setup read; a stored token or answer wins. */
@@ -211,6 +366,12 @@ export const buildCloudflareModelDriver = (
   envCredential: TOKEN_ENV,
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {
+      if (isClassifier(modelName)) {
+        return yield* new DriverError({
+          driver: DriverFailureId.make(DRIVER_ID),
+          reason: `${DRIVER_ID}/${modelName} is a classifier model: it runs no turn; a cell asks it with models.decide`,
+        })
+      }
       const account = yield* accountFrom(Option.fromNullishOr(authInfo), env)
       const sdk = yield* loadChatSdk
       return AiModel.make(
@@ -219,7 +380,20 @@ export const buildCloudflareModelDriver = (
         chatModel(sdk, modelName, account, Option.fromNullishOr(hints)),
       )
     }),
-  listModels: () => listWorkersAiModels(catalog),
+  resolveDecisionModel: (modelName, authInfo) =>
+    Effect.map(accountFrom(Option.fromNullishOr(authInfo), env), (account) =>
+      typeSafeDecisionModel(modelName, {
+        apiKey: account.token,
+        apiUrl: accountRoot(account),
+        transformClient: (client) =>
+          client.pipe(clefRunPath(modelName), gatewayHeader(account.gatewayId), unwrapEnvelope),
+      }),
+    ),
+  listModels: () =>
+    Effect.map(listWorkersAiModels(catalog), (models) => [
+      ...models,
+      ...CLASSIFIERS.map((entry) => classifierModel(DRIVER_ID, entry)),
+    ]),
   auth: {
     methods: [
       AuthMethod.make({

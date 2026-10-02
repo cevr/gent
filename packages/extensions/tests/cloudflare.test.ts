@@ -26,7 +26,15 @@ import {
   CloudflareExtension,
 } from "../src/cloudflare.js"
 import { catalogSource, modelsDevCatalog } from "../src/providers.js"
-import { encodeExternalJson } from "./helpers/external-wire.js"
+import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
+import {
+  decideTicket,
+  jsonReply,
+  systemOneBody,
+  TICKET,
+  TICKET_ANSWER,
+  TICKET_QUESTIONS,
+} from "./helpers/decision-wire.js"
 
 /**
  * The Cloudflare driver: Workers AI and AI Gateway models over Cloudflare's
@@ -257,21 +265,158 @@ describe("Cloudflare chat", () => {
 // ── catalog ─────────────────────────────────────────────────────────────────
 
 describe("Cloudflare catalog", () => {
-  it.live("lists the Workers AI models that call tools, under the cloudflare id", () =>
+  it.live(
+    "lists the Workers AI models that call tools under the cloudflare id, then the Clef classifiers",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* fixtureDriver()
+        const models = yield* Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))()
+        expect(
+          models.map((model) => ({
+            id: model.id,
+            provider: model.provider,
+            kind: Option.fromUndefinedOr(model.kind),
+            pricing: model.pricing,
+          })),
+        ).toEqual([
+          {
+            id: ModelId.make(`cloudflare/${LLAMA}`),
+            provider: ProviderId.make("cloudflare"),
+            kind: Option.none(),
+            pricing: { input: 0.293, output: 2.253 },
+          },
+          {
+            id: ModelId.make("cloudflare/clef"),
+            provider: ProviderId.make("cloudflare"),
+            kind: Option.some("classifier"),
+            pricing: { input: 0.24, output: 0 },
+          },
+          {
+            id: ModelId.make("cloudflare/clef-flash"),
+            provider: ProviderId.make("cloudflare"),
+            kind: Option.some("classifier"),
+            pricing: { input: 0.09, output: 0 },
+          },
+        ])
+        // Chat Completions caches implicitly: no model goes cold.
+        expect(models.some((model) => Predicate.isNotUndefined(model.promptCacheTtlMs))).toBe(false)
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+})
+
+// ── clef decisions ──────────────────────────────────────────────────────────
+
+const resolveDecision = (driver: Driver, modelName: string, authInfo?: ProviderAuthInfo) =>
+  Option.getOrThrow(Option.fromUndefinedOr(driver.resolveDecisionModel))(modelName, authInfo)
+
+const RUN_URL = "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare"
+
+/** The Workers AI REST envelope around a model's own answer. */
+const envelope = (result: Schema.Json) => ({
+  result,
+  success: true,
+  errors: [],
+  messages: [],
+})
+
+describe("Cloudflare Clef decisions", () => {
+  it.live(
+    "a decide posts the System One body to the account's Workers AI run path of each Clef model",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* fixtureDriver()
+        const state = makeFakeFetchState()
+        const auth = signedIn({ accountId: "acct-1" })
+        const response = yield* decideTicket(yield* resolveDecision(driver, "clef", auth), state)
+        yield* decideTicket(yield* resolveDecision(driver, "clef-flash", auth), state)
+        expect(state.captured.map((request) => request.url)).toEqual([
+          `${RUN_URL}/clef`,
+          `${RUN_URL}/clef-flash`,
+        ])
+        for (const request of state.captured) {
+          expect(request.headers["authorization"]).toBe(`Bearer ${TOKEN}`)
+          expect(request.headers["cf-aig-gateway-id"]).toBeUndefined()
+        }
+        // The body names the model as Clef's schema spells it, not the `@cf/` path.
+        expect(yield* Effect.forEach(state.captured, systemOneBody)).toEqual([
+          { model: "clef", state: TICKET, questions: TICKET_QUESTIONS },
+          { model: "clef-flash", state: TICKET, questions: TICKET_QUESTIONS },
+        ])
+        expect(response.answers.topic.label).toBe("billing")
+        expect(response.usage.inputTokens).toBe(30)
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("with a gateway id the decide names the gateway", () =>
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
-      const models = yield* Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))()
-      expect(
-        models.map((model) => ({ id: model.id, provider: model.provider, pricing: model.pricing })),
-      ).toEqual([
-        {
-          id: ModelId.make(`cloudflare/${LLAMA}`),
-          provider: ProviderId.make("cloudflare"),
-          pricing: { input: 0.293, output: 2.253 },
-        },
-      ])
-      // Chat Completions caches implicitly: no model goes cold.
-      expect(models.some((model) => Predicate.isNotUndefined(model.promptCacheTtlMs))).toBe(false)
+      const state = makeFakeFetchState()
+      const auth = signedIn({ accountId: "acct-1", gatewayId: "gw-main" })
+      yield* decideTicket(yield* resolveDecision(driver, "clef-flash", auth), state)
+      expect(onlyRequest(state).headers["cf-aig-gateway-id"]).toBe("gw-main")
+      expect(onlyRequest(state).url).toBe(`${RUN_URL}/clef-flash`)
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("an answer inside the Workers AI envelope decodes as the bare answer does", () =>
+    Effect.gen(function* () {
+      const driver = yield* fixtureDriver()
+      const auth = signedIn({ accountId: "acct-1" })
+      const bare = yield* decideTicket(
+        yield* resolveDecision(driver, "clef", auth),
+        makeFakeFetchState(),
+      )
+      const wrapped = yield* decideTicket(
+        yield* resolveDecision(driver, "clef", auth),
+        makeFakeFetchState(),
+        () => jsonReply(envelope(TICKET_ANSWER)),
+      )
+      expect(wrapped).toEqual(bare)
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("an envelope that reports failure fails with its first error's message", () =>
+    Effect.gen(function* () {
+      const driver = yield* fixtureDriver()
+      const auth = signedIn({ accountId: "acct-1" })
+      const failure = (message: string) => ({
+        result: externalWireNull,
+        success: false,
+        errors: [{ code: 5007, message }],
+        messages: [],
+      })
+      const replies = [
+        () => jsonReply(failure("No such model @cf/cloudflare/clef")),
+        () => jsonReply(failure("Authentication error"), 401),
+      ]
+      const messages = yield* Effect.forEach(replies, (reply) =>
+        Effect.gen(function* () {
+          const model = yield* resolveDecision(driver, "clef", auth)
+          const error = yield* Effect.flip(decideTicket(model, makeFakeFetchState(), reply))
+          return error.message
+        }),
+      )
+      expect(messages[0]).toContain("No such model @cf/cloudflare/clef")
+      expect(messages[1]).toContain("Authentication error")
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("a decide without an account id fails before any request and names the variable", () =>
+    Effect.gen(function* () {
+      const driver = yield* fixtureDriver()
+      const error = yield* Effect.flip(
+        resolveDecision(driver, "clef", ProviderAuthInfo.cases.Api.make({ key: TOKEN })),
+      )
+      expect(error).toBeInstanceOf(ProviderAuthError)
+      expect(error.message).toContain("CLOUDFLARE_ACCOUNT_ID")
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("a Clef model is not a chat model: resolving it for chat fails and names it", () =>
+    Effect.gen(function* () {
+      const driver = yield* fixtureDriver()
+      const error = yield* Effect.flip(driver.resolveModel("clef", signedIn({ accountId: "a" })))
+      expect(error).toMatchObject({ _tag: "DriverError", reason: expect.stringContaining("clef") })
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 })

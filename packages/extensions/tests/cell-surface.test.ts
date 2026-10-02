@@ -45,8 +45,12 @@ import {
   systemTextOf,
   testLeafContext,
   testToolContext,
+  type FakeFetchState,
+  fakeFetchLayer,
+  makeFakeFetchState,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
+import { FetchHttpClient } from "effect/http"
 import * as Prompt from "effect/ai/Prompt"
 import { type Decision, DecisionModel } from "effect/ai"
 import {
@@ -99,6 +103,8 @@ import {
 import { BashTool } from "../src/exec-tools.js"
 import { BuiltinExtensions } from "../src/index.js"
 import { OpenCodeExtension } from "../src/opencode.js"
+import { buildCloudflareModelDriver, CloudflareExtension } from "../src/cloudflare.js"
+import { catalogSource } from "../src/providers.js"
 import { TypeSafeExtension } from "../src/typesafe.js"
 import { EditTool, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { GoalTool } from "../src/goal.js"
@@ -108,6 +114,7 @@ import { ReadSessionTool } from "../src/session-tools.js"
 import { CancelTool, MonitorTool, WakeTool } from "../src/wake.js"
 import { CellResponse } from "../src/cell-protocol.js"
 import { shippedPreset } from "./helpers/test-preset.js"
+import { jsonReply, systemOneBody } from "./helpers/decision-wire.js"
 import {
   ChildAgentHandle,
   CancelChild,
@@ -487,6 +494,7 @@ const judgeExtension = (calls: Ref.Ref<ReadonlyArray<JudgeCall>>) =>
 const SHIPPED_JEV_DRIVERS: ReadonlySet<string> = new Set([
   TypeSafeExtension.manifest.id,
   OpenCodeExtension.manifest.id,
+  CloudflareExtension.manifest.id,
 ])
 
 /**
@@ -523,6 +531,12 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
   readonly storeKey: boolean
   readonly calls: Ref.Ref<ReadonlyArray<JudgeCall>>
   readonly extensions?: ReadonlyArray<(typeof BuiltinExtensions)[number]>
+  /** Keys stored before the turn, each with its prompt answers. */
+  readonly signIns?: ReadonlyArray<{
+    readonly provider: string
+    readonly key: string
+    readonly metadata: Record<string, string>
+  }>
 }) {
   const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
     toolCallStep("cell", { code: params.code }),
@@ -544,6 +558,8 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
       key: "judge-key",
       sessionId: harness.sessionId,
     })
+  for (const signIn of params.signIns ?? [])
+    yield* harness.client.auth.setKey({ ...signIn, sessionId: harness.sessionId })
   const results = yield* sendAndAwaitReply(harness, "decide", "done")
   expect(results).toMatchObject([{ name: "cell", isFailure: false }])
   return yield* Schema.decodeUnknownEffect(Schema.Struct({ display: Schema.String }))(
@@ -552,6 +568,67 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
 })
 
 const decodeDecideJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))
+
+/** Clef Flash's answer inside the Workers AI envelope, as the run path writes it. */
+const clefEnvelopeReply = () =>
+  jsonReply({
+    result: {
+      model: "clef-flash",
+      answers: { urgent: { type: "noul", noul: 0.75 } },
+      usage: { input_tokens: 12, output_tokens: 0 },
+    },
+    success: true,
+    errors: [],
+    messages: [],
+  })
+
+/**
+ * `layer`'s decision model with `fetchLayer`'s `fetch` in place while each
+ * decide runs: `FetchHttpClient` reads `fetch` from the fiber that sends, and
+ * the cell host decides on its own fiber, not the one that built the layer.
+ */
+const decidingThrough = (
+  layer: Layer.Layer<DecisionModel.DecisionModel>,
+  fetchLayer: Layer.Layer<never>,
+): Layer.Layer<DecisionModel.DecisionModel> =>
+  Layer.effect(
+    DecisionModel.DecisionModel,
+    Effect.gen(function* () {
+      const model = yield* DecisionModel.DecisionModel
+      const fetch = yield* FetchHttpClient.Fetch
+      return DecisionModel.DecisionModel.of({
+        ...model,
+        decide: (definition, options) =>
+          model
+            .decide(definition, options)
+            .pipe(Effect.provideService(FetchHttpClient.Fetch, fetch)),
+      })
+    }),
+  ).pipe(Layer.provide(Layer.merge(layer, fetchLayer)))
+
+/**
+ * The shipped Cloudflare driver with no environment credentials, its decision
+ * models sending through a fake fetch that captures into `state`.
+ */
+const capturedCloudflare = (state: FakeFetchState) =>
+  defineExtension({
+    id: "@test/cloudflare-captured",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      const driver = buildCloudflareModelDriver(
+        { token: Option.none(), accountId: Option.none(), gatewayId: Option.none() },
+        yield* catalogSource(host.home),
+      )
+      const resolve = Option.getOrThrow(Option.fromUndefinedOr(driver.resolveDecisionModel))
+      yield* host.register("modelDriver", {
+        ...driver,
+        resolveDecisionModel: (model, authInfo) =>
+          Effect.map(resolve(model, authInfo), (layer) =>
+            decidingThrough(layer, fakeFetchLayer(state, clefEnvelopeReply)),
+          ),
+      })
+    }),
+  })
 
 describe("cell models host", () => {
   it.scopedLive(
@@ -692,6 +769,52 @@ describe("cell models host", () => {
           { echoed: "models.compare" },
           { echoed: "context.pin" },
         ])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    20000,
+  )
+
+  it.scopedLive(
+    "a cell decides through Cloudflare Clef with the token and the account and gateway the sign-in asked for",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+        const state = makeFakeFetchState()
+        const { display } = yield* runJudgeCell({
+          calls,
+          storeKey: false,
+          extensions: [capturedCloudflare(state)],
+          signIns: [
+            {
+              provider: "cloudflare",
+              key: "cf-token",
+              metadata: { accountId: "acct-1", gatewayId: "gw-main" },
+            },
+          ],
+          code: [
+            "const reply = await models.decide({ text: 'late order' }, {",
+            "  urgent: models.probability({ instructions: 'Needs action today' }),",
+            "}, { model: 'cloudflare/clef-flash' })",
+            "JSON.stringify(reply)",
+          ].join("\n"),
+        })
+        expect(yield* decodeDecideJson(display)).toEqual({
+          model: "cloudflare/clef-flash",
+          answers: { urgent: { probability: 0.75 } },
+          usage: { inputTokens: 12, outputTokens: 0 },
+        })
+        expect(state.captured.map((request) => request.url)).toEqual([
+          "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clef-flash",
+        ])
+        expect(state.captured[0]?.headers["authorization"]).toBe("Bearer cf-token")
+        expect(state.captured[0]?.headers["cf-aig-gateway-id"]).toBe("gw-main")
+        expect(yield* Effect.forEach(state.captured, systemOneBody)).toEqual([
+          {
+            model: "clef-flash",
+            state: { text: "late order" },
+            questions: { urgent: { type: "noul", instructions: "Needs action today" } },
+          },
+        ])
+        expect(yield* Ref.get(calls)).toEqual([])
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
     20000,
   )

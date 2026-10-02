@@ -949,7 +949,7 @@ describe("OpenCode Zen classifiers", () => {
       }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
-  it.live("the shipped extensions list both routes' Jev models as classifiers over RPC", () =>
+  it.live("the shipped extensions list every route's classifier models over RPC", () =>
     Effect.gen(function* () {
       const home = yield* fixtureHome
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
@@ -963,6 +963,8 @@ describe("OpenCode Zen classifiers", () => {
         .filter((model) => model.kind === "classifier")
         .map((model) => model.id)
       expect(classifiers.toSorted()).toEqual([
+        ModelId.make("cloudflare/clef"),
+        ModelId.make("cloudflare/clef-flash"),
         ModelId.make("opencode/jev-1.13"),
         ModelId.make("opencode/jev-1.13-free"),
         ModelId.make("typesafe/jev-1.13.0"),

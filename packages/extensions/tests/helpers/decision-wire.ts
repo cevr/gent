@@ -27,43 +27,51 @@ const ticketDecisions = Decision.make({
 
 export const TICKET = { text: "My payments failed for three days" }
 
-/** System One's reply to the ticket questions, as the API writes it. */
-const systemOneReply = () => ({
-  status: 200,
-  headers: { "content-type": "application/json" },
-  body: encodeExternalJson({
-    model: "jev",
-    answers: {
-      topic: {
-        type: "choice",
-        choice: "billing",
-        probabilities: { billing: 0.9, other: 0.1 },
-        confidence: 0.8,
-      },
-      urgency: {
-        type: "score",
-        score: 2,
-        probabilities: { "0": 0, "1": 0.1, "2": 0.9 },
-        confidence: 0.7,
-      },
-      urgent: { type: "noul", noul: 0.25 },
+/** System One's answer to the ticket questions, as the API writes it. */
+export const TICKET_ANSWER = {
+  model: "jev",
+  answers: {
+    topic: {
+      type: "choice",
+      choice: "billing",
+      probabilities: { billing: 0.9, other: 0.1 },
+      confidence: 0.8,
     },
-    usage: { input_tokens: 30, output_tokens: 0 },
-  }),
+    urgency: {
+      type: "score",
+      score: 2,
+      probabilities: { "0": 0, "1": 0.1, "2": 0.9 },
+      confidence: 0.7,
+    },
+    urgent: { type: "noul", noul: 0.25 },
+  },
+  usage: { input_tokens: 30, output_tokens: 0 },
+}
+
+type Responder = Parameters<typeof fakeFetchLayer>[1]
+
+/** A JSON reply with `status`, as a provider sends one. */
+export const jsonReply = (body: Schema.Json, status = 200) => ({
+  status,
+  headers: { "content-type": "application/json" },
+  body: encodeExternalJson(body),
 })
 
-/** Ask the ticket questions through `layer`, each request captured into `state`. */
+const systemOneReply = () => jsonReply(TICKET_ANSWER)
+
+/**
+ * Ask the ticket questions through `layer`, each request captured into
+ * `state`; `reply` answers each, System One's bare answer unless given.
+ */
 export const decideTicket = (
   layer: Layer.Layer<DecisionModel.DecisionModel>,
   state: FakeFetchState,
+  reply: Responder = systemOneReply,
 ) =>
   Effect.gen(function* () {
     const model = yield* DecisionModel.DecisionModel
     return yield* model.decide(ticketDecisions, { input: TICKET })
-  }).pipe(
-    Effect.provide(Layer.provideMerge(layer, fakeFetchLayer(state, systemOneReply))),
-    Effect.scoped,
-  )
+  }).pipe(Effect.provide(Layer.provideMerge(layer, fakeFetchLayer(state, reply))), Effect.scoped)
 
 const SystemOneBody = Schema.fromJsonString(Schema.JsonObject)
 
