@@ -221,6 +221,6 @@ export const startOwnedServer = (
       }),
     )
     // The entry goes before the kernel lock is released: finalizers run in reverse.
-    yield* Effect.addFinalizer(() => serverLockFile.remove(home, serverId).pipe(Effect.ignore))
+    yield* Effect.addFinalizer(() => serverLockFile.remove(home))
     return server
   })

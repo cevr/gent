@@ -267,6 +267,19 @@ const holdKernelLock = (
   })
 
 /**
+ * Remove the entry on disk, whatever server it names. Only the holder of the
+ * kernel lock calls it: under the lock, the entry is the holder's own or one
+ * a server that is gone left. A removal that fails leaves the entry, and the
+ * next holder removes it.
+ */
+const removeEntry = (home: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const entry = (yield* dataPaths(home)).serverLock
+    yield* fs.remove(entry).pipe(Effect.ignore)
+  })
+
+/**
  * Own the database for the life of the current scope: take the kernel lock,
  * then remove the entry on disk. Holding the lock proves no server runs on
  * the database, so the entry names a server that is gone; removed at once, it
@@ -278,9 +291,7 @@ const holdServerLock = (
 ): Effect.Effect<boolean, GentConnectionError, Scope.Scope | FileSystem.FileSystem> =>
   Effect.gen(function* () {
     if (!(yield* holdKernelLock(home))) return false
-    const fs = yield* FileSystem.FileSystem
-    const entry = (yield* dataPaths(home)).serverLock
-    yield* fs.remove(entry).pipe(Effect.ignore)
+    yield* removeEntry(home)
     return true
   })
 
@@ -377,37 +388,16 @@ const writeLock = (
     )
   })
 
-/** Removes the entry only while it still names `serverId`. */
-const removeLock = (
-  home: string,
-  serverId: string,
-): Effect.Effect<boolean, never, FileSystem.FileSystem | GentPlatform> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const current = yield* readLock(home)
-    if (Option.isNone(current) || current.value.serverId !== serverId) return false
-    const path = (yield* dataPaths(home)).serverLock
-    return yield* fs.remove(path).pipe(
-      Effect.as(true),
-      Effect.catchEager(() => Effect.succeed(false)),
-    )
-  })
-
 /**
- * Remove an entry proved stale. The kernel lock is held from the read through
- * the removal, so no new owner can write its entry in between. A lock that
- * cannot be taken means a new owner holds it: its entry is not ours to remove.
+ * Remove an entry proved stale: take the server lock for the removal and let
+ * it go. The kernel lock is held through the removal, so no new owner can
+ * write its entry in between. False when the lock cannot be taken: a new
+ * owner holds it, and the entry is its own.
  */
 const removeStaleEntry = (
   home: string,
-  serverId: string,
-): Effect.Effect<boolean, GentConnectionError, FileSystem.FileSystem | GentPlatform> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      if (!(yield* holdKernelLock(home))) return false
-      return yield* removeLock(home, serverId)
-    }),
-  )
+): Effect.Effect<boolean, GentConnectionError, FileSystem.FileSystem> =>
+  Effect.scoped(holdServerLock(home))
 
 const lockStatus = (
   home: string,
@@ -464,7 +454,7 @@ const stopLocked = (
     const { entry } = status
     if (status._tag === "Stale") {
       if (options?.removeStale !== true) return ServerStopResult.cases.NotRunning.make({ entry })
-      if (!(yield* removeStaleEntry(home, entry.serverId))) {
+      if (!(yield* removeStaleEntry(home))) {
         return ServerStopResult.cases.NotRunning.make({ entry })
       }
       return ServerStopResult.cases.Removed.make({ entry })
@@ -476,7 +466,7 @@ const stopLocked = (
     yield* platform.signal(entry.pid, "SIGTERM").pipe(Effect.ignore)
     if (!(yield* goneWithin(home, entry)))
       return ServerStopResult.cases.StillRunning.make({ entry })
-    yield* removeStaleEntry(home, entry.serverId)
+    yield* removeStaleEntry(home)
     return ServerStopResult.cases.Stopped.make({ entry })
   })
 
@@ -487,7 +477,7 @@ const stopLocked = (
 export const serverLockFile = {
   read: readLock,
   write: writeLock,
-  remove: removeLock,
+  remove: removeEntry,
 }
 
 /**
