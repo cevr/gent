@@ -269,9 +269,10 @@ Priority: headless → session → continue → prompt → home
 A headless run has no user, so it declines every interaction its turn presents,
 with notes that name `--approve-all`. `--approve-all` approves every ask. The
 run follows only its own turn: the live events from the `MessageReceived` of
-the prompt it sent (the first
-client-sent user message with the prompt's text after the send) to the
-`TurnCompleted` that names that message. A resumed session's history and an
+the prompt it sent (the message its send's request id names, through
+`userMessageIdForRequest`) to the `TurnCompleted` that names that message.
+Another client's message with the same text is not the run's. A resumed
+session's history and an
 older turn still running on the branch are not printed and do not settle it. An
 `ErrorOccurred` alone does not end the run; the `TurnCompleted` receipt does.
 It exits 1 when the receipt says `interrupted`, `streamFailed` or `unanswered`,

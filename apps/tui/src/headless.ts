@@ -16,10 +16,10 @@ import {
   formatHeadTail,
   type AgentEvent,
   type BranchId,
-  type Message,
   type SessionId,
   GentConnectionError,
   type GentNamespacedClient,
+  userMessageIdForRequest,
 } from "@gent/core/protocol"
 import {
   CellOperationReceipts,
@@ -195,28 +195,11 @@ export interface HeadlessOptions {
 const DECLINE_NOTES =
   "Declined: this is a headless run and no user is present to answer. Report what you would do; a user can rerun the prompt with --approve-all to approve every ask."
 
-const messageText = (message: Message): string =>
-  message.parts
-    .flatMap((part) => {
-      if (part.type === "text") return [part.text]
-      return []
-    })
-    .join("")
-
 /** How the run draws a tool call that ended. */
 const TOOL_END_STATUS = {
   ToolCallSucceeded: "completed",
   ToolCallFailed: "error",
 } satisfies Record<"ToolCallSucceeded" | "ToolCallFailed", HeadlessToolCall["status"]>
-
-/** A user message a client sent with this text: the opening message of a run's turn. */
-const isClientPrompt = (message: Message, text: string): boolean =>
-  message._tag === "regular" &&
-  message.role === "user" &&
-  Option.fromNullishOr(message.metadata).pipe(
-    Option.exists((metadata) => metadata.fromClient === true),
-  ) &&
-  messageText(message) === text
 
 /** How the run's own turn ended, read from its `TurnCompleted` receipt. */
 type TurnEnd = "answered" | "unanswered" | "interrupted"
@@ -285,20 +268,22 @@ export const runHeadless = (
       // Settles with how the run's own turn ended.
       const done = yield* Deferred.make<TurnEnd>()
       let live = false
-      let sent = false
+      // One request id for the send and each retry of it.
+      const sendRequestId = yield* randomId
       /**
        * The opening message of the run's own turn. The branch may be running
        * an older turn when the prompt arrives; that turn's output, errors,
        * asks and `TurnCompleted` are not this run's. A turn starts with the
        * `MessageReceived` of its opening message, and the branch runs one turn
        * at a time, so the events from the run's opening message to the
-       * `TurnCompleted` that names it are the run's turn. The opening message
-       * is the first client-sent user message with the prompt's text after the
-       * run sent it.
+       * `TurnCompleted` that names it are the run's turn. The server names the
+       * opening message by the send's request id, so another client's message
+       * with the same text is not this run's.
        */
-      let ownTurn = Option.none<Message["id"]>()
+      const ownMessage = userMessageIdForRequest(sendRequestId)
+      let ownTurnStarted = false
       let ownTurnEnded = false
-      const inOwnTurn = () => Option.isSome(ownTurn) && !ownTurnEnded
+      const inOwnTurn = () => ownTurnStarted && !ownTurnEnded
       // Errors of the run's turn, notices included. The run's end owns
       // stderr: one line.
       const errors: Array<string> = []
@@ -333,7 +318,7 @@ export const runHeadless = (
       }
       // The run settles on the `TurnCompleted` that names its opening message.
       const turnCompleted = (event: Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>) => {
-        if (!Option.contains(ownTurn, event.messageId)) return Effect.void
+        if (event.messageId !== ownMessage) return Effect.void
         ownTurnEnded = true
         return Deferred.succeed(done, turnEnd(event, { wroteText, failed }))
       }
@@ -389,8 +374,7 @@ export const runHeadless = (
             }
             if (!live) return
             if (event._tag === "MessageReceived") {
-              if (sent && Option.isNone(ownTurn) && isClientPrompt(event.message, promptText))
-                ownTurn = Option.some(event.message.id)
+              if (event.message.id === ownMessage) ownTurnStarted = true
               return
             }
             if (!inOwnTurn()) return
@@ -456,8 +440,6 @@ export const runHeadless = (
       // lets the message go; a failed phase appends one with `streamFailed`.
       // A send that fails is the fallback end, for a turn that never got a
       // receipt.
-      const sendRequestId = yield* randomId
-      sent = true
       const sendFiber = yield* Effect.suspend(() =>
         client.message.send({
           sessionId,

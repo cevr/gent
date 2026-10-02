@@ -21,6 +21,7 @@ import {
   SessionId,
   ToolCallId,
   GentConnectionError,
+  userMessageIdForRequest,
 } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
@@ -69,8 +70,14 @@ const noUser: HeadlessOptions = { approveAll: false, place: PLACE }
 const sessionId = SessionId.make("session-headless")
 const branchId = BranchId.make("branch-headless")
 const PROMPT = "Say hi"
+/**
+ * Stands for the run's own message in a fixture. The server names that message
+ * by the send's request id, so `branchClient` replaces this id with
+ * `userMessageIdForRequest(requestId)` once the run sends.
+ */
 const OWN_TURN = MessageId.make("own-turn")
 const OLDER_TURN = MessageId.make("older-turn")
+const OTHER_CLIENT_TURN = MessageId.make("other-client-turn")
 
 /** The client-sent message that opens a turn, as its `MessageReceived` carries it. */
 const opening = (id: MessageId, text: string) =>
@@ -104,8 +111,10 @@ const errorNotice = (error: string) =>
  * A branch as one run sees it: the stored history, the synchronization
  * marker, the live events that come before the run's prompt is sent (an
  * older turn still running), and, once the run sends, the `afterSend` events
- * and then its own turn: the opening message, then `ownTurn`. The stream stays
- * open. Each send runs `sendAttempt` first; the turn opens when the attempt
+ * and then its own turn: the opening message, then `ownTurn`. The opening
+ * message and each `TurnCompleted` that names `OWN_TURN` carry the id the
+ * send's request id names, as the server writes them. The stream stays open.
+ * Each send runs `sendAttempt` first; the turn opens when the attempt
  * succeeds. `send` fails with `sendFailure` when one is given, as a failed
  * turn phase fails it.
  */
@@ -123,7 +132,8 @@ const branchClient = (input: {
     readonly notes?: string
   }) => Effect.Effect<void>
 }) => {
-  const sent = Deferred.makeUnsafe<void>()
+  // Settles with the id of the run's own message.
+  const sent = Deferred.makeUnsafe<MessageId>()
   const history = input.history ?? []
   const envelopes = (events: ReadonlyArray<AgentEvent>, from: number) =>
     events.map((event, index) =>
@@ -135,14 +145,23 @@ const branchClient = (input: {
     lastEventId: EventId.make(history.length),
   })
   const before = [...history, marker, ...(input.beforeSend ?? [])]
-  const after = [...(input.afterSend ?? []), opening(OWN_TURN, PROMPT), ...input.ownTurn]
+  const after = (own: MessageId) => [
+    ...(input.afterSend ?? []),
+    opening(own, PROMPT),
+    ...input.ownTurn.map((event) => {
+      if (event._tag !== "TurnCompleted" || event.messageId !== OWN_TURN) return event
+      return TurnCompleted.make({ ...event, messageId: own })
+    }),
+  ]
   return createMockClient({
     session: {
       events: () =>
         Stream.fromIterable(envelopes(before, 1)).pipe(
           Stream.concat(
             Stream.fromEffect(Deferred.await(sent)).pipe(
-              Stream.flatMap(() => Stream.fromIterable(envelopes(after, before.length + 1))),
+              Stream.flatMap((own) =>
+                Stream.fromIterable(envelopes(after(own), before.length + 1)),
+              ),
             ),
           ),
           Stream.concat(Stream.never),
@@ -154,7 +173,9 @@ const branchClient = (input: {
           onNone: () => Effect.void,
           onSome: (attempt) => attempt(send),
         }).pipe(
-          Effect.andThen(Deferred.done(sent, Exit.void)),
+          Effect.andThen(
+            Deferred.succeed(sent, userMessageIdForRequest(send.requestId ?? "<missing>")),
+          ),
           Effect.andThen(
             Option.match(Option.fromUndefinedOr(input.sendFailure), {
               onNone: () => Effect.void,
@@ -326,6 +347,24 @@ describe("runHeadless", () => {
       const captured = yield* captureStdout(run(client))
       expect(captured.stdout).toContain("the answer")
       expect(captured.stdout).not.toContain("older output")
+    }),
+  )
+
+  headlessTest("another client's message with the prompt's text is not the run's turn", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        // After the send, another client's message with the same text runs first.
+        afterSend: [
+          opening(OTHER_CLIENT_TURN, PROMPT),
+          chunk("other client output"),
+          completed({ messageId: OTHER_CLIENT_TURN, unanswered: true }),
+        ],
+        ownTurn: [chunk("the answer"), completed()],
+      })
+      const { result: exit, stdout } = yield* captureStdout(Effect.exit(run(client)))
+      expect(exit._tag).toBe("Success")
+      expect(stdout).toContain("the answer")
+      expect(stdout).not.toContain("other client output")
     }),
   )
 
