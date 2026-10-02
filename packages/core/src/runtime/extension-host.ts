@@ -666,29 +666,22 @@ const compileBucket = <T>(
   return result
 }
 
+/** The id a tool or request registration answers to; both share one namespace. */
+const capabilityEntryId = (entry: RegisteredCapabilityEntry): string => {
+  if (entry.kind === "tool") return String(getToolId(entry.capability))
+  return String(entry.capability.id)
+}
+
+/**
+ * The registration each capability id resolves to. The entries are in scope
+ * order, so a later-scope contribution from either bucket shadows an earlier
+ * registration with the same id.
+ */
 const compileCapabilityWinners = (
-  sorted: ReadonlyArray<LoadedExtension>,
+  entries: ReadonlyArray<RegisteredCapabilityEntry>,
 ): ReadonlyMap<string, RegisteredCapabilityEntry> => {
   const winners = new Map<string, RegisteredCapabilityEntry>()
-  for (const ext of sorted) {
-    // Sorted scope-ascending; later writes win. Iterate every typed bucket
-    // for each extension so a later-scope contribution from any bucket
-    // shadows an earlier registration with the same id.
-    for (const cap of Option.getOrElse(Option.fromUndefinedOr(ext.contributions.tools), () => [])) {
-      winners.set(String(getToolId(cap)), {
-        kind: "tool",
-        extensionId: ext.manifest.id,
-        extension: ext,
-        capability: cap,
-      })
-    }
-    for (const cap of Option.getOrElse(
-      Option.fromUndefinedOr(ext.contributions.requests),
-      () => [],
-    )) {
-      winners.set(String(cap.id), { kind: "rpc", extensionId: ext.manifest.id, capability: cap })
-    }
-  }
+  for (const entry of entries) winners.set(capabilityEntryId(entry), entry)
   return winners
 }
 
@@ -704,6 +697,7 @@ const compileSlashCommands = (
   return commands
 }
 
+/** Every tool and request registration, in scope order (later scopes last). */
 const compileCapabilityEntries = (
   sorted: ReadonlyArray<LoadedExtension>,
 ): ReadonlyArray<RegisteredCapabilityEntry> => {
@@ -733,10 +727,7 @@ const resolveCapabilityEntry = (
   for (let i = entries.length - 1; i >= 0; i--) {
     const candidate = entries[i]
     if (Predicate.isUndefined(candidate)) continue
-    let candidateId: string
-    if (candidate.kind === "tool") candidateId = getToolId(candidate.capability)
-    else candidateId = candidate.capability.id
-    if (candidate.extensionId === extensionId && candidateId === capabilityId)
+    if (candidate.extensionId === extensionId && capabilityEntryId(candidate) === capabilityId)
       return Option.some(candidate)
   }
   return Option.none()
@@ -876,8 +867,8 @@ export const resolveExtensions = (
   // authorization. Every leaf (regardless of bucket) enters the candidate map;
   // authorization (`kind === "tool"`) happens AFTER selection so a higher-scope
   // command/rpc override correctly hides a shadowed builtin tool.
-  const capabilityWinners = compileCapabilityWinners(sorted)
   const capabilityEntries = compileCapabilityEntries(sorted)
+  const capabilityWinners = compileCapabilityWinners(capabilityEntries)
   const rpcRegistry = compileRpcRegistry(capabilityEntries)
   const modelCapabilities = new Map<string, RegisteredToolEntry>()
   for (const [id, entry] of capabilityWinners) {
@@ -1296,40 +1287,28 @@ interface ExtensionScan {
   readonly projectTrusted: boolean
 }
 
-const scanExtensionDirectories = Effect.fn("ExtensionLoader.scanExtensionDirectories")(function* (
-  dirs: ExtensionDirectories,
-  projectTrusted: boolean,
-) {
-  const user = yield* scanDir(dirs.userDir)
-  // Launched from home, the project directory is the user's: one scope, read once.
-  let project: DirScan = { paths: [], unreadable: [] }
-  if (yield* hasProjectScope({ user: dirs.userDir, project: dirs.projectDir }))
-    project = yield* scanDir(dirs.projectDir)
-  const scan: ExtensionScan = { dirs, user, project, projectTrusted }
-  return scan
-})
-
 /**
- * The extension directories, read once, with the project's trust. Trust is
- * read from the user config file now, by the one reader the TUI uses too, so
- * a grant or a revoke reaches the next scan, and a user file that does not
- * decode trusts no project: a revoke is never undone by a broken edit.
+ * The extension directories a profile for these inputs reads, read once, with
+ * the project's trust. Trust is read from the user config file now, by the
+ * one reader the TUI uses too, so a grant or a revoke reaches the next scan,
+ * and a user file that does not decode trusts no project: a revoke is never
+ * undone by a broken edit.
  */
-const scanExtensions = Effect.fn("ExtensionLoader.scanExtensions")(function* (
-  dirs: ExtensionDirectories,
-) {
-  return yield* scanExtensionDirectories(dirs, yield* isProjectExtensionDirectoryTrusted(dirs))
-})
-
-/** The extension directories a profile for these inputs reads, read once. */
-export const scanRuntimeProfileExtensions = (inputs: {
-  readonly cwd: string
-  readonly home: string
-}): Effect.Effect<ExtensionScan, never, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path
-    return yield* scanExtensions(extensionDirectories(path, inputs))
-  })
+export const scanRuntimeProfileExtensions = Effect.fn("ExtensionLoader.scanExtensions")(
+  function* (inputs: {
+    readonly cwd: string
+    readonly home: string
+  }): Effect.fn.Return<ExtensionScan, never, FileSystem.FileSystem | Path.Path> {
+    const dirs = extensionDirectories(yield* Path.Path, inputs)
+    const projectTrusted = yield* isProjectExtensionDirectoryTrusted(dirs)
+    const user = yield* scanDir(dirs.userDir)
+    // Launched from home, the project directory is the user's: one scope, read once.
+    let project: DirScan = { paths: [], unreadable: [] }
+    if (yield* hasProjectScope({ user: dirs.userDir, project: dirs.projectDir }))
+      project = yield* scanDir(dirs.projectDir)
+    return { dirs, user, project, projectTrusted }
+  },
+)
 
 /**
  * The extension files a scan found, each with its version, the paths that
