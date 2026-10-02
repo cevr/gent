@@ -449,6 +449,8 @@ interface SettingsPickerProps {
   rows: readonly PickerRow[]
   /** The row the next turn would use; rendered with a marker and preselected. */
   current: Option.Option<string>
+  /** The note row: why the rows are not there yet, such as a catalog that loads. */
+  detail?: Option.Option<string>
   onSelect: (id: string) => void
   onClose: () => void
 }
@@ -488,6 +490,7 @@ export function SettingsPicker(props: SettingsPickerProps) {
     <Show when={props.open}>
       <PickerFrame
         error={Option.none()}
+        detail={props.detail}
         title={`${props.title} · ${visible().length}`}
         keys={[KeyHints.filter, KeyHints.move, KeyHints.select, KeyHints.close]}
       >

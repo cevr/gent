@@ -749,6 +749,11 @@ export function Session(props: SessionProps) {
             title="Model"
             rows={modelRows(client.models())}
             current={Option.some(client.model())}
+            // No models yet is not none: the session's catalog still loads.
+            detail={Option.match(client.modelCatalog(), {
+              onNone: () => Option.some("Loading the session's models…"),
+              onSome: () => Option.none(),
+            })}
             onSelect={(id) => controller.onModelSelect(ModelId.make(id))}
             onClose={controller.closeOverlay}
           />

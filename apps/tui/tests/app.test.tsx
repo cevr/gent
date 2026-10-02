@@ -2147,6 +2147,55 @@ describe("App status and activity rows", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // A session's catalog loads again when the reader returns to it. Until it
+  // settles, the session has no models yet, which is not the same as none:
+  // the picker says it is loading, and `/model <query>` says so too.
+  for (const [surface, typed, expected] of [
+    ["picker", "/model", "Loading the session's models"],
+    ["slash command", "/model sonnet", "Models are still loading"],
+  ] as const) {
+    it.scopedLive(`the ${surface} on a returning session's loading catalog says it loads`, () =>
+      Effect.gen(function* () {
+        const reload = yield* Deferred.make<void>()
+        let readsOfA = 0
+        const view = yield* mountSessionPair({
+          model: {
+            list: (input: { readonly sessionId: SessionId }) =>
+              Effect.suspend(() => {
+                const sonnet = Model.make({
+                  id: ModelId.make("anthropic/sonnet"),
+                  name: "Sonnet",
+                  provider: ProviderId.make("anthropic"),
+                })
+                if (input.sessionId !== pairA.sessionId) return Effect.succeed([sonnet])
+                readsOfA += 1
+                if (readsOfA === 1) return Effect.succeed([sonnet])
+                return Deferred.await(reload).pipe(Effect.as([sonnet]))
+              }),
+          },
+          driver: {
+            list: () =>
+              Effect.succeed({
+                drivers: [{ id: "anthropic" }],
+                overrides: {},
+                agents: [testAgent],
+              }),
+          },
+        })
+        yield* waitForFrame(view.setup, () => view.client.models().length === 1, "A's catalog")
+        yield* view.switchTo(pairB, "Session B")
+        yield* view.switchTo(pairA, "Session A")
+        yield* waitForFrame(view.setup, () => readsOfA === 2, "A's catalog read again")
+        yield* typeCommand(typed)(view.setup)
+        const frame = yield* waitForFrame(
+          view.setup,
+          (next) => next.includes(expected),
+          "the loading note",
+        )
+        expect(frame).not.toContain("No model matches")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   // Two forks out at once: the one asked for last is the reader's choice,
   // whichever answers first.
   for (const order of [

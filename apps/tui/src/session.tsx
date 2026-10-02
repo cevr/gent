@@ -1555,6 +1555,11 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         apply(Option.none())
         return
       }
+      // Until the session's catalog settles, no match is no answer.
+      if (Option.isNone(props.client.modelCatalog())) {
+        props.client.setNotice(`Models are still loading · try /model ${query} again`)
+        return
+      }
       Match.type<ModelQueryResult>().pipe(
         Match.tagsExhaustive({
           Match: (result) => apply(Option.some(result.model.id)),
