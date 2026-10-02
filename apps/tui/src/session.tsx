@@ -543,9 +543,11 @@ interface ComposerMemory {
   readonly refusals: ComposerRefusals
   readonly history: PromptHistoryStore
   /**
-   * Text taken back from a branch's queue replaces that branch's draft: in
-   * its composer when one is on screen, in its kept draft when not. The drain
-   * has committed by then, so the text must not depend on the view that asked.
+   * Text taken back from a branch's queue goes back to that branch's draft:
+   * in its composer when one is on screen, in its kept draft when not. It goes
+   * ahead of what the reader has typed, which stays, as a refused send does.
+   * The drain has committed by then, so the text must not depend on the view
+   * that asked.
    */
   readonly restore: (branchId: BranchId, text: string) => void
   /**
@@ -712,9 +714,22 @@ export function ComposerMemoryProvider(props: ParentProps<ComposerMemoryProvider
     })
   }
   const restore = (branchId: BranchId, text: string): void => {
-    // Queued text is a message, so the draft is one too.
-    const draft: ComposerDraft = { draft: text, mode: "editing" }
     const live = Option.fromUndefinedOr(links.get(branchId))
+    const current = Option.match(live, {
+      onSome: (link) => link.current(),
+      onNone: () =>
+        Option.getOrElse(drafts.get(branchId), (): ComposerDraft => ({
+          draft: "",
+          mode: "editing",
+        })),
+    })
+    // Queued text is a message, so the draft is one too: a typed command
+    // behind it keeps its `!`.
+    let typed = current.draft
+    if (current.mode === "shell" && typed.trim().length > 0) typed = `!${typed}`
+    let joined = text
+    if (typed.trim().length > 0) joined = `${text}${REFUSED_SEPARATOR}${typed}`
+    const draft: ComposerDraft = { draft: joined, mode: "editing" }
     if (Option.isSome(live)) {
       live.value.apply(draft)
       return

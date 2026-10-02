@@ -605,6 +605,29 @@ const pairB = { sessionId: SessionId.make("session-b"), branchId: BranchId.make(
  * The session view on A, with B one switch away: a test starts an action in
  * A, moves to B before A's server answers, and reads where the answer lands.
  */
+/** A queue drain that answers `content` once the test completes `answer`. */
+const gatedDrain = (content: string) =>
+  Effect.gen(function* () {
+    const asked = yield* Deferred.make<void>()
+    const answer = yield* Deferred.make<void>()
+    const drain = () =>
+      Deferred.complete(asked, Effect.void).pipe(
+        Effect.andThen(Deferred.await(answer)),
+        Effect.as({
+          steering: [],
+          followUp: [
+            {
+              _tag: "FollowUp" satisfies "FollowUp",
+              id: MessageId.make("queued"),
+              content,
+              createdAt: 0,
+            },
+          ],
+        }),
+      )
+    return { asked, answer, drain }
+  })
+
 const mountSessionPair = (overrides: Parameters<typeof createMockClient>[0]) =>
   Effect.gen(function* () {
     const client = createMockClient({
@@ -2174,6 +2197,42 @@ describe("App status and activity rows", () => {
       )
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // Text the reader typed is never lost to a restore: the queued text goes
+  // ahead of the draft, as a refused send does. The draft can change while
+  // the drain is out, in the composer on screen or in a kept draft.
+  for (const [where, title] of [
+    ["now", "alt+up keeps the draft and puts the queued text ahead of it"],
+    ["waiting", "text typed while the drain is out stays behind the queued text"],
+    ["returned", "a kept draft edited after a return stays behind the queued text"],
+  ] as const) {
+    it.scopedLive(title, () =>
+      Effect.gen(function* () {
+        const drain = yield* gatedDrain("queued in A")
+        const view = yield* mountSessionPair({ queue: { drain: drain.drain } })
+        const typeIn = (text: string) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => view.setup.mockInput.typeText(text))
+            yield* waitForFrame(view.setup, (frame) => frame.includes(text), text)
+          })
+        if (where === "now") yield* typeIn("my own draft")
+        view.setup.mockInput.pressArrow("up", { meta: true })
+        yield* Deferred.await(drain.asked)
+        if (where === "waiting") yield* typeIn("my own draft")
+        if (where === "returned") {
+          yield* view.switchTo(pairB, "Session B")
+          yield* view.switchTo(pairA, "Session A")
+          yield* typeIn("my own draft")
+        }
+        yield* Deferred.complete(drain.answer, Effect.void)
+        const frame = yield* waitForFrame(
+          view.setup,
+          (next) => next.includes("queued in A") && next.includes("my own draft"),
+          "the queued text and the draft",
+        )
+        expect(frame.indexOf("queued in A")).toBeLessThan(frame.indexOf("my own draft"))
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   it.scopedLive("a running turn's activity row shows esc cancel", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
