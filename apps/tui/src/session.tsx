@@ -40,6 +40,7 @@ import {
   type AuthProviderInfo,
   type EventEnvelope,
   InteractionPresented,
+  interjectionMessageId,
   type MessageId,
   messagePartsImages,
   messagePartsReasoning,
@@ -57,6 +58,7 @@ import {
   type QueueEntryInfo,
   type QueueSnapshot,
   type ToolInteraction,
+  userMessageIdForRequest,
 } from "@gent/core/protocol"
 import {
   formatConnectionIssue,
@@ -608,28 +610,41 @@ const afterBlock = (current: ComposerDraft, block: RefusedBlock): string =>
   current.draft.slice(block.shown.length + REFUSED_SEPARATOR.length)
 
 /**
- * Put text taken back from the queue into a draft. A queued text that an
- * entry of the draft's refused block holds is that entry: the server had the
- * send after all, so the entry stays where it is, once, and drops the request
- * id of the send the drain took. Any other queued text goes after the refused
- * block and ahead of what the reader typed since, so a later refusal still
- * joins the block in send order. Queued text is a message: a command around
- * it keeps its `!`.
+ * Whether a queued item is the send a refused entry holds: the entry's lost
+ * request id opened it, as a follow-up (`message:<id>`) or an interjection
+ * (`<id>:interjection`). Text says nothing: the server queued the expanded
+ * text, and another send can have the same words.
+ */
+const queuedAs = (entry: RefusedSubmission, item: QueueEntryInfo): boolean =>
+  Option.exists(
+    entry.requestId,
+    (requestId) =>
+      item.id === userMessageIdForRequest(requestId) ||
+      item.id === interjectionMessageId(requestId),
+  )
+
+/**
+ * Put text taken back from the queue into a draft. A queued item that an
+ * entry of the draft's refused block sent (`queuedAs`) is that entry: the
+ * server had the send after all, so the entry stays where it is, once, as
+ * the reader wrote it, and drops the request id of the send the drain took.
+ * Any other queued text goes after the refused block and ahead of what the
+ * reader typed since, so a later refusal still joins the block in send order.
+ * Queued text is a message: a command around it keeps its `!`.
  */
 export const mergeRestored = (
   current: ComposerDraft,
   block: RefusedBlock,
   queue: QueueState,
 ): RefusedMerge => {
-  const same = (left: string, right: string) => left.trim() === right.trim()
   const queued = [...queue.steering, ...queue.followUp]
   const entries = block.entries.map((entry): WrittenRefusal => {
-    if (!queued.some((item) => same(item.content, entry.text))) return entry
+    if (!queued.some((item) => queuedAs(entry, item))) return entry
     return { ...entry, requestId: Option.none() }
   })
   const kept = blockKept(current, block)
   const fresh = (item: QueueEntryInfo) =>
-    !kept || !block.entries.some((entry) => same(item.content, entry.text))
+    !kept || !block.entries.some((entry) => queuedAs(entry, item))
   const rest = queuedDraftText({
     steering: queue.steering.filter(fresh),
     followUp: queue.followUp.filter(fresh),

@@ -46,6 +46,7 @@ import {
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
   type QueueEntryInfo,
+  userMessageIdForRequest,
 } from "@gent/core/protocol"
 import {
   emptyQueueSnapshot,
@@ -2355,10 +2356,11 @@ describe("App status and activity rows", () => {
     )
   }
   // A send whose replies were lost comes back to the draft, but the server
-  // may have queued it. Taking the queue back then gives the text once, and
-  // the next send is new: the old request id names the send the drain took.
+  // may have queued it. Taking the queue back then gives the text once, as
+  // the reader wrote it (the server holds its `@file` expanded), and the next
+  // send is new: the old request id names the send the drain took.
   it.scopedLive(
-    "a lost send the server queued comes back once when the queue is taken back",
+    "a lost `@file` send the server queued comes back once when the queue is taken back",
     () =>
       Effect.gen(function* () {
         const sends: Array<{ readonly content: string; readonly requestId: string }> = []
@@ -2378,36 +2380,39 @@ describe("App status and activity rows", () => {
               }),
           },
           queue: {
+            // The server queued the first send under its request id.
             drain: () =>
-              Effect.succeed({
+              Effect.sync(() => ({
                 steering: [],
                 followUp: [
                   {
                     _tag: "FollowUp" satisfies "FollowUp",
-                    id: MessageId.make("queued-lost"),
-                    content: "resend me",
+                    id: userMessageIdForRequest(sends[0]?.requestId ?? "none"),
+                    content: sends[0]?.content ?? "",
                     createdAt: 0,
                   },
                 ],
-              }).pipe(Effect.ensuring(Deferred.complete(drained, Effect.void))),
+              })).pipe(Effect.ensuring(Deferred.complete(drained, Effect.void))),
           },
         })
-        yield* Effect.promise(() => view.setup.mockInput.typeText("resend me"))
+        const draft = "resend @package.json"
+        yield* Effect.promise(() => view.setup.mockInput.typeText(draft))
         yield* Effect.promise(() => view.setup.renderOnce())
         view.setup.mockInput.pressEnter()
         yield* waitForFrame(
           view.setup,
-          (frame) => sends.length === 5 && frame.includes("┃ resend me"),
+          (frame) => sends.length === 5 && frame.includes(`┃ ${draft}`),
           "the lost send back in the draft",
           8_000,
         )
+        expect(sends[0]?.content).not.toBe(draft)
         view.setup.mockInput.pressArrow("up", { meta: true })
         yield* Deferred.await(drained)
         yield* view.settle
-        expect(renderFrame(view.setup).split("resend me").length - 1).toBe(1)
+        expect(renderFrame(view.setup).split("resend").length - 1).toBe(1)
         view.setup.mockInput.pressEnter()
         yield* waitForFrame(view.setup, () => sends.length === 6, "sent again")
-        expect(sends[5]?.content).toBe("resend me")
+        expect(sends[5]?.content).toBe(sends[0]?.content)
         expect(sends[5]?.requestId).not.toBe(sends[0]?.requestId)
       }).pipe(Effect.timeout("12 seconds")),
     15_000,

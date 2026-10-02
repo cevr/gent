@@ -53,6 +53,8 @@ export {
   type ModelContextMetrics,
   type SessionRuntimeMetrics,
   stepSessionMetrics,
+  interjectionMessageId,
+  userMessageIdForRequest,
 } from "./domain/agent-loop.js"
 export {
   CONTEXT_WINDOW_MESSAGE_TYPE,

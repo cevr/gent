@@ -57,6 +57,8 @@ import {
   AgentEvent,
   AgentName,
   assistantMessageIdForTurn,
+  interjectionMessageId,
+  userMessageIdForRequest,
   dateFromMillis,
   EventEnvelope,
   Message,
@@ -212,6 +214,54 @@ describe("refused submissions", () => {
       placeholder,
     )
     expect(merged.draft).toEqual({ draft: longCommand, mode: "shell" })
+  })
+
+  test("a lost `@file` send the server queued comes back once, as the draft the reader wrote", () => {
+    // The composer refuses the draft as typed; the server queued it expanded.
+    const lost = mergeRefused(editing(""), empty, {
+      order: 0,
+      text: "see @a.ts",
+      shell: false,
+      requestId: Option.some("r1"),
+    })
+    const queue = {
+      steering: [],
+      followUp: [
+        queueEntry("FollowUp", userMessageIdForRequest("r1"), "see \n```ts\nconst a = 1\n```"),
+      ],
+    }
+    const restored = mergeRestored(lost.draft, lost.block, queue)
+    expect(restored.draft).toEqual(editing("see @a.ts"))
+    // The drain took that send: the text goes again as new.
+    expect(restored.block.entries.map((entry) => entry.requestId)).toEqual([Option.none()])
+  })
+
+  test("a lost interjection the server queued comes back once", () => {
+    const lost = mergeRefused(editing(""), empty, {
+      order: 0,
+      text: "stop that",
+      shell: false,
+      requestId: Option.some("r2"),
+    })
+    const queue = {
+      steering: [queueEntry("Steering", interjectionMessageId("r2"), "stop that")],
+      followUp: [],
+    }
+    expect(mergeRestored(lost.draft, lost.block, queue).draft).toEqual(editing("stop that"))
+  })
+
+  test("a queued message with the same text as an answered refusal is restored, not dropped", () => {
+    // The server answered this refusal: it was never queued.
+    const answered = mergeRefused(editing(""), empty, {
+      order: 0,
+      text: "yes",
+      shell: false,
+      requestId: Option.none(),
+    })
+    const queue = { steering: [], followUp: [queueEntry("FollowUp", "other-send", "yes")] }
+    expect(mergeRestored(answered.draft, answered.block, queue).draft).toEqual(
+      editing("yes\n\nyes"),
+    )
   })
 
   test("a kept block that joins a composer on screen is written the way that composer writes", () => {

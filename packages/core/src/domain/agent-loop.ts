@@ -635,6 +635,9 @@ export const AgentLoop = Actor.fromEntity(
 
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
 const commandIdForRequestId = (requestId: string) => ActorCommandId.make(`message:${requestId}`)
+/** The user message a send under this request id opens, queued or running. */
+export const userMessageIdForRequest = (requestId: string) =>
+  userMessageIdForCommand(commandIdForRequestId(requestId))
 
 const loopRefFor = Effect.fn("AgentLoop.client.refFor")(function* (
   sessionId: SessionId,
