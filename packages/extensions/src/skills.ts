@@ -368,13 +368,16 @@ export function parseSkillFile(content: string, filename: string) {
   }
 
   const name = Option.getOrElse(header.name, () => filename.replace(/\.md$/, ""))
-  // Without a description key, the first body paragraph (minus a heading) describes the skill.
+  // Without a description key, the first body paragraph with text after its
+  // leading heading lines describes the skill; a heading-only paragraph is skipped.
   const description = header.description.pipe(
     Option.orElse(() =>
-      Option.fromNullishOr(body.split(/\r?\n\r?\n/)[0]).pipe(
-        Option.map((paragraph) => headChars(oneLine(paragraph.replace(/^#.*(\r?\n|$)/, "")), 100)),
-        Option.filter((text) => text.length > 0),
-      ),
+      Option.fromUndefinedOr(
+        body
+          .split(/\r?\n\r?\n/)
+          .map((paragraph) => oneLine(paragraph.replace(/^(#.*(\r?\n|$))+/, "")))
+          .find((text) => text.length > 0),
+      ).pipe(Option.map((text) => headChars(text, 100))),
     ),
     Option.getOrElse(() => `Skill: ${name}`),
   )

@@ -158,6 +158,14 @@ Content here`
     expect(result.description).toBe("Short description")
   })
 
+  test("a heading on its own paragraph is skipped for the first paragraph after it", () => {
+    expect(parseSkillFile("# Deploy\n\nShip the app.\n\nMore", "deploy.md").description).toBe(
+      "Ship the app.",
+    )
+    const content = "---\nversion: 2\n---\n# Title\n\n## Usage\r\n\r\nBody text\n\nMore"
+    expect(parseSkillFile(content, "bare").description).toBe("Body text")
+  })
+
   test("a folded block scalar description reads as one line", () => {
     const content =
       "---\nname: arch\ndescription: >-\n  Effect-first patterns.\n  Use when designing.\n---\nBody"
