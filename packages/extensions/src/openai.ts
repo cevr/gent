@@ -34,7 +34,10 @@ import {
 } from "effect/http"
 import { BunHttpServer } from "@effect/platform-bun"
 import {
+  type ApiClassContribution,
   AuthMethod,
+  type CatalogModel,
+  type CatalogOverride,
   DEFAULT_RETRY_POLICY,
   defineExtension,
   ExtensionHost,
@@ -46,17 +49,19 @@ import {
   type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
   type ProviderHints,
-  ReasoningEffort,
 } from "@gent/core/extensions/api"
 import {
+  adapterEntry,
   catalogModels,
+  CHAT_COMPLETIONS_CLASS,
   type CredentialCache,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
   type CredentialFailure,
   checkCredentials,
   CredentialRefreshUnavailable,
-  effortAtOrAbove,
+  effortFor,
+  endpointClient,
   EMPTY_CREDENTIAL_CELL,
   explainCredentialFailure,
   authorizedClient,
@@ -71,7 +76,11 @@ import {
   requestJsonObject,
   rewriteJsonBody,
   replaceHeldCredential,
+  maxTokensOf,
   RESPONSES_PROMPT_CACHE_TTL,
+  reasoningHint,
+  sampledTemperature,
+  sdkApiKey,
   takesLowVerbosity,
   withEncryptedReasoning,
   modelReasons,
@@ -1259,96 +1268,90 @@ const OAUTH_FLOWS: ReadonlyArray<typeof authorizeOpenAI> = [
 type OpenAiResponsesConfig = Required<
   Parameters<typeof OpenAiResponsesLanguageModel.layer>[0]
 >["config"]
-/** Every effort level, lowest first. */
-const OPENAI_EFFORT_ORDER = ReasoningEffort.literals
+
+// ── responses class ──
 
 /**
- * The `reasoning.effort` values each model family accepts, lowest first;
- * first match wins. From each model page's list at
- * developers.openai.com/api/docs/models. A request that names any other
- * value fails with HTTP 400. A model none of these match gets the hint as
- * it is.
+ * The Responses request, for both auth paths and every provider that speaks
+ * the API: not stored, the conversation as the prompt cache key, the model's
+ * text verbosity, and the effort the catalog's effort list accepts with a
+ * reasoning summary. OpenAI runs a reasoning model at its default effort when
+ * the request names none, so a hint of "none" names the lowest effort the
+ * model lists. `max_output_tokens` counts reasoning tokens too, so on a
+ * reasoning model a small cap (the 768-token compaction summary) is shared
+ * with the thinking the effort floor still asks for. OpenAI's reasoning
+ * models reject `temperature`; GPT-5.1 and 5.2 take it at effort `none`, and
+ * it is dropped there too, as one rule per model.
  */
-const OPENAI_ACCEPTED_EFFORTS: ReadonlyArray<{
-  readonly pattern: RegExp
-  readonly accepts: ReadonlyArray<ReasoningEffort>
-}> = [
-  { pattern: /^gpt-5-pro(-|$)/, accepts: ["high"] },
-  // GPT-5.2, 5.4 and 5.5 Pro. Anchored, so o1-pro and o3-pro fall to the o-series row.
-  { pattern: /^gpt-5\.\d+-pro(-|$)/, accepts: ["medium", "high", "xhigh"] },
-  { pattern: /^gpt-6(\.\d+)?-astra(-|$)/, accepts: ["low", "medium", "high", "xhigh", "max"] },
-  {
-    pattern: /^gpt-6(\.\d+)?-(sol|luna)(-|$)/,
-    accepts: ["none", "low", "medium", "high", "xhigh", "max"],
-  },
-  { pattern: /^gpt-5\.6(-|$)/, accepts: ["none", "low", "medium", "high", "xhigh", "max"] },
-  { pattern: /codex-max|^gpt-5\.[2-9]-codex/, accepts: ["low", "medium", "high", "xhigh"] },
-  { pattern: /codex|^o\d/, accepts: ["low", "medium", "high"] },
-  // The first GPT-5 family.
-  {
-    pattern: /^gpt-5(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/,
-    accepts: ["minimal", "low", "medium", "high"],
-  },
-  { pattern: /^gpt-5\.1(-|$)/, accepts: ["none", "low", "medium", "high"] },
-  { pattern: /^gpt-5\.[2-5](-|$)/, accepts: ["none", "low", "medium", "high", "xhigh"] },
-]
-
-/**
- * The effort a request sends for a gent reasoning hint: the lowest value the
- * model accepts at or above the hint, else its highest. OpenAI runs a
- * reasoning model at its default effort when the request names none, so a
- * hint of "none" still names the model's lowest effort. A model the catalog
- * says does not reason gets no effort.
- */
-const openAiReasoningEffort = (
-  modelName: string,
-  hints: ProviderHints,
-): Option.Option<ReasoningEffort> => {
-  if (hints.supportsReasoning === false) return Option.none()
-  return Option.fromUndefinedOr(hints.reasoning).pipe(
-    Option.flatMap((effort) => {
-      const family = OPENAI_ACCEPTED_EFFORTS.find((entry) => entry.pattern.test(modelName))
-      if (Predicate.isUndefined(family)) return Option.some(effort)
-      return effortAtOrAbove(OPENAI_EFFORT_ORDER, family.accepts, effort)
-    }),
-  )
-}
-
-/** Whether the model reasons: the catalog's flag, else a known reasoning family. */
-const openAiModelReasons = (modelName: string, hints: Option.Option<ProviderHints>): boolean =>
-  modelReasons(hints, () => OPENAI_ACCEPTED_EFFORTS.some((entry) => entry.pattern.test(modelName)))
-
-/** The one request config for both auth paths; both speak the Responses API. */
-const buildOpenAiResponsesConfig = (
-  modelName: string,
+const responsesConfig = (
+  entry: CatalogModel,
   hints: Option.Option<ProviderHints>,
 ): OpenAiResponsesConfig => {
   let config: OpenAiResponsesConfig = { store: false }
-  if (takesLowVerbosity(modelName)) config = { ...config, text: { verbosity: "low" } }
-  if (Option.isSome(hints)) {
-    const cacheKey = Option.fromUndefinedOr(hints.value.cacheKey)
-    if (Option.isSome(cacheKey)) config = { ...config, prompt_cache_key: cacheKey.value }
-    // `max_output_tokens` counts reasoning tokens too, so on a reasoning
-    // model a small cap (the 768-token compaction summary) is shared with
-    // the thinking the effort floor still asks for.
-    const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
-    if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
-    // OpenAI's reasoning models reject `temperature`. GPT-5.1 and 5.2 take it
-    // at effort `none`; it is dropped there too, as one rule per model.
-    const temperature = Option.fromNullishOr(hints.value.temperature)
-    if (Option.isSome(temperature) && !openAiModelReasons(modelName, hints)) {
-      config = { ...config, temperature: temperature.value }
-    }
-    const reasoning = openAiReasoningEffort(modelName, hints.value)
-    if (Option.isSome(reasoning)) {
-      config = {
-        ...config,
-        reasoning: { effort: reasoning.value, summary: "auto" },
-      }
-    }
+  if (takesLowVerbosity(entry.id)) config = { ...config, text: { verbosity: "low" } }
+  const cacheKey = Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.cacheKey))
+  if (Option.isSome(cacheKey)) config = { ...config, prompt_cache_key: cacheKey.value }
+  const maxTokens = maxTokensOf(hints)
+  if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
+  const temperature = sampledTemperature(entry, hints)
+  if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
+  const effort = Option.flatMap(reasoningHint(entry, hints), (level) => effortFor(entry, level))
+  if (Option.isSome(effort)) {
+    config = { ...config, reasoning: { effort: effort.value, summary: "auto" } }
   }
   return config
 }
+
+/**
+ * The OpenAI Responses API, for any provider whose models.dev entry names
+ * `@ai-sdk/openai` or the `responses` shape (the OpenCode gateways' GPT
+ * models). The body asks for the encrypted reasoning
+ * (`withEncryptedReasoning`).
+ */
+export const RESPONSES_CLASS: ApiClassContribution = {
+  id: "openai-responses",
+  npm: ["@ai-sdk/openai"],
+  protocols: ["responses"],
+  promptCacheTtl: Option.some(RESPONSES_PROMPT_CACHE_TTL),
+  resolveModel: (request) =>
+    Effect.map(loadOpenAiSdk, ({ OpenAiClient, OpenAiLanguageModel }) => {
+      const reasons = modelReasons(request.model, request.hints)
+      const client = OpenAiClient.layer({
+        apiKey: sdkApiKey(request.apiKey),
+        apiUrl: Option.getOrUndefined(request.baseUrl),
+        transformClient: endpointClient(request, rewriteJsonBody(withEncryptedReasoning(reasons))),
+      }).pipe(Layer.provide(ModelHttpClient))
+      return AiModel.make(
+        request.providerId,
+        request.model.id,
+        OpenAiLanguageModel.layer({
+          model: request.model.id,
+          config: responsesConfig(request.model, request.hints),
+        }).pipe(Layer.provide(client)),
+      )
+    }),
+}
+
+/**
+ * Where models.dev and gent disagree on an OpenAI model, gent's value, with
+ * its receipt. models.dev lists no `none` effort for GPT-6.1 Sol; gent's
+ * model-page table (developers.openai.com/api/docs/models, the GPT-6 Sol and
+ * Luna rows, read 2026-09-23) accepts it, and the owner keeps it (2026-10-02).
+ */
+const OPENAI_OVERRIDES: ReadonlyArray<CatalogOverride> = [
+  {
+    match: /^gpt-6\.1-sol(-|$)/,
+    patch: (entry) => ({
+      ...entry,
+      reasoningOptions: (entry.reasoningOptions ?? []).map((option) => {
+        if (option.type !== "effort" || option.values.includes("none")) return option
+        return { ...option, values: ["none", ...option.values] }
+      }),
+    }),
+    receipt:
+      "developers.openai.com/api/docs/models (GPT-6 Sol and Luna accept effort none), read 2026-09-23",
+  },
+]
 
 // ── Reasoning summary refusal ──
 
@@ -1669,7 +1672,7 @@ export const buildOpenAIModelDriver = (
   pendingCallbacks: Map<string, PendingCallbackEntry>,
   envApiKey: Option.Option<string>,
   crypto: Crypto.Crypto,
-): ModelDriverContribution => {
+): ModelDriverContribution & Required<Pick<ModelDriverContribution, "resolveModel">> => {
   // The keys whose organization OpenAI refused a reasoning summary.
   const refusedKeys: RefusedKeys = Ref.makeUnsafe(HashSet.empty())
   // The reasoning items the API could not decrypt for this driver's account.
@@ -1794,14 +1797,17 @@ export const buildOpenAIModelDriver = (
       ...DEFAULT_RETRY_POLICY,
       transientStreamEvent: ResponsesTransientStreamEvent,
     },
-    resolveModel: (modelName, authInfo, hints) =>
+    overrides: OPENAI_OVERRIDES,
+    resolveModel: (modelName, authInfo, hintsInput, catalog) =>
       Effect.gen(function* () {
         const auth = Option.fromNullishOr(authInfo)
-        const reasons = openAiModelReasons(modelName, Option.fromNullishOr(hints))
+        const hints = Option.fromNullishOr(hintsInput)
+        const entry = adapterEntry(Option.fromUndefinedOr(catalog), "openai", modelName)
+        const reasons = modelReasons(entry, hints)
+        const config = responsesConfig(entry, hints)
         // Stored OAuth — handle inline with token refresh. Both paths speak the
         // Responses API through @effect/ai-openai; OAuth adds the Codex rewrite.
         if (Option.isSome(auth) && auth.value._tag === "Oauth") {
-          const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
           if (!isOpenAIOAuthModel(modelName)) {
             return yield* new ProviderAuthError({
               message: `Model "${modelName}" not available with ChatGPT OAuth`,
@@ -1831,7 +1837,6 @@ export const buildOpenAIModelDriver = (
         const apiKey = apiKeyFrom(auth, envApiKey)
 
         if (Option.isSome(apiKey)) {
-          const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
           return makeApiKeyOpenAIResolution(
             yield* loadOpenAiSdk,
             modelName,
@@ -1853,7 +1858,7 @@ export const buildOpenAIModelDriver = (
       }),
     listModels: (catalog, authInfo) =>
       Effect.sync(() => {
-        const models = catalogModels(catalog, "openai", Option.some(RESPONSES_PROMPT_CACHE_TTL))
+        const models = catalogModels(catalog, "openai", RESPONSES_PROMPT_CACHE_TTL)
         // When OAuth is active, filter to allowed models + zero pricing
         const auth = Option.fromNullishOr(authInfo)
         if (Option.isNone(auth) || auth.value._tag !== "Oauth") return models
@@ -1968,5 +1973,7 @@ export const OpenAIExtension = defineExtension({
       "modelDriver",
       buildOpenAIModelDriver(credentialCellRef, pendingCallbacks, envApiKey, crypto),
     )
+    // The two OpenAI wire protocols any provider's models may speak.
+    yield* host.register("apiClass", RESPONSES_CLASS, CHAT_COMPLETIONS_CLASS)
   }),
 })

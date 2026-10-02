@@ -91,7 +91,7 @@ import {
 } from "../domain/capability.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import { causeChainMessage, causeMessage, omitUndefined } from "../domain/guards.js"
-import type { ModelDriverContribution } from "../domain/driver.js"
+import type { ApiClassContribution, ModelDriverContribution } from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import { GentPlatform, type RuntimeModuleSource } from "./gent-platform.js"
 import {
@@ -606,6 +606,7 @@ interface ResolvedExtensions {
   readonly rpcRegistry: CompiledRpcRegistry
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
+  readonly apiClasses: ReadonlyMap<string, ApiClassContribution>
   readonly slashCommands: ReadonlyArray<SlashCommand>
   readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -880,6 +881,11 @@ export const resolveExtensions = (
     (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.modelDrivers), () => []),
     (d) => d.id,
   )
+  const apiClasses = compileBucket(
+    sorted,
+    (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.apiClasses), () => []),
+    (apiClass) => apiClass.id,
+  )
 
   const slashCommands = compileSlashCommands(capabilityWinners)
 
@@ -894,6 +900,7 @@ export const resolveExtensions = (
     rpcRegistry,
     agents,
     modelDrivers,
+    apiClasses,
     slashCommands,
     extensionHooks,
     extensions: sorted,
@@ -1722,6 +1729,11 @@ const collectValidationFailures = (
     (cs) => cs.modelDrivers ?? [],
     (driver) => Option.some(driver.id),
     "model driver",
+  )
+  collectScopedCollisions(
+    (cs) => cs.apiClasses ?? [],
+    (apiClass) => Option.some(apiClass.id),
+    "API class",
   )
 
   return failures

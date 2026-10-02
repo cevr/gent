@@ -69,16 +69,20 @@ export {
   credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
   DriverError,
-  DriverFailureId,
   ProviderAuthError,
   ProviderAuthInfo,
   ReasoningOption,
   reportProviderStopReason,
   modelFromCatalog,
+  catalogModelEntry,
 } from "../domain/driver.js"
 export { InteractionPendingError } from "../domain/interaction.js"
 export type {
+  ApiClassContribution,
+  ApiClassRequest,
+  ApiEndpoint,
   CatalogModel,
+  CatalogOverride,
   CatalogProvider,
   ModelCatalogView,
   ModelDriverContribution,

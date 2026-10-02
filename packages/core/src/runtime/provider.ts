@@ -40,18 +40,23 @@ import {
   AuthMetadata,
   AuthMethod,
   CatalogLimit,
+  type ApiClassContribution,
+  apiClassFor,
   type CatalogModel,
+  catalogModelEntry,
   type CatalogProvider,
   DEFAULT_RETRY_POLICY,
   DriverError,
   DriverFailureId,
   type ModelCatalogView,
   type ModelDriverContribution,
+  modelFromCatalog,
   ReasoningOption,
   type PersistAuth,
   ProviderAuthError,
   ProviderAuthInfo,
   type ProviderHints,
+  type ProviderResolution,
   type RetryPolicy,
   type StoredOAuthCredentials,
 } from "../domain/driver.js"
@@ -1319,6 +1324,178 @@ export class ModelCatalogSource extends Context.Service<
     Layer.succeed(ModelCatalogSource, ModelCatalogSource.of({ read: Effect.succeed(catalog) }))
 }
 
+// ── driver composition ──────────────────────────────────────────────────────
+//
+// A model driver is the adapter of one models.dev provider. Core composes the
+// catalog entry, the API class that speaks it and the adapter's endpoint into
+// a model, and lists the provider's models a class speaks, unless the driver
+// resolves or lists them itself.
+
+/** The drivers and the API classes of one profile. */
+interface DriverProfile {
+  readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
+  readonly apiClasses: ReadonlyMap<string, ApiClassContribution>
+}
+
+/** The models.dev provider `driver` serves. */
+const catalogProviderOf = (driver: ModelDriverContribution): string =>
+  driver.catalogProvider ?? driver.id
+
+/** The catalog as `driver` reads it: its catalog provider's entries with its overrides applied. */
+const driverCatalogView = (
+  catalog: ModelCatalogView,
+  driver: ModelDriverContribution,
+): ModelCatalogView => {
+  const overrides = driver.overrides ?? []
+  if (overrides.length === 0) return catalog
+  const own = catalogProviderOf(driver)
+  return {
+    provider: (id) =>
+      Option.map(catalog.provider(id), (provider) => {
+        if (id !== own) return provider
+        return {
+          ...provider,
+          models: provider.models.map((entry) =>
+            overrides.reduce((patched, override) => {
+              if (!override.match.test(patched.id)) return patched
+              return override.patch(patched)
+            }, entry),
+          ),
+        }
+      }),
+  }
+}
+
+/**
+ * The models core lists for a driver with an endpoint: its catalog
+ * provider's entries the agent loop can drive (tool calling, not a decision
+ * model) that some class speaks, each with the class's cache lifetime, then
+ * the provider's decision models when the driver resolves classifiers.
+ */
+const catalogDriverModels = (
+  apiClasses: ReadonlyMap<string, ApiClassContribution>,
+  driver: ModelDriverContribution,
+  catalog: ModelCatalogView,
+): ReadonlyArray<Model> => {
+  const providerId = catalogProviderOf(driver)
+  const entries = Option.match(catalog.provider(providerId), {
+    onNone: (): ReadonlyArray<CatalogModel> => [],
+    onSome: (provider) => provider.models,
+  })
+  const chat = entries.flatMap((raw) => {
+    if (raw.toolCall === false || raw.decision === true) return []
+    const entry = catalogModelEntry(catalog, providerId, raw.id)
+    const apiClass = Option.flatMap(entry, (value) => apiClassFor(apiClasses.values(), value))
+    return Option.toArray(
+      Option.map(apiClass, (speaker) => {
+        const model = modelFromCatalog(driver.id, raw)
+        return Option.match(speaker.promptCacheTtl, {
+          onNone: () => model,
+          onSome: (ttl) => Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(ttl) }),
+        })
+      }),
+    )
+  })
+  if (Predicate.isUndefined(driver.resolveDecisionModel)) return chat
+  const classifiers = entries
+    .filter((entry) => entry.decision === true)
+    .map((entry) => modelFromCatalog(driver.id, entry))
+  return [...chat, ...classifiers]
+}
+
+/** The driver's models: its own list over its catalog view, else core's. */
+const driverModels = (
+  apiClasses: ReadonlyMap<string, ApiClassContribution>,
+  driver: ModelDriverContribution,
+  catalog: ModelCatalogView,
+  auth: Option.Option<ProviderAuthInfo>,
+): Effect.Effect<ReadonlyArray<Model>, DriverError | ProviderAuthError> => {
+  const view = driverCatalogView(catalog, driver)
+  const listModels = driver.listModels
+  if (Predicate.isNotUndefined(listModels)) {
+    return Effect.suspend(() => listModels(view, Option.getOrUndefined(auth)))
+  }
+  return Effect.sync(() => catalogDriverModels(apiClasses, driver, view))
+}
+
+/** Whether a driver lists models: its own list, or core's for a driver with an endpoint. */
+const listsModels = (driver: ModelDriverContribution): boolean =>
+  Predicate.isNotUndefined(driver.listModels) || Predicate.isNotUndefined(driver.endpoint)
+
+const driverFailure = (driver: ModelDriverContribution, reason: string): DriverError =>
+  new DriverError({ driver: DriverFailureId.make(driver.id), reason })
+
+/** One model a driver resolves: the request core or a test hands `resolveDriverModel`. */
+interface DriverModelRequest {
+  readonly driver: ModelDriverContribution
+  readonly apiClasses: ReadonlyMap<string, ApiClassContribution>
+  readonly modelName: string
+  readonly auth: Option.Option<ProviderAuthInfo>
+  readonly hints: Option.Option<ProviderHints>
+  readonly catalog: ModelCatalogView
+}
+
+/**
+ * Resolve one model of a driver: the driver's own `resolveModel` over its
+ * catalog view, else core's composition: the catalog entry, the class that
+ * speaks it and the driver's endpoint. A model with no entry, a decision
+ * model, and a model no registered class speaks fail with `DriverError`.
+ */
+export const resolveDriverModel = (
+  request: DriverModelRequest,
+): Effect.Effect<ProviderResolution, ProviderAuthError | DriverError> =>
+  Effect.gen(function* () {
+    const { driver, modelName } = request
+    const view = driverCatalogView(request.catalog, driver)
+    const own = driver.resolveModel
+    if (Predicate.isNotUndefined(own)) {
+      return yield* own(
+        modelName,
+        Option.getOrUndefined(request.auth),
+        Option.getOrUndefined(request.hints),
+        view,
+      )
+    }
+    const endpointFor = driver.endpoint
+    if (Predicate.isUndefined(endpointFor)) {
+      return yield* driverFailure(driver, `${driver.name} names no endpoint and no resolveModel`)
+    }
+    const entry = catalogModelEntry(view, catalogProviderOf(driver), modelName)
+    if (Option.isNone(entry)) {
+      return yield* driverFailure(
+        driver,
+        `${driver.name} model "${modelName}" has no entry in the models.dev catalog`,
+      )
+    }
+    if (entry.value.decision === true) {
+      return yield* driverFailure(
+        driver,
+        `${driver.id}/${modelName} is a classifier model: it runs no turn; a cell asks it with models.decide`,
+      )
+    }
+    const apiClass = apiClassFor(request.apiClasses.values(), entry.value)
+    if (Option.isNone(apiClass)) {
+      const npm = Option.getOrElse(Option.fromUndefinedOr(entry.value.npm), () => "no AI SDK")
+      return yield* driverFailure(
+        driver,
+        `${driver.name} model "${modelName}" speaks the ${npm} wire format, which gent does not support`,
+      )
+    }
+    const endpoint = yield* endpointFor(
+      modelName,
+      Option.getOrUndefined(request.auth),
+      Option.getOrUndefined(request.hints),
+    )
+    return yield* apiClass.value.resolveModel({
+      providerId: driver.id,
+      model: entry.value,
+      hints: request.hints,
+      apiKey: endpoint.apiKey,
+      baseUrl: Option.orElse(endpoint.baseUrl, () => Option.fromUndefinedOr(entry.value.api)),
+      transformClient: endpoint.transformClient,
+    })
+  })
+
 /** A model driver whose catalog could not be read; its models are left out. */
 export interface ModelCatalogFailure {
   readonly driverId: string
@@ -1337,7 +1514,7 @@ const isDriverError = Schema.is(DriverError)
  * under each driver that lists models.
  */
 export const listModelCatalog = Effect.fn("ModelCatalog.list")(function* (
-  modelDrivers: ReadonlyMap<string, ModelDriverContribution>,
+  profile: DriverProfile,
   catalog: LoadedModelCatalog,
   resolveAuth?: (
     driverId: string,
@@ -1345,16 +1522,15 @@ export const listModelCatalog = Effect.fn("ModelCatalog.list")(function* (
 ) {
   const models: Array<Model> = []
   const failures: Array<ModelCatalogFailure> = []
-  for (const driver of modelDrivers.values()) {
-    const listModels = driver.listModels
-    if (Predicate.isUndefined(listModels)) continue
+  for (const driver of profile.modelDrivers.values()) {
+    if (!listsModels(driver)) continue
     if (Option.isSome(catalog.failure)) {
       failures.push({ driverId: driver.id, error: catalog.failure.value })
     }
     let auth = Option.none<ProviderAuthInfo>()
     if (Predicate.isNotUndefined(resolveAuth)) auth = yield* resolveAuth(driver.id)
     const listed = yield* Effect.suspend(() =>
-      listModels(catalog, Option.getOrUndefined(auth)),
+      driverModels(profile.apiClasses, driver, catalog, auth),
     ).pipe(
       Effect.flatMap((list) =>
         Effect.fromOption(decodeModelList(list)).pipe(
@@ -1463,12 +1639,14 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
 
   const catalog = yield* (yield* ModelCatalogSource).read
   return yield* Effect.suspend(() =>
-    extensionProvider.resolveModel(
+    resolveDriverModel({
+      driver: extensionProvider,
+      apiClasses: extensionRegistry.getResolved().apiClasses,
       modelName,
-      Option.getOrUndefined(authParam),
-      request.hints,
+      auth: authParam,
+      hints: Option.fromUndefinedOr(request.hints),
       catalog,
-    ),
+    }),
   ).pipe(
     Effect.catchTag("DriverError", (error) =>
       Effect.fail(
@@ -1600,7 +1778,9 @@ const classifierCatalog = Effect.fn("DecisionModelResolver.catalog")(function* (
 ) {
   const drivers = classifierDrivers(allDrivers)
   const source = yield* catalogSource.read
-  const catalog = yield* listModelCatalog(drivers, source, (driverId) =>
+  // A classifier needs no API class: with none, core lists only the decision models.
+  const profile: DriverProfile = { modelDrivers: drivers, apiClasses: new Map() }
+  const catalog = yield* listModelCatalog(profile, source, (driverId) =>
     classifierAuth(auth, allDrivers, driverId).pipe(
       Effect.mapError((error) => new ProviderAuthError({ message: error.message })),
     ),
@@ -1809,7 +1989,7 @@ export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* ()
   const catalogRecord = yield* ModelCatalogRecord
   const source = yield* (yield* ModelCatalogSource).read
   const profile = (yield* ExtensionRegistry).getResolved()
-  const catalog = yield* listModelCatalog(profile.modelDrivers, source, (providerId) =>
+  const catalog = yield* listModelCatalog(profile, source, (providerId) =>
     driverAuthInfo(authStore, profile.modelDrivers, providerId).pipe(
       Effect.mapError(
         (e) =>

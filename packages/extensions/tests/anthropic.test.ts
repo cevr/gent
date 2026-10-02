@@ -43,7 +43,13 @@ import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/process"
-import { captureProviderStopReason, testHostFacts, turnNoticesText } from "@gent/core/test-utils"
+import {
+  captureProviderStopReason,
+  fixtureModelCatalog,
+  testHostFacts,
+  turnNoticesText,
+} from "@gent/core/test-utils"
+import { resolveShipped } from "./helpers/api-classes.js"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/http"
 import {
   type CredentialCacheCell,
@@ -1446,7 +1452,14 @@ const sentThroughSignedInDriver = (
       ),
     )
     const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
-    const model = yield* driver.resolveModel(modelName, authInfo, hints)
+    // Core resolves over the catalog, with the driver's overrides applied.
+    const model = yield* resolveShipped(
+      driver,
+      fixtureModelCatalog(),
+      modelName,
+      Option.some(authInfo),
+      Option.some(hints),
+    )
     const state = makeFakeFetchState()
     yield* send(model, state)
     return Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)))
@@ -2664,11 +2677,32 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
   const sentFor = (modelName: string, reasoning: ProviderHints["reasoning"] = "high") =>
     Effect.map(sentOnBothPaths(modelName, { reasoning }), (sent) => sent.output_config)
 
-  // Anthropic answers 400 when a model outside its effort table gets one.
-  it.live("a model that takes no effort gets none on either auth path", () =>
+  // Anthropic answers 400 when a model outside its effort table gets one. The
+  // catalog names a thinking budget for these models, so a hint thinks on one.
+  it.live(
+    "a model that takes no effort gets none, and thinks on a budget, on either auth path",
+    () =>
+      Effect.gen(function* () {
+        for (const model of [
+          "claude-haiku-4-5",
+          "claude-sonnet-4-5",
+          "claude-sonnet-4-5-20250929",
+        ]) {
+          expect(yield* sentOnBothPaths(model, { reasoning: "high" })).toEqual({
+            thinking: { type: "enabled" },
+          })
+        }
+      }),
+  )
+
+  // models.dev does not list Mythos under Anthropic: the request names no
+  // effort, and the family's thinking stays on.
+  it.live("a model the catalog does not list gets its family's thinking and no effort", () =>
     Effect.gen(function* () {
-      for (const model of ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-5-20250929"]) {
-        expect(yield* sentOnBothPaths(model, { reasoning: "high" })).toEqual({})
+      for (const reasoning of ["none", "high"] as const) {
+        expect(yield* sentOnBothPaths("claude-mythos-5", { reasoning })).toEqual({
+          thinking: { type: "adaptive", display: "summarized" },
+        })
       }
     }),
   )
@@ -2737,10 +2771,16 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
           display: "summarized",
         })
       }
-      // Extended-thinking-only models reject adaptive thinking with a 400.
-      for (const model of ["claude-opus-4-5", "claude-haiku-4-5", "claude-sonnet-4-5"]) {
-        expect((yield* sentOnBothPaths(model, { reasoning: "high" })).thinking).toBeUndefined()
+      // Extended-thinking-only models reject adaptive thinking with a 400; a
+      // budget-only model thinks on a budget, and Opus 4.5 takes effort alone.
+      for (const model of ["claude-haiku-4-5", "claude-sonnet-4-5"]) {
+        expect((yield* sentOnBothPaths(model, { reasoning: "high" })).thinking).toEqual({
+          type: "enabled",
+        })
       }
+      expect(
+        (yield* sentOnBothPaths("claude-opus-4-5", { reasoning: "high" })).thinking,
+      ).toBeUndefined()
     }),
   )
 
@@ -2778,12 +2818,7 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
         expect(yield* sentOnBothPaths(model, none)).toEqual({ thinking: { type: "disabled" } })
       }
       // Thinking cannot be turned off: the lowest effort instead.
-      for (const model of [
-        "claude-opus-5-5",
-        "claude-fable-5",
-        "claude-fable-5-1",
-        "claude-mythos-5",
-      ]) {
+      for (const model of ["claude-opus-5-5", "claude-fable-5", "claude-fable-5-1"]) {
         expect(yield* sentOnBothPaths(model, none)).toEqual({ output_config: { effort: "low" } })
       }
       // Thinking already off by default: nothing to send.
@@ -2807,7 +2842,9 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
       expect(yield* temperature("claude-sonnet-4-6", { reasoning: "high" })).toBeUndefined()
       expect(yield* temperature("claude-sonnet-4-6", {})).toBe(0.2)
       expect(yield* temperature("claude-sonnet-4-6", { reasoning: "none" })).toBe(0.2)
-      expect(yield* temperature("claude-haiku-4-5", { reasoning: "high" })).toBe(0.2)
+      // A budget-thinking request takes no temperature either.
+      expect(yield* temperature("claude-haiku-4-5", {})).toBe(0.2)
+      expect(yield* temperature("claude-haiku-4-5", { reasoning: "high" })).toBeUndefined()
     }),
   )
 })

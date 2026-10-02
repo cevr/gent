@@ -1708,7 +1708,7 @@ describe("driver resolution", () => {
       const resolved = resolveExtensions([
         makeExt("ext", "builtin", { modelDrivers: [first, second] }),
       ])
-      const result = yield* listModelCatalog(resolved.modelDrivers, fixtureModelCatalog())
+      const result = yield* listModelCatalog(resolved, fixtureModelCatalog())
       expect(result.models.map((model) => model.id)).toEqual([
         ModelId.make("first/one"),
         ModelId.make("second/one"),
@@ -1731,7 +1731,7 @@ describe("driver resolution", () => {
       const resolved = resolveExtensions([
         makeExt("ext", "builtin", { modelDrivers: [listing, silent] }),
       ])
-      const result = yield* listModelCatalog(resolved.modelDrivers, fixtureModelCatalog())
+      const result = yield* listModelCatalog(resolved, fixtureModelCatalog())
       expect(result.models.map((model) => model.id)).toEqual([ModelId.make("listing/one")])
     }),
   )
@@ -1764,7 +1764,7 @@ describe("driver resolution", () => {
       const resolved = resolveExtensions([
         makeExt("auth-ext", "builtin", { modelDrivers: [driverA, driverB] }),
       ])
-      yield* listModelCatalog(resolved.modelDrivers, fixtureModelCatalog(), (driverId) => {
+      yield* listModelCatalog(resolved, fixtureModelCatalog(), (driverId) => {
         if (driverId === "auth-a") {
           return Effect.succeedSome(ProviderAuthInfo.cases.Api.make({ key: "secret-a" }))
         }
@@ -1811,7 +1811,7 @@ describe("driver resolution", () => {
       const resolved = resolveExtensions([
         makeExt("drivers-ext", "builtin", { modelDrivers: [broken, offline, working] }),
       ])
-      const result = yield* listModelCatalog(resolved.modelDrivers, fixtureModelCatalog())
+      const result = yield* listModelCatalog(resolved, fixtureModelCatalog())
       expect(result.models.map((model) => model.id)).toEqual([ModelId.make("working/one")])
       expect(result.failures.map((failure) => failure.driverId)).toEqual(["broken", "offline"])
       expect(result.failures[0]?.error).toContain("invalid model catalog")

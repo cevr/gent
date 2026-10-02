@@ -19,7 +19,10 @@ import {
 import { TestClock } from "effect/testing"
 import * as AiError from "effect/ai/AiError"
 import {
+  type ApiClassContribution,
+  type ApiClassRequest,
   AuthMethod,
+  catalogModelEntry,
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
   type ModelCatalogView,
@@ -52,6 +55,7 @@ import {
   ModelRegistry,
   modelCatalog,
   finishPart,
+  resolveDriverModel,
   toolCallPart,
 } from "../../src/runtime/provider"
 import { BunServices } from "@effect/platform-bun"
@@ -2419,11 +2423,14 @@ describe("models.dev catalog source", () => {
         }
 
         const listed = yield* listModelCatalog(
-          new Map([
-            ["openai", lists("openai")],
-            ["anthropic", lists("anthropic")],
-            ["plain", resolvesOnly],
-          ]),
+          {
+            modelDrivers: new Map([
+              ["openai", lists("openai")],
+              ["anthropic", lists("anthropic")],
+              ["plain", resolvesOnly],
+            ]),
+            apiClasses: new Map(),
+          },
           offline,
         )
 
@@ -2432,5 +2439,180 @@ describe("models.dev catalog source", () => {
           { driverId: "anthropic", error: "models.dev catalog 9 days old, offline" },
         ])
       }),
+  )
+})
+
+// ── driver composition ──────────────────────────────────────────────────────
+
+/**
+ * Core composes a model of a driver that names an endpoint: the catalog
+ * entry, the API class that speaks it, and the driver's endpoint. A class
+ * here records each request it gets instead of building a model.
+ */
+describe("driver composition", () => {
+  /** A gateway's catalog, as models.dev writes it: one package for the provider, others per model. */
+  const gatewayCatalog = modelCatalogFromBodies({
+    chat: encodeCatalogJson({
+      gateway: {
+        id: "gateway",
+        name: "Gateway",
+        env: ["GATEWAY_API_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://gateway.test/v1",
+        models: {
+          chat: { name: "Chat", tool_call: true },
+          responses: { name: "Responses", tool_call: true, provider: { npm: "@ai-sdk/openai" } },
+          routed: {
+            name: "Routed",
+            tool_call: true,
+            provider: { npm: "@ai-sdk/openai", ["shape"]: "completions" },
+          },
+          google: { name: "Google", tool_call: true, provider: { npm: "@ai-sdk/google" } },
+          wide: { name: "Wide", tool_call: true, limit: { context: 1_000_000, output: 64_000 } },
+        },
+      },
+    }),
+    decision: encodeCatalogJson({
+      gateway: {
+        id: "gateway",
+        npm: "@ai-sdk/openai-compatible",
+        models: { judge: { name: "Judge", type: "decision", tool_call: false } },
+      },
+    }),
+  })
+
+  const recordingClass = (
+    id: string,
+    npm: ReadonlyArray<string>,
+    protocols: ReadonlyArray<string>,
+    seen: Array<ApiClassRequest>,
+  ): ApiClassContribution => ({
+    id,
+    npm,
+    protocols,
+    promptCacheTtl: Option.none(),
+    resolveModel: (request) =>
+      Effect.sync(() => {
+        seen.push(request)
+        return AiModel.make(id, request.model.id, LanguageModelLayers.failing)
+      }),
+  })
+
+  const gatewayDriver: ModelDriverContribution = {
+    id: "gateway",
+    name: "Gateway",
+    endpoint: () =>
+      Effect.succeed({
+        apiKey: Option.some("gateway-key"),
+        baseUrl: Option.none(),
+        transformClient: Option.none(),
+      }),
+    resolveDecisionModel: () => Effect.die("no decision in these tests"),
+    overrides: [
+      {
+        match: /^wide$/,
+        patch: (entry) => ({ ...entry, limit: { ...entry.limit, context: 200_000 } }),
+        receipt: "the gateway's docs name a 200k window",
+      },
+    ],
+  }
+
+  const classesSeeing = (seen: Array<ApiClassRequest>) =>
+    new Map(
+      [
+        recordingClass("chat", ["@ai-sdk/openai-compatible"], ["completions"], seen),
+        recordingClass("responses", ["@ai-sdk/openai"], ["responses"], seen),
+      ].map((each) => [each.id, each] as const),
+    )
+
+  const resolve = (modelName: string, seen: Array<ApiClassRequest>) =>
+    resolveDriverModel({
+      driver: gatewayDriver,
+      apiClasses: classesSeeing(seen),
+      modelName,
+      auth: Option.none(),
+      hints: Option.none(),
+      catalog: gatewayCatalog,
+    })
+
+  it.effect("an entry that names no package of its own takes its provider's package and URL", () =>
+    Effect.sync(() => {
+      const entry = (key: string) => catalogModelEntry(gatewayCatalog, "gateway", key)
+      expect(Option.map(entry("chat"), (each) => [each.npm, each.api])).toEqual(
+        Option.some(["@ai-sdk/openai-compatible", "https://gateway.test/v1"]),
+      )
+      expect(Option.map(entry("responses"), (each) => each.npm)).toEqual(
+        Option.some("@ai-sdk/openai"),
+      )
+      expect(Option.isNone(entry("absent"))).toBe(true)
+    }),
+  )
+
+  it.effect(
+    "the class that speaks the entry's protocol wins over its package, and the package picks otherwise",
+    () =>
+      Effect.gen(function* () {
+        const seen: Array<ApiClassRequest> = []
+        const providers = yield* Effect.forEach(["chat", "responses", "routed"], (modelName) =>
+          Effect.map(resolve(modelName, seen), (resolution) => resolution.provider),
+        )
+        expect(providers).toEqual(["chat", "responses", "chat"])
+        // The endpoint's key, and the catalog's URL where the endpoint names none.
+        expect(
+          seen.map((request) => [
+            request.providerId,
+            Option.getOrNull(request.apiKey),
+            Option.getOrNull(request.baseUrl),
+          ]),
+        ).toEqual([
+          ["gateway", "gateway-key", "https://gateway.test/v1"],
+          ["gateway", "gateway-key", "https://gateway.test/v1"],
+          ["gateway", "gateway-key", "https://gateway.test/v1"],
+        ])
+      }),
+  )
+
+  it.effect(
+    "a model no class speaks, a model the catalog does not list and a decision model fail as driver errors",
+    () =>
+      Effect.gen(function* () {
+        const reason = (modelName: string) =>
+          resolve(modelName, []).pipe(
+            Effect.flip,
+            Effect.map((error) => {
+              if (error._tag !== "DriverError") return error.message
+              return error.reason
+            }),
+          )
+        expect(yield* reason("google")).toBe(
+          'Gateway model "google" speaks the @ai-sdk/google wire format, which gent does not support',
+        )
+        expect(yield* reason("absent")).toBe(
+          'Gateway model "absent" has no entry in the models.dev catalog',
+        )
+        expect(yield* reason("judge")).toContain("gateway/judge is a classifier model")
+      }),
+  )
+
+  it.effect("an override patches the entry the class sees and the window core lists", () =>
+    Effect.gen(function* () {
+      const seen: Array<ApiClassRequest> = []
+      yield* resolve("wide", seen)
+      expect(seen.map((request) => request.model.limit?.context)).toEqual([200_000])
+
+      const listed = yield* listModelCatalog(
+        { modelDrivers: new Map([["gateway", gatewayDriver]]), apiClasses: classesSeeing([]) },
+        gatewayCatalog,
+      )
+      expect(
+        listed.models.map((model) => [model.id, model.kind ?? "chat", model.contextLength ?? 0]),
+      ).toEqual([
+        [ModelId.make("gateway/chat"), "chat", 0],
+        [ModelId.make("gateway/responses"), "chat", 0],
+        [ModelId.make("gateway/routed"), "chat", 0],
+        [ModelId.make("gateway/wide"), "chat", 200_000],
+        [ModelId.make("gateway/judge"), "classifier", 0],
+      ])
+    }),
   )
 })

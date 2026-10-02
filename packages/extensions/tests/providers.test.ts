@@ -21,12 +21,11 @@ import {
   ModelId,
   ProviderAuthError,
 } from "@gent/core/extensions/api"
+import { listModelCatalog } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/process"
 import {
-  catalogEntry,
-  catalogClassifiers,
   catalogModels,
   type CredentialCacheCell,
   type CredentialFailure,
@@ -78,7 +77,7 @@ const anthropicDriverIn = Effect.fn("test.anthropicDriverIn")(function* (
 
 describe("driver catalog", () => {
   it.live(
-    "the Anthropic driver lists a documented 200k model, and a model outside the 1M families, at 200k, whatever the catalog says",
+    "the Anthropic driver's override lists Sonnet 4.5 at its documented 200k window, and every other model at the catalog's window",
     () =>
       Effect.gen(function* () {
         const claude = (key: string, context: number): CatalogModel => ({
@@ -92,21 +91,19 @@ describe("driver catalog", () => {
           claude("claude-sonnet-4-6", 1_000_000),
           claude("claude-opus-5", 1_000_000),
           claude("claude-haiku-4-5", 200_000),
-          // A model the family table does not name yet stays at 200k until a row
-          // records its window: an understated window compacts early, an overstated one fails.
           claude("claude-sonnet-6", 1_000_000),
         )
         const driver = yield* anthropicDriverIn("1h")
-        const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
-        const windows = (yield* listModels(catalog)).map(
-          (model) => `${model.id} ${String(model.contextLength)}`,
+        const listed = yield* listModelCatalog(
+          { modelDrivers: new Map([[driver.id, driver]]), apiClasses: new Map() },
+          { ...catalog, providerIds: ["anthropic"], failure: Option.none() },
         )
-        expect(windows).toEqual([
+        expect(listed.models.map((model) => `${model.id} ${String(model.contextLength)}`)).toEqual([
           "anthropic/claude-sonnet-4-5 200000",
           "anthropic/claude-sonnet-4-6 1000000",
           "anthropic/claude-opus-5 1000000",
           "anthropic/claude-haiku-4-5 200000",
-          "anthropic/claude-sonnet-6 200000",
+          "anthropic/claude-sonnet-6 1000000",
         ])
       }).pipe(Effect.provide(BunServices.layer)),
   )
@@ -118,7 +115,7 @@ describe("driver catalog", () => {
       limit: { context: 1_000_000 },
     })
 
-    const models = catalogModels(catalog, "anthropic", Option.some(Duration.minutes(5)))
+    const models = catalogModels(catalog, "anthropic", Duration.minutes(5))
 
     expect(models.map((model) => model.promptCacheTtlMs)).toEqual([5 * 60_000])
   })
@@ -141,35 +138,12 @@ describe("driver catalog", () => {
       { id: "anthropic", name: "Anthropic", env: [], models: [{ id: "opus", name: "Opus" }] },
     )
 
-    expect(catalogModels(catalog, "openai", Option.none()).map((model) => model.id)).toEqual([
+    const ttl = Duration.minutes(5)
+    expect(catalogModels(catalog, "openai", ttl).map((model) => model.id)).toEqual([
       ModelId.make("openai/gpt-5.4"),
       ModelId.make("openai/gpt-4o"),
     ])
-    expect(catalogModels(catalog, "missing", Option.none())).toEqual([])
-    // The decision model lists apart, as a classifier.
-    expect(
-      catalogClassifiers(catalog, "openai").map((model) => [model.id, model.kind, model.name]),
-    ).toEqual([[ModelId.make("openai/clef"), "classifier", "Clef"]])
-    expect(catalogClassifiers(catalog, "anthropic")).toEqual([])
-  })
-
-  test("a catalog entry that names no package of its own takes its provider's", () => {
-    const catalog = catalogOf({
-      id: "opencode",
-      name: "OpenCode Zen",
-      env: [],
-      npm: "@ai-sdk/openai-compatible",
-      models: [
-        { id: "kimi", name: "Kimi" },
-        { id: "gpt-5", name: "GPT-5", npm: "@ai-sdk/openai" },
-      ],
-    })
-
-    const npm = (key: string) => Option.getOrUndefined(catalogEntry(catalog, "opencode", key))?.npm
-
-    expect(npm("kimi")).toBe("@ai-sdk/openai-compatible")
-    expect(npm("gpt-5")).toBe("@ai-sdk/openai")
-    expect(Option.isNone(catalogEntry(catalog, "opencode", "absent"))).toBe(true)
+    expect(catalogModels(catalog, "missing", ttl)).toEqual([])
   })
 
   it.live(

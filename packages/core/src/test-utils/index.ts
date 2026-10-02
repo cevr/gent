@@ -52,7 +52,9 @@ export {
 } from "./language-model.js"
 export {
   finishPart,
+  listModelCatalog,
   modelCatalogFromBodies,
+  resolveDriverModel,
   textDeltaPart,
   toolCallPart,
 } from "../runtime/provider.js"

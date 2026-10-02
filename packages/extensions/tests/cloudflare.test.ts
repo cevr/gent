@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { ConfigProvider, Effect, Layer, Option, Predicate, Schema } from "effect"
 import {
+  type ModelDriverContribution,
   ModelId,
   ProviderAuthError,
   ProviderAuthInfo,
@@ -11,6 +12,7 @@ import {
   createE2ELayer,
   createRpcClient,
   LanguageModelLayers,
+  listModelCatalog,
   modelCatalogFixture,
   modelCatalogFromBodies,
   textStep,
@@ -20,6 +22,7 @@ import {
   type CloudflareEnv,
   CloudflareExtension,
 } from "../src/cloudflare.js"
+import { ApiClassesExtension, resolveShipped, SHIPPED_API_CLASSES } from "./helpers/api-classes.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import {
   decideTicket,
@@ -140,6 +143,21 @@ const catalogHttpLayer = Effect.gen(function* () {
 const fixtureDriver = (env: CloudflareEnv = NO_ENV) =>
   Effect.succeed(buildCloudflareModelDriver(env))
 
+/** One Workers AI model, resolved by core over `fixtureCatalog` and the shipped classes. */
+const resolveOn = (
+  driver: ModelDriverContribution,
+  modelName: string,
+  authInfo?: ProviderAuthInfo,
+  hints?: ProviderHints,
+) =>
+  resolveShipped(
+    driver,
+    fixtureCatalog,
+    modelName,
+    Option.fromUndefinedOr(authInfo),
+    Option.fromUndefinedOr(hints),
+  )
+
 // ── wire fixtures ───────────────────────────────────────────────────────────
 
 const chatBody = {
@@ -167,9 +185,9 @@ const generate = (
   authInfo?: ProviderAuthInfo,
   hints: ProviderHints = {},
 ) =>
-  driver
-    .resolveModel(modelName, authInfo, hints)
-    .pipe(Effect.flatMap((model) => oneGenerate(model, state, chatReply)))
+  resolveOn(driver, modelName, authInfo, hints).pipe(
+    Effect.flatMap((model) => oneGenerate(model, state, chatReply)),
+  )
 
 const RequestBody = Schema.fromJsonString(Schema.JsonObject)
 
@@ -211,22 +229,32 @@ describe("Cloudflare chat", () => {
       }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
-  it.live("with a gateway id every request names the gateway; a third-party id goes as given", () =>
+  it.live("with a gateway id the request names the gateway", () =>
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
       const state = makeFakeFetchState()
-      const auth = signedIn({ accountId: "acct-1", gatewayId: "gw-main" })
-      yield* generate(driver, LLAMA, state, auth)
-      yield* generate(driver, "openai/gpt-5-mini", state, auth)
-      expect(state.captured.map((request) => request.url)).toEqual([CHAT_URL, CHAT_URL])
-      for (const request of state.captured) {
-        expect(request.headers["cf-aig-gateway-id"]).toBe("gw-main")
-        expect(request.headers["authorization"]).toBe(`Bearer ${TOKEN}`)
-      }
-      const models = yield* Effect.forEach(state.captured, (request) =>
-        Effect.map(bodyOf(request), (body) => body["model"]),
+      yield* generate(driver, LLAMA, state, signedIn({ accountId: "acct-1", gatewayId: "gw-main" }))
+      const request = onlyRequest(state)
+      expect(request.url).toBe(CHAT_URL)
+      expect(request.headers["cf-aig-gateway-id"]).toBe("gw-main")
+      expect(request.headers["authorization"]).toBe(`Bearer ${TOKEN}`)
+      expect((yield* bodyOf(request))["model"]).toBe(LLAMA)
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  // models.dev names the Workers AI models; an id it does not list names no
+  // wire format, so no API class can speak it.
+  it.live("a model the Workers AI catalog does not list fails and names the catalog", () =>
+    Effect.gen(function* () {
+      const driver = yield* fixtureDriver()
+      const error = yield* Effect.flip(
+        resolveOn(driver, "openai/gpt-5-mini", signedIn({ accountId: "acct-1" })),
       )
-      expect(models).toEqual([LLAMA, "openai/gpt-5-mini"])
+      expect(error).toMatchObject({
+        _tag: "DriverError",
+        driver: "cloudflare",
+        reason: 'Cloudflare model "openai/gpt-5-mini" has no entry in the models.dev catalog',
+      })
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
@@ -264,16 +292,13 @@ describe("Cloudflare chat", () => {
       const driver = yield* fixtureDriver({ ...NO_ENV, token: Option.some("cf-env-token") })
       // A key stored before the sign-in asked for the account has no answer.
       const unanswered = ProviderAuthInfo.cases.Api.make({ key: TOKEN })
-      for (const resolving of [
-        driver.resolveModel(LLAMA),
-        driver.resolveModel(LLAMA, unanswered),
-      ]) {
+      for (const resolving of [resolveOn(driver, LLAMA), resolveOn(driver, LLAMA, unanswered)]) {
         const error = yield* Effect.flip(resolving)
         expect(error).toBeInstanceOf(ProviderAuthError)
         expect(error.message).toContain("CLOUDFLARE_ACCOUNT_ID")
         expect(error.message).toContain("/auth")
       }
-      const noToken = yield* Effect.flip((yield* fixtureDriver()).resolveModel(LLAMA))
+      const noToken = yield* Effect.flip(resolveOn(yield* fixtureDriver(), LLAMA))
       expect(noToken.message).toContain("CLOUDFLARE_API_TOKEN")
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
@@ -287,7 +312,8 @@ describe("Cloudflare catalog", () => {
     () =>
       Effect.gen(function* () {
         const driver = yield* fixtureDriver()
-        const models = yield* Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))(
+        const { models } = yield* listModelCatalog(
+          { modelDrivers: new Map([[driver.id, driver]]), apiClasses: SHIPPED_API_CLASSES },
           fixtureCatalog,
         )
         expect(
@@ -435,9 +461,7 @@ describe("Cloudflare Clef decisions", () => {
   it.live("a Clef model is not a chat model: resolving it for chat fails and names it", () =>
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
-      const error = yield* Effect.flip(
-        driver.resolveModel(CLEF, signedIn({ accountId: "a" }), {}, fixtureCatalog),
-      )
+      const error = yield* Effect.flip(resolveOn(driver, CLEF, signedIn({ accountId: "a" })))
       expect(error).toMatchObject({ _tag: "DriverError", reason: expect.stringContaining(CLEF) })
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
@@ -453,7 +477,7 @@ const signInClient = (env: Record<string, string>) =>
       createE2ELayer({
         agents: [],
         modelCatalogHttpLayer: yield* catalogHttpLayer,
-        extensionInputs: [CloudflareExtension],
+        extensionInputs: [ApiClassesExtension, CloudflareExtension],
         providerLayer,
       }).pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })))),
     )

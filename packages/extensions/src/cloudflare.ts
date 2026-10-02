@@ -1,46 +1,23 @@
-import { Effect, Layer, Option, Predicate, Redacted, Schema } from "effect"
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpClientError,
-  HttpClientRequest,
-  HttpClientResponse,
-} from "effect/http"
-import { Model as AiModel } from "effect/ai"
-import type { OpenAiLanguageModel as OpenAiChatLanguageModel } from "@effect/ai-openai-compat"
-import type * as ChatSdkModule from "@effect/ai-openai-compat"
+import { Effect, Option, Predicate, Schema } from "effect"
+import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http"
 import {
   AuthMethod,
   defineExtension,
-  DriverError,
-  DriverFailureId,
   ExtensionHost,
-  Model,
-  ModelId,
-  type ModelCatalogView,
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthInfo,
-  type ProviderHints,
-  ProviderId,
 } from "@gent/core/extensions/api"
-import {
-  apiKeyFrom,
-  catalogClassifiers,
-  catalogEntry,
-  catalogModels,
-  readOptionalEnv,
-} from "./providers.js"
+import { apiKeyFrom, readOptionalEnv } from "./providers.js"
 import { typeSafeDecisionModel } from "./typesafe.js"
 
 // Test seam: only tests read buildCloudflareModelDriver, which lets a test
 // run the driver against a fake fetch and a fixture catalog.
 
 /**
- * Cloudflare's REST API for AI on `api.cloudflare.com`: Workers AI models
- * (`@cf/...`) and the third-party models AI Gateway serves (`author/model`),
- * both over OpenAI Chat Completions at `/accounts/{account}/ai/v1`. One
- * Cloudflare API token signs every request (`Authorization: Bearer`); the
+ * Cloudflare's REST API for AI on `api.cloudflare.com`: the Workers AI models
+ * (`@cf/...`) over OpenAI Chat Completions at `/accounts/{account}/ai/v1`.
+ * One Cloudflare API token signs every request (`Authorization: Bearer`); the
  * sign-in also asks the account id, and an AI Gateway id that routes the
  * requests through that gateway (`cf-aig-gateway-id`).
  *
@@ -124,8 +101,7 @@ const accountRoot = (account: Account): string =>
 /**
  * With a gateway id, every request names the gateway: AI Gateway then logs,
  * caches and bills it. Workers AI (`@cf/`) models need the header to go
- * through a gateway at all; third-party models default to the account's
- * default gateway without it.
+ * through a gateway at all.
  */
 const gatewayHeader =
   (gatewayId: Option.Option<string>) =>
@@ -138,76 +114,18 @@ const gatewayHeader =
         ),
     })
 
-// ── chat completions ────────────────────────────────────────────────────────
-
-type ChatSdk = typeof ChatSdkModule
-type ChatConfig = NonNullable<Parameters<typeof OpenAiChatLanguageModel.layer>[0]["config"]>
-
-// oxlint-disable-next-line effect/noDynamicImports -- the SDK loads at the first model build, not at launch
-const loadChatSdk = Effect.promise((): Promise<ChatSdk> => import("@effect/ai-openai-compat"))
-
-/**
- * The Chat Completions request: tools without strict schemas, which the
- * Workers AI models do not all take, the output cap, and a `temperature` only
- * for a model the catalog says does not reason. The catalog lists no
- * reasoning controls for a Workers AI model, so the request names no effort.
- */
-const chatConfig = (hints: Option.Option<ProviderHints>): ChatConfig => {
-  let config: ChatConfig = { strictJsonSchema: false }
-  const maxTokens = Option.flatMap(hints, (value) => Option.fromNullishOr(value.maxTokens))
-  if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
-  const temperature = hints.pipe(
-    Option.filter((value) => value.supportsReasoning === false),
-    Option.flatMap((value) => Option.fromNullishOr(value.temperature)),
-  )
-  if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-  return config
-}
-
-const chatModel = (
-  { OpenAiClient, OpenAiLanguageModel }: ChatSdk,
-  modelName: string,
-  account: Account,
-  hints: Option.Option<ProviderHints>,
-) => {
-  const client = OpenAiClient.layer({
-    apiKey: Redacted.make(account.token),
-    apiUrl: `${accountRoot(account)}/v1`,
-    transformClient: gatewayHeader(account.gatewayId),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
-  return OpenAiLanguageModel.layer({ model: modelName, config: chatConfig(hints) }).pipe(
-    Layer.provide(client),
-  )
-}
-
 // ── catalog ─────────────────────────────────────────────────────────────────
 
 /**
  * models.dev lists the Workers AI models under this provider, with the
- * account's `/ai/v1` as their API. Its `cloudflare-ai-gateway` list names the
- * `ai-gateway-provider` package, which speaks the gateway's provider-native
- * routes, not this one, so the picker shows the Workers AI models only; a
- * third-party `author/model` id still resolves when an agent names it.
+ * account's `/ai/v1` as their API: core lists them under this driver's id,
+ * the chat models over Chat Completions, then the classifier models of
+ * models.dev's decision list (Clef and Clef Flash). Its
+ * `cloudflare-ai-gateway` list names the `ai-gateway-provider` package, which
+ * speaks the gateway's provider-native routes, not this one: its third-party
+ * `author/model` ids are neither listed nor resolved.
  */
 const CATALOG_PROVIDER = "cloudflare-workers-ai"
-
-/**
- * The Workers AI models under this driver's id: the chat models, then the
- * classifier models of models.dev's decision list (Clef and Clef Flash). The
- * chat models speak Chat Completions, whose upstreams cache implicitly with
- * no write price, so none has a cache lifetime.
- */
-const listWorkersAiModels = (catalog: ModelCatalogView): ReadonlyArray<Model> =>
-  [
-    ...catalogModels(catalog, CATALOG_PROVIDER, Option.none()),
-    ...catalogClassifiers(catalog, CATALOG_PROVIDER),
-  ].map((model) =>
-    Model.make({
-      ...model,
-      id: ModelId.make(`${DRIVER_ID}/${model.id.slice(CATALOG_PROVIDER.length + 1)}`),
-      provider: ProviderId.make(DRIVER_ID),
-    }),
-  )
 
 // ── clef decisions ──────────────────────────────────────────────────────────
 
@@ -345,36 +263,20 @@ const unwrapEnvelope = (client: HttpClient.HttpClient): HttpClient.HttpClient =>
     ),
   )
 
-/** Whether the catalog names `modelName` a decision model: chat refuses it. */
-const isClassifier = (modelName: string, catalog: Option.Option<ModelCatalogView>): boolean =>
-  Option.exists(
-    Option.flatMap(catalog, (view) => catalogEntry(view, CATALOG_PROVIDER, modelName)),
-    (entry) => entry.decision === true,
-  )
-
 // ── driver ──────────────────────────────────────────────────────────────────
 
 /** The Cloudflare driver. `env` holds the variables setup read; a stored token or answer wins. */
 export const buildCloudflareModelDriver = (env: CloudflareEnv): ModelDriverContribution => ({
   id: DRIVER_ID,
   name: "Cloudflare",
+  catalogProvider: CATALOG_PROVIDER,
   envCredential: TOKEN_ENV,
-  resolveModel: (modelName, authInfo, hints, catalog) =>
-    Effect.gen(function* () {
-      if (isClassifier(modelName, Option.fromUndefinedOr(catalog))) {
-        return yield* new DriverError({
-          driver: DriverFailureId.make(DRIVER_ID),
-          reason: `${DRIVER_ID}/${modelName} is a classifier model: it runs no turn; a cell asks it with models.decide`,
-        })
-      }
-      const account = yield* accountFrom(Option.fromNullishOr(authInfo), env)
-      const sdk = yield* loadChatSdk
-      return AiModel.make(
-        DRIVER_ID,
-        modelName,
-        chatModel(sdk, modelName, account, Option.fromNullishOr(hints)),
-      )
-    }),
+  endpoint: (_modelName, authInfo) =>
+    Effect.map(accountFrom(Option.fromNullishOr(authInfo), env), (account) => ({
+      apiKey: Option.some(account.token),
+      baseUrl: Option.some(`${accountRoot(account)}/v1`),
+      transformClient: Option.some(gatewayHeader(account.gatewayId)),
+    })),
   resolveDecisionModel: (modelName, authInfo) =>
     Effect.map(accountFrom(Option.fromNullishOr(authInfo), env), (account) =>
       typeSafeDecisionModel(clefBodyModel(modelName), {
@@ -384,7 +286,6 @@ export const buildCloudflareModelDriver = (env: CloudflareEnv): ModelDriverContr
           client.pipe(clefRunPath(modelName), gatewayHeader(account.gatewayId), unwrapEnvelope),
       }),
     ),
-  listModels: (catalog) => Effect.succeed(listWorkersAiModels(catalog)),
   auth: {
     methods: [
       AuthMethod.make({

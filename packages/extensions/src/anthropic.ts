@@ -11,14 +11,17 @@ import {
   Option,
   Path,
   Predicate,
-  Redacted,
   Schema,
   Stream,
   SynchronizedRef,
 } from "effect"
 import { Hex } from "effect/encoding"
 import {
+  type ApiClassContribution,
+  type ApiEndpoint,
   AuthMethod,
+  type CatalogModel,
+  type CatalogOverride,
   DEFAULT_RETRY_POLICY,
   defineExtension,
   ExtensionHost,
@@ -31,11 +34,13 @@ import {
   ProviderAuthError,
   type ProviderAuthorizationResult,
   type ProviderHints,
+  type ReasoningEffort,
   reportProviderStopReason,
   runProcess,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
 import {
+  adapterEntry,
   catalogModels,
   type CredentialCache,
   CredentialCacheCell,
@@ -43,8 +48,14 @@ import {
   type CredentialFailure,
   checkCredentials,
   CredentialRefreshUnavailable,
-  effortAtOrAbove,
+  effortFor,
   EMPTY_CREDENTIAL_CELL,
+  hasToggle,
+  lowestEffort,
+  maxTokensOf,
+  reasoningHint,
+  sdkApiKey,
+  thinkingBudget,
   explainCredentialFailure,
   authorizedClient,
   freshEnoughAt,
@@ -2157,11 +2168,6 @@ export const buildKeychainTransformClient = (
 // The OAuth path hands the cache to the keychain transform middleware,
 // which reads it per request via `mapRequestEffect`.
 
-/** Anthropic `output_config.effort` levels, lowest first. */
-const AnthropicEffort = Schema.Literals(["low", "medium", "high", "xhigh", "max"])
-type AnthropicEffort = typeof AnthropicEffort.Type
-const ANTHROPIC_EFFORT_ORDER = AnthropicEffort.literals
-
 /**
  * How a family thinks when a request does not say. From the model table at
  * platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting
@@ -2172,165 +2178,117 @@ const ANTHROPIC_EFFORT_ORDER = AnthropicEffort.literals
  */
 type ThinkingDefault = "Off" | "On" | "AlwaysOn"
 
-interface AnthropicFamily {
+/**
+ * The Claude families whose thinking default the table above names, first
+ * match wins, by the lowercased id. models.dev lists each model's efforts,
+ * budget and toggle, and whether it takes a `temperature`; it does not carry
+ * the default, so this rule is all the Messages class keeps per family. A
+ * family a row names thinks adaptively at a level, which an `Off` family
+ * needs to reason, and shows its thinking (`THINKING_CONFIG`).
+ */
+const THINKING_DEFAULTS: ReadonlyArray<{
   readonly pattern: RegExp
-  /** The effort levels the family accepts, lowest first. */
-  readonly accepts: ReadonlyArray<AnthropicEffort>
-  /** None for a family without adaptive thinking (extended thinking only). */
-  readonly thinking: Option.Option<ThinkingDefault>
-  /** A non-default `temperature` gets HTTP 400 on every request, thinking or not. */
-  readonly fixedSampling: boolean
-  /** The family has the 1M-token window; every other Claude model has 200k. */
-  readonly millionTokenContext: boolean
-}
+  readonly thinking: ThinkingDefault
+}> = [
+  { pattern: /(fable-5|mythos|opus-5-5)(-|$)/, thinking: "AlwaysOn" },
+  // Opus 5 accepts `disabled` only at effort `high` or below; `none` names no effort.
+  { pattern: /(opus-5|sonnet-5)(-|$)/, thinking: "On" },
+  { pattern: /(opus-4-[78]|(opus|sonnet)-4-6)(-|$)/, thinking: "Off" },
+]
+
+const thinkingDefault = (modelId: string): Option.Option<ThinkingDefault> =>
+  Option.map(
+    Option.fromUndefinedOr(
+      THINKING_DEFAULTS.find((row) => row.pattern.test(modelId.toLowerCase())),
+    ),
+    (row) => row.thinking,
+  )
 
 /**
- * The model families that take effort, first match wins, by substring of the
- * lowercased id. Efforts are from platform.claude.com/docs/en/build-with-claude/effort,
- * thinking from the table above, sampling from the thinking page's "Sampling
- * parameters" section, the window from the context-windows page (all read
- * 2026-09-23). A model no row matches takes no
- * effort and no thinking: Sonnet 4.5, Haiku 4.5 and older models answer HTTP
- * 400 when a request names an effort, so a new family stays plain until it
- * is added here.
+ * Where models.dev and gent disagree on an Anthropic model, gent's value,
+ * with its receipt. models.dev lists 1M for Claude Sonnet 4.5, which has 200k
+ * now that no beta widens it, and a request past the real window fails
+ * before compaction would start.
  */
-const ANTHROPIC_FAMILIES: ReadonlyArray<AnthropicFamily> = [
+const ANTHROPIC_OVERRIDES: ReadonlyArray<CatalogOverride> = [
   {
-    pattern: /(fable-5|mythos|opus-5-5)(-|$)/,
-    accepts: ["low", "medium", "high", "xhigh", "max"],
-    thinking: Option.some("AlwaysOn"),
-    fixedSampling: true,
-    millionTokenContext: true,
-  },
-  {
-    // Opus 5 accepts `disabled` only at effort `high` or below; `none` names no effort.
-    pattern: /(opus-5|sonnet-5)(-|$)/,
-    accepts: ["low", "medium", "high", "xhigh", "max"],
-    thinking: Option.some("On"),
-    fixedSampling: true,
-    millionTokenContext: true,
-  },
-  {
-    pattern: /opus-4-[78](-|$)/,
-    accepts: ["low", "medium", "high", "xhigh", "max"],
-    thinking: Option.some("Off"),
-    fixedSampling: true,
-    millionTokenContext: true,
-  },
-  {
-    pattern: /(opus|sonnet)-4-6(-|$)/,
-    accepts: ["low", "medium", "high", "max"],
-    thinking: Option.some("Off"),
-    fixedSampling: false,
-    millionTokenContext: true,
-  },
-  {
-    pattern: /opus-4-5(-|$)/,
-    accepts: ["low", "medium", "high"],
-    thinking: Option.none(),
-    fixedSampling: false,
-    millionTokenContext: false,
+    match: /^claude-sonnet-4-5(-|$)/,
+    patch: (entry) =>
+      Option.match(Option.fromUndefinedOr(entry.limit), {
+        onNone: () => entry,
+        onSome: (limit) => ({ ...entry, limit: { ...limit, context: 200_000 } }),
+      }),
+    receipt:
+      "platform.claude.com/docs/en/build-with-claude/context-windows (Sonnet 4.5: 200k), read 2026-09-23",
   },
 ]
 
-/** The window of every Claude model outside the 1M families. */
-const STANDARD_CONTEXT_TOKENS = 200_000
-
 /**
- * The catalog with each window checked against the docs: models.dev lists
- * 1M for Claude Sonnet 4.5, which has 200k now that no beta widens it, and a
- * request past the real window fails before compaction would start.
- */
-const withDocumentedWindows = (models: ReadonlyArray<Model>): ReadonlyArray<Model> =>
-  models.map((model) => {
-    const lower = model.id.toLowerCase()
-    const family = ANTHROPIC_FAMILIES.find((entry) => entry.pattern.test(lower))
-    if (family?.millionTokenContext === true) return model
-    if (Predicate.isUndefined(model.contextLength)) return model
-    if (model.contextLength <= STANDARD_CONTEXT_TOKENS) return model
-    return Model.make({ ...model, contextLength: STANDARD_CONTEXT_TOKENS })
-  })
-
-/** Each gent reasoning level as an Anthropic effort; `none` asks for no reasoning and is handled per family. */
-const HINT_EFFORT = new Map<string, AnthropicEffort>([
-  ["minimal", "low"],
-  ["low", "low"],
-  ["medium", "medium"],
-  ["high", "high"],
-  ["xhigh", "xhigh"],
-  ["max", "max"],
-])
-
-/**
- * What one model's requests carry for a reasoning hint. Both auth paths apply
- * it to the request body in `anthropicClientLayer`: the SDK config type cannot
- * name effort `xhigh` or `max`, and effort and thinking are decided together.
+ * What one model's requests carry for a reasoning hint. Every Messages path
+ * applies it to the request body in `anthropicClientLayer`: the SDK config
+ * type cannot name effort `xhigh` or `max`, and effort and thinking are
+ * decided together.
  */
 interface AnthropicRequestPlan {
-  readonly effort: Option.Option<AnthropicEffort>
-  readonly thinking: Option.Option<"adaptive" | "disabled">
-  /** False where a `temperature` would get HTTP 400. */
-  readonly temperature: boolean
+  readonly effort: Option.Option<ReasoningEffort>
+  readonly thinking: Option.Option<JsonRecord>
 }
 
-const PLAIN_REQUEST: AnthropicRequestPlan = {
-  effort: Option.none(),
-  thinking: Option.none(),
-  temperature: true,
-}
+const PLAIN_REQUEST: AnthropicRequestPlan = { effort: Option.none(), thinking: Option.none() }
 
 /**
- * The request plan for a model and a hint.
+ * The request plan for a catalog entry and a hint.
  *
- * - No hint: the model's own defaults.
- * - `none`: as little reasoning as the model allows. A family that can turn
- *   thinking off does; an always-on family runs at its lowest effort. The
- *   compaction summary asks for this under a 768-token cap, and thinking
- *   counts toward `max_tokens`, so a thinking summary can come back cut or
- *   empty.
- * - A level: the lowest effort the family accepts at or above it, else its
- *   highest, with adaptive thinking on, which an `Off` family needs to reason.
+ * - No hint: the model's own defaults. A family that thinks by default is
+ *   sent `adaptive`, its own default, so that the thinking display applies.
+ * - `none`: as little reasoning as the model allows. An always-on family
+ *   runs at its lowest effort; a family on by default, or a model that lists
+ *   a toggle, turns thinking off. The compaction summary asks for this under
+ *   a 768-token cap, and thinking counts toward `max_tokens`, so a thinking
+ *   summary can come back cut or empty.
+ * - A level with an effort list: the lowest effort the model accepts at or
+ *   above it, else its highest, with adaptive thinking for a family the
+ *   default rule names.
+ * - A level with a thinking budget and no effort list: thinking `enabled`
+ *   with the budget.
+ * - A level with only a toggle (MiniMax M3, which thinks only when asked):
+ *   adaptive thinking.
  */
 const anthropicRequestPlan = (
-  modelName: string,
-  hint: ProviderHints["reasoning"],
+  entry: CatalogModel,
+  hints: Option.Option<ProviderHints>,
 ): AnthropicRequestPlan => {
-  const lower = modelName.toLowerCase()
-  const family = ANTHROPIC_FAMILIES.find((entry) => entry.pattern.test(lower))
-  if (Predicate.isUndefined(family)) return PLAIN_REQUEST
-  if (Predicate.isUndefined(hint)) {
-    // A family that thinks by default is sent `adaptive`, its own default,
-    // so that the thinking display below applies to it.
+  const rule = thinkingDefault(entry.id)
+  const hint = reasoningHint(entry, hints)
+  if (Option.isNone(hint)) {
+    if (Option.exists(rule, (value) => value !== "Off")) {
+      return { effort: Option.none(), thinking: Option.some(THINKING_CONFIG.adaptive) }
+    }
+    return PLAIN_REQUEST
+  }
+  if (hint.value === "none") {
+    if (Option.contains(rule, "AlwaysOn")) {
+      return { effort: lowestEffort(entry), thinking: Option.none() }
+    }
+    if (Option.contains(rule, "On") || hasToggle(entry)) {
+      return { effort: Option.none(), thinking: Option.some(THINKING_CONFIG.disabled) }
+    }
+    return PLAIN_REQUEST
+  }
+  const effort = effortFor(entry, hint.value)
+  if (Option.isSome(effort)) {
+    return { effort, thinking: Option.map(rule, () => THINKING_CONFIG.adaptive) }
+  }
+  const budget = thinkingBudget(entry, hint.value, hints)
+  if (Option.isSome(budget)) {
     return {
       effort: Option.none(),
-      thinking: Option.map(
-        Option.filter(family.thinking, (value) => value !== "Off"),
-        () => "adaptive",
-      ),
-      temperature: !family.fixedSampling,
+      thinking: Option.some({ type: "enabled", budget_tokens: budget.value }),
     }
   }
-  if (hint === "none") {
-    const thinkingDefault = Option.getOrUndefined(family.thinking)
-    if (thinkingDefault === "On") {
-      return { effort: Option.none(), thinking: Option.some("disabled"), temperature: false }
-    }
-    if (thinkingDefault === "AlwaysOn") {
-      const lowest = Option.fromUndefinedOr(family.accepts[0])
-      return {
-        effort: lowest,
-        thinking: Option.none(),
-        temperature: false,
-      }
-    }
-    return { ...PLAIN_REQUEST, temperature: !family.fixedSampling }
-  }
-  const effort = Option.fromUndefinedOr(HINT_EFFORT.get(hint)).pipe(
-    Option.flatMap((level) => effortAtOrAbove(ANTHROPIC_EFFORT_ORDER, family.accepts, level)),
-  )
-  const thinking: AnthropicRequestPlan["thinking"] = Option.map(family.thinking, () => "adaptive")
-  // Before the 4.7 families, `temperature` conflicts only with thinking on.
-  return { effort, thinking, temperature: !family.fixedSampling && Option.isNone(thinking) }
+  if (hasToggle(entry))
+    return { effort: Option.none(), thinking: Option.some({ type: "adaptive" }) }
+  return PLAIN_REQUEST
 }
 
 type AnthropicConfig = Required<Parameters<typeof AnthropicLanguageModel.layer>[0]>["config"]
@@ -2344,26 +2302,25 @@ interface AnthropicRequest {
   readonly cacheLifetimes: Option.Option<CacheLifetimes>
 }
 
+/**
+ * One model's requests. A `temperature` goes only to a model that takes one
+ * (`temperature: false` in the catalog gets HTTP 400 on every request) and
+ * only while the plan sends no thinking, which rejects it.
+ */
 const anthropicRequest = (
-  modelName: string,
+  entry: CatalogModel,
   hints: Option.Option<ProviderHints>,
   promptCacheTtl: PromptCacheTtl,
 ): AnthropicRequest => {
-  const plan = anthropicRequestPlan(
-    modelName,
-    Option.getOrUndefined(
-      Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.reasoning)),
-    ),
-  )
+  const plan = anthropicRequestPlan(entry, hints)
   let config: AnthropicConfig = {}
-  if (Option.isSome(hints)) {
-    const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
-    if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
-    const temperature = Option.fromNullishOr(hints.value.temperature)
-    if (Option.isSome(temperature) && plan.temperature) {
-      config = { ...config, temperature: temperature.value }
-    }
-  }
+  const maxTokens = maxTokensOf(hints)
+  if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
+  const temperature = hints.pipe(
+    Option.filter(() => entry.temperature !== false && Option.isNone(plan.thinking)),
+    Option.flatMap((value) => Option.fromNullishOr(value.temperature)),
+  )
+  if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
   const child = Option.exists(hints, (value) => value.child === true)
   const lifetimes = cacheLifetimes(promptCacheTtl, child)
   return {
@@ -2432,9 +2389,7 @@ const withBeta = (
 /** The payload with the plan's effort and thinking; any `output_config` the SDK set is kept. */
 const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): JsonRecord => {
   let result = payload
-  if (Option.isSome(plan.thinking)) {
-    result = { ...result, thinking: THINKING_CONFIG[plan.thinking.value] }
-  }
+  if (Option.isSome(plan.thinking)) result = { ...result, thinking: plan.thinking.value }
   if (Option.isSome(plan.effort)) {
     const current = result["output_config"]
     let outputConfig: JsonRecord = {}
@@ -2456,15 +2411,25 @@ const makeApiKeyAnthropicLayer = (
   sdk: AnthropicSdk,
   modelName: string,
   request: AnthropicRequest,
-  apiKey: string,
+  endpoint: ApiEndpoint,
 ) => {
   const { AnthropicClient, AnthropicLanguageModel } = sdk
+  // The SDK adds `/v1/messages` to its base URL itself; models.dev names the `/v1` root.
+  const apiUrl = Option.map(endpoint.baseUrl, (url) => url.replace(/\/v1\/?$/, ""))
   const clientLayer = anthropicClientLayer(
     sdk,
     request.plan,
     apiKeyClientPath(request.cacheLifetimes),
     (rewriteBody) =>
-      AnthropicClient.layer({ apiKey: Redacted.make(apiKey), transformClient: rewriteBody }),
+      AnthropicClient.layer({
+        apiKey: sdkApiKey(endpoint.apiKey),
+        apiUrl: Option.getOrUndefined(apiUrl),
+        transformClient: (client) =>
+          Option.match(endpoint.transformClient, {
+            onNone: () => rewriteBody(client),
+            onSome: (transform) => transform(rewriteBody(client)),
+          }),
+      }),
   ).pipe(Layer.provide(ModelHttpClient))
   return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
     Layer.provide(clientLayer),
@@ -2506,6 +2471,39 @@ const makeOauthAnthropicLayer = (
 }
 
 /**
+ * The cache lifetime the Messages class asks for on a provider other than
+ * Anthropic: the `ephemeral` default, 5 minutes, which every Messages
+ * upstream takes. The Anthropic driver picks its own (`PromptCacheTtl`).
+ */
+const MESSAGES_PROMPT_CACHE_TTL: PromptCacheTtl = "5m"
+
+/**
+ * The Anthropic Messages API, for any provider whose models.dev entry names
+ * `@ai-sdk/anthropic` (the OpenCode gateways' Claude, MiniMax and Qwen
+ * models). The request plan and the cache markers are the Anthropic
+ * driver's own.
+ */
+export const MESSAGES_CLASS: ApiClassContribution = {
+  id: "anthropic-messages",
+  npm: ["@ai-sdk/anthropic"],
+  protocols: [],
+  promptCacheTtl: Option.some(PROMPT_CACHE_LIFETIME[MESSAGES_PROMPT_CACHE_TTL]),
+  resolveModel: (request) =>
+    Effect.map(loadAnthropicSdk, (sdk) =>
+      AiModel.make(
+        request.providerId,
+        request.model.id,
+        makeApiKeyAnthropicLayer(
+          sdk,
+          request.model.id,
+          anthropicRequest(request.model, request.hints, MESSAGES_PROMPT_CACHE_TTL),
+          request,
+        ),
+      ),
+    ),
+}
+
+/**
  * Build the model-driver contribution over a credential cell the caller
  * allocated once: every `resolveModel` call shares it, so a credential is
  * reused (a fresh cell per `resolveModel` would lose it).
@@ -2515,16 +2513,14 @@ export const buildAnthropicModelDriver = (
   envApiKey: Option.Option<string>,
   services: AnthropicDriverServices,
   promptCacheTtl: PromptCacheTtl,
-): ModelDriverContribution => ({
+): ModelDriverContribution & Required<Pick<ModelDriverContribution, "resolveModel">> => ({
   id: "anthropic",
   name: "Anthropic",
   envCredential: "ANTHROPIC_API_KEY",
+  overrides: ANTHROPIC_OVERRIDES,
   // The lifetimes the markers ask for, a root's and a child's, and the write price; see `PromptCacheTtl`.
   listModels: (catalog) =>
-    Effect.succeed(
-      catalogModels(catalog, "anthropic", Option.some(PROMPT_CACHE_LIFETIME[promptCacheTtl])),
-    ).pipe(
-      Effect.map(withDocumentedWindows),
+    Effect.succeed(catalogModels(catalog, "anthropic", PROMPT_CACHE_LIFETIME[promptCacheTtl])).pipe(
       Effect.map(withChildPromptCacheLifetime(promptCacheTtl)),
       Effect.map(withPromptCacheWritePrice(promptCacheTtl)),
     ),
@@ -2533,10 +2529,11 @@ export const buildAnthropicModelDriver = (
     ...DEFAULT_RETRY_POLICY,
     transientStreamEvent: MessagesTransientStreamEvent,
   },
-  resolveModel: (modelName, authInfo, hints) =>
+  resolveModel: (modelName, authInfo, hints, catalog) =>
     Effect.gen(function* () {
       const auth = Option.fromNullishOr(authInfo)
-      const request = anthropicRequest(modelName, Option.fromNullishOr(hints), promptCacheTtl)
+      const entry = adapterEntry(Option.fromUndefinedOr(catalog), "anthropic", modelName)
+      const request = anthropicRequest(entry, Option.fromNullishOr(hints), promptCacheTtl)
 
       // Precedence, the same as OpenAI: stored Claude Code sign-in, then
       // stored API key, then ANTHROPIC_API_KEY. A user who chooses Claude
@@ -2559,7 +2556,11 @@ export const buildAnthropicModelDriver = (
         return AiModel.make(
           "anthropic",
           modelName,
-          makeApiKeyAnthropicLayer(yield* loadAnthropicSdk, modelName, request, apiKey.value),
+          makeApiKeyAnthropicLayer(yield* loadAnthropicSdk, modelName, request, {
+            apiKey,
+            baseUrl: Option.none(),
+            transformClient: Option.none(),
+          }),
         )
       }
 
@@ -2678,5 +2679,6 @@ export const AnthropicExtension = defineExtension({
       "modelDriver",
       buildAnthropicModelDriver(credentialCellRef, envApiKey, services, yield* readPromptCacheTtl),
     )
+    yield* ctx.register("apiClass", MESSAGES_CLASS)
   }),
 })

@@ -54,7 +54,14 @@ import {
   oneGenerate,
   respondFirstWith,
 } from "./helpers/fake-http-client.js"
-import { freePort, createRpcHarness, turnNoticesText, waitFor } from "@gent/core/test-utils"
+import {
+  createRpcHarness,
+  fixtureModelCatalog,
+  freePort,
+  turnNoticesText,
+  waitFor,
+} from "@gent/core/test-utils"
+import { resolveShipped } from "./helpers/api-classes.js"
 import { SessionId } from "@gent/core/protocol"
 import { BunCrypto } from "@effect/platform-bun"
 
@@ -171,6 +178,8 @@ type PendingCallbacks = Parameters<typeof buildOpenAIModelDriver>[1]
 /**
  * The OpenAI driver as the extension's setup builds it: its own credential
  * cell (empty unless `cell` is given), the pending logins, no environment key.
+ * Its `resolveModel` resolves as core does, over the fixture catalog with the
+ * driver's overrides applied.
  */
 const makeDriver = (
   options: {
@@ -182,12 +191,24 @@ const makeDriver = (
     const cellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
       options.cell ?? EMPTY_CREDENTIAL_CELL,
     )
-    const driver = buildOpenAIModelDriver(
+    const built = buildOpenAIModelDriver(
       cellRef,
       options.pending ?? new Map(),
       Option.none(),
       yield* hostCrypto,
     )
+    const catalog = fixtureModelCatalog()
+    const driver = {
+      ...built,
+      resolveModel: (modelName: string, authInfo?: ProviderAuthInfo, hints?: ProviderHints) =>
+        resolveShipped(
+          built,
+          catalog,
+          modelName,
+          Option.fromUndefinedOr(authInfo),
+          Option.fromUndefinedOr(hints),
+        ),
+    }
     return { driver, cellRef }
   })
 // ── Tests ──
@@ -1771,16 +1792,16 @@ describe("OpenAI request hints", () => {
     "a request for no reasoning names the lowest effort the model accepts, on both paths",
     () =>
       Effect.gen(function* () {
-        // Each floor is the model page's lowest `reasoning.effort` (developers.openai.com/api/docs/models).
+        // Each floor is the catalog's lowest effort. models.dev leaves `none` off
+        // GPT-6.1 Sol, which takes it (developers.openai.com/api/docs/models):
+        // the driver's override puts it back.
         const reasoningModels = [
           "gpt-5.4",
           "gpt-5.6-sol",
           "gpt-5-mini",
-          "gpt-5.1-codex",
           "gpt-6-astra",
           "gpt-6-sol",
           "gpt-6-luna",
-          "gpt-6.1-astra",
           "gpt-6.1-sol",
         ]
         const lowest = [
@@ -1788,10 +1809,8 @@ describe("OpenAI request hints", () => {
           Option.some("none"),
           Option.some("minimal"),
           Option.some("low"),
-          Option.some("low"),
           Option.some("none"),
           Option.some("none"),
-          Option.some("low"),
           Option.some("none"),
         ]
         expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), reasoningModels)).toEqual(lowest)
@@ -1810,25 +1829,26 @@ describe("OpenAI request hints", () => {
       expect(
         yield* effortsFor(auth, ["gpt-4.1", "o4-mini"], "high", { supportsReasoning: false }),
       ).toEqual([Option.none(), Option.none()])
-      // A reasoning model gets its effort whatever its name looks like.
+      // Without the hint, the catalog entry's flag decides.
+      expect(yield* effortsFor(auth, ["gpt-4.1", "o4-mini"], "high")).toEqual([
+        Option.none(),
+        Option.some("high"),
+      ])
+      // A model the catalog does not list names no effort it might refuse.
       expect(
-        yield* effortsFor(auth, ["gpt-4.1-reasoner", "chatgpt-5-latest"], "high", {
-          supportsReasoning: true,
-        }),
-      ).toEqual([Option.some("high"), Option.some("high")])
+        yield* effortsFor(auth, ["gpt-4.1-reasoner"], "high", { supportsReasoning: true }),
+      ).toEqual([Option.none()])
     }),
   )
 
   it.live("an effort the model does not accept becomes the nearest one it does", () =>
     Effect.gen(function* () {
-      // The accepted values are each model page's `reasoning.effort` list
-      // (developers.openai.com/api/docs/models).
+      // The accepted values are each catalog entry's effort list.
       const cases: ReadonlyArray<readonly [string, ProviderHints["reasoning"], string]> = [
         // Above the ceiling: the highest accepted.
         ["gpt-5-mini", "max", "high"],
         ["gpt-5.4", "max", "xhigh"],
         ["gpt-5.1", "xhigh", "high"],
-        ["gpt-5.1-codex", "max", "high"],
         ["gpt-5.2-pro", "max", "xhigh"],
         // o-series pro models take the o-series levels, not the GPT-5 Pro ones.
         ["o3-pro", "max", "high"],
