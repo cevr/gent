@@ -834,7 +834,8 @@ describe("BashTool execution", () => {
     () =>
       Effect.gen(function* () {
         const { toolCallId: _dropped, ...withoutToolCall } = stubCtx
-        const outcome = yield* Effect.exit(
+        // A typed failure, not a defect: without the guard the output path dies on the missing id.
+        const error = yield* Effect.flip(
           runToolWithCtx(
             BashTool,
             { command: "printf never-runs", run_in_background: true },
@@ -842,7 +843,10 @@ describe("BashTool execution", () => {
           ).pipe(provideBun),
         )
 
-        expect(Exit.isFailure(outcome)).toBe(true)
+        expect(error).toMatchObject({
+          _tag: "BackgroundBashError",
+          message: "Background bash requires a host-owned tool call",
+        })
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )
