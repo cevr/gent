@@ -18,14 +18,12 @@ import {
   Option,
   Path,
   Predicate,
-  Random,
   Schema,
   Sink,
   Stdio,
 } from "effect"
 import { MinimumLogLevel } from "effect/References"
 import {
-  classifyLogFile,
   dataPaths,
   Gent,
   makeJsonFileLogger,
@@ -104,30 +102,9 @@ const emitOneEntry = (marker: string) => (logger: Logger.Logger<unknown, void>) 
     Effect.provideService(MinimumLogLevel, "Info"),
   )
 
-/** Other tests append to the shared client log; pick this test's line by its marker. */
-const findLineByMarker = (path: string, marker: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const lines = (yield* fs.readFileString(path)).split("\n")
-    const own = lines.find((line) =>
-      Option.exists(decodeJsonLine(line), (entry) => entry["msg"] === marker),
-    )
-    return Option.getOrElse(Option.fromNullishOr(own), () => "")
-  })
-
-/** The name `classifyLogFile` reads, from a full path. */
-const basename = (path: Option.Option<string>): string =>
-  Option.getOrElse(
-    Option.map(path, (value) =>
-      Option.getOrElse(Option.fromUndefinedOr(value.split("/").at(-1)), () => value),
-    ),
-    () => "",
-  )
-
 /**
- * `inspectLogs` orders by mtime. Fixtures are written in order so each is newer
- * than the last, and removed again on the way out; assertions compare only
- * files this test created, never "newest in the directory".
+ * `inspectLogs` orders by mtime. Each fixture gets an mtime from its rank, so a
+ * higher rank is newer.
  */
 const writeLog = (dir: string, name: string, ageRank: number) =>
   Effect.gen(function* () {
@@ -248,7 +225,7 @@ describe("client trace logger", () => {
   it.scopedLive("writes the SDK JSON line format at the client log path", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
-      const marker = `trace-receipt-${yield* Random.nextInt}`
+      const marker = "trace-receipt"
       const dir = yield* fs.makeTempDirectoryScoped()
       const clientPath = `${dir}/00000000-20260917000000-client.log`
       const serverStylePath = `${dir}/00000000-20260917000000-server.log`
@@ -256,8 +233,9 @@ describe("client trace logger", () => {
       yield* Effect.scoped(Effect.flatMap(makeClientTraceLogger(dir, clientPath), emit))
       yield* Effect.scoped(Effect.flatMap(makeJsonFileLogger(serverStylePath), emit))
 
-      const clientLine = yield* findLineByMarker(clientPath, marker)
-      const serverLine = yield* findLineByMarker(serverStylePath, marker)
+      // Each logger writes one line into a file that only this test owns.
+      const clientLine = (yield* fs.readFileString(clientPath)).trim()
+      const serverLine = (yield* fs.readFileString(serverStylePath)).trim()
 
       const clientEntry = decodeLogEntry(clientLine)
       const serverEntry = decodeLogEntry(serverLine)
@@ -274,52 +252,24 @@ describe("client trace logger", () => {
   )
 })
 
-describe("log file classification", () => {
-  it.live("names each side by its suffix and claims nothing else", () =>
-    Effect.sync(() => {
-      expect(classifyLogFile("abc12345-20260915120000-server.log")).toEqual(Option.some("server"))
-      expect(classifyLogFile("abc12345-20260915120000-client.log")).toEqual(Option.some("client"))
-      expect(classifyLogFile("notes.txt")).toEqual(Option.none())
-      expect(classifyLogFile("server.log")).toEqual(Option.none())
-    }),
-  )
-})
-
 describe("inspect logs", () => {
   it.scopedLive("reports the newest file each side wrote and ignores unrelated names", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const dir = yield* fs.makeTempDirectoryScoped()
 
-      // Written oldest first; the last write of each kind is the newest.
-      const older = yield* writeLog(dir, "00000001-20260915120000-server.log", 1)
+      yield* writeLog(dir, "00000001-20260915120000-server.log", 1)
       const client = yield* writeLog(dir, "00000002-20260915140000-client.log", 2)
       const newer = yield* writeLog(dir, "00000003-20260915130000-server.log", 3)
-      // Newest file of all, and not a log: the classifier must refuse it.
-      const ignored = yield* writeLog(dir, "00000004-notes.txt", 4)
+      // The newest files have names that neither side claims, so they never win.
+      yield* writeLog(dir, "00000004-notes.txt", 4)
+      yield* writeLog(dir, "server.log", 5)
 
       const logs = yield* inspectLogs(dir)
 
       expect(logs.dir).toBe(dir)
-      // A name neither side claims never wins, however new it is.
-      expect(logs.latestServer).not.toBe(ignored)
-      expect(logs.latestClient).not.toBe(ignored)
-      // The directory holds only this test's files, so each side has one answer.
       expect(logs.latestServer).toBe(newer)
       expect(logs.latestClient).toBe(client)
-      expect(logs.latestServer).not.toBe(older)
-      expect(
-        Option.contains(
-          classifyLogFile(basename(Option.fromUndefinedOr(logs.latestServer))),
-          "server",
-        ),
-      ).toBe(true)
-      expect(
-        Option.contains(
-          classifyLogFile(basename(Option.fromUndefinedOr(logs.latestClient))),
-          "client",
-        ),
-      ).toBe(true)
     }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
   )
 })
