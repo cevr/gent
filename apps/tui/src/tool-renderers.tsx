@@ -467,14 +467,35 @@ const rowsText = (rows: ReadonlyArray<WindowedLine>): string =>
     .join("\n")
 
 /**
- * The one-line summary the tool wrote, for a row whose body did not come
- * through: a reloaded op too large for the snapshot draws this instead.
+ * The reason a failed call gives: the error text of its output (the runner
+ * stores a failure as `{ error }`), else the summary it kept. None for a call
+ * that did not fail.
+ */
+const failureReason = (call: ToolCall): Option.Option<string> => {
+  if (call.status !== "error") return Option.none()
+  return Option.fromNullishOr(formatGenericToolText(call.output)).pipe(
+    Option.orElse(() => Option.fromNullishOr(formatGenericToolText(call.summary))),
+    Option.filter((text) => text.trim().length > 0),
+  )
+}
+
+/**
+ * The one line for a row whose body did not come through: a failed call's
+ * reason, else the summary the tool wrote (a reloaded op too large for the
+ * snapshot draws this instead).
  */
 function SummaryLine(props: { toolCall: ToolCall }) {
   const { theme } = useTheme()
   return (
-    <Show when={props.toolCall.status !== "running" && props.toolCall.summary}>
-      {(summary) => <text style={{ fg: theme.textMuted }}>{summary()}</text>}
+    <Show
+      when={Option.getOrUndefined(failureReason(props.toolCall))}
+      fallback={
+        <Show when={props.toolCall.status !== "running" && props.toolCall.summary}>
+          {(summary) => <text style={{ fg: theme.textMuted }}>{summary()}</text>}
+        </Show>
+      }
+    >
+      {(reason) => <text style={{ fg: theme.error }}>{reason()}</text>}
     </Show>
   )
 }
@@ -555,7 +576,10 @@ function BashToolRenderer(props: ToolRendererProps) {
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
-        <Show when={Option.getOrUndefined(data())}>
+        <Show
+          when={Option.getOrUndefined(data())}
+          fallback={<SummaryLine toolCall={props.toolCall} />}
+        >
           <box flexDirection="column">
             <text>
               <Outcome />
@@ -567,7 +591,10 @@ function BashToolRenderer(props: ToolRendererProps) {
         </Show>
       }
     >
-      <Show when={Option.getOrUndefined(data())}>
+      <Show
+        when={Option.getOrUndefined(data())}
+        fallback={<SummaryLine toolCall={props.toolCall} />}
+      >
         <box flexDirection="column">
           <text>
             <Outcome />
@@ -950,7 +977,10 @@ export function ReadToolRenderer(props: ToolRendererProps) {
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
-        <Show when={Option.getOrUndefined(data())}>
+        <Show
+          when={Option.getOrUndefined(data())}
+          fallback={<SummaryLine toolCall={props.toolCall} />}
+        >
           {(d) => (
             <box flexDirection="column">
               <text>
@@ -990,18 +1020,20 @@ export function ReadToolRenderer(props: ToolRendererProps) {
         </Show>
       }
     >
-      <For each={expandedParts()}>
-        {(part) =>
-          Match.value(part).pipe(
-            Match.tagsExhaustive({
-              run: (item) => <GutterText lines={[...item.lines]} startLine={item.startLine} />,
-              elision: (item) => (
-                <ElisionRow text={plural(item.count, `more ${unitNoun(item.unit)}`)} />
-              ),
-            }),
-          )
-        }
-      </For>
+      <Show when={Option.isSome(data())} fallback={<SummaryLine toolCall={props.toolCall} />}>
+        <For each={expandedParts()}>
+          {(part) =>
+            Match.value(part).pipe(
+              Match.tagsExhaustive({
+                run: (item) => <GutterText lines={[...item.lines]} startLine={item.startLine} />,
+                elision: (item) => (
+                  <ElisionRow text={plural(item.count, `more ${unitNoun(item.unit)}`)} />
+                ),
+              }),
+            )
+          }
+        </For>
+      </Show>
     </ToolFrame>
   )
 }
@@ -1102,18 +1134,28 @@ export function EditToolRenderer(props: ToolRendererProps) {
           status={props.toolCall.status}
           expanded={props.expanded}
           collapsedContent={
-            <box flexDirection="column">
-              <text>
-                <span style={{ fg: theme.diffAdded, bold: true }}>+{data().added}</span>
-                <span style={{ fg: theme.textMuted }}> </span>
-                <span style={{ fg: theme.diffRemoved, bold: true }}>-{data().removed}</span>
-              </text>
-              <Show when={collapsedDiffLines().length > 0}>
-                <For each={collapsedDiffLines()}>{(item) => renderDiffLine(item, theme)}</For>
-              </Show>
-            </box>
+            // A failed edit changed nothing: its row says why, not the diff it asked for.
+            <Show
+              when={props.toolCall.status !== "error"}
+              fallback={<SummaryLine toolCall={props.toolCall} />}
+            >
+              <box flexDirection="column">
+                <text>
+                  <span style={{ fg: theme.diffAdded, bold: true }}>+{data().added}</span>
+                  <span style={{ fg: theme.textMuted }}> </span>
+                  <span style={{ fg: theme.diffRemoved, bold: true }}>-{data().removed}</span>
+                </text>
+                <Show when={collapsedDiffLines().length > 0}>
+                  <For each={collapsedDiffLines()}>{(item) => renderDiffLine(item, theme)}</For>
+                </Show>
+              </box>
+            </Show>
           }
         >
+          {/* Open, a failed edit says why above the diff it asked for. */}
+          <Show when={props.toolCall.status === "error"}>
+            <SummaryLine toolCall={props.toolCall} />
+          </Show>
           <diff
             diff={data().diff}
             view="unified"
@@ -1166,7 +1208,7 @@ function WriteToolRenderer(props: ToolRendererProps) {
 
   // The header names the file, so the body, open or closed, says what the write did.
   const Written = () => (
-    <Show when={data()}>
+    <Show when={data()} fallback={<SummaryLine toolCall={props.toolCall} />}>
       {(d) => (
         <text>
           <span style={{ fg: theme.success }}>{formatBytes(d().bytesWritten)}</span>
@@ -1447,10 +1489,14 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
         </text>
       </Show>
 
-      <Show when={props.toolCall.status !== "running" && Option.getOrUndefined(summary())}>
+      <Show when={props.toolCall.status === "completed" && Option.getOrUndefined(summary())}>
         <text style={{ fg: theme.textMuted }}>
           <span style={{ fg: theme.success }}>✓</span> {Option.getOrElse(summary(), () => "")}
         </text>
+      </Show>
+
+      <Show when={props.toolCall.status === "error"}>
+        <SummaryLine toolCall={props.toolCall} />
       </Show>
     </>
   )

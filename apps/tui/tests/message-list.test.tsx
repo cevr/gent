@@ -1388,6 +1388,63 @@ describe("tool frame identity", () => {
     }),
   )
 
+  it.scopedLive("a failed builtin call shows its reason in every view, and as a cell op", () =>
+    Effect.gen(function* () {
+      // The runner stores a failure as `{ error }`, and its summary is the head of that JSON.
+      const failed = (tool: string, input: Readonly<Record<string, string>>): ToolCall => {
+        const output = encodeJson({ error: `Tool '${tool}' failed: REASON-${tool}` })
+        return { id: `call-${tool}-failed`, toolName: tool, status: "error", input, output }
+      }
+      const calls: ReadonlyArray<ToolCall> = [
+        failed("bash", { command: "false" }),
+        failed("read", { path: "/tmp/missing.txt" }),
+        failed("edit", { path: "/tmp/a.ts", oldString: "old", newString: "new" }),
+        failed("write", { path: "/tmp/b.ts", content: "text" }),
+        failed("read_session", { sessionId: "session-missing" }),
+        // A call whose output did not come through keeps the summary the runner wrote.
+        {
+          id: "call-summary-failed",
+          toolName: "read",
+          status: "error",
+          input: { path: "/tmp/summary.txt" },
+          summary: "REASON-summary",
+          output: absent,
+        },
+      ]
+      const cell: ToolCall = {
+        id: "call-cell-op-failed",
+        toolName: "cell",
+        status: "completed",
+        input: { code: "await tools.read({ path: 'gone.txt' })" },
+        output: encodeJson({ display: "cell done" }),
+        operations: [failed("grep", { pattern: "x" }), failed("read", { path: "gone.txt" })].map(
+          (op) => ({ ...op, id: `${op.id}-op` }),
+        ),
+      }
+      const items: SessionItem[] = [...calls, cell].map((call) =>
+        assistantToolMessage(`assistant-${call.id}`, call),
+      )
+      const setup = yield* renderScoped(
+        () => <RegisteredToolMessageLists items={items} fullDetail />,
+        { width: 110, height: 200 },
+      )
+      const reasons = ["bash", "read", "edit", "write", "read_session", "summary"]
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => reasons.every((tool) => next.includes(`REASON-${tool}`)),
+        "failure reasons",
+      )
+      // Collapsed, preview and full detail each name the reason once per call.
+      for (const tool of ["bash", "edit", "write", "read_session", "summary"]) {
+        expect(frame.match(new RegExp(`REASON-${tool}\\b`, "g"))?.length).toBe(3)
+      }
+      // The cell's ops draw in full detail only, each as its collapsed sub-row:
+      // the direct read in its three views, plus the read the cell admitted.
+      expect(frame.match(/REASON-read\b/g)?.length).toBe(4)
+      expect(frame.match(/REASON-grep\b/g)?.length).toBe(1)
+    }),
+  )
+
   it.scopedLive("shows worker recovery errors in collapsed, preview, and detail frames", () =>
     Effect.gen(function* () {
       const recovered: ToolCall = {
