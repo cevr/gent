@@ -1113,25 +1113,17 @@ describe("docked pane column budget", () => {
       // margins. Ruled, it spends three: the body pads one each side and the
       // row pads one more on the left. The drawn row cannot witness the
       // difference — a row budgeted too wide is clamped by its own box — so
-      // the budget is pinned here and the cut row is checked against the rule.
-      const seen: Array<{ row: number; section: number }> = []
-      const Probe = () => {
-        const { rowWidth, sectionWidth } = usePickerGeometry()
-        seen.push({ row: rowWidth(), section: sectionWidth() })
-        return <text>probe</text>
-      }
+      // the settings test above pins the shared `usePickerGeometry` budget,
+      // and here the cut row is checked against the rule.
       const setup = yield* renderScoped(
         () => (
-          <>
-            <Probe />
-            <BranchPicker
-              open={true}
-              sessionId={sessionId}
-              sessionName="Test Session"
-              branches={[wideBranch]}
-              onSelect={() => {}}
-            />
-          </>
+          <BranchPicker
+            open={true}
+            sessionId={sessionId}
+            sessionName="Test Session"
+            branches={[wideBranch]}
+            onSelect={() => {}}
+          />
         ),
         {
           width: 58,
@@ -1145,9 +1137,6 @@ describe("docked pane column budget", () => {
         },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("LLL"), "branch row")
-      // A row pads itself one column inside a body that pads one each side.
-      expect(seen[0]).toEqual({ row: 55, section: 56 })
-
       const lines = renderFrame(setup).split("\n")
       const rowLines = lines.filter((line) => line.includes("LLL"))
       // The label is cut, not wrapped onto a second line.

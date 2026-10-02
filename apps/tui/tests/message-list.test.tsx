@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Deferred, type Duration, Effect, Fiber, Option, Order, Schedule, Schema } from "effect"
+import { Deferred, Effect, Fiber, Option, Order, Schedule, Schema } from "effect"
 import {
   type CliRenderer,
   type CliRendererExternalOutputEvent,
@@ -85,7 +85,7 @@ import {
   makeSettleTimeouts,
   refuseCommits,
 } from "./scrollback-hold-boundary"
-import { waitForFrame, waitForTerminal, waitUntil } from "./helpers-boundary"
+import { untilExtensionsLoaded, waitForFrame, waitForTerminal, waitUntil } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { clientContributions, defineClientExtension } from "../src/extensions/client-facets"
@@ -394,8 +394,8 @@ const assistantToolMessage = (id: string, toolCall: ToolCall): ListMessage => ({
 
 /**
  * A failed call as the runner stores it: the output is `{ error }` as pretty
- * JSON, and the summary is the compact JSON cut to 100 characters, with `...`
- * after a cut.
+ * JSON, and the summary is the error's first line cut to 100 characters, with
+ * `...` after a cut (core `summarizeToolResult`).
  */
 const runnerFailure = (
   id: string,
@@ -403,9 +403,9 @@ const runnerFailure = (
   input: ToolCall["input"],
   error: string,
 ): ToolCall => {
-  const compact = encodeJson({ error })
-  let summary = compact
-  if (compact.length > 100) summary = `${compact.slice(0, 100)}...`
+  const line = error.trim().split("\n")[0] ?? ""
+  let summary = line
+  if (line.length > 100) summary = `${line.slice(0, 100)}...`
   return {
     id,
     toolName,
@@ -416,7 +416,24 @@ const runnerFailure = (
   }
 }
 
-/** An error longer than the summary keeps, so the stored summary is cut JSON. */
+/**
+ * A failed call as an older runner stored it, and as its stored rows keep it:
+ * the summary is the compact `{ error }` JSON cut to 100 characters, with
+ * `...` after a cut, so it does not parse.
+ */
+const jsonSummaryFailure = (
+  id: string,
+  toolName: string,
+  input: ToolCall["input"],
+  error: string,
+): ToolCall => {
+  const compact = encodeJson({ error })
+  let summary = compact
+  if (compact.length > 100) summary = `${compact.slice(0, 100)}...`
+  return { ...runnerFailure(id, toolName, input, error), summary }
+}
+
+/** An error longer than the summary keeps, so the stored summary is cut. */
 const LONG_TOOL_ERROR =
   "connection refused by the upstream server after three tries at the configured endpoint"
 
@@ -592,14 +609,6 @@ function Transcript(
 /** The text of one native history commit, with a line break after each row when asked. */
 const committedTextOf = (event: CliRendererExternalOutputEvent, lineBreaks = false) =>
   new TextDecoder().decode(event.snapshot.getRealCharBytes(lineBreaks))
-
-/** Draws frames until the client extensions have loaded: native history waits for them. */
-const untilExtensionsLoaded = (
-  setup: Parameters<typeof renderFrame>[0],
-  loaded: () => boolean,
-  within: Duration.Input = "5 seconds",
-) =>
-  Effect.promise(() => setup.flush()).pipe(Effect.repeat({ until: loaded }), Effect.timeout(within))
 
 /** The transcript once the builtin client extensions, and so their message rows, have loaded. */
 function LoadedMessageList(props: { items: SessionItem[]; fullDetail?: boolean }) {
@@ -1258,7 +1267,20 @@ describe("tool frame identity", () => {
 
   it.scopedLive("a failed call with no renderer shows its identity and reason in both views", () =>
     Effect.gen(function* () {
-      const items: SessionItem[] = [unknownFailureMessage("call-unknown-7")]
+      const error = `Tool 'unknown_fx_tool' failed: ${LONG_TOOL_ERROR}`
+      const items: SessionItem[] = [
+        unknownFailureMessage("call-unknown-7"),
+        // A reloaded call whose output did not come through reads its summary,
+        // in the shape the runner stores today and in the older JSON shape.
+        assistantToolMessage("assistant-unknown-summary", {
+          ...runnerFailure("call-unknown-8", "unknown_fx_tool", absent, error),
+          output: absent,
+        }),
+        assistantToolMessage("assistant-unknown-json-summary", {
+          ...jsonSummaryFailure("call-unknown-9", "unknown_fx_tool", absent, error),
+          output: absent,
+        }),
+      ]
       const setup = yield* renderScoped(
         () => (
           <>
@@ -1266,12 +1288,13 @@ describe("tool frame identity", () => {
             <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
           </>
         ),
-        { width: 160, height: 20 },
+        { width: 160, height: 40 },
       )
       const frame = renderFrame(setup)
-      expect(frame.match(/#call-unknown-7/g)?.length).toBe(2)
-      expect(frame.match(/\[x unknown_fx_tool\]/g)?.length).toBe(2)
-      expect(frame.match(/failed: connection refused by the upstream/g)?.length).toBe(2)
+      for (const id of ["call-unknown-7", "call-unknown-8", "call-unknown-9"])
+        expect(frame.match(new RegExp(`#${id}\\b`, "g"))?.length).toBe(2)
+      expect(frame.match(/\[x unknown_fx_tool\]/g)?.length).toBe(6)
+      expect(frame.match(/failed: connection refused by the upstream/g)?.length).toBe(6)
       expect(frame).not.toContain('{"error"')
     }),
   )
@@ -2653,6 +2676,7 @@ describe("write row", () => {
 
 // ── native transcript markdown ──────────────────────────────────────────────
 
+/** An answer as the streaming path writes it: `_tag` first, and no metadata. */
 const assistant = (id: string, content: string): ListMessage => ({
   _tag: "regular-message",
   id,
@@ -2662,6 +2686,13 @@ const assistant = (id: string, content: string): ListMessage => ({
   images: [],
   createdAt: 0,
   segments: [{ _tag: "text", content }],
+})
+
+/** A prompt the reader typed: the server stamps its client origin. */
+const clientPrompt = (id: string, text: string): ListMessage => ({
+  ...userMessage("regular-message", id, text, "queued"),
+  pendingMode: absent,
+  metadata: { fromClient: true },
 })
 
 describe("native transcript markdown", () => {
@@ -3735,13 +3766,8 @@ describe("native transcript region at the terminal's bottom", () => {
             id,
             Array.from({ length: rows }, (_, index) => `- ${label}-${index + 10} row`).join("\n"),
           )
-        const asked = (id: string, text: string): ListMessage => ({
-          ...userMessage("regular-message", id, text, "queued"),
-          pendingMode: absent,
-          metadata: { fromClient: true },
-        })
         const [items, setItems] = createSignal<ListMessage[]>([
-          asked("p1", "FIRST-ASK"),
+          clientPrompt("p1", "FIRST-ASK"),
           listAnswer("a1", "ROWA", 60),
         ])
         const [streaming, setStreaming] = createSignal(false)
@@ -3759,9 +3785,9 @@ describe("native transcript region at the terminal's bottom", () => {
         // A short turn runs and ends, with the activity row in the footer.
         batch(() => {
           setItems([
-            asked("p1", "FIRST-ASK"),
+            clientPrompt("p1", "FIRST-ASK"),
             listAnswer("a1", "ROWA", 60),
-            asked("p2", "SECOND-ASK"),
+            clientPrompt("p2", "SECOND-ASK"),
             { ...listAnswer("a2", "ROWB", 4), draft: true },
           ])
           setStreaming(true)
@@ -3770,9 +3796,9 @@ describe("native transcript region at the terminal's bottom", () => {
         yield* waitForStableFrame(setup)
         batch(() => {
           setItems([
-            asked("p1", "FIRST-ASK"),
+            clientPrompt("p1", "FIRST-ASK"),
             listAnswer("a1", "ROWA", 60),
-            asked("p2", "SECOND-ASK"),
+            clientPrompt("p2", "SECOND-ASK"),
             listAnswer("a2", "ROWB", 4),
           ])
           setStreaming(false)
@@ -4010,18 +4036,6 @@ describe("native transcript mouse tracking", () => {
  * reader would lose the session above the fold.
  */
 
-/** The streaming path writes `_tag` first and carries no metadata. */
-const streamedMessage = (id: string, content: string): ListMessage => ({
-  _tag: "regular-message",
-  id,
-  role: "assistant",
-  content,
-  reasoning: "",
-  images: [],
-  createdAt: 0,
-  segments: [{ _tag: "text", content }],
-})
-
 /** The rebuild path spreads the body and appends `_tag` last. */
 const rebuiltMessage = (id: string, content: string): ListMessage => {
   const body: Omit<ListMessage, "_tag"> = {
@@ -4042,14 +4056,14 @@ const longBody = (label: string) =>
 
 describe("transcript fingerprint", () => {
   test("the two construction paths agree on one message", () => {
-    expect(transcriptFingerprint(streamedMessage("m1", "hello"))).toBe(
+    expect(transcriptFingerprint(assistant("m1", "hello"))).toBe(
       transcriptFingerprint(rebuiltMessage("m1", "hello")),
     )
   })
 
   test("new text still changes the fingerprint", () => {
     expect(transcriptFingerprint(rebuiltMessage("m1", "hello world"))).not.toBe(
-      transcriptFingerprint(streamedMessage("m1", "hello")),
+      transcriptFingerprint(assistant("m1", "hello")),
     )
   })
 
@@ -4086,8 +4100,8 @@ describe("native transcript rebuild", () => {
         const hold = yield* makeSettleHold
         const committedText: string[] = []
         const [items, setItems] = createSignal<ListMessage[]>([
-          streamedMessage("first", longBody("REBUILT-ITEM")),
-          streamedMessage("second", "TAIL"),
+          assistant("first", longBody("REBUILT-ITEM")),
+          assistant("second", "TAIL"),
         ])
 
         const setup = yield* renderScoped(
@@ -4511,12 +4525,6 @@ describe("native transcript commit handover", () => {
 // ── sticky last prompt ──────────────────────────────────────────────────────
 
 describe("sticky last prompt", () => {
-  /** A prompt the reader typed: the server stamps its client origin. */
-  const prompt = (id: string, text: string): ListMessage => ({
-    ...userMessage("regular-message", id, text, "queued"),
-    pendingMode: absent,
-    metadata: { fromClient: true },
-  })
   /** A user-role message an extension sent: a parent's message, a wake, a delegate start. */
   const extensionSent = (id: string, text: string): ListMessage => ({
     ...userMessage("regular-message", id, text, "queued"),
@@ -4565,7 +4573,7 @@ describe("sticky last prompt", () => {
 
   it.scopedLive("no pinned row while the prompt is on screen", () =>
     Effect.gen(function* () {
-      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 1)], {
+      const setup = yield* mountTranscript(() => [clientPrompt("p1", "ASK-ONE"), reply("r1", 1)], {
         streaming: true,
       })
       // A short session: both items fit the live tail, and the terminal shows
@@ -4583,7 +4591,7 @@ describe("sticky last prompt", () => {
   it.scopedLive("a streaming reply that pushes the prompt out above pins it in one row", () =>
     Effect.gen(function* () {
       const setup = yield* mountTranscript(
-        () => [prompt("p1", "ASK-ONE"), reply("r1", 20), { ...reply("r2", 20), draft: true }],
+        () => [clientPrompt("p1", "ASK-ONE"), reply("r1", 20), { ...reply("r2", 20), draft: true }],
         { streaming: true },
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
@@ -4598,7 +4606,7 @@ describe("sticky last prompt", () => {
     Effect.gen(function* () {
       const long = `ASK-LONG ${"word ".repeat(40)}`
       const setup = yield* mountTranscript(
-        () => [prompt("p1", long), reply("r1", 20), { ...reply("r2", 20), draft: true }],
+        () => [clientPrompt("p1", long), reply("r1", 20), { ...reply("r2", 20), draft: true }],
         { streaming: true },
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-LONG"), "pinned")
@@ -4613,7 +4621,7 @@ describe("sticky last prompt", () => {
     () =>
       Effect.gen(function* () {
         const [items, setItems] = createSignal<SessionItem[]>([
-          prompt("p1", "ASK-ONE"),
+          clientPrompt("p1", "ASK-ONE"),
           reply("r1", 20),
           { ...reply("d1", 20), draft: true },
           // Waiting in the queue: the reader has not seen it run.
@@ -4623,7 +4631,11 @@ describe("sticky last prompt", () => {
         const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
         expect(frame).not.toContain("↑ QUEUED-ASK")
         // Another branch: its own last prompt, derived from its own messages.
-        setItems([prompt("p2", "ASK-TWO"), reply("r2", 20), { ...reply("d2", 20), draft: true }])
+        setItems([
+          clientPrompt("p2", "ASK-TWO"),
+          reply("r2", 20),
+          { ...reply("d2", 20), draft: true },
+        ])
         yield* waitForFrame(
           setup,
           (next) => next.includes("↑ ASK-TWO") && !next.includes("ASK-ONE"),
@@ -4638,7 +4650,7 @@ describe("sticky last prompt", () => {
       Effect.gen(function* () {
         const setup = yield* mountTranscript(
           () => [
-            prompt("p1", "ASK-ONE"),
+            clientPrompt("p1", "ASK-ONE"),
             reply("r1", 20),
             extensionSent("w1", "PARENT-SAYS"),
             reply("r2", 20),
@@ -4659,7 +4671,7 @@ describe("sticky last prompt", () => {
       }
       const setup = yield* mountTranscript(
         () => [
-          prompt("p1", "ASK-ONE"),
+          clientPrompt("p1", "ASK-ONE"),
           reply("r1", 4),
           steer,
           reply("r2", 20),
@@ -4716,7 +4728,7 @@ describe("sticky last prompt", () => {
         const history: SessionItem[] = [
           // A draft ahead of the prompt keeps the prompt in the live view too.
           { ...reply("d0", 1), draft: true },
-          prompt("p0", "ASK-ONE"),
+          clientPrompt("p0", "ASK-ONE"),
           ...Array.from({ length: HISTORY }, (_, index) => counted(`h${index}`)),
         ]
         const tail = history.at(-1)
@@ -4755,7 +4767,7 @@ describe("sticky last prompt", () => {
   it.scopedLive("a terminal too short for the row keeps the live tail and pins nothing", () =>
     Effect.gen(function* () {
       // Two rows left for the transcript: the live tail keeps them both.
-      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 20)], {
+      const setup = yield* mountTranscript(() => [clientPrompt("p1", "ASK-ONE"), reply("r1", 20)], {
         streaming: true,
         height: 12,
         footer: 9,
@@ -4809,7 +4821,7 @@ describe("sticky last prompt", () => {
   it.scopedLive("a turn that starts over a cut answer pins nothing inside it", () =>
     Effect.gen(function* () {
       const settledItems: ListMessage[] = [
-        prompt("p1", "ASK-ONE"),
+        clientPrompt("p1", "ASK-ONE"),
         reply("h1", 20),
         reply("a1", 20),
       ]
@@ -4852,7 +4864,7 @@ describe("sticky last prompt", () => {
       // The tail's 11 rows fill the live rows exactly. At idle nothing is
       // pinned, so no row pushes the tail's top row out of view.
       const { setup, committed } = yield* mountExact([
-        { item: prompt("p0", "ASK-ONE"), name: "p0", lines: 1 },
+        { item: clientPrompt("p0", "ASK-ONE"), name: "p0", lines: 1 },
         { item: reply("h1", 1), name: "h1", lines: 20 },
         { item: reply("tail", 1), name: "tail", lines: 11 },
       ])
@@ -4873,7 +4885,7 @@ describe("sticky last prompt", () => {
     Effect.gen(function* () {
       // At idle history takes the answer's top rows; the rest stays live under them.
       const { setup, committed } = yield* mountExact([
-        { item: prompt("p0", "ASK-ONE"), name: "p0", lines: 1 },
+        { item: clientPrompt("p0", "ASK-ONE"), name: "p0", lines: 1 },
         { item: reply("h1", 1), name: "h1", lines: 20 },
         { item: reply("ans", 1), name: "ans", lines: 30 },
       ])

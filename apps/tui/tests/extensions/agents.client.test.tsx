@@ -1585,15 +1585,6 @@ const key = (id: string) => ({
   branchId: BranchId.make(`${id}-branch`),
 })
 
-const rowStaleReply = (id: string): AgentRowEntry => ({
-  sessionId: SessionId.make(id),
-  branchId: BranchId.make(`${id}-branch`),
-  section: "idle",
-  live: true,
-  depth: 0,
-  sideThread: false,
-})
-
 describe("Agents controller across a session switch", () => {
   it.scopedLive("drops a reply that lands after the shell moved to another session", () =>
     Effect.gen(function* () {
@@ -1615,7 +1606,7 @@ describe("Agents controller across a session switch", () => {
       active = key("second")
 
       // The in-flight reply carries the previous session's rows.
-      yield* Deferred.succeed(gate, [rowStaleReply("first")])
+      yield* Deferred.succeed(gate, [row("first")])
       yield* Effect.yieldNow
 
       expect(controller.rows()).toEqual([])
@@ -1649,9 +1640,9 @@ describe("Agents controller across a session switch", () => {
       controller.refresh("a")
       controller.refresh("ab")
 
-      yield* Deferred.succeed(second, [rowStaleReply("ab-match")])
+      yield* Deferred.succeed(second, [row("ab-match")])
       yield* Effect.yieldNow
-      yield* Deferred.succeed(first, [rowStaleReply("a-match")])
+      yield* Deferred.succeed(first, [row("a-match")])
       yield* Effect.yieldNow
 
       expect(controller.rows().map((entry) => String(entry.sessionId))).toEqual(["ab-match"])
@@ -1675,7 +1666,7 @@ describe("Agents controller across a session switch", () => {
       expect(controller.loading()).toBe(true)
       active = key("second")
 
-      yield* Deferred.succeed(gate, [rowStaleReply("first")])
+      yield* Deferred.succeed(gate, [row("first")])
       yield* Effect.yieldNow
 
       // The rows are dropped, but the pane must not draw "loading" forever.
