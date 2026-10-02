@@ -4186,6 +4186,53 @@ describe("extension requests and slash commands", () => {
     )
   }
 
+  // No extension ran and no turn failed: the reason is the one to show.
+  it.live("RPC request whose profile cannot be built fails with the reason", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broken = yield* Ref.make(false)
+        const working = Context.get(yield* Layer.build(fixedSessionProfiles()), SessionProfileCache)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensions: [],
+          sessionProfileCacheLayer: Layer.succeed(
+            SessionProfileCache,
+            SessionProfileCache.of({
+              resolve: (cwd) =>
+                Effect.gen(function* () {
+                  if (yield* Ref.get(broken)) {
+                    return yield* Effect.die(
+                      new Error("profile unreadable: /nonexistent/broken-config"),
+                    )
+                  }
+                  return yield* working.resolve(cwd)
+                }),
+            }),
+          ),
+        })
+        yield* Ref.set(broken, true)
+        const result = yield* Effect.exit(
+          client.extension.request({
+            sessionId,
+            branchId,
+            extensionId: ExtensionId.make("@test/commands"),
+            capabilityId: "greet",
+            input: "x",
+          }),
+        )
+        expect(Exit.isFailure(result)).toBe(true)
+        if (Exit.isFailure(result)) {
+          expectExtensionProtocolFailure(
+            result.cause,
+            "profile unreadable: /nonexistent/broken-config",
+          )
+        }
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   it.live("RPC request rejects missing branches", () =>
     Effect.gen(function* () {
       invoked.length = 0

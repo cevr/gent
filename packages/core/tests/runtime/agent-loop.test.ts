@@ -1458,7 +1458,7 @@ const makeHarness = (
               turnFailure: {
                 epoch: (s.turnFailure?.epoch ?? 0) + 1,
                 messageId,
-                error: Cause.squash(cause),
+                error: new AgentLoopError({ message: "turn failed", cause: Cause.squash(cause) }),
               },
             })),
           ),
@@ -1745,7 +1745,11 @@ describe("a start interrupted while it waits for the loop", () => {
           state: buildIdleState(),
           queue: emptyLoopQueueState(),
           // The branch already had three failed turns.
-          turnFailure: { epoch: 3, messageId: MessageId.make("earlier"), error: "boom" },
+          turnFailure: {
+            epoch: 3,
+            messageId: MessageId.make("earlier"),
+            error: new AgentLoopError({ message: "boom" }),
+          },
         },
         { settles: true, failing: new Set(["queued-second"]) },
       )
