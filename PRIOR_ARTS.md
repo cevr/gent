@@ -32,6 +32,7 @@ Fetch with `okra repo fetch <slug>`; get the path with `okra repo path <slug>`. 
 - Rejected from prior art: an LLM permission reviewer, a static tool table, a mutex event queue, unbounded steps, whole-log replay, text-blob compaction (`NORTH_STAR.md` → Rejected).
 - Pi main 1.0 (`86dfceec4`, Pass 27) replaces the historical pico comparison. gent already has kernel tool discovery, MCP calls and classifiers; a second tool-exposure vocabulary or codemode sandbox is not adopted. Physical routing/accounting and persisted prompt/tool deltas are capability gaps, with no measured saving claimed.
 - Pi's warmer makes paid replay requests, bounded by lifetime, replay safety and expected savings. gent retains its one-hour root/five-minute child caches and cold-window handoff. Unconditional idle pings remain rejected; an opt-in warmer needs matched task cost and quality evidence.
+- A native image-model primitive has no current consumer. Pass28's full extension review and root's product-source search found no image-generation caller; existing image handling projects message/MCP content. Decided by small-interface-deep-implementation and subtract-before-you-add: keep image generation in an ordinary extension tool if requested, and add a kernel primitive only for a demonstrated need.
 
 ## To survey
 
@@ -42,4 +43,3 @@ Pass 27 source comparison: `~/.cache/architecture-loop/gent/pass27/pi1.md`.
 | PI27-1 virtual models     | Principles settle explicit selection by default, extension-owned opt-in policy and physical-model budgets/accounting. Owner question: add task-start/per-turn routing in this pass or measure first; matched task cost/quality still required.             |
 | PI27-3 cache warming      | Sol6.1/high + Luna6/max offline checks recommend no warmer yet. Streaming-only is the first measurement candidate; root1h/child5m plus shared1h markers preserved. Idle probability, real replay cost and quality remain unmeasured; paid checks deferred. |
 | PI27-4 prompt/tool deltas | Pass28 real-extension wire capture confirms prefix changes; compare stable block separation before persistence. Native system-message support excludes captured Sonnet5; preserve fallback and tool admission.                                             |
-| Kernel image models       | Is there a consumer that needs a native image-model call beyond an ordinary extension tool? Classifiers and MCP already exist.                                                                                                                             |
