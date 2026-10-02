@@ -2632,6 +2632,105 @@ describe("loop open hooks", () => {
     20_000,
   )
 
+  it.scopedLive("a send to a terminated session is refused before its loop opens", () =>
+    Effect.gen(function* () {
+      const opened = yield* Deferred.make<void>()
+      const recording = defineExtension({
+        id: "@gent/test-loop-open-after-terminate",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("loopOpen", () => Deferred.succeed(opened, void 0))
+        }),
+      })
+      const calls = yield* Ref.make(0)
+      const context = yield* Layer.build(
+        createE2ELayer({
+          ...e2ePreset,
+          providerLayer: countingReply("never asked", calls),
+          extensionInputs: [...e2ePreset.extensionInputs, recording],
+        }),
+      )
+      const sessionId = SessionId.make("terminated-send-session")
+      const branchId = BranchId.make("terminated-send-branch")
+      yield* Effect.gen(function* () {
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* (yield* SessionStorage).createSession(
+          new Session({ id: sessionId, name: "Terminated", createdAt: now, updatedAt: now }),
+        )
+        yield* (yield* BranchStorage).createBranch(
+          new Branch({ id: branchId, sessionId, createdAt: now }),
+        )
+        const runtime = yield* SessionRuntime
+        yield* runtime.terminateSession(sessionId)
+        const sent = yield* Effect.exit(
+          runtime.sendUserMessage({ sessionId, branchId, content: "too late" }),
+        )
+        expect(sent._tag).toBe("Failure")
+        // The hook forks off the opening operation; give a wrong open time to show.
+        const hookRan = yield* Deferred.await(opened).pipe(Effect.timeoutOption("300 millis"))
+        expect(hookRan._tag).toBe("None")
+        expect(yield* Ref.get(calls)).toBe(0)
+      }).pipe(Effect.provide(context))
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a send after the session's open loop was terminated does not reopen it", () =>
+    Effect.gen(function* () {
+      const opens = yield* Ref.make(0)
+      const firstOpen = yield* Deferred.make<void>()
+      const reopened = yield* Deferred.make<void>()
+      const recording = defineExtension({
+        id: "@gent/test-loop-reopen-after-terminate",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("loopOpen", () =>
+            Ref.updateAndGet(opens, (count) => count + 1).pipe(
+              Effect.flatMap((count) => {
+                if (count === 1) return Deferred.succeed(firstOpen, void 0)
+                return Deferred.succeed(reopened, void 0)
+              }),
+            ),
+          )
+        }),
+      })
+      const calls = yield* Ref.make(0)
+      const context = yield* Layer.build(
+        createE2ELayer({
+          ...e2ePreset,
+          providerLayer: countingReply("never asked", calls),
+          extensionInputs: [...e2ePreset.extensionInputs, recording],
+        }),
+      )
+      const sessionId = SessionId.make("reopen-after-terminate-session")
+      const branchId = BranchId.make("reopen-after-terminate-branch")
+      yield* Effect.gen(function* () {
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* (yield* SessionStorage).createSession(
+          new Session({ id: sessionId, name: "Terminated", createdAt: now, updatedAt: now }),
+        )
+        yield* (yield* BranchStorage).createBranch(
+          new Branch({ id: branchId, sessionId, createdAt: now }),
+        )
+        const runtime = yield* SessionRuntime
+        // A read opens the loop and runs its hooks once.
+        yield* runtime.getState({ sessionId, branchId })
+        yield* Deferred.await(firstOpen)
+        yield* runtime.terminateSession(sessionId)
+        const sent = yield* Effect.exit(
+          runtime.sendUserMessage({ sessionId, branchId, content: "too late" }),
+        )
+        expect(sent._tag).toBe("Failure")
+        // A reopen would fork the hook off the send; give it time to show.
+        const hookRanAgain = yield* Deferred.await(reopened).pipe(
+          Effect.timeoutOption("300 millis"),
+        )
+        expect(hookRanAgain._tag).toBe("None")
+        expect(yield* Ref.get(opens)).toBe(1)
+        expect(yield* Ref.get(calls)).toBe(0)
+      }).pipe(Effect.provide(context))
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("a failing loopOpen hook leaves the loop open and later hooks still run", () =>
     Effect.gen(function* () {
       const later = yield* Deferred.make<void>()

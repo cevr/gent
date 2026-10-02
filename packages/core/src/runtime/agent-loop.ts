@@ -2496,15 +2496,11 @@ const buildAgentLoopActorHandlers = (config: {
         }),
       )
 
-    const markWrite = Effect.gen(function* () {
-      if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
-        return yield* new AgentLoopError({
-          message: `Session runtime terminated: ${sessionId}`,
-        })
-      }
-      return yield* Ref.modify(operationSeen, (seen) => [seen, true])
-    })
-
+    /**
+     * Refuse an operation on a terminated session. Every handler runs it before
+     * `ensureStarted`, so a terminated session never opens its loop (and never
+     * runs its `loopOpen` hooks) only to refuse the operation.
+     */
     const rejectIfTerminated = Effect.gen(function* () {
       if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
         return yield* new AgentLoopError({
@@ -2512,6 +2508,11 @@ const buildAgentLoopActorHandlers = (config: {
         })
       }
     })
+
+    /** A write: refused on a terminated session; answers whether an op was seen before. */
+    const markWrite = rejectIfTerminated.pipe(
+      Effect.andThen(Ref.modify(operationSeen, (seen) => [seen, true] as const)),
+    )
 
     const ensureTarget = (target: {
       readonly sessionId: SessionId
@@ -2819,15 +2820,18 @@ const buildAgentLoopActorHandlers = (config: {
     })
 
     // An open that fails (the session cannot be read) leaves `Building`, and
-    // the next op opens again.
-    yield* openLoop.pipe(
-      provideActorWorkspace,
-      Effect.catchEager((error) =>
-        Effect.logWarning("agent loop open failed").pipe(
-          Effect.annotateLogs({ sessionId, branchId, error: error.message }),
+    // the next op opens again. A terminated session does not open: every op
+    // on it is refused.
+    if (!(yield* sessionGovernance.isTerminated(workspaceId, sessionId))) {
+      yield* openLoop.pipe(
+        provideActorWorkspace,
+        Effect.catchEager((error) =>
+          Effect.logWarning("agent loop open failed").pipe(
+            Effect.annotateLogs({ sessionId, branchId, error: error.message }),
+          ),
         ),
-      ),
-    )
+      )
+    }
     yield* Effect.addFinalizer(() =>
       Effect.flatMap(Ref.get(lifecycleRef), (lifecycle) => {
         const loop = lifecycleHandle(lifecycle)
@@ -2901,6 +2905,7 @@ const buildAgentLoopActorHandlers = (config: {
     const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
       operation: TurnSubmissionInput,
     ) {
+      yield* rejectIfTerminated
       const handle = yield* ensureStarted
       yield* admitTurn(handle, operation)
     })
@@ -2908,6 +2913,7 @@ const buildAgentLoopActorHandlers = (config: {
     const submitTurnAndWait = Effect.fn("AgentLoopActor.submitTurnAndWait")(function* (
       operation: TurnSubmissionInput,
     ) {
+      yield* rejectIfTerminated
       const handle = yield* ensureStarted
       const baseline = yield* waitBaseline(handle)
       yield* admitTurn(handle, operation)
@@ -3105,6 +3111,7 @@ const buildAgentLoopActorHandlers = (config: {
       QueueFollowUp: Effect.fn("AgentLoop.QueueFollowUp")(
         ({ operation }: HandlerRequest<QueueFollowUpInput>) =>
           Effect.gen(function* () {
+            yield* rejectIfTerminated
             const handle = yield* ensureStarted
             yield* enqueueMessage(handle, {
               message: operation.message,
@@ -3161,6 +3168,7 @@ const buildAgentLoopActorHandlers = (config: {
         ({ operation }: HandlerRequest<RequestExtensionInput>) =>
           Effect.gen(function* () {
             yield* ensureTarget(operation)
+            yield* rejectIfTerminated
             const handle = yield* ensureStarted
             // A request comes from a client, which can answer, and sends to
             // its own branch as that client until the request ends.
