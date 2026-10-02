@@ -185,7 +185,7 @@ describe("cell worker process", () => {
   )
 
   it.scopedLive(
-    "reports a launch phase when the binary cannot execute, and pipes one output stream",
+    "a binary that cannot execute fails in the launch phase",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -297,6 +297,54 @@ describe("cell worker process", () => {
           Exit.isFailure,
           3000,
           "orphaned worker exit",
+        )
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(platform)),
+    15000,
+  )
+
+  it.scopedLive(
+    "a process a cell started ends with the worker when the host process dies",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const platform = yield* GentPlatform
+        const worker = yield* buildCellWorker
+        const directory = yield* fs.makeTempDirectoryScoped()
+        const marker = path.join(directory, "child.pid")
+        const hostEntry = yield* path.fromFileUrl(
+          new URL("./helpers/cell-host-process.ts", import.meta.url),
+        )
+        // The cell starts `sleep` in the worker's process group, then holds the thread.
+        const host = yield* ChildProcess.make(yield* platform.execPath, [hostEntry], {
+          cwd: yield* packageDirectory,
+          forceKillAfter: "2 seconds",
+          env: {
+            CELL_WORKER_SCRIPT: worker.scriptPath,
+            CELL_SOURCE:
+              'const child = require("node:child_process").spawn("sleep", ["30"], { stdio: "ignore" }); require("node:fs").writeFileSync(process.env.CELL_PID_MARKER, String(child.pid)); while (true) {}',
+            CELL_PID_MARKER: marker,
+          },
+          extendEnv: true,
+          stdout: "ignore",
+          stderr: "inherit",
+        })
+        const text = yield* waitFor(
+          fs.readFileString(marker),
+          (value) => value !== "",
+          5000,
+          "the cell's child pid",
+        )
+        const pid = Number(text)
+        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+        // A red run must not leave the child behind.
+        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(pid, "SIGKILL")))
+        yield* host.kill({ killSignal: "SIGKILL" })
+        yield* waitFor(
+          platform.signal(pid, 0).pipe(Effect.exit),
+          Exit.isFailure,
+          3000,
+          "the cell's child exit",
         )
       }).pipe(Effect.timeout("12 seconds"), Effect.provide(platform)),
     15000,
