@@ -995,9 +995,10 @@ after that belong to the next cell. The output returns
 ahead of the cell's display, as Prime Agent's kernel does; a bounded prefix also
 serves as diagnostics when the worker fails. Cells evaluate in the worker's
 own realm, so the process is the isolation unit. This is not
-a second agent engine or persistence owner. After a fault, only explicit reset
-can replace the worker. Each kernel permits three replacement attempts by
-default, including failed starts. Close cancels active work and waits for its
+a second agent engine or persistence owner. After a fault, the next cell
+replaces the worker and restores the namespace the last good cell saved;
+`reset: true` is only the model's way to discard that namespace. Each kernel
+stops after three failed launches in a row by default, failed starts included. Close cancels active work and waits for its
 cleanup. The Gent policy bridge and other platform isolation remain unfinished.
 
 The `@gent/extensions` build compiles `src/cell-worker-boundary.ts` into `dist/gent-cell`.
@@ -1064,7 +1065,8 @@ the outer map cannot directly dispatch unadvertised host tools. Tool discovery
 returns the selected declaration's input schema and usage guidelines. External
 drivers and turns that do not select `cell` keep their existing tool surface.
 Cancellation saves a failed outer receipt without replaying source. An active
-worker loses state and requires explicit reset; a cell stopped before evaluation
+worker loses state, and the next cell replaces it and restores the namespace the
+last good cell saved; a cell stopped before evaluation
 reports that it did not start. The steering RPC still acknowledges durable
 delivery, not completed cancellation. Clients observe completion through events.
 
