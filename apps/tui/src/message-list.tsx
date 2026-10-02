@@ -2484,6 +2484,10 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         onNone: () => base,
         onSome: (rows) => Math.min(rows, base),
       })
+      // A lower floor makes the canvas taller. Rows offered for the old one
+      // and not landed would leave the tail short of it: they come back, and
+      // this pass offers again for the new canvas.
+      if (Option.exists(footerFloor, (rows) => floor < rows) && pendingRows > 0) rewind()
       footerFloor = Option.some(floor)
       // The rows the tail holds above the canvas, less those already offered.
       offerRows(items, next, {

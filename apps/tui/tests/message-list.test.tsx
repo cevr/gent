@@ -4017,6 +4017,34 @@ describe("native transcript region at the terminal's bottom", () => {
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
   )
+
+  // History takes the rows above the canvas, which the footer's smallest base
+  // sizes. A base that drops while those rows are on their way (the turn ends
+  // and its status row goes) makes the canvas taller: rows offered for the
+  // old base would leave the tail short of it, and the region at the
+  // terminal's bottom would shrink and later grow back over history.
+  it.scopedLive(
+    "a footer that shrinks while history takes rows leaves the tail its full canvas",
+    () =>
+      Effect.gen(function* () {
+        const [streaming, setStreaming] = createSignal(true)
+        const [footer, setFooter] = createSignal(5)
+        const { setup, renderer } = yield* settledLongSession({
+          items: () => [...longSession(), assistant("tall", longBody("TALL"))],
+          streaming,
+          footer,
+          paneOpen: () => false,
+          overlayOpen: () => false,
+        })
+        setStreaming(false)
+        setFooter(3)
+        yield* waitForStableFrame(setup)
+        expect(renderer.footerHeight).toBe(regionRows)
+        expect(rowsUnderRegion(renderer)).toBe(0)
+        expect(blankRowsAboveComposer(renderFrame(setup))).toBe(0)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
 })
 
 // ── native transcript exit ──────────────────────────────────────────────────
