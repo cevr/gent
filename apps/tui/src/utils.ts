@@ -89,6 +89,9 @@ export function dropLastGrapheme(value: string): string {
   return value.slice(0, last)
 }
 
+/** How many characters the reader sees: graphemes, not code units. */
+export const graphemeCount = (value: string): number => Array.from(graphemes.segment(value)).length
+
 /** The first `count` graphemes, ending in `…` when the text has more. */
 export function headGraphemes(value: string, count: number): string {
   let kept = 0

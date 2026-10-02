@@ -539,10 +539,50 @@ describe("Auth route", () => {
       yield* Effect.promise(() => setup.mockInput.typeText("sk junk"))
       setup.mockInput.pressKey("w", { ctrl: true })
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText("x👍🏽"))
+      // The mask shows one star per character the reader typed: `sk x👍🏽` is five.
+      yield* waitForFrame(setup, (frame) => frame.includes("*****"))
+      expect(renderFrame(setup)).not.toContain("******")
       setup.mockInput.pressBackspace()
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("API key saved for anthropic"))
       expect(keys).toEqual(["sk x"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("a key longer than the field shows its tail after an ellipsis", () =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("anthropic"),
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ anthropic: [apiMethodRoute] }),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 40,
+        height: 12,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key ›"))
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("k".repeat(100)))
+      yield* waitForFrame(setup, (frame) => frame.includes("API key › …"))
+      const field = renderFrame(setup)
+        .split("\n")
+        .find((line) => line.includes("API key ›"))
+      // The caret stays on screen: the cut leaves room for it inside 40 columns.
+      expect(field?.trimEnd()).toMatch(/^ API key › …\*+│$/)
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("reads the sign-in methods of the session's own drivers", () =>

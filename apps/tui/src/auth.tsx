@@ -18,6 +18,7 @@ import {
 } from "solid-js"
 import { omitUndefined } from "@gent/core/extensions/api"
 import { LinkOpener } from "./os"
+import { textWidth } from "./bun-adapter"
 import { useTheme } from "./theme"
 import { useClient, useRuntime } from "./client"
 import {
@@ -35,7 +36,15 @@ import {
   usePickerBody,
   usePickerGeometry,
 } from "./ui"
-import { formatError, plural, repliesInView, type ReplyWriter, type UiError } from "./utils"
+import {
+  formatError,
+  graphemeCount,
+  plural,
+  repliesInView,
+  type ReplyWriter,
+  truncateStart,
+  type UiError,
+} from "./utils"
 import {
   pastedLine,
   type ScopedKeyboardEvent,
@@ -864,7 +873,7 @@ export function Auth(props: AuthProps) {
   const listLoading = () => Option.isNone(state().error)
   const retryRow = () =>
     Option.map(state().error, () => <text style={{ fg: theme.textMuted }}> Press r to retry.</text>)
-  const keyMask = (value: string) => "*".repeat(value.length)
+  const keyMask = (value: string) => "*".repeat(graphemeCount(value))
   const codeLabel = (method: string) => {
     if (method === "code") return "Paste code:"
     return "Paste code (optional):"
@@ -1089,9 +1098,8 @@ function AuthTextLine(props: {
   const visibleText = () => {
     // The label, its space and the caret take their columns first.
     const room = Math.max(1, sectionWidth() - props.label.length - 2)
-    const chars = [...props.text]
-    if (chars.length <= room) return props.text
-    return "…" + chars.slice(chars.length - (room - 1)).join("")
+    if (textWidth(props.text) <= room) return props.text
+    return "…" + truncateStart(props.text, room - 1)
   }
   useScopedKeyboard(
     (event) => {
