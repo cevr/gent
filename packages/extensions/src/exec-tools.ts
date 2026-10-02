@@ -2,6 +2,7 @@ import {
   ByteSize,
   Cause,
   Context,
+  Crypto,
   DateTime,
   Duration,
   Effect,
@@ -12,12 +13,14 @@ import {
   Path,
   Predicate,
   Ref,
+  References,
   Schema,
   Scope,
   Semaphore,
   Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
+import { Hex } from "effect/encoding"
 import { countOf } from "./fs-tools.js"
 import {
   type BranchId,
@@ -525,8 +528,8 @@ interface BackgroundBashTarget {
   readonly branchId: ExtensionContextService["branchId"]
   readonly toolCallId: ToolCallId
   readonly Session: Pick<ExtensionContextService["Session"], "getSession" | "listBranches" | "send">
-  /** The gent data directory, resolved at start: the job fiber has no ExtensionContext. */
-  readonly dataDir: string
+  /** Resolved before ownership transfer: the job fiber has no ExtensionContext or Crypto. */
+  readonly outputFile: string
 }
 
 const backgroundJobKey = (target: BackgroundBashTarget): BackgroundBashJobKey =>
@@ -591,17 +594,52 @@ const queueBackgroundFollowUp = (params: {
 // the read tool, and no other module learns how a command keeps its output.
 
 /**
- * `<data dir>/background-bash/<sessionId>/<branchId>/<toolCallId>.txt`: one
+ * `<data dir>/background-bash/<sessionId>/<branchId>/calls/<digest>.txt`: one
  * file per bash call. The path is absolute: a relative `GENT_DATA_DIR` resolves
  * against the server's cwd, as the database does, and the read tool resolves
  * a relative path against the session cwd instead.
  */
-const jobOutputFile = (path: Path.Path, dataDir: string, key: BackgroundBashJobKeyFields) =>
+const legacyJobOutputFile = (path: Path.Path, dataDir: string, key: BackgroundBashJobKeyFields) =>
   path.resolve(
     sessionOutputDirectory(path, dataDir, key.sessionId),
     key.branchId,
     `${key.toolCallId.replace(/[^\w.:-]/g, "_")}.txt`,
   )
+
+// Hash the whole identity, including every UTF-16 code unit. A separate directory
+// keeps new writes from overwriting files whose paths an older build already emitted.
+const encodeCallIdentity = Schema.encodeSync(Schema.fromJsonString(ToolCallId))
+const jobOutputFile = Effect.fn("ExecTools.jobOutputFile")(function* (
+  path: Path.Path,
+  dataDir: string,
+  key: BackgroundBashJobKeyFields,
+) {
+  const crypto = yield* Crypto.Crypto
+  const digest = yield* crypto.digest(
+    "SHA-256",
+    new TextEncoder().encode(encodeCallIdentity(key.toolCallId)),
+  )
+  return path.resolve(
+    sessionOutputDirectory(path, dataDir, key.sessionId),
+    key.branchId,
+    "calls",
+    `${Hex.encode(digest)}.txt`,
+  )
+})
+
+/** Old rows still name their existing sanitized file; new writes use the canonical filename. */
+const retainedJobOutputFile = Effect.fn("ExecTools.retainedJobOutputFile")(function* (
+  path: Path.Path,
+  dataDir: string,
+  key: BackgroundBashJobKeyFields,
+) {
+  const file = yield* jobOutputFile(path, dataDir, key)
+  const legacy = legacyJobOutputFile(path, dataDir, key)
+  const fs = yield* FileSystem.FileSystem
+  if (yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))) return file
+  if (yield* fs.exists(legacy).pipe(Effect.orElseSucceed(() => false))) return legacy
+  return file
+})
 
 /** `<data dir>/background-bash/<sessionId>`: every output file one session's calls kept. */
 const sessionOutputDirectory = (path: Path.Path, dataDir: string, sessionId: SessionId) =>
@@ -1086,7 +1124,8 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const stopped = yield* storage.interruptedJobs(branch)
   const saved = new Map(
     yield* Effect.forEach(stopped.slice(0, maximumNoticeJobs), (job) =>
-      savedOutput(jobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId })).pipe(
+      retainedJobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }).pipe(
+        Effect.flatMap(savedOutput),
         Effect.map((where): readonly [ToolCallId, string] => [job.toolCallId, where]),
       ),
     ),
@@ -1102,10 +1141,8 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const finished = yield* storage.undeliveredJobs(branch)
   const outputs = new Map(
     yield* Effect.forEach(finished.slice(0, maximumNoticeJobs), (job) =>
-      storedOutputFile(
-        jobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }),
-        job.state,
-      ).pipe(
+      retainedJobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }).pipe(
+        Effect.flatMap((file) => storedOutputFile(file, job.state)),
         Effect.map((file): readonly [ToolCallId, string] => [
           job.toolCallId,
           storedJobOutput(job.state.message ?? "", file)(maximumNoticeOutputChars),
@@ -1150,7 +1187,11 @@ interface BackgroundBashSupervisorService {
   ) => Effect.Effect<
     string,
     BackgroundBashStorageError | BackgroundBashError,
-    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path | ExtensionContext
+    | ChildProcessSpawner.ChildProcessSpawner
+    | FileSystem.FileSystem
+    | Path.Path
+    | Crypto.Crypto
+    | ExtensionContext
   >
 }
 
@@ -1181,8 +1222,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
       job: BackgroundBashJob,
       target: BackgroundBashTarget,
     ) {
-      const path = yield* Path.Path
-      const file = jobOutputFile(path, target.dataDir, target)
+      const file = target.outputFile
       const { exitCode, output } = yield* streamBackgroundCommand(job.command, job.cwd, file).pipe(
         Effect.scoped,
         Effect.catchTag("PlatformError", (e) =>
@@ -1226,7 +1266,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
           onSome: Effect.succeed,
           onNone: () =>
             Effect.gen(function* () {
-              const file = jobOutputFile(yield* Path.Path, target.dataDir, target)
+              const file = target.outputFile
               return storedJobOutput(state.message ?? "", yield* storedOutputFile(file, state))
             }),
         })
@@ -1253,17 +1293,30 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
             message: "Background bash requires a host-owned tool call",
           })
         }
-        const target: BackgroundBashTarget = {
+        const keyFields = {
           sessionId: ctx.sessionId,
           branchId: ctx.branchId,
           toolCallId: ctx.toolCallId,
-          Session: ctx.Session,
-          dataDir: yield* resolveDataDir(ctx.home),
         }
-        const file = jobOutputFile(yield* Path.Path, target.dataDir, target)
+        const path = yield* Path.Path
+        const dataDir = yield* resolveDataDir(ctx.home)
+        const file = yield* jobOutputFile(path, dataDir, keyFields).pipe(
+          Effect.catchTag("PlatformError", (e) => new BackgroundBashError({ message: e.message })),
+        )
+        const retainedFile = () =>
+          retainedJobOutputFile(path, dataDir, keyFields).pipe(
+            Effect.catchTag(
+              "PlatformError",
+              (e) => new BackgroundBashError({ message: e.message }),
+            ),
+          )
+        const target: BackgroundBashTarget = {
+          ...keyFields,
+          Session: ctx.Session,
+          outputFile: file,
+        }
         const key = backgroundJobKey(target)
-        const keyFields = backgroundJobKeyFields(target)
-        if ((yield* Ref.get(completed)).has(key)) return file
+        if ((yield* Ref.get(completed)).has(key)) return yield* retainedFile()
         // Commit the claim and install its worker owner without an interruption gap.
         // Permit acquisition and terminal replay remain interruptible; the child
         // fork is interruptible independently of this transfer mask.
@@ -1274,11 +1327,12 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               command: job.command,
               cwd: job.cwd,
             })
-            if (claim._tag === "AlreadyRunning") return file
+            if (claim._tag === "AlreadyRunning") return yield* restore(retainedFile())
             if (claim._tag === "Terminal") {
-              yield* restore(deliverTerminal(target, claim.state))
+              const outputFile = yield* restore(retainedFile())
+              yield* restore(deliverTerminal({ ...target, outputFile }, claim.state))
               yield* rememberCompleted(key)
-              return file
+              return outputFile
             }
 
             const fullContext = yield* Effect.context<
@@ -1293,6 +1347,8 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               ChildProcessSpawner.ChildProcessSpawner,
               FileSystem.FileSystem,
               Path.Path,
+              References.CurrentLoggers,
+              References.MinimumLogLevel,
             )(fullContext)
             yield* runBackgroundJob(job, target).pipe(
               // The server stopped or the resource closed: the row must not stay
@@ -1376,13 +1432,18 @@ export const BashTool = tool({
     // Output past what the result keeps goes to the call's file, where a
     // background job's output goes; a call with no host id keeps only the ends.
     const dataDir = yield* resolveDataDir(ctx.home)
-    const spill = Option.map(Option.fromUndefinedOr(ctx.toolCallId), (toolCallId) =>
-      jobOutputFile(path, dataDir, {
-        sessionId: ctx.sessionId,
-        branchId: ctx.branchId,
-        toolCallId,
-      }),
-    )
+    let spill = Option.none<string>()
+    if (!Predicate.isUndefined(ctx.toolCallId)) {
+      spill = Option.some(
+        yield* jobOutputFile(path, dataDir, {
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          toolCallId: ctx.toolCallId,
+        }).pipe(
+          Effect.catchTag("PlatformError", (e) => new BashError({ command, message: e.message })),
+        ),
+      )
+    }
     const spawnScope = yield* Scope.make()
     const closeSpawnScope = Scope.close(spawnScope, Exit.void).pipe(Effect.ignore)
     const result = yield* runBashCommand(command, cwd, spill).pipe(

@@ -9,10 +9,12 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Logger,
   Option,
   Path,
   Predicate,
   Ref,
+  References,
   Schema,
   Scope,
   Stream,
@@ -57,7 +59,7 @@ import {
 } from "@gent/core/test-utils"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
-import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core/host"
 import { ExtensionServiceError, maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/sql"
@@ -68,6 +70,7 @@ import * as AiError from "effect/ai/AiError"
 const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
   const base = Layer.mergeAll(
     storageLayer,
+    BunCrypto.layer,
     BunFileSystem.layer,
     Path.layer,
     BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
@@ -78,6 +81,7 @@ const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
 const makeProcessLayerWithFailingMarkFailed = <A, E>(storageLayer: Layer.Layer<A, E>) => {
   const base = Layer.mergeAll(
     storageLayer,
+    BunCrypto.layer,
     BunFileSystem.layer,
     Path.layer,
     BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
@@ -277,6 +281,8 @@ const hugeLineCount = 4000
 
 /** The file a cut notice names; empty when it names none. */
 const savedOutputFile = (text: string) => /The whole output is in (\S+) /.exec(text)?.[1] ?? ""
+const startedOutputFile = (text: string) =>
+  /Its output streams to (\S+); read/.exec(text)?.[1] ?? ""
 
 /** The completion notice of a background job, run under `home`, whose output is far past the bound. */
 const hugeBackgroundNotice = Effect.fn("test.hugeBackgroundNotice")(function* (
@@ -509,9 +515,7 @@ describe("Bash command semantics", () => {
               expect(notices[0]).toContain(
                 `Background command completed (exit code ${entry.exitCode})`,
               )
-              const saved = yield* fs.readFileString(
-                `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`,
-              )
+              const saved = yield* fs.readFileString(startedOutputFile(output.stdout))
               if (Predicate.isString(entry.stderr)) {
                 expect(saved).toContain(entry.stderr)
                 // The two pipes can arrive in either order.
@@ -1030,7 +1034,7 @@ describe("BashTool execution", () => {
         const fs = yield* FileSystem.FileSystem
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-row-file-" })
         const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-        const toolCallId = ToolCallId.make("tc-row-file-replay")
+        const toolCallId = ToolCallId.make("tc/row-file-replay")
         const ctx = withSession(
           { ...stubCtx, toolCallId, home },
           {
@@ -1057,7 +1061,7 @@ describe("BashTool execution", () => {
           "",
         )
         const folder = `${home}/.gent/background-bash/${ctx.sessionId}/${ctx.branchId}`
-        const file = `${folder}/${toolCallId}.txt`
+        const file = `${folder}/tc_row-file-replay.txt`
         yield* fs.makeDirectory(folder, { recursive: true })
         yield* fs.writeFileString(file, output)
         yield* Effect.gen(function* () {
@@ -1429,6 +1433,7 @@ describe("BashTool execution", () => {
         const branch = { sessionId: stubCtx.sessionId, branchId: stubCtx.branchId }
         const delivered = yield* Ref.make<ReadonlyArray<string>>([])
         const refusing = yield* Ref.make(true)
+        const refused = yield* Deferred.make<void>()
         const ctx = withSession(
           { ...stubCtx, toolCallId },
           {
@@ -1448,11 +1453,13 @@ describe("BashTool execution", () => {
             send: onQueue((notice) =>
               Effect.gen(function* () {
                 if (yield* Ref.get(refusing)) {
-                  return yield* new ExtensionServiceError({
-                    service: "Session",
-                    operation: "send",
-                    message: "Follow-up queue full (max 10)",
-                  })
+                  return yield* Effect.fail(
+                    new ExtensionServiceError({
+                      service: "Session",
+                      operation: "send",
+                      message: "Follow-up queue full (max 10)",
+                    }),
+                  ).pipe(Effect.ensuring(Deferred.succeed(refused, void 0)))
                 }
                 yield* Ref.update(delivered, (all) => [...all, notice.sourceId])
               }),
@@ -1475,6 +1482,7 @@ describe("BashTool execution", () => {
         const firstProfile = yield* Layer.buildWithScope(makeProcessLayer(storageLayer), scope)
         yield* Effect.gen(function* () {
           yield* runToolWithCtx(BashTool, params, ctx)
+          yield* Deferred.await(refused)
           yield* waitFor(undelivered, (jobs) => jobs.length === 1, 2_000, "the refused completion")
         }).pipe(Effect.provideContext(firstProfile))
         yield* Scope.close(scope, Exit.void)
@@ -1546,6 +1554,121 @@ describe("ExecToolsExtension (bash) via model turn", () => {
 })
 
 describe("background job output", () => {
+  for (const runInBackground of [false, true]) {
+    let mode = "foreground"
+    if (runInBackground) mode = "background"
+    for (const entry of [
+      { name: "slash and underscore", ids: ["call/a", "call_a"] },
+      { name: "unicode and underscore", ids: ["call-🚀", "call-__"] },
+      { name: "long identities", ids: ["x".repeat(300), `${"x".repeat(299)}y`] },
+      {
+        name: "a literal hash and its encoded identity",
+        ids: ["call/a", "a883c4294550dd476c83701ebac2824f923f1e7cf1cad0bbc009e66b6dbf4d18"],
+      },
+    ]) {
+      it.scopedLive.layer(BunServices.layer)(
+        `${mode} keeps independent output files for ${entry.name}`,
+        () =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem
+            const directory = yield* makeTempDirectoryScoped("gent-output-identity-")
+            const calls = yield* Ref.make(0)
+            const providerLayer = LanguageModelLayers.testStream(() =>
+              Ref.updateAndGet(calls, (n) => n + 1).pipe(
+                Effect.map((call) => {
+                  if (call <= entry.ids.length) {
+                    let mark = "a"
+                    if (call === 2) mark = "b"
+                    return Stream.fromIterable([
+                      toolCallPart(
+                        "bash",
+                        {
+                          command: `head -c 600000 /dev/zero | tr '\\0' ${mark}`,
+                          run_in_background: runInBackground,
+                        },
+                        { toolCallId: ToolCallId.make(entry.ids[call - 1] ?? "") },
+                      ),
+                      finishPart({ finishReason: "tool-calls" }),
+                    ])
+                  }
+                  return Stream.fromIterable([
+                    textDeltaPart(`reply ${call}`),
+                    finishPart({ finishReason: "stop" }),
+                  ])
+                }),
+              ),
+            )
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              home: directory,
+              cwd: directory,
+            })
+            const legacy = `${directory}/.gent/background-bash/${sessionId}/${branchId}/call_a.txt`
+            if (entry.name === "slash and underscore") {
+              // An older call `call?a` emitted this path; neither new call may overwrite it.
+              yield* fs.makeDirectory(
+                `${directory}/.gent/background-bash/${sessionId}/${branchId}`,
+                {
+                  recursive: true,
+                },
+              )
+              yield* fs.writeFileString(legacy, "retained-before-upgrade")
+            }
+            yield* client.message.send({
+              sessionId,
+              branchId,
+              content: "Keep both command outputs",
+            })
+            const settled = yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (snapshot) => {
+                const results = snapshot.messages
+                  .flatMap((message) => message.parts)
+                  .filter((part) => part.type === "tool-result" && entry.ids.includes(part.id))
+                const completions = snapshot.messages.filter(
+                  (message) => message.metadata?.customType === "background-bash",
+                )
+                return (
+                  snapshot.runtime._tag === "Idle" &&
+                  results.length === 2 &&
+                  (!runInBackground || completions.length === 2)
+                )
+              },
+              10_000,
+              "both shell outputs settled",
+            )
+            const files: string[] = []
+            for (const [index, id] of entry.ids.entries()) {
+              const stored = settled.messages
+                .flatMap((message) => message.parts)
+                .find((part) => part.type === "tool-result" && part.id === id)
+              if (Predicate.isUndefined(stored) || stored.type !== "tool-result")
+                return yield* Effect.die("Missing command result")
+              expect(stored.isFailure).toBe(false)
+              const result = yield* Schema.decodeUnknownEffect(
+                Schema.Struct({
+                  stdout: Schema.String,
+                  outputFile: Schema.optionalKey(Schema.String),
+                }),
+              )(stored.result)
+              let file = result.outputFile ?? ""
+              if (runInBackground) file = startedOutputFile(result.stdout)
+              expect(file.startsWith(`${directory}/.gent/background-bash/`)).toBe(true)
+              files.push(file)
+              let mark = "a"
+              if (index === 1) mark = "b"
+              expect(yield* fs.readFileString(file)).toBe(mark.repeat(600_000))
+            }
+            expect(new Set(files).size).toBe(2)
+            if (entry.name === "slash and underscore")
+              expect(yield* fs.readFileString(legacy)).toBe("retained-before-upgrade")
+          }).pipe(Effect.timeout("20 seconds")),
+        25_000,
+      )
+    }
+  }
+
   /** Live heap bytes after a full collection; Bun counts array buffers in it. */
   const liveBytes = Effect.sync(() => {
     Bun.gc(true)
@@ -1587,7 +1710,6 @@ describe("background job output", () => {
           cwd: directory,
           home: directory,
         })
-        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
         const baseline = yield* liveBytes
         yield* client.message.send({ sessionId, branchId, content: "start the job" })
         yield* waitFor(fs.exists(produced), (exists) => exists, 20_000, "the job printed")
@@ -1596,6 +1718,16 @@ describe("background job output", () => {
         const held = (yield* liveBytes) - baseline
         expect(held).toBeLessThan(bytes / 8)
 
+        const started = yield* client.session.getSnapshot({ sessionId, branchId })
+        const stored = started.messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool-result" && part.id === toolCallId)
+        if (Predicate.isUndefined(stored) || stored.type !== "tool-result")
+          return yield* Effect.die("Missing background start result")
+        const result = yield* Schema.decodeUnknownEffect(Schema.Struct({ stdout: Schema.String }))(
+          stored.result,
+        )
+        const file = startedOutputFile(result.stdout)
         // The file is readable before the job exits and holds all of it so far.
         const size = yield* waitFor(
           fs.stat(file).pipe(
@@ -1608,7 +1740,6 @@ describe("background job output", () => {
         )
         expect(size).toBe(bytes + mark.length)
         // The start result names the file, so the model can read it mid-run.
-        const started = yield* client.session.getSnapshot({ sessionId, branchId })
         const results = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
           started.messages.filter((message) => message.role === "tool"),
         )
@@ -1699,7 +1830,6 @@ describe("foreground command output", () => {
           cwd: directory,
           home: directory,
         })
-        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
         const baseline = yield* liveBytes
         yield* client.message.send({ sessionId, branchId, content: "run the command" })
         yield* waitFor(fs.exists(produced), (exists) => exists, 20_000, "the command printed")
@@ -1735,6 +1865,7 @@ describe("foreground command output", () => {
             outputChars: Schema.Finite,
           }),
         )(stored.result)
+        const file = result.outputFile
         // The row keeps each stream's ends and names the file with all of it.
         expect(result.exitCode).toBe(0)
         expect(result.stdout.length).toBeLessThanOrEqual(256 * 1024)
@@ -1742,7 +1873,9 @@ describe("foreground command output", () => {
         expect(result.stdout).toContain("characters truncated")
         expect(result.stdout.endsWith("MID-RUN-MARK\nafter release\n")).toBe(true)
         expect(result.stderr).toBe("on stderr\n")
-        expect(result.outputFile).toBe(file)
+        expect(
+          file.startsWith(`${directory}/.gent/background-bash/${sessionId}/${branchId}/calls/`),
+        ).toBe(true)
         expect(result.outputChars).toBe(total)
         expect(Number((yield* fs.stat(file)).size)).toBe(total)
       }).pipe(Effect.timeout("40 seconds")),
@@ -1780,10 +1913,16 @@ describe("foreground command output", () => {
           cwd: directory,
           home: directory,
         })
-        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
+        const folder = `${directory}/.gent/background-bash/${sessionId}/${branchId}/calls`
         yield* client.message.send({ sessionId, branchId, content: "run the command" })
         // The output passes what memory keeps whole, so the file holds it while the command runs.
-        yield* waitFor(fs.exists(file), (exists) => exists, 10_000, "the output file")
+        const files = yield* waitFor(
+          fs.readDirectory(folder).pipe(Effect.orElseSucceed(() => [])),
+          (files) => files.length === 1,
+          10_000,
+          "the output file",
+        )
+        const file = `${folder}/${files[0]}`
         const settled = yield* waitFor(
           client.session.getSnapshot({ sessionId, branchId }),
           (snapshot) =>
@@ -1829,14 +1968,13 @@ describe("background bash after session deletion", () => {
           home: directory,
         })
         const sessionFiles = `${directory}/.gent/background-bash/${sessionId}`
-        const file = `${sessionFiles}/${branchId}/${toolCallId}.txt`
         const other = `${directory}/.gent/background-bash/other-session/branch/call.txt`
         yield* fs.makeDirectory(`${directory}/.gent/background-bash/other-session/branch`, {
           recursive: true,
         })
         yield* fs.writeFileString(other, "kept")
         yield* client.message.send({ sessionId, branchId, content: "run the command" })
-        yield* waitFor(
+        const settled = yield* waitFor(
           client.session.getSnapshot({ sessionId, branchId }),
           (snapshot) =>
             snapshot.runtime._tag === "Idle" &&
@@ -1846,6 +1984,14 @@ describe("background bash after session deletion", () => {
           10_000,
           "the spilled result",
         )
+        const stored = settled.messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool-result" && part.id === toolCallId)
+        if (Predicate.isUndefined(stored) || stored.type !== "tool-result")
+          return yield* Effect.die("Missing spilled result")
+        const { outputFile: file } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ outputFile: Schema.String }),
+        )(stored.result)
         expect(yield* fs.exists(file)).toBe(true)
 
         yield* client.session.delete({ sessionId })
@@ -1911,6 +2057,16 @@ describe("a background completion the full follow-up queue refused", () => {
         const command = `while ! test -f ${release}; do sleep 0.02; done; printf 'queue-full-output\\n'; seq 1 1000`
         const holding = yield* Deferred.make<void>()
         const releaseHold = yield* Deferred.make<void>()
+        const refused = yield* Deferred.make<void>()
+        const refusalLogger = Layer.merge(
+          Layer.succeed(References.MinimumLogLevel, "Warn"),
+          Logger.layer([
+            Logger.make(({ message }) => {
+              if (String(message) === "exec-tools.background.follow-up.refused")
+                Deferred.doneUnsafe(refused, Effect.void)
+            }),
+          ]),
+        )
         const notices = yield* Ref.make<ReadonlyArray<string>>([])
         const providerLayer = LanguageModelLayers.testStream((options) =>
           Effect.gen(function* () {
@@ -1941,6 +2097,7 @@ describe("a background completion the full follow-up queue refused", () => {
           storagePath,
           cwd: directory,
           home: directory,
+          extraLayers: [refusalLogger],
         })
         const idle = (label: string) =>
           waitFor(
@@ -1964,6 +2121,7 @@ describe("a background completion the full follow-up queue refused", () => {
           yield* client.message.send({ sessionId, branchId, content: `queued ${i}` })
         }
         yield* fs.writeFileString(release, "go")
+        yield* Deferred.await(refused)
         // The job ends while the queue is full: the refused completion is kept on its row.
         yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient
@@ -2048,9 +2206,9 @@ describe("a background completion the full follow-up queue refused", () => {
           home: directory,
         })
         const printed = Array.from({ length: 1000 }, (_, index) => `${index + 1}\n`).join("")
-        const finished = ToolCallId.make("tc-long-row")
+        const finished = ToolCallId.make("tc/long-row")
         const stopped = ToolCallId.make("tc-stopped-no-file")
-        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${finished}.txt`
+        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/tc_long-row.txt`
         yield* fs.makeDirectory(`${directory}/.gent/background-bash/${sessionId}/${branchId}`, {
           recursive: true,
         })
