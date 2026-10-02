@@ -52,12 +52,10 @@ import {
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
 import { type SessionIdentity, useClient, useRuntime } from "./client"
-import type {
-  AutocompleteContribution,
-  InteractionRendererComponent,
-} from "./extensions/client-facets.js"
+import type { InteractionRendererComponent } from "./extensions/client-facets.js"
 import { PromptRenderer } from "./interaction-renderers"
 import {
+  type ResolvedAutocomplete,
   runAutocompleteContributions,
   type SourcedAutocompleteItem,
 } from "./extensions/loader-boundary"
@@ -458,39 +456,45 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   const { log } = useClient()
 
   // Find contributions matching the active prefix
-  const contributions = createMemo((): AutocompleteContribution[] =>
+  const contributions = createMemo((): ReadonlyArray<ResolvedAutocomplete> =>
     extensionUI.autocompleteItems().filter((c) => c.prefix === props.state.type),
   )
 
   // Autocomplete items return a sync array or an Effect. Both run through
   // `runAutocompleteContributions` (boundary helper), which merges every
-  // contribution for the prefix, drops duplicate ids, and turns one
-  // contribution's failure into no rows from it plus one log line.
+  // contribution for the prefix and drops duplicate ids. A contribution that
+  // fails gives no rows from it: a failed request is one log line, and code
+  // that throws or dies (`items`, `onOpen`) fails its extension by name.
 
   // The prefix this popup has opened on. A mount is an open, and so is a
   // switch to another prefix while mounted; each tells its contributions once,
   // before their first fetch.
   let openedOn = Option.none<string>()
-  const openOn = (prefix: string) => {
-    if (Option.contains(openedOn, prefix)) return
+  const opens = (prefix: string): boolean => {
+    if (Option.contains(openedOn, prefix)) return false
     openedOn = Option.some(prefix)
-    for (const contribution of contributions()) contribution.onOpen?.()
+    return true
   }
 
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
     (): readonly [string, string] => [props.state.type, props.state.filter],
-    ([prefix, filter]): Promise<SourcedAutocompleteItem[]> => {
-      openOn(prefix)
-      return runAutocompleteContributions(
+    ([prefix, filter]): Promise<SourcedAutocompleteItem[]> =>
+      runAutocompleteContributions(
         contributions(),
-        filter,
+        { filter, opening: opens(prefix) },
         extensionUI.clientRuntime,
-        (failed, reason) => {
-          log.error("autocomplete.contribution.failed", { prefix: failed, error: reason })
+        {
+          failed: (contribution, reason) => {
+            log.error("autocomplete.contribution.failed", {
+              prefix: contribution.prefix,
+              error: reason,
+            })
+          },
+          broke: (contribution, reason) =>
+            extensionUI.recordRenderFailure(contribution.extensionId, reason),
         },
-      )
-    },
+      ),
   )
 
   // Use .latest for stale-while-revalidate: keeps showing previous results
@@ -738,6 +742,19 @@ interface DraftSpan {
   readonly end: number
 }
 
+/**
+ * Puts the caret after the last character. The textarea counts its caret in
+ * its own units (a wide character is two, a letter and its combining mark
+ * one), so a string length is not an offset.
+ */
+const caretToEnd = (textarea: TextareaRenderable): void => {
+  textarea.gotoBufferEnd()
+}
+
+/** The caret as a string index: the length of the text before it. */
+const caretIndex = (textarea: TextareaRenderable): number =>
+  textarea.getTextRange(0, textarea.cursorOffset).length
+
 /** The textarea offsets an edit covers; an insert is the empty span at the caret. */
 const draftEditSpan = (textarea: TextareaRenderable, edit: DraftEdit): DraftSpan => {
   const caret = textarea.cursorOffset
@@ -950,7 +967,7 @@ function useComposerController(): ComposerController {
 
     const nextValue = beforeTrigger + insertion
     inputRef.value.replaceText(nextValue)
-    inputRef.value.cursorOffset = nextValue.length
+    caretToEnd(inputRef.value)
     // An insertion that ends without a space is not finished (`@src/`): the
     // popup reopens on it instead of closing.
     if (insertion.endsWith(" ")) {
@@ -1083,7 +1100,7 @@ function useComposerController(): ComposerController {
     }
     if (Option.isSome(inputRef)) {
       inputRef.value.replaceText(next.draft)
-      inputRef.value.cursorOffset = next.draft.length
+      caretToEnd(inputRef.value)
     }
     sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text: next.draft }))
   }
@@ -1328,7 +1345,7 @@ function useComposerController(): ComposerController {
           Effect.sync(() => {
             if (result._tag === "applied" && Option.isSome(inputRef)) {
               inputRef.value.replaceText(result.content)
-              inputRef.value.cursorOffset = result.content.length
+              caretToEnd(inputRef.value)
               sc.onComposerInteraction(
                 ComposerInteractionEvent.cases.RestoreDraft.make({ text: result.content }),
               )
@@ -1428,10 +1445,11 @@ function useComposerController(): ComposerController {
       return false
     }
 
+    // The caret and the length in one unit, string indices.
     const result = history.navigate(
       event.name,
       inputRef.value.plainText,
-      inputRef.value.cursorOffset,
+      caretIndex(inputRef.value),
       inputRef.value.plainText.length,
     )
     const text = Option.fromNullishOr(result.text)
@@ -1439,7 +1457,7 @@ function useComposerController(): ComposerController {
 
     inputRef.value.replaceText(text.value)
     if (result.cursor === "start") inputRef.value.cursorOffset = 0
-    else inputRef.value.cursorOffset = text.value.length
+    else caretToEnd(inputRef.value)
     sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text: text.value }))
     return true
   }
@@ -1524,7 +1542,7 @@ function useComposerController(): ComposerController {
     const draft = sc.interactionState().draft
     if (Option.isNone(inputRef) || inputRef.value.plainText === draft) return
     inputRef.value.replaceText(draft)
-    inputRef.value.cursorOffset = draft.length
+    caretToEnd(inputRef.value)
     clearAutocomplete()
     // A prompt-search preview writes the draft while the palette holds the
     // composer: focus stays with the palette, or a paste would land here.

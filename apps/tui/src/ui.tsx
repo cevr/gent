@@ -777,8 +777,9 @@ export function TrayFrame(props: { children: JSX.Element }) {
 /**
  * The edit a key makes on one line of typed text, the same in every
  * single-line input (a list's filter, an extension's ask line) as in the
- * composer: backspace drops the last whole character, ctrl+w the last word
- * and the spaces after it, ctrl+u the whole line.
+ * composer: backspace drops the last whole character, ctrl+w, alt+backspace
+ * and ctrl+backspace the last word and the spaces after it, ctrl+u the whole
+ * line.
  */
 export const lineEdit = (event: ScopedKeyboardEvent): Option.Option<(text: string) => string> =>
   Option.map(eraseKey(event), (unit) => (text: string) => eraseText(text, unit))
@@ -787,8 +788,13 @@ export const lineEdit = (event: ScopedKeyboardEvent): Option.Option<(text: strin
 export const EraseUnit = Schema.Literals(["grapheme", "word", "line"])
 export type EraseUnit = typeof EraseUnit.Type
 
-/** The erase unit a key names: backspace, ctrl+w or ctrl+u. */
+/**
+ * The erase unit a key names: backspace, ctrl+w or ctrl+u. Alt+backspace and
+ * ctrl+backspace take a word, as the composer's `word-backward` does.
+ */
 export const eraseKey = (event: ScopedKeyboardEvent): Option.Option<EraseUnit> => {
+  if (event.name === "backspace" && (event.ctrl === true || event.meta === true))
+    return Option.some("word")
   if (event.name === "backspace") return Option.some("grapheme")
   if (event.ctrl !== true) return Option.none()
   if (event.name === "w") return Option.some("word")

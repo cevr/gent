@@ -98,6 +98,7 @@ import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
   ClientContext,
+  autocompleteContribution,
   clientCommandContribution,
   clientContributions,
   defineClientExtension,
@@ -1287,8 +1288,7 @@ describe("App session view and fatal screen", () => {
     interactionRenderers: ["interaction renderer"],
     // A command runs on a key, outside the draw.
     commands: [],
-    // `runAutocompleteContributions` catches a throw from `items`.
-    autocomplete: [],
+    autocomplete: ["autocomplete items", "autocomplete open"],
   } as const satisfies Record<keyof ClientContributions, ReadonlyArray<string>>
   const breaksSession = sessionNamed("session-breaks", "branch-breaks", "Breaks")
   const breaksEnvelope = (id: number, event: EventEnvelope["event"]) =>
@@ -1309,6 +1309,8 @@ describe("App session view and fatal screen", () => {
     widget: [],
     "status label": [],
     "notice row": [],
+    "autocomplete items": [],
+    "autocomplete open": [],
     "message renderer": [breaksUserMessage],
     "message prompt": [breaksUserMessage],
     "tool renderer": [
@@ -1370,6 +1372,8 @@ describe("App session view and fatal screen", () => {
               <text>{explode()}</text>
             </Show>
           )
+          // How often the popup ran an autocomplete source's code.
+          let asked = 0
           const contribution = () => {
             switch (surface) {
               case "widget":
@@ -1410,8 +1414,36 @@ describe("App session view and fatal screen", () => {
                 return rendererContribution(["breaks_tool"], Breaks)
               case "interaction renderer":
                 return interactionRendererContribution(Breaks, "breaks-ask")
+              // A source the popup runs on `%`: its `items` dies inside its
+              // Effect, or its `onOpen` throws, once `broken` turns true.
+              case "autocomplete items":
+                return autocompleteContribution({
+                  prefix: "%",
+                  title: "Breaks",
+                  items: () => {
+                    asked += 1
+                    return Effect.sync(() => {
+                      if (broken()) explode()
+                      return [{ id: "breaks-drawn", label: "breaks-drawn" }]
+                    })
+                  },
+                })
+              case "autocomplete open":
+                return autocompleteContribution({
+                  prefix: "%",
+                  title: "Breaks",
+                  items: () => {
+                    asked += 1
+                    return [{ id: "breaks-drawn", label: "breaks-drawn" }]
+                  },
+                  onOpen: () => {
+                    asked += 1
+                    if (broken()) explode()
+                  },
+                })
             }
           }
+          const autocomplete = surface.startsWith("autocomplete")
           const extension = defineClientExtension("@test/breaks", {
             setup: Effect.succeed(clientContributions(contribution())),
           })
@@ -1454,12 +1486,23 @@ describe("App session view and fatal screen", () => {
             setup.mockInput.pressKey("o", { ctrl: true })
             setup.mockInput.pressKey("o", { ctrl: true })
           }
+          if (autocomplete) {
+            // A `%` typed before the extensions load opens nothing.
+            yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "loaded")
+            yield* Effect.promise(() => setup.mockInput.typeText("%"))
+          }
           yield* waitForFrame(
             setup,
             (frame) => frame.includes("breaks-drawn"),
             "the extension draws",
           )
           setBroken(true)
+          if (autocomplete) {
+            // The popup opens again and runs the source.
+            setup.mockInput.pressBackspace()
+            yield* waitForFrame(setup, (frame) => !frame.includes("breaks-drawn"), "closed")
+            yield* Effect.promise(() => setup.mockInput.typeText("%"))
+          }
           // A session whose last message is the reader's runs a turn: no `ready`.
           const idle = !surface.startsWith("message") && surface !== "interaction renderer"
           const frame = yield* waitForFrame(
@@ -1489,6 +1532,17 @@ describe("App session view and fatal screen", () => {
             )
             expect(responded).toEqual([true])
             return
+          }
+          if (autocomplete) {
+            // The failed source is offered no more: a `%` opens no popup.
+            const askedBefore = asked
+            setup.mockInput.pressBackspace()
+            yield* waitForFrame(setup, (current) => !current.includes("┃ %"), "the % deleted")
+            yield* Effect.promise(() => setup.mockInput.typeText("%"))
+            yield* waitForFrame(setup, (current) => current.includes("┃ %"), "the % again")
+            yield* Effect.promise(() => setup.renderOnce())
+            expect(asked).toBe(askedBefore)
+            setup.mockInput.pressBackspace()
           }
           yield* Effect.promise(() => setup.mockInput.typeText("still here"))
           yield* waitForFrame(setup, (current) => current.includes("┃ still here"), "the draft")
