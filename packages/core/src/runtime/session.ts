@@ -276,7 +276,7 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
   // missing capability, a full queue); the user needs that text, not the
   // operation name.
   if (Schema.is(AgentLoopError)(inner) || Schema.is(FollowUpQueueFull)(inner)) {
-    return new SessionRuntimeError({ message: `${message}: ${inner.message}`, cause })
+    return new SessionRuntimeError({ message: inner.message, cause })
   }
   return new SessionRuntimeError({ message, cause })
 }

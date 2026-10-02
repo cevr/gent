@@ -457,9 +457,13 @@ export function ExtensionUIProvider(props: {
                           // status row of the session it ran in.
                           Effect.catchEager((error) =>
                             Effect.sync(() => {
+                              // The server reports an extension's refusal in its
+                              // own words; the row names the command, not the transport.
+                              let reason = formatError(error)
+                              if (error._tag === "ExtensionProtocolError") reason = error.message
                               const failure = {
                                 target: { sessionId: sid, branchId: bid },
-                                text: `/${c.name} failed: ${formatError(error)}`,
+                                text: `/${c.name} failed: ${reason}`,
                               }
                               client.setErrorIn(failure.target, failure.text)
                               standingFailure = Option.some(failure)

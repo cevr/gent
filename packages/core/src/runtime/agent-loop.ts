@@ -2388,8 +2388,9 @@ const agentLoopActorHandlers = Effect.gen(function* () {
     error: AgentLoopError | CapabilityError | CapabilityNotFoundError,
   ): AgentLoopError => {
     if (Schema.is(AgentLoopError)(error)) return error
-    let message: string = error._tag
-    if ("reason" in error) message = `${error._tag}: ${error.reason}`
+    // The extension's own reason is the message a client shows.
+    let message = `"${error.extensionId}" has no request "${error.capabilityId}"`
+    if ("reason" in error) message = error.reason
     return new AgentLoopError({ message, cause: error })
   }
 

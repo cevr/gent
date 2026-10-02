@@ -3196,7 +3196,14 @@ describe("App slash commands", () => {
       expect(sent).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // A server command the server refuses says so on the status row.
+  // A server command the server refuses says so on the status row: the
+  // extension's own reason, on one row that fits 60 columns.
+  const auditRefused = Schema.decodeSync(GentRpcError)({
+    _tag: "ExtensionProtocolError",
+    extensionId: "@test/server-audit",
+    tag: "audit",
+    message: "audit refused on this branch",
+  })
   it.scopedLive("a server slash command that fails shows why until the next one runs", () =>
     Effect.gen(function* () {
       const { setup } = yield* mountApp({
@@ -3222,16 +3229,23 @@ describe("App slash commands", () => {
             request: (input: { readonly capabilityId: string }) =>
               Effect.suspend(() => {
                 if (input.capabilityId === "note") return Effect.void
-                return Effect.fail(new ProviderAuthError({ message: "audit refused" }))
+                return Effect.fail(auditRefused)
               }),
           },
         },
         builtins: builtinClientModules,
+        width: 60,
         initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       yield* typeCommand("/audit now")(setup)
-      yield* waitForFrame(setup, (frame) => frame.includes("audit refused"), "the failure")
+      const failed = yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("audit refused"),
+        "the failure",
+      )
+      const row = failed.split("\n").find((line) => line.includes("audit refused")) ?? ""
+      expect(row.trim()).toStartWith("/audit failed: audit refused on this branch ·")
       yield* typeCommand("/note")(setup)
       const frame = yield* waitForFrame(
         setup,

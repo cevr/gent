@@ -3810,6 +3810,9 @@ const invoked: Array<{
   cwd: string
 }> = []
 // Server-visible slash commands are slash-decorated requests.
+class RefusedError extends Schema.TaggedError<RefusedError>()("RefusedError", {
+  message: Schema.String,
+}) {}
 const TestCommandsExtension: GentExtension = {
   manifest: { id: ExtensionId.make("@test/commands") },
   setup: registerContributions({
@@ -3841,6 +3844,13 @@ const TestCommandsExtension: GentExtension = {
         input: Schema.String,
         output: Schema.Void,
         execute: () => Effect.void,
+      }),
+      // A request whose handler refuses, with its own reason.
+      request({
+        id: "refuse",
+        input: Schema.String,
+        output: Schema.Void,
+        execute: () => Effect.fail(new RefusedError({ message: "Nothing to do on this branch" })),
       }),
     ],
   }),
@@ -4144,6 +4154,37 @@ describe("extension requests and slash commands", () => {
       )
     }),
   )
+
+  // A client shows the failure to a reader: the error says the extension's
+  // own reason, without the loop's and the runtime's wrappers.
+  for (const [capabilityId, reason] of [
+    ["refuse", "Nothing to do on this branch"],
+    ["missing", '"@test/commands" has no request "missing"'],
+  ] as const) {
+    it.live(`RPC request ${capabilityId} fails with the extension's own reason`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [TestCommandsExtension],
+          })
+          const result = yield* Effect.exit(
+            client.extension.request({
+              sessionId,
+              branchId,
+              extensionId: ExtensionId.make("@test/commands"),
+              capabilityId,
+              input: "x",
+            }),
+          )
+          expect(Exit.isFailure(result)).toBe(true)
+          if (Exit.isFailure(result)) expectExtensionProtocolFailure(result.cause, reason)
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
+    )
+  }
 
   it.live("RPC request rejects missing branches", () =>
     Effect.gen(function* () {
