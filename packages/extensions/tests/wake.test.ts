@@ -1507,6 +1507,93 @@ describe("wake tool claims", () => {
 })
 
 describe("monitor command", () => {
+  for (const cancel of [false, true]) {
+    let outcome = "times out"
+    if (cancel) outcome = "can be cancelled"
+    it.scopedLive(
+      `a backtracking until pattern ${outcome} without stalling the server`,
+      () =>
+        Effect.gen(function* () {
+          const home = yield* makeTempDirectoryScoped("wake-monitor-regex-")
+          const queued = yield* Ref.make<ReadonlyArray<string>>([])
+          const fired = yield* Deferred.make<boolean>()
+          const shellClosed = yield* Deferred.make<void>()
+          const real = yield* ChildProcessSpawner.ChildProcessSpawner
+          const observed = ChildProcessSpawner.make((command) =>
+            real
+              .spawn(command)
+              .pipe(
+                Effect.tap(() => Effect.addFinalizer(() => Deferred.succeed(shellClosed, void 0))),
+              ),
+          )
+          const ctx = contextWith(home, queued, Option.some(fired))
+          const started = yield* Clock.currentTimeMillis
+          let timeoutSeconds = 0.1
+          if (cancel) timeoutSeconds = 60
+          const handle = yield* runToolWithCtx(
+            MonitorTool,
+            {
+              command: "printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxx!\\n%.0s' {1..8}",
+              until: "(x+x+)+y",
+              timeoutSeconds,
+              everySeconds: 1,
+              note: "backtracking check",
+            },
+            ctx,
+          ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observed))
+          yield* Deferred.await(shellClosed)
+          if (cancel) {
+            const removed = yield* runToolWithCtx(CancelTool, { wakeId: handle.wakeId }, ctx)
+            expect(removed.cancelled).toEqual([handle.wakeId])
+            expect(yield* Ref.get(queued)).toEqual([])
+            expect(yield* (yield* WakeAlarms).pending).toEqual([])
+          } else {
+            yield* Deferred.await(fired)
+            const [message] = yield* Ref.get(queued)
+            expect(message).toContain("timed out after 1 checks")
+            expect(message).not.toContain("matched after")
+          }
+          // The measured synchronous search takes about 800 ms on this host;
+          // leave five times the check deadline for process/I/O and worker startup.
+          expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(500)
+        }).pipe(
+          Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer)),
+          Effect.timeout("8 seconds"),
+        ),
+      10_000,
+    )
+  }
+
+  it.scopedLive(
+    "an undecided until search reports its reason at the deadline instead of an ordinary miss",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("wake-monitor-undecided-")
+        const queued = yield* Ref.make<ReadonlyArray<string>>([])
+        const fired = yield* Deferred.make<boolean>()
+        yield* runToolWithCtx(
+          MonitorTool,
+          {
+            command: "printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx!xxy'",
+            until: "(x+x+)+y",
+            everySeconds: 1,
+            timeoutSeconds: 2,
+            note: "report uncertainty",
+          },
+          contextWith(home, queued, Option.some(fired)),
+        )
+        yield* Deferred.await(fired)
+        const [message] = yield* Ref.get(queued)
+        expect(message).toContain("until matching could not decide: simplify the pattern")
+        expect(message).toContain("timed out after 1 checks")
+        expect(message).not.toContain("matched after")
+      }).pipe(
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer)),
+        Effect.timeout("5 seconds"),
+      ),
+    8_000,
+  )
+
   it.scopedLive(
     "a relative cwd runs in the session directory, not the server directory",
     () =>

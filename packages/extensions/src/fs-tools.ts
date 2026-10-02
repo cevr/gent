@@ -7,7 +7,6 @@ import {
   type PlatformError,
   Result,
   Schema,
-  type Scope,
   Stream,
 } from "effect"
 import picomatch from "picomatch"
@@ -26,6 +25,7 @@ import {
   writeFileAtomic,
 } from "@gent/core/extensions/api"
 import { ChildProcess, type ChildProcessSpawner } from "effect/process"
+import { makeRegexMatcher, type RegexMatcher, type RegexMatcherError } from "./regex-matcher.js"
 
 // ── file listing ─────────────────────────────────────────────────────────────
 
@@ -1530,6 +1530,9 @@ class GrepError extends Schema.TaggedError<GrepError>()("GrepError", {
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
+const grepMatcherError = (cause: RegexMatcherError) =>
+  new GrepError({ message: cause.message, pattern: cause.pattern, cause })
+
 // Grep Tool Params
 
 const GrepParams = Schema.Struct({
@@ -1627,120 +1630,12 @@ const clipLine = (line: string, at: number): string => {
   return clipped
 }
 
-// ── Line matcher: the regex runs on its own thread ──
-
-/**
- * A line whose search runs longer than this and finds nothing is undecided.
- * JavaScriptCore stops a search that backtracks too far and reports no match,
- * with no other signal, so a slow miss may hide a match. The limit counts
- * backtracking steps, so a give-up takes a steady time: 320 ms for the
- * fastest pattern measured, 450 ms to 1 s for most. Load only makes it
- * slower. A slow real miss counted here costs one number in the result, so
- * the bound sits far below the fastest give-up.
- */
-const UNDECIDED_LINE_MS = 50
-
 /** A grep that runs longer than this fails: its pattern backtracks too much. */
 const GREP_TIME_LIMIT = Duration.seconds(30)
 
-/** One file's answer from the matcher thread. */
-const MatcherReply = Schema.Struct({
-  id: Schema.Int,
-  /** Each matching line's index and the offset of its match, at most `limit + 1`. */
-  hits: Schema.Array(Schema.Tuple([Schema.Int, Schema.Int])),
-  undecided: Schema.Int,
-})
-type MatcherReply = typeof MatcherReply.Type
-
-/**
- * The matcher thread's source. It is plain JavaScript with no imports, so it
- * runs from a Blob URL in the compiled binary as well as from source. Each
- * request carries the pattern; the thread builds its regex once.
- */
-const MATCHER_SOURCE = [
-  "let regex",
-  "onmessage = (event) => {",
-  "  const { id, source, flags, text, limit } = event.data",
-  "  regex ??= new RegExp(source, flags)",
-  "  const lines = text.split('\\n')",
-  "  const hits = []",
-  "  let undecided = 0",
-  "  for (let index = 0; index < lines.length && hits.length <= limit; index++) {",
-  "    const started = performance.now()",
-  "    const hit = regex.exec(lines[index])",
-  "    if (hit !== null) hits.push([index, hit.index])",
-  `    else if (performance.now() - started > ${UNDECIDED_LINE_MS}) undecided++`,
-  "  }",
-  "  postMessage({ id, hits, undecided })",
-  "}",
-].join("\n")
-
-/** Searches one file's text on the matcher thread. */
-interface LineMatcher {
-  readonly search: (text: string, limit: number) => Effect.Effect<MatcherReply, GrepError>
-}
-
-/**
- * A matcher thread for one grep. The regex runs off the server thread, so a
- * pattern that backtracks for minutes stalls nothing else, and closing the
- * scope ends the thread: a timeout or an interrupt stops the search at once.
- */
-const makeLineMatcher = (regex: RegExp): Effect.Effect<LineMatcher, GrepError, Scope.Scope> =>
-  Effect.gen(function* () {
-    const pending = new Map<number, (reply: Effect.Effect<MatcherReply, GrepError>) => void>()
-    const failAll = (message: string) => {
-      for (const resume of pending.values()) {
-        resume(Effect.fail(new GrepError({ message, pattern: regex.source })))
-      }
-      pending.clear()
-    }
-    // The URL is released on its own, so it is revoked even when the Worker
-    // constructor throws.
-    const url = yield* Effect.acquireRelease(
-      Effect.sync(() => URL.createObjectURL(new Blob([MATCHER_SOURCE]))),
-      (created) => Effect.sync(() => URL.revokeObjectURL(created)),
-    )
-    const thread = yield* Effect.acquireRelease(
-      Effect.try({
-        // oxlint-disable-next-line effect/noGlobals -- the regex must run on an OS thread the server can end, and an Effect Worker needs a bundled entry module; this one is a Blob of plain JavaScript.
-        try: () => new Worker(url),
-        catch: (cause) =>
-          new GrepError({
-            message: `grep could not start its matcher: ${String(cause)}`,
-            pattern: regex.source,
-          }),
-      }),
-      (started) =>
-        Effect.sync(() => {
-          started.terminate()
-          failAll("grep ended")
-        }),
-    )
-    thread.onmessage = (event: MessageEvent) => {
-      const reply = Schema.decodeUnknownOption(MatcherReply)(event.data)
-      if (Option.isNone(reply)) return failAll("grep's matcher sent a reply it cannot read")
-      const resume = pending.get(reply.value.id)
-      pending.delete(reply.value.id)
-      resume?.(Effect.succeed(reply.value))
-    }
-    thread.onerror = (event: ErrorEvent) => failAll(`grep's matcher failed: ${event.message}`)
-    let nextId = 0
-    return {
-      search: (text, limit) =>
-        Effect.callback<MatcherReply, GrepError>((resume) => {
-          const id = nextId++
-          pending.set(id, resume)
-          thread.postMessage({ id, source: regex.source, flags: regex.flags, text, limit })
-          return Effect.sync(() => {
-            pending.delete(id)
-          })
-        }),
-    }
-  })
-
 /** What one grep looks for. */
 interface Search {
-  readonly matcher: LineMatcher
+  readonly matcher: RegexMatcher
   readonly limit: number
   readonly contextLines: number
 }
@@ -1771,8 +1666,10 @@ const searchFile = (
     if (Option.isNone(decoded)) return none
 
     const text = decoded.value.text
-    const reply = yield* search.matcher.search(text, search.limit)
     const lines = text.split("\n")
+    const reply = yield* search.matcher
+      .search(lines, search.limit)
+      .pipe(Effect.mapError(grepMatcherError))
     const contextOf = (from: number, to: number) =>
       lines.slice(from, to).map((line) => clipLine(line, 0))
     const matches = reply.hits.map(([index, at]): GrepMatch => {
@@ -1924,7 +1821,7 @@ export const GrepTool = tool({
 
     const { matches, truncated, oversized, undecided } = yield* Effect.scoped(
       Effect.gen(function* () {
-        const matcher = yield* makeLineMatcher(regex)
+        const matcher = yield* makeRegexMatcher(regex).pipe(Effect.mapError(grepMatcherError))
         return yield* searchFiles(files, { matcher, limit, contextLines })
       }),
     ).pipe(

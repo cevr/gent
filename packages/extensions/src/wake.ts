@@ -34,6 +34,7 @@ import {
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
 import { runBashCommand, wholeCommandOutputText } from "./exec-tools.js"
+import { makeRegexMatcher } from "./regex-matcher.js"
 
 // Test seam: only tests read these exports. WakeAlarms and
 // WakeAlarmsLive let a test hold and cancel timers; rearmPendingAlarms runs the
@@ -421,16 +422,31 @@ const alarmWork = (
     }
   })
 
-const matches = (
+const matches = Effect.fn("Wake.monitorMatches")(function* (
   entry: Extract<WakeEntry, { readonly _tag: "monitor" }>,
   result: { readonly exitCode: number; readonly stdoutPieces: ReadonlyArray<string> },
-): boolean => {
-  if (Predicate.isUndefined(entry.until)) return result.exitCode === 0
+) {
+  const until = entry.until
+  if (Predicate.isUndefined(until)) return result.exitCode === 0
   // The data, never the display: a cut display holds a marker `until` could
   // match, and a match must not span the gap between the head and the tail.
-  const until = new RegExp(entry.until)
-  return result.stdoutPieces.some((piece) => until.test(piece))
-}
+  const regex = yield* Effect.try({
+    try: () => new RegExp(until),
+    catch: () => new WakeError({ message: `until is not a valid regular expression: ${until}` }),
+  })
+  const matcher = yield* makeRegexMatcher(regex).pipe(
+    Effect.mapError((cause) => new WakeError({ message: cause.message })),
+  )
+  const reply = yield* matcher
+    .search(result.stdoutPieces, 0)
+    .pipe(Effect.mapError((cause) => new WakeError({ message: cause.message })))
+  if (reply.hits.length > 0) return true
+  if (reply.undecided > 0)
+    return yield* new WakeError({
+      message: "until matching could not decide: simplify the pattern",
+    })
+  return false
+})
 
 const monitorWork = (
   entry: Extract<WakeEntry, { readonly _tag: "monitor" }>,
@@ -481,7 +497,29 @@ const monitorWork = (
         ),
       )
       lastOutput = [result.stdout, result.stderr].filter((text) => text.length > 0).join("\n")
-      if (!result.cut && matches(entry, result)) {
+      let matched = false
+      let cut = result.cut
+      if (!cut) {
+        const remaining = Math.max(0, entry.deadline - (yield* Clock.currentTimeMillis))
+        const verdict = yield* Effect.scoped(matches(entry, result)).pipe(
+          Effect.timeoutOption(Duration.millis(remaining)),
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              // A slow miss may be JSC giving up. Keep the reason and settle
+              // at the deadline, rather than silently retrying an unknown result.
+              lastOutput = [lastOutput, error.message].join("\n")
+              const left = Math.max(0, entry.deadline - (yield* Clock.currentTimeMillis))
+              yield* Effect.sleep(Duration.millis(left))
+              return Option.none<boolean>()
+            }),
+          ),
+        )
+        matched = Option.getOrElse(verdict, () => false)
+        cut = Option.isNone(verdict)
+        if (cut)
+          lastOutput = [lastOutput, "until matching did not complete before deadline"].join("\n")
+      }
+      if (matched) {
         yield* Effect.logInfo("wake.monitor.matched").pipe(
           Effect.annotateLogs({ wakeId: entry.wakeId, checks }),
         )
@@ -497,7 +535,7 @@ const monitorWork = (
         )
       }
       const now = yield* Clock.currentTimeMillis
-      if (result.cut || now >= entry.deadline) {
+      if (cut || now >= entry.deadline) {
         return yield* queueWake(
           entry,
           monitorMessage(entry, "timed-out", checks, lastOutput),

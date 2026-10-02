@@ -314,8 +314,10 @@ describe("cell worker kernel", () => {
         expect(own.display).toContain("own timer")
         // A timer from cell A throws while cell B runs: B does not claim it,
         // and the next cell names A as its origin.
-        yield* run("setTimeout(() => { throw new Error('late timer') }, 40); 1")
-        const whileLate = yield* run(`${settle}; kept`)
+        yield* run(
+          "var releaseLate = false; setTimeout(function waitForCellB() { if (!releaseLate) { setTimeout(waitForCellB, 0); return; } throw new Error('late timer'); }, 0); 1",
+        )
+        const whileLate = yield* run(`releaseLate = true; ${settle}; kept`)
         expect(whileLate.display).not.toContain("late timer")
         expect(whileLate.display).toContain("5")
         const afterTimer = yield* run("2")
