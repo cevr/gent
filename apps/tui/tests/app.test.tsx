@@ -2241,12 +2241,23 @@ describe("App cancel and quit keys during a turn", () => {
       }
       view.setup.mockInput.pressKey("r", { ctrl: true })
       yield* waitForFrame(view.setup, (frame) => frame.includes("Prompt search · 2"), "search")
+      // The paste is the search's query, never the composer's draft.
+      yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText("PASTED-ZQ"))
+      const pasted = yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("› PASTED-ZQ"),
+        "the paste in the query",
+      )
+      expect(pasted).not.toContain("┃ PASTED-ZQ")
+      // Esc clears the query; the cursor then moves to the older prompt.
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("Prompt search · 2") && !frame.includes("PASTED-ZQ"),
+        "the query cleared",
+      )
       view.setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => view.setup.renderOnce())
-      yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText("PASTED-ZQ"))
-      yield* waitForFrame(view.setup, () => true, "the paste taken")
-      yield* waitForFrame(view.setup, () => true, "the paste taken")
-      expect(renderFrame(view.setup)).not.toContain("PASTED-ZQ")
       view.setup.mockInput.pressEnter()
       const frame = yield* waitForFrame(
         view.setup,
@@ -5013,6 +5024,33 @@ describe("agents view on the left arrow", () => {
       yield* Effect.promise(() => setup.mockInput.typeText("hi"))
       yield* waitForFrame(setup, (frame) => frame.includes("┃ hi"), "typed text in the composer")
     }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "/sessions filters on pasted and Unicode text, and the composer draft stays empty",
+    () =>
+      Effect.gen(function* () {
+        const setup = yield* mountShortTerminalWithTrays(30)
+        yield* typeCommand("/sessions")(setup)
+        yield* waitForFrame(setup, paneOpen, "the agents pane")
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText("task 4"))
+        yield* Effect.promise(() => setup.mockInput.typeText("é"))
+        const filtered = yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("› task 4é"),
+          "the filter holds the paste and the typed letter",
+        )
+        expect(filtered).not.toContain("┃ task 4")
+        expect(filtered).not.toContain("┃ é")
+        // Esc clears the filter, Esc closes the pane: the composer holds only what is typed next.
+        setup.mockInput.pressEscape()
+        yield* waitForFrame(setup, (frame) => !frame.includes("› task 4"), "the filter cleared")
+        setup.mockInput.pressEscape()
+        yield* waitForFrame(setup, (frame) => !paneOpen(frame), "the pane closed")
+        yield* Effect.promise(() => setup.mockInput.typeText("x"))
+        const after = yield* waitForFrame(setup, (frame) => frame.includes("┃ x"), "the draft")
+        expect(after).not.toContain("┃ task")
+      }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.scopedLive("← with a draft moves the text cursor and opens nothing", () =>

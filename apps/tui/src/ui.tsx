@@ -17,7 +17,9 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import {
   KeyboardGate,
+  pastedLine,
   type ScopedKeyboardEvent,
+  typedText,
   useScopedKeyboard,
   useTerminalDimensions,
 } from "./terminal"
@@ -751,7 +753,7 @@ export function TrayFrame(props: { children: JSX.Element }) {
  * Every pane that lets a reader move a cursor down rows and press enter is
  * this component. It owns the whole block of list behavior:
  * the selection index and its wrap-around, the query string, the key table
- * (up/down, ^p/^n, enter, escape, backspace, printable characters), the
+ * (up/down, ^p/^n, enter, escape, backspace, typed and pasted text), the
  * scroll sync that keeps the cursor row in view, the sticky selection that
  * re-anchors when the data arrives, the moved cursor that follows its entry
  * by key when the rows arrive again, and the empty fallback.
@@ -802,7 +804,8 @@ export const SelectListEvent = Schema.TaggedUnion({
   Backspace: {},
   MoveUp: { itemCount: Schema.Finite },
   MoveDown: { itemCount: Schema.Finite },
-  TypeChar: { char: Schema.String },
+  /** Text typed or pasted into the query. */
+  Type: { text: Schema.String },
   /** Keep the cursor inside a list that shrank under it. */
   Clamp: { itemCount: Schema.Finite },
 })
@@ -829,7 +832,9 @@ export function transitionSelectList(
         Anchor: (event) => ({ ...state, selectedIndex: event.selectedIndex }),
         Backspace: () => {
           if (state.query.length === 0) return state
-          return { query: state.query.slice(0, -1), selectedIndex: 0, moved: false }
+          // A character, not a UTF-16 unit: half an emoji is no query.
+          const query = [...state.query].slice(0, -1).join("")
+          return { query, selectedIndex: 0, moved: false }
         },
         MoveUp: (event) => ({
           ...state,
@@ -841,8 +846,8 @@ export function transitionSelectList(
           selectedIndex: wrapIndex(state.selectedIndex, event.itemCount, 1),
           moved: true,
         }),
-        TypeChar: (event) => ({
-          query: state.query + event.char,
+        Type: (event) => ({
+          query: state.query + event.text,
           selectedIndex: 0,
           moved: false,
         }),
@@ -858,14 +863,15 @@ export function transitionSelectList(
 
 // ── Component ─────────────────────────────────────────────────────
 
-/** Printable ASCII without shortcut modifiers is filter input. */
-const printableChar = (event: ScopedKeyboardEvent): Option.Option<string> =>
-  Option.filter(Option.fromNullishOr(event.sequence), (sequence) => {
-    if (event.ctrl || event.meta || event.option || event.super || event.hyper) return false
-    if (sequence.length !== 1) return false
-    const code = sequence.charCodeAt(0)
-    return code >= 32 && code <= 126
-  })
+/**
+ * The text a key types into the filter: printable text, Unicode included,
+ * from a key without a shortcut modifier. A shortcut goes on to the scopes
+ * under the list.
+ */
+const typedKey = (event: ScopedKeyboardEvent): Option.Option<string> => {
+  if (event.ctrl || event.meta || event.option || event.super || event.hyper) return Option.none()
+  return typedText(Option.fromNullishOr(event.sequence))
+}
 
 /**
  * What the pane draws for one row.
@@ -1253,16 +1259,29 @@ export function SelectList<A>(props: SelectListProps<A>) {
         return true
       }
 
-      const char = printableChar(event)
-      if (Option.isSome(char)) {
+      const typed = typedKey(event)
+      if (Option.isSome(typed)) {
         applyQuery(
-          transitionSelectList(state(), SelectListEvent.cases.TypeChar.make({ char: char.value })),
+          transitionSelectList(state(), SelectListEvent.cases.Type.make({ text: typed.value })),
         )
         return true
       }
       return false
     },
-    { when: () => props.open },
+    {
+      when: () => props.open,
+      // A filter owns what is pasted while it shows: the query is one line,
+      // so a line break becomes a space. A list with no filter leaves the
+      // paste to the scopes under it.
+      paste: (text) => {
+        if (!props.filter) return false
+        const line = pastedLine(text, " ")
+        if (line.length > 0) {
+          applyQuery(transitionSelectList(state(), SelectListEvent.cases.Type.make({ text: line })))
+        }
+        return true
+      },
+    },
   )
 
   // Inside a `PickerFrame` the list fits the rows the frame gives it. It

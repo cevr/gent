@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
 import { Clock, Effect, Option } from "effect"
-import { createSignal } from "solid-js"
+import { createSignal, Show } from "solid-js"
 import {
   decoration,
   groupedRows,
@@ -18,6 +18,7 @@ import {
   transitionSelectList,
   usePickerGeometry,
 } from "../src/ui"
+import { useScopedKeyboard } from "../src/terminal"
 import { createMockClient, renderFrame, renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import {
@@ -78,7 +79,7 @@ describe("select list reducer", () => {
       expect(down.selectedIndex).toBe(0)
       // A move marks the cursor as the reader's, so changed rows keep it on its entry.
       expect(down.moved).toBe(true)
-      const retyped = transitionSelectList(down, SelectListEvent.cases.TypeChar.make({ char: "a" }))
+      const retyped = transitionSelectList(down, SelectListEvent.cases.Type.make({ text: "a" }))
       expect(retyped.moved).toBe(false)
 
       const far = SelectListState.initial(7)
@@ -93,7 +94,7 @@ describe("select list reducer", () => {
     Effect.sync(() => {
       const typed = transitionSelectList(
         SelectListState.initial(2),
-        SelectListEvent.cases.TypeChar.make({ char: "a" }),
+        SelectListEvent.cases.Type.make({ text: "a" }),
       )
       expect(typed).toEqual({ query: "a", selectedIndex: 0, moved: false })
 
@@ -283,6 +284,130 @@ describe("select list filter", () => {
       // Only the open reset; tab contributed nothing.
       expect(seen).toEqual([""])
     }),
+  )
+
+  for (const [protocol, kittyKeyboard] of [
+    ["legacy", false],
+    ["kitty", true],
+  ] as const) {
+    it.scopedLive(`takes Unicode text and deletes it a character at a time (${protocol})`, () =>
+      Effect.gen(function* () {
+        const seen: Array<string> = []
+        const setup = yield* renderScoped(
+          () => (
+            <SelectList
+              id="fruit"
+              open={true}
+              rows={() => plainRows(fruits)}
+              rowKey={(fruit) => fruit.id}
+              filter={{ onQueryChange: (next) => seen.push(next) }}
+              onSelect={() => {}}
+              onDismiss={() => {}}
+            />
+          ),
+          { kittyKeyboard },
+        )
+        yield* waitForFrame(setup, () => renderFrame(setup).includes("Cherry"), "open")
+        // Under kitty, é arrives as its code point (`CSI 233 u`). The mock's
+        // `typeText` splits by UTF-16 unit, so the emoji goes as one key.
+        yield* Effect.promise(() => setup.mockInput.typeText("é"))
+        setup.mockInput.pressKey("🍒")
+        yield* waitForFrame(setup, () => seen.at(-1) === "é🍒", "Unicode query")
+        // One backspace takes the whole emoji, never half of its surrogate pair.
+        setup.mockInput.pressBackspace()
+        yield* waitForFrame(setup, () => seen.at(-1) === "é", "one character deleted")
+        expect(renderFrame(setup)).toContain("› é")
+      }),
+    )
+  }
+
+  it.scopedLive("a paste joins the query as one line, its control sequences dropped", () =>
+    Effect.gen(function* () {
+      const seen: Array<string> = []
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(fruits)}
+          rowKey={(fruit) => fruit.id}
+          filter={{ onQueryChange: (next) => seen.push(next) }}
+          onSelect={() => {}}
+          onDismiss={() => {}}
+        />
+      ))
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Cherry"), "open")
+      setup.mockInput.pressKey("c")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("h\u001b[31mer\u001b[0m\nry"))
+      yield* waitForFrame(setup, () => seen.at(-1) === "cher ry", "pasted query")
+      expect(seen).toEqual(["", "c", "cher ry"])
+    }),
+  )
+
+  it.scopedLive(
+    "leaves shortcut keys, and a paste into a list with no filter, to the scopes under it",
+    () =>
+      Effect.gen(function* () {
+        const passed: Array<string> = []
+        const Below = () => {
+          useScopedKeyboard(
+            (event) => {
+              passed.push(`key ${event.name}`)
+              return true
+            },
+            {
+              paste: (text) => {
+                passed.push(`paste ${text}`)
+                return true
+              },
+            },
+          )
+          return <></>
+        }
+        const seen: Array<string> = []
+        const [filtered, setFiltered] = createSignal(true)
+        const setup = yield* renderScoped(
+          () => (
+            <>
+              <Below />
+              <Show
+                when={filtered()}
+                fallback={
+                  <SelectList
+                    id="plain"
+                    open={true}
+                    rows={() => plainRows(fruits)}
+                    rowKey={(fruit) => fruit.id}
+                    onSelect={() => {}}
+                    onDismiss={() => {}}
+                  />
+                }
+              >
+                <SelectList
+                  id="fruit"
+                  open={true}
+                  rows={() => plainRows(fruits)}
+                  rowKey={(fruit) => fruit.id}
+                  filter={{ onQueryChange: (next) => seen.push(next) }}
+                  onSelect={() => {}}
+                  onDismiss={() => {}}
+                />
+              </Show>
+            </>
+          ),
+          { kittyKeyboard: true },
+        )
+        yield* waitForFrame(setup, () => renderFrame(setup).includes("Cherry"), "open")
+        setup.mockInput.pressKey("a", { ctrl: true })
+        setup.mockInput.pressKey("b", { meta: true })
+        yield* waitForFrame(setup, () => passed.length === 2, "shortcuts passed on")
+        expect(passed).toEqual(["key a", "key b"])
+        expect(seen).toEqual([""])
+
+        setFiltered(false)
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText("plain"))
+        yield* waitForFrame(setup, () => passed.length === 3, "paste passed on")
+        expect(passed.at(-1)).toBe("paste plain")
+      }),
   )
 })
 

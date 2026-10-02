@@ -462,6 +462,23 @@ describe("PromptSearchPalette renderer", () => {
     }),
   )
 
+  it.scopedLive("a pasted query previews its top match, and enter accepts it", () =>
+    Effect.gen(function* () {
+      const events: Array<PromptSearchEvent> = []
+      const setup = yield* openPalette(["alpha", "café order", "gamma"], (event) =>
+        events.push(event),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("gamma"), "open")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("café"))
+      yield* waitForFrame(setup, (frame) => !frame.includes("gamma"), "narrowed by the paste")
+      expect(renderFrame(setup)).toContain("› café")
+      expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.some("café order") })
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(events.at(-1)).toEqual({ _tag: "Accept" })
+    }),
+  )
+
   it.scopedLive("enter on an empty list still accepts, and escape cancels", () =>
     Effect.gen(function* () {
       const events: Array<PromptSearchEvent> = []

@@ -208,7 +208,15 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
               open={true}
               rows={rows}
               rowKey={(entry) => entry.key}
-              filter={{ onQueryChange: setQuery }}
+              filter={{
+                // A paste reaches the query without a key: a query the reader
+                // changed counts as acting, as a key does. The open's own
+                // empty report changes nothing.
+                onQueryChange: (next) => {
+                  if (next !== query()) touched = true
+                  setQuery(next)
+                },
+              }}
               extraKeys={(event) => {
                 // Enter accepts whatever the composer previews, an empty list
                 // included; the list would swallow it with nothing selected.
