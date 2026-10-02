@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  Cause,
   Clock,
   ConfigProvider,
   Deferred,
@@ -2103,6 +2104,71 @@ describe("a background completion the full follow-up queue refused", () => {
 // ── background bash across a restart ───────────────────────────────────────
 
 describe("a background job the server stopped", () => {
+  it.scopedLive.layer(BunServices.layer)(
+    "interruption after a durable start claim leaves a scope-owned job",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* makeTempDirectoryScoped("gent-background-claim-")
+        const ctx = {
+          ...stubCtx,
+          home: directory,
+          toolCallId: ToolCallId.make("claim-interrupted"),
+        }
+        const key = { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId: ctx.toolCallId }
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `${directory}/storage.db`,
+          Layer.empty,
+          {},
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        // Interrupt at the existing storage boundary after the real transaction commits.
+        const interruptedStorage = Layer.effect(
+          BackgroundBashStorage,
+          Effect.gen(function* () {
+            const storage = yield* BackgroundBashStorage
+            return BackgroundBashStorage.of({
+              ...storage,
+              claimStart: (input) =>
+                Effect.withFiber((fiber) =>
+                  storage.claimStart(input).pipe(
+                    Effect.tap((claim) =>
+                      Effect.sync(() => {
+                        if (claim._tag === "Started") fiber.interruptUnsafe()
+                      }),
+                    ),
+                  ),
+                ),
+            })
+          }),
+        ).pipe(Layer.provideMerge(BackgroundBashStorage.Live))
+        const processLayer = BackgroundBashSupervisorLive.pipe(
+          Layer.provideMerge(interruptedStorage),
+          Layer.provideMerge(Layer.merge(storageLayer, BunServices.layer)),
+        )
+        const scope = yield* Scope.make()
+        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+        const profile = yield* Layer.buildWithScope(processLayer, scope)
+        const start = yield* runToolWithCtx(
+          BashTool,
+          { command: "sleep 30", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provideContext(profile), Effect.forkChild)
+        const outcome = yield* Fiber.await(start)
+        expect(Exit.isFailure(outcome)).toBe(true)
+        if (Exit.isFailure(outcome)) expect(Cause.hasInterruptsOnly(outcome.cause)).toBe(true)
+        // No new process generation can reconcile this claim. Its resource must own cleanup.
+        yield* Scope.close(scope, Exit.void)
+        const claim = yield* BackgroundBashStorage.pipe(
+          Effect.flatMap((storage) =>
+            storage.claimStart({ ...key, command: "sleep 30", cwd: Option.some(directory) }),
+          ),
+          Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))),
+        )
+        expect(claim._tag).toBe("Terminal")
+        if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
   it.scopedLive(
     "is marked interrupted when its fiber stops, not left running under this process",
     () =>

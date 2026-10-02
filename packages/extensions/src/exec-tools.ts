@@ -1264,55 +1264,62 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         const key = backgroundJobKey(target)
         const keyFields = backgroundJobKeyFields(target)
         if ((yield* Ref.get(completed)).has(key)) return file
-        const claim = yield* storage.claimStart({
-          ...keyFields,
-          command: job.command,
-          cwd: job.cwd,
-        })
-        if (claim._tag === "AlreadyRunning") return file
-        if (claim._tag === "Terminal") {
-          yield* deliverTerminal(target, claim.state)
-          yield* rememberCompleted(key)
-          return file
-        }
+        // Commit the claim and install its worker owner without an interruption gap.
+        // Permit acquisition and terminal replay remain interruptible; the child
+        // fork is interruptible independently of this transfer mask.
+        return yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const claim = yield* storage.claimStart({
+              ...keyFields,
+              command: job.command,
+              cwd: job.cwd,
+            })
+            if (claim._tag === "AlreadyRunning") return file
+            if (claim._tag === "Terminal") {
+              yield* restore(deliverTerminal(target, claim.state))
+              yield* rememberCompleted(key)
+              return file
+            }
 
-        const fullContext = yield* Effect.context<
-          ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-        >()
-        // forkIn inherits the parent fiber's full context, and provideContext
-        // would only merge on top — request-scoped tags carried by the caller
-        // (e.g., CurrentInteraction) would leak into the long-lived background
-        // fork. updateContext replaces the forked fiber's context outright,
-        // pinning it to the explicit slice the background helpers need.
-        const jobContext = Context.pick(
-          ChildProcessSpawner.ChildProcessSpawner,
-          FileSystem.FileSystem,
-          Path.Path,
-        )(fullContext)
-        yield* runBackgroundJob(job, target).pipe(
-          // The server stopped or the resource closed: the row must not stay
-          // running under this process, where no reconcile would reach it.
-          // The branch's next turn reads it as a notice.
-          Effect.onInterrupt(() => storage.markInterrupted(keyFields).pipe(Effect.ignore)),
-          Effect.catchTag("BashError", (e) => queueFailure(job, target, e.message)),
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) return Effect.void
-            return queueFailure(job, target, `Internal error: ${Cause.pretty(cause)}`)
+            const fullContext = yield* Effect.context<
+              ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+            >()
+            // forkIn inherits the parent fiber's full context, and provideContext
+            // would only merge on top — request-scoped tags carried by the caller
+            // (e.g., CurrentInteraction) would leak into the long-lived background
+            // fork. updateContext replaces the forked fiber's context outright,
+            // pinning it to the explicit slice the background helpers need.
+            const jobContext = Context.pick(
+              ChildProcessSpawner.ChildProcessSpawner,
+              FileSystem.FileSystem,
+              Path.Path,
+            )(fullContext)
+            yield* runBackgroundJob(job, target).pipe(
+              // The server stopped or the resource closed: the row must not stay
+              // running under this process, where no reconcile would reach it.
+              // The branch's next turn reads it as a notice.
+              Effect.onInterrupt(() => storage.markInterrupted(keyFields).pipe(Effect.ignore)),
+              Effect.catchTag("BashError", (e) => queueFailure(job, target, e.message)),
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.void
+                return queueFailure(job, target, `Internal error: ${Cause.pretty(cause)}`)
+              }),
+              Effect.ensuring(rememberCompleted(key)),
+              Effect.updateContext(
+                (
+                  _: Context.Context<
+                    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+                  >,
+                ) => jobContext,
+              ),
+              // A fiber interrupted before its first step runs none of it, the
+              // interrupt mark included. Starting at once installs the mark
+              // before transferring the claim to the resource scope.
+              Effect.forkIn(scope, { startImmediately: true }),
+            )
+            return file
           }),
-          Effect.ensuring(rememberCompleted(key)),
-          Effect.updateContext(
-            (
-              _: Context.Context<
-                ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-              >,
-            ) => jobContext,
-          ),
-          // A fiber interrupted before its first step runs none of it, the
-          // interrupt mark included. Starting at once installs the mark
-          // before the claim is visible to anything that could stop it.
-          Effect.forkIn(scope, { startImmediately: true }),
         )
-        return file
       }).pipe(gate.withPermits(1))
 
     return BackgroundBashSupervisor.of({ start })
