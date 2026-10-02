@@ -45,6 +45,7 @@ import {
   EventEnvelope,
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
+  type GentNamespacedClient,
   type QueueEntryInfo,
   userMessageIdForRequest,
 } from "@gent/core/protocol"
@@ -74,6 +75,7 @@ import {
   createMockClient,
   createMockRuntime,
   createMutableRuntime,
+  holdingReplies,
   renderFrame,
   renderScoped,
   TerminalOutput,
@@ -2560,6 +2562,102 @@ describe("App status and activity rows", () => {
       const first = Math.max(frame.indexOf("LARGE one"), frame.indexOf("[Pasted"))
       expect(first).toBeGreaterThanOrEqual(0)
       expect(first).toBeLessThan(frame.indexOf("second send"))
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("no reply asked for in the session the reader left draws in the next one", () =>
+    Effect.gen(function* () {
+      // The session-keyed reads answer per session, so a reply for A that
+      // lands in B shows: A's catalog names the model its own way and A's
+      // health fails an extension.
+      const sonnetNamed = (name: string) =>
+        new Model({
+          id: ModelId.make("anthropic/claude-sonnet-5"),
+          name,
+          provider: ProviderId.make("anthropic"),
+        })
+      const ofA = <A,>(sessionId: SessionId, inA: A, elsewhere: A) =>
+        Option.getOrElse(
+          Option.map(
+            Option.liftPredicate(sessionId, (id) => id === pairA.sessionId),
+            () => inA,
+          ),
+          () => elsewhere,
+        )
+      const perSession = {
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+        model: {
+          list: (input: { readonly sessionId: SessionId }) =>
+            Effect.succeed([sonnetNamed(ofA(input.sessionId, "Sonnet of A", "Claude Sonnet 5"))]),
+        },
+        extension: {
+          listStatus: (input: { readonly scope: { readonly id: SessionId } }) =>
+            Effect.succeed(
+              ofA(input.scope.id, scheduledFailureHealth("@a/only", "failed in A"), healthyHealth),
+            ),
+        },
+      }
+      const sessionB = (view: TestSetup) =>
+        waitForFrame(
+          view,
+          (frame) => frame.includes("ready ·") && frame.includes("Claude Sonnet 5"),
+          "session B",
+        )
+      const mountOnA = (client: GentNamespacedClient) =>
+        Effect.gen(function* () {
+          let ctx = Option.none<ClientContextValue>()
+          const setup = yield* renderScoped(
+            () => (
+              <>
+                <App />
+                <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+              </>
+            ),
+            {
+              client,
+              runtime: createMockRuntime(),
+              width: 120,
+              // No repository: the status row reads no git branch, which lands on its own time.
+              cwd: "/nonexistent/gent-test-cwd",
+              initialSession: {
+                id: pairA.sessionId,
+                activeBranchId: pairA.branchId,
+                name: "Session A",
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(0),
+              },
+            },
+          )
+          return { setup, client: yield* requireClient(ctx) }
+        })
+      const settle = (setup: TestSetup) =>
+        Effect.gen(function* () {
+          for (let frame = 0; frame < 5; frame++) {
+            yield* Effect.yieldNow
+            yield* Effect.promise(() => setup.renderOnce())
+          }
+        })
+
+      // Control: A answers, then the reader moves to B.
+      const control = yield* mountOnA(createMockClient(perSession))
+      yield* waitForFrame(control.setup, (frame) => frame.includes("Sonnet of A"), "session A")
+      control.client.switchSession(pairB.sessionId, pairB.branchId, "Session B")
+      yield* sessionB(control.setup)
+      yield* settle(control.setup)
+      const expected = renderFrame(control.setup)
+      expect(expected).not.toContain("@a/only")
+
+      // Every reply of A is still out when the reader moves to B, and lands last.
+      const holding = holdingReplies()
+      const held = yield* mountOnA(createMockClient(perSession, holding))
+      yield* Effect.promise(() => held.setup.renderOnce())
+      held.client.switchSession(pairB.sessionId, pairB.branchId, "Session B")
+      yield* Effect.promise(() => held.setup.renderOnce())
+      expect(holding.held()).toBeGreaterThan(0)
+      yield* holding.release
+      yield* waitForFrame(held.setup, (frame) => frame === expected, "the control frame")
+      yield* settle(held.setup)
+      expect(renderFrame(held.setup)).toBe(expected)
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a running turn's activity row shows esc cancel", () =>

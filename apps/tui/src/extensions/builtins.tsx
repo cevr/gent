@@ -29,6 +29,8 @@ import {
   messageRendererContribution,
   rankAutocompleteItems,
   readFrecencyLookup,
+  repliesInView,
+  type ReplyWriter,
   recordFrecencyPick,
   rendererContribution,
   sessionQuery,
@@ -330,16 +332,17 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
     let rankedIn = Option.none<string>()
     // The listing and the read in flight each belong to one session. A key
     // typed after a switch never ranks the session it left, and a reply that
-    // lands after the switch is kept only under the session that asked.
+    // lands after the switch is dropped.
     let listing = Option.none<{ readonly session: string; readonly paths: ReadonlyArray<string> }>()
     // One read at a time per session: keys typed while it is on its way wait for it.
     let pending = Option.none<{
       readonly session: string
       readonly fiber: Fiber.Fiber<ReadonlyArray<string>>
     }>()
-    // Each open starts a new listing generation; a read from an earlier open
-    // never becomes the listing of this one.
-    let opened = 0
+    // A listing read writes only while it is the newest read and its session
+    // is still in view. Each open takes a read too, so a read from an earlier
+    // open never becomes the listing of this one.
+    const listings = repliesInView(() => String(transport.currentSession().sessionId))
     /**
      * The session a key was typed in, read once per key. The listing request
      * names it, so a switch while the key is being served cannot send the
@@ -353,15 +356,17 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
       const session = transport.currentSession()
       return { key: String(session.sessionId), session }
     }
-    const fetchListing = ({ key: session, session: asked }: Asker, generation: number) =>
+    const fetchListing = ({ key: session, session: asked }: Asker, reply: ReplyWriter) =>
       transport.request(ref(FilesRpc.List), {}, asked).pipe(
         Effect.map((paths) => paths.filter(isReferenceablePath)),
         // A failed listing offers nothing until the popup opens again.
         Effect.orElseSucceed((): ReadonlyArray<string> => []),
         Effect.tap((paths) =>
-          Effect.sync(() => {
-            if (generation === opened) listing = Option.some({ session, paths })
-          }),
+          Effect.sync(() =>
+            reply.write(() => {
+              listing = Option.some({ session, paths })
+            }),
+          ),
         ),
       )
     const readListing = (asker: Asker) =>
@@ -369,7 +374,9 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
         const session = asker.key
         const inFlight = Option.filter(pending, (read) => read.session === session)
         if (Option.isSome(inFlight)) return yield* Fiber.join(inFlight.value.fiber)
-        const fiber = yield* lifecycle.scoped(Effect.forkScoped(fetchListing(asker, opened)))
+        const fiber = yield* lifecycle.scoped(
+          Effect.forkScoped(fetchListing(asker, listings.take())),
+        )
         pending = Option.some({ session, fiber })
         return yield* Fiber.join(fiber).pipe(
           Effect.ensuring(
@@ -434,7 +441,7 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
       // The listing lives for one open: whatever filter the popup opens on,
       // it ranks a list read since then.
       onOpen: () => {
-        opened++
+        listings.take()
         listing = Option.none()
         pending = Option.none()
       },

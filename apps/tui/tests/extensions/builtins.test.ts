@@ -154,13 +154,13 @@ const withFilesPopup = <A>(
         // The session is rooted outside the launch directory: fff scans the session's.
         workspace: { cwd: launchCwd, home, sessionCwd: Effect.succeed(sessionCwd) },
         currentSession: () => session,
+        // A read answers the listing of the moment it was asked.
         requestEffect: () =>
-          Effect.sync(() => {
+          Effect.suspend(() => {
             reads++
-          }).pipe(
-            Effect.andThen(options.gate ?? Effect.void),
-            Effect.andThen(Effect.sync(() => listed)),
-          ),
+            const answer = listed
+            return (options.gate ?? Effect.void).pipe(Effect.as(answer))
+          }),
       },
     )
   })
@@ -402,6 +402,29 @@ describe("files popup", () => {
             return yield* popup.items("src/")
           }),
         { unlisted: ["src/new.ts"] },
+      )
+      expect(shown.map((item) => item.id)).toContain("src/new.ts")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  filesTest("a read from before a reopen never becomes the reopened popup's listing", () =>
+    Effect.gen(function* () {
+      const answer = yield* Deferred.make<void>()
+      const shown = yield* withFilesPopup(
+        ["src/old.ts"],
+        (popup) =>
+          Effect.gen(function* () {
+            popup.open()
+            const before = yield* Effect.forkChild(popup.items(""))
+            while (popup.reads() === 0) yield* Effect.yieldNow
+            popup.relist(["src/old.ts", "src/new.ts"])
+            // The popup closed and opens again while the first read is out.
+            popup.open()
+            yield* Deferred.succeed(answer, void 0)
+            yield* Fiber.join(before)
+            return yield* popup.items("src/")
+          }),
+        { gate: Deferred.await(answer), unlisted: ["src/new.ts"] },
       )
       expect(shown.map((item) => item.id)).toContain("src/new.ts")
     }).pipe(Effect.timeout("10 seconds")),
