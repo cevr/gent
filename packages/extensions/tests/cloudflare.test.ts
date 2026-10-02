@@ -91,16 +91,49 @@ const remotePayload = {
   },
 }
 
-/** The catalog core would hand the driver: this file's entries, and no decision models. */
+/** The decision list's Workers AI entries, as models.dev writes them (2026-10-02). */
+const decisionPayload = {
+  "cloudflare-workers-ai": {
+    id: "cloudflare-workers-ai",
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+    models: {
+      "@cf/cloudflare/clef-flash": {
+        name: "Clef Flash",
+        type: "decision",
+        tool_call: false,
+        limit: { context: 65536, output: 65536 },
+        cost: { input: 0.09, output: 0 },
+      },
+      "@cf/cloudflare/clef": {
+        name: "Clef",
+        type: "decision",
+        tool_call: false,
+        limit: { context: 65536, output: 65536 },
+        cost: { input: 0.24, output: 0 },
+      },
+    },
+  },
+}
+
+const CLEF = "@cf/cloudflare/clef"
+const CLEF_FLASH = "@cf/cloudflare/clef-flash"
+
+/** The catalog core would hand the driver: this file's chat and decision entries. */
 const fixtureCatalog = modelCatalogFromBodies({
   chat: encodeExternalJson(remotePayload),
-  decision: "{}",
+  decision: encodeExternalJson(decisionPayload),
 })
 
 /** A models.dev client for an RPC root: it answers with this file's entries. */
 const catalogHttpLayer = Effect.gen(function* () {
   const fixture = yield* modelCatalogFixture
   yield* fixture.serve("api.json", encodeExternalJson(remotePayload), '"cloudflare-test"')
+  yield* fixture.serve(
+    "api.json?type=decision",
+    encodeExternalJson(decisionPayload),
+    '"cloudflare-test-decision"',
+  )
   return fixture.layer
 })
 
@@ -271,17 +304,18 @@ describe("Cloudflare catalog", () => {
             kind: Option.none(),
             pricing: { input: 0.293, output: 2.253 },
           },
+          // The decision list's models keep their Workers AI ids and prices.
           {
-            id: ModelId.make("cloudflare/clef"),
-            provider: ProviderId.make("cloudflare"),
-            kind: Option.some("classifier"),
-            pricing: { input: 0.24, output: 0 },
-          },
-          {
-            id: ModelId.make("cloudflare/clef-flash"),
+            id: ModelId.make(`cloudflare/${CLEF_FLASH}`),
             provider: ProviderId.make("cloudflare"),
             kind: Option.some("classifier"),
             pricing: { input: 0.09, output: 0 },
+          },
+          {
+            id: ModelId.make(`cloudflare/${CLEF}`),
+            provider: ProviderId.make("cloudflare"),
+            kind: Option.some("classifier"),
+            pricing: { input: 0.24, output: 0 },
           },
         ])
         // Chat Completions caches implicitly: no model goes cold.
@@ -313,8 +347,8 @@ describe("Cloudflare Clef decisions", () => {
         const driver = yield* fixtureDriver()
         const state = makeFakeFetchState()
         const auth = signedIn({ accountId: "acct-1" })
-        const response = yield* decideTicket(yield* resolveDecision(driver, "clef", auth), state)
-        yield* decideTicket(yield* resolveDecision(driver, "clef-flash", auth), state)
+        const response = yield* decideTicket(yield* resolveDecision(driver, CLEF, auth), state)
+        yield* decideTicket(yield* resolveDecision(driver, CLEF_FLASH, auth), state)
         expect(state.captured.map((request) => request.url)).toEqual([
           `${RUN_URL}/clef`,
           `${RUN_URL}/clef-flash`,
@@ -338,7 +372,7 @@ describe("Cloudflare Clef decisions", () => {
       const driver = yield* fixtureDriver()
       const state = makeFakeFetchState()
       const auth = signedIn({ accountId: "acct-1", gatewayId: "gw-main" })
-      yield* decideTicket(yield* resolveDecision(driver, "clef-flash", auth), state)
+      yield* decideTicket(yield* resolveDecision(driver, CLEF_FLASH, auth), state)
       expect(onlyRequest(state).headers["cf-aig-gateway-id"]).toBe("gw-main")
       expect(onlyRequest(state).url).toBe(`${RUN_URL}/clef-flash`)
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
@@ -349,11 +383,11 @@ describe("Cloudflare Clef decisions", () => {
       const driver = yield* fixtureDriver()
       const auth = signedIn({ accountId: "acct-1" })
       const bare = yield* decideTicket(
-        yield* resolveDecision(driver, "clef", auth),
+        yield* resolveDecision(driver, CLEF, auth),
         makeFakeFetchState(),
       )
       const wrapped = yield* decideTicket(
-        yield* resolveDecision(driver, "clef", auth),
+        yield* resolveDecision(driver, CLEF, auth),
         makeFakeFetchState(),
         () => jsonReply(envelope(TICKET_ANSWER)),
       )
@@ -377,7 +411,7 @@ describe("Cloudflare Clef decisions", () => {
       ]
       const messages = yield* Effect.forEach(replies, (reply) =>
         Effect.gen(function* () {
-          const model = yield* resolveDecision(driver, "clef", auth)
+          const model = yield* resolveDecision(driver, CLEF, auth)
           const error = yield* Effect.flip(decideTicket(model, makeFakeFetchState(), reply))
           return error.message
         }),
@@ -391,7 +425,7 @@ describe("Cloudflare Clef decisions", () => {
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
       const error = yield* Effect.flip(
-        resolveDecision(driver, "clef", ProviderAuthInfo.cases.Api.make({ key: TOKEN })),
+        resolveDecision(driver, CLEF, ProviderAuthInfo.cases.Api.make({ key: TOKEN })),
       )
       expect(error).toBeInstanceOf(ProviderAuthError)
       expect(error.message).toContain("CLOUDFLARE_ACCOUNT_ID")
@@ -401,8 +435,10 @@ describe("Cloudflare Clef decisions", () => {
   it.live("a Clef model is not a chat model: resolving it for chat fails and names it", () =>
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
-      const error = yield* Effect.flip(driver.resolveModel("clef", signedIn({ accountId: "a" })))
-      expect(error).toMatchObject({ _tag: "DriverError", reason: expect.stringContaining("clef") })
+      const error = yield* Effect.flip(
+        driver.resolveModel(CLEF, signedIn({ accountId: "a" }), {}, fixtureCatalog),
+      )
+      expect(error).toMatchObject({ _tag: "DriverError", reason: expect.stringContaining(CLEF) })
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 })

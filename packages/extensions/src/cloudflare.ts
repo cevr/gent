@@ -24,8 +24,14 @@ import {
   type ProviderHints,
   ProviderId,
 } from "@gent/core/extensions/api"
-import { apiKeyFrom, catalogModels, readOptionalEnv } from "./providers.js"
-import { type ClassifierEntry, classifierModel, typeSafeDecisionModel } from "./typesafe.js"
+import {
+  apiKeyFrom,
+  catalogClassifiers,
+  catalogEntry,
+  catalogModels,
+  readOptionalEnv,
+} from "./providers.js"
+import { typeSafeDecisionModel } from "./typesafe.js"
 
 // Test seam: only tests read buildCloudflareModelDriver, which lets a test
 // run the driver against a fake fetch and a fixture catalog.
@@ -186,12 +192,16 @@ const chatModel = (
 const CATALOG_PROVIDER = "cloudflare-workers-ai"
 
 /**
- * The Workers AI models under this driver's id. They speak Chat Completions,
- * whose upstreams cache implicitly with no write price, so none has a cache
- * lifetime.
+ * The Workers AI models under this driver's id: the chat models, then the
+ * classifier models of models.dev's decision list (Clef and Clef Flash). The
+ * chat models speak Chat Completions, whose upstreams cache implicitly with
+ * no write price, so none has a cache lifetime.
  */
 const listWorkersAiModels = (catalog: ModelCatalogView): ReadonlyArray<Model> =>
-  catalogModels(catalog, CATALOG_PROVIDER, Option.none()).map((model) =>
+  [
+    ...catalogModels(catalog, CATALOG_PROVIDER, Option.none()),
+    ...catalogClassifiers(catalog, CATALOG_PROVIDER),
+  ].map((model) =>
     Model.make({
       ...model,
       id: ModelId.make(`${DRIVER_ID}/${model.id.slice(CATALOG_PROVIDER.length + 1)}`),
@@ -203,30 +213,23 @@ const listWorkersAiModels = (catalog: ModelCatalogView): ReadonlyArray<Model> =>
 
 /**
  * Cloudflare's classifier models, Clef (27B) and Clef Flash (9B): the cell's
- * `models.decide`, priced per million input tokens as the Workers AI model
- * pages list them. The pages name no output price; 0 here. models.dev lists
- * neither model.
- */
-const CLASSIFIERS: ReadonlyArray<ClassifierEntry> = [
-  { name: "clef", label: "Clef", pricing: { input: 0.24, output: 0 } },
-  { name: "clef-flash", label: "Clef Flash", pricing: { input: 0.09, output: 0 } },
-]
-
-/**
- * Clef takes TypeSafe's System One body unchanged, its `model` field
- * `clef` or `clef-flash`, at the model's own Workers AI path. The TypeSafe
- * client posts to `{apiUrl}/systemone`; the request goes to
- * `/run/@cf/cloudflare/{model}` under the account instead.
+ * `models.decide`. models.dev's decision list names them with their Workers
+ * AI ids (`@cf/cloudflare/clef`) and prices.
+ *
+ * Clef takes TypeSafe's System One body unchanged, its `model` field the
+ * last segment of the id (`clef` or `clef-flash`), at the model's own Workers
+ * AI path. The TypeSafe client posts to `{apiUrl}/systemone`; the request
+ * goes to `/run/{id}` under the account instead.
  */
 const clefRunPath =
   (modelName: string) =>
   (client: HttpClient.HttpClient): HttpClient.HttpClient =>
     HttpClient.mapRequest(client, (request) =>
-      HttpClientRequest.setUrl(
-        request,
-        request.url.replace(/\/systemone$/, `/run/@cf/cloudflare/${modelName}`),
-      ),
+      HttpClientRequest.setUrl(request, request.url.replace(/\/systemone$/, `/run/${modelName}`)),
     )
+
+/** The `model` field of a Clef request body: the id's last segment. */
+const clefBodyModel = (modelName: string): string => modelName.slice(modelName.lastIndexOf("/") + 1)
 
 /**
  * The Workers AI REST envelope, `{ result, success, errors, messages }`. The
@@ -342,8 +345,12 @@ const unwrapEnvelope = (client: HttpClient.HttpClient): HttpClient.HttpClient =>
     ),
   )
 
-const isClassifier = (modelName: string): boolean =>
-  CLASSIFIERS.some((entry) => entry.name === modelName)
+/** Whether the catalog names `modelName` a decision model: chat refuses it. */
+const isClassifier = (modelName: string, catalog: Option.Option<ModelCatalogView>): boolean =>
+  Option.exists(
+    Option.flatMap(catalog, (view) => catalogEntry(view, CATALOG_PROVIDER, modelName)),
+    (entry) => entry.decision === true,
+  )
 
 // ── driver ──────────────────────────────────────────────────────────────────
 
@@ -352,9 +359,9 @@ export const buildCloudflareModelDriver = (env: CloudflareEnv): ModelDriverContr
   id: DRIVER_ID,
   name: "Cloudflare",
   envCredential: TOKEN_ENV,
-  resolveModel: (modelName, authInfo, hints) =>
+  resolveModel: (modelName, authInfo, hints, catalog) =>
     Effect.gen(function* () {
-      if (isClassifier(modelName)) {
+      if (isClassifier(modelName, Option.fromUndefinedOr(catalog))) {
         return yield* new DriverError({
           driver: DriverFailureId.make(DRIVER_ID),
           reason: `${DRIVER_ID}/${modelName} is a classifier model: it runs no turn; a cell asks it with models.decide`,
@@ -370,18 +377,14 @@ export const buildCloudflareModelDriver = (env: CloudflareEnv): ModelDriverContr
     }),
   resolveDecisionModel: (modelName, authInfo) =>
     Effect.map(accountFrom(Option.fromNullishOr(authInfo), env), (account) =>
-      typeSafeDecisionModel(modelName, {
+      typeSafeDecisionModel(clefBodyModel(modelName), {
         apiKey: account.token,
         apiUrl: accountRoot(account),
         transformClient: (client) =>
           client.pipe(clefRunPath(modelName), gatewayHeader(account.gatewayId), unwrapEnvelope),
       }),
     ),
-  listModels: (catalog) =>
-    Effect.succeed([
-      ...listWorkersAiModels(catalog),
-      ...CLASSIFIERS.map((entry) => classifierModel(DRIVER_ID, entry)),
-    ]),
+  listModels: (catalog) => Effect.succeed(listWorkersAiModels(catalog)),
   auth: {
     methods: [
       AuthMethod.make({

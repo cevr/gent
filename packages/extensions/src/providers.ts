@@ -803,6 +803,22 @@ export const catalogModels = (
         .map((model) => withPromptCacheTtl(model, promptCacheTtl)),
   })
 
+/**
+ * The classifier models of one provider, from models.dev's decision list
+ * (`api.json?type=decision`): the cell's `models.decide`. They run no turn.
+ */
+export const catalogClassifiers = (
+  catalog: ModelCatalogView,
+  providerId: string,
+): ReadonlyArray<Model> =>
+  Option.match(catalog.provider(providerId), {
+    onNone: () => [],
+    onSome: (provider) =>
+      provider.models
+        .filter((entry) => entry.decision === true)
+        .map((entry) => modelFromCatalog(providerId, entry)),
+  })
+
 /** The model with `promptCacheTtl` as its cache lifetime; a model with none never goes cold. */
 export const withPromptCacheTtl = (
   model: Model,

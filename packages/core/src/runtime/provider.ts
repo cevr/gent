@@ -1619,8 +1619,8 @@ const classifierCatalog = Effect.fn("DecisionModelResolver.catalog")(function* (
 
 /**
  * Whether some driver that serves classifiers has a stored or env
- * credential. A driver declares `resolveDecisionModel` only when it lists a
- * classifier, so no catalog is read. A failed read counts as none.
+ * credential. A driver declares `resolveDecisionModel` only when it can
+ * serve a classifier, so no catalog is read. A failed read counts as none.
  */
 const classifierAvailable = Effect.fn("DecisionModelResolver.hasCredential")(
   function* (auth: AuthService, allDrivers: ModelDrivers) {

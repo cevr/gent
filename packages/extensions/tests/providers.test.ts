@@ -26,6 +26,7 @@ import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/process"
 import {
   catalogEntry,
+  catalogClassifiers,
   catalogModels,
   type CredentialCacheCell,
   type CredentialFailure,
@@ -145,6 +146,11 @@ describe("driver catalog", () => {
       ModelId.make("openai/gpt-4o"),
     ])
     expect(catalogModels(catalog, "missing", Option.none())).toEqual([])
+    // The decision model lists apart, as a classifier.
+    expect(
+      catalogClassifiers(catalog, "openai").map((model) => [model.id, model.kind, model.name]),
+    ).toEqual([[ModelId.make("openai/clef"), "classifier", "Clef"]])
+    expect(catalogClassifiers(catalog, "anthropic")).toEqual([])
   })
 
   test("a catalog entry that names no package of its own takes its provider's", () => {

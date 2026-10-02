@@ -3,15 +3,12 @@ import type { HttpClient } from "effect/http"
 import type { DecisionModel } from "effect/ai"
 import {
   AuthMethod,
+  type CatalogModel,
   defineExtension,
   ExtensionHost,
-  Model,
-  ModelId,
   type ModelDriverContribution,
-  type ModelPricing,
-  omitUndefined,
+  modelFromCatalog,
   ProviderAuthError,
-  ProviderId,
 } from "@gent/core/extensions/api"
 import { apiKeyFrom, ModelHttpClient, readOptionalEnv } from "./providers.js"
 
@@ -21,8 +18,8 @@ import { apiKeyFrom, ModelHttpClient, readOptionalEnv } from "./providers.js"
 /**
  * TypeSafe's classifier models (Jev): typed answers to classify, rate and
  * probability questions, the cell's `models.decide`. They run no turn. The
- * driver posts to TypeSafe itself; the OpenCode Zen driver reuses
- * `typeSafeDecisionModel` for the Jev models its gateway serves.
+ * driver posts to TypeSafe itself; the OpenCode and Cloudflare drivers reuse
+ * `typeSafeDecisionModel` for the decision models models.dev lists under them.
  *
  * Docs: docs.typesafe.ai and `@effect/ai-typesafe` (read 2026-10-01).
  */
@@ -63,25 +60,6 @@ export const typeSafeDecisionModel = (
     ),
   )
 
-// ── catalog ─────────────────────────────────────────────────────────────────
-
-/** One classifier entry of a driver's static catalog: models.dev lists no Jev model. */
-export interface ClassifierEntry {
-  readonly name: string
-  readonly label: string
-  readonly pricing?: ModelPricing
-}
-
-/** A catalog `Model` for a classifier entry; the TUI picker leaves it out. */
-export const classifierModel = (providerId: string, entry: ClassifierEntry): Model =>
-  Model.make({
-    id: ModelId.make(`${providerId}/${entry.name}`),
-    name: entry.label,
-    provider: ProviderId.make(providerId),
-    kind: "classifier",
-    ...omitUndefined({ pricing: entry.pricing }),
-  })
-
 // ── driver ──────────────────────────────────────────────────────────────────
 
 const DRIVER_ID = "typesafe"
@@ -90,14 +68,16 @@ const API_URL = "https://api.typesafe.ai/v1"
 
 /**
  * The model ids `@effect/ai-typesafe` names (`TypeSafeDecisionModel.Model`),
- * as the TypeSafe docs list them. A cell that names no model and has a
- * TypeSafe key gets `jev-latest`: core's default picks a `-latest` model in
- * any position.
+ * as the TypeSafe docs list them. models.dev lists Jev only under gateways
+ * (OpenCode Zen, nano-gpt, vivgrid), never TypeSafe's own API, so the driver
+ * keeps these local entries in the catalog's shape. A cell that names no
+ * model and has a TypeSafe key gets `jev-latest`: core's default picks a
+ * `-latest` model in any position.
  */
-const CLASSIFIERS: ReadonlyArray<ClassifierEntry> = [
-  { name: "jev-latest", label: "Jev (latest)" },
-  { name: "jev-preview", label: "Jev (preview)" },
-  { name: "jev-1.13.0", label: "Jev 1.13.0" },
+const CLASSIFIERS: ReadonlyArray<CatalogModel> = [
+  { id: "jev-latest", name: "Jev (latest)", decision: true },
+  { id: "jev-preview", name: "Jev (preview)", decision: true },
+  { id: "jev-1.13.0", name: "Jev 1.13.0", decision: true },
 ]
 
 /** A chat turn asked for a model of a driver that serves only classifiers. */
@@ -130,7 +110,7 @@ export const buildTypeSafeModelDriver = (
       }
       return typeSafeDecisionModel(modelName, { apiKey: apiKey.value, apiUrl: API_URL })
     }),
-  listModels: () => Effect.succeed(CLASSIFIERS.map((entry) => classifierModel(DRIVER_ID, entry))),
+  listModels: () => Effect.succeed(CLASSIFIERS.map((entry) => modelFromCatalog(DRIVER_ID, entry))),
   auth: {
     methods: [AuthMethod.make({ type: "api", label: "TypeSafe API key" })],
   },

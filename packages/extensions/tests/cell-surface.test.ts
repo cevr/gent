@@ -795,12 +795,12 @@ describe("cell models host", () => {
           code: [
             "const reply = await models.decide({ text: 'late order' }, {",
             "  urgent: models.probability({ instructions: 'Needs action today' }),",
-            "}, { model: 'cloudflare/clef-flash' })",
+            "}, { model: 'cloudflare/@cf/cloudflare/clef-flash' })",
             "JSON.stringify(reply)",
           ].join("\n"),
         })
         expect(yield* decodeDecideJson(display)).toEqual({
-          model: "cloudflare/clef-flash",
+          model: "cloudflare/@cf/cloudflare/clef-flash",
           answers: { urgent: { probability: 0.75 } },
           usage: { inputTokens: 12, outputTokens: 0 },
         })

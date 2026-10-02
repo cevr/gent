@@ -908,7 +908,7 @@ describe("OpenCode Zen classifiers", () => {
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
-  it.live("Zen lists its Jev models as classifiers; Go serves none", () =>
+  it.live("each gateway lists the classifiers models.dev's decision list names under it", () =>
     Effect.gen(function* () {
       const { zen, go } = yield* fixtureDrivers
       const zenModels = yield* Option.getOrThrow(Option.fromUndefinedOr(zen.listModels))(
@@ -922,8 +922,8 @@ describe("OpenCode Zen classifiers", () => {
       const goModels = yield* Option.getOrThrow(Option.fromUndefinedOr(go.listModels))(
         fixtureCatalog,
       )
+      // The decision list names none under Go.
       expect(goModels.some((model) => model.kind === "classifier")).toBe(false)
-      expect(go.resolveDecisionModel).toBeUndefined()
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
@@ -952,8 +952,8 @@ describe("OpenCode Zen classifiers", () => {
         .filter((model) => model.kind === "classifier")
         .map((model) => model.id)
       expect(classifiers.toSorted()).toEqual([
-        ModelId.make("cloudflare/clef"),
-        ModelId.make("cloudflare/clef-flash"),
+        ModelId.make("cloudflare/@cf/cloudflare/clef"),
+        ModelId.make("cloudflare/@cf/cloudflare/clef-flash"),
         ModelId.make("opencode/jev-1.13"),
         ModelId.make("opencode/jev-1.13-free"),
         ModelId.make("typesafe/jev-1.13.0"),
