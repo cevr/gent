@@ -69,6 +69,7 @@ interface SourceForms {
    * in a template is no import.
    */
   readonly module: ModuleSyntax
+  /** The seam guard's facts, read only for the files it reads (`readsSeams`); empty for the rest. */
   readonly seams: SeamSyntax
   /**
    * `codeOnly` with regex bodies blanked too, and the line breaks inside
@@ -385,6 +386,8 @@ const parsedText = (file: string, text: string): ParsedText => {
     line: lineAt(text, (error.labels[0]?.start ?? shift) - shift),
     body: error.message,
   }))
+  let seams = NO_SEAMS
+  if (readsSeams(file)) seams = seamSyntaxOf(result.program, lineOf)
   return {
     errors,
     comments,
@@ -393,7 +396,7 @@ const parsedText = (file: string, text: string): ParsedText => {
       .map((span) => ({ ...span, start: span.start - shift, end: span.end - shift }))
       .sort((a, b) => a.start - b.start),
     module: moduleSyntaxOf(result, lineOf, dynamicReads, literalSpecifiers),
-    seams: seamSyntaxOf(result.program, lineOf),
+    seams,
   }
 }
 
@@ -420,19 +423,21 @@ const blankedSpans = (
 
 /**
  * Each source's forms, keyed by how it is read and by its text: a guards run
- * reads one file's text in several scans, and parses it once.
+ * reads one file's text in several scans, and parses it once. How a file is
+ * read is its language and whether the seam guard reads its seam facts.
  */
-const sourceFormsCache = {
-  ts: new Map<string, SourceForms>(),
-  tsx: new Map<string, SourceForms>(),
-  dts: new Map<string, SourceForms>(),
-  json: new Map<string, SourceForms>(),
-}
+const sourceFormsCache = new Map<string, Map<string, SourceForms>>()
 
 /** The forms of `text`, read as `file` is read. */
 const sourceForms = (file: string, text: string): SourceForms => {
-  let cache = sourceFormsCache[parseLanguage(file)]
-  if (isJsonFile(file)) cache = sourceFormsCache.json
+  let reading: string = parseLanguage(file)
+  if (isJsonFile(file)) reading = "json"
+  if (readsSeams(file)) reading += "+seams"
+  const cache = Option.getOrElse(Option.fromNullishOr(sourceFormsCache.get(reading)), () => {
+    const created = new Map<string, SourceForms>()
+    sourceFormsCache.set(reading, created)
+    return created
+  })
   return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
     const { errors, comments, names, spans, module, seams } = parsedText(file, text)
     const forms: SourceForms = {
@@ -666,6 +671,10 @@ const SEAM_DECLARATION_FILE = "packages/core/src/domain/extension.ts"
 const isAdapterSource = (file: string): boolean =>
   isShippedSource(file) && (file.startsWith("packages/extensions/src/") || file.startsWith("apps/"))
 
+/** The files whose seam facts the guard reads; the shared parse skips the walk for the rest. */
+const readsSeams = (file: string): boolean =>
+  file === SEAM_DECLARATION_FILE || isAdapterSource(file)
+
 const SeamFamily = Schema.Literals(["registration", "hook", "facet", "resource"])
 type SeamFamily = typeof SeamFamily.Type
 export type SeamKey = `${SeamFamily}:${string}`
@@ -685,6 +694,9 @@ interface SeamSyntax {
   readonly declarations: ReadonlyArray<DeclaredSeam>
   readonly uses: ReadonlySet<SeamKey>
 }
+
+/** The seam facts of a file the guard does not read. */
+const NO_SEAMS: SeamSyntax = { declarations: [], uses: new Set() }
 
 const staticNameOf = (node: PropertyKey): Option.Option<string> => {
   if (node.type === "Identifier") return Option.some(node.name)
