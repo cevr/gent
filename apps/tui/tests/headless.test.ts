@@ -103,14 +103,20 @@ const errorNotice = (error: string) =>
 /**
  * A branch as one run sees it: the stored history, the synchronization
  * marker, the live events that come before the run's prompt is sent (an
- * older turn still running), and, once the run sends, its own turn: the
- * opening message, then `ownTurn`. The stream stays open. `send` fails with
- * `sendFailure` when one is given, as a failed turn phase fails it.
+ * older turn still running), and, once the run sends, the `afterSend` events
+ * and then its own turn: the opening message, then `ownTurn`. The stream stays
+ * open. Each send runs `sendAttempt` first; the turn opens when the attempt
+ * succeeds. `send` fails with `sendFailure` when one is given, as a failed
+ * turn phase fails it.
  */
 const branchClient = (input: {
   readonly history?: ReadonlyArray<AgentEvent>
   readonly beforeSend?: ReadonlyArray<AgentEvent>
+  readonly afterSend?: ReadonlyArray<AgentEvent>
   readonly ownTurn: ReadonlyArray<AgentEvent>
+  readonly sendAttempt?: (send: {
+    readonly requestId?: string
+  }) => Effect.Effect<void, RpcClientError>
   readonly sendFailure?: HeadlessRunnerTestError
   readonly respondInteraction?: (answer: {
     readonly approved: boolean
@@ -129,7 +135,7 @@ const branchClient = (input: {
     lastEventId: EventId.make(history.length),
   })
   const before = [...history, marker, ...(input.beforeSend ?? [])]
-  const after = [opening(OWN_TURN, PROMPT), ...input.ownTurn]
+  const after = [...(input.afterSend ?? []), opening(OWN_TURN, PROMPT), ...input.ownTurn]
   return createMockClient({
     session: {
       events: () =>
@@ -143,8 +149,12 @@ const branchClient = (input: {
         ),
     },
     message: {
-      send: () =>
-        Deferred.done(sent, Exit.void).pipe(
+      send: (send: { readonly requestId?: string }) =>
+        Option.match(Option.fromUndefinedOr(input.sendAttempt), {
+          onNone: () => Effect.void,
+          onSome: (attempt) => attempt(send),
+        }).pipe(
+          Effect.andThen(Deferred.done(sent, Exit.void)),
           Effect.andThen(
             Option.match(Option.fromUndefinedOr(input.sendFailure), {
               onNone: () => Effect.void,
@@ -221,7 +231,7 @@ describe("runHeadless", () => {
     }),
   )
 
-  headlessTest("a failed stream with no answer fails the run with one stderr line", () =>
+  headlessTest("a failed stream with no answer fails the run with a one-line message", () =>
     Effect.gen(function* () {
       const client = branchClient({
         ownTurn: [
@@ -266,16 +276,6 @@ describe("runHeadless", () => {
     }),
   )
 
-  headlessTest("an interrupted turn fails the run", () =>
-    Effect.gen(function* () {
-      const client = branchClient({ ownTurn: [completed({ interrupted: true })] })
-      const exit = yield* Effect.exit(run(client))
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag !== "Failure") return
-      expect(String(Cause.squash(exit.cause))).toContain("the turn was interrupted")
-    }),
-  )
-
   headlessTest("an interrupted turn fails the run even after partial text", () =>
     Effect.gen(function* () {
       const client = branchClient({
@@ -284,6 +284,8 @@ describe("runHeadless", () => {
       const { result: exit, stdout } = yield* captureStdout(Effect.exit(run(client)))
       expect(stdout).toContain("half an answer")
       expect(exit._tag).toBe("Failure")
+      if (exit._tag !== "Failure") return
+      expect(String(Cause.squash(exit.cause))).toContain("the turn was interrupted")
     }),
   )
 
@@ -316,46 +318,10 @@ describe("runHeadless", () => {
 
   headlessTest("an older turn's TurnCompleted after the send settles nothing", () =>
     Effect.gen(function* () {
-      const sent = Deferred.makeUnsafe<void>()
-      const events = [
-        AgentEvent.cases.StreamSynchronized.make({
-          sessionId,
-          branchId,
-          lastEventId: EventId.make(0),
-        }),
-      ]
-      // After the send: the older turn still streams and completes unanswered,
-      // then the run's own turn opens and answers.
-      const live = [
-        chunk("older output"),
-        completed({ messageId: OLDER_TURN, unanswered: true }),
-        opening(OWN_TURN, PROMPT),
-        chunk("the answer"),
-        completed(),
-      ]
-      const client = createMockClient({
-        session: {
-          events: () =>
-            Stream.fromIterable(
-              events.map((event, index) =>
-                EventEnvelope.make({ id: EventId.make(index + 1), event, createdAt: 0 }),
-              ),
-            ).pipe(
-              Stream.concat(
-                Stream.fromEffect(Deferred.await(sent)).pipe(
-                  Stream.flatMap(() =>
-                    Stream.fromIterable(
-                      live.map((event, index) =>
-                        EventEnvelope.make({ id: EventId.make(index + 2), event, createdAt: 0 }),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Stream.concat(Stream.never),
-            ),
-        },
-        message: { send: () => Deferred.done(sent, Exit.void).pipe(Effect.asVoid) },
+      const client = branchClient({
+        // After the send, the older turn still streams and completes unanswered.
+        afterSend: [chunk("older output"), completed({ messageId: OLDER_TURN, unanswered: true })],
+        ownTurn: [chunk("the answer"), completed()],
       })
       const captured = yield* captureStdout(run(client))
       expect(captured.stdout).toContain("the answer")
@@ -436,46 +402,17 @@ describe("runHeadless", () => {
     Effect.gen(function* () {
       const observedRequestIds: Array<string> = []
       let sendAttempts = 0
-      const sent = Deferred.makeUnsafe<void>()
-      const marker = AgentEvent.cases.StreamSynchronized.make({
-        sessionId,
-        branchId,
-        lastEventId: EventId.make(0),
-      })
-      const live = [opening(OWN_TURN, PROMPT), completed()]
-      const client = createMockClient({
-        session: {
-          events: () =>
-            Stream.make(
-              EventEnvelope.make({ id: EventId.make(1), event: marker, createdAt: 0 }),
-            ).pipe(
-              Stream.concat(
-                Stream.fromEffect(Deferred.await(sent)).pipe(
-                  Stream.flatMap(() =>
-                    Stream.fromIterable(
-                      live.map((event, index) =>
-                        EventEnvelope.make({ id: EventId.make(index + 2), event, createdAt: 0 }),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Stream.concat(Stream.never),
-            ),
-        },
-        message: {
-          send: (input: { requestId?: string }) => {
-            observedRequestIds.push(input.requestId ?? "<missing>")
-            sendAttempts += 1
-            // Fail the first two attempts with a lost connection so the
-            // retry policy fires; succeed on the third.
-            if (sendAttempts < 3) {
-              return Effect.fail(
-                new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
-              )
-            }
-            return Deferred.done(sent, Exit.void).pipe(Effect.asVoid)
-          },
+      const client = branchClient({
+        ownTurn: [completed()],
+        sendAttempt: (send) => {
+          observedRequestIds.push(send.requestId ?? "<missing>")
+          sendAttempts += 1
+          // Fail the first two attempts with a lost connection so the
+          // retry policy fires; succeed on the third.
+          if (sendAttempts < 3) {
+            return Effect.fail(new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }))
+          }
+          return Effect.void
         },
       })
       const exit = yield* Effect.exit(

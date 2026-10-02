@@ -139,6 +139,14 @@ export const AuthEvent = Schema.TaggedUnion({
     providers: Schema.Array(AuthProviderInfo),
     methods: Schema.Record(Schema.String, Schema.Array(AuthMethod)),
   },
+  /**
+   * The server answered a reload after a stored key changed under a screen
+   * the reader has left: the catalog is new, and the screen stays.
+   */
+  Refreshed: {
+    providers: Schema.Array(AuthProviderInfo),
+    methods: Schema.Record(Schema.String, Schema.Array(AuthMethod)),
+  },
   /** A load or an action failed; the pane falls back to the list and says why. */
   Failed: { error: Schema.String },
   /** A provider was chosen from the list. */
@@ -208,6 +216,10 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
         catalog: Option.some({ providers: event.providers, methods: event.methods }),
         screen: AuthScreen.cases.List.make({}),
         error: Option.none(),
+      }),
+      Refreshed: (event) => ({
+        ...state,
+        catalog: Option.some({ providers: event.providers, methods: event.methods }),
       }),
       Failed: (event) => list(state, Option.some(event.error)),
       OpenMethod: (event) => methods(state, event.provider),
@@ -432,7 +444,8 @@ export function Auth(props: AuthProps) {
 
   // ── Loading ───────────────────────────────────────────────────────
 
-  const loadAuth = (token: ReplyWriter) => {
+  /** `keepScreen`: the answer refreshes the catalog only (`Refreshed`). */
+  const loadAuth = (token: ReplyWriter, keepScreen = false) => {
     clientCtx.log.info("auth:load-start")
     const request = {
       ...omitUndefined({ agentName: Option.getOrUndefined(clientCtx.agent()) }),
@@ -446,7 +459,9 @@ export function Auth(props: AuthProps) {
         Effect.tap(([providers, methods]) =>
           whileCurrent(token, () => {
             clientCtx.log.info("auth:load-complete", { providers: providers.length })
-            send(AuthEvent.cases.Loaded.make({ providers: [...providers], methods }))
+            const catalog = { providers: [...providers], methods }
+            if (keepScreen) send(AuthEvent.cases.Refreshed.make(catalog))
+            else send(AuthEvent.cases.Loaded.make(catalog))
           }),
         ),
         Effect.catchEager((err) =>
@@ -512,12 +527,28 @@ export function Auth(props: AuthProps) {
     return true
   }
 
+  /**
+   * A key was stored or removed. While its action is current the pane says
+   * so and goes back to the list. A reader who stepped back meanwhile
+   * (`back`) stays where they are, but the catalog still changed: it is read
+   * again under the newest action and only its rows change.
+   */
+  const keyChanged = (token: ReplyWriter, note: Option.Option<string>) =>
+    Effect.sync(() => {
+      if (!token.live()) {
+        loadAuth(actions.newest(), true)
+        return
+      }
+      Option.map(note, flashSuccess)
+      loadAuth(token)
+    })
+
   const deleteProvider = (provider: AuthProviderInfo) => {
     if (provider.source !== "stored") return
     const token = begin()
     cast(
       clientCtx.client.auth.deleteKey({ provider: provider.provider, sessionId }).pipe(
-        Effect.tap(() => whileCurrent(token, () => loadAuth(token))),
+        Effect.tap(() => keyChanged(token, Option.none())),
         Effect.catchEager(failed(token)),
       ),
     )
@@ -530,12 +561,7 @@ export function Auth(props: AuthProps) {
     clientCtx.log.info("auth:submit-key", { provider })
     cast(
       clientCtx.client.auth.setKey({ provider, key, sessionId }).pipe(
-        Effect.tap(() =>
-          whileCurrent(token, () => {
-            flashSuccess(`API key saved for ${label(provider)}`)
-            loadAuth(token)
-          }),
-        ),
+        Effect.tap(() => keyChanged(token, Option.some(`API key saved for ${label(provider)}`))),
         Effect.catchEager(failed(token)),
       ),
     )

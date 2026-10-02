@@ -45,8 +45,7 @@ import {
   type NoticeRow,
   type WidgetComponent,
   type WidgetSlot,
-  ClientContributionsData,
-  contributionBucketSchema,
+  decodeContributions,
 } from "./client-facets.js"
 import { bindModuleSource, buildClientExtension, type ClientBuildNames } from "../bun-adapter"
 import type { ToolRenderer } from "../tool-renderers"
@@ -85,13 +84,7 @@ const discoverDir = (
     const results: DiscoveredTuiExtension[] = []
 
     for (const entry of entries) {
-      if (
-        entry.startsWith(".") ||
-        entry.startsWith("_") ||
-        entry === "__tests__" ||
-        entry === "node_modules"
-      )
-        continue
+      if (entry.startsWith(".") || entry.startsWith("_") || entry === "node_modules") continue
 
       const filePath = path.join(dir, entry)
       const info = yield* fs.stat(filePath).pipe(Effect.option)
@@ -174,13 +167,17 @@ export interface LoadedTuiExtension {
 }
 
 export interface ResolvedWidget {
+  /** The extension that contributed it, named when its render fails. */
+  readonly extensionId: string
   readonly id: string
   readonly slot: WidgetSlot
   readonly priority: number
   readonly component: WidgetComponent
 }
 
-export interface ResolvedStatusLabel {
+interface ResolvedStatusLabel {
+  /** The extension that contributed it, named when it fails. */
+  readonly extensionId: string
   readonly priority: number
   readonly produce: () => ReadonlyArray<StatusLabelItem>
 }
@@ -551,10 +548,10 @@ export const resolveTuiExtensions = (
       name: contribution.customType,
     })),
   )
-  const widgets = resolveKeyed(sorted, failures, "widget", (contributions) =>
+  const widgets = resolveKeyed(sorted, failures, "widget", (contributions, extensionId) =>
     itemsOrEmpty(contributions.widgets).map((contribution) => ({
       key: contribution.id,
-      value: { ...contribution, priority: priorityOrDefault(contribution.priority) },
+      value: { ...contribution, extensionId, priority: priorityOrDefault(contribution.priority) },
       name: contribution.id,
     })),
   )
@@ -588,10 +585,13 @@ export const resolveTuiExtensions = (
     })),
     interactionRenderers,
     statusLabels: byPriority(
-      collected((contributions) => contributions.statusLabels).map((contribution) => ({
-        priority: priorityOrDefault(contribution.priority),
-        produce: contribution.produce,
-      })),
+      sorted.flatMap((ext) =>
+        itemsOrEmpty(ext.contributions.statusLabels).map((contribution) => ({
+          extensionId: ext.id,
+          priority: priorityOrDefault(contribution.priority),
+          produce: contribution.produce,
+        })),
+      ),
     ),
     noticeRows: [...noticeRows.values()],
     autocompleteItems: collected((contributions) => contributions.autocomplete),
@@ -677,42 +677,17 @@ const withinLoadTimeout =
     )
 
 /**
- * A setup's result as plain contributions, inside this extension's own
- * failure. A key the object owns outside the known buckets fails by name, so
- * a renamed bucket never drops its items silently. Each known bucket is read
- * once by property access (a class instance's getter counts), checked by name,
- * and decoded to new objects, so the resolution every extension shares never
- * touches the extension's own object. Anything that throws on the way (a
- * getter, a proxy, a field the decode reads again) fails only this extension.
+ * A setup's result as plain contributions (`decodeContributions`), inside this
+ * extension's own failure. Anything that throws on the way (a getter, a
+ * proxy, a field the decode reads again) fails only this extension.
  */
 const readContributions = (
   id: string,
   // eslint-disable-next-line effect/noUnknownParameters -- a user setup's result is parsed at this module boundary.
   value: unknown,
 ): Effect.Effect<ClientContributions, ClientExtensionFailure> =>
-  Effect.gen(function* () {
-    if (!Predicate.isObject(value)) {
-      return yield* Effect.fail({ id, reason: "setup must return contributions" })
-    }
-    const unknownKey = Option.fromUndefinedOr(
-      Object.keys(value).find((key) => Option.isNone(contributionBucketSchema(key))),
-    )
-    if (Option.isSome(unknownKey)) {
-      return yield* Effect.fail({ id, reason: `unknown contribution "${unknownKey.value}"` })
-    }
-    const buckets: Array<readonly [string, unknown]> = []
-    for (const key of Object.keys(ClientContributionsData.fields)) {
-      if (Predicate.hasProperty(value, key)) buckets.push([key, value[key]])
-    }
-    for (const [key, bucket] of buckets) {
-      const schema = contributionBucketSchema(key)
-      if (Option.isSome(schema) && !Schema.is(schema.value)(bucket)) {
-        return yield* Effect.fail({ id, reason: `malformed contribution "${key}"` })
-      }
-    }
-    const decoded = Schema.decodeExit(ClientContributionsData)(Object.fromEntries(buckets))
-    return yield* Effect.mapError(decoded, () => ({ id, reason: "malformed contributions" }))
-  }).pipe(
+  Effect.suspend(() => decodeContributions(value)).pipe(
+    Effect.mapError((reason) => ({ id, reason })),
     Effect.catchDefect((defect) =>
       Effect.fail({ id, reason: `reading contributions failed: ${String(defect)}` }),
     ),

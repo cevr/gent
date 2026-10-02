@@ -1221,10 +1221,12 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   // Each navigation (a create sent, a fork asked for, a session switch, a
-  // branch switch asked for) takes the next number. A create or a fork
-  // answers late, so it takes the view only while its number is the latest:
-  // a later /new, fork or switch has overtaken it otherwise.
-  let navigation = 0
+  // branch switch asked for) is the newest read of the reader's place. A
+  // create or a fork answers late, so it takes the view only while it is the
+  // newest: a later /new, fork or switch has overtaken it otherwise. The key
+  // is constant: only a navigation overtakes one, never an identity the
+  // server moved.
+  const navigations = repliesInView(() => "navigation")
 
   /**
    * Creates a session in `cwd` and shows it. A `/new` starts in the launch
@@ -1238,7 +1240,7 @@ export function ClientProvider(props: ClientProviderProps) {
     >,
     cwd: Effect.Effect<string, GentClientRpcError>,
   ) => {
-    const ownNavigation = ++navigation
+    const navigation = navigations.take()
     // The current session stays in view until the server answers: a create
     // it refuses leaves the reader where they were, with the reason.
     const createSessionEffect = Effect.fn("TUI.createSession")(function* () {
@@ -1254,7 +1256,7 @@ export function ClientProvider(props: ClientProviderProps) {
       createSessionEffect().pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            if (ownNavigation !== navigation) {
+            if (!navigation.live()) {
               log.info("createSession.overtaken", { sessionId: result.sessionId })
               return
             }
@@ -1279,8 +1281,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.sync(() => {
             log.error("createSession.failed", { error: String(err) })
             // An overtaken create failed for the view the reader left.
-            if (ownNavigation !== navigation) return
-            showError(Option.some(formatError(err)))
+            navigation.write(() => showError(Option.some(formatError(err))))
           }),
         ),
       ),
@@ -1296,7 +1297,7 @@ export function ClientProvider(props: ClientProviderProps) {
     from: SessionIdentity,
     toBranchId: BranchId,
   ): Effect.Effect<void> => {
-    navigation++
+    navigations.take()
     return Effect.gen(function* () {
       const requestId = yield* randomId
       yield* client.branch.switch({
@@ -1337,7 +1338,7 @@ export function ClientProvider(props: ClientProviderProps) {
       const current = session()
       // A switch overtakes any create still waiting, even a switch to the
       // session already in view: the reader chose where to be.
-      navigation++
+      navigations.take()
       // Choosing the session already in view changes nothing else. A reset here
       // would clear its status, metrics and settings, and no snapshot comes to
       // restore them: the identity did not change, so the feed does not re-run.
@@ -1395,7 +1396,7 @@ export function ClientProvider(props: ClientProviderProps) {
       const from = sessionIdentity()
       // The fork is a navigation from the moment it is asked for: a later
       // fork or switch overtakes it, and it overtakes an earlier one.
-      const ownNavigation = ++navigation
+      const navigation = navigations.take()
       return Effect.gen(function* () {
         const requestId = yield* randomId
         const result = yield* client.branch.fork({
@@ -1405,7 +1406,7 @@ export function ClientProvider(props: ClientProviderProps) {
           requestId,
         })
         const forked = BranchId.make(result.branchId)
-        if (ownNavigation !== navigation) {
+        if (!navigation.live()) {
           log.info("forkBranch.overtaken", { sessionId: from.sessionId, branchId: forked })
           return
         }

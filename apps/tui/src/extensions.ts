@@ -88,6 +88,8 @@ export {
   formatUsageStats,
   isReferenceablePath,
   plural,
+  repliesInView,
+  type ReplyWriter,
   shortId,
   type ToolInput,
   truncate,

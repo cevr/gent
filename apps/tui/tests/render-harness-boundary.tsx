@@ -2,11 +2,22 @@
 
 import { Writable } from "node:stream" // eslint-disable-line effect/noNodeBuiltinImport -- the renderer writes to a Node stream; a test terminal must be one.
 import { BunServices } from "@effect/platform-bun"
-import { Config, Context, Effect, FileSystem, Layer, Option, Path, Scope, Stream } from "effect"
+import {
+  Config,
+  Context,
+  Deferred,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Scope,
+  Stream,
+} from "effect"
 import type { CliRenderer, CliRendererExternalOutputEvent, TerminalColors } from "@opentui/core"
 import { render } from "@opentui/solid"
 import { createTestRenderer, type TestRendererOptions } from "@opentui/core/testing"
-import type { JSX } from "solid-js"
+import { onMount, type JSX } from "solid-js"
 import { KeyboardScopeProvider, TerminalDimensionsProvider } from "../src/terminal"
 import { SpinnerClockProvider } from "../src/ui"
 import { ThemeProvider } from "../src/theme"
@@ -17,6 +28,7 @@ import {
   type ClientLog,
   ClientProvider,
   type Session,
+  useClient,
 } from "../src/client"
 import { type GentRuntime } from "@gent/sdk"
 import { ExtensionUIProvider } from "../src/extensions/host"
@@ -27,6 +39,7 @@ import {
   AgentName,
   EventEnvelope,
   BranchId,
+  dateFromMillis,
   ModelId,
   SessionId,
   type Session as DomainSession,
@@ -93,7 +106,15 @@ export const snapshotNaming = (agent: AgentName) => ({
     }),
 })
 
-export const createMockClient = (overrides?: NamespaceOverrides): GentNamespacedClient => {
+/** How a mock client answers: `holdingReplies` makes one that holds every reply. */
+interface ReplyHold {
+  readonly hold: (method: MockMethod) => MockMethod
+}
+
+export const createMockClient = (
+  overrides?: NamespaceOverrides,
+  replies?: ReplyHold,
+): GentNamespacedClient => {
   const noRpcError = <A,>(value: A) => Effect.succeed(value)
   // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
   const absent = undefined
@@ -213,10 +234,57 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
         () => ({}),
       )
       const extra = Option.fromNullishOr(overrides?.[ns])
-      if (Option.isSome(extra)) return { ...base, ...extra.value }
-      return base
+      const methods: Partial<MockNamespace> = Option.match(extra, {
+        onNone: () => base,
+        onSome: (value) => ({ ...base, ...value }),
+      })
+      return Option.match(Option.fromUndefinedOr(replies), {
+        onNone: () => methods,
+        onSome: ({ hold }) =>
+          Object.fromEntries(
+            Object.entries(methods).flatMap(([name, method]) =>
+              Option.match(Option.fromUndefinedOr(method), {
+                onNone: () => [],
+                onSome: (present) => [[name, hold(present)]],
+              }),
+            ),
+          ),
+      })
     },
   })
+}
+
+/**
+ * A `createMockClient` hold that keeps every reply. Each call that answers
+ * with an Effect waits until `release`, which lets the held replies go newest
+ * first: a reply asked for in a session the reader has left lands last. A
+ * stream is no reply and is never held. After `release` the client answers
+ * at once. Because it holds every method, a new read is covered without a
+ * list to keep.
+ */
+export const holdingReplies = () => {
+  const held: Array<Deferred.Deferred<void>> = []
+  let holding = true
+  // A mocked method answers `unknown`. The hold only runs a reply later, so
+  // it reads one as an Effect that needs nothing and leaves its error as is.
+  const isReply = <T,>(value: T): value is T & Effect.Effect<unknown> => Effect.isEffect(value)
+  const hold =
+    (method: MockMethod): MockMethod =>
+    (...args) => {
+      const reply = method(...args)
+      if (!holding || !isReply(reply)) return reply
+      const gate = Deferred.makeUnsafe<void>()
+      held.push(gate)
+      return Deferred.await(gate).pipe(Effect.andThen(reply))
+    }
+  const release = Effect.gen(function* () {
+    holding = false
+    for (const gate of held.splice(0).reverse()) {
+      yield* Deferred.complete(gate, Effect.void)
+      yield* Effect.yieldNow
+    }
+  })
+  return { hold, held: () => held.length, release }
 }
 
 /**
@@ -269,7 +337,7 @@ export const createMutableRuntime = (initialState: ConnectionState) => {
 }
 
 /** The session a render starts on when the test names none: the client always holds one. */
-export const defaultTestSession: Session = {
+const defaultTestSession: Session = {
   sessionId: SessionId.make("session-test"),
   branchId: BranchId.make("branch-test"),
   name: "Test Session",
@@ -532,6 +600,45 @@ export const renderScoped = (...args: Parameters<typeof renderWithProviders>) =>
     Effect.promise(() => renderWithProviders(...args)),
     (setup) => Effect.sync(() => destroyRenderSetup(setup)),
   )
+
+/** A stored session to start a render on: `initialSession` takes it as the server lists it. */
+export const sessionFixture = (id: string, branch: string, name: string): DomainSession => ({
+  id: SessionId.make(id),
+  activeBranchId: BranchId.make(branch),
+  name,
+  createdAt: dateFromMillis(0),
+  updatedAt: dateFromMillis(0),
+})
+
+function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
+  const client = useClient()
+  onMount(() => props.onReady(client))
+  return <box />
+}
+
+/**
+ * A scoped render that also hands back the client its tree reads. `view`
+ * mounts after the probe; without it the render holds only the probe. The
+ * effect dies when the probe does not mount.
+ */
+export const mountClient = (
+  options: Parameters<typeof renderWithProviders>[1] & { readonly view?: () => JSX.Element } = {},
+) =>
+  Effect.gen(function* () {
+    const { view, ...renderOptions } = options
+    let held = Option.none<ClientContextValue>()
+    const setup = yield* renderScoped(
+      () => (
+        <>
+          <ClientProbe onReady={(client) => (held = Option.some(client))} />
+          {view?.()}
+        </>
+      ),
+      renderOptions,
+    )
+    if (Option.isNone(held)) return yield* Effect.die("the client probe did not mount")
+    return { setup, client: held.value }
+  })
 
 /**
  * The agent a session runs as reaches the UI only through its snapshot. A

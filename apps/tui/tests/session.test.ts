@@ -57,6 +57,8 @@ import {
   AgentEvent,
   AgentName,
   assistantMessageIdForTurn,
+  interjectionMessageId,
+  userMessageIdForRequest,
   dateFromMillis,
   EventEnvelope,
   Message,
@@ -212,6 +214,54 @@ describe("refused submissions", () => {
       placeholder,
     )
     expect(merged.draft).toEqual({ draft: longCommand, mode: "shell" })
+  })
+
+  test("a lost `@file` send the server queued comes back once, as the draft the reader wrote", () => {
+    // The composer refuses the draft as typed; the server queued it expanded.
+    const lost = mergeRefused(editing(""), empty, {
+      order: 0,
+      text: "see @a.ts",
+      shell: false,
+      requestId: Option.some("r1"),
+    })
+    const queue = {
+      steering: [],
+      followUp: [
+        queueEntry("FollowUp", userMessageIdForRequest("r1"), "see \n```ts\nconst a = 1\n```"),
+      ],
+    }
+    const restored = mergeRestored(lost.draft, lost.block, queue)
+    expect(restored.draft).toEqual(editing("see @a.ts"))
+    // The drain took that send: the text goes again as new.
+    expect(restored.block.entries.map((entry) => entry.requestId)).toEqual([Option.none()])
+  })
+
+  test("a lost interjection the server queued comes back once", () => {
+    const lost = mergeRefused(editing(""), empty, {
+      order: 0,
+      text: "stop that",
+      shell: false,
+      requestId: Option.some("r2"),
+    })
+    const queue = {
+      steering: [queueEntry("Steering", interjectionMessageId("r2"), "stop that")],
+      followUp: [],
+    }
+    expect(mergeRestored(lost.draft, lost.block, queue).draft).toEqual(editing("stop that"))
+  })
+
+  test("a queued message with the same text as an answered refusal is restored, not dropped", () => {
+    // The server answered this refusal: it was never queued.
+    const answered = mergeRefused(editing(""), empty, {
+      order: 0,
+      text: "yes",
+      shell: false,
+      requestId: Option.none(),
+    })
+    const queue = { steering: [], followUp: [queueEntry("FollowUp", "other-send", "yes")] }
+    expect(mergeRestored(answered.draft, answered.block, queue).draft).toEqual(
+      editing("yes\n\nyes"),
+    )
   })
 
   test("a kept block that joins a composer on screen is written the way that composer writes", () => {
@@ -471,7 +521,7 @@ describe("prompt history store", () => {
         "second prompt",
         "first prompt",
       ])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   storeTest("a second home keeps its own history", () =>
@@ -486,7 +536,7 @@ describe("prompt history store", () => {
       expect(Option.getOrElse(yield* readEntries(first), (): ReadonlyArray<string> => [])).toEqual([
         "only in first",
       ])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -506,7 +556,7 @@ describe("prompt history across writers", () => {
       expect(Option.getOrElse(yield* readEntries(home), (): ReadonlyArray<string> => [])).toEqual(
         merged,
       )
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   storeTest("concurrent adds in one process all land", () =>
@@ -522,7 +572,7 @@ describe("prompt history across writers", () => {
 
       const stored = Option.getOrElse(yield* readEntries(home), (): ReadonlyArray<string> => [])
       expect([...stored].sort()).toEqual([...prompts].sort())
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   storeTest("a repeat of the newest prompt is not stored twice", () =>
@@ -531,7 +581,7 @@ describe("prompt history across writers", () => {
       const home = yield* fs.makeTempDirectoryScoped()
       yield* recordPrompt(home, "same")
       expect(yield* recordPrompt(home, "same")).toEqual(["same"])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -652,7 +702,7 @@ describe("buildModelLabels", () => {
     expect(labels[0]!.text).toBe("debug")
   })
 
-  test("carries no context gauge — that anchors to the right edge", () => {
+  test("the thinking level comes before the debug label", () => {
     const labels = buildModelLabels({
       reasoningLevel: Option.some("high"),
       theme,
@@ -1292,6 +1342,70 @@ const isSessionEvent = Predicate.or(
 const toolCallsOf = (message: Option.Option<FeedMessage>): ReturnType<typeof messageToolCalls> =>
   Option.match(message, { onNone: () => [], onSome: messageToolCalls })
 
+type FeedCallbacks = Parameters<typeof useSessionFeed>[3]
+
+interface FeedMount {
+  /** The session the feed opens; each snapshot fetch answers it unless `session` overrides `getSnapshot`. */
+  readonly snapshot: SessionSnapshot
+  /** The envelopes the events stream delivers before it stays open. */
+  readonly events?: ReadonlyArray<EventEnvelope>
+  /** Session methods that replace the defaults, such as an events stream that fails. */
+  readonly session?: NonNullable<Parameters<typeof createMockClient>[0]>["session"]
+  readonly runtime?: GentRuntime
+  /** Feed client members that replace the no-op ones, such as event counters. */
+  readonly client?: Partial<FeedClient>
+  readonly callbacks?: Partial<FeedCallbacks>
+}
+
+/** A feed mounted in its own root, with the session's identity fixed to the snapshot's. */
+const openFeed = (mount: FeedMount) => {
+  const { sessionId, branchId } = mount.snapshot
+  let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+  const dispose = createRoot((disposeRoot) => {
+    const [active] = createSignal(makeSession(sessionId, branchId))
+    const client = feedClientStub({
+      sessionIdentity: identityOf(active),
+      client: createMockClient({
+        session: {
+          getSnapshot: () => Effect.succeed(mount.snapshot),
+          events: () => Stream.concat(Stream.make(...(mount.events ?? [])), Stream.never),
+          watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+          ...mount.session,
+        },
+      }),
+      runtime: mount.runtime ?? createMockRuntime(),
+      ...mount.client,
+    })
+    feed = Option.some(
+      useSessionFeed(
+        sessionId,
+        branchId,
+        client,
+        {
+          onInteraction: () => {},
+          onInteractionDismissed: () => {},
+          onBranchSwitch: () => {},
+          onQueueSnapshot: () => {},
+          ...mount.callbacks,
+        },
+        noStartupPrompt,
+        () => true,
+      ),
+    )
+    return disposeRoot
+  })
+  const cellOf = () =>
+    Option.flatMap(feed, (value) =>
+      Option.fromNullishOr(
+        toolCallsOf(
+          Option.fromUndefinedOr(value.messages().find((message) => message.role === "assistant")),
+        )[0],
+      ),
+    )
+  const activeTool = () => Option.flatMap(feed, (value) => value.activeTool())
+  return { feed, cellOf, activeTool, dispose }
+}
+
 describe("useSessionFeed", () => {
   it.live("an unmount interrupts the feed fiber", () =>
     Effect.gen(function* () {
@@ -1307,27 +1421,11 @@ describe("useSessionFeed", () => {
           return fiber
         },
       }
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        useSessionFeed(
-          sessionId,
-          branchId,
-          feedClientStub({
-            sessionIdentity: identityOf(active),
-            // The feed waits on its snapshot forever: only an interrupt ends it.
-            client: createMockClient({ session: { getSnapshot: () => Effect.never } }),
-            runtime,
-          }),
-          {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onQueueSnapshot: () => {},
-            onBranchSwitch: () => {},
-          },
-          noStartupPrompt,
-          () => true,
-        )
-        return disposeRoot
+      const { dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        // The feed waits on its snapshot forever: only an interrupt ends it.
+        session: { getSnapshot: () => Effect.never },
+        runtime,
       })
       expect(forked.length).toBe(1)
       dispose()
@@ -1336,13 +1434,14 @@ describe("useSessionFeed", () => {
     }).pipe(Effect.timeout("5 seconds")),
   )
 
-  it.live("changes route when a branch event changes the active client identity", () =>
+  it.live("a branch event that moves the active identity switches the feed's branch", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("branch-navigation-session")
       const branchId = BranchId.make("branch-navigation-first")
       const nextBranchId = BranchId.make("branch-navigation-second")
       const switched = yield* Deferred.make<void>()
       let snapshotCount = 0
+      const switches: Array<readonly [SessionId, BranchId]> = []
       const dispose = createRoot((disposeRoot) => {
         const [active, setActive] = createSignal(makeSession(sessionId, branchId))
         const runtime = createMockRuntime()
@@ -1384,8 +1483,7 @@ describe("useSessionFeed", () => {
             onInteractionDismissed: () => {},
             onQueueSnapshot: () => {},
             onBranchSwitch: (nextSession, nextBranch) => {
-              expect(nextSession).toBe(sessionId)
-              expect(nextBranch).toBe(nextBranchId)
+              switches.push([nextSession, nextBranch])
               runtime.cast(Deferred.succeed(switched, void 0))
             },
           },
@@ -1399,6 +1497,7 @@ describe("useSessionFeed", () => {
         Effect.ensuring(Effect.sync(dispose)),
       )
       expect(snapshotCount).toBe(1)
+      expect(switches).toEqual([[sessionId, nextBranchId]])
     }),
   )
 
@@ -1424,67 +1523,48 @@ describe("useSessionFeed", () => {
         cast: withClock.cast,
         fork: withClock.fork,
       }
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () =>
-                Effect.gen(function* () {
-                  fetches.push(yield* Clock.currentTimeMillis)
-                  watchDelivered = yield* Deferred.make<void>()
-                  return snapshotFor(sessionId, branchId)
+      const { dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        session: {
+          getSnapshot: () =>
+            Effect.gen(function* () {
+              fetches.push(yield* Clock.currentTimeMillis)
+              watchDelivered = yield* Deferred.make<void>()
+              return snapshotFor(sessionId, branchId)
+            }),
+          // The events stream fails once the watch delivered, as a
+          // decode failure does on a live connection.
+          events: () =>
+            Stream.concat(
+              Stream.fromEffect(Deferred.await(watchDelivered)).pipe(
+                Stream.drain,
+                Stream.concat(Stream.fromIterable(served)),
+              ),
+              Stream.fail(
+                new RpcClientError({
+                  reason: new RpcClientDefect({
+                    message: "Error decoding message",
+                    cause: "bad frame",
+                  }),
                 }),
-              // The events stream fails once the watch delivered, as a
-              // decode failure does on a live connection.
-              events: () =>
-                Stream.concat(
-                  Stream.fromEffect(Deferred.await(watchDelivered)).pipe(
-                    Stream.drain,
-                    Stream.concat(Stream.fromIterable(served)),
-                  ),
-                  Stream.fail(
-                    new RpcClientError({
-                      reason: new RpcClientDefect({
-                        message: "Error decoding message",
-                        cause: "bad frame",
-                      }),
-                    }),
-                  ),
-                ),
-              watchRuntime: () =>
-                Stream.make(runtimeSnapshot()).pipe(
-                  Stream.concat(
-                    Stream.fromEffect(Deferred.succeed(watchDelivered, void 0)).pipe(Stream.drain),
-                  ),
-                  Stream.concat(Stream.never),
-                  Stream.onStart(
-                    Effect.sync(() => {
-                      openWatches += 1
-                      mostWatches = Math.max(mostWatches, openWatches)
-                    }),
-                  ),
-                  Stream.ensuring(Effect.sync(() => (openWatches -= 1))),
-                ),
-            },
-          }),
-          runtime,
-        })
-        useSessionFeed(
-          sessionId,
-          branchId,
-          client,
-          {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onQueueSnapshot: () => {},
-            onBranchSwitch: () => {},
-          },
-          noStartupPrompt,
-          () => true,
-        )
-        return disposeRoot
+              ),
+            ),
+          watchRuntime: () =>
+            Stream.make(runtimeSnapshot()).pipe(
+              Stream.concat(
+                Stream.fromEffect(Deferred.succeed(watchDelivered, void 0)).pipe(Stream.drain),
+              ),
+              Stream.concat(Stream.never),
+              Stream.onStart(
+                Effect.sync(() => {
+                  openWatches += 1
+                  mostWatches = Math.max(mostWatches, openWatches)
+                }),
+              ),
+              Stream.ensuring(Effect.sync(() => (openWatches -= 1))),
+            ),
+        },
+        runtime,
       })
       yield* waitUntilAdvancing(
         clock.adjust("1 second"),
@@ -1621,54 +1701,24 @@ describe("useSessionFeed", () => {
       ]
       const errorSeen = yield* Deferred.make<void>()
       let appliedEvents = 0
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
-              events: () =>
-                Stream.concat(
-                  Stream.make(...uniqueEnvelopes.flatMap((envelope) => [envelope, envelope])),
-                  Stream.never,
-                ),
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
-          }),
-          runtime: createMockRuntime(),
+      const runtime = createMockRuntime()
+      const { feed, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: uniqueEnvelopes.flatMap((envelope) => [envelope, envelope]),
+        runtime,
+        client: {
           log: {
             debug: () => {},
             info: () => {},
             warn: () => {},
             error: (message: string) => {
-              if (message === "sessionFeed.error")
-                client.runtime.cast(Deferred.succeed(errorSeen, void 0))
+              if (message === "sessionFeed.error") runtime.cast(Deferred.succeed(errorSeen, void 0))
             },
           },
           applySessionEvent: () => {
             appliedEvents += 1
           },
-        })
-
-        feed = Option.some(
-          useSessionFeed(
-            sessionId,
-            branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
-        )
-        return disposeRoot
+        },
       })
 
       yield* Deferred.await(errorSeen)
@@ -1708,7 +1758,7 @@ describe("useSessionFeed", () => {
         expect(retry?._tag === "retrying" && retry.outcome).toBe("retried")
         dispose()
       })
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("a notice draws a notice row, not an error row", () =>
@@ -1737,36 +1787,9 @@ describe("useSessionFeed", () => {
           }),
         ),
       ]
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
-              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
-          }),
-          runtime: createMockRuntime(),
-        })
-        feed = Option.some(
-          useSessionFeed(
-            sessionId,
-            branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
-        )
-        return disposeRoot
+      const { feed, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: envelopes,
       })
       yield* waitUntil(
         () => Option.isSome(feed) && feed.value.items().some((item) => item._tag === "notice"),
@@ -1783,7 +1806,7 @@ describe("useSessionFeed", () => {
         )
         dispose()
       })
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("a retry row sits above the answer of the attempt it waited for, and says why", () =>
@@ -1809,36 +1832,9 @@ describe("useSessionFeed", () => {
           AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "the answer" }),
         ),
       ]
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
-              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
-          }),
-          runtime: createMockRuntime(),
-        })
-        feed = Option.some(
-          useSessionFeed(
-            sessionId,
-            branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
-        )
-        return disposeRoot
+      const { feed, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: envelopes,
       })
       yield* waitUntil(
         () =>
@@ -1897,39 +1893,9 @@ describe("useSessionFeed", () => {
           }),
         ),
       ]
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () =>
-                Effect.succeed(
-                  snapshotFor(sessionId, branchId, Option.getOrUndefined(lastEventId)),
-                ),
-              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
-          }),
-          runtime: createMockRuntime(),
-        })
-        feed = Option.some(
-          useSessionFeed(
-            sessionId,
-            branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
-        )
-        return disposeRoot
+      const { feed, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId, Option.getOrUndefined(lastEventId)),
+        events: envelopes,
       })
       yield* waitUntil(
         () =>
@@ -2034,36 +2000,9 @@ describe("useSessionFeed", () => {
       const cellId = ToolCallId.make("tool-call-cell")
       const innerId = ToolCallId.make("tool-call-cell-read")
       const envelopes = cellNestingEnvelopes(sessionId, branchId, cellId, innerId)
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
-              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
-          }),
-          runtime: createMockRuntime(),
-        })
-        feed = Option.some(
-          useSessionFeed(
-            sessionId,
-            branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
-        )
-        return disposeRoot
+      const { feed, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: envelopes,
       })
 
       yield* waitUntil(
@@ -2080,55 +2019,8 @@ describe("useSessionFeed", () => {
         expectNestedCellOperation(feed.value, innerId)
         dispose()
       })
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
-
-  /** A feed over one snapshot and a live event stream. */
-  const openFeed = (snapshot: SessionSnapshot, envelopes: ReadonlyArray<EventEnvelope>) => {
-    let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-    const dispose = createRoot((disposeRoot) => {
-      const [active] = createSignal(makeSession(snapshot.sessionId, snapshot.branchId))
-      const client = feedClientStub({
-        sessionIdentity: identityOf(active),
-        client: createMockClient({
-          session: {
-            getSnapshot: () => Effect.succeed(snapshot),
-            events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
-            watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-          },
-        }),
-        runtime: createMockRuntime(),
-      })
-      feed = Option.some(
-        useSessionFeed(
-          snapshot.sessionId,
-          snapshot.branchId,
-          client,
-          {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          },
-          noStartupPrompt,
-          () => true,
-        ),
-      )
-      return disposeRoot
-    })
-    const cellOf = () =>
-      Option.flatMap(feed, (value) =>
-        Option.fromNullishOr(
-          toolCallsOf(
-            Option.fromUndefinedOr(
-              value.messages().find((message) => message.role === "assistant"),
-            ),
-          )[0],
-        ),
-      )
-    const activeTool = () => Option.flatMap(feed, (value) => value.activeTool())
-    return { cellOf, activeTool, dispose }
-  }
 
   it.live("a cell's running ops show side by side while one of them waits", () =>
     Effect.gen(function* () {
@@ -2144,21 +2036,24 @@ describe("useSessionFeed", () => {
           input: { command },
           parentToolCallId: cellId,
         })
-      const { activeTool, dispose } = openFeed(snapshotFor(sessionId, branchId), [
-        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
-        makeEnvelope(
-          2,
-          AgentEvent.cases.ToolCallStarted.make({
-            sessionId,
-            branchId,
-            toolCallId: cellId,
-            toolName: "cell",
-            input: { code: "await Promise.all([tools.bash(a), tools.bash(b)])" },
-          }),
-        ),
-        makeEnvelope(3, opStarted("tool-call-ticks", "sleep 2; echo SLEPT")),
-        makeEnvelope(4, opStarted("tool-call-asks", "git checkout HEAD -- README.md")),
-      ])
+      const { activeTool, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: [
+          makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+          makeEnvelope(
+            2,
+            AgentEvent.cases.ToolCallStarted.make({
+              sessionId,
+              branchId,
+              toolCallId: cellId,
+              toolName: "cell",
+              input: { code: "await Promise.all([tools.bash(a), tools.bash(b)])" },
+            }),
+          ),
+          makeEnvelope(3, opStarted("tool-call-ticks", "sleep 2; echo SLEPT")),
+          makeEnvelope(4, opStarted("tool-call-asks", "git checkout HEAD -- README.md")),
+        ],
+      })
       yield* waitUntil(() =>
         Option.exists(activeTool(), (label) => label.includes("git checkout")),
       ).pipe(
@@ -2173,26 +2068,29 @@ describe("useSessionFeed", () => {
         ),
         Effect.ensuring(Effect.sync(dispose)),
       )
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("a running read names its file from the cwd, as its row does", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-running-read")
       const branchId = BranchId.make("branch-feed-running-read")
-      const { activeTool, dispose } = openFeed(snapshotFor(sessionId, branchId), [
-        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
-        makeEnvelope(
-          2,
-          AgentEvent.cases.ToolCallStarted.make({
-            sessionId,
-            branchId,
-            toolCallId: ToolCallId.make("tool-call-running-read"),
-            toolName: "read",
-            input: { path: "/work/proj/src/app.tsx" },
-          }),
-        ),
-      ])
+      const { activeTool, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: [
+          makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+          makeEnvelope(
+            2,
+            AgentEvent.cases.ToolCallStarted.make({
+              sessionId,
+              branchId,
+              toolCallId: ToolCallId.make("tool-call-running-read"),
+              toolName: "read",
+              input: { path: "/work/proj/src/app.tsx" },
+            }),
+          ),
+        ],
+      })
       yield* waitUntil(() => Option.isSome(activeTool())).pipe(
         Effect.andThen(
           Effect.sync(() =>
@@ -2210,41 +2108,44 @@ describe("useSessionFeed", () => {
       const branchId = BranchId.make("branch-feed-interrupted-cell")
       const cellId = ToolCallId.make("tool-call-interrupted-cell")
       const opId = ToolCallId.make("tool-call-interrupted-op")
-      const { cellOf, dispose } = openFeed(snapshotFor(sessionId, branchId), [
-        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
-        ...stepEndEnvelopes(sessionId, branchId, cellId, 2),
-        makeEnvelope(
-          4,
-          AgentEvent.cases.ToolCallStarted.make({
-            sessionId,
-            branchId,
-            toolCallId: cellId,
-            toolName: "cell",
-            input: { code: "await tools.bash({command: 'sleep 60'})" },
-          }),
-        ),
-        makeEnvelope(
-          5,
-          AgentEvent.cases.ToolCallStarted.make({
-            sessionId,
-            branchId,
-            toolCallId: opId,
-            toolName: "bash",
-            input: { command: "sleep 60" },
-            parentToolCallId: cellId,
-          }),
-        ),
-        makeEnvelope(
-          6,
-          AgentEvent.cases.ToolCallFailed.make({
-            sessionId,
-            branchId,
-            toolCallId: cellId,
-            toolName: "cell",
-            summary: "The tool did not finish: the turn was interrupted.",
-          }),
-        ),
-      ])
+      const { cellOf, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: [
+          makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+          ...stepEndEnvelopes(sessionId, branchId, cellId, 2),
+          makeEnvelope(
+            4,
+            AgentEvent.cases.ToolCallStarted.make({
+              sessionId,
+              branchId,
+              toolCallId: cellId,
+              toolName: "cell",
+              input: { code: "await tools.bash({command: 'sleep 60'})" },
+            }),
+          ),
+          makeEnvelope(
+            5,
+            AgentEvent.cases.ToolCallStarted.make({
+              sessionId,
+              branchId,
+              toolCallId: opId,
+              toolName: "bash",
+              input: { command: "sleep 60" },
+              parentToolCallId: cellId,
+            }),
+          ),
+          makeEnvelope(
+            6,
+            AgentEvent.cases.ToolCallFailed.make({
+              sessionId,
+              branchId,
+              toolCallId: cellId,
+              toolName: "cell",
+              summary: "The tool did not finish: the turn was interrupted.",
+            }),
+          ),
+        ],
+      })
       yield* waitUntil(() => Option.exists(cellOf(), (cell) => cell.status === "error")).pipe(
         Effect.andThen(
           Effect.sync(() => {
@@ -2254,7 +2155,7 @@ describe("useSessionFeed", () => {
         ),
         Effect.ensuring(Effect.sync(dispose)),
       )
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("a live result on a reloaded op drops the cuts of the output it replaces", () =>
@@ -2312,20 +2213,23 @@ describe("useSessionFeed", () => {
         ],
       }
       const wholeOutput = '{"stdout":"done","stderr":"","exitCode":0}'
-      const { cellOf, dispose } = openFeed(snapshot, [
-        makeEnvelope(
-          2,
-          AgentEvent.cases.ToolCallSucceeded.make({
-            sessionId,
-            branchId,
-            toolCallId: opId,
-            toolName: "bash",
-            summary: "exit 0 · 1 line",
-            output: wholeOutput,
-            parentToolCallId: cellId,
-          }),
-        ),
-      ])
+      const { cellOf, dispose } = openFeed({
+        snapshot,
+        events: [
+          makeEnvelope(
+            2,
+            AgentEvent.cases.ToolCallSucceeded.make({
+              sessionId,
+              branchId,
+              toolCallId: opId,
+              toolName: "bash",
+              summary: "exit 0 · 1 line",
+              output: wholeOutput,
+              parentToolCallId: cellId,
+            }),
+          ),
+        ],
+      })
       yield* waitUntil(() =>
         Option.exists(cellOf(), (cell) => cell.operations?.[0]?.status === "completed"),
       ).pipe(
@@ -2338,7 +2242,7 @@ describe("useSessionFeed", () => {
         ),
         Effect.ensuring(Effect.sync(dispose)),
       )
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("replays buffered event-only state before the snapshot cursor", () =>
@@ -2378,51 +2282,35 @@ describe("useSessionFeed", () => {
       const bufferedTags: string[] = []
       const branchSwitches: Array<{ sessionId: SessionId; branchId: BranchId }> = []
 
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, 3)),
-              events: ({ after }: { readonly after?: number }) => {
-                requestedAfter = Option.fromNullishOr(after)
-                return Stream.concat(
-                  Stream.make(bufferedPulse, bufferedInteraction, bufferedBranchSwitch, liveEvent),
-                  Stream.never,
-                )
-              },
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
-          }),
-          runtime: createMockRuntime(),
+      const runtime = createMockRuntime()
+      const { dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId, 3),
+        session: {
+          events: ({ after }: { readonly after?: number }) => {
+            requestedAfter = Option.fromNullishOr(after)
+            return Stream.concat(
+              Stream.make(bufferedPulse, bufferedInteraction, bufferedBranchSwitch, liveEvent),
+              Stream.never,
+            )
+          },
+        },
+        runtime,
+        client: {
           applySessionEvent: (envelope) => {
-            if (envelope.id === liveEvent.id)
-              client.runtime.cast(Deferred.succeed(liveSeen, void 0))
+            if (envelope.id === liveEvent.id) runtime.cast(Deferred.succeed(liveSeen, void 0))
           },
           applyBufferedSessionEvent: (envelope) => {
             bufferedTags.push(envelope.event._tag)
           },
-        })
-
-        useSessionFeed(
-          sessionId,
-          branchId,
-          client,
-          {
-            onInteraction: (interaction) => {
-              client.runtime.cast(Deferred.succeed(interactionSeen, interaction))
-            },
-            onInteractionDismissed: () => {},
-            onBranchSwitch: (nextSessionId, nextBranchId) => {
-              branchSwitches.push({ sessionId: nextSessionId, branchId: nextBranchId })
-            },
-            onQueueSnapshot: () => {},
+        },
+        callbacks: {
+          onInteraction: (interaction) => {
+            runtime.cast(Deferred.succeed(interactionSeen, interaction))
           },
-          noStartupPrompt,
-          () => true,
-        )
-        return disposeRoot
+          onBranchSwitch: (nextSessionId, nextBranchId) => {
+            branchSwitches.push({ sessionId: nextSessionId, branchId: nextBranchId })
+          },
+        },
       })
 
       const interaction = yield* Deferred.await(interactionSeen)
@@ -2434,7 +2322,7 @@ describe("useSessionFeed", () => {
         expect(branchSwitches).toEqual([])
         dispose()
       })
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   for (const saved of [false, true]) {
@@ -2545,48 +2433,17 @@ describe("useSessionFeed", () => {
           snapshot = { ...snapshot, lastEventId: events.length, messages }
         }
         let applied = 0
-        let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-        const dispose = createRoot((disposeRoot) => {
-          const [active] = createSignal(makeSession(sessionId, branchId))
-          const client = feedClientStub({
-            sessionIdentity: identityOf(active),
-            client: createMockClient({
-              session: {
-                getSnapshot: () => Effect.succeed(snapshot),
-                events: () =>
-                  Stream.concat(
-                    Stream.make(
-                      ...events.map((event, index) => makeEnvelope(index + 1, event, index * 300)),
-                    ),
-                    Stream.never,
-                  ),
-                watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-              },
-            }),
-            runtime: createMockRuntime(),
+        const { feed, dispose } = openFeed({
+          snapshot,
+          events: events.map((event, index) => makeEnvelope(index + 1, event, index * 300)),
+          client: {
             applySessionEvent: () => {
               applied += 1
             },
             applyBufferedSessionEvent: () => {
               applied += 1
             },
-          })
-          feed = Option.some(
-            useSessionFeed(
-              sessionId,
-              branchId,
-              client,
-              {
-                onInteraction: () => {},
-                onInteractionDismissed: () => {},
-                onBranchSwitch: () => {},
-                onQueueSnapshot: () => {},
-              },
-              noStartupPrompt,
-              () => true,
-            ),
-          )
-          return disposeRoot
+          },
         })
 
         yield* waitUntil(
@@ -2624,7 +2481,7 @@ describe("useSessionFeed", () => {
           ),
           Effect.ensuring(Effect.sync(dispose)),
         )
-      }),
+      }).pipe(Effect.timeout("10 seconds")),
     )
   }
 
@@ -2673,46 +2530,21 @@ describe("useSessionFeed", () => {
       const { sessionId, branchId, answerId, started, chunk, synchronized } =
         midStepIds("feed-mid-step")
       const later = yield* Queue.unbounded<EventEnvelope>()
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              // The snapshot's cursor covers the step's first chunk, not its answer.
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, 2)),
-              events: () =>
-                Stream.concat(
-                  Stream.make(
-                    makeEnvelope(1, started),
-                    makeEnvelope(2, chunk("Hello ")),
-                    synchronized(2),
-                    makeEnvelope(3, chunk("world")),
-                  ),
-                  Stream.fromQueue(later),
-                ),
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
-          }),
-          runtime: createMockRuntime(),
-        })
-        feed = Option.some(
-          useSessionFeed(
-            sessionId,
-            branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
-        )
-        return disposeRoot
+      const { feed, dispose } = openFeed({
+        // The snapshot's cursor covers the step's first chunk, not its answer.
+        snapshot: snapshotFor(sessionId, branchId, 2),
+        session: {
+          events: () =>
+            Stream.concat(
+              Stream.make(
+                makeEnvelope(1, started),
+                makeEnvelope(2, chunk("Hello ")),
+                synchronized(2),
+                makeEnvelope(3, chunk("world")),
+              ),
+              Stream.fromQueue(later),
+            ),
+        },
       })
       yield* waitUntil(() => assistantContents(feed).join("").includes("world"))
       expect(assistantContents(feed)).toEqual(["Hello world"])
@@ -2754,63 +2586,40 @@ describe("useSessionFeed", () => {
         cast: withClock.cast,
         fork: withClock.fork,
       }
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              // The second snapshot still lacks the answer: the step runs on.
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, cursor)),
-              events: () => {
-                attempts += 1
-                cursor = 4
-                if (attempts === 1)
-                  return Stream.concat(
-                    Stream.make(
-                      makeEnvelope(1, started),
-                      makeEnvelope(2, chunk("Hello ")),
-                      synchronized(2),
-                    ),
-                    Stream.fail(
-                      new RpcClientError({
-                        reason: new RpcClientDefect({ message: "connection lost", cause: "drop" }),
-                      }),
-                    ),
-                  )
-                // The chunks that streamed while the connection was down replay.
-                return Stream.concat(
-                  Stream.make(
-                    makeEnvelope(3, chunk("big ")),
-                    makeEnvelope(4, chunk("wide ")),
-                    synchronized(4),
-                    makeEnvelope(5, chunk("world")),
-                  ),
-                  Stream.never,
-                )
-              },
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
-          }),
-          runtime,
-        })
-        feed = Option.some(
-          useSessionFeed(
-            sessionId,
-            branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
-        )
-        return disposeRoot
+      const { feed, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        session: {
+          // The second snapshot still lacks the answer: the step runs on.
+          getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, cursor)),
+          events: () => {
+            attempts += 1
+            cursor = 4
+            if (attempts === 1)
+              return Stream.concat(
+                Stream.make(
+                  makeEnvelope(1, started),
+                  makeEnvelope(2, chunk("Hello ")),
+                  synchronized(2),
+                ),
+                Stream.fail(
+                  new RpcClientError({
+                    reason: new RpcClientDefect({ message: "connection lost", cause: "drop" }),
+                  }),
+                ),
+              )
+            // The chunks that streamed while the connection was down replay.
+            return Stream.concat(
+              Stream.make(
+                makeEnvelope(3, chunk("big ")),
+                makeEnvelope(4, chunk("wide ")),
+                synchronized(4),
+                makeEnvelope(5, chunk("world")),
+              ),
+              Stream.never,
+            )
+          },
+        },
+        runtime,
       })
       yield* waitUntilAdvancing(
         clock.adjust("1 second"),
@@ -2851,37 +2660,9 @@ describe("useSessionFeed", () => {
             }),
           ),
         ]
-        let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-        const dispose = createRoot((disposeRoot) => {
-          const [active] = createSignal(makeSession(sessionId, branchId))
-          const client = feedClientStub({
-            sessionIdentity: identityOf(active),
-            client: createMockClient({
-              session: {
-                getSnapshot: () =>
-                  Effect.succeed(snapshotFor(sessionId, branchId, { replay: 3, live: 0 }[pass])),
-                events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
-                watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-              },
-            }),
-            runtime: createMockRuntime(),
-          })
-          feed = Option.some(
-            useSessionFeed(
-              sessionId,
-              branchId,
-              client,
-              {
-                onInteraction: () => {},
-                onInteractionDismissed: () => {},
-                onBranchSwitch: () => {},
-                onQueueSnapshot: () => {},
-              },
-              noStartupPrompt,
-              () => true,
-            ),
-          )
-          return disposeRoot
+        const { feed, dispose } = openFeed({
+          snapshot: snapshotFor(sessionId, branchId, { replay: 3, live: 0 }[pass]),
+          events: envelopes,
         })
         yield* waitUntil(() =>
           Option.exists(feed, (value) =>
@@ -2918,48 +2699,17 @@ describe("useSessionFeed", () => {
         }),
       ]
       let applied = 0
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
-              events: () =>
-                Stream.concat(
-                  Stream.make(
-                    ...events.map((event, index) => makeEnvelope(index + 1, event, index * 100)),
-                  ),
-                  Stream.never,
-                ),
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
-          }),
-          runtime: createMockRuntime(),
+      const { feed, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: events.map((event, index) => makeEnvelope(index + 1, event, index * 100)),
+        client: {
           applySessionEvent: () => {
             applied += 1
           },
           applyBufferedSessionEvent: () => {
             applied += 1
           },
-        })
-        feed = Option.some(
-          useSessionFeed(
-            sessionId,
-            branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
-        )
-        return disposeRoot
+        },
       })
 
       yield* waitUntil(
@@ -2985,171 +2735,74 @@ describe("useSessionFeed", () => {
         ),
         Effect.ensuring(Effect.sync(dispose)),
       )
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("shows a live compaction message as soon as its event arrives", () =>
-    Effect.gen(function* () {
-      const sessionId = SessionId.make("session-feed-compaction-live")
-      const branchId = BranchId.make("branch-feed-compaction-live")
-      const messageEnvelope = makeEnvelope(
-        1,
-        AgentEvent.cases.MessageReceived.make({
-          message: makeCompactionMessage(sessionId, branchId),
-        }),
-      )
-      const streamStartedEnvelope = makeEnvelope(
-        2,
-        AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
-      )
-      const streamChunkEnvelope = makeEnvelope(
-        3,
-        AgentEvent.cases.StreamChunk.make({
-          sessionId,
-          branchId,
-          chunk: "native response",
-        }),
-      )
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
-              events: () =>
-                Stream.concat(
-                  Stream.make(messageEnvelope, streamStartedEnvelope, streamChunkEnvelope),
-                  Stream.never,
-                ),
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
+  // A hidden user message arrives as a live event: the feed draws it as its own
+  // row, apart from the model output that streams after it.
+  for (const { customType, metadata } of [
+    { customType: "context-window", metadata: Option.none() },
+    {
+      customType: "prompt-present",
+      metadata: Option.some({ customType: "prompt-present", hidden: true }),
+    },
+  ]) {
+    it.live(`a live ${customType} message stays apart from the model output after it`, () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make(`session-feed-live-${customType}`)
+        const branchId = BranchId.make(`branch-feed-live-${customType}`)
+        const handoff = makeCompactionMessage(sessionId, branchId)
+        const messageEnvelope = makeEnvelope(
+          1,
+          AgentEvent.cases.MessageReceived.make({
+            message: Option.match(metadata, {
+              onNone: () => handoff,
+              onSome: (value) => ({ ...handoff, metadata: value }),
+            }),
           }),
-          runtime: createMockRuntime(),
-        })
-        feed = Option.some(
-          useSessionFeed(
+        )
+        const streamStartedEnvelope = makeEnvelope(
+          2,
+          AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
+        )
+        const streamChunkEnvelope = makeEnvelope(
+          3,
+          AgentEvent.cases.StreamChunk.make({
             sessionId,
             branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
-        )
-        return disposeRoot
-      })
-
-      yield* waitUntil(
-        () =>
-          Option.isSome(feed) &&
-          feed.value.messages().some((message) => message.content.includes("native response")),
-      )
-      if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
-      expect(feed.value.messages()).toHaveLength(2)
-      const summary = feed.value
-        .messages()
-        .find((message) => message.metadata?.customType === "context-window")
-      const response = feed.value
-        .messages()
-        .find((message) => message.content.includes("native response"))
-      expect(summary?.content).toBe("Context handoff: stored summary")
-      expect(response?.id).toBeDefined()
-      expect(response?.id).not.toBe(summary?.id)
-      expect(response?.content).toBe("native response")
-      dispose()
-    }),
-  )
-
-  it.live("shows a live notice separately from later model output", () =>
-    Effect.gen(function* () {
-      const sessionId = SessionId.make("session-feed-compaction-live")
-      const branchId = BranchId.make("branch-feed-compaction-live")
-      const messageEnvelope = makeEnvelope(
-        1,
-        AgentEvent.cases.MessageReceived.make({
-          message: {
-            ...makeCompactionMessage(sessionId, branchId),
-            metadata: { customType: "prompt-present", hidden: true },
-          },
-        }),
-      )
-      const streamStartedEnvelope = makeEnvelope(
-        2,
-        AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
-      )
-      const streamChunkEnvelope = makeEnvelope(
-        3,
-        AgentEvent.cases.StreamChunk.make({
-          sessionId,
-          branchId,
-          chunk: "native response",
-        }),
-      )
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
-              events: () =>
-                Stream.concat(
-                  Stream.make(messageEnvelope, streamStartedEnvelope, streamChunkEnvelope),
-                  Stream.never,
-                ),
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
+            chunk: "native response",
           }),
-          runtime: createMockRuntime(),
-        })
-        feed = Option.some(
-          useSessionFeed(
-            sessionId,
-            branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
         )
-        return disposeRoot
-      })
+        const { feed, dispose } = openFeed({
+          snapshot: snapshotFor(sessionId, branchId),
+          events: [messageEnvelope, streamStartedEnvelope, streamChunkEnvelope],
+        })
 
-      yield* waitUntil(
-        () =>
-          Option.isSome(feed) &&
-          feed.value.messages().some((message) => message.content.includes("native response")),
-      )
-      if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
-      expect(feed.value.messages()).toHaveLength(2)
-      const summary = feed.value
-        .messages()
-        .find((message) => message.metadata?.customType === "prompt-present")
-      const response = feed.value
-        .messages()
-        .find((message) => message.content.includes("native response"))
-      expect(summary?.content).toBe("Context handoff: stored summary")
-      expect(response?.id).toBeDefined()
-      expect(response?.id).not.toBe(summary?.id)
-      expect(response?.content).toBe("native response")
-      dispose()
-    }),
-  )
+        yield* waitUntil(
+          () =>
+            Option.isSome(feed) &&
+            feed.value.messages().some((message) => message.content.includes("native response")),
+        )
+        if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
+        expect(feed.value.messages()).toHaveLength(2)
+        const summary = feed.value
+          .messages()
+          .find((message) => message.metadata?.customType === customType)
+        const response = feed.value
+          .messages()
+          .find((message) => message.content.includes("native response"))
+        expect(summary?.content).toBe("Context handoff: stored summary")
+        expect(response?.id).toBeDefined()
+        expect(response?.id).not.toBe(summary?.id)
+        expect(response?.content).toBe("native response")
+        dispose()
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
 
-  it.live("reconstructs retry history and completion state during reload", () =>
+  // The retry row's cancelled label on replay belongs to "a cancel during the
+  // backoff reads cancelled, live and on replay".
+  it.live("a reload draws the snapshot's handoff message beside the replayed rows", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-compaction-reload")
       const branchId = BranchId.make("branch-feed-compaction-reload")
@@ -3174,42 +2827,13 @@ describe("useSessionFeed", () => {
         }),
       )
       // The handoff marker is a durable user message, so a reload reads it
-      // from the snapshot rather than from the buffered event stream.
-      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
-      const dispose = createRoot((disposeRoot) => {
-        const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = feedClientStub({
-          sessionIdentity: identityOf(active),
-          client: createMockClient({
-            session: {
-              getSnapshot: () =>
-                Effect.succeed({
-                  ...snapshotFor(sessionId, branchId, 3),
-                  messages: [projectMessage(makeCompactionMessage(sessionId, branchId), [])],
-                }),
-              events: () =>
-                Stream.concat(Stream.make(retryEnvelope, interruptedEnvelope), Stream.never),
-              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
-            },
-          }),
-          runtime: createMockRuntime(),
-        })
-        feed = Option.some(
-          useSessionFeed(
-            sessionId,
-            branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-            noStartupPrompt,
-            () => true,
-          ),
-        )
-        return disposeRoot
+      // from the snapshot, not from the buffered event stream.
+      const { feed, dispose } = openFeed({
+        snapshot: {
+          ...snapshotFor(sessionId, branchId, 3),
+          messages: [projectMessage(makeCompactionMessage(sessionId, branchId), [])],
+        },
+        events: [retryEnvelope, interruptedEnvelope],
       })
 
       yield* waitUntil(
@@ -3221,15 +2845,9 @@ describe("useSessionFeed", () => {
             .some((message) => message.metadata?.customType === "context-window"),
       )
       if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
-      const retry = feed.value.items().find((item) => item._tag === "retrying")
-      // The cancel cut the retry short: it did not finish.
-      expect(retry?._tag === "retrying" && retry.outcome).toBe("cancelled")
-      if (retry?._tag === "retrying") {
-        expect(getSessionEventLabel(retry)).toBe("Retry 1/3 cancelled · temporary provider failure")
-      }
       expect(feed.value.items().some((item) => item._tag === "interruption")).toBe(true)
       expect(feed.value.messages()[0]?.content).toContain("stored summary")
       dispose()
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })

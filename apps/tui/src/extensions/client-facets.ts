@@ -28,7 +28,6 @@ import {
 import type { CapabilityRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal, on } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
-import type { Command } from "../commands"
 import type { JSX } from "@opentui/solid"
 import { RGBA } from "@opentui/core"
 import { NamedThemeColor } from "../theme"
@@ -674,42 +673,58 @@ type AutocompleteItemsEffect = Effect.Effect<
 >
 
 // ── Contribution shapes ──
+//
+// Each entry's schema is the one owner of its shape. The type the host and
+// the constructors read is derived from it, and the loader decodes a setup's
+// buckets with it, so a field the schema does not list does not exist.
 
-interface RendererContribution {
-  readonly toolNames: ReadonlyArray<string>
-  readonly component: ToolRenderer
-}
+/** A function value; the host calls it, so its parameters are not checked here. */
+type HostCalledFunction = (...args: ReadonlyArray<never>) => void
 
-/** A message row renderer as the host resolves it, keyed by its custom type. */
-export interface MessageRendererEntry {
-  readonly component: MessageRenderer
+/**
+ * A function the host calls as `F`. Only that it is a function is checked:
+ * its parameters and result stay the extension's contract.
+ */
+const contributed = <F extends HostCalledFunction>() =>
+  Schema.declare((value: unknown): value is F => Predicate.isFunction(value))
+
+const RendererContribution = Schema.Struct({
+  toolNames: Schema.Array(Schema.String),
+  component: contributed<ToolRenderer>(),
+})
+type RendererContribution = typeof RendererContribution.Type
+
+const MessageRendererContribution = Schema.Struct({
+  /** Matches `metadata.customType` exactly. */
+  customType: Schema.String,
+  component: contributed<MessageRenderer>(),
   /**
    * Present when a user message of this type is a prompt the reader asked,
    * though an extension sent it (a `/btw` fork's question): the text the
    * reader wrote, from the message content. The transcript pins it as the
    * reader's last prompt.
    */
-  readonly prompt?: (content: string) => string
-}
+  prompt: Schema.optional(contributed<(content: string) => string>()),
+})
+type MessageRendererContribution = typeof MessageRendererContribution.Type
 
-interface MessageRendererContribution extends MessageRendererEntry {
-  /** Matches `metadata.customType` exactly. */
-  readonly customType: string
-}
+/** A message row renderer as the host resolves it, keyed by its custom type. */
+export type MessageRendererEntry = Omit<MessageRendererContribution, "customType">
 
-interface WidgetContribution {
-  readonly id: string
-  readonly slot: WidgetSlot
+const WidgetContribution = Schema.Struct({
+  id: Schema.String,
+  slot: WidgetSlot,
   /** Lower = earlier; default 100. */
-  readonly priority?: number
-  readonly component: WidgetComponent
-}
+  priority: Schema.optional(Schema.Finite),
+  component: contributed<WidgetComponent>(),
+})
+type WidgetContribution = typeof WidgetContribution.Type
 
-interface InteractionRendererContribution {
+const InteractionRendererContribution = Schema.Struct({
   /** Matches `metadata.type`; the host's prompt renderer draws an unmatched interaction. */
-  readonly metadataType: string
-  readonly component: InteractionRendererComponent
-}
+  metadataType: Schema.String,
+  component: contributed<InteractionRendererComponent>(),
+})
 
 /** A theme color by name, or a resolved one. */
 export const StatusLabelColor = Schema.Union([Schema.instanceOf(RGBA), NamedThemeColor])
@@ -724,11 +739,12 @@ export interface StatusLabelItem {
  * Text on the composer's status row. The row is one line: the host's labels,
  * then every extension label by priority, then the right-anchored gauge and cost.
  */
-interface StatusLabelContribution {
+const StatusLabelContribution = Schema.Struct({
   /** Lower = earlier; default 100. */
-  readonly priority?: number
-  readonly produce: () => ReadonlyArray<StatusLabelItem>
-}
+  priority: Schema.optional(Schema.Finite),
+  produce: contributed<() => ReadonlyArray<StatusLabelItem>>(),
+})
+type StatusLabelContribution = typeof StatusLabelContribution.Type
 
 /**
  * One transcript row an extension derives, such as a cache-miss notice. It is
@@ -747,8 +763,8 @@ export interface NoticeRow {
   readonly text: string
 }
 
-interface NoticeRowContribution {
-  readonly id: string
+const NoticeRowContribution = Schema.Struct({
+  id: Schema.String,
   /**
    * The rows of one branch. Reactive: the transcript reads it again when it
    * changes. `None` while the source cannot yet say what its rows are: native
@@ -759,12 +775,13 @@ interface NoticeRowContribution {
    * failure and stays: when it answers, its rows draw among the rows history
    * has not yet committed.
    */
-  readonly rows: (session: ActiveExtensionSession) => Option.Option<ReadonlyArray<NoticeRow>>
-}
+  rows: contributed<(session: ActiveExtensionSession) => Option.Option<ReadonlyArray<NoticeRow>>>(),
+})
+type NoticeRowContribution = typeof NoticeRowContribution.Type
 
-export interface AutocompleteContribution {
-  readonly prefix: string
-  readonly title: string
+const AutocompleteContribution = Schema.Struct({
+  prefix: Schema.String,
+  title: Schema.String,
   /** Fetch items for the given filter. Sync OR Effect (no Promise).
    *  - Sync: returned array used directly.
    *  - Effect: run through the TUI shell's `clientRuntime`. R may be any
@@ -773,127 +790,123 @@ export interface AutocompleteContribution {
    *  The popup wraps in `createResource` — undefined while loading, items
    *  when resolved. Async work goes through Effect so client extension code
    *  shares the TUI shell runtime and cancellation semantics. */
-  readonly items: (filter: string) => ReadonlyArray<AutocompleteItem> | AutocompleteItemsEffect
+  items:
+    contributed<(filter: string) => ReadonlyArray<AutocompleteItem> | AutocompleteItemsEffect>(),
   /** Format the selected item id for insertion into the draft. Default: `${prefix}${id} ` */
-  readonly formatInsertion?: (id: string) => string
+  formatInsertion: Schema.optional(contributed<(id: string) => string>()),
   /** Called after an item is selected. Use for side effects like frecency tracking. */
-  readonly onSelect?: (id: string, filter: string) => void
+  onSelect: Schema.optional(contributed<(id: string, filter: string) => void>()),
   /**
    * Called each time the popup opens on this prefix, before its first
    * `items`. A source that caches between keys drops the cache here, so the
    * reader never ranks a list older than the popup, whatever filter it opens on.
    */
-  readonly onOpen?: () => void
-}
+  onOpen: Schema.optional(contributed<() => void>()),
+})
+export type AutocompleteContribution = typeof AutocompleteContribution.Type
+
+/**
+ * One command: a palette row, and optionally a keybind and a slash name. The
+ * session's own commands, client extension commands and server slash commands
+ * all take this shape and resolve under one rule (`resolveCommands`).
+ */
+const Command = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  description: Schema.optional(Schema.String),
+  category: Schema.optional(Schema.String),
+  keybind: Schema.optional(Schema.String),
+  /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
+  slash: Schema.optional(Schema.String),
+  /** Additional slash names that resolve to this command */
+  aliases: Schema.optional(Schema.Array(Schema.String)),
+  onSelect: contributed<() => void>(),
+  /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
+  onSlash: Schema.optional(contributed<(args: string) => void>()),
+})
+export type Command = typeof Command.Type
 
 // ── Buckets ──
 
-export interface ClientContributions {
-  readonly renderers?: ReadonlyArray<RendererContribution>
-  readonly messageRenderers?: ReadonlyArray<MessageRendererContribution>
-  readonly widgets?: ReadonlyArray<WidgetContribution>
-  readonly commands?: ReadonlyArray<Command>
-  readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
-  readonly statusLabels?: ReadonlyArray<StatusLabelContribution>
-  readonly noticeRows?: ReadonlyArray<NoticeRowContribution>
-  readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
-}
-
-/** A function value; the host calls it, so its parameters are not checked here. */
-type HostCalledFunction = (...args: ReadonlyArray<never>) => void
-
 /**
- * A function the host calls as `F`. Only that it is a function is checked:
- * its parameters and result stay the extension's contract.
- */
-const contributed = <F extends HostCalledFunction>() =>
-  Schema.declare((value: unknown): value is F => Predicate.isFunction(value))
-
-const bucketOf = <Fields extends Schema.Struct.Fields>(fields: Fields) =>
-  Schema.UndefinedOr(Schema.Array(Schema.Struct(fields)))
-
-/**
- * Every contribution bucket, with the shape of each entry as the host reads
- * it. The loader fails an extension that returns any other key, so a renamed
- * bucket fails loudly instead of dropping its items, and one whose bucket has
- * another shape, so a malformed entry fails its own extension before the
- * host resolves every extension's contributions together.
+ * Every contribution bucket, with the schema of one entry. The loader fails
+ * an extension that returns any other key, so a renamed bucket fails loudly
+ * instead of dropping its items, and one whose bucket has another shape, so a
+ * malformed entry fails its own extension before the host resolves every
+ * extension's contributions together.
  */
 const CONTRIBUTION_BUCKETS = {
-  renderers: bucketOf({
-    toolNames: Schema.Array(Schema.String),
-    component: contributed<ToolRenderer>(),
-  }),
-  messageRenderers: bucketOf({
-    customType: Schema.String,
-    component: contributed<MessageRenderer>(),
-    prompt: Schema.optional(contributed<(content: string) => string>()),
-  }),
-  widgets: bucketOf({
-    id: Schema.String,
-    slot: WidgetSlot,
-    priority: Schema.optional(Schema.Finite),
-    component: contributed<WidgetComponent>(),
-  }),
-  commands: bucketOf({
-    id: Schema.String,
-    title: Schema.String,
-    description: Schema.optional(Schema.String),
-    category: Schema.optional(Schema.String),
-    keybind: Schema.optional(Schema.String),
-    slash: Schema.optional(Schema.String),
-    aliases: Schema.optional(Schema.Array(Schema.String)),
-    onSelect: contributed<Command["onSelect"]>(),
-    onSlash: Schema.optional(contributed<(args: string) => void>()),
-  }),
-  interactionRenderers: bucketOf({
-    metadataType: Schema.String,
-    component: contributed<InteractionRendererComponent>(),
-  }),
-  statusLabels: bucketOf({
-    priority: Schema.optional(Schema.Finite),
-    produce: contributed<StatusLabelContribution["produce"]>(),
-  }),
-  noticeRows: bucketOf({ id: Schema.String, rows: contributed<NoticeRowContribution["rows"]>() }),
-  autocomplete: bucketOf({
-    prefix: Schema.String,
-    title: Schema.String,
-    items: contributed<AutocompleteContribution["items"]>(),
-    formatInsertion: Schema.optional(contributed<(id: string) => string>()),
-    onSelect: Schema.optional(contributed<(id: string, filter: string) => void>()),
-    onOpen: Schema.optional(contributed<() => void>()),
-  }),
-} satisfies Record<keyof ClientContributions, Schema.Top>
+  renderers: RendererContribution,
+  messageRenderers: MessageRendererContribution,
+  widgets: WidgetContribution,
+  commands: Command,
+  interactionRenderers: InteractionRendererContribution,
+  statusLabels: StatusLabelContribution,
+  noticeRows: NoticeRowContribution,
+  autocomplete: AutocompleteContribution,
+}
 
-/**
- * A setup's contributions as plain data: decoding reads each value once and
- * builds new objects and arrays, so the shared resolution never reads an
- * extension's own object (a getter that throws, or answers differently later).
- */
-export const ClientContributionsData = Schema.Struct({
-  renderers: Schema.optionalKey(CONTRIBUTION_BUCKETS.renderers),
-  messageRenderers: Schema.optionalKey(CONTRIBUTION_BUCKETS.messageRenderers),
-  widgets: Schema.optionalKey(CONTRIBUTION_BUCKETS.widgets),
-  commands: Schema.optionalKey(CONTRIBUTION_BUCKETS.commands),
-  interactionRenderers: Schema.optionalKey(CONTRIBUTION_BUCKETS.interactionRenderers),
-  statusLabels: Schema.optionalKey(CONTRIBUTION_BUCKETS.statusLabels),
-  noticeRows: Schema.optionalKey(CONTRIBUTION_BUCKETS.noticeRows),
-  autocomplete: Schema.optionalKey(CONTRIBUTION_BUCKETS.autocomplete),
-} satisfies Record<keyof ClientContributions, Schema.Top>)
+type ContributionBucket = keyof typeof CONTRIBUTION_BUCKETS
 
-const isContributionBucket = (key: string): key is keyof typeof CONTRIBUTION_BUCKETS =>
-  Object.hasOwn(CONTRIBUTION_BUCKETS, key)
+type EntryOf<Bucket extends ContributionBucket> = (typeof CONTRIBUTION_BUCKETS)[Bucket]["Type"]
 
-/** The schema of the bucket a setup's key names; `None` when the key is no bucket. */
-export const contributionBucketSchema = (key: string): Option.Option<Schema.Top> =>
-  Option.map(
-    Option.liftPredicate(key, isContributionBucket),
-    (bucket) => CONTRIBUTION_BUCKETS[bucket],
-  )
+/** What a setup returns: any of the buckets, each a list of its entries. */
+export type ClientContributions = {
+  readonly [Bucket in ContributionBucket]?: ReadonlyArray<EntryOf<Bucket>>
+}
 
 type MutableClientContributions = {
-  -readonly [Key in keyof ClientContributions]: ClientContributions[Key]
+  -readonly [Bucket in ContributionBucket]?: ReadonlyArray<EntryOf<Bucket>>
 }
+
+const isContributionBucket = (key: string): key is ContributionBucket =>
+  Object.hasOwn(CONTRIBUTION_BUCKETS, key)
+
+const CONTRIBUTION_BUCKET_NAMES = Object.keys(CONTRIBUTION_BUCKETS).filter(isContributionBucket)
+
+const decodeBucket = <Bucket extends ContributionBucket>(
+  out: { -readonly [B in Bucket]?: ReadonlyArray<EntryOf<B>> },
+  bucket: Bucket,
+  // eslint-disable-next-line effect/noUnknownParameters -- a user setup's bucket is parsed at this boundary.
+  entries: unknown,
+) =>
+  Schema.decodeUnknownExit(Schema.Array(CONTRIBUTION_BUCKETS[bucket]))(entries).pipe(
+    Effect.mapError(() => `malformed contribution "${bucket}"`),
+    Effect.map((decoded) => {
+      out[bucket] = decoded
+    }),
+  )
+
+/**
+ * A setup's result as plain contributions, or the reason it is none. A key
+ * the object owns outside the known buckets fails by name, so a renamed
+ * bucket never drops its items silently. Each known bucket is read once by
+ * property access (a class instance's getter counts) and decoded by its
+ * schema to new objects and arrays, so the resolution every extension shares
+ * never reads the extension's own object (a getter that throws, or answers
+ * differently later). A throw on the way is a defect for the caller to name.
+ */
+export const decodeContributions = (
+  // eslint-disable-next-line effect/noUnknownParameters -- a user setup's result is parsed at this boundary.
+  value: unknown,
+): Effect.Effect<ClientContributions, string> =>
+  Effect.gen(function* () {
+    if (!Predicate.isObject(value)) return yield* Effect.fail("setup must return contributions")
+    const unknownKey = Option.fromUndefinedOr(
+      Object.keys(value).find((key) => !isContributionBucket(key)),
+    )
+    if (Option.isSome(unknownKey)) {
+      return yield* Effect.fail(`unknown contribution "${unknownKey.value}"`)
+    }
+    const out: MutableClientContributions = {}
+    for (const bucket of CONTRIBUTION_BUCKET_NAMES) {
+      if (!Predicate.hasProperty(value, bucket)) continue
+      const entries = value[bucket]
+      // An absent bucket and one set to `undefined` contribute nothing alike.
+      if (!Predicate.isUndefined(entries)) yield* decodeBucket(out, bucket, entries)
+    }
+    return out
+  })
 
 const append = <A>(
   // eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
@@ -909,22 +922,21 @@ const append = <A>(
   return [...leftOption.value, ...rightOption.value]
 }
 
+const appendBucket = <Bucket extends ContributionBucket>(
+  out: { -readonly [B in Bucket]?: ReadonlyArray<EntryOf<B>> },
+  part: ClientContributions,
+  bucket: Bucket,
+) => {
+  out[bucket] = append(out[bucket], part[bucket])
+}
+
 export const clientContributions = (
   ...parts: ReadonlyArray<ClientContributions>
 ): ClientContributions => {
   const out: MutableClientContributions = {}
-
   for (const part of parts) {
-    out.renderers = append(out.renderers, part.renderers)
-    out.messageRenderers = append(out.messageRenderers, part.messageRenderers)
-    out.widgets = append(out.widgets, part.widgets)
-    out.commands = append(out.commands, part.commands)
-    out.interactionRenderers = append(out.interactionRenderers, part.interactionRenderers)
-    out.statusLabels = append(out.statusLabels, part.statusLabels)
-    out.noticeRows = append(out.noticeRows, part.noticeRows)
-    out.autocomplete = append(out.autocomplete, part.autocomplete)
+    for (const bucket of CONTRIBUTION_BUCKET_NAMES) appendBucket(out, part, bucket)
   }
-
   return out
 }
 

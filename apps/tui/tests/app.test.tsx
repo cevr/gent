@@ -46,6 +46,7 @@ import {
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
   type QueueEntryInfo,
+  userMessageIdForRequest,
 } from "@gent/core/protocol"
 import {
   emptyQueueSnapshot,
@@ -73,13 +74,14 @@ import {
   createMockClient,
   createMockRuntime,
   createMutableRuntime,
+  holdingReplies,
   renderFrame,
   renderScoped,
   TerminalOutput,
   snapshotNaming,
 } from "./render-harness-boundary"
 import { LinkOpener, LinkOpenerError } from "../src/os"
-import { createSignal, type JSX, onMount, Show, type Signal } from "solid-js"
+import { createSignal, onMount, Show, type Signal } from "solid-js"
 import { ExtensionId, ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
 import {
@@ -100,9 +102,10 @@ import {
   type AnyExtensionClientModule,
   type NoticeRow,
   noticeRowContribution,
+  statusLabelContribution,
   widgetContribution,
 } from "../src/extensions/client-facets"
-import { NOTICE_ROWS_BOUND, useSessionController } from "../src/session"
+import { NOTICE_ROWS_BOUND, useExit, useSessionController } from "../src/session"
 import { seedDebugSession } from "../src/ops"
 
 // ── app bootstrap ───────────────────────────────────────────────────────────
@@ -181,7 +184,7 @@ describe("startup and headless auth", () => {
       })
       expect(bootstrap.initialSession.sessionId).toBe(sessionA.id)
       expect(reads).toEqual([])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("a headless session names the missing sign-ins of the agent it runs", () =>
     Effect.gen(function* () {
@@ -258,7 +261,7 @@ describe("startup and headless auth", () => {
       // The session id is the question: the server answers for the agent the
       // session runs.
       expect(calls).toEqual([{ sessionId: SessionId.make("session-a") }])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("a session with several branches boots into the branch picker", () =>
     Effect.gen(function* () {
@@ -289,7 +292,7 @@ describe("startup and headless auth", () => {
         Option.some(2),
       )
       expect(calls).toEqual([])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   // A session record with no branch is a typed failure, so `gent -s <id>`
@@ -309,7 +312,7 @@ describe("startup and headless auth", () => {
         }),
       )
       expect(error.reason).toBe("missing-branch")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -325,7 +328,7 @@ describe("startup state", () => {
         }),
       )
       expect(error.reason).toBe("headless-missing-prompt")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   // The composer sends nothing for a blank draft; headless holds the same line.
@@ -340,7 +343,7 @@ describe("startup state", () => {
         }),
       )
       expect(error.reason).toBe("headless-missing-prompt")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("a new headless session is created as the requested agent and run spec", () =>
@@ -379,7 +382,7 @@ describe("startup state", () => {
       expect(state).toMatchObject({ session: { id: "session-test" } })
       // The agent is fixed on the session; the prompt's turn carries none.
       expect(created.map((input) => input.admission)).toEqual([admission])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("fails with typed bootstrap error when requested session is missing", () =>
@@ -395,7 +398,7 @@ describe("startup state", () => {
       )
       expect(error.reason).toBe("session-not-found")
       expect(error.sessionId).toBe(SessionId.make("missing-session"))
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("resume opens the user's last session, not a child a delegate spawned later", () =>
     Effect.gen(function* () {
@@ -435,7 +438,7 @@ describe("startup state", () => {
         prompt: Option.none(),
       })
       expect(state).toMatchObject({ _tag: "session", session: { id: "handoff" } })
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -452,14 +455,17 @@ const authSource = (hasKey: boolean): "stored" | "none" => {
   return "none"
 }
 
-const requireClient = (
-  context: Option.Option<ClientContextValue>,
-): Effect.Effect<ClientContextValue, MessageTimeoutError> => {
-  if (Option.isNone(context)) {
-    return Effect.fail(new MessageTimeoutError({ message: "client context not ready" }))
-  }
-  return Effect.succeed(context.value)
-}
+/** What a probe gave once it mounted. */
+const requireProbe = <A,>(
+  probe: Option.Option<A>,
+  name: string,
+): Effect.Effect<A, MessageTimeoutError> =>
+  Effect.fromOption(probe).pipe(
+    Effect.mapError(() => new MessageTimeoutError({ message: `${name} not ready` })),
+  )
+
+const requireClient = (context: Option.Option<ClientContextValue>) =>
+  requireProbe(context, "client context")
 
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
@@ -468,6 +474,67 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
   })
   return <box />
 }
+
+function ExtensionUIProbe(props: {
+  readonly onReady: (ext: ReturnType<typeof useExtensionUI>) => void
+}) {
+  const ext = useExtensionUI()
+  onMount(() => {
+    props.onReady(ext)
+  })
+  return <box />
+}
+
+/** The session a mount starts on, as the client holds it. */
+const sessionNamed = (id: string, branch: string, name: string) => ({
+  sessionId: SessionId.make(id),
+  branchId: BranchId.make(branch),
+  name,
+})
+
+/** A `message` namespace that records each sent content. */
+const recordSends = (sent: Array<string>) => ({
+  send: (input: { readonly content: string }) =>
+    Effect.sync(() => {
+      sent.push(input.content)
+    }),
+})
+
+type RenderOptions = NonNullable<Parameters<typeof renderScoped>[1]>
+
+/**
+ * The app on a mock client. `client` replaces the mock's methods it names;
+ * the mock lists no providers and an empty branch tree. `replies` holds the
+ * mock's replies, and `app` holds the props of `App`. The probes give the
+ * client context and the extension UI.
+ */
+const mountApp = (
+  options: Omit<RenderOptions, "client"> & {
+    readonly client?: Parameters<typeof createMockClient>[0]
+    readonly replies?: Parameters<typeof createMockClient>[1]
+    readonly app?: Parameters<typeof App>[0]
+  } = {},
+) =>
+  Effect.gen(function* () {
+    const { client, replies, app, ...render } = options
+    let ctx = Option.none<ClientContextValue>()
+    let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+    const setup = yield* renderScoped(
+      () => (
+        <>
+          <App {...app} />
+          <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+          <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+        </>
+      ),
+      { ...render, client: createMockClient(client, replies) },
+    )
+    return {
+      setup,
+      client: yield* requireClient(ctx),
+      ext: yield* requireProbe(ext, "extension UI"),
+    }
+  })
 
 /**
  * Counts the renderer teardowns the app performs in place of them, so a test
@@ -495,7 +562,11 @@ const countShutdowns = (setup: TestSetup) =>
  * The runtime stream says Running once and then stays quiet, as it does
  * through a long generation or a long tool call.
  */
-const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionClientModule> = []) =>
+const mountRunningTurn = (
+  height = 24,
+  extensions: ReadonlyArray<AnyExtensionClientModule> = [],
+  terminal: { readonly kittyKeyboard?: boolean } = {},
+) =>
   Effect.gen(function* () {
     const sessionId = SessionId.make("session-running")
     const branchId = BranchId.make("branch-running")
@@ -510,85 +581,57 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
         return clientContributions()
       }),
     })
-    const client = createMockClient({
-      auth: { listProviders: () => Effect.succeed([]) },
-      branch: { getTree: () => Effect.succeed([]) },
-      session: {
-        getSnapshot: () =>
-          Effect.succeed({
-            sessionId,
-            branchId,
-            messages: [],
-            lastEventId: nullValue,
-            reasoningLevel: absent,
-            resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-            agent: AgentName.make("main"),
-            runtime: running,
-            metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-          }),
-        watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
-      },
-      steer: {
-        command: (input: { readonly command: { readonly _tag: string } }) =>
-          Effect.sync(() => {
-            steers.push(input.command._tag)
-          }),
-      },
-      queue: {
-        // One follow-up waits behind the turn; alt+up takes it back into the draft.
-        drain: () =>
-          Effect.succeed({
-            steering: [],
-            followUp: [
-              {
-                _tag: "FollowUp" satisfies "FollowUp",
-                id: MessageId.make("queued-follow-up"),
-                content: "the queued follow-up",
-                createdAt: 0,
-              },
-            ],
-          }),
-      },
-      message: {
-        send: (input: { readonly content: string }) =>
-          Effect.sync(() => {
-            sent.push(input.content)
-          }),
-      },
-    })
-    let ctx = Option.none<ClientContextValue>()
-    const setup = yield* renderScoped(
-      () => (
-        <>
-          <App />
-          <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-        </>
-      ),
-      {
-        client,
-        runtime: createMockRuntime(),
-        builtins: [...builtinClientModules, activityProbe, ...extensions],
-        height,
-        initialSession: {
-          id: sessionId,
-          activeBranchId: branchId,
-          name: "Running",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
+    const { setup, client } = yield* mountApp({
+      client: {
+        session: {
+          getSnapshot: () =>
+            Effect.succeed({
+              sessionId,
+              branchId,
+              messages: [],
+              lastEventId: nullValue,
+              reasoningLevel: absent,
+              resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+              agent: AgentName.make("main"),
+              runtime: running,
+              metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+            }),
+          watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
         },
+        steer: {
+          command: (input: { readonly command: { readonly _tag: string } }) =>
+            Effect.sync(() => {
+              steers.push(input.command._tag)
+            }),
+        },
+        queue: {
+          // One follow-up waits behind the turn; alt+up takes it back into the draft.
+          drain: () =>
+            Effect.succeed({
+              steering: [],
+              followUp: [
+                {
+                  _tag: "FollowUp" satisfies "FollowUp",
+                  id: MessageId.make("queued-follow-up"),
+                  content: "the queued follow-up",
+                  createdAt: 0,
+                },
+              ],
+            }),
+        },
+        message: recordSends(sent),
       },
-    )
+      builtins: [...builtinClientModules, activityProbe, ...extensions],
+      height,
+      ...terminal,
+      initialSession: sessionNamed(sessionId, branchId, "Running"),
+    })
     const { shutdowns } = yield* countShutdowns(setup)
-    yield* waitForFrame(
-      setup,
-      () => ctx.pipe(Option.exists((value) => value.isStreaming())),
-      "running turn",
-    )
+    yield* waitForFrame(setup, () => client.isStreaming(), "running turn")
     yield* waitForFrame(setup, () => readActivity() !== "unmounted", "activity probe loaded")
-    const clientValue = yield* requireClient(ctx)
     return {
       setup,
-      client: clientValue,
+      client,
       steers,
       sent,
       shutdowns,
@@ -601,10 +644,6 @@ type TestSetup = Effect.Success<ReturnType<typeof renderScoped>>
 const pairA = { sessionId: SessionId.make("session-a"), branchId: BranchId.make("branch-a") }
 const pairB = { sessionId: SessionId.make("session-b"), branchId: BranchId.make("branch-b") }
 
-/**
- * The session view on A, with B one switch away: a test starts an action in
- * A, moves to B before A's server answers, and reads where the answer lands.
- */
 /** A queue drain that answers `content` once the test completes `answer`. */
 const gatedDrain = (content: string) =>
   Effect.gen(function* () {
@@ -628,35 +667,17 @@ const gatedDrain = (content: string) =>
     return { asked, answer, drain }
   })
 
+/**
+ * The session view on A, with B one switch away: a test starts an action in
+ * A, moves to B before A's server answers, and reads where the answer lands.
+ */
 const mountSessionPair = (overrides: Parameters<typeof createMockClient>[0]) =>
   Effect.gen(function* () {
-    const client = createMockClient({
-      auth: { listProviders: () => Effect.succeed([]) },
-      ...overrides,
-      branch: { getTree: () => Effect.succeed([]), ...overrides?.["branch"] },
+    const { setup, client: clientCtx } = yield* mountApp({
+      client: overrides,
+      initialSession: sessionNamed(pairA.sessionId, pairA.branchId, "Session A"),
     })
-    let ctx = Option.none<ClientContextValue>()
-    const setup = yield* renderScoped(
-      () => (
-        <>
-          <App />
-          <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-        </>
-      ),
-      {
-        client,
-        runtime: createMockRuntime(),
-        initialSession: {
-          id: pairA.sessionId,
-          activeBranchId: pairA.branchId,
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
-      },
-    )
     yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session A")
-    const clientCtx = yield* requireClient(ctx)
     const switchTo = (pair: typeof pairA, name: string) =>
       Effect.gen(function* () {
         clientCtx.switchSession(pair.sessionId, pair.branchId, name)
@@ -680,14 +701,6 @@ const mountSessionPair = (overrides: Parameters<typeof createMockClient>[0]) =>
 const ESC_CUE = "esc again to clear"
 const CTRL_C_CUE = "ctrl+c again to exit"
 
-/** A `message` namespace that records each sent content. */
-const recordSends = (sent: Array<string>) => ({
-  send: (input: { readonly content: string }) =>
-    Effect.sync(() => {
-      sent.push(input.content)
-    }),
-})
-
 /**
  * An idle session view with no draft; `shutdowns` counts the exits it
  * performs, and `sent` holds each message it sent.
@@ -703,22 +716,11 @@ const mountIdleSession = (
 ) =>
   Effect.gen(function* () {
     const sent: Array<string> = []
-    const client = createMockClient({
-      auth: { listProviders: () => Effect.succeed([]) },
-      branch: { getTree: () => Effect.succeed([]) },
-      message: recordSends(sent),
-    })
-    const setup = yield* renderScoped(() => <App />, {
-      client,
+    const { setup } = yield* mountApp({
+      client: { message: recordSends(sent) },
       runtime,
       ...terminal,
-      initialSession: {
-        id: SessionId.make("session-a"),
-        activeBranchId: BranchId.make("branch-a"),
-        name: "Session A",
-        createdAt: dateFromMillis(0),
-        updatedAt: dateFromMillis(0),
-      },
+      initialSession: sessionNamed("session-a", "branch-a", "Session A"),
     })
     yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
     const { shutdowns, destroy } = yield* countShutdowns(setup)
@@ -788,87 +790,70 @@ const mountShortTerminalWithTrays = (
       return { ...row, activity: "bash" }
     }
     const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
-    const client = createMockClient({
-      auth: { listProviders: () => Effect.succeed([]) },
-      branch: { getTree: () => Effect.succeed([]) },
-      session: {
-        getSnapshot: () =>
-          Effect.succeed({
-            sessionId,
-            branchId,
-            messages: [],
-            lastEventId: nullValue,
-            reasoningLevel: absent,
-            agent: AgentName.make("main"),
-            runtime: running,
-            resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-            metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-          }),
-        watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
-        delete: () => options.deleteSession ?? Effect.void,
-        thread: () =>
-          Effect.succeed([
-            new Session({
-              id: sessionId,
-              name: "Session BTW",
-              activeBranchId: branchId,
-              createdAt: dateFromMillis(0),
-              updatedAt: dateFromMillis(0),
+    const { setup, client } = yield* mountApp({
+      client: {
+        session: {
+          getSnapshot: () =>
+            Effect.succeed({
+              sessionId,
+              branchId,
+              messages: [],
+              lastEventId: nullValue,
+              reasoningLevel: absent,
+              agent: AgentName.make("main"),
+              runtime: running,
+              resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+              metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
             }),
-          ]),
-      },
-      message: { list: () => Effect.succeed(messages) },
-      extension: {
-        request: (input: { capabilityId: string }) =>
-          Effect.sync(() => {
-            if (input.capabilityId === "list-agents") return { rows: [3, 4, 5, 6].map(child) }
-            if (input.capabilityId === "wake.pending") {
-              return {
-                now: 0,
-                entries: [{ _tag: "alarm", wakeId: "w1", dueAt: 120_000, note: "check tests" }],
+          watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+          delete: () => options.deleteSession ?? Effect.void,
+          thread: () =>
+            Effect.succeed([
+              new Session({
+                id: sessionId,
+                name: "Session BTW",
+                activeBranchId: branchId,
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(0),
+              }),
+            ]),
+        },
+        message: { list: () => Effect.succeed(messages) },
+        extension: {
+          request: (input: { capabilityId: string }) =>
+            Effect.sync(() => {
+              if (input.capabilityId === "list-agents") return { rows: [3, 4, 5, 6].map(child) }
+              if (input.capabilityId === "wake.pending") {
+                return {
+                  now: 0,
+                  entries: [{ _tag: "alarm", wakeId: "w1", dueAt: 120_000, note: "check tests" }],
+                }
               }
-            }
-            if (input.capabilityId === "btw.ask") return { asked: true }
-            if (input.capabilityId === "btw.fork") {
-              return { sessionId: SessionId.make("fork"), branchId: BranchId.make("fork-b") }
-            }
-            if (input.capabilityId === "btw.progress") {
-              return {
-                fork: {
-                  sessionId: SessionId.make("fork"),
-                  branchId: BranchId.make("fork-b"),
-                  name: "btw: which task is hardest?",
-                  turns: [{ question: "which task is hardest?", answer }],
-                  replying: false,
-                },
+              if (input.capabilityId === "btw.ask") return { asked: true }
+              if (input.capabilityId === "btw.fork") {
+                return { sessionId: SessionId.make("fork"), branchId: BranchId.make("fork-b") }
               }
-            }
-            return {}
-          }),
-      },
-    })
-    const setup = yield* renderScoped(
-      () => (
-        <>
-          <App />
-          <ClientProbe onReady={options.onClient ?? (() => {})} />
-        </>
-      ),
-      {
-        client,
-        runtime: createMockRuntime(),
-        builtins: builtinClientModules,
-        height,
-        width: options.width,
-        initialSession: {
-          id: sessionId,
-          activeBranchId: branchId,
-          name: "Session BTW",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
+              if (input.capabilityId === "btw.progress") {
+                return {
+                  fork: {
+                    sessionId: SessionId.make("fork"),
+                    branchId: BranchId.make("fork-b"),
+                    name: "btw: which task is hardest?",
+                    turns: [{ question: "which task is hardest?", answer }],
+                    replying: false,
+                  },
+                }
+              }
+              return {}
+            }),
         },
       },
-    )
+      builtins: builtinClientModules,
+      height,
+      width: options.width,
+      initialSession: sessionNamed(sessionId, branchId, "Session BTW"),
+    })
+    options.onClient?.(client)
     yield* waitForFrame(
       setup,
       (frame) => frame.includes("Generating") && frame.includes("delegate: task 3"),
@@ -876,16 +861,6 @@ const mountShortTerminalWithTrays = (
     )
     return setup
   })
-
-function ExtensionUIProbe(props: {
-  readonly onReady: (ext: ReturnType<typeof useExtensionUI>) => void
-}) {
-  const ext = useExtensionUI()
-  onMount(() => {
-    props.onReady(ext)
-  })
-  return <box />
-}
 
 function TerminalDimensionsProbe() {
   const dimensions = useTerminalDimensions()
@@ -946,41 +921,14 @@ const mountNoticeSources = (ids: ReadonlyArray<string>) =>
         ),
       ),
     })
-    let ext = Option.none<ReturnType<typeof useExtensionUI>>()
-    const setup = yield* renderScoped(
-      () => (
-        <>
-          <App />
-          <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
-        </>
-      ),
-      {
-        client: createMockClient({
-          auth: { listProviders: () => Effect.succeed([]) },
-          branch: { getTree: () => Effect.succeed([]) },
-        }),
-        runtime,
-        builtins: [...builtinClientModules, extension],
-        initialSession: {
-          id: SessionId.make("session-silent"),
-          activeBranchId: BranchId.make("branch-silent"),
-          name: "Silent",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
-      },
-    )
-    const loaded = () => Option.exists(ext, (value) => value.loaded())
-    yield* waitForFrame(setup, (frame) => frame.includes("ready ·") && loaded(), "loaded")
-    const sources = (): ReadonlyArray<string> =>
-      Option.match(ext, {
-        onNone: () => [],
-        onSome: (value) => value.noticeRows().map((source) => source.id),
-      })
-    const failed = () =>
-      Option.exists(ext, (value) =>
-        value.failures().some((failure) => failure.id === "@test/silent-notices"),
-      )
+    const { setup, ext } = yield* mountApp({
+      runtime,
+      builtins: [...builtinClientModules, extension],
+      initialSession: sessionNamed("session-silent", "branch-silent", "Silent"),
+    })
+    yield* waitForFrame(setup, (frame) => frame.includes("ready ·") && ext.loaded(), "loaded")
+    const sources = (): ReadonlyArray<string> => ext.noticeRows().map((source) => source.id)
+    const failed = () => ext.failures().some((failure) => failure.id === "@test/silent-notices")
     yield* waitForFrame(setup, () => ids.every((id) => sources().includes(id)), "the sources")
     return { setup, clock, warnings, answer, settled: () => settled(), sources, failed }
   })
@@ -1039,83 +987,35 @@ describe("notice rows", () => {
 })
 
 describe("App sign-in pane", () => {
-  it.scopedLive("shares one terminal resize source across App and cleans it up", () =>
-    Effect.gen(function* () {
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <TerminalDimensionsProbe />
-          </>
-        ),
-        {
-          initialSession: {
-            id: SessionId.make("session-resize"),
-            activeBranchId: BranchId.make("branch-resize"),
-            name: "Resize",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        },
-      )
-      expect(setup.renderer.listenerCount("resize")).toBe(1)
-      expect(renderFrame(setup)).toContain("80x24")
-
-      setup.renderer.resize(100, 30)
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(renderFrame(setup)).toContain("100x30")
-
-      setup.renderer.destroy()
-      expect(setup.renderer.listenerCount("resize")).toBe(0)
-    }),
-  )
-
   // A scripted model (`--debug`, `--mock-empty`) answers with no key: the
   // session view asks for no sign-in, as headless does not.
   it.scopedLive("a scripted model opens the session with no sign-in", () =>
     Effect.gen(function* () {
       let checks = 0
-      const client = createMockClient({
-        auth: {
-          listProviders: () =>
-            Effect.sync(() => {
-              checks += 1
-              return [
-                {
-                  provider: "anthropic",
-                  hasKey: false,
-                  required: true,
-                  source: "none" satisfies "none",
-                  authType: absent,
-                },
-              ]
-            }),
-        },
-        branch: { getTree: () => Effect.succeed([]) },
-      })
-      let ctx = Option.none<ClientContextValue>()
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App scriptedModel />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          runtime: createMockRuntime(),
-          initialSession: {
-            id: SessionId.make("session-scripted"),
-            activeBranchId: BranchId.make("branch-scripted"),
-            name: "Scripted",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+      const { setup, client } = yield* mountApp({
+        app: { scriptedModel: true },
+        client: {
+          auth: {
+            listProviders: () =>
+              Effect.sync(() => {
+                checks += 1
+                return [
+                  {
+                    provider: "anthropic",
+                    hasKey: false,
+                    required: true,
+                    source: noAuthSource,
+                    authType: absent,
+                  },
+                ]
+              }),
           },
         },
-      )
+        initialSession: sessionNamed("session-scripted", "branch-scripted", "Scripted"),
+      })
       yield* waitForFrame(setup, (next) => next.includes("ready ·"), "session view")
       // The agent resolves: the point where a keyed model checks its sign-ins.
-      applySnapshotAgent(yield* requireClient(ctx), AgentName.make("main"))
+      applySnapshotAgent(client, AgentName.make("main"))
       yield* Effect.promise(() => setup.renderOnce())
       const frame = yield* Effect.promise(() => setup.renderOnce()).pipe(
         Effect.map(() => renderFrame(setup)),
@@ -1127,55 +1027,33 @@ describe("App sign-in pane", () => {
 
   it.scopedLive("rechecks auth requirements when the selected agent changes", () =>
     Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
       const calls: Array<{
         agentName?: string
       }> = []
-      const client = createMockClient({
-        auth: {
-          listProviders: (input: { agentName?: string }) => {
-            calls.push(input)
-            if (input.agentName === "secondary") {
-              return Effect.succeed([
-                {
-                  provider: "openai",
-                  hasKey: false,
-                  required: true,
-                  source: "none",
-                  authType: absent,
-                },
-              ])
-            }
-            return Effect.succeed([])
+      const { setup, client } = yield* mountApp({
+        client: {
+          auth: {
+            listProviders: (input: { agentName?: string }) => {
+              calls.push(input)
+              if (input.agentName === "secondary") {
+                return Effect.succeed([
+                  {
+                    provider: "openai",
+                    hasKey: false,
+                    required: true,
+                    source: "none",
+                    authType: absent,
+                  },
+                ])
+              }
+              return Effect.succeed([])
+            },
+            listMethods: () => Effect.succeed({ openai: [apiMethod] }),
           },
-          listMethods: () =>
-            Effect.succeed({
-              openai: [apiMethod],
-            }),
         },
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
       })
-      const runtime = createMockRuntime()
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          runtime,
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        },
-      )
-      const clientContext = yield* requireClient(ctx)
-      applySnapshotAgent(clientContext, AgentName.make("secondary"))
+      applySnapshotAgent(client, AgentName.make("secondary"))
       const frame = yield* waitForFrame(
         setup,
         (next) => next.includes("Sign in ·"),
@@ -1183,7 +1061,7 @@ describe("App sign-in pane", () => {
       )
       expect(calls.length).toBeGreaterThan(0)
       expect(frame).toContain("Sign in ·")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("the startup auth check asks for the agent the session's snapshot names", () =>
     Effect.gen(function* () {
@@ -1191,61 +1069,46 @@ describe("App sign-in pane", () => {
         agentName?: string
         sessionId?: string
       }> = []
-      const client = createMockClient({
-        session: snapshotNaming(AgentName.make("secondary")),
-        auth: {
-          listProviders: (input: { agentName?: string; sessionId?: string }) => {
-            calls.push(input)
-            if (input.agentName === "secondary") {
-              return Effect.succeed([
-                {
-                  provider: "openai",
-                  hasKey: false,
-                  required: true,
-                  source: "none",
-                  authType: absent,
-                },
-              ])
-            }
-            return Effect.succeed([])
+      const { setup } = yield* mountApp({
+        client: {
+          session: snapshotNaming(AgentName.make("secondary")),
+          auth: {
+            listProviders: (input: { agentName?: string; sessionId?: string }) => {
+              calls.push(input)
+              if (input.agentName === "secondary") {
+                return Effect.succeed([
+                  {
+                    provider: "openai",
+                    hasKey: false,
+                    required: true,
+                    source: "none",
+                    authType: absent,
+                  },
+                ])
+              }
+              return Effect.succeed([])
+            },
+            listMethods: () => Effect.succeed({ openai: [apiMethod] }),
           },
-          listMethods: () =>
-            Effect.succeed({
-              openai: [apiMethod],
-            }),
         },
-      })
-      const runtime = createMockRuntime()
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
       })
       const frame = yield* waitForFrame(
         setup,
         (next) => next.includes("Sign in ·"),
         "API Keys from initial agent",
       )
-      // The auth check names the session that is actually mounted. It used to
-      // name the route's session instead, which the harness could set to a
-      // different id than the one the client held.
+      // The auth check names the session the client holds.
       expect(calls[0]).toEqual({
         agentName: AgentName.make("secondary"),
         sessionId: SessionId.make("session-a"),
       })
       // The gate opens the auth overlay itself, and the branch picker is read
-      // off that same overlay. A gate that re-ran on its own write would keep
-      // checking; it settles instead. (Two checks: the agent arrives after the
-      // first, which predates the overlay being the picker's owner.)
+      // off that same overlay. A gate that ran again on its own write would
+      // keep checking; it settles at two checks instead.
       expect(calls.length).toBe(2)
       expect(frame).toContain("Sign in ·")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   /**
    * The enforced sign-in on a `height`-row terminal: openai is required and
@@ -1254,43 +1117,35 @@ describe("App sign-in pane", () => {
    */
   const mountSignIn = (height = 24, savedKeys: Array<string> = []) =>
     Effect.gen(function* () {
-      const client = createMockClient({
-        auth: {
-          setKey: (input: { readonly provider: string; readonly key: string }) =>
-            Effect.sync(() => {
-              savedKeys.push(input.key)
-            }),
-          listProviders: () =>
-            Effect.succeed([
-              {
-                provider: "openai",
-                hasKey: false,
-                required: true,
-                source: noAuthSource,
-                authType: absent,
-              },
-              {
-                provider: "zzprovider",
-                hasKey: false,
-                required: false,
-                source: noAuthSource,
-                authType: absent,
-              },
-            ]),
-          listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+      const { setup } = yield* mountApp({
+        client: {
+          auth: {
+            setKey: (input: { readonly provider: string; readonly key: string }) =>
+              Effect.sync(() => {
+                savedKeys.push(input.key)
+              }),
+            listProviders: () =>
+              Effect.succeed([
+                {
+                  provider: "openai",
+                  hasKey: false,
+                  required: true,
+                  source: noAuthSource,
+                  authType: absent,
+                },
+                {
+                  provider: "zzprovider",
+                  hasKey: false,
+                  required: false,
+                  source: noAuthSource,
+                  authType: absent,
+                },
+              ]),
+            listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+          },
         },
-      })
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime: createMockRuntime(),
         height,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("API key [api]"), "openai's methods")
       return setup
@@ -1371,189 +1226,31 @@ describe("App sign-in pane", () => {
       expect(line.length).toBeLessThanOrEqual(setup.renderer.terminalWidth)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  for (const [outcome, superseded] of [
-    ["clears its reason", false],
-    ["keeps a newer error", true],
-  ] as const) {
-    it.scopedLive(
-      `a send refused after a switch restores its draft and ${outcome} when edited`,
-      () =>
-        Effect.gen(function* () {
-          // The reader sends in A and moves to B before A's server answers. The
-          // refusal belongs to A: B shows none of it, and A has both on return.
-          const sessionA = SessionId.make("session-a")
-          const branchA = BranchId.make("branch-a")
-          const sessionB = SessionId.make("session-b")
-          const branchB = BranchId.make("branch-b")
-          const sentOut = yield* Deferred.make<void>()
-          const answer = yield* Deferred.make<void>()
-          const answered = yield* Deferred.make<void>()
-          const client = createMockClient({
-            auth: { listProviders: () => Effect.succeed([]) },
-            branch: { getTree: () => Effect.succeed([]) },
-            session: {
-              getSnapshot: (input: {
-                readonly sessionId: SessionId
-                readonly branchId: BranchId
-              }) =>
-                Effect.succeed({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  messages: [],
-                  lastEventId: nullValue,
-                  reasoningLevel: absent,
-                  agent: AgentName.make("primary"),
-                  runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
-                  metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-                }),
-            },
-            message: {
-              send: () =>
-                Deferred.complete(sentOut, Effect.void).pipe(
-                  Effect.andThen(Deferred.await(answer)),
-                  Effect.andThen(Effect.fail(refusedInA)),
-                  Effect.ensuring(Deferred.complete(answered, Effect.void)),
-                ),
-            },
-          })
-          let ctx = Option.none<ClientContextValue>()
-          const setup = yield* renderScoped(
-            () => (
-              <>
-                <App />
-                <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-              </>
-            ),
-            {
-              client,
-              runtime: createMockRuntime(),
-              initialSession: {
-                id: sessionA,
-                activeBranchId: branchA,
-                name: "Session A",
-                createdAt: dateFromMillis(0),
-                updatedAt: dateFromMillis(0),
-              },
-            },
-          )
-          yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session A")
-          if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
-          const clientCtx = ctx.value
-          yield* Effect.promise(() => setup.mockInput.typeText("keep me in A"))
-          yield* Effect.promise(() => setup.renderOnce())
-          setup.mockInput.pressEnter()
-          yield* Deferred.await(sentOut)
-          clientCtx.switchSession(sessionB, branchB, "Session B")
-          yield* waitForFrame(
-            setup,
-            () => clientCtx.sessionIdentity().sessionId === sessionB,
-            "session B",
-          )
-          yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session B view")
-          yield* Deferred.complete(answer, Effect.void)
-          yield* Deferred.await(answered)
-          // A few frames for anything the refusal would draw in B.
-          for (let frame = 0; frame < 3; frame++) {
-            yield* Effect.yieldNow
-            yield* Effect.promise(() => setup.renderOnce())
-          }
-          const inB = renderFrame(setup)
-          expect(inB).not.toContain("send refused in A")
-          expect(inB).not.toContain("keep me in A")
-          expect(clientCtx.error()).toEqual(Option.none())
-          clientCtx.switchSession(sessionA, branchA, "Session A")
-          yield* waitForFrame(setup, (frame) => frame.includes("keep me in A"), "draft back in A")
-          yield* waitForFrame(setup, (frame) => frame.includes("send refused in A"), "reason in A")
-          if (superseded) {
-            clientCtx.setErrorIn({ sessionId: sessionA, branchId: branchA }, "a newer server error")
-            yield* waitForFrame(
-              setup,
-              (frame) => frame.includes("a newer server error"),
-              "newer error",
-            )
-          }
-          setup.mockInput.pressKey("u", { ctrl: true })
-          yield* waitForFrame(
-            setup,
-            (frame) => !frame.includes("keep me in A") && !frame.includes("send refused in A"),
-            "the returned draft and its refusal gone",
-          )
-          if (superseded) expect(renderFrame(setup)).toContain("a newer server error")
-        }).pipe(Effect.timeout("10 seconds")),
-    )
-  }
-  it.scopedLive("the startup prompt belongs to the boot session, not the next one", () =>
+})
+
+describe("App session view and fatal screen", () => {
+  it.scopedLive("shares one terminal resize source across App and cleans it up", () =>
     Effect.gen(function* () {
-      // The boot picker re-mounts the session view on the chosen branch, so
-      // the prompt has to outlive one mount. A session the reader opens after
-      // that is a different session and must start empty.
-      const bootSessionId = SessionId.make("session-boot")
-      const bootBranchId = BranchId.make("branch-boot")
-      const nextSessionId = SessionId.make("session-next")
-      const nextBranchId = BranchId.make("branch-next")
-      const startupPrompt = "only for the boot session"
-      const sentMessages: Array<{ sessionId: SessionId; content: string }> = []
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        session: {
-          create: () =>
-            Effect.succeed({
-              sessionId: nextSessionId,
-              branchId: nextBranchId,
-              name: "Next",
-            }),
-        },
-        message: {
-          send: (input: { readonly sessionId: SessionId; readonly content: string }) =>
-            Effect.sync(() => {
-              sentMessages.push(input)
-            }),
-        },
-      })
-      let ctx = Option.none<ClientContextValue>()
       const setup = yield* renderScoped(
         () => (
           <>
             <App />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+            <TerminalDimensionsProbe />
           </>
         ),
-        {
-          client,
-          runtime: createMockRuntime(),
-          initialPrompt: Option.some(startupPrompt),
-          initialSession: {
-            id: bootSessionId,
-            activeBranchId: bootBranchId,
-            name: "Boot",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        },
+        { initialSession: sessionNamed("session-resize", "branch-resize", "Resize") },
       )
-      yield* waitForFrame(
-        setup,
-        () => sentMessages.some((message) => message.content === startupPrompt),
-        "sent message",
-      )
-      expect(sentMessages).toHaveLength(1)
-      if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
-      ctx.value.createSession()
-      yield* waitForFrame(
-        setup,
-        () => ctx.pipe(Option.exists((value) => value.session().sessionId === nextSessionId)),
-        "next session mounted",
-      )
-      // Several frames for the new session's feed to settle.
-      yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.yieldNow
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(sentMessages.filter((message) => message.sessionId === nextSessionId)).toEqual([])
-    }),
-  )
-})
+      expect(setup.renderer.listenerCount("resize")).toBe(1)
+      expect(renderFrame(setup)).toContain("80x24")
 
-describe("App session view and fatal screen", () => {
+      setup.renderer.resize(100, 30)
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("100x30")
+
+      setup.renderer.destroy()
+      expect(setup.renderer.listenerCount("resize")).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // Mermaid draws inline in the transcript. No key opens a full-screen
   // viewer over the session: panes dock, and the composer keeps the keys.
   it.scopedLive("ctrl+shift+m keeps the session view and its composer", () =>
@@ -1568,58 +1265,75 @@ describe("App session view and fatal screen", () => {
         "the draft",
       )
       expect(frame).not.toContain("Fatal error")
-      expect(frame).toContain("ready ·")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // A render throw replaces the whole view. The screen it leaves names a way
-  // out, ctrl+c takes it and prints the way back, and the client log keeps
-  // the error.
+  // A client extension's render code fails that extension, by name, as a
+  // setup throw does: the session view stays and takes keys.
+  for (const surface of ["widget", "status label"] as const) {
+    it.scopedLive(`a ${surface} whose render throws fails its extension and the view stays`, () =>
+      Effect.gen(function* () {
+        const [broken, setBroken] = createSignal(false)
+        // Throws once `broken` turns true: its decode fails.
+        const explode = () => Schema.decodeUnknownSync(Schema.Literal("fine"))("render broke")
+        const Breaks = () => (
+          <Show when={broken()}>
+            <text>{explode()}</text>
+          </Show>
+        )
+        const contribution = () => {
+          if (surface === "widget")
+            return widgetContribution({ id: "breaks", slot: "below-input", component: Breaks })
+          return statusLabelContribution({
+            produce: () => {
+              if (broken()) explode()
+              return [{ text: "breaks-label", color: "info" as const }]
+            },
+          })
+        }
+        const extension = defineClientExtension("@test/breaks", {
+          setup: Effect.succeed(clientContributions(contribution())),
+        })
+        const { setup } = yield* mountApp({
+          builtins: [...builtinClientModules, extension],
+          width: 120,
+          initialSession: sessionNamed("session-breaks", "branch-breaks", "Breaks"),
+        })
+        yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+        setBroken(true)
+        const frame = yield* waitForFrame(
+          setup,
+          (current) =>
+            current.includes("@test/breaks: render failed") && current.includes("ready ·"),
+          "the failure named",
+        )
+        expect(frame).not.toContain("Fatal error")
+        expect(frame).toContain("ready ·")
+        yield* Effect.promise(() => setup.mockInput.typeText("still here"))
+        yield* waitForFrame(setup, (current) => current.includes("┃ still here"), "the draft")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // A host render throw replaces the whole view: a server reply the client
+  // takes as is (an extension health report without its lists). The screen
+  // it leaves names a way out, ctrl+c takes it and prints the way back, and
+  // the client log keeps the error.
   it.scopedLive("the fatal screen logs the error and exits on ctrl+c with the resume hint", () =>
     Effect.gen(function* () {
-      const [broken, setBroken] = createSignal(false)
-      // A widget whose render throws once `broken` turns true: its decode fails.
-      const Explodes = (): JSX.Element =>
-        Schema.decodeUnknownSync(Schema.Literal("fine"))("widget broke")
-      const Breaks = () => (
-        <Show when={broken()}>
-          <Explodes />
-        </Show>
-      )
-      const extension = defineClientExtension("@test/breaks", {
-        setup: Effect.succeed(
-          clientContributions(
-            widgetContribution({ id: "breaks", slot: "below-input", component: Breaks }),
-          ),
-        ),
-      })
       const logged: Array<string> = []
       const record = (msg: string) => logged.push(msg)
       const written: Array<string> = []
-      const setup = yield* renderScoped(() => <App />, {
-        client: createMockClient({
-          auth: { listProviders: () => Effect.succeed([]) },
-          branch: { getTree: () => Effect.succeed([]) },
-        }),
-        builtins: [...builtinClientModules, extension],
+      const { setup } = yield* mountApp({
+        client: { extension: { listStatus: () => Effect.succeed({ _tag: "Degraded" }) } },
         log: { debug: () => {}, info: () => {}, warn: () => {}, error: record },
         writeTerminal: (text) => written.push(text),
-        initialSession: {
-          id: SessionId.make("session-fatal"),
-          activeBranchId: BranchId.make("branch-fatal"),
-          name: "Fatal",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-fatal", "branch-fatal", "Fatal"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       const { shutdowns } = yield* countShutdowns(setup)
-      setBroken(true)
       const frame = yield* waitForFrame(
         setup,
         (current) => current.includes("Fatal error"),
         "fatal",
       )
-      expect(frame).toContain(`Expected "fine"`)
       expect(frame).toContain("ctrl+c")
       expect(logged).toContain("app.fatal")
       setup.mockInput.pressKey("c", { ctrl: true })
@@ -1631,37 +1345,18 @@ describe("App session view and fatal screen", () => {
   // server refuses leaves the reader where they were, with the reason.
   it.scopedLive("a /new the server refuses keeps the session in view and shows why", () =>
     Effect.gen(function* () {
-      let ctx: Option.Option<ClientContextValue> = Option.none()
       const release = yield* Deferred.make<void>()
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        branch: { getTree: () => Effect.succeed([]) },
-        session: {
-          create: () =>
-            Deferred.await(release).pipe(
-              Effect.andThen(Effect.fail(new ProviderAuthError({ message: "create refused" }))),
-            ),
-        },
-      })
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          initialSession: {
-            id: SessionId.make("session-kept"),
-            activeBranchId: BranchId.make("branch-kept"),
-            name: "Kept",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+      const { setup, client: clientContext } = yield* mountApp({
+        client: {
+          session: {
+            create: () =>
+              Deferred.await(release).pipe(
+                Effect.andThen(Effect.fail(new ProviderAuthError({ message: "create refused" }))),
+              ),
           },
         },
-      )
-      const clientContext = yield* requireClient(ctx)
+        initialSession: sessionNamed("session-kept", "branch-kept", "Kept"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       yield* typeCommand("/new")(setup)
       // While the create is in flight, the session stays mounted.
@@ -2011,36 +1706,54 @@ describe("App status and activity rows", () => {
         }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // The session view remounts per identity and the fatal screen has its own
+  // exit: an exit from a second view while the first one leaves is the same exit.
+  it.scopedLive("two views that exit leave the terminal once", () =>
+    Effect.gen(function* () {
+      const written: string[] = []
+      const exits: Array<() => void> = []
+      function ExitProbe() {
+        exits.push(useExit())
+        return <text>probe</text>
+      }
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ExitProbe />
+            <ExitProbe />
+          </>
+        ),
+        { writeTerminal: (text) => written.push(text) },
+      )
+      const { shutdowns } = yield* countShutdowns(setup)
+      expect(exits).toHaveLength(2)
+      for (const exit of exits) exit()
+      yield* waitUntil(() => written.some((text) => text.includes("to resume")), "the resume hint")
+      for (let frame = 0; frame < 3; frame++) yield* Effect.yieldNow
+      expect(shutdowns()).toBe(1)
+      expect(written.filter((text) => text.includes("to resume"))).toHaveLength(1)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("a session cost under a cent reads as the turn row spells it, not as free", () =>
     Effect.gen(function* () {
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        branch: { getTree: () => Effect.succeed([]) },
-        session: {
-          getSnapshot: () =>
-            Effect.succeed({
-              sessionId: SessionId.make("session-a"),
-              branchId: BranchId.make("branch-a"),
-              messages: [],
-              lastEventId: nullValue,
-              reasoningLevel: absent,
-              resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-              agent: AgentName.make("main"),
-              runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
-              metrics: { turns: 1, durationMs: 0, costUsd: 0.002, lastInputTokens: 0 },
-            }),
+      const { setup } = yield* mountApp({
+        client: {
+          session: {
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId: SessionId.make("session-a"),
+                branchId: BranchId.make("branch-a"),
+                messages: [],
+                lastEventId: nullValue,
+                reasoningLevel: absent,
+                resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+                agent: AgentName.make("main"),
+                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                metrics: { turns: 1, durationMs: 0, costUsd: 0.002, lastInputTokens: 0 },
+              }),
+          },
         },
-      })
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime: createMockRuntime(),
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
       const frame = yield* waitForFrame(setup, (next) => next.includes("$0.0"), "the cost label")
       expect(frame).toContain("$0.002")
@@ -2054,6 +1767,93 @@ describe("App status and activity rows", () => {
       expect(view.activity()).toBe("working")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  it.scopedLive("a running turn's activity row shows esc cancel", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      const frame = yield* waitForFrame(view.setup, (next) => next.includes("Generating"), "busy")
+      const row = frame.split("\n").find((line) => line.includes("Generating")) ?? ""
+      expect(row.trim()).toMatch(/^Generating( \(\d+s\))? · esc cancel$/)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  test("a narrow activity row drops the elapsed time first, then cuts the label, and keeps the way out", () => {
+    expect(activityLine("Generating", " (12s)", 40)).toBe("Generating (12s) · esc cancel")
+    expect(activityLine("Generating", " (12s)", 24)).toBe("Generating · esc cancel")
+    expect(activityLine("read(src/very/long/path.ts)", " (3s)", 20)).toBe("read(s… · esc cancel")
+  })
+  // Two catalogs can share a model name; the row says which provider runs,
+  // and bills, the next turn.
+  it.scopedLive("the status row names the provider of a model whose name another shares", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-shared-name")
+      const branchId = BranchId.make("branch-shared-name")
+      const sonnet = (provider: string) =>
+        new Model({
+          id: ModelId.make(`${provider}/claude-sonnet-5`),
+          name: "Claude Sonnet 5",
+          provider: ProviderId.make(provider),
+        })
+      const provider = (id: string, name: string) => ({
+        provider: id,
+        name,
+        hasKey: true,
+        required: false,
+        source: "stored" satisfies "stored",
+        authType: absent,
+      })
+      const { setup } = yield* mountApp({
+        client: {
+          auth: {
+            listProviders: () =>
+              Effect.succeed([
+                provider("anthropic", "Anthropic"),
+                provider("opencode", "OpenCode"),
+              ]),
+          },
+          model: { list: () => Effect.succeed([sonnet("anthropic"), sonnet("opencode")]) },
+          driver: {
+            list: () =>
+              Effect.succeed({
+                drivers: [{ id: "anthropic" }, { id: "opencode" }],
+                overrides: {},
+                agents: [testAgent],
+              }),
+          },
+          session: {
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId,
+                branchId,
+                messages: [],
+                lastEventId: nullValue,
+                reasoningLevel: absent,
+                resolvedModelId: ModelId.make("opencode/claude-sonnet-5"),
+                agent: AgentName.make("main"),
+                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+              }),
+          },
+        },
+        width: 120,
+        initialSession: sessionNamed(sessionId, branchId, "Shared"),
+      })
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Claude Sonnet 5 (OpenCode)"),
+        "the provider in the status row",
+      )
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  test("a model name no other provider shares stays bare", () => {
+    const model = new Model({
+      id: ModelId.make("anthropic/claude-opus-5"),
+      name: "Claude Opus 5",
+      provider: ProviderId.make("anthropic"),
+    })
+    expect(statusModelName(model, [model], [])).toBe("Claude Opus 5")
+  })
+})
+
+describe("App drafts, queue restore and forks across session switches", () => {
   // Every state shows its way out: a running turn names the key that stops it.
   // The tray's hint names alt+up; the key it names takes the queue back.
   it.scopedLive("alt+up takes the queued follow-up back into the draft", () =>
@@ -2067,6 +1867,63 @@ describe("App status and activity rows", () => {
       )
     }).pipe(Effect.timeout("4 seconds")),
   )
+  // The reader sends in A and moves to B before A's server answers. The
+  // refusal belongs to A: B shows none of it, and A has both on return.
+  for (const [outcome, superseded] of [
+    ["clears its reason", false],
+    ["keeps a newer error", true],
+  ] as const) {
+    it.scopedLive(
+      `a send refused after a switch restores its draft and ${outcome} when edited`,
+      () =>
+        Effect.gen(function* () {
+          const sentOut = yield* Deferred.make<void>()
+          const answer = yield* Deferred.make<void>()
+          const answered = yield* Deferred.make<void>()
+          const view = yield* mountSessionPair({
+            message: {
+              send: () =>
+                Deferred.complete(sentOut, Effect.void).pipe(
+                  Effect.andThen(Deferred.await(answer)),
+                  Effect.andThen(Effect.fail(refusedInA)),
+                  Effect.ensuring(Deferred.complete(answered, Effect.void)),
+                ),
+            },
+          })
+          const { setup, client } = view
+          yield* Effect.promise(() => setup.mockInput.typeText("keep me in A"))
+          yield* Effect.promise(() => setup.renderOnce())
+          setup.mockInput.pressEnter()
+          yield* Deferred.await(sentOut)
+          yield* view.switchTo(pairB, "Session B")
+          yield* Deferred.complete(answer, Effect.void)
+          yield* Deferred.await(answered)
+          yield* view.settle
+          const inB = renderFrame(setup)
+          expect(inB).not.toContain("send refused in A")
+          expect(inB).not.toContain("keep me in A")
+          expect(client.error()).toEqual(Option.none())
+          client.switchSession(pairA.sessionId, pairA.branchId, "Session A")
+          yield* waitForFrame(setup, (frame) => frame.includes("keep me in A"), "draft back in A")
+          yield* waitForFrame(setup, (frame) => frame.includes("send refused in A"), "reason in A")
+          if (superseded) {
+            client.setErrorIn(pairA, "a newer server error")
+            yield* waitForFrame(
+              setup,
+              (frame) => frame.includes("a newer server error"),
+              "newer error",
+            )
+          }
+          setup.mockInput.pressKey("u", { ctrl: true })
+          yield* waitForFrame(
+            setup,
+            (frame) => !frame.includes("keep me in A") && !frame.includes("send refused in A"),
+            "the returned draft and its refusal gone",
+          )
+          if (superseded) expect(renderFrame(setup)).toContain("a newer server error")
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   // A fork answers late. Its branch stays, but the reader's later choice of
   // where to be wins: the fork is not shown, and no switch names another view.
   // With no move, the switch names the branch forked from.
@@ -2355,10 +2212,11 @@ describe("App status and activity rows", () => {
     )
   }
   // A send whose replies were lost comes back to the draft, but the server
-  // may have queued it. Taking the queue back then gives the text once, and
-  // the next send is new: the old request id names the send the drain took.
+  // may have queued it. Taking the queue back then gives the text once, as
+  // the reader wrote it (the server holds its `@file` expanded), and the next
+  // send is new: the old request id names the send the drain took.
   it.scopedLive(
-    "a lost send the server queued comes back once when the queue is taken back",
+    "a lost `@file` send the server queued comes back once when the queue is taken back",
     () =>
       Effect.gen(function* () {
         const sends: Array<{ readonly content: string; readonly requestId: string }> = []
@@ -2378,36 +2236,39 @@ describe("App status and activity rows", () => {
               }),
           },
           queue: {
+            // The server queued the first send under its request id.
             drain: () =>
-              Effect.succeed({
+              Effect.sync(() => ({
                 steering: [],
                 followUp: [
                   {
                     _tag: "FollowUp" satisfies "FollowUp",
-                    id: MessageId.make("queued-lost"),
-                    content: "resend me",
+                    id: userMessageIdForRequest(sends[0]?.requestId ?? "none"),
+                    content: sends[0]?.content ?? "",
                     createdAt: 0,
                   },
                 ],
-              }).pipe(Effect.ensuring(Deferred.complete(drained, Effect.void))),
+              })).pipe(Effect.ensuring(Deferred.complete(drained, Effect.void))),
           },
         })
-        yield* Effect.promise(() => view.setup.mockInput.typeText("resend me"))
+        const draft = "resend @package.json"
+        yield* Effect.promise(() => view.setup.mockInput.typeText(draft))
         yield* Effect.promise(() => view.setup.renderOnce())
         view.setup.mockInput.pressEnter()
         yield* waitForFrame(
           view.setup,
-          (frame) => sends.length === 5 && frame.includes("┃ resend me"),
+          (frame) => sends.length === 5 && frame.includes(`┃ ${draft}`),
           "the lost send back in the draft",
           8_000,
         )
+        expect(sends[0]?.content).not.toBe(draft)
         view.setup.mockInput.pressArrow("up", { meta: true })
         yield* Deferred.await(drained)
         yield* view.settle
-        expect(renderFrame(view.setup).split("resend me").length - 1).toBe(1)
+        expect(renderFrame(view.setup).split("resend").length - 1).toBe(1)
         view.setup.mockInput.pressEnter()
         yield* waitForFrame(view.setup, () => sends.length === 6, "sent again")
-        expect(sends[5]?.content).toBe("resend me")
+        expect(sends[5]?.content).toBe(sends[0]?.content)
         expect(sends[5]?.requestId).not.toBe(sends[0]?.requestId)
       }).pipe(Effect.timeout("12 seconds")),
     15_000,
@@ -2471,96 +2332,125 @@ describe("App status and activity rows", () => {
       expect(at("later send")).toBeLessThan(at("queued text"))
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.scopedLive("a running turn's activity row shows esc cancel", () =>
+  // A refused paste-sized message comes back as a placeholder; the kept
+  // draft holds its text once the view leaves. A refusal that lands after a
+  // return still joins the block in send order.
+  it.scopedLive("a refusal after a switch joins a refused paste in send order", () =>
     Effect.gen(function* () {
-      const view = yield* mountRunningTurn()
-      const frame = yield* waitForFrame(view.setup, (next) => next.includes("Generating"), "busy")
-      const row = frame.split("\n").find((line) => line.includes("Generating")) ?? ""
-      expect(row.trim()).toMatch(/^Generating( \(\d+s\))? · esc cancel$/)
-    }).pipe(Effect.timeout("4 seconds")),
+      const large = "LARGE one\nline two\nline three"
+      const asked = { large: yield* Deferred.make<void>(), small: yield* Deferred.make<void>() }
+      const answer = { large: yield* Deferred.make<void>(), small: yield* Deferred.make<void>() }
+      const gate = (which: "large" | "small") =>
+        Deferred.complete(asked[which], Effect.void).pipe(
+          Effect.andThen(Deferred.await(answer[which])),
+          Effect.andThen(Effect.fail(refusedInA)),
+        )
+      const view = yield* mountSessionPair({
+        message: {
+          send: (input: { readonly content: string }) => {
+            if (input.content.startsWith("LARGE")) return gate("large")
+            return gate("small")
+          },
+        },
+      })
+      yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText(large))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("[Pasted"), "the paste chip")
+      view.setup.mockInput.pressEnter()
+      yield* Deferred.await(asked.large)
+      yield* Effect.promise(() => view.setup.mockInput.typeText("second send"))
+      yield* Effect.promise(() => view.setup.renderOnce())
+      view.setup.mockInput.pressEnter()
+      yield* Deferred.await(asked.small)
+      yield* Deferred.complete(answer.large, Effect.void)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("[Pasted"), "the refused paste")
+      yield* view.switchTo(pairB, "Session B")
+      yield* view.switchTo(pairA, "Session A")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("LARGE one"), "the kept text")
+      yield* Deferred.complete(answer.small, Effect.void)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("second send"), "the later refusal")
+      // The earlier text comes first, as itself or written again as a placeholder.
+      const frame = renderFrame(view.setup)
+      const first = Math.max(frame.indexOf("LARGE one"), frame.indexOf("[Pasted"))
+      expect(first).toBeGreaterThanOrEqual(0)
+      expect(first).toBeLessThan(frame.indexOf("second send"))
+    }).pipe(Effect.timeout("10 seconds")),
   )
-  test("a narrow activity row drops the elapsed time first, then cuts the label, and keeps the way out", () => {
-    expect(activityLine("Generating", " (12s)", 40)).toBe("Generating (12s) · esc cancel")
-    expect(activityLine("Generating", " (12s)", 24)).toBe("Generating · esc cancel")
-    expect(activityLine("read(src/very/long/path.ts)", " (3s)", 20)).toBe("read(s… · esc cancel")
-  })
-  // Two catalogs can share a model name; the row says which provider runs,
-  // and bills, the next turn.
-  it.scopedLive("the status row names the provider of a model whose name another shares", () =>
+  it.scopedLive("no reply asked for in the session the reader left draws in the next one", () =>
     Effect.gen(function* () {
-      const sessionId = SessionId.make("session-shared-name")
-      const branchId = BranchId.make("branch-shared-name")
-      const sonnet = (provider: string) =>
+      // The session-keyed reads answer per session, so a reply for A that
+      // lands in B shows: A's catalog names the model its own way and A's
+      // health fails an extension.
+      const sonnetNamed = (name: string) =>
         new Model({
-          id: ModelId.make(`${provider}/claude-sonnet-5`),
-          name: "Claude Sonnet 5",
-          provider: ProviderId.make(provider),
+          id: ModelId.make("anthropic/claude-sonnet-5"),
+          name,
+          provider: ProviderId.make("anthropic"),
         })
-      const provider = (id: string, name: string) => ({
-        provider: id,
-        name,
-        hasKey: true,
-        required: false,
-        source: "stored" satisfies "stored",
-        authType: absent,
-      })
-      const client = createMockClient({
-        auth: {
-          listProviders: () =>
-            Effect.succeed([provider("anthropic", "Anthropic"), provider("opencode", "OpenCode")]),
+      const ofA = <A,>(sessionId: SessionId, inA: A, elsewhere: A) =>
+        Option.getOrElse(
+          Option.map(
+            Option.liftPredicate(sessionId, (id) => id === pairA.sessionId),
+            () => inA,
+          ),
+          () => elsewhere,
+        )
+      const perSession = {
+        model: {
+          list: (input: { readonly sessionId: SessionId }) =>
+            Effect.succeed([sonnetNamed(ofA(input.sessionId, "Sonnet of A", "Claude Sonnet 5"))]),
         },
-        branch: { getTree: () => Effect.succeed([]) },
-        model: { list: () => Effect.succeed([sonnet("anthropic"), sonnet("opencode")]) },
-        driver: {
-          list: () =>
-            Effect.succeed({
-              drivers: [{ id: "anthropic" }, { id: "opencode" }],
-              overrides: {},
-              agents: [testAgent],
-            }),
+        extension: {
+          listStatus: (input: { readonly scope: { readonly id: SessionId } }) =>
+            Effect.succeed(
+              ofA(input.scope.id, scheduledFailureHealth("@a/only", "failed in A"), healthyHealth),
+            ),
         },
-        session: {
-          getSnapshot: () =>
-            Effect.succeed({
-              sessionId,
-              branchId,
-              messages: [],
-              lastEventId: nullValue,
-              reasoningLevel: absent,
-              resolvedModelId: ModelId.make("opencode/claude-sonnet-5"),
-              agent: AgentName.make("main"),
-              runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
-              metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-            }),
-        },
-      })
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime: createMockRuntime(),
-        width: 120,
-        initialSession: {
-          id: sessionId,
-          activeBranchId: branchId,
-          name: "Shared",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
-      })
-      yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("Claude Sonnet 5 (OpenCode)"),
-        "the provider in the status row",
-      )
-    }).pipe(Effect.timeout("4 seconds")),
+      }
+      const sessionB = (view: TestSetup) =>
+        waitForFrame(
+          view,
+          (frame) => frame.includes("ready ·") && frame.includes("Claude Sonnet 5"),
+          "session B",
+        )
+      const mountOnA = (replies?: Parameters<typeof createMockClient>[1]) =>
+        mountApp({
+          client: perSession,
+          replies,
+          width: 120,
+          // No repository: the status row reads no git branch, which lands on its own time.
+          cwd: "/nonexistent/gent-test-cwd",
+          initialSession: sessionNamed(pairA.sessionId, pairA.branchId, "Session A"),
+        })
+      const settle = (setup: TestSetup) =>
+        Effect.gen(function* () {
+          for (let frame = 0; frame < 5; frame++) {
+            yield* Effect.yieldNow
+            yield* Effect.promise(() => setup.renderOnce())
+          }
+        })
+
+      // Control: A answers, then the reader moves to B.
+      const control = yield* mountOnA()
+      yield* waitForFrame(control.setup, (frame) => frame.includes("Sonnet of A"), "session A")
+      control.client.switchSession(pairB.sessionId, pairB.branchId, "Session B")
+      yield* sessionB(control.setup)
+      yield* settle(control.setup)
+      const expected = renderFrame(control.setup)
+      expect(expected).not.toContain("@a/only")
+
+      // Every reply of A is still out when the reader moves to B, and lands last.
+      const holding = holdingReplies()
+      const held = yield* mountOnA(holding)
+      yield* Effect.promise(() => held.setup.renderOnce())
+      held.client.switchSession(pairB.sessionId, pairB.branchId, "Session B")
+      yield* Effect.promise(() => held.setup.renderOnce())
+      expect(holding.held()).toBeGreaterThan(0)
+      yield* holding.release
+      yield* waitForFrame(held.setup, (frame) => frame === expected, "the control frame")
+      yield* settle(held.setup)
+      expect(renderFrame(held.setup)).toBe(expected)
+    }).pipe(Effect.timeout("10 seconds")),
   )
-  test("a model name no other provider shares stays bare", () => {
-    const model = new Model({
-      id: ModelId.make("anthropic/claude-opus-5"),
-      name: "Claude Opus 5",
-      provider: ProviderId.make("anthropic"),
-    })
-    expect(statusModelName(model, [model], [])).toBe("Claude Opus 5")
-  })
 })
 
 describe("App cancel and quit keys during a turn", () => {
@@ -2653,6 +2543,7 @@ describe("App cancel and quit keys during a turn", () => {
   }> = [
     { name: "/model", title: "Model ·", open: typeCommand("/model"), draft: Option.none() },
     { name: "/think", title: "Reasoning ·", open: typeCommand("/think"), draft: Option.none() },
+    { name: "/auth", title: "Sign in ·", open: typeCommand("/auth"), draft: Option.none() },
     {
       name: "prompt search",
       title: "Prompt search",
@@ -2710,8 +2601,6 @@ describe("App cancel and quit keys during a turn", () => {
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // Each render has its own home: no prompt an earlier test or run sent is
-  // in its history.
   // Prompt search holds the composer: a paste while it previews an entry
   // does not land in the draft behind it.
   it.scopedLive("a paste during prompt search does not reach the composer", () =>
@@ -2751,6 +2640,8 @@ describe("App cancel and quit keys during a turn", () => {
       expect(frame).not.toContain("PASTED-ZQ")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // Each render has its own home: no prompt an earlier test or run sent is
+  // in its history.
   it.scopedLive("a render starts with an empty prompt history", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
@@ -2813,21 +2704,45 @@ describe("App cancel and quit keys during a turn", () => {
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // A transcript toggle between two ctrl+c presses is another gesture: the
-  // second press collapses the transcript and never quits.
-  it.scopedLive("a transcript toggle between two ctrl+c presses disarms the quit", () =>
+  // The expanded transcript is a layer: after a ctrl+c that cancelled the
+  // turn and armed the exit, the next ctrl+c collapses the transcript, and
+  // the press after that goes on down the ladder instead of quitting.
+  it.scopedLive("ctrl+c over the expanded transcript collapses it and does not quit", () =>
     Effect.gen(function* () {
-      const view = yield* mountRunningTurnWithError
+      const view = yield* mountRunningTurn(24, [], { kittyKeyboard: true })
       view.setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
       view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the toggle must be parsed and handled before the next press
-      yield* Effect.sleep("50 millis")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("transcript ·"), "transcript")
       view.setup.mockInput.pressKey("c", { ctrl: true })
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the press must be parsed and handled before the negative assertion
-      yield* Effect.sleep("100 millis")
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => !next.includes("transcript ·"),
+        "the transcript collapsed",
+      )
+      expect(frame).not.toContain(CTRL_C_CUE)
+      expect(view.steers).toEqual(["Cancel"])
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Esc over the expanded transcript collapses it; the turn behind it runs on.
+  it.scopedLive(
+    "esc over the expanded transcript during a turn collapses it and cancels nothing",
+    () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurn(24, [], { kittyKeyboard: true })
+        view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
+        yield* waitForFrame(view.setup, (frame) => frame.includes("transcript ·"), "transcript")
+        view.setup.mockInput.pressEscape()
+        yield* waitForFrame(
+          view.setup,
+          (frame) => !frame.includes("transcript ·"),
+          "the transcript collapsed",
+        )
+        expect(view.steers).toEqual([])
+        view.setup.mockInput.pressEscape()
+        yield* waitForFrame(view.setup, () => view.steers.length === 1, "the turn cancelled")
+      }).pipe(Effect.timeout("10 seconds")),
   )
   // ctrl+o changes only how tool groups draw, so nothing nearer is left for
   // the next press to undo: the key itself has to disarm the quit.
@@ -2838,9 +2753,8 @@ describe("App cancel and quit keys during a turn", () => {
         const view = yield* mountRunningTurnWithError
         view.setup.mockInput.pressKey("c", { ctrl: true })
         yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+        // The parser takes the bytes in order: ctrl+o is handled before ctrl+c.
         view.setup.mockInput.pressKey("o", { ctrl: true })
-        // oxlint-disable-next-line effect/noFixedWaitInTests -- the key must be parsed and handled before the next press
-        yield* Effect.sleep("50 millis")
         view.setup.mockInput.pressKey("c", { ctrl: true })
         yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
         expect(view.shutdowns()).toBe(0)
@@ -2856,47 +2770,28 @@ describe("App cancel and quit keys during a turn", () => {
       const idle = { _tag: idleTag, queue: emptyQueueSnapshot() }
       const runtime = yield* Queue.unbounded<typeof running | typeof idle>()
       yield* Queue.offer(runtime, running)
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        branch: { getTree: () => Effect.succeed([]) },
-        session: {
-          getSnapshot: () =>
-            Effect.succeed({
-              sessionId,
-              branchId,
-              messages: [],
-              lastEventId: nullValue,
-              reasoningLevel: absent,
-              agent: AgentName.make("main"),
-              runtime: running,
-              metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-            }),
-          watchRuntime: () => Stream.fromQueue(runtime),
-        },
-        steer: { command: () => Queue.offer(runtime, idle).pipe(Effect.asVoid) },
-      })
-      let ctx = Option.none<ClientContextValue>()
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          runtime: createMockRuntime(),
-          initialSession: {
-            id: sessionId,
-            activeBranchId: branchId,
-            name: "Cancel",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+      const { setup, client } = yield* mountApp({
+        client: {
+          session: {
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId,
+                branchId,
+                messages: [],
+                lastEventId: nullValue,
+                reasoningLevel: absent,
+                agent: AgentName.make("main"),
+                runtime: running,
+                metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+              }),
+            watchRuntime: () => Stream.fromQueue(runtime),
           },
+          steer: { command: () => Queue.offer(runtime, idle).pipe(Effect.asVoid) },
         },
-      )
+        initialSession: sessionNamed(sessionId, branchId, "Cancel"),
+      })
       const { shutdowns } = yield* countShutdowns(setup)
-      const streaming = () => ctx.pipe(Option.exists((value) => value.isStreaming()))
+      const streaming = () => client.isStreaming()
       yield* waitForFrame(setup, streaming, "running turn")
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, () => !streaming(), "turn cancelled")
@@ -2908,21 +2803,9 @@ describe("App cancel and quit keys during a turn", () => {
   )
   it.scopedLive("ctrl+c twice quits an idle session while the btw pane is open", () =>
     Effect.gen(function* () {
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        branch: { getTree: () => Effect.succeed([]) },
-      })
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime: createMockRuntime(),
+      const { setup } = yield* mountApp({
         builtins: builtinClientModules,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       yield* Effect.promise(() => setup.mockInput.typeText("/btw"))
@@ -2945,34 +2828,14 @@ describe("App slash commands", () => {
       const held = defineClientExtension("@test/held-load", {
         setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
       })
-      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
       const sent: Array<string> = []
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
-          </>
-        ),
-        {
-          client: createMockClient({
-            auth: { listProviders: () => Effect.succeed([]) },
-            branch: { getTree: () => Effect.succeed([]) },
-            message: recordSends(sent),
-          }),
-          runtime: createMockRuntime(),
-          builtins: [...builtinClientModules, held],
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "Session A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        },
-      )
+      const { setup, ext } = yield* mountApp({
+        client: { message: recordSends(sent) },
+        builtins: [...builtinClientModules, held],
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
-      expect(Option.exists(ext, (value) => value.loaded())).toBe(false)
+      expect(ext.loaded()).toBe(false)
       yield* Effect.promise(() => setup.mockInput.typeText("/btw"))
       yield* waitForFrame(setup, (frame) => frame.includes("/btw"), "the typed command")
       setup.mockInput.pressEnter()
@@ -2993,9 +2856,6 @@ describe("App slash commands", () => {
       expect(sent).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // A `/word` no command source names is a typo, not a message: it stays in
-  // the draft with the way to the commands. A first word that reads as a
-  // path, with a second `/` or a `.`, is text for the model.
   // `/help` is the usual way to look for commands: it opens the one list of
   // them and starts no turn.
   it.scopedLive("/help opens the command palette and sends nothing", () =>
@@ -3006,18 +2866,10 @@ describe("App slash commands", () => {
       expect(view.sent()).toEqual([])
     }).pipe(Effect.timeout("4 seconds")),
   )
-  it.scopedLive("an unknown slash command is refused into its draft, and a path is sent", () =>
+  // A first word that reads as a path, with a second `/` or a `.`, is text
+  // for the model.
+  it.scopedLive("a slash word that reads as a path is sent as text", () =>
     Effect.gen(function* () {
-      const typo = yield* mountIdleSession()
-      yield* typeCommand("/zzq")(typo.setup)
-      yield* waitForFrame(
-        typo.setup,
-        (frame) =>
-          frame.includes("Unknown command: /zzq · ctrl+p commands") && frame.includes("┃ /zzq"),
-        "the refusal and the draft back",
-      )
-      expect(typo.sent()).toEqual([])
-      typo.unmount()
       for (const path of ["/tmp/x what is this", "/notes.md read it"]) {
         const view = yield* mountIdleSession()
         yield* typeCommand(path)(view.setup)
@@ -3027,17 +2879,20 @@ describe("App slash commands", () => {
       }
     }).pipe(Effect.timeout("4 seconds")),
   )
-  // The refusal names the draft it gave back: once the reader changes that
-  // draft, the reason goes with it.
+  // A `/word` no command source names is a typo, not a message: it stays in
+  // the draft with the way to the commands. The refusal names the draft it
+  // gave back: once the reader changes that draft, the reason goes with it.
   it.scopedLive("an unknown command's refusal leaves the status row with its draft", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
       yield* typeCommand("/zzq")(view.setup)
       yield* waitForFrame(
         view.setup,
-        (frame) => frame.includes("Unknown command: /zzq") && frame.includes("┃ /zzq"),
+        (frame) =>
+          frame.includes("Unknown command: /zzq · ctrl+p commands") && frame.includes("┃ /zzq"),
         "the refusal and the draft back",
       )
+      expect(view.sent()).toEqual([])
       view.setup.mockInput.pressKey("u", { ctrl: true })
       yield* waitForFrame(
         view.setup,
@@ -3054,20 +2909,9 @@ describe("App slash commands", () => {
   )
   it.scopedLive("a pane that opens over a previewing prompt search gives the draft back", () =>
     Effect.gen(function* () {
-      const setup = yield* renderScoped(() => <App />, {
-        client: createMockClient({
-          auth: { listProviders: () => Effect.succeed([]) },
-          branch: { getTree: () => Effect.succeed([]) },
-        }),
-        runtime: createMockRuntime(),
+      const { setup } = yield* mountApp({
         builtins: builtinClientModules,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       yield* Effect.promise(() => setup.mockInput.typeText("older prompt"))
@@ -3093,53 +2937,27 @@ describe("App slash commands", () => {
         const listed = yield* Deferred.make<void>()
         const requests: Array<unknown> = []
         const sent: Array<string> = []
-        let ext = Option.none<ReturnType<typeof useExtensionUI>>()
-        const setup = yield* renderScoped(
-          () => (
-            <>
-              <App />
-              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
-            </>
-          ),
-          {
-            client: createMockClient({
-              auth: { listProviders: () => Effect.succeed([]) },
-              branch: { getTree: () => Effect.succeed([]) },
-              message: recordSends(sent),
-              extension: {
-                listSlashCommands: () =>
-                  Deferred.await(listed).pipe(
-                    Effect.as([
-                      {
-                        name: "probe",
-                        extensionId: "@test/server-probe",
-                        capabilityId: "probe",
-                      },
-                    ]),
-                  ),
-                request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
-                  Effect.sync(() => {
-                    if (input.capabilityId === "probe") requests.push(input.input)
-                  }),
-              },
-            }),
-            runtime: createMockRuntime(),
-            builtins: builtinClientModules,
-            initialSession: {
-              id: SessionId.make("session-a"),
-              activeBranchId: BranchId.make("branch-a"),
-              name: "Session A",
-              createdAt: dateFromMillis(0),
-              updatedAt: dateFromMillis(0),
+        const { setup, ext } = yield* mountApp({
+          client: {
+            message: recordSends(sent),
+            extension: {
+              listSlashCommands: () =>
+                Deferred.await(listed).pipe(
+                  Effect.as([
+                    { name: "probe", extensionId: "@test/server-probe", capabilityId: "probe" },
+                  ]),
+                ),
+              request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+                Effect.sync(() => {
+                  if (input.capabilityId === "probe") requests.push(input.input)
+                }),
             },
           },
-        )
+          builtins: builtinClientModules,
+          initialSession: sessionNamed("session-a", "branch-a", "Session A"),
+        })
         yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
-        yield* waitForFrame(
-          setup,
-          () => Option.exists(ext, (value) => value.loaded()),
-          "client extensions loaded",
-        )
+        yield* waitForFrame(setup, () => ext.loaded(), "client extensions loaded")
         yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
         yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
         setup.mockInput.pressEnter()
@@ -3160,50 +2978,28 @@ describe("App slash commands", () => {
       const requests: Array<unknown> = []
       const sent: Array<string> = []
       let listings = 0
-      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
-          </>
-        ),
-        {
-          client: createMockClient({
-            auth: { listProviders: () => Effect.succeed([]) },
-            branch: { getTree: () => Effect.succeed([]) },
-            message: recordSends(sent),
-            extension: {
-              // The first listing is from before the extension registered.
-              listSlashCommands: () =>
-                Effect.sync(() => {
-                  listings += 1
-                  if (listings === 1) return []
-                  return [{ name: "late", extensionId: "@test/late", capabilityId: "late" }]
-                }),
-              request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
-                Effect.sync(() => {
-                  if (input.capabilityId === "late") requests.push(input.input)
-                }),
-            },
-          }),
-          runtime: createMockRuntime(),
-          builtins: builtinClientModules,
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "Session A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+      const { setup, ext } = yield* mountApp({
+        client: {
+          message: recordSends(sent),
+          extension: {
+            // The first listing is from before the extension registered.
+            listSlashCommands: () =>
+              Effect.sync(() => {
+                listings += 1
+                if (listings === 1) return []
+                return [{ name: "late", extensionId: "@test/late", capabilityId: "late" }]
+              }),
+            request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+              Effect.sync(() => {
+                if (input.capabilityId === "late") requests.push(input.input)
+              }),
           },
         },
-      )
+        builtins: builtinClientModules,
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
-      yield* waitForFrame(
-        setup,
-        () => Option.exists(ext, (value) => value.commandsSettled()),
-        "the commands settled",
-      )
+      yield* waitForFrame(setup, () => ext.commandsSettled(), "the commands settled")
       yield* typeCommand("/late now")(setup)
       yield* waitForFrame(setup, () => requests.length + sent.length > 0, "the command answered")
       expect(requests).toEqual(["now"])
@@ -3219,12 +3015,10 @@ describe("App slash commands", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   // A server command the server refuses says so on the status row.
-  it.scopedLive("a server slash command that fails shows why", () =>
+  it.scopedLive("a server slash command that fails shows why until the next one runs", () =>
     Effect.gen(function* () {
-      const setup = yield* renderScoped(() => <App />, {
-        client: createMockClient({
-          auth: { listProviders: () => Effect.succeed([]) },
-          branch: { getTree: () => Effect.succeed([]) },
+      const { setup } = yield* mountApp({
+        client: {
           extension: {
             listSlashCommands: () =>
               Effect.succeed([
@@ -3235,31 +3029,40 @@ describe("App slash commands", () => {
                   extensionId: "@test/server-audit",
                   capabilityId: "audit",
                 },
+                {
+                  name: "note",
+                  displayName: "Note",
+                  description: "Take a note",
+                  extensionId: "@test/server-note",
+                  capabilityId: "note",
+                },
               ]),
-            request: () => Effect.fail(new ProviderAuthError({ message: "audit refused" })),
+            request: (input: { readonly capabilityId: string }) =>
+              Effect.suspend(() => {
+                if (input.capabilityId === "note") return Effect.void
+                return Effect.fail(new ProviderAuthError({ message: "audit refused" }))
+              }),
           },
-        }),
-        runtime: createMockRuntime(),
-        builtins: builtinClientModules,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
         },
+        builtins: builtinClientModules,
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       yield* typeCommand("/audit now")(setup)
       yield* waitForFrame(setup, (frame) => frame.includes("audit refused"), "the failure")
+      yield* typeCommand("/note")(setup)
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => !next.includes("audit refused") && next.includes("ready ·"),
+        "the failure gone",
+      )
+      expect(frame).not.toContain("/audit failed")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("the slash popup shows a server command's description", () =>
     Effect.gen(function* () {
-      const setup = yield* renderScoped(() => <App />, {
-        client: createMockClient({
-          auth: { listProviders: () => Effect.succeed([]) },
-          branch: { getTree: () => Effect.succeed([]) },
+      const { setup } = yield* mountApp({
+        client: {
           extension: {
             listSlashCommands: () =>
               Effect.succeed([
@@ -3272,16 +3075,9 @@ describe("App slash commands", () => {
                 },
               ]),
           },
-        }),
-        runtime: createMockRuntime(),
-        builtins: builtinClientModules,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
         },
+        builtins: builtinClientModules,
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       yield* Effect.promise(() => setup.mockInput.typeText("/aud"))
@@ -3289,9 +3085,6 @@ describe("App slash commands", () => {
       expect(renderFrame(setup)).toContain("Detect, audit")
     }).pipe(Effect.timeout("10 seconds")),
   )
-})
-
-describe("App docked panes at short heights", () => {
   // A connection drop while the list is in flight is not an answer: the held
   // command waits, and the reconnect lists the server commands again.
   // The failed reply may reach the client before or after the connection
@@ -3310,66 +3103,39 @@ describe("App docked panes at short heights", () => {
           const lifecycle = createMutableRuntime(
             ConnectionState.cases.Connected.make({ generation: 0 }),
           )
-          let ext = Option.none<ReturnType<typeof useExtensionUI>>()
-          const setup = yield* renderScoped(
-            () => (
-              <>
-                <App />
-                <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
-              </>
-            ),
-            {
-              client: createMockClient({
-                auth: { listProviders: () => Effect.succeed([]) },
-                branch: { getTree: () => Effect.succeed([]) },
-                message: recordSends(sent),
-                extension: {
-                  listSlashCommands: () =>
-                    Effect.suspend(() => {
-                      listings += 1
-                      if (listings === 1) {
-                        return Deferred.await(drop).pipe(
-                          Effect.andThen(
-                            Effect.fail(
-                              new RpcClientError({
-                                reason: new SocketCloseError({ code: 1006 }),
-                              }),
-                            ),
+          const { setup, ext } = yield* mountApp({
+            client: {
+              message: recordSends(sent),
+              extension: {
+                listSlashCommands: () =>
+                  Effect.suspend(() => {
+                    listings += 1
+                    if (listings === 1) {
+                      return Deferred.await(drop).pipe(
+                        Effect.andThen(
+                          Effect.fail(
+                            new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
                           ),
-                          Effect.ensuring(Deferred.succeed(failed, void 0)),
-                        )
-                      }
-                      return Effect.succeed([
-                        {
-                          name: "probe",
-                          extensionId: "@test/server-probe",
-                          capabilityId: "probe",
-                        },
-                      ])
-                    }),
-                  request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
-                    Effect.sync(() => {
-                      if (input.capabilityId === "probe") requests.push(input.input)
-                    }),
-                },
-              }),
-              runtime: lifecycle.runtime,
-              builtins: builtinClientModules,
-              initialSession: {
-                id: SessionId.make("session-a"),
-                activeBranchId: BranchId.make("branch-a"),
-                name: "Session A",
-                createdAt: dateFromMillis(0),
-                updatedAt: dateFromMillis(0),
+                        ),
+                        Effect.ensuring(Deferred.succeed(failed, void 0)),
+                      )
+                    }
+                    return Effect.succeed([
+                      { name: "probe", extensionId: "@test/server-probe", capabilityId: "probe" },
+                    ])
+                  }),
+                request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+                  Effect.sync(() => {
+                    if (input.capabilityId === "probe") requests.push(input.input)
+                  }),
               },
             },
-          )
+            runtime: lifecycle.runtime,
+            builtins: builtinClientModules,
+            initialSession: sessionNamed("session-a", "branch-a", "Session A"),
+          })
           yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
-          yield* waitForFrame(
-            setup,
-            () => Option.exists(ext, (value) => value.loaded()),
-            "client extensions loaded",
-          )
+          yield* waitForFrame(setup, () => ext.loaded(), "client extensions loaded")
           yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
           yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
           setup.mockInput.pressEnter()
@@ -3407,56 +3173,35 @@ describe("App docked panes at short heights", () => {
         const lifecycle = createMutableRuntime(
           ConnectionState.cases.Connected.make({ generation: 0 }),
         )
-        let ext = Option.none<ReturnType<typeof useExtensionUI>>()
-        const setup = yield* renderScoped(
-          () => (
-            <>
-              <App />
-              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
-            </>
-          ),
-          {
-            client: createMockClient({
-              auth: { listProviders: () => Effect.succeed([]) },
-              branch: { getTree: () => Effect.succeed([]) },
-              message: recordSends(sent),
-              extension: {
-                listSlashCommands: () =>
-                  Effect.suspend(() => {
-                    listings += 1
-                    // The first server has no /probe; the one the reconnect reaches has.
-                    if (listings === 1) return Effect.succeed([])
-                    return Deferred.await(relisted).pipe(
-                      Effect.as([
-                        {
-                          name: "probe",
-                          extensionId: "@test/server-probe",
-                          capabilityId: "probe",
-                        },
-                      ]),
-                    )
-                  }),
-                request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
-                  Effect.sync(() => {
-                    if (input.capabilityId === "probe") requests.push(input.input)
-                  }),
-              },
-            }),
-            runtime: lifecycle.runtime,
-            builtins: builtinClientModules,
-            initialSession: {
-              id: SessionId.make("session-a"),
-              activeBranchId: BranchId.make("branch-a"),
-              name: "Session A",
-              createdAt: dateFromMillis(0),
-              updatedAt: dateFromMillis(0),
+        const { setup, ext } = yield* mountApp({
+          client: {
+            message: recordSends(sent),
+            extension: {
+              listSlashCommands: () =>
+                Effect.suspend(() => {
+                  listings += 1
+                  // The first server has no /probe; the one the reconnect reaches has.
+                  if (listings === 1) return Effect.succeed([])
+                  return Deferred.await(relisted).pipe(
+                    Effect.as([
+                      { name: "probe", extensionId: "@test/server-probe", capabilityId: "probe" },
+                    ]),
+                  )
+                }),
+              request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+                Effect.sync(() => {
+                  if (input.capabilityId === "probe") requests.push(input.input)
+                }),
             },
           },
-        )
+          runtime: lifecycle.runtime,
+          builtins: builtinClientModules,
+          initialSession: sessionNamed("session-a", "branch-a", "Session A"),
+        })
         yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
         yield* waitForFrame(
           setup,
-          () => Option.exists(ext, (value) => value.loaded() && value.commandsSettled()),
+          () => ext.loaded() && ext.commandsSettled(),
           "the first listing settled",
         )
         lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
@@ -3473,6 +3218,9 @@ describe("App docked panes at short heights", () => {
         expect(sent).toEqual([])
       }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App docked panes at short heights", () => {
   /**
    * The docked pane closes inside the terminal: its bottom rule is the last
    * row drawn, or the key hint under it is.
@@ -3481,10 +3229,6 @@ describe("App docked panes at short heights", () => {
     const rule = drawn.findLastIndex((line) => line.startsWith("─"))
     return rule >= 0 && drawn.length - 1 - rule <= 1
   }
-  // At 14 rows the composer takes four of the footer's twelve once its blank
-  // rows give way, and the agents pane's rules and title take three more: the
-  // filter row, the section heading and the cursor row fit. The trays, the
-  // blank rows and the detail line give way for them.
   // A delete the server refuses says so: the row stays, and the status row
   // names the failure.
   it.scopedLive("an agents-pane delete the server refuses shows why", () =>
@@ -3504,6 +3248,10 @@ describe("App docked panes at short heights", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("delete refused"), "the failure")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // At 14 rows the composer takes four of the footer's twelve once its blank
+  // rows give way, and the agents pane's rules and title take three more: the
+  // filter row, the section heading and the cursor row fit. The trays, the
+  // blank rows and the detail line give way for them.
   it.scopedLive(
     "the agents pane keeps its cursor row in view at the smallest height that holds it",
     () =>
@@ -4046,41 +3794,15 @@ describe("App interjections and the boot branch picker", () => {
   )
   /** A resumed session with two branches: the boot branch picker is open over it. */
   const mountBootBranchPicker = Effect.gen(function* () {
-    const client = createMockClient({
-      auth: { listProviders: () => Effect.succeed([]) },
-      branch: { getTree: () => Effect.succeed([]) },
-    })
-    const setup = yield* renderScoped(
-      () => (
-        <App
-          initialBranches={Option.some([
-            {
-              id: BranchId.make("branch-a"),
-              sessionId: SessionId.make("session-a"),
-              name: "main",
-              createdAt: dateFromMillis(0),
-            },
-            {
-              id: BranchId.make("branch-b"),
-              sessionId: SessionId.make("session-a"),
-              name: "side",
-              createdAt: dateFromMillis(1),
-            },
-          ])}
-        />
-      ),
-      {
-        client,
-        runtime: createMockRuntime(),
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+    const { setup } = yield* mountApp({
+      app: {
+        initialBranches: Option.some([
+          { ...branchOf("branch-a", 0), name: "main" },
+          { ...branchOf("branch-b", 1), name: "side" },
+        ]),
       },
-    )
+      initialSession: sessionNamed("session-a", "branch-a", "Session A"),
+    })
     yield* waitForFrame(setup, (frame) => frame.includes("Resume: Session A"), "picker")
     return setup
   })
@@ -4138,179 +3860,66 @@ describe("App auth gate at startup", () => {
       const calls: Array<{
         agentName?: string
       }> = []
-      const client = createMockClient({
-        auth: {
-          listProviders: (input: { agentName?: string }) => {
-            calls.push(input)
-            return Effect.succeed([])
+      // The mock's snapshot names an agent, which makes the auth check
+      // runnable. Without one the gate stops before it reads the picker, and
+      // this test proves nothing.
+      const { setup } = yield* mountApp({
+        app: { initialBranches: Option.some([branchOf("branch-a", 0), branchOf("branch-b", 1)]) },
+        client: {
+          auth: {
+            listProviders: (input: { agentName?: string }) => {
+              calls.push(input)
+              return Effect.succeed([])
+            },
+          },
+          branch: {
+            getTree: () =>
+              Effect.succeed([
+                {
+                  branch: { ...branchOf("branch-a", 0), name: "Main" },
+                  messageCount: 3,
+                  children: [],
+                },
+                {
+                  branch: { ...branchOf("branch-b", 1), name: "Side" },
+                  messageCount: 1,
+                  children: [],
+                },
+              ]),
           },
         },
-        branch: {
-          getTree: () =>
-            Effect.succeed([
-              {
-                branch: {
-                  id: BranchId.make("branch-a"),
-                  sessionId: SessionId.make("session-a"),
-                  name: "Main",
-                  createdAt: dateFromMillis(0),
-                },
-                messageCount: 3,
-                children: [],
-              },
-              {
-                branch: {
-                  id: BranchId.make("branch-b"),
-                  sessionId: SessionId.make("session-a"),
-                  name: "Side",
-                  createdAt: dateFromMillis(1),
-                },
-                messageCount: 1,
-                children: [],
-              },
-            ]),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
-      const runtime = createMockRuntime()
-      const setup = yield* renderScoped(
-        () => (
-          <App
-            initialBranches={Option.some([
-              {
-                id: BranchId.make("branch-a"),
-                sessionId: SessionId.make("session-a"),
-                createdAt: dateFromMillis(0),
-              },
-              {
-                id: BranchId.make("branch-b"),
-                sessionId: SessionId.make("session-a"),
-                createdAt: dateFromMillis(1),
-              },
-            ])}
-          />
-        ),
-        {
-          client,
-          runtime,
-          // An agent is what makes the auth check runnable at all. Without one
-          // the gate short-circuits before it reads the picker, and this test
-          // proves nothing.
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "Session A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        },
-      )
       yield* waitForFrame(setup, (next) => next.includes("Resume: Session A"), "branch picker")
       expect(calls).toEqual([])
 
       // Choosing a branch closes the picker, and only then does the gate run.
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() => setup.renderOnce())
+      yield* waitUntil(() => calls.length > 0, "the gate runs")
       expect(calls.map((call) => call.agentName)).toEqual(["primary"])
-    }),
-  )
-  it.scopedLive(
-    "cold start with prompt and missing auth defers the prompt until auth resolves",
-    () =>
-      Effect.gen(function* () {
-        const providersDeferred = yield* Deferred.make<
-          Array<{
-            provider: string
-            hasKey: boolean
-            required: boolean
-            source: string
-            authType: typeof absent
-          }>
-        >()
-        const sentMessages: Array<{
-          content: string
-        }> = []
-        const client = createMockClient({
-          auth: {
-            listProviders: () => Deferred.await(providersDeferred),
-            listMethods: () =>
-              Effect.succeed({
-                openai: [apiMethod],
-              }),
-          },
-          message: {
-            send: (input: { content: string }) =>
-              Effect.sync(() => {
-                sentMessages.push(input)
-              }),
-          },
-        })
-        const runtime = createMockRuntime()
-        const setup = yield* renderScoped(() => <App />, {
-          client,
-          runtime,
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-          initialPrompt: Option.some("build a feature"),
-        })
-        // Auth is pending — prompt must not be sent yet
-        yield* Effect.promise(() => setup.renderOnce())
-        expect(sentMessages).toEqual([])
-        // Resolve auth — keys are required but missing
-        yield* Deferred.succeed(providersDeferred, [
-          {
-            provider: "openai",
-            hasKey: false,
-            required: true,
-            source: "none",
-            authType: absent,
-          },
-        ])
-        // Auth overlay should appear
-        const authFrame = yield* waitForFrame(
-          setup,
-          (next) => next.includes("Sign in ·"),
-          "auth overlay",
-        )
-        expect(authFrame).toContain("Sign in ·")
-        // Prompt still not sent while auth overlay is open
-        expect(sentMessages).toEqual([])
-      }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   // An enforced sign-in holds the slot: with a required key missing there is
   // no session to fall back to, so ctrl+c quits over it.
   it.scopedLive("ctrl+c over an enforced sign-in arms the exit, and a second quits", () =>
     Effect.gen(function* () {
-      const client = createMockClient({
-        auth: {
-          listProviders: () =>
-            Effect.succeed([
-              {
-                provider: "openai",
-                hasKey: false,
-                required: true,
-                source: "none",
-                authType: absent,
-              },
-            ]),
-          listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+      const { setup } = yield* mountApp({
+        client: {
+          auth: {
+            listProviders: () =>
+              Effect.succeed([
+                {
+                  provider: "openai",
+                  hasKey: false,
+                  required: true,
+                  source: "none",
+                  authType: absent,
+                },
+              ]),
+            listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+          },
         },
-      })
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime: createMockRuntime(),
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("Sign in ·"), "the sign-in")
       const { shutdowns } = yield* countShutdowns(setup)
@@ -4328,34 +3937,26 @@ describe("App auth gate at startup", () => {
   it.scopedLive("Esc on an enforced sign-in's provider list keeps it and loads nothing again", () =>
     Effect.gen(function* () {
       let loads = 0
-      const client = createMockClient({
-        auth: {
-          listProviders: () =>
-            Effect.sync(() => {
-              loads += 1
-              return [
-                {
-                  provider: "openai",
-                  hasKey: false,
-                  required: true,
-                  source: noAuthSource,
-                  authType: absent,
-                },
-              ]
-            }),
-          listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+      const { setup } = yield* mountApp({
+        client: {
+          auth: {
+            listProviders: () =>
+              Effect.sync(() => {
+                loads += 1
+                return [
+                  {
+                    provider: "openai",
+                    hasKey: false,
+                    required: true,
+                    source: noAuthSource,
+                    authType: absent,
+                  },
+                ]
+              }),
+            listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+          },
         },
-      })
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime: createMockRuntime(),
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("· method"), "the method screen")
       setup.mockInput.pressEscape()
@@ -4382,47 +3983,37 @@ describe("App auth gate at startup", () => {
       const sentMessages: Array<{
         content: string
       }> = []
-      const client = createMockClient({
-        auth: {
-          listProviders: () =>
-            Effect.sync(() => {
-              authChecks += 1
-            }).pipe(
-              Effect.flatMap(() =>
-                Effect.fail(new ProviderAuthError({ message: "session auth lookup failed" })),
+      const { setup } = yield* mountApp({
+        client: {
+          auth: {
+            listProviders: () =>
+              Effect.sync(() => {
+                authChecks += 1
+              }).pipe(
+                Effect.flatMap(() =>
+                  Effect.fail(new ProviderAuthError({ message: "session auth lookup failed" })),
+                ),
               ),
-            ),
-          listMethods: () =>
-            Effect.succeed({
-              openai: [apiMethod],
-            }),
+            listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+          },
+          message: {
+            send: (input: { content: string }) =>
+              Effect.sync(() => {
+                sentMessages.push(input)
+              }),
+          },
         },
-        message: {
-          send: (input: { content: string }) =>
-            Effect.sync(() => {
-              sentMessages.push(input)
-            }),
-        },
-      })
-      const runtime = createMockRuntime()
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
         initialPrompt: Option.some("must not send"),
       })
-      yield* waitForFrame(setup, () => authChecks > 0, "auth check failure")
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- real-clock gap so any spurious send fiber has time to surface (negative assertion follows)
-      yield* Effect.sleep("20 millis")
-      yield* Effect.promise(() => setup.renderOnce())
+      // The failed check has settled once its retry note draws.
+      yield* waitForFrame(
+        setup,
+        (frame) => authChecks > 0 && frame.includes("Press r to retry"),
+        "auth check failure",
+      )
       expect(sentMessages).toEqual([])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("cold start with prompt recovers after a transient auth check failure", () =>
     Effect.gen(function* () {
@@ -4430,43 +4021,33 @@ describe("App auth gate at startup", () => {
       const sentMessages: Array<{
         content: string
       }> = []
-      const client = createMockClient({
-        auth: {
-          listProviders: () =>
-            Effect.sync(() => {
-              authChecks += 1
-            }).pipe(
-              Effect.flatMap(() =>
-                (() => {
-                  if (authChecks === 1) {
-                    return Effect.fail(
-                      new ProviderAuthError({ message: "temporary auth lookup failed" }),
-                    )
-                  }
-                  return Effect.succeed([])
-                })(),
+      const { setup } = yield* mountApp({
+        client: {
+          auth: {
+            listProviders: () =>
+              Effect.sync(() => {
+                authChecks += 1
+              }).pipe(
+                Effect.flatMap(() =>
+                  (() => {
+                    if (authChecks === 1) {
+                      return Effect.fail(
+                        new ProviderAuthError({ message: "temporary auth lookup failed" }),
+                      )
+                    }
+                    return Effect.succeed([])
+                  })(),
+                ),
               ),
-            ),
-          listMethods: () => Effect.succeed({}),
+          },
+          message: {
+            send: (input: { content: string }) =>
+              Effect.sync(() => {
+                sentMessages.push(input)
+              }),
+          },
         },
-        message: {
-          send: (input: { content: string }) =>
-            Effect.sync(() => {
-              sentMessages.push(input)
-            }),
-        },
-      })
-      const runtime = createMockRuntime()
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
         initialPrompt: Option.some("send after retry"),
       })
       yield* waitForFrame(
@@ -4475,42 +4056,32 @@ describe("App auth gate at startup", () => {
         "sent message",
       )
       expect(authChecks).toBeGreaterThan(1)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("enforced auth overlay can retry failed provider loads", () =>
     Effect.gen(function* () {
       let authChecks = 0
-      const client = createMockClient({
-        auth: {
-          listProviders: () =>
-            Effect.sync(() => {
-              authChecks += 1
-            }).pipe(
-              Effect.flatMap(() =>
-                (() => {
-                  if (authChecks < 3) {
-                    return Effect.fail(
-                      new ProviderAuthError({ message: "temporary auth lookup failed" }),
-                    )
-                  }
-                  return Effect.succeed([])
-                })(),
+      const { setup } = yield* mountApp({
+        client: {
+          auth: {
+            listProviders: () =>
+              Effect.sync(() => {
+                authChecks += 1
+              }).pipe(
+                Effect.flatMap(() =>
+                  (() => {
+                    if (authChecks < 3) {
+                      return Effect.fail(
+                        new ProviderAuthError({ message: "temporary auth lookup failed" }),
+                      )
+                    }
+                    return Effect.succeed([])
+                  })(),
+                ),
               ),
-            ),
-          listMethods: () => Effect.succeed({}),
+          },
         },
-      })
-      const runtime = createMockRuntime()
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
       })
       yield* waitForFrame(
         setup,
@@ -4521,10 +4092,10 @@ describe("App auth gate at startup", () => {
       setup.mockInput.pressKey("r")
       yield* waitForFrame(setup, (frame) => !frame.includes("Sign in ·"), "auth retry resolved")
       expect(authChecks).toBe(3)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
-    "branch resume pane gates auth, sends deferred prompt, and searches prompt history",
+    "the boot branch picker gates auth and sends the startup prompt on the chosen branch",
     () =>
       Effect.gen(function* () {
         let hasOpenAiKey = false
@@ -4539,133 +4110,66 @@ describe("App auth gate at startup", () => {
         const alphaSessionId = SessionId.make("session-alpha")
         const alphaBranchId = BranchId.make("branch-alpha")
         const betaBranchId = BranchId.make("branch-beta")
-        const initialPrompt = "deferred route-flow prompt"
-        const historyPrompt = "resume prompt search route flow"
-        const client = createMockClient({
-          session: {
-            getSnapshot: ({
-              sessionId,
-              branchId,
-            }: {
-              readonly sessionId: SessionId
-              readonly branchId: BranchId
-            }) =>
-              Effect.succeed({
-                sessionId,
-                branchId,
-                messages: [],
-                lastEventId: nullValue,
-                reasoningLevel: absent,
-                agent: "primary",
-                runtime: {
-                  _tag: "Idle",
-                  queue: emptyQueueSnapshot(),
-                },
-                metrics: {
-                  turns: 0,
-                  durationMs: 0,
-                  costUsd: 0,
-                  lastInputTokens: 0,
-                },
-              }),
-          },
-          branch: {
-            getTree: () =>
-              Effect.succeed([
-                {
-                  branch: {
-                    id: alphaBranchId,
-                    sessionId: alphaSessionId,
-                    name: "Main",
-                    createdAt: dateFromMillis(0),
-                  },
-                  messageCount: 3,
-                  children: [],
-                },
-                {
-                  branch: {
-                    id: betaBranchId,
-                    sessionId: alphaSessionId,
-                    name: "Side",
-                    createdAt: dateFromMillis(1),
-                  },
-                  messageCount: 1,
-                  children: [],
-                },
-              ]),
-          },
-          auth: {
-            listProviders: () => {
-              const providers = [
-                {
-                  provider: "openai",
-                  hasKey: hasOpenAiKey,
-                  required: true,
-                  source: authSource(hasOpenAiKey),
-                  authType: absent,
-                },
-              ]
-              if (hasOpenAiKey || initialAuthCheckResolved) return Effect.succeed(providers)
-              return Deferred.await(initialAuthCheck).pipe(Effect.as(providers))
+        const main = {
+          id: alphaBranchId,
+          sessionId: alphaSessionId,
+          name: "Main",
+          createdAt: dateFromMillis(0),
+        }
+        const side = {
+          id: betaBranchId,
+          sessionId: alphaSessionId,
+          name: "Side",
+          createdAt: dateFromMillis(1),
+        }
+        const initialPrompt = "deferred startup prompt"
+        const { setup } = yield* mountApp({
+          app: { initialBranches: Option.some([main, side]) },
+          client: {
+            branch: {
+              getTree: () =>
+                Effect.succeed([
+                  { branch: main, messageCount: 3, children: [] },
+                  { branch: side, messageCount: 1, children: [] },
+                ]),
             },
-            listMethods: () =>
-              Effect.succeed({
-                openai: [apiMethod],
-              }),
-            setKey: ({ key }: { readonly key: string }) =>
-              Effect.sync(() => {
-                hasOpenAiKey = key.length > 0
-              }),
+            auth: {
+              listProviders: () => {
+                const providers = [
+                  {
+                    provider: "openai",
+                    hasKey: hasOpenAiKey,
+                    required: true,
+                    source: authSource(hasOpenAiKey),
+                    authType: absent,
+                  },
+                ]
+                if (hasOpenAiKey || initialAuthCheckResolved) return Effect.succeed(providers)
+                return Deferred.await(initialAuthCheck).pipe(Effect.as(providers))
+              },
+              listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+              setKey: ({ key }: { readonly key: string }) =>
+                Effect.sync(() => {
+                  hasOpenAiKey = key.length > 0
+                }),
+            },
+            message: {
+              send: (input: {
+                readonly sessionId: SessionId
+                readonly branchId: BranchId
+                readonly content: string
+                readonly requestId: string
+              }) =>
+                Effect.sync(() => {
+                  sentMessages.push(input)
+                }),
+            },
           },
-          message: {
-            send: (input: {
-              readonly sessionId: SessionId
-              readonly branchId: BranchId
-              readonly content: string
-              readonly requestId: string
-            }) =>
-              Effect.sync(() => {
-                sentMessages.push(input)
-              }),
-          },
+          initialSession: sessionNamed(alphaSessionId, alphaBranchId, "Alpha"),
+          initialPrompt: Option.some(initialPrompt),
+          width: 100,
+          height: 30,
         })
-        const runtime = createMockRuntime()
-        const setup = yield* renderScoped(
-          () => (
-            <>
-              <App
-                initialBranches={Option.some([
-                  {
-                    id: alphaBranchId,
-                    sessionId: alphaSessionId,
-                    name: "Main",
-                    createdAt: dateFromMillis(0),
-                  },
-                  {
-                    id: betaBranchId,
-                    sessionId: alphaSessionId,
-                    name: "Side",
-                    createdAt: dateFromMillis(1),
-                  },
-                ])}
-              />
-            </>
-          ),
-          {
-            client,
-            runtime,
-            initialSession: {
-              id: alphaSessionId,
-              activeBranchId: alphaBranchId,
-              name: "Alpha",
-              createdAt: dateFromMillis(0),
-              updatedAt: dateFromMillis(1),
-            },
-            initialPrompt: Option.some(initialPrompt),
-            width: 100,
-            height: 30,
-          },
-        )
         yield* waitForFrame(
           setup,
           (frame) => frame.includes("Resume: Alpha") && frame.includes("Side (1)"),
@@ -4704,30 +4208,10 @@ describe("App auth gate at startup", () => {
           sessionId: alphaSessionId,
           branchId: betaBranchId,
         })
-        yield* Effect.promise(() => setup.mockInput.typeText(historyPrompt))
-        setup.mockInput.pressEnter()
-        yield* waitForFrame(
-          setup,
-          () => sentMessages.some((message) => message.content === historyPrompt),
-          "sent message",
-        )
-        setup.mockInput.pressKey("r", { ctrl: true })
-        yield* waitForFrame(
-          setup,
-          (frame) => frame.includes("Prompt search") && frame.includes(historyPrompt),
-          "prompt search history",
-        )
-        setup.mockInput.pressEscape()
-        yield* waitForFrame(
-          setup,
-          (frame) => !frame.includes("Prompt search"),
-          "prompt search closed",
-        )
-      }),
+      }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("stale auth checks cannot reopen the auth gate after key save", () =>
     Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
       let hasOpenAiKey = false
       let sessionAuthChecks = 0
       const staleSessionCheck = yield* Deferred.make<
@@ -4743,27 +4227,29 @@ describe("App auth gate at startup", () => {
         content: string
       }> = []
       const initialPrompt = "stale auth race prompt"
-      const client = createMockClient({
-        auth: {
-          listProviders: (input: {
-            readonly sessionId?: SessionId
-            readonly agentName?: string
-          }) => {
-            const sessionId = Option.fromNullishOr(input.sessionId)
-            if (Option.isSome(sessionId)) {
-              sessionAuthChecks++
-              if (sessionAuthChecks === 1) {
-                return Effect.succeed([
-                  {
-                    provider: "openai",
-                    hasKey: false,
-                    required: true,
-                    source: authSource(false),
-                    authType: absent,
-                  },
-                ])
+      const { setup, client: clientContext } = yield* mountApp({
+        client: {
+          auth: {
+            listProviders: (input: {
+              readonly sessionId?: SessionId
+              readonly agentName?: string
+            }) => {
+              const sessionId = Option.fromNullishOr(input.sessionId)
+              if (Option.isSome(sessionId)) {
+                sessionAuthChecks++
+                if (sessionAuthChecks === 1) {
+                  return Effect.succeed([
+                    {
+                      provider: "openai",
+                      hasKey: false,
+                      required: true,
+                      source: authSource(false),
+                      authType: absent,
+                    },
+                  ])
+                }
+                if (sessionAuthChecks === 2) return Deferred.await(staleSessionCheck)
               }
-              if (sessionAuthChecks === 2) return Deferred.await(staleSessionCheck)
               return Effect.succeed([
                 {
                   provider: "openai",
@@ -4773,57 +4259,25 @@ describe("App auth gate at startup", () => {
                   authType: absent,
                 },
               ])
-            }
-            return Effect.succeed([
-              {
-                provider: "openai",
-                hasKey: hasOpenAiKey,
-                required: true,
-                source: authSource(hasOpenAiKey),
-                authType: absent,
-              },
-            ])
+            },
+            listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+            setKey: ({ key }: { readonly key: string }) =>
+              Effect.sync(() => {
+                hasOpenAiKey = key.length > 0
+              }),
           },
-          listMethods: () =>
-            Effect.succeed({
-              openai: [apiMethod],
-            }),
-          setKey: ({ key }: { readonly key: string }) =>
-            Effect.sync(() => {
-              hasOpenAiKey = key.length > 0
-            }),
+          message: {
+            send: (input: { readonly content: string }) =>
+              Effect.sync(() => {
+                sentMessages.push(input)
+              }),
+          },
         },
-        message: {
-          send: (input: { readonly content: string }) =>
-            Effect.sync(() => {
-              sentMessages.push(input)
-            }),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
+        initialPrompt: Option.some(initialPrompt),
+        width: 100,
+        height: 30,
       })
-      const runtime = createMockRuntime()
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          runtime,
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-          initialPrompt: Option.some(initialPrompt),
-          width: 100,
-          height: 30,
-        },
-      )
-      const clientContext = yield* requireClient(ctx)
       yield* waitForFrame(setup, (frame) => frame.includes("Sign in ·"), "auth gate")
       applySnapshotAgent(clientContext, AgentName.make("secondary"))
       yield* waitForFrame(setup, () => sessionAuthChecks >= 2, "stale session auth check started")
@@ -4857,46 +4311,74 @@ describe("App auth gate at startup", () => {
       yield* Effect.promise(() => setup.renderOnce())
       expect(renderFrame(setup)).not.toContain("Sign in ·")
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
 describe("App startup prompt and renames", () => {
+  // The boot picker mounts the session view again on the chosen branch, so
+  // the prompt outlives one mount. A session the reader opens after that is
+  // a different session and starts empty.
+  it.scopedLive("the startup prompt belongs to the boot session, not the next one", () =>
+    Effect.gen(function* () {
+      const nextSessionId = SessionId.make("session-next")
+      const startupPrompt = "only for the boot session"
+      const sentMessages: Array<{ sessionId: SessionId; content: string }> = []
+      const { setup, client } = yield* mountApp({
+        client: {
+          session: {
+            create: () =>
+              Effect.succeed({
+                sessionId: nextSessionId,
+                branchId: BranchId.make("branch-next"),
+                name: "Next",
+              }),
+          },
+          message: {
+            send: (input: { readonly sessionId: SessionId; readonly content: string }) =>
+              Effect.sync(() => {
+                sentMessages.push(input)
+              }),
+          },
+        },
+        initialPrompt: Option.some(startupPrompt),
+        initialSession: sessionNamed("session-boot", "branch-boot", "Boot"),
+      })
+      yield* waitForFrame(
+        setup,
+        () => sentMessages.some((message) => message.content === startupPrompt),
+        "sent message",
+      )
+      expect(sentMessages).toHaveLength(1)
+      client.createSession()
+      yield* waitForFrame(
+        setup,
+        () => client.session().sessionId === nextSessionId,
+        "next session mounted",
+      )
+      // Several frames for the new session's feed to settle.
+      yield* Effect.promise(() => setup.renderOnce())
+      yield* Effect.yieldNow
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(sentMessages.filter((message) => message.sessionId === nextSessionId)).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("a renamed session keeps its view and does not send the startup prompt again", () =>
     Effect.gen(function* () {
-      let ctx: Option.Option<ClientContextValue> = Option.none()
       const sentMessages: Array<{ readonly content: string }> = []
       const initialPrompt = "send me once"
-      const client = createMockClient({
-        message: {
-          send: (input: { readonly content: string }) =>
-            Effect.sync(() => {
-              sentMessages.push(input)
-            }),
-        },
-      })
-      const runtime = createMockRuntime()
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          runtime,
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+      const { setup, client: clientContext } = yield* mountApp({
+        client: {
+          message: {
+            send: (input: { readonly content: string }) =>
+              Effect.sync(() => {
+                sentMessages.push(input)
+              }),
           },
-          initialPrompt: Option.some(initialPrompt),
         },
-      )
-      const clientContext = yield* requireClient(ctx)
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
+        initialPrompt: Option.some(initialPrompt),
+      })
       yield* waitForFrame(
         setup,
         () => sentMessages.some((message) => message.content === initialPrompt),
@@ -4914,47 +4396,28 @@ describe("App startup prompt and renames", () => {
       yield* Effect.sleep("50 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a startup prompt the server refuses comes back to the draft with its reason", () =>
     Effect.gen(function* () {
-      let ctx: Option.Option<ClientContextValue> = Option.none()
       const attempts: Array<{ readonly content: string; readonly requestId?: string }> = []
       const initialPrompt = "survive one failure"
-      const client = createMockClient({
-        message: {
-          send: (input: { readonly content: string; readonly requestId?: string }) =>
-            Effect.suspend(() => {
-              attempts.push(input)
-              if (attempts.length === 1) {
-                return Effect.fail(new ProviderAuthError({ message: "send refused" }))
-              }
-              return Effect.void
-            }),
-        },
-      })
-      const runtime = createMockRuntime()
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          runtime,
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+      const { setup, client: clientContext } = yield* mountApp({
+        client: {
+          message: {
+            send: (input: { readonly content: string; readonly requestId?: string }) =>
+              Effect.suspend(() => {
+                attempts.push(input)
+                if (attempts.length === 1) {
+                  return Effect.fail(new ProviderAuthError({ message: "send refused" }))
+                }
+                return Effect.void
+              }),
           },
-          initialPrompt: Option.some(initialPrompt),
         },
-      )
-      const clientContext = yield* requireClient(ctx)
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
+        initialPrompt: Option.some(initialPrompt),
+      })
       // The refusal is an answer: the prompt comes back as a draft, with why.
       yield* waitForFrame(
         setup,
@@ -4968,7 +4431,7 @@ describe("App startup prompt and renames", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, () => attempts.length === 2, "sent by the reader")
       expect(attempts[1]?.content).toBe(initialPrompt)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
     "a startup prompt whose replies were lost goes again under its request id",
@@ -4976,31 +4439,23 @@ describe("App startup prompt and renames", () => {
       Effect.gen(function* () {
         const ids: Array<string> = []
         const initialPrompt = "lost on the way back"
-        const client = createMockClient({
-          message: {
-            send: (input: { readonly content: string; readonly requestId?: string }) =>
-              Effect.suspend(() => {
-                ids.push(input.requestId ?? "<missing>")
-                // The first send and its four retries: admitted, reply lost.
-                if (ids.length <= 5) {
-                  return Effect.fail(
-                    new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
-                  )
-                }
-                return Effect.void
-              }),
+        const { setup } = yield* mountApp({
+          client: {
+            message: {
+              send: (input: { readonly content: string; readonly requestId?: string }) =>
+                Effect.suspend(() => {
+                  ids.push(input.requestId ?? "<missing>")
+                  // The first send and its four retries: admitted, reply lost.
+                  if (ids.length <= 5) {
+                    return Effect.fail(
+                      new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
+                    )
+                  }
+                  return Effect.void
+                }),
+            },
           },
-        })
-        const setup = yield* renderScoped(() => <App />, {
-          client,
-          runtime: createMockRuntime(),
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
+          initialSession: sessionNamed("session-a", "branch-a", "A"),
           initialPrompt: Option.some(initialPrompt),
         })
         yield* waitForFrame(
@@ -5018,38 +4473,19 @@ describe("App startup prompt and renames", () => {
   )
   it.scopedLive("a renamed session does not refetch the extension slash commands", () =>
     Effect.gen(function* () {
-      let ctx: Option.Option<ClientContextValue> = Option.none()
       let slashCommandCalls = 0
-      const client = createMockClient({
-        extension: {
-          listSlashCommands: () =>
-            Effect.sync(() => {
-              slashCommandCalls += 1
-              return []
-            }),
-        },
-      })
-      const runtime = createMockRuntime()
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          runtime,
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+      const { setup, client: clientContext } = yield* mountApp({
+        client: {
+          extension: {
+            listSlashCommands: () =>
+              Effect.sync(() => {
+                slashCommandCalls += 1
+                return []
+              }),
           },
         },
-      )
-      const clientContext = yield* requireClient(ctx)
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
+      })
       yield* waitForFrame(setup, () => slashCommandCalls >= 1, "slash commands fetched")
       const before = slashCommandCalls
       // The extension-contributed rows belong to the session, not to its name.
@@ -5063,7 +4499,7 @@ describe("App startup prompt and renames", () => {
       yield* Effect.sleep("50 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(slashCommandCalls).toBe(before)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -5214,44 +4650,35 @@ describe("App clipboard", () => {
   const mountOAuthScreen = (url: string, host: Layer.Layer<never> = Layer.empty) =>
     Effect.gen(function* () {
       const output = new TerminalOutput()
-      const client = createMockClient({
-        auth: {
-          listProviders: () =>
-            Effect.succeed([
-              {
-                provider: "openai",
-                hasKey: false,
-                required: true,
-                source: noAuthSource,
-                authType: absent,
-              },
-            ]),
-          listMethods: () =>
-            Effect.succeed({ openai: [{ label: "ChatGPT (device code)", type: "oauth" }] }),
-          authorize: () =>
-            Effect.succeed({
-              authorizationId: "auth-device",
-              url,
-              method: "auto",
-              instructions: "Open the URL and enter this code:\nWXYZ-1234",
-            }),
-          // The device poll waits for a code the reader never enters.
-          callback: () => Effect.never,
+      const { setup } = yield* mountApp({
+        client: {
+          auth: {
+            listProviders: () =>
+              Effect.succeed([
+                {
+                  provider: "openai",
+                  hasKey: false,
+                  required: true,
+                  source: noAuthSource,
+                  authType: absent,
+                },
+              ]),
+            listMethods: () =>
+              Effect.succeed({ openai: [{ label: "ChatGPT (device code)", type: "oauth" }] }),
+            authorize: () =>
+              Effect.succeed({
+                authorizationId: "auth-device",
+                url,
+                method: "auto",
+                instructions: "Open the URL and enter this code:\nWXYZ-1234",
+              }),
+            // The device poll waits for a code the reader never enters.
+            callback: () => Effect.never,
+          },
         },
-      })
-      const services = yield* noBrowserServices(host)
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime: createMockRuntime(),
-        services,
+        services: yield* noBrowserServices(host),
         output,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed("session-a", "branch-a", "A"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("ChatGPT (device code)"), "methods")
       setup.mockInput.pressEnter()
@@ -5607,9 +5034,7 @@ describe("TUI renderer surfaces", () => {
       const envelope = (id: number, event: EventEnvelope["event"]) =>
         EventEnvelope.make({ id: EventId.make(id), createdAt: id, event })
       const answerId = MessageId.make("answer-diagram")
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        branch: { getTree: () => Effect.succeed([]) },
+      const client = {
         session: {
           events: () =>
             Stream.concat(
@@ -5667,19 +5092,12 @@ describe("TUI renderer surfaces", () => {
               Stream.never,
             ),
         },
-      })
-      const setup = yield* renderScoped(() => <App />, {
+      }
+      const { setup } = yield* mountApp({
         client,
-        runtime: createMockRuntime(),
         width: 80,
         height: 30,
-        initialSession: {
-          id: sessionId,
-          activeBranchId: branchId,
-          name: "Diagram",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed(sessionId, branchId, "Diagram"),
       })
       const frame = yield* waitForFrame(
         setup,
@@ -5762,32 +5180,24 @@ describe("TUI renderer surfaces", () => {
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-test")
       const branchId = BranchId.make("branch-test")
-      const client = createMockClient({
-        session: {
-          getSnapshot: () =>
-            Effect.succeed({
-              sessionId,
-              branchId,
-              messages: [],
-              lastEventId: nullValue,
-              reasoningLevel: absent,
-              resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-              agent: AgentName.make("primary"),
-              runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
-              metrics: { turns: 3, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-            }),
+      const { setup } = yield* mountApp({
+        client: {
+          session: {
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId,
+                branchId,
+                messages: [],
+                lastEventId: nullValue,
+                reasoningLevel: absent,
+                resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+                agent: AgentName.make("primary"),
+                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                metrics: { turns: 3, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+              }),
+          },
         },
-      })
-      const setup = yield* renderScoped(() => <App />, {
-        client,
-        runtime: createMockRuntime(),
-        initialSession: {
-          id: sessionId,
-          activeBranchId: branchId,
-          name: "Resumed",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed(sessionId, branchId, "Resumed"),
       })
       yield* waitForFrame(setup, (drawn) => drawn.includes("idle ·"), "the resumed status")
       expect(renderFrame(setup)).not.toContain("ready ·")
@@ -5818,16 +5228,16 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("[steer 1] switch to secondary")
       expect(frame).toContain("[queued 1] line one +2 lines")
       expect(frame).toContain("alt+up restore")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget renders nothing when no connection issue", () =>
     Effect.gen(function* () {
-      // ConnectionWidget now self-sources from useClient() — no props.
-      // Default mock client has no connection issues, so widget renders nothing.
+      // ConnectionWidget reads the client itself. The default mock client has
+      // no connection issue, so the widget draws nothing.
       const setup = yield* renderScoped(() => <ConnectionWidget />)
       const frame = renderFrame(setup)
       expect(frame).not.toContain("connection")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget surfaces failed extension activation", () =>
     Effect.gen(function* () {
@@ -5862,7 +5272,7 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("failed extensions")
       // The reason, not only the id: a broken config names its parse error.
       expect(frame).toContain("@gent/memory: startup boom")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget names a model catalog that did not load", () =>
     Effect.gen(function* () {
@@ -5896,16 +5306,17 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("some models unavailable")
       expect(frame).toContain("ollama: connect ECONNREFUSED")
       expect(frame).not.toContain("failed extensions")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget surfaces failed extensions for the active session", () =>
     Effect.gen(function* () {
+      const scopes: Array<ExtensionStatusScope> = []
       const setup = yield* renderScoped(() => <ConnectionWidget />, {
         initialSession: testSession,
         client: createMockClient({
           extension: {
             listStatus: ({ scope }: { scope: ExtensionStatusScope }) => {
-              expect(scope).toEqual({ _tag: "Session", id: testSession.id })
+              scopes.push(scope)
               return Effect.succeed({
                 _tag: "Degraded",
                 healthyExtensions: [],
@@ -5933,7 +5344,9 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("connection")
       expect(frame).toContain("failed extensions")
       expect(frame).toContain("@gent/plan")
-    }),
+      expect(scopes).not.toHaveLength(0)
+      for (const scope of scopes) expect(scope).toEqual({ _tag: "Session", id: testSession.id })
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
     "ConnectionWidget refreshes extension status after reconnect generation changes",
@@ -5943,6 +5356,7 @@ describe("TUI renderer surfaces", () => {
           ConnectionState.cases.Connected.make({ generation: 0 }),
         )
         let callCount = 0
+        const scopes: Array<ExtensionStatusScope> = []
         let currentHealth: ExtensionHealthSnapshot = {
           _tag: "Degraded",
           healthyExtensions: [],
@@ -5969,7 +5383,7 @@ describe("TUI renderer surfaces", () => {
             extension: {
               listStatus: ({ scope }: { scope: ExtensionStatusScope }) => {
                 callCount += 1
-                expect(scope).toEqual({ _tag: "Session", id: testSession.id })
+                scopes.push(scope)
                 return Effect.succeed(currentHealth)
               },
             },
@@ -5985,15 +5399,16 @@ describe("TUI renderer surfaces", () => {
         yield* Effect.yieldNow
         yield* Effect.promise(() => setup.renderOnce())
         lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
-        yield* Effect.yieldNow
-        yield* Effect.promise(() => setup.renderOnce())
-        yield* Effect.yieldNow
-        yield* Effect.promise(() => setup.renderOnce())
-        const frame = renderFrame(setup)
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => !next.includes("failed extensions"),
+          "the status read again",
+        )
         expect(callCount).toBe(2)
+        for (const scope of scopes) expect(scope).toEqual({ _tag: "Session", id: testSession.id })
         expect(frame).not.toContain("failed extensions")
         expect(frame).not.toContain("@gent/plan")
-      }),
+      }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget clears stale extension status when switching sessions", () =>
     Effect.gen(function* () {
@@ -6024,14 +5439,13 @@ describe("TUI renderer surfaces", () => {
       expect(renderFrame(setup)).toContain("@gent/plan")
       if (Option.isNone(controls)) return yield* Effect.die("health controls not ready")
       controls.value.switchSession()
-      yield* Effect.yieldNow
-      yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.yieldNow
-      yield* Effect.promise(() => setup.renderOnce())
-      const frame = renderFrame(setup)
-      expect(frame).not.toContain("failed extensions")
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => !next.includes("failed extensions"),
+        "the other session's status",
+      )
       expect(frame).not.toContain("@gent/plan")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("same-session branch switches preserve session-scoped extension health", () =>
     Effect.gen(function* () {
@@ -6070,7 +5484,7 @@ describe("TUI renderer surfaces", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("failed extensions")
       expect(frame).toContain("@gent/plan")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("the status row names an unborn branch, and a detached head by its commit", () =>
     Effect.scoped(
@@ -6086,19 +5500,8 @@ describe("TUI renderer surfaces", () => {
             ),
           )
         const statusRow = Effect.gen(function* () {
-          const setup = yield* renderScoped(() => <App />, {
-            client: createMockClient({
-              auth: { listProviders: () => Effect.succeed([]) },
-              branch: { getTree: () => Effect.succeed([]) },
-            }),
-            runtime: createMockRuntime(),
-            initialSession: {
-              id: SessionId.make("session-a"),
-              activeBranchId: BranchId.make("branch-a"),
-              name: "Session A",
-              createdAt: dateFromMillis(0),
-              updatedAt: dateFromMillis(0),
-            },
+          const { setup } = yield* mountApp({
+            initialSession: sessionNamed("session-a", "branch-a", "Session A"),
             cwd,
           })
           const frame = yield* waitForFrame(setup, (next) => /\(.+\)/.test(next), "the branch")
@@ -6139,19 +5542,8 @@ describe("TUI renderer surfaces", () => {
         yield* git(repo, "worktree", "add", "-q", "-b", "side", `${root}/worktree`)
         const follows = (cwd: string, before: string, after: string) =>
           Effect.gen(function* () {
-            const setup = yield* renderScoped(() => <App />, {
-              client: createMockClient({
-                auth: { listProviders: () => Effect.succeed([]) },
-                branch: { getTree: () => Effect.succeed([]) },
-              }),
-              runtime: createMockRuntime(),
-              initialSession: {
-                id: SessionId.make("session-a"),
-                activeBranchId: BranchId.make("branch-a"),
-                name: "Session A",
-                createdAt: dateFromMillis(0),
-                updatedAt: dateFromMillis(0),
-              },
+            const { setup } = yield* mountApp({
+              initialSession: sessionNamed("session-a", "branch-a", "Session A"),
               cwd,
             })
             yield* waitForFrame(setup, (frame) => frame.includes(`(${before})`), before)
@@ -6228,9 +5620,7 @@ describe("client extension status", () => {
           }),
         )
       const idle = { _tag: "Idle" satisfies "Idle", queue: emptyQueueSnapshot() }
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        branch: { getTree: () => Effect.succeed([]) },
+      const client = {
         extension: {
           listStatus: () =>
             Effect.sync(() => {
@@ -6273,17 +5663,10 @@ describe("client extension status", () => {
               Stream.never,
             ),
         },
-      })
-      const setup = yield* renderScoped(() => <App />, {
+      }
+      const { setup } = yield* mountApp({
         client,
-        runtime: createMockRuntime(),
-        initialSession: {
-          id: sessionId,
-          activeBranchId: branchId,
-          name: "Pulses",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionNamed(sessionId, branchId, "Pulses"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       // The mount read, one read for the replayed five, and one for the live pulse.
@@ -6295,53 +5678,26 @@ describe("client extension status", () => {
   it.scopedLive("a /driver usage hint lands in the footer and never starts a model turn", () =>
     Effect.gen(function* () {
       const sentMessages: Array<{ readonly content: string }> = []
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        message: {
-          send: (input: { readonly content: string }) =>
-            Effect.sync(() => {
-              sentMessages.push(input)
-            }),
-        },
-      })
-      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          runtime: createMockRuntime(),
-          width: 140,
-          initialSession: {
-            id: SessionId.make("session-driver"),
-            activeBranchId: BranchId.make("branch-driver"),
-            name: "Driver",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+      const { setup } = yield* mountApp({
+        client: {
+          message: {
+            send: (input: { readonly content: string }) =>
+              Effect.sync(() => {
+                sentMessages.push(input)
+              }),
           },
         },
-      )
-      const driverCommand = () =>
-        ext.pipe(
-          Option.flatMap((value) =>
-            Option.fromUndefinedOr(value.commands().find((command) => command.slash === "driver")),
-          ),
-        )
-      yield* waitForFrame(setup, () => Option.isSome(driverCommand()), "driver command loaded")
-      const command = driverCommand()
-      if (Option.isNone(command)) return yield* Effect.die("driver command not loaded")
-      command.value.onSlash?.("")
-      const frame = yield* waitForFrame(
+        width: 140,
+        initialSession: sessionNamed("session-driver", "branch-driver", "Driver"),
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* typeCommand("/driver")(setup)
+      yield* waitForFrame(
         setup,
         (text) => text.includes("Usage: /driver <agent> <driver-id|default>"),
         "driver usage in the footer",
       )
-      expect(frame).toContain("Usage: /driver")
       expect(sentMessages).toEqual([])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })

@@ -1,6 +1,8 @@
 import {
+  Cause,
   Context,
   Effect,
+  Exit,
   type FileSystem,
   Layer,
   ManagedRuntime,
@@ -18,6 +20,7 @@ import {
   makeClientContextLayer,
   type MessageRendererEntry,
   type PaneOwner,
+  type StatusLabelItem,
 } from "./client-facets.js"
 import {
   type Accessor,
@@ -25,10 +28,12 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  ErrorBoundary,
   type JSX,
   onCleanup,
   on,
   onMount,
+  untrack,
 } from "solid-js"
 import { formatError, isConnectionLoss, useRequiredContext } from "../utils"
 // A static import: Bun's bundler reaches the builtins only through it in the compiled binary.
@@ -41,13 +46,12 @@ import {
   loadExtensionUi,
   resolveCommands,
   type ResolvedNoticeRows,
-  type ResolvedStatusLabel,
   type ResolvedTuiExtensions,
   type ResolvedWidget,
 } from "./loader-boundary"
 import { useWorkspace } from "../workspace"
 import { useClient } from "../client"
-import type { SessionId } from "@gent/core/protocol"
+import type { BranchId, SessionId } from "@gent/core/protocol"
 
 // ── per-provider client runtime ─────────────────────────────────────────────
 
@@ -111,7 +115,19 @@ interface ExtensionUIContextValue {
   /** The session view supplies its own commands; they resolve at builtin scope. */
   readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
   readonly interactionRenderers: Accessor<Map<string, InteractionRendererComponent>>
-  readonly statusLabels: Accessor<ReadonlyArray<ResolvedStatusLabel>>
+  /**
+   * Every status label's items, by priority. A `produce` that throws fails
+   * its extension (`recordRenderFailure`) and draws nothing.
+   */
+  readonly statusLabelItems: Accessor<ReadonlyArray<StatusLabelItem>>
+  /**
+   * An extension's render code threw: it joins `failures` by name, as a setup
+   * throw does, and its widgets and status labels draw no more. The first
+   * throw is the one reported.
+   */
+  readonly recordRenderFailure: (extensionId: string, reason: string) => void
+  /** Whether an extension's render code has thrown. */
+  readonly renderFailed: (extensionId: string) => boolean
   /** Extension transcript rows by notice id; the session view merges the rows of its branch. */
   readonly noticeRows: Accessor<ReadonlyArray<ResolvedNoticeRows>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
@@ -155,6 +171,33 @@ export function ExtensionUIProvider(props: {
 
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [loaded, setLoaded] = createSignal(false)
+  const [renderFailures, setRenderFailures] = createSignal<ReadonlyArray<ClientExtensionFailure>>(
+    [],
+  )
+  const renderFailed = (extensionId: string) =>
+    renderFailures().some((failure) => failure.id === extensionId)
+  // A throw comes from inside a render or a memo: the read here must not
+  // subscribe it to the list it writes.
+  const recordRenderFailure = (extensionId: string, reason: string) => {
+    if (untrack(() => renderFailed(extensionId))) return
+    client.log.warn("tui-ext.render.failed", { extensionId, reason })
+    setRenderFailures((current) => [
+      ...current,
+      { id: extensionId, reason: `render failed: ${reason}` },
+    ])
+  }
+  const statusLabelItems = () =>
+    resolved()
+      .statusLabels.filter((label) => !renderFailed(label.extensionId))
+      .flatMap((label) =>
+        Exit.match(Effect.runSyncExit(Effect.try(label.produce)), {
+          onSuccess: (items) => items,
+          onFailure: (cause) => {
+            recordRenderFailure(label.extensionId, String(Cause.squash(cause)))
+            return []
+          },
+        }),
+      )
   const [sessionCommands, setSessionCommands] = createSignal<ReadonlyArray<Command>>([])
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<CommandSource>>([])
   // The session and connection whose server slash commands have answered,
@@ -277,6 +320,13 @@ export function ExtensionUIProvider(props: {
   // lost, and a command held for it waits for that answer. A refusal is an
   // answer and settles this connection.
   const [listingRequest, setListingRequest] = createSignal(0)
+  // The last server command failure on the status row. It answers the
+  // command the reader ran, so the next server command takes it back
+  // (`dismissErrorIn`); a later error of another kind stays.
+  let standingFailure = Option.none<{
+    readonly target: { readonly sessionId: SessionId; readonly branchId: BranchId }
+    readonly text: string
+  }>()
   const refreshCommands = () => {
     setServerListed(Option.none())
     setListingRequest((request) => request + 1)
@@ -305,6 +355,10 @@ export function ExtensionUIProvider(props: {
                 for (const c of cmds) {
                   const run = (args: string) => {
                     const { sessionId: sid, branchId: bid } = client.sessionIdentity()
+                    Option.map(standingFailure, (failure) =>
+                      client.dismissErrorIn(failure.target, failure.text),
+                    )
+                    standingFailure = Option.none()
                     client.runtime.cast(
                       client.client.extension
                         .request({
@@ -318,12 +372,14 @@ export function ExtensionUIProvider(props: {
                           // The reader ran the command, so a failure shows on the
                           // status row of the session it ran in.
                           Effect.catchEager((error) =>
-                            Effect.sync(() =>
-                              client.setErrorIn(
-                                { sessionId: sid, branchId: bid },
-                                `/${c.name} failed: ${formatError(error)}`,
-                              ),
-                            ).pipe(
+                            Effect.sync(() => {
+                              const failure = {
+                                target: { sessionId: sid, branchId: bid },
+                                text: `/${c.name} failed: ${formatError(error)}`,
+                              }
+                              client.setErrorIn(failure.target, failure.text)
+                              standingFailure = Option.some(failure)
+                            }).pipe(
                               Effect.andThen(Effect.logWarning("slash.command.failed")),
                               Effect.annotateLogs({
                                 extensionId: c.extensionId,
@@ -404,14 +460,20 @@ export function ExtensionUIProvider(props: {
         commandsSettled,
         refreshCommands,
         messageRenderers: () => resolved().messageRenderers,
-        widgets: () => resolved().widgets,
+        widgets: () => resolved().widgets.filter((widget) => !renderFailed(widget.extensionId)),
         commands: () => resolvedCommands().commands,
         setSessionCommands,
         interactionRenderers: () => resolved().interactionRenderers,
-        statusLabels: () => resolved().statusLabels,
+        statusLabelItems,
+        recordRenderFailure,
+        renderFailed,
         noticeRows: () => resolved().noticeRows,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
-        failures: () => [...resolved().failures, ...resolvedCommands().failures],
+        failures: () => [
+          ...resolved().failures,
+          ...resolvedCommands().failures,
+          ...renderFailures(),
+        ],
         setDynamicAutocomplete,
         setActivityProvider: (provider) => setActivityProvider(() => provider),
         setPaneOwner: (owner) => setPaneOwner(() => owner),
@@ -429,5 +491,44 @@ export function useExtensionUI(): ExtensionUIContextValue {
   return useRequiredContext(
     ExtensionUIContext,
     "useExtensionUI must be used within ExtensionUIProvider",
+  )
+}
+
+// ── extension render boundary ───────────────────────────────────────────────
+
+/** Reports the throw once it has its place: the report is a write the render may not make. */
+function RenderFailed(props: {
+  readonly extensionId: string
+  readonly reason: string
+  readonly fallback: JSX.Element
+}) {
+  const ext = useExtensionUI()
+  onMount(() => ext.recordRenderFailure(props.extensionId, props.reason))
+  return <>{props.fallback}</>
+}
+
+/**
+ * The host's boundary around a component an extension contributed. A throw
+ * in its render fails that extension by name, as a setup throw does, and
+ * draws `fallback` (nothing when absent) in its place; the rest of the view
+ * stays. Every place the host draws extension code goes through it.
+ */
+export function ExtensionRenderBoundary(props: {
+  readonly extensionId: string
+  readonly fallback?: JSX.Element
+  readonly children: JSX.Element
+}) {
+  return (
+    <ErrorBoundary
+      fallback={(error) => (
+        <RenderFailed
+          extensionId={props.extensionId}
+          reason={String(error)}
+          fallback={props.fallback}
+        />
+      )}
+    >
+      {props.children}
+    </ErrorBoundary>
   )
 }

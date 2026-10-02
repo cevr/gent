@@ -27,28 +27,13 @@ import { textWidth } from "./bun-adapter"
 import { useTheme } from "./theme"
 import { useExtensionUI } from "./extensions/host"
 import { type Keybind, parseKeybind } from "./extensions/loader-boundary"
+import type { Command } from "./extensions/client-facets"
 
 // ── command types ───────────────────────────────────────────────────────────
 
-/**
- * One command: a palette row, and optionally a keybind and a slash name. The
- * session's own commands, client extension commands and server slash commands
- * all take this shape and resolve under one rule (`resolveCommands`).
- */
-export interface Command {
-  readonly id: string
-  readonly title: string
-  readonly description?: string
-  readonly category?: string
-  readonly keybind?: string
-  /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
-  readonly slash?: string
-  /** Additional slash names that resolve to this command */
-  readonly aliases?: readonly string[]
-  readonly onSelect: () => void
-  /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
-  readonly onSlash?: (args: string) => void
-}
+// A command's shape is its contribution schema's (`client-facets.ts`): the
+// loader decodes an extension's commands with it, so the type has one owner.
+export type { Command }
 
 /**
  * A keybind with no ctrl or meta is a key the composer also reads: an arrow
@@ -258,6 +243,16 @@ const filterItems = (items: readonly PaletteItem[], query: string): readonly Pal
   return matchSorter(items, query, {
     keys: ["title", "description", "category"],
   })
+}
+
+/**
+ * The name column of a picker row that also draws a description: the longest
+ * name and a gap of 2, so a name stays whole while the description gives way,
+ * up to 60 % of `width` and at least 8. The palette and the `/` popup share it.
+ */
+export const nameColumnWidth = (names: ReadonlyArray<string>, width: number): number => {
+  const longest = names.reduce((widest, name) => Math.max(widest, textWidth(name)), 0)
+  return Math.max(8, Math.min(longest + 2, Math.floor(width * 0.6)))
 }
 
 const selectedTitle = (title: string, selected: boolean): string => {
@@ -493,11 +488,10 @@ export function CommandPalette() {
   // the description gives way: a name is what the reader picks by.
   const labelWidth = () => {
     if (!hasDetails()) return dimensions().width
-    const longest = filteredItems().reduce(
-      (width, item) => Math.max(width, textWidth(item.title)),
-      0,
+    return nameColumnWidth(
+      filteredItems().map((item) => item.title),
+      dimensions().width,
     )
-    return Math.max(8, Math.min(longest + 2, Math.floor(dimensions().width * 0.6)))
   }
 
   const keys = () => {

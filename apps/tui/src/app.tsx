@@ -58,7 +58,7 @@ import {
   SessionControllerContext,
   useExit,
 } from "./session"
-import { useExtensionUI } from "./extensions/host"
+import { ExtensionRenderBoundary, useExtensionUI } from "./extensions/host"
 import { Auth, providerLabel } from "./auth"
 import type { StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js"
 
@@ -472,7 +472,11 @@ function ExtensionWidgets(props: { slot: WidgetSlot }) {
     <For each={slotWidgets()}>
       {(widget) => {
         const Widget = widget.component
-        return <Widget />
+        return (
+          <ExtensionRenderBoundary extensionId={widget.extensionId}>
+            <Widget />
+          </ExtensionRenderBoundary>
+        )
       }}
     </For>
   )
@@ -544,11 +548,7 @@ export function Session(props: SessionProps) {
 
   /** Every extension status label, by priority, after the host's own. */
   const extensionLabels = (): StatusRowLabel[] =>
-    ext
-      .statusLabels()
-      .flatMap((label) =>
-        label.produce().map((item) => ({ text: item.text, color: resolveColor(item.color) })),
-      )
+    ext.statusLabelItems().map((item) => ({ text: item.text, color: resolveColor(item.color) }))
 
   const connectionLabels = (): StatusRowLabel[] => {
     const items: StatusRowLabel[] = []
