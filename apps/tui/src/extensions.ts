@@ -75,9 +75,10 @@ export {
   useSpinnerClock,
 } from "./ui"
 export { useTheme } from "./theme"
-export { pastedLine, typedText, useScopedKeyboard, useTerminalDimensions } from "./terminal"
+export { pastedLine, typedKey, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 export { textWidth } from "./bun-adapter"
 export {
+  dropLastGrapheme,
   fitWidth,
   formatAge,
   formatCost,
@@ -96,6 +97,6 @@ export {
 
 // ── shipped renderers and ranking ──
 
-export { BUILTIN_TOOL_RENDERERS, type ToolRendererProps } from "./tool-renderers"
+export { BUILTIN_TOOL_RENDERERS, failureReason, type ToolRendererProps } from "./tool-renderers"
 export { HandoffRenderer, OptionList, PromptRenderer, yesNoAnswer } from "./interaction-renderers"
 export { rankAutocompleteItems, readFrecencyLookup, recordFrecencyPick } from "./autocomplete"

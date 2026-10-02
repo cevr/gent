@@ -66,6 +66,7 @@ One ladder, owned by `createSessionController` (`handleEscape`, `handleInterrupt
 
 - **Esc** clears a list's filter before leaving the list. On a sign-in screen it goes back to the provider's methods, then the provider list. In the session it closes the palette, collapses the expanded transcript, collapses the disclosure, then cancels a running turn. On a draft the first press arms and the status row says `esc again to clear`; the second clears the draft. On an empty idle composer it does nothing. In shell mode a draft arms and clears the same way; on an empty shell draft the composer takes Esc and leaves shell mode.
 - **ctrl+c** closes a pane that holds the composer, closes the palette, collapses the expanded transcript, clears a draft, stops a running `!cmd` (and arms nothing), then cancels a running turn. A press that cancels a turn, or one on an idle empty composer, arms the exit and the status row says `ctrl+c again to exit`; the second press exits, even over a turn that started since (children that keep waking the session).
+- **ctrl+w** and **ctrl+u** in a list's filter delete the last word and the whole query, as they do in the composer.
 - **ctrl+d** on an empty composer exits (no pane, palette or ask open, the transcript collapsed); on a draft it deletes forward.
 - An armed key disarms on any other key (the other ladder key included: an Esc that leaves shell mode disarms a ctrl+c), a paste, a keybind, or after one second (a fiber on the client runtime, so a test clock moves it; the view interrupts it when it unmounts). The arm is per key: a ctrl+c then an Esc is two gestures.
 - Over the boot branch picker and an enforced sign-in, Esc does nothing and the hint says `ctrl+c quit`; ctrl+c arms the exit as on an empty composer, and the second press exits.
@@ -231,10 +232,12 @@ library through `DiagramLibraryContext`.
 The transcript pins the reader's last prompt in one row (`↑ <first line>`) above
 the live tail while that prompt's own row is off screen: cut off the top of the
 live viewport, or deep enough in native history that the terminal no longer
-shows it. A prompt whose row history took among the live item's cut rows counts
-as on screen while the terminal still
 shows it (`promptOnScreen` in `message-list.tsx`, reckoned as if the row were
-drawn so it never flickers). It is derived from the displayed items, so it
+drawn so it never flickers). It draws only while a turn runs, and not while
+history holds the top rows of the first live item (`partialRows`): at idle
+history takes them, and they stay there into the next turn until the item
+moves whole, so the row would sit between that item's rows in history and its
+rows on screen. It is derived from the displayed items, so it
 follows the branch and session in view. `readerPrompt` decides whose message
 it is, from the metadata alone: a user message with the server's client origin
 (`fromClient`: typed, or a steer that joined the running turn), or a custom

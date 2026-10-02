@@ -16,13 +16,14 @@ import {
   ClientContext,
   clientContributions,
   defineClientExtension,
+  dropLastGrapheme,
   messageRendererContribution,
   pastedLine,
   keyHint,
   KeyHints,
   PickerFrame,
   sessionQuery,
-  typedText,
+  typedKey,
   UserRow,
   useScopedKeyboard,
   useTerminalDimensions,
@@ -38,8 +39,9 @@ import {
  * `/btw <question>` (alias `/side`) forks the branch into a parallel child
  * session seeded with its context and opens a pane over it; `/btw` alone
  * reopens the pane on the fork this branch opened last, or forks without
- * asking. The pane docks under the composer; follow-ups type into its ask line. `^o` opens the fork as the
- * shell's session; `esc` closes the pane and leaves the fork where it is.
+ * asking. The pane docks under the composer; follow-ups type into its ask
+ * line. Enter on an empty ask line opens the fork as the shell's session;
+ * `esc` closes the pane and leaves the fork where it is.
  */
 
 interface ForkPaneController {
@@ -238,11 +240,10 @@ export function ForkPane(props: {
       return true
     }
     if (event.name === "backspace") {
-      setDraft((current) => [...current].slice(0, -1).join(""))
+      setDraft(dropLastGrapheme)
       return true
     }
-    if (event.ctrl === true || event.meta === true) return false
-    const typed = typedText(Option.fromNullishOr(event.sequence))
+    const typed = typedKey(event)
     if (Option.isNone(typed)) return false
     setDraft((current) => current + typed.value)
     return true

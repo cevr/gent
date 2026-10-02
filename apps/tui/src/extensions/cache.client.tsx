@@ -15,6 +15,7 @@ import {
   clientContributions,
   defineClientExtension,
   formatAge,
+  formatCost,
   formatTokens,
   type NoticeRow,
   noticeRowContribution,
@@ -47,7 +48,7 @@ import {
  * large enough to matter; the status row shows the branch's total.
  */
 
-export const CACHE_EXTENSION_ID = "@gent/cache"
+const CACHE_EXTENSION_ID = "@gent/cache"
 
 /** A miss at or under this is cache breakpoint granularity, not a lost prefix. */
 const NOISE_FLOOR_TOKENS = 1024
@@ -451,7 +452,7 @@ const causeText = CacheMissCause.match({
 /** `cache expired during 7m cell · 14k tokens re-billed ~$0.08`; a cent or less is not named. */
 export const missText = (miss: CacheMiss, costUsd: number): string => {
   let cost = ""
-  if (costUsd >= 0.01) cost = ` ~$${costUsd.toFixed(2)}`
+  if (costUsd >= 0.01) cost = ` ~${formatCost(costUsd)}`
   return `${causeText(miss.cause)} · ${formatTokens(miss.missedTokens)} tokens re-billed${cost}`
 }
 
@@ -587,7 +588,7 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
               () => 0,
             )
             if (total <= 0) return []
-            return [{ text: `cache waste $${total.toFixed(2)}`, color: "textMuted" }]
+            return [{ text: `cache waste ${formatCost(total)}`, color: "textMuted" }]
           },
         }),
       )

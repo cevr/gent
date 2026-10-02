@@ -304,6 +304,17 @@ const isFinalByte = (char: string): boolean => char >= "@" && char <= "~"
 export const typedText = (sequence: Option.Option<string>): Option.Option<string> =>
   Option.filter(sequence, (text) => text.length > 0 && ![...text].some(isControl))
 
+/**
+ * The text a key types into a field a pane reads through `useScopedKeyboard`:
+ * printable text, Unicode included, from a key held with no shortcut modifier
+ * (ctrl, meta, option, super or hyper). A shortcut types nothing and goes on
+ * to the scopes under the pane. Every such field reads its keys here.
+ */
+export const typedKey = (event: ScopedKeyboardEvent): Option.Option<string> => {
+  if (event.ctrl || event.meta || event.option || event.super || event.hyper) return Option.none()
+  return typedText(Option.fromNullishOr(event.sequence))
+}
+
 /** The index after a string sequence's end: BEL, ESC then backslash, or 8-bit ST. */
 const skipString = (chars: ReadonlyArray<string>, from: number): number => {
   let at = from

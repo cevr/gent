@@ -30,6 +30,7 @@ import { delegateSubtitle } from "../../src/extensions/delegate.client"
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
 const absent = undefined
 const syntaxStyle = () => SyntaxStyle.create()
+const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.String))
 const parentSession: Session = {
   sessionId: SessionId.make("session-parent"),
   branchId: BranchId.make("branch-parent"),
@@ -322,6 +323,24 @@ describe("delegate.start row", () => {
       const frame = yield* loadedFrame([])
       expect(frame).toContain("review the loader")
       expect(frame).toContain("child ess-1234")
+    }),
+  )
+
+  it.scopedLive("a refused start says why in a sentence, not as the stored JSON", () =>
+    Effect.gen(function* () {
+      const error = "Tool 'delegate.start' failed: Child start failed: the branch is at its limit"
+      const refused: ToolCall = {
+        id: ToolCallId.make("op-delegate-refused"),
+        toolName: "delegate.start",
+        status: "error",
+        input: { todo: "review the parser" },
+        summary: `{"error":${encodeJsonText(error)}}`,
+        output: `{\n  "error": ${encodeJsonText(error)}\n}`,
+      }
+      const frame = yield* loadedFrame([assistant("m-refused", [refused])])
+      expect(frame).toContain("review the parser")
+      expect(frame).toContain("Child start failed: the branch is at its limit")
+      expect(frame).not.toContain('"error"')
     }),
   )
 

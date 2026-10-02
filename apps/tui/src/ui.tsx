@@ -19,12 +19,12 @@ import {
   KeyboardGate,
   pastedLine,
   type ScopedKeyboardEvent,
-  typedText,
+  typedKey,
   useScopedKeyboard,
   useTerminalDimensions,
 } from "./terminal"
 import { useTheme } from "./theme"
-import { truncate, useRequiredContext } from "./utils"
+import { dropLastGrapheme, truncate, useRequiredContext } from "./utils"
 import { textWidth } from "./bun-adapter"
 import type { MessageRowProps } from "./extensions/client-facets"
 
@@ -802,6 +802,10 @@ export const SelectListEvent = Schema.TaggedUnion({
   /** Move the cursor without disturbing the query: the pane's data arrived. */
   Anchor: { selectedIndex: Schema.Finite },
   Backspace: {},
+  /** ctrl+w: delete the last word and the spaces after it, as the composer does. */
+  DeleteWord: {},
+  /** ctrl+u: delete the whole query, as the composer kills to the line start. */
+  ClearQuery: {},
   MoveUp: { itemCount: Schema.Finite },
   MoveDown: { itemCount: Schema.Finite },
   /** Text typed or pasted into the query. */
@@ -832,9 +836,15 @@ export function transitionSelectList(
         Anchor: (event) => ({ ...state, selectedIndex: event.selectedIndex }),
         Backspace: () => {
           if (state.query.length === 0) return state
-          // A character, not a UTF-16 unit: half an emoji is no query.
-          const query = [...state.query].slice(0, -1).join("")
-          return { query, selectedIndex: 0, moved: false }
+          return { query: dropLastGrapheme(state.query), selectedIndex: 0, moved: false }
+        },
+        DeleteWord: () => {
+          if (state.query.length === 0) return state
+          return { query: state.query.replace(/\S*\s*$/u, ""), selectedIndex: 0, moved: false }
+        },
+        ClearQuery: () => {
+          if (state.query.length === 0) return state
+          return { query: "", selectedIndex: 0, moved: false }
         },
         MoveUp: (event) => ({
           ...state,
@@ -862,16 +872,6 @@ export function transitionSelectList(
 }
 
 // ── Component ─────────────────────────────────────────────────────
-
-/**
- * The text a key types into the filter: printable text, Unicode included,
- * from a key without a shortcut modifier. A shortcut goes on to the scopes
- * under the list.
- */
-const typedKey = (event: ScopedKeyboardEvent): Option.Option<string> => {
-  if (event.ctrl || event.meta || event.option || event.super || event.hyper) return Option.none()
-  return typedText(Option.fromNullishOr(event.sequence))
-}
 
 /**
  * What the pane draws for one row.
@@ -1256,6 +1256,16 @@ export function SelectList<A>(props: SelectListProps<A>) {
 
       if (event.name === "backspace") {
         applyQuery(transitionSelectList(state(), SelectListEvent.cases.Backspace.make({})))
+        return true
+      }
+
+      if (event.ctrl === true && event.name === "w") {
+        applyQuery(transitionSelectList(state(), SelectListEvent.cases.DeleteWord.make({})))
+        return true
+      }
+
+      if (event.ctrl === true && event.name === "u") {
+        applyQuery(transitionSelectList(state(), SelectListEvent.cases.ClearQuery.make({})))
         return true
       }
 

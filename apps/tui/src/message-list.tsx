@@ -75,6 +75,7 @@ import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import {
   bashOutputRows,
   cellOperations,
+  failureReason,
   GenericToolRenderer,
   RegisteredToolCall,
   type ToolCall,
@@ -966,7 +967,7 @@ function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
               <text>
                 <span style={{ fg: theme.error }}>
                   [x {props.toolCall.toolName}] #{formatToolCallIdentity(props.toolCall.id)}{" "}
-                  {props.toolCall.summary ?? "failed"}
+                  {Option.getOrElse(failureReason(props.toolCall), () => "failed")}
                 </span>
               </text>
             </Show>
@@ -1249,7 +1250,7 @@ function projectTranscriptDisplay(
  * resuming a 23-step session: zero reserved rows and one reserved row both
  * give 0 history rows, two give 235.
  */
-export const SPLIT_FOOTER_RESERVED_OUTPUT_ROWS = 2
+const SPLIT_FOOTER_RESERVED_OUTPUT_ROWS = 2
 
 export const splitFooterHeight = (terminalHeight: number, requestedHeight: number): number => {
   const maximum = Math.max(1, terminalHeight - SPLIT_FOOTER_RESERVED_OUTPUT_ROWS)
@@ -1301,13 +1302,8 @@ interface PromptGeometry {
   readonly liveHeight: number
   /** The rows the live tail may take before the pinned row takes one. */
   readonly liveRows: number
-  /**
-   * The rows of native history the terminal shows above the app, the pinned
-   * row drawn, less the top rows of the first live item that history holds.
-   */
+  /** The rows of native history the terminal shows above the app, the pinned row drawn. */
   readonly scrollbackRows: number
-  /** The top rows of the first live item that history holds. */
-  readonly cut: number
 }
 
 /**
@@ -1318,9 +1314,7 @@ interface PromptGeometry {
  * A live prompt is on screen while its row is at or below the viewport's top:
  * the viewport sticks to the bottom, so a live tail taller than it cuts rows
  * off the top. A committed prompt is on screen while it and the history rows
- * after it fit in the rows the terminal shows above the app; so is a prompt
- * whose text row history holds among the live item's cut rows, while the
- * terminal shows the rows of history from that row on. An unmeasured
+ * after it fit in the rows the terminal shows above the app. An unmeasured
  * height met before the answer is known counts as on screen, so nothing is
  * pinned on a guess.
  *
@@ -1338,10 +1332,6 @@ export const promptOnScreen = (geometry: PromptGeometry): boolean => {
     }
     return Option.some(total)
   }
-  // The cut rows are history's last rows, so the text row is `cut` less its
-  // own row above the region: on screen while the terminal shows that many.
-  if (geometry.index === geometry.committed && geometry.cut > PROMPT_TEXT_ROW)
-    return geometry.cut - PROMPT_TEXT_ROW <= geometry.scrollbackRows + geometry.cut
   if (geometry.index < geometry.committed) {
     const past = geometry.scrollbackRows + PROMPT_TEXT_ROW
     return Option.match(rowsUpTo(geometry.index, geometry.committed, past), {
@@ -2251,9 +2241,12 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * enough in native history that the terminal no longer shows it. Derived
    * from the displayed items, so a switch of branch or session pins that
    * branch's prompt. The row is the first thing a short terminal gives up: it
-   * shows only while the live tail keeps a row of its own beside it. The
-   * expanded transcript and an overlay draw on the alternate screen, where
-   * nothing is pinned.
+   * shows only while the live tail keeps a row of its own beside it. It draws
+   * only while a turn runs, and not while history holds the top rows of the
+   * first live item: at idle history takes them, and they stay there into the
+   * next turn until the item moves whole, so the row would sit between that
+   * item's rows in history and its rows on screen. The expanded transcript and
+   * an overlay draw on the alternate screen, where nothing is pinned.
    */
   const promptOf = (customType: string) =>
     Option.flatMap(Option.fromUndefinedOr(ext.messageRenderers().get(customType)), (renderer) =>
@@ -2279,31 +2272,26 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   /** Per measurement: a height lookup by index and sums bounded by the screen. */
   const stickyPrompt = createMemo((): Option.Option<string> => {
     if (props.expanded || props.overlayOpen || liveRows() < 2) return Option.none()
+    // At idle history takes the top rows of the first live item, and they stay
+    // there into the next turn until the item moves whole: the row would sit
+    // between that item's rows in history and its rows on screen.
+    if (!props.streaming || partialRows() > 0) return Option.none()
     const prompt = lastPrompt()
     if (Option.isNone(prompt)) return Option.none()
     measurementVersion()
     const items = displayedItems()
     const height = dimensions().height
-    const committed = committedCount()
-    // The first live item shows without the top rows history already holds.
-    const cut = partialRows()
     const onScreen = promptOnScreen({
       heightAt: (index) =>
         Option.flatMap(Option.fromUndefinedOr(items[index]), (item) =>
-          Option.map(Option.fromUndefinedOr(itemHeights.get(item)), (rows) => {
-            if (index === committed) return rows - cut
-            return rows
-          }),
+          Option.fromUndefinedOr(itemHeights.get(item)),
         ),
       index: prompt.value.index,
-      committed,
+      committed: committedCount(),
       liveHeight: liveHeight(),
       liveRows: liveRows(),
       scrollbackRows:
-        height -
-        splitFooterHeight(height, props.footerHeight + 1 + Math.max(1, liveHeight())) -
-        cut,
-      cut,
+        height - splitFooterHeight(height, props.footerHeight + 1 + Math.max(1, liveHeight())),
     })
     if (onScreen) return Option.none()
     return Option.some(prompt.value.text)

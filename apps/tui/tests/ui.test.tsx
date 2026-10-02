@@ -316,6 +316,15 @@ describe("select list filter", () => {
         // One backspace takes the whole emoji, never half of its surrogate pair.
         setup.mockInput.pressBackspace()
         yield* waitForFrame(setup, () => seen.at(-1) === "é", "one character deleted")
+        // A character drawn from several code points (a skin tone, a flag) goes whole too.
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText("👍🏽🇺🇸"))
+        yield* waitForFrame(setup, () => seen.at(-1) === "é👍🏽🇺🇸", "emoji pasted")
+        setup.mockInput.pressBackspace()
+        yield* waitForFrame(setup, () => seen.at(-1) !== "é👍🏽🇺🇸", "flag deleted")
+        expect(seen.at(-1)).toBe("é👍🏽")
+        setup.mockInput.pressBackspace()
+        yield* waitForFrame(setup, () => seen.at(-1) !== "é👍🏽", "thumb deleted")
+        expect(seen.at(-1)).toBe("é")
         expect(renderFrame(setup)).toContain("› é")
       }),
     )
@@ -340,6 +349,34 @@ describe("select list filter", () => {
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText("h\u001b[31mer\u001b[0m\nry"))
       yield* waitForFrame(setup, () => seen.at(-1) === "cher ry", "pasted query")
       expect(seen).toEqual(["", "c", "cher ry"])
+    }),
+  )
+
+  it.scopedLive("ctrl+w deletes the last word and ctrl+u the whole query, as in the composer", () =>
+    Effect.gen(function* () {
+      const seen: Array<string> = []
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(fruits)}
+          rowKey={(fruit) => fruit.id}
+          filter={{ onQueryChange: (next) => seen.push(next) }}
+          onSelect={() => {}}
+          onDismiss={() => {}}
+        />
+      ))
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Cherry"), "open")
+      yield* Effect.promise(() => setup.mockInput.typeText("son net"))
+      yield* waitForFrame(setup, () => seen.at(-1) === "son net", "typed")
+      setup.mockInput.pressKey("w", { ctrl: true })
+      yield* waitForFrame(setup, () => seen.at(-1) !== "son net", "a key that edits")
+      expect(seen.at(-1)).toBe("son ")
+      yield* Effect.promise(() => setup.mockInput.typeText("é"))
+      yield* waitForFrame(setup, () => seen.at(-1) === "son é", "typed again")
+      setup.mockInput.pressKey("u", { ctrl: true })
+      yield* waitForFrame(setup, () => seen.at(-1) === "", "the query cleared")
+      expect(renderFrame(setup)).toContain("Cherry")
     }),
   )
 

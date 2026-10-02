@@ -270,6 +270,19 @@ describe("mermaid diagrams", () => {
     }),
   )
 
+  // The answer is indented, so a diagram fits the columns after the indent:
+  // one fitted to the whole terminal wraps its right edge onto the next row.
+  it.scopedLive("a diagram fits the answer's width, not the terminal's", () =>
+    Effect.gen(function* () {
+      const frame = yield* drawn("graph LR\n  Alpha-->Beta-->Gamma", 48)
+      const labelRow = Option.getOrThrow(
+        Option.fromUndefinedOr(frame.split("\n").find((row) => row.includes("Alpha"))),
+      )
+      expect(labelRow).toContain("Gamma")
+      expect(labelRow.trimEnd().endsWith("│")).toBe(true)
+    }),
+  )
+
   it.scopedLive("a hyphen inside an id stays part of the id", () =>
     Effect.gen(function* () {
       const frame = yield* drawn("graph LR\n  us-east-->db")
@@ -361,6 +374,15 @@ describe("mermaid diagrams", () => {
       }),
     )
   }
+
+  it.scopedLive("an open fence waits for the statement still being written", () =>
+    Effect.gen(function* () {
+      const frame = yield* drawnAnswer("```mermaid\ngraph LR\n  Alpha-->Beta\n  Beta-->Gam")
+      expect(frame).toContain("Beta")
+      expect(frame).not.toContain("Alpha-->Beta")
+      expect(frame).not.toContain("Gam")
+    }),
+  )
 
   // Only an edge statement is an edge: a subgraph title keeps its text.
   it.scopedLive("a subgraph title stays as written", () =>

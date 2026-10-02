@@ -80,6 +80,26 @@ export function truncate(value: string, width: number): string {
 }
 
 /**
+ * The text less its last character as the reader sees it: one grapheme, so a
+ * backspace takes a toned emoji, a flag or a ZWJ family whole.
+ */
+export function dropLastGrapheme(value: string): string {
+  let last = 0
+  for (const { index } of graphemes.segment(value)) last = index
+  return value.slice(0, last)
+}
+
+/** The first `count` graphemes, ending in `…` when the text has more. */
+export function headGraphemes(value: string, count: number): string {
+  let kept = 0
+  for (const { index } of graphemes.segment(value)) {
+    if (kept === count) return `${value.slice(0, index)}…`
+    kept += 1
+  }
+  return value
+}
+
+/**
  * At least `width` display columns: padded with spaces by display width, never
  * cut. `String.padEnd` counts code units, so it over-pads a wide (CJK) name
  * and under-pads a joined emoji.
@@ -223,7 +243,8 @@ export const formatBytes = (bytes: number): string => {
  * - `compact`: whole seconds under a minute, then `2m 5s`, then `1h 2m`
  *   (status lines, turn summaries, the agents pane and the wake tray).
  * - `padded`: whole seconds under a minute, then `2m05s`, then `1h02m` (fixed-width detail rows).
- * - `precise`: `12ms` under a second, tenths under a minute, then as `compact` (tool receipts).
+ * - `precise`: `12ms` under a second, tenths under a minute, then as `compact` of the
+ *   rounded seconds (tool receipts).
  */
 type DurationStyle = "compact" | "padded" | "precise"
 
@@ -247,12 +268,13 @@ const padded = (ms: number): string => {
   return hours(secs, "", 2)
 }
 
+/** Rounds first, then picks the unit, so a value never reads `1000ms` or `1m 60s`. */
 const precise = (ms: number): string => {
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  const secs = ms / 1000
-  if (secs < 60) return `${secs.toFixed(1)}s`
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`
-  return hours(Math.floor(secs), " ", 1)
+  const millis = Math.round(ms)
+  if (millis < 1000) return `${millis}ms`
+  const tenths = Math.round(ms / 100)
+  if (tenths < 600) return `${(tenths / 10).toFixed(1)}s`
+  return compact(Math.round(ms / 1000) * 1000)
 }
 
 export const formatDuration = (ms: number, style: DurationStyle): string =>

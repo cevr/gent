@@ -302,6 +302,58 @@ describe("fork pane", () => {
     }),
   )
 
+  it.scopedLive("a key held with super or hyper types nothing into the ask line", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      server.set(Option.some(view([{ question: "why?", answer: "because" }], false)))
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast },
+      })
+      yield* queue.drain
+      const setup = yield* renderScoped(
+        () => <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />,
+        { kittyKeyboard: true },
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
+      setup.mockInput.pressKey("a", { super: true })
+      setup.mockInput.pressKey("b", { hyper: true })
+      setup.mockInput.pressKey("x")
+      yield* waitForFrame(setup, (frame) => frame.includes("ask › x"), "the typed key")
+      setup.mockInput.pressEnter()
+      yield* queue.drain
+      expect(server.asked).toEqual(["x"])
+    }),
+  )
+
+  it.scopedLive("backspace takes the last whole character off the ask line", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      server.set(Option.some(view([{ question: "why?", answer: "because" }], false)))
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast },
+      })
+      yield* queue.drain
+      const setup = yield* renderScoped(() => (
+        <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+      ))
+      yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("ok 👍🏽🇺🇸"))
+      yield* waitForFrame(setup, (frame) => frame.includes("ask › ok"), "draft")
+      // A flag is two code points and a toned thumb two: each goes in one press.
+      setup.mockInput.pressBackspace()
+      setup.mockInput.pressBackspace()
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* waitForFrame(setup, (frame) => frame.includes("ask › ok !"), "two characters gone")
+      setup.mockInput.pressEnter()
+      yield* queue.drain
+      expect(server.asked).toEqual(["ok !"])
+    }),
+  )
+
   it.scopedLive("a refused fork leaves the error visible and the input ready", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()

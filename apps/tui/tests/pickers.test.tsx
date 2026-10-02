@@ -34,9 +34,10 @@ import { waitForFrame } from "./helpers-boundary"
 /**
  * The session's own docked pickers: fork-from-message, resume-branch,
  * settings and prompt search, each drawn in `PickerFrame`. Escape is the
- * interesting key: the message picker closes itself, while the branch picker
- * leaves the route, so it has to claim escape before the list treats it as a
- * dismissal.
+ * interesting key: in a list with a filter it clears the filter first and
+ * closes the picker on the next press. The branch picker is a choice the
+ * session needs before it opens, so escape leaves it open and its hint row
+ * names ctrl+c to exit.
  */
 
 const sessionId = SessionId.make("session-test")
