@@ -140,43 +140,32 @@ describe("ReadTool", () => {
     }),
   )
 
-  readTest("a truncated read reports the offset that continues without a gap", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      const testFile = `${tmpDir}/paged.txt`
-      const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`)
-      yield* fs.writeFileString(testFile, lines.join("\n"))
+  readTest(
+    "a truncated read reports the offset that continues without a gap; a complete read reports none",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        const testFile = `${tmpDir}/paged.txt`
+        const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`)
+        yield* fs.writeFileString(testFile, lines.join("\n"))
 
-      const first = yield* runToolWithCtx(ReadTool, { path: testFile, limit: 4 }, ctx)
-      expect(first.truncated).toBe(true)
-      expect(first.nextOffset).toBe(5)
-      expect(first.content).toContain("4\tline 4")
-      expect(first.content).not.toContain("line 5")
+        const first = yield* runToolWithCtx(ReadTool, { path: testFile, limit: 4 }, ctx)
+        expect(first.truncated).toBe(true)
+        expect(first.nextOffset).toBe(5)
+        expect(first.content).toContain("4\tline 4")
+        expect(first.content).not.toContain("line 5")
 
-      const second = yield* runToolWithCtx(
-        ReadTool,
-        { path: testFile, offset: Option.getOrThrow(Option.fromNullishOr(first.nextOffset)) },
-        ctx,
-      )
-      // The line-number column is right-padded to the widest number in the page.
-      expect(second.content.split("\n")[0]).toBe(" 5\tline 5")
-      expect(second.truncated).toBe(false)
-      expect(Option.isNone(Option.fromNullishOr(second.nextOffset))).toBe(true)
-    }),
-  )
-
-  readTest("a complete read reports no continuation offset", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      const testFile = `${tmpDir}/whole.txt`
-      yield* fs.writeFileString(testFile, "only line")
-
-      const result = yield* runToolWithCtx(ReadTool, { path: testFile }, ctx)
-      expect(result.truncated).toBe(false)
-      expect(Option.isNone(Option.fromNullishOr(result.nextOffset))).toBe(true)
-    }),
+        const second = yield* runToolWithCtx(
+          ReadTool,
+          { path: testFile, offset: Option.getOrThrow(Option.fromNullishOr(first.nextOffset)) },
+          ctx,
+        )
+        // The line-number column is right-padded to the widest number in the page.
+        expect(second.content.split("\n")[0]).toBe(" 5\tline 5")
+        expect(second.truncated).toBe(false)
+        expect(Option.isNone(Option.fromNullishOr(second.nextOffset))).toBe(true)
+      }),
   )
 
   readTest("an offset past the last line reads nothing and reports the line count", () =>
@@ -413,7 +402,10 @@ describe("WriteTool", () => {
 const editTest = it.scopedLive.layer(BunServices.layer)
 const stubCtx = testToolContext()
 
-/** Edit a fresh file that holds `content`: the tool's exit and the file afterward. */
+/**
+ * Edit a fresh file that holds `content`: the tool's exit, its replacement
+ * count (none on failure) and the file afterward.
+ */
 const editFile = Effect.fn("test.editFile")(function* (
   content: string,
   params: { readonly oldString: string; readonly newString: string; readonly replaceAll?: boolean },
@@ -423,14 +415,17 @@ const editFile = Effect.fn("test.editFile")(function* (
   const dir = yield* fs.makeTempDirectoryScoped()
   const filePath = path.join(dir, "test.txt")
   yield* fs.writeFileString(filePath, content)
+  // A params decode can reject the call before the tool body runs.
   const exit = yield* Effect.exit(
-    runToolWithCtx(EditTool, { path: filePath, ...params }, stubCtx).pipe(
+    Effect.suspend(() => runToolWithCtx(EditTool, { path: filePath, ...params }, stubCtx)).pipe(
       Effect.provide(BunServices.layer),
     ),
   )
   let failure = ""
+  let replacements = Option.none<number>()
   if (Exit.isFailure(exit)) failure = Cause.pretty(exit.cause)
-  return { exit, failure, filePath, after: yield* fs.readFileString(filePath) }
+  else replacements = Option.some(exit.value.replacements)
+  return { exit, failure, replacements, filePath, after: yield* fs.readFileString(filePath) }
 })
 
 describe("EditTool redaction check", () => {
@@ -598,124 +593,62 @@ describe("EditTool execution", () => {
   for (const { name, file, search } of normalizedCases) {
     editTest(`an ASCII search matches ${name} in the file`, () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const dir = yield* fs.makeTempDirectoryScoped()
-        const filePath = path.join(dir, "test.txt")
-        yield* fs.writeFileString(filePath, file)
-        const result = yield* runToolWithCtx(
-          EditTool,
-          { path: filePath, oldString: search, newString: "done" },
-          stubCtx,
-        ).pipe(Effect.provide(BunServices.layer))
-        expect(result.replacements).toBe(1)
-        expect(yield* fs.readFileString(filePath)).toBe("done\n")
+        const edited = yield* editFile(file, { oldString: search, newString: "done" })
+        expect(edited.replacements).toEqual(Option.some(1))
+        expect(edited.after).toBe("done\n")
       }),
     )
   }
   editTest("replaceAll replaces every occurrence", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const filePath = path.join(dir, "test.txt")
-      yield* fs.writeFileString(filePath, "foo bar foo baz foo\n")
-      const result = yield* runToolWithCtx(
-        EditTool,
-        { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
-        stubCtx,
-      ).pipe(Effect.provide(BunServices.layer))
-      expect(result.replacements).toBe(3)
-      const content = yield* fs.readFileString(filePath)
-      expect(content).toBe("qux bar qux baz qux\n")
+      const edited = yield* editFile("foo bar foo baz foo\n", {
+        oldString: "foo",
+        newString: "qux",
+        replaceAll: true,
+      })
+      expect(edited.replacements).toEqual(Option.some(3))
+      expect(edited.after).toBe("qux bar qux baz qux\n")
     }),
   )
   editTest("fails on ambiguous match without replaceAll", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const filePath = path.join(dir, "test.txt")
-      yield* fs.writeFileString(filePath, "foo bar foo\n")
-      const exit = yield* Effect.exit(
-        runToolWithCtx(
-          EditTool,
-          { path: filePath, oldString: "foo", newString: "baz" },
-          stubCtx,
-        ).pipe(Effect.provide(BunServices.layer)),
-      )
-      expect(exit._tag).toBe("Failure")
+      const edited = yield* editFile("foo bar foo\n", { oldString: "foo", newString: "baz" })
+      expect(edited.exit._tag).toBe("Failure")
     }),
   )
   editTest("newString with dollar patterns is written literally", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const filePath = path.join(dir, "test.sh")
-      yield* fs.writeFileString(filePath, "echo old\n")
-      yield* runToolWithCtx(
-        EditTool,
-        { path: filePath, oldString: "old", newString: "$$ pid $& $` $' x" },
-        stubCtx,
-      ).pipe(Effect.provide(BunServices.layer))
-      expect(yield* fs.readFileString(filePath)).toBe("echo $$ pid $& $` $' x\n")
+      const edited = yield* editFile("echo old\n", {
+        oldString: "old",
+        newString: "$$ pid $& $` $' x",
+      })
+      expect(edited.after).toBe("echo $$ pid $& $` $' x\n")
     }),
   )
   editTest("an empty oldString is rejected", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const filePath = path.join(dir, "test.txt")
-      yield* fs.writeFileString(filePath, "abc")
-      // The params decode rejects the call before the tool body runs.
-      const exit = yield* Effect.exit(
-        Effect.suspend(() =>
-          runToolWithCtx(
-            EditTool,
-            { path: filePath, oldString: "", newString: "-", replaceAll: true },
-            stubCtx,
-          ),
-        ).pipe(Effect.provide(BunServices.layer)),
-      )
-      expect(exit._tag).toBe("Failure")
-      expect(yield* fs.readFileString(filePath)).toBe("abc")
+      const edited = yield* editFile("abc", { oldString: "", newString: "-", replaceAll: true })
+      expect(edited.exit._tag).toBe("Failure")
+      expect(edited.after).toBe("abc")
     }),
   )
   editTest("a normalized match that occurs twice is ambiguous", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const filePath = path.join(dir, "test.txt")
       const original = "foo \nbar\nfoo  \nbar\n"
-      yield* fs.writeFileString(filePath, original)
-      const exit = yield* Effect.exit(
-        runToolWithCtx(
-          EditTool,
-          { path: filePath, oldString: "foo\nbar", newString: "x" },
-          stubCtx,
-        ).pipe(Effect.provide(BunServices.layer)),
-      )
-      expect(exit._tag).toBe("Failure")
-      expect(yield* fs.readFileString(filePath)).toBe(original)
+      const edited = yield* editFile(original, { oldString: "foo\nbar", newString: "x" })
+      expect(edited.exit._tag).toBe("Failure")
+      expect(edited.after).toBe(original)
     }),
   )
   editTest("replaceAll replaces every normalized match", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const filePath = path.join(dir, "test.txt")
-      yield* fs.writeFileString(filePath, "foo \nbar\nmid\nfoo  \nbar\n")
-      const result = yield* runToolWithCtx(
-        EditTool,
-        { path: filePath, oldString: "foo\nbar", newString: "x", replaceAll: true },
-        stubCtx,
-      ).pipe(Effect.provide(BunServices.layer))
-      expect(result.replacements).toBe(2)
-      expect(yield* fs.readFileString(filePath)).toBe("x\nmid\nx\n")
+      const edited = yield* editFile("foo \nbar\nmid\nfoo  \nbar\n", {
+        oldString: "foo\nbar",
+        newString: "x",
+        replaceAll: true,
+      })
+      expect(edited.replacements).toEqual(Option.some(2))
+      expect(edited.after).toBe("x\nmid\nx\n")
     }),
   )
 })
@@ -867,41 +800,6 @@ describe("file encodings", () => {
     }),
   )
 
-  // A match never starts or ends between a CR and its LF.
-  const crlfEdits: ReadonlyArray<[string, string, string, string, string]> = [
-    [
-      "a search that starts with LF takes the CR before it",
-      "prev\r\nfoo\r\nnext\r\n",
-      "\nfoo",
-      "\nbar",
-      "prev\r\nbar\r\nnext\r\n",
-    ],
-    [
-      "a line deleted from its LF takes its CR too",
-      "prev\r\nfoo\r\nnext\r\n",
-      "\nfoo",
-      "",
-      "prev\r\nnext\r\n",
-    ],
-  ]
-  for (const [name, before, oldString, newString, after] of crlfEdits) {
-    encodingTest(name, () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const dir = yield* fs.makeTempDirectoryScoped()
-        const filePath = `${dir}/crlf.txt`
-        yield* fs.writeFileString(filePath, before)
-        const result = yield* runToolWithCtx(
-          EditTool,
-          { path: filePath, oldString, newString },
-          stubCtx,
-        )
-        expect(result.replacements).toBe(1)
-        expect(yield* fs.readFileString(filePath)).toBe(after)
-      }),
-    )
-  }
-
   encodingTest("a search that ends between a CR and its LF matches nothing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -919,7 +817,26 @@ describe("file encodings", () => {
   )
 
   // [name, file, oldString, newString, replaceAll, count, file after]
+  // A match never starts or ends between a CR and its LF.
   const lineEndEdits: ReadonlyArray<[string, string, string, string, boolean, number, string]> = [
+    [
+      "a search that starts with LF takes the CR before it",
+      "prev\r\nfoo\r\nnext\r\n",
+      "\nfoo",
+      "\nbar",
+      false,
+      1,
+      "prev\r\nbar\r\nnext\r\n",
+    ],
+    [
+      "a line deleted from its LF takes its CR too",
+      "prev\r\nfoo\r\nnext\r\n",
+      "\nfoo",
+      "",
+      false,
+      1,
+      "prev\r\nnext\r\n",
+    ],
     ["a bare-CR file: a middle line edits in place", "a\rb\rc", "b", "B", false, 1, "a\rB\rc"],
     [
       "a bare-CR file: a replacement's line breaks take CR",
@@ -962,17 +879,9 @@ describe("file encodings", () => {
   for (const [name, before, oldString, newString, replaceAll, count, after] of lineEndEdits) {
     encodingTest(name, () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const dir = yield* fs.makeTempDirectoryScoped()
-        const filePath = `${dir}/endings.txt`
-        yield* fs.writeFileString(filePath, before)
-        const result = yield* runToolWithCtx(
-          EditTool,
-          { path: filePath, oldString, newString, replaceAll },
-          stubCtx,
-        )
-        expect(result.replacements).toBe(count)
-        expect(yield* fs.readFileString(filePath)).toBe(after)
+        const edited = yield* editFile(before, { oldString, newString, replaceAll })
+        expect(edited.replacements).toEqual(Option.some(count))
+        expect(edited.after).toBe(after)
       }),
     )
   }
@@ -1118,23 +1027,6 @@ describe("GrepTool", () => {
 
       const result = yield* runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir }, ctxGrep)
       expect(result.matches.length).toBe(2)
-    }).pipe(Effect.provide(BunServices.layer)),
-  )
-
-  it.scopedLive("respects glob filter", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${tmpDir}/file1.ts`, "const foo = 1")
-      yield* fs.writeFileString(`${tmpDir}/file2.js`, "const foo = 2")
-
-      const result = yield* runToolWithCtx(
-        GrepTool,
-        { pattern: "foo", path: tmpDir, glob: "*.ts" },
-        ctxGrep,
-      )
-      expect(result.matches.length).toBe(1)
-      expect(result.matches[0]!.file).toContain("file1.ts")
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
@@ -1508,18 +1400,6 @@ describe("grep's file listing outside a git work tree", () => {
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 
-  it.scopedLive("a .gitignore line drops the file it names", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "ignored.txt")
-      yield* fs.writeFileString(`${tmpDir}/kept.txt`, "keep")
-      yield* fs.writeFileString(`${tmpDir}/ignored.txt`, "skip")
-
-      expect(yield* listed(tmpDir)).toEqual([".gitignore", "kept.txt"])
-    }).pipe(Effect.provide(BunServices.layer)),
-  )
-
   it.scopedLive("an edited .gitignore applies to the next listing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -1562,19 +1442,6 @@ describe("grep's file listing outside a git work tree", () => {
         "build/out.js",
         "keep.log",
       ])
-    }).pipe(Effect.provide(BunServices.layer)),
-  )
-
-  it.scopedLive("a directory-only pattern leaves a file of that name", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.makeDirectory(`${tmpDir}/src/logs`, { recursive: true })
-      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "logs/\n")
-      yield* fs.writeFileString(`${tmpDir}/src/logs/a.txt`, "x")
-      yield* fs.writeFileString(`${tmpDir}/logs`, "a file")
-
-      expect(yield* listed(tmpDir)).toEqual([".gitignore", "logs"])
     }).pipe(Effect.provide(BunServices.layer)),
   )
 

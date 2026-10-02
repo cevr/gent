@@ -676,19 +676,6 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.scopedLive(
-    "runs a command and returns stdout",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* inTempCwd(stubCtx)
-        const result = yield* provideBun(runToolWithCtx(BashTool, { command: "echo hello" }, ctx))
-
-        expect(result.stdout.trim()).toBe("hello")
-        expect(result.exitCode).toBe(0)
-      }).pipe(withProcessTimeout),
-    processTestTimeout,
-  )
-
   // The stub context's `approve` dies, so an ask would fail the test. The
   // command runs and fails at once: its directory does not exist.
   it.scopedLive(
@@ -735,35 +722,8 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.scopedLive(
-    "captures nonzero exit code",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* inTempCwd(stubCtx)
-        const result = yield* provideBun(runToolWithCtx(BashTool, { command: "exit 2" }, ctx))
-
-        expect(result.exitCode).toBe(2)
-      }).pipe(withProcessTimeout),
-    processTestTimeout,
-  )
-
   it.live(
-    "respects cwd parameter",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
-        const result = yield* provideBun(runToolWithCtx(BashTool, { command: "pwd", cwd }, stubCtx))
-
-        // the temp root may resolve through a symlink (/private/tmp on macOS)
-        expect(result.stdout.trim()).toBe(yield* fs.realPath(cwd))
-        expect(result.exitCode).toBe(0)
-      }).pipe(withProcessTimeout, Effect.scoped, Effect.provide(BunFileSystem.layer)),
-    processTestTimeout,
-  )
-
-  it.live(
-    "runs in the session directory, not the server directory",
+    "runs in the session directory, not the server directory, or in the cwd given",
     () =>
       Effect.gen(function* () {
         const result = yield* provideBun(
@@ -778,7 +738,16 @@ describe("BashTool execution", () => {
               const plain = yield* runToolWithCtx(BashTool, { command: "pwd" }, ctx)
               const relative = yield* runToolWithCtx(BashTool, { command: "pwd", cwd: "sub" }, ctx)
               const split = yield* runToolWithCtx(BashTool, { command: "cd sub && pwd" }, ctx)
-              return { sessionDir, plain, relative, split }
+              // the temp root may resolve through a symlink (/private/tmp on macOS)
+              const absoluteDir = yield* fs.realPath(
+                yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-cwd-" }),
+              )
+              const absolute = yield* runToolWithCtx(
+                BashTool,
+                { command: "pwd", cwd: absoluteDir },
+                ctx,
+              )
+              return { sessionDir, plain, relative, split, absoluteDir, absolute }
             }),
           ),
         )
@@ -787,21 +756,8 @@ describe("BashTool execution", () => {
         expect(result.plain.stdout.trim()).toBe(result.sessionDir)
         expect(result.relative.stdout.trim()).toBe(`${result.sessionDir}/sub`)
         expect(result.split.stdout.trim()).toBe(`${result.sessionDir}/sub`)
-      }).pipe(withProcessTimeout),
-    processTestTimeout,
-  )
-
-  it.scopedLive(
-    "Bash executes a directory change in the command",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* inTempCwd(stubCtx)
-        const result = yield* provideBun(
-          runToolWithCtx(BashTool, { command: "cd /tmp && pwd" }, ctx),
-        )
-
-        expect(result.stdout.trim()).toMatch(/\/tmp$/)
-        expect(result.exitCode).toBe(0)
+        expect(result.absolute.stdout.trim()).toBe(result.absoluteDir)
+        expect(result.absolute.exitCode).toBe(0)
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )

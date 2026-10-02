@@ -811,63 +811,61 @@ const providerAuthFailure = (exit: Exit.Exit<unknown, HttpClientError>) =>
   })
 // ── Tests ──
 describe("codexClient — auth headers", () => {
-  it.scopedLive("injects Authorization Bearer from credential service", () =>
-    Effect.gen(function* () {
-      const state = answering(200)
-      const response = yield* runOk(postResponses(yield* codexClientOver(state)))
-      // A 200 is the answer: one request, no retry.
-      expect(response.status).toBe(200)
-      expect(state.captured).toHaveLength(1)
-      expect(state.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
-    }),
-  )
-  it.scopedLive("overrides any pre-existing Authorization header", () =>
-    Effect.gen(function* () {
+  // Each case posts one `/responses` request; a 200 is the answer: one request, no retry.
+  const headerCases: ReadonlyArray<{
+    readonly title: string
+    readonly authInfo?: ProviderAuthInfo
+    readonly sent?: Record<string, string>
+    /** Each header the backend sees, `Option.none()` for one it must not see. */
+    readonly expected: Record<string, Option.Option<string>>
+  }> = [
+    {
+      title: "injects Authorization Bearer from credential service",
+      expected: { authorization: Option.some("Bearer k1-access") },
+    },
+    {
       // Defensive: if anything upstream injected a placeholder Bearer,
       // the transform must replace it with the OAuth value.
-      const state = answering(200)
-      const client = yield* codexClientOver(state)
-      yield* runOk(postResponses(client, { authorization: "Bearer placeholder" }))
-      expect(state.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
-    }),
-  )
-  it.scopedLive("sets ChatGPT-Account-Id when present in credentials", () =>
-    Effect.gen(function* () {
-      const state = answering(200)
-      const client = yield* codexClientOver(
-        state,
-        validAuthInfo({ access: "k1-access", accountId: "acct-123" }),
-      )
-      yield* runOk(postResponses(client))
-      expect(state.captured[0]!.headers["chatgpt-account-id"]).toBe("acct-123")
-    }),
-  )
-  it.scopedLive("omits ChatGPT-Account-Id when accountId absent", () =>
-    Effect.gen(function* () {
-      const state = answering(200)
-      yield* runOk(postResponses(yield* codexClientOver(state)))
-      expect(state.captured[0]!.headers["chatgpt-account-id"]).toBeUndefined()
-    }),
-  )
-  it.scopedLive("sets default originator + user-agent when upstream omits them", () =>
-    Effect.gen(function* () {
-      const state = answering(200)
-      yield* runOk(postResponses(yield* codexClientOver(state)))
-      expect(state.captured[0]!.headers["originator"]).toBe("gent")
-      expect(state.captured[0]!.headers["user-agent"]).toBe("gent")
-    }),
-  )
-  it.scopedLive("preserves upstream originator + user-agent when already set", () =>
-    Effect.gen(function* () {
-      const state = answering(200)
-      const client = yield* codexClientOver(state)
-      yield* runOk(
-        postResponses(client, { originator: "custom-app", "user-agent": "custom-ua/1.0" }),
-      )
-      expect(state.captured[0]!.headers["originator"]).toBe("custom-app")
-      expect(state.captured[0]!.headers["user-agent"]).toBe("custom-ua/1.0")
-    }),
-  )
+      title: "overrides any pre-existing Authorization header",
+      sent: { authorization: "Bearer placeholder" },
+      expected: { authorization: Option.some("Bearer k1-access") },
+    },
+    {
+      title: "sets ChatGPT-Account-Id when present in credentials",
+      authInfo: validAuthInfo({ access: "k1-access", accountId: "acct-123" }),
+      expected: { "chatgpt-account-id": Option.some("acct-123") },
+    },
+    {
+      title: "omits ChatGPT-Account-Id when accountId absent",
+      expected: { "chatgpt-account-id": Option.none() },
+    },
+    {
+      title: "sets default originator + user-agent when upstream omits them",
+      expected: { originator: Option.some("gent"), "user-agent": Option.some("gent") },
+    },
+    {
+      title: "preserves upstream originator + user-agent when already set",
+      sent: { originator: "custom-app", "user-agent": "custom-ua/1.0" },
+      expected: {
+        originator: Option.some("custom-app"),
+        "user-agent": Option.some("custom-ua/1.0"),
+      },
+    },
+  ]
+  for (const headerCase of headerCases) {
+    it.scopedLive(headerCase.title, () =>
+      Effect.gen(function* () {
+        const state = answering(200)
+        const client = yield* codexClientOver(state, headerCase.authInfo)
+        const response = yield* runOk(postResponses(client, headerCase.sent))
+        expect(response.status).toBe(200)
+        expect(state.captured).toHaveLength(1)
+        for (const [name, value] of Object.entries(headerCase.expected)) {
+          expect(Option.fromUndefinedOr(state.captured[0]!.headers[name])).toEqual(value)
+        }
+      }),
+    )
+  }
   it.scopedLive("preserves request method, url, and body for non-Codex paths", () =>
     Effect.gen(function* () {
       // `@effect/ai-openai` also talks to `/embeddings` and other
@@ -1378,44 +1376,47 @@ const runStream = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchSta
   )
 
 describe("OpenAI cache routing", () => {
-  it.live("API-key requests preserve cache routing for generation and streaming", () =>
-    Effect.gen(function* () {
-      const { driver } = yield* makeDriver()
-      const codec = Schema.fromJsonString(
-        Schema.Struct({ prompt_cache_key: Schema.optional(Schema.String) }),
-      )
-      const cacheKeys = [
-        Option.some("same-session"),
-        Option.some("same-session"),
-        Option.some("other-session"),
-        Option.none<string>(),
-      ]
-      for (const streaming of [false, true]) {
-        const fetchState = makeFakeFetchState()
-        for (const cacheKey of cacheKeys) {
-          const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("cache-test-key"), {
-            cacheKey: Option.getOrUndefined(cacheKey),
-          })
-          if (streaming) {
-            yield* runStream(model, fetchState)
-          } else {
-            yield* runOne(model, fetchState)
-          }
-        }
-        const keys = yield* Effect.forEach(fetchState.captured, (request) =>
-          Effect.gen(function* () {
-            expect(request.url).toBe("https://api.openai.com/v1/responses")
-            expect(request.headers["authorization"]).toBe("Bearer cache-test-key")
-            const body = Option.getOrThrow(Option.fromUndefinedOr(request.body))
-            expect(body).not.toContain("previous_response_id")
-            return Option.fromUndefinedOr(
-              (yield* Schema.decodeEffect(codec)(body)).prompt_cache_key,
-            )
-          }),
+  it.live(
+    "API-key requests go to the public API with the key as bearer, no Codex beta header, and preserve cache routing for generation and streaming",
+    () =>
+      Effect.gen(function* () {
+        const { driver } = yield* makeDriver()
+        const codec = Schema.fromJsonString(
+          Schema.Struct({ prompt_cache_key: Schema.optional(Schema.String) }),
         )
-        expect(keys).toEqual(cacheKeys)
-      }
-    }),
+        const cacheKeys = [
+          Option.some("same-session"),
+          Option.some("same-session"),
+          Option.some("other-session"),
+          Option.none<string>(),
+        ]
+        for (const streaming of [false, true]) {
+          const fetchState = makeFakeFetchState()
+          for (const cacheKey of cacheKeys) {
+            const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("cache-test-key"), {
+              cacheKey: Option.getOrUndefined(cacheKey),
+            })
+            if (streaming) {
+              yield* runStream(model, fetchState)
+            } else {
+              yield* runOne(model, fetchState)
+            }
+          }
+          const keys = yield* Effect.forEach(fetchState.captured, (request) =>
+            Effect.gen(function* () {
+              expect(request.url).toBe("https://api.openai.com/v1/responses")
+              expect(request.headers["authorization"]).toBe("Bearer cache-test-key")
+              expect(request.headers["openai-beta"]).toBeUndefined()
+              const body = Option.getOrThrow(Option.fromUndefinedOr(request.body))
+              expect(body).not.toContain("previous_response_id")
+              return Option.fromUndefinedOr(
+                (yield* Schema.decodeEffect(codec)(body)).prompt_cache_key,
+              )
+            }),
+          )
+          expect(keys).toEqual(cacheKeys)
+        }
+      }),
   )
 
   // ChatGPT routes cache affinity by the Responses `session-id` header, not
@@ -1654,49 +1655,63 @@ describe("OpenAI reasoning replay", () => {
       }),
   )
 
-  it.live("another 400 on a request with reasoning is not retried and keeps its message", () =>
-    Effect.gen(function* () {
-      const { driver } = yield* makeDriver({
-        cell: makeDurableCell({
-          access: "replay-token",
-          refresh: "r",
-          expires: FAR_FUTURE_MS,
-          accountId: Option.none(),
-        }),
-      })
-      const other = encodeExternalJson({
-        error: {
-          message: "Input exceeds the context window.",
-          type: "invalid_request_error",
-          param: "input",
-          code: "context_length_exceeded",
-        },
-      })
-      const state = makeFakeFetchState()
-      const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-replay"), {
-        reasoning: "high",
-      })
-      const exit = yield* LanguageModel.generateText({
-        prompt: conversation,
-        toolkit: Toolkit.make(ReadTool),
-        disableToolCallResolution: true,
-      }).pipe(
-        Effect.provide(
-          Layer.provideMerge(
-            model,
-            fakeFetchLayer(state, () => ({
-              status: 400,
-              body: other,
-              headers: { "content-type": "application/json" },
-            })),
+  it.live(
+    "another 400 on a request with reasoning is not retried, keeps its message, and leaves the summary asked for",
+    () =>
+      Effect.gen(function* () {
+        const { driver } = yield* makeDriver({
+          cell: makeDurableCell({
+            access: "replay-token",
+            refresh: "r",
+            expires: FAR_FUTURE_MS,
+            accountId: Option.none(),
+          }),
+        })
+        const other = encodeExternalJson({
+          error: {
+            message: "Input exceeds the context window.",
+            type: "invalid_request_error",
+            param: "input",
+            code: "context_length_exceeded",
+          },
+        })
+        const state = makeFakeFetchState()
+        const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-replay"), {
+          reasoning: "high",
+        })
+        const exit = yield* LanguageModel.generateText({
+          prompt: conversation,
+          toolkit: Toolkit.make(ReadTool),
+          disableToolCallResolution: true,
+        }).pipe(
+          Effect.provide(
+            Layer.provideMerge(
+              model,
+              fakeFetchLayer(state, () => ({
+                status: 400,
+                body: other,
+                headers: { "content-type": "application/json" },
+              })),
+            ),
           ),
-        ),
-        Effect.scoped,
-        Effect.exit,
-      )
-      expect(state.captured.length).toBe(1)
-      expect(Exit.isFailure(exit) && Cause.pretty(exit.cause).includes("context window")).toBe(true)
-    }),
+          Effect.scoped,
+          Effect.exit,
+        )
+        const summaries = (fetchState: FakeFetchState) =>
+          fetchState.captured.map((req) => req.body?.includes('"summary"') === true)
+        expect(state.captured.length).toBe(1)
+        expect(summaries(state)).toEqual([true])
+        expect(Exit.isFailure(exit) && Cause.pretty(exit.cause).includes("context window")).toBe(
+          true,
+        )
+        // The 400 is not a summary refusal, so the key is not recorded: the next request asks again.
+        const later = makeFakeFetchState()
+        const again = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-replay"), {
+          reasoning: "high",
+        })
+        yield* oneGenerate(again, later, () => openaiResponsesHappyResponse())
+        expect(summaries(later)).toEqual([true])
+      }),
   )
 })
 
@@ -3045,21 +3060,6 @@ describe("OpenAI sign-in — a rejected token", () => {
   )
 })
 describe("OpenAI API-key requests", () => {
-  it.live("an API-key request goes to the public API with the key as its bearer", () =>
-    Effect.gen(function* () {
-      const { driver } = yield* makeDriver()
-      const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      const lastReq = fetchState.captured.at(-1)!
-      // SDK injects standard Bearer auth from apiKey
-      expect(lastReq.headers["authorization"]).toBe("Bearer sk-test-1234")
-      // No Codex backend rewrite on the API-key path
-      expect(lastReq.url).toBe("https://api.openai.com/v1/responses")
-      // No Codex beta header
-      expect(lastReq.headers["openai-beta"]).toBeUndefined()
-    }),
-  )
   it.live(
     "an API-key request to a reasoning model uses the Responses shape: output cap, no temperature, a reasoning summary",
     () =>
@@ -3132,34 +3132,6 @@ describe("OpenAI API-key requests", () => {
         yield* oneGenerate(other, otherKey, () => openaiResponsesHappyResponse())
         expect(summaries(otherKey)).toEqual([true])
       }),
-  )
-  it.live("any other 400 is not retried and keeps the summary", () =>
-    Effect.gen(function* () {
-      const { driver } = yield* makeDriver()
-      const state = makeFakeFetchState()
-      const model = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), {
-        reasoning: "high",
-      })
-      const other = encodeExternalJson({
-        error: { message: "bad", type: "invalid_request_error", param: "input" },
-      })
-      const exit = yield* oneGenerate(model, state, () => ({
-        status: 400,
-        body: other,
-        headers: { "content-type": "application/json" },
-      })).pipe(Effect.exit)
-      const summaries = (fetchState: FakeFetchState) =>
-        fetchState.captured.map((req) => req.body?.includes('"summary"') === true)
-      expect(exit._tag).toBe("Failure")
-      expect(summaries(state)).toEqual([true])
-      // The 400 is not a refusal, so the key is not recorded: the next request asks again.
-      const later = makeFakeFetchState()
-      const again = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), {
-        reasoning: "high",
-      })
-      yield* oneGenerate(again, later, () => openaiResponsesHappyResponse())
-      expect(summaries(later)).toEqual([true])
-    }),
   )
   it.live("an API-key request to a model that does not reason keeps its temperature", () =>
     Effect.gen(function* () {

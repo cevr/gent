@@ -23,6 +23,32 @@ const unusedWorker = CellWorker.cases.Script.make({
   scriptPath: "/nonexistent/worker.js",
 })
 
+type CellOwner = Effect.Success<ReturnType<typeof openCellOwner>>
+type CellCall = Parameters<CellOwner["run"]>[0]
+
+/** The host for cells that make no host call. */
+const noHostCalls = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+
+/** Runs one cell on `owner` with `host`. */
+const runCell = (owner: CellOwner, call: CellCall, host = noHostCalls) =>
+  owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
+
+// A failure carries its text as `message`; a finished cell as `display`.
+const ReplyText = Schema.Union([
+  Schema.Struct({ message: Schema.String }),
+  Schema.Struct({ display: Schema.String }),
+])
+
+/** Runs one cell and returns the text of its reply. */
+const replyText = (owner: CellOwner, call: CellCall, host = noHostCalls) =>
+  runCell(owner, call, host).pipe(
+    Effect.map((result) => {
+      const text = Schema.decodeUnknownSync(ReplyText)(result.result)
+      if ("message" in text) return text.message
+      return text.display
+    }),
+  )
+
 describe("recorded cell execution", () => {
   it.scopedLive(
     "records reset once and does not clear newer state on repeat",
@@ -34,16 +60,13 @@ describe("recorded cell execution", () => {
           [1],
         )
         if (!first || !reset || !next || !read) return yield* Effect.die("Missing cells")
-        const execution = yield* openCellOwner(worker)
-        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-        const run = (call: Parameters<typeof execution.run>[0]) =>
-          execution.run(call).pipe(Effect.provideService(CellOperationHost, host))
-        expect((yield* run(first)).result).toMatchObject({ display: "21" })
-        const cleared = yield* run(reset)
+        const cells = yield* openCellOwner(worker)
+        expect((yield* runCell(cells, first)).result).toMatchObject({ display: "21" })
+        const cleared = yield* runCell(cells, reset)
         expect(cleared).toMatchObject({ isFailure: false, result: { display: "undefined" } })
-        expect((yield* run(next)).result).toMatchObject({ display: "42" })
-        expect(yield* run(reset)).toEqual(cleared)
-        expect((yield* run(read)).result).toMatchObject({ display: "42" })
+        expect((yield* runCell(cells, next)).result).toMatchObject({ display: "42" })
+        expect(yield* runCell(cells, reset)).toEqual(cleared)
+        expect((yield* runCell(cells, read)).result).toMatchObject({ display: "42" })
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
   )
@@ -71,19 +94,13 @@ describe("recorded cell execution", () => {
             ),
         })
         const cells = yield* openCellOwner(worker)
-        const running = yield* cells
-          .run(first)
-          .pipe(
-            Effect.provideService(CellOperationHost, host),
-            Effect.forkScoped({ startImmediately: true }),
-          )
+        const running = yield* runCell(cells, first, host).pipe(
+          Effect.forkScoped({ startImmediately: true }),
+        )
         yield* Deferred.await(started)
-        const queued = yield* cells
-          .run(second)
-          .pipe(
-            Effect.provideService(CellOperationHost, host),
-            Effect.forkScoped({ startImmediately: true }),
-          )
+        const queued = yield* runCell(cells, second, host).pipe(
+          Effect.forkScoped({ startImmediately: true }),
+        )
         yield* cells.cancel
         expect(yield* Deferred.isDone(stopped)).toBe(true)
         const cancelled = yield* Fiber.join(running)
@@ -100,16 +117,16 @@ describe("recorded cell execution", () => {
           isFailure: true,
           result: { message: "Cell did not start because execution was cancelled." },
         })
-        expect(
-          yield* cells.run(first).pipe(Effect.provideService(CellOperationHost, host)),
-        ).toEqual(cancelled)
+        expect(yield* runCell(cells, first, host)).toEqual(cancelled)
         // The host replaces the lost worker itself; no namespace was saved yet, so nothing is restored.
-        expect(
-          yield* cells.run(third).pipe(Effect.provideService(CellOperationHost, host)),
-        ).toMatchObject({ isFailure: false, result: { display: "1" } })
-        expect(
-          yield* cells.run(fourth).pipe(Effect.provideService(CellOperationHost, host)),
-        ).toMatchObject({ isFailure: false, result: { display: "42" } })
+        expect(yield* runCell(cells, third, host)).toMatchObject({
+          isFailure: false,
+          result: { display: "1" },
+        })
+        expect(yield* runCell(cells, fourth, host)).toMatchObject({
+          isFailure: false,
+          result: { display: "42" },
+        })
         expect(yield* Ref.get(calls)).toBe(1)
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
@@ -129,9 +146,7 @@ describe("recorded cell execution", () => {
         })
         const cells = yield* openCellOwner(worker)
         yield* cells.stop
-        const exit = yield* cells
-          .run(late)
-          .pipe(Effect.provideService(CellOperationHost, host), Effect.exit)
+        const exit = yield* runCell(cells, late, host).pipe(Effect.exit)
         expect(Exit.hasInterrupts(exit)).toBe(true)
         expect(yield* Ref.get(calls)).toBe(0)
         // Never admitted: a restart re-issues the call instead of settling it.
@@ -170,9 +185,7 @@ describe("recorded cell execution", () => {
           catalog: hostCatalog("mark"),
           call: () => Effect.die("A cell that never started made a host call"),
         })
-        const running = yield* cells
-          .run(late)
-          .pipe(Effect.provideService(CellOperationHost, host), Effect.forkScoped)
+        const running = yield* runCell(cells, late, host).pipe(Effect.forkScoped)
         yield* Deferred.await(claimed)
         const stopping = yield* cells.stop.pipe(Effect.forkScoped({ startImmediately: true }))
         yield* Deferred.succeed(proceed, true)
@@ -218,10 +231,7 @@ describe("recorded cell execution", () => {
           }),
         )
         const cells = yield* openCellOwner(unusedWorker)
-        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-        const incomplete = yield* cells
-          .run(cell)
-          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+        const incomplete = yield* runCell(cells, cell).pipe(Effect.flip)
         expect(incomplete).toMatchObject({
           _tag: "CellExecutionIncomplete",
           message:
@@ -253,9 +263,7 @@ describe("recorded cell execution", () => {
           catalog: hostCatalog("wait"),
           call: () => Deferred.succeed(started, true).pipe(Effect.andThen(Effect.never)),
         })
-        const running = yield* cells
-          .run(cell)
-          .pipe(Effect.provideService(CellOperationHost, host), Effect.forkScoped)
+        const running = yield* runCell(cells, cell, host).pipe(Effect.forkScoped)
         yield* Deferred.await(started)
         yield* cells.cancel
         const cancelled = yield* Fiber.join(running)
@@ -286,9 +294,7 @@ describe("recorded cell execution", () => {
             ),
         })
         const cells = yield* openCellOwner(worker)
-        const failed = yield* cells
-          .run(uncaught)
-          .pipe(Effect.provideService(CellOperationHost, host))
+        const failed = yield* runCell(cells, uncaught, host)
         expect(failed).toMatchObject({
           isFailure: true,
           result: { _tag: "CellEvaluationError", message: refusal, output: "before" },
@@ -313,9 +319,8 @@ describe("recorded cell execution", () => {
           call: () => Effect.succeed({}),
         })
         const cells = yield* openCellOwner(worker)
-        const message = (call: typeof unknownTool) =>
-          cells.run(call).pipe(
-            Effect.provideService(CellOperationHost, host),
+        const message = (call: CellCall) =>
+          runCell(cells, call, host).pipe(
             Effect.map(
               (reply) =>
                 Schema.decodeUnknownSync(Schema.Struct({ message: Schema.String }))(reply.result)
@@ -351,27 +356,13 @@ describe("recorded cell execution", () => {
           call: () => Effect.succeed({}),
         })
         const cells = yield* openCellOwner(worker)
-        // A failure carries its text as `message`; a finished cell as `display`.
-        const ReplyText = Schema.Union([
-          Schema.Struct({ message: Schema.String }),
-          Schema.Struct({ display: Schema.String }),
-        ])
-        const reply = (call: typeof aggregate) =>
-          cells.run(call).pipe(
-            Effect.provideService(CellOperationHost, host),
-            Effect.map((result) => {
-              const text = Schema.decodeUnknownSync(ReplyText)(result.result)
-              if ("message" in text) return text.message
-              return text.display
-            }),
-          )
-        const aggregateText = yield* reply(aggregate)
+        const aggregateText = yield* replyText(cells, aggregate, host)
         expect(aggregateText).toContain("AggregateError")
         expect(aggregateText).toContain("Error: first")
         expect(aggregateText).toContain("RangeError: second")
-        expect(yield* reply(syntax)).toMatch(/line \d+, column \d+: let x = ;/)
-        expect(yield* reply(shell)).toContain("shell-detail")
-        const caughtText = yield* reply(caught)
+        expect(yield* replyText(cells, syntax, host)).toMatch(/line \d+, column \d+: let x = ;/)
+        expect(yield* replyText(cells, shell, host)).toContain("shell-detail")
+        const caughtText = yield* replyText(cells, caught, host)
         expect(caughtText).toContain("tools.nope is not a host tool")
         expect(caughtText).not.toMatch(/\bat [^ ]+ \(/)
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
@@ -489,19 +480,16 @@ describe("recorded cell execution", () => {
         if (!define || !probe || calls.length !== rows.length * 2 + 2) {
           return yield* Effect.die("Missing test cells")
         }
-        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const open = openCellOwner(worker)
         const cells = yield* open
-        const run = (owner: typeof cells, call: typeof define) =>
-          owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
-        expect((yield* run(cells, define)).result).toMatchObject({ display: "7" })
+        expect((yield* runCell(cells, define)).result).toMatchObject({ display: "7" })
         for (const [index, row] of rows.entries()) {
           const bind = calls[index * 2 + 1]
           const after = calls[index * 2 + 2]
           if (!bind || !after) return yield* Effect.die("Missing test cells")
-          const bound = (yield* run(cells, bind).pipe(heldBy(row.name))).result
+          const bound = (yield* runCell(cells, bind).pipe(heldBy(row.name))).result
           // The next cell answers from the same worker: no restore report.
-          const next = (yield* run(cells, after).pipe(heldBy(row.name))).result
+          const next = (yield* runCell(cells, after).pipe(heldBy(row.name))).result
           expect({ row: row.name, bound, next }).toMatchObject({
             row: row.name,
             bound: { display: "1" },
@@ -511,7 +499,7 @@ describe("recorded cell execution", () => {
         }
         // A second owner stands in for a restart: the saved namespace keeps what it can save.
         const restarted = yield* open
-        const reply = (yield* run(restarted, probe)).result
+        const reply = (yield* runCell(restarted, probe)).result
         expect(reply).toMatchObject({
           display: ["7", ...rows.flatMap((row) => row.probe.map(([, shown]) => shown))].join(","),
         })
@@ -610,16 +598,13 @@ describe("recorded cell execution", () => {
             replaced.probe,
           ])
           if (!bind || !ran || !probe) return yield* Effect.die("Missing test cells")
-          const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
           const open = openCellOwner(worker)
           const cells = yield* open
-          const run = (owner: typeof cells, call: typeof bind) =>
-            owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
-          expect((yield* run(cells, bind)).result).toMatchObject({ display: replaced.shown })
-          expect((yield* run(cells, ran)).result).toMatchObject({ display: "false" })
+          expect((yield* runCell(cells, bind)).result).toMatchObject({ display: replaced.shown })
+          expect((yield* runCell(cells, ran)).result).toMatchObject({ display: "false" })
           // A restarted owner restores the value the cell bound, not what the replacement said.
           const restarted = yield* open
-          expect((yield* run(restarted, probe)).result).toMatchObject({
+          expect((yield* runCell(restarted, probe)).result).toMatchObject({
             display: replaced.display,
           })
         }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
@@ -660,12 +645,9 @@ describe("recorded cell execution", () => {
             "[typeof lost, typeof Map.prototype.stuck].join(',')",
           ])
           if (!define || !change || !after || !probe) return yield* Effect.die("Missing test cells")
-          const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
           const cells = yield* openCellOwner(worker)
-          const run = (call: typeof define) =>
-            cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
-          yield* run(define)
-          const changed = (yield* run(change)).result
+          yield* runCell(cells, define)
+          const changed = (yield* runCell(cells, change)).result
           expect(changed).toHaveProperty(
             stuck.reply,
             expect.stringContaining(
@@ -680,11 +662,13 @@ describe("recorded cell execution", () => {
           )
           expect(changed).toHaveProperty(stuck.reply, expect.not.stringContaining("not saved"))
           expect(changed).toHaveProperty(stuck.reply, expect.not.stringContaining("reset"))
-          expect((yield* run(after)).result).toMatchObject({
+          expect((yield* runCell(cells, after)).result).toMatchObject({
             display: "7",
             restored: { restored: ["kept"], omitted: [] },
           })
-          expect((yield* run(probe)).result).toMatchObject({ display: "undefined,undefined" })
+          expect((yield* runCell(cells, probe)).result).toMatchObject({
+            display: "undefined,undefined",
+          })
         }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
       10000,
     )
@@ -751,16 +735,13 @@ describe("recorded cell execution", () => {
             "kept",
           ])
           if (!define || !change || !after) return yield* Effect.die("Missing test cells")
-          const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
           const cells = yield* openCellOwner(worker, { evaluationTimeoutMs: 3000 })
-          const run = (call: typeof define) =>
-            cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
-          yield* run(define)
-          expect((yield* run(change)).result).toHaveProperty(
+          yield* runCell(cells, define)
+          expect((yield* runCell(cells, change)).result).toHaveProperty(
             builtin.reply,
             expect.stringContaining(builtin.shown),
           )
-          const next = (yield* run(after)).result
+          const next = (yield* runCell(cells, after)).result
           expect(next).toMatchObject({ display: "7" })
           expect(next).not.toHaveProperty("restored")
         }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
@@ -782,19 +763,16 @@ describe("recorded cell execution", () => {
           "[kept, typeof Promise.prototype.then].join(',')",
         ])
         if (!define || !change || !after) return yield* Effect.die("Missing test cells")
-        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const cells = yield* openCellOwner(worker, { evaluationTimeoutMs: 3000 })
-        const run = (call: typeof define) =>
-          cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
-        yield* run(define)
-        const changed = (yield* run(change)).result
+        yield* runCell(cells, define)
+        const changed = (yield* runCell(cells, change)).result
         expect(changed).toHaveProperty(
           "display",
           expect.stringContaining(
             "2\nBuilt-ins the cell changed that cannot be put back: Promise.prototype.then",
           ),
         )
-        expect((yield* run(after)).result).toMatchObject({
+        expect((yield* runCell(cells, after)).result).toMatchObject({
           display: "7,function",
           restored: { restored: ["kept"], omitted: [] },
         })
@@ -815,12 +793,10 @@ describe("recorded cell execution", () => {
           "String(globalThis.ran)",
         ])
         if (!start || !wait || !after) return yield* Effect.die("Missing test cells")
-        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const cells = yield* openCellOwner(worker)
         const DisplayText = Schema.Struct({ display: Schema.String })
-        const display = (call: typeof start) =>
-          cells.run(call).pipe(
-            Effect.provideService(CellOperationHost, host),
+        const display = (call: CellCall) =>
+          runCell(cells, call).pipe(
             Effect.map((result) => Schema.decodeUnknownSync(DisplayText)(result.result).display),
           )
         yield* display(start)
@@ -849,14 +825,11 @@ describe("recorded cell execution", () => {
           "[kept, typeof lost, typeof Map.prototype.late].join(',')",
         ])
         if (!define || !change || !after) return yield* Effect.die("Missing test cells")
-        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const cells = yield* openCellOwner(worker)
-        const run = (call: typeof define) =>
-          cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
-        yield* run(define)
-        const changed = (yield* run(change)).result
+        yield* runCell(cells, define)
+        const changed = (yield* runCell(cells, change)).result
         expect(changed).toHaveProperty("display", expect.stringContaining("Map.prototype.late"))
-        expect((yield* run(after)).result).toMatchObject({
+        expect((yield* runCell(cells, after)).result).toMatchObject({
           display: "7,undefined,undefined",
           restored: { restored: ["kept"], omitted: [] },
         })
@@ -921,34 +894,18 @@ describe("recorded cell execution", () => {
         if (!define || calls.length !== displayHazards.length * 2 + 1) {
           return yield* Effect.die("Missing test cells")
         }
-        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const cells = yield* openCellOwner(worker)
-        const ReplyText = Schema.Union([
-          Schema.Struct({ message: Schema.String }),
-          Schema.Struct({ display: Schema.String }),
-        ])
-        const reply = (call: typeof define) =>
-          cells.run(call).pipe(
-            Effect.provideService(CellOperationHost, host),
-            Effect.map((result) => {
-              const text = Schema.decodeUnknownSync(ReplyText)(result.result)
-              if ("message" in text) return text.message
-              return text.display
-            }),
-          )
-        expect(yield* reply(define)).toBe("7")
+        expect(yield* replyText(cells, define)).toBe("7")
         for (const [index, row] of displayHazards.entries()) {
           const shown = calls[index * 2 + 1]
           const after = calls[index * 2 + 2]
           if (!shown || !after) return yield* Effect.die("Missing test cells")
-          expect({ row: row.name, shown: yield* reply(shown).pipe(heldBy(row.name)) }).toEqual({
+          expect({
             row: row.name,
-            shown: row.shown,
-          })
+            shown: yield* replyText(cells, shown).pipe(heldBy(row.name)),
+          }).toEqual({ row: row.name, shown: row.shown })
           // The next cell answers from the same worker: no restore report.
-          const next = (yield* cells
-            .run(after)
-            .pipe(Effect.provideService(CellOperationHost, host), heldBy(row.name))).result
+          const next = (yield* runCell(cells, after).pipe(heldBy(row.name))).result
           expect({ row: row.name, next }).toMatchObject({ row: row.name, next: { display: "7" } })
           expect({ row: row.name, next }).not.toHaveProperty("next.restored")
         }
@@ -1011,9 +968,7 @@ describe("recorded cell execution", () => {
             scriptPath: path.join(directory, "missing-worker.js"),
           }),
         )
-        expect(
-          yield* replay.run(first).pipe(Effect.provideService(CellOperationHost, host)),
-        ).toEqual(result)
+        expect(yield* runCell(replay, first, host)).toEqual(result)
         expect(yield* fs.readFileString(output)).toBe("x")
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
@@ -1050,20 +1005,16 @@ describe("recorded cell execution", () => {
             ),
         })
         const execution = yield* openCellOwner(worker)
-        const running = yield* execution
-          .run(first)
-          .pipe(Effect.provideService(CellOperationHost, host), Effect.forkScoped)
+        const running = yield* runCell(execution, first, host).pipe(Effect.forkScoped)
         yield* Deferred.await(started)
         yield* Fiber.interrupt(running)
         expect(yield* Deferred.isDone(stopped)).toBe(true)
         // The loop closed under the cell; the next loop opens its own execution.
         const reopened = yield* openCellOwner(worker)
-        const unknown = yield* reopened
-          .run(first)
-          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+        const unknown = yield* runCell(reopened, first, host).pipe(Effect.flip)
         expect(unknown._tag).toBe("CellExecutionIncomplete")
         expect(yield* fs.readFileString(output)).toBe("x")
-        const fresh = yield* reopened.run(next).pipe(Effect.provideService(CellOperationHost, host))
+        const fresh = yield* runCell(reopened, next, host)
         expect(fresh.result).toMatchObject({ display: "42" })
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
@@ -1080,17 +1031,12 @@ describe("recorded cell execution", () => {
         const [first, next] = yield* setupCalls(["41", "42"])
         if (!first || !next) return yield* Effect.die("Missing test cell")
         const execution = yield* openCellOwner(worker, { maximumFailedLaunches: 1 })
-        const host = CellOperationHost.of({ call: () => Effect.die("Unexpected host operation") })
-        const failed = yield* execution
-          .run(first)
-          .pipe(Effect.provideService(CellOperationHost, host))
+        const failed = yield* runCell(execution, first)
         expect(failed.isFailure).toBe(true)
         expect(failed.result).toMatchObject({ _tag: "CellProcessError", phase: "launch" })
         // The worker is back, but one failed launch already reached the limit of one.
         yield* fs.rename(savedWorker, worker.scriptPath)
-        const refused = yield* execution
-          .run(next)
-          .pipe(Effect.provideService(CellOperationHost, host))
+        const refused = yield* runCell(execution, next)
         expect(refused.result).toMatchObject({
           _tag: "CellProcessError",
           phase: "launch",
