@@ -210,12 +210,9 @@ export const captureCurrentToolBinding = Effect.fn("ToolBinding.captureCurrent")
   toolName: string,
 ) {
   const runner = yield* ToolRunner
-  const registry = yield* ExtensionRegistry
   const captured = yield* runner.capture({ toolName })
   if (Option.isNone(captured)) return Option.none<ResolvedToolCapability>()
-  return Option.some(
-    yield* attachToolBindingIdentity(captured.value, registry.getResolved().extensions),
-  )
+  return Option.some(yield* attachToolBindingIdentity(captured.value))
 })
 
 /**
@@ -410,9 +407,8 @@ const sourceRevisionFor = (extension: LoadedExtension): Option.Option<ToolSource
 /** Attach the durable identity available for one freshly selected capability. */
 export const attachToolBindingIdentity = Effect.fn("ToolBinding.attachIdentity")(function* (
   entry: ResolvedToolCapability,
-  extensions: ReadonlyArray<LoadedExtension>,
 ) {
-  const extension = extensions.find((candidate) => candidate.manifest.id === entry.extensionId)
+  const extension = entry.extension
   let sourceRevision = Option.none<ToolSourceRevision>()
   if (Predicate.isNotUndefined(extension)) {
     const revision = sourceRevisionFor(extension)
@@ -679,6 +675,8 @@ type ToolCapabilityContext = ExtensionHostContext & {
 /** The exact owner and implementation selected for one tool surface. */
 export interface ResolvedToolCapability {
   readonly extensionId: ExtensionId
+  /** The selected registration's owner; absent for directly supplied unowned tools. */
+  readonly extension?: LoadedExtension
   readonly capability: ToolCapability
   readonly binding?: ToolBindingIdentity
 }
@@ -873,7 +871,7 @@ export const staticToolEntries = (
   activeRegistry: ExtensionRegistryService,
 ): ReadonlyArray<ResolvedToolCapability> =>
   [...activeRegistry.getResolved().modelCapabilities.values()].map(
-    ({ extensionId, capability }) => ({ extensionId, capability }),
+    ({ extensionId, extension, capability }) => ({ extensionId, extension, capability }),
   )
 
 const captureToolEntry = (params: {

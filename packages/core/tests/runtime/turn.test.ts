@@ -3622,7 +3622,7 @@ const replayCases = [
   },
 ]
 
-const makeTool = (): ToolCapability =>
+const makeTool = (reply = "ok"): ToolCapability =>
   tool({
     id: "replay_tool",
     description: "Replay test tool",
@@ -3631,7 +3631,7 @@ const makeTool = (): ToolCapability =>
     execute: (_params: { readonly value: string }) =>
       Effect.gen(function* () {
         yield* ExtensionContext
-        return "ok"
+        return reply
       }),
   })
 
@@ -3654,6 +3654,85 @@ const makeBinding = () =>
   })
 
 describe("tool binding replay", () => {
+  const bindingLayerFor = (extensions: ReadonlyArray<LoadedExtension>) =>
+    Layer.mergeAll(
+      ExtensionRegistry.fromResolved(resolveExtensions(extensions)),
+      ToolRunner.Live.pipe(Layer.provide(BunServices.layer)),
+      GentPlatform.Test(),
+    )
+
+  it.scopedLive("a same-id project tool cannot replay a builtin artifact's binding", () =>
+    Effect.gen(function* () {
+      const builtin = makeExtension(makeTool())
+      const projectTool = makeTool("changed project implementation")
+      const project: LoadedExtension = {
+        manifest: builtin.manifest,
+        scope: "project",
+        sourcePath: "/project/.gent/extensions/replay.ts",
+        contributions: { tools: [projectTool] },
+      }
+      const original = yield* captureCurrentToolBinding("replay_tool").pipe(
+        Effect.provide(bindingLayerFor([builtin])),
+      )
+      if (Option.isNone(original) || Predicate.isUndefined(original.value.binding))
+        return yield* Effect.die("Missing builtin fixture identity")
+      const binding = original.value.binding
+      yield* Effect.gen(function* () {
+        const selected = yield* captureCurrentToolBinding("replay_tool")
+        if (Option.isNone(selected)) return yield* Effect.die("Missing selected project tool")
+        expect(selected.value.capability).toBe(projectTool)
+        const refused = yield* resolveStoredToolBinding({
+          sessionId: SessionId.make("same-id-project-replay"),
+          assistantMessageId: MessageId.make("same-id-project-outer"),
+          toolCallId: ToolCallId.make("same-id-project-operation"),
+          binding,
+        }).pipe(Effect.exit)
+        expect(Exit.isFailure(refused)).toBe(true)
+        if (Exit.isFailure(refused)) {
+          expect(Cause.squash(refused.cause)).toMatchObject({
+            _tag: "ToolBindingReplayError",
+            reason: "MissingSourceIdentity",
+          })
+        }
+        expect(selected.value.binding).toBeUndefined()
+      }).pipe(Effect.provide(bindingLayerFor([builtin, project])))
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive("a same-id extension with another tool preserves the builtin tool's identity", () =>
+    Effect.gen(function* () {
+      const builtinTool = makeTool()
+      const builtin = makeExtension(builtinTool)
+      const other = tool({
+        id: "another_replay_tool",
+        description: "A different project tool",
+        params: Schema.Struct({}),
+        output: Schema.String,
+        execute: () => Effect.succeed("project"),
+      })
+      const project: LoadedExtension = {
+        manifest: builtin.manifest,
+        scope: "project",
+        sourcePath: "/project/.gent/extensions/another.ts",
+        contributions: { tools: [other] },
+      }
+      const original = yield* captureCurrentToolBinding("replay_tool").pipe(
+        Effect.provide(bindingLayerFor([builtin])),
+      )
+      if (Option.isNone(original) || Predicate.isUndefined(original.value.binding))
+        return yield* Effect.die("Missing builtin fixture identity")
+      const binding = original.value.binding
+      const selected = yield* resolveStoredToolBinding({
+        sessionId: SessionId.make("same-id-other-replay"),
+        assistantMessageId: MessageId.make("same-id-other-outer"),
+        toolCallId: ToolCallId.make("same-id-other-operation"),
+        binding,
+      }).pipe(Effect.provide(bindingLayerFor([builtin, project])))
+      expect(selected.capability).toBe(builtinTool)
+      expect(selected.binding).toEqual(binding)
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
   it.scopedLive(
     "validates an inner operation binding without an assistant tool-call storage row",
     () =>

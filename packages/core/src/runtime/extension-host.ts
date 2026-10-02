@@ -622,6 +622,7 @@ interface ResolvedExtensions {
 interface RegisteredToolEntry {
   readonly kind: "tool"
   readonly extensionId: ExtensionId
+  readonly extension: LoadedExtension
   readonly capability: ToolCapability
 }
 
@@ -677,6 +678,7 @@ const compileCapabilityWinners = (
       winners.set(String(getToolId(cap)), {
         kind: "tool",
         extensionId: ext.manifest.id,
+        extension: ext,
         capability: cap,
       })
     }
@@ -711,7 +713,7 @@ const compileCapabilityEntries = (
       Option.fromUndefinedOr(ext.contributions.tools),
       () => [],
     )) {
-      entries.push({ kind: "tool", extensionId: ext.manifest.id, capability })
+      entries.push({ kind: "tool", extensionId: ext.manifest.id, extension: ext, capability })
     }
     for (const capability of Option.getOrElse(
       Option.fromUndefinedOr(ext.contributions.requests),

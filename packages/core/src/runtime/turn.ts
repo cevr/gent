@@ -1417,7 +1417,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   } = compileToolPolicy(allTools, dispatchAgent, { interactive }, extensionProjections)
   const entriesByToolId = new Map<string, ResolvedToolCapability>()
   for (const entry of allToolEntries) {
-    const bound = yield* attachToolBindingIdentity(entry, resolvedExtensions.extensions)
+    const bound = yield* attachToolBindingIdentity(entry)
     entriesByToolId.set(String(getToolId(entry.capability)), bound)
   }
   const hostToolBindings = new Map<string, ResolvedToolCapability>()
