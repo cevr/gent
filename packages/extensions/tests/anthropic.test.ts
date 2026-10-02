@@ -312,22 +312,18 @@ describe("transformStreamEvent", () => {
     if (result.type === "content_block_start") expect(result.content_block.type).toBe("text")
   })
 
-  test("passes through non-content_block_start events", () => {
-    const event = {
-      type: "message_stop",
-    } satisfies AnthropicClient.MessageStreamEvent
-    const result = transformStreamEvent([])(event)
-    expect(result).toBe(event)
-  })
-
-  test("passes through content_block_delta events", () => {
-    const event = {
-      type: "content_block_delta",
-      index: 1,
-      delta: { type: "input_json_delta", partial_json: '{"text":' },
-    } satisfies AnthropicClient.MessageStreamEvent
-    const result = transformStreamEvent([])(event)
-    expect(result).toBe(event)
+  test("passes through events other than content_block_start, content_block_delta included", () => {
+    const events: ReadonlyArray<AnthropicClient.MessageStreamEvent> = [
+      { type: "message_stop" },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"text":' },
+      },
+    ]
+    for (const event of events) {
+      expect(transformStreamEvent([])(event)).toBe(event)
+    }
   })
 })
 
@@ -550,63 +546,67 @@ const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 // `Effect.orDie` collapses typed errors to defects so test bodies can
 // assert success without `as Effect<unknown, never, never>` casts.
 const runOk = <A, E, R>(eff: Effect.Effect<A, E, R>) => Effect.scoped(eff.pipe(Effect.orDie))
+const answerOk = () => new Response("ok", { status: 200 })
+/**
+ * A keychain-transform client over a fake that records each request and
+ * answers with `responder`. `post` sends one claude-opus-4-6 message.
+ */
+const keychainClient = (
+  responder: (call: number) => Response | TransportFailure,
+  io: AnthropicCredentialIO = validCredsIO("k1"),
+) =>
+  Effect.gen(function* () {
+    const creds = yield* credentialCache(io)
+    const fakeState: FakeClientState = { captured: [], responder }
+    const wrapped = buildKeychainTransformClient(creds, TEST_ENV)(makeFakeClient(fakeState))
+    const post = (headers: Record<string, string> = {}) =>
+      wrapped.post("https://api.anthropic.com/v1/messages", {
+        headers,
+        body: jsonBody({ model: "claude-opus-4-6" }),
+      })
+    return { post, captured: fakeState.captured }
+  })
+/** One message through a fresh keychain-transform client: its exit and the requests the fake saw. */
+const sendOnce = (
+  responder: (call: number) => Response | TransportFailure,
+  options: { readonly io?: AnthropicCredentialIO; readonly headers?: Record<string, string> } = {},
+) =>
+  Effect.gen(function* () {
+    const { post, captured } = yield* keychainClient(responder, options.io)
+    const exit = yield* Effect.scoped(post(options.headers)).pipe(Effect.exit)
+    return { exit, captured }
+  })
+/** The status of a request that reached the fake, or false if it failed. */
+const statusOf = (exit: Exit.Exit<HttpClientResponse.HttpClientResponse, unknown>) =>
+  Exit.isSuccess(exit) && exit.value.status
 // ── Tests ──
 describe("keychainTransformClient — auth headers", () => {
   it.scopedLive("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildKeychainTransformClient(creds, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      yield* runOk(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
-      )
-      expect(fakeState.captured).toHaveLength(1)
-      expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
+      const { exit, captured } = yield* sendOnce(answerOk)
+      expect(statusOf(exit)).toBe(200)
+      expect(captured).toHaveLength(1)
+      expect(captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
     }),
   )
   it.scopedLive("removes x-api-key (would otherwise conflict with OAuth Bearer)", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildKeychainTransformClient(creds, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
       // Simulate the SDK's baseline by injecting x-api-key on the
       // outgoing request. The transform must strip it.
-      yield* runOk(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          headers: { "x-api-key": "oauth-placeholder", "anthropic-version": "2023-06-01" },
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
-      )
-      expect(fakeState.captured[0]!.headers["x-api-key"]).toBeUndefined()
+      const { exit, captured } = yield* sendOnce(answerOk, {
+        headers: { "x-api-key": "oauth-placeholder", "anthropic-version": "2023-06-01" },
+      })
+      expect(statusOf(exit)).toBe(200)
+      expect(captured[0]!.headers["x-api-key"]).toBeUndefined()
       // Preserves SDK baseline header
-      expect(fakeState.captured[0]!.headers["anthropic-version"]).toBe("2023-06-01")
+      expect(captured[0]!.headers["anthropic-version"]).toBe("2023-06-01")
     }),
   )
   it.scopedLive("sets x-app, user-agent, anthropic-dangerous-direct-browser-access", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildKeychainTransformClient(creds, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      yield* runOk(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
-      )
-      const headers = fakeState.captured[0]!.headers
+      const { exit, captured } = yield* sendOnce(answerOk)
+      expect(statusOf(exit)).toBe(200)
+      const headers = captured[0]!.headers
       expect(headers["x-app"]).toBe("cli")
       expect(headers["user-agent"]).toMatch(/^claude-cli\/.+ \(external, cli\)$/)
       expect(headers["anthropic-dangerous-direct-browser-access"]).toBe("true")
@@ -614,23 +614,14 @@ describe("keychainTransformClient — auth headers", () => {
   )
   it.scopedLive("merges anthropic-beta with model defaults", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildKeychainTransformClient(creds, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
       // Body declares claude-opus-4-6, which has model-default betas
       // (base set + 1M-context + effort-2025-11-24 from the override).
       // Incoming "incoming-beta-1" must merge with those, not replace.
-      yield* runOk(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          headers: { "anthropic-beta": "incoming-beta-1" },
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
-      )
-      const beta = fakeState.captured[0]!.headers["anthropic-beta"]
+      const { exit, captured } = yield* sendOnce(answerOk, {
+        headers: { "anthropic-beta": "incoming-beta-1" },
+      })
+      expect(statusOf(exit)).toBe(200)
+      const beta = captured[0]!.headers["anthropic-beta"]
       expect(beta).toBeDefined()
       const betas = beta!.split(",").map((s) => s.trim())
       // Incoming preserved
@@ -643,24 +634,15 @@ describe("keychainTransformClient — auth headers", () => {
   )
   it.scopedLive("credential-service failure surfaces as a request-build HttpClientError", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache({
-        read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
-        refresh: () => Effect.fail(new ProviderAuthError({ message: "no refresh token either" })),
+      const { exit, captured } = yield* sendOnce(answerOk, {
+        io: {
+          read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
+          refresh: () => Effect.fail(new ProviderAuthError({ message: "no refresh token either" })),
+        },
       })
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("ok", { status: 200 }),
-      }
-      const transform = buildKeychainTransformClient(creds, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const exit = yield* Effect.scoped(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
-      ).pipe(Effect.exit)
       // The fake client never saw the request — the transform short-
       // circuited at the credential read.
-      expect(fakeState.captured).toHaveLength(0)
+      expect(captured).toHaveLength(0)
       expect(Exit.isFailure(exit)).toBe(true)
       if (!Exit.isFailure(exit)) return
       const error = Cause.findErrorOption(exit.cause)
@@ -673,18 +655,6 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
   // The agent loop owns the retry of 429, 529, 5xx, and transport failures
   // (it honors retry-after and reports each attempt). The transform sends
   // each request once and hands the result back.
-  const sendOnce = (responder: (call: number) => Response | TransportFailure) =>
-    Effect.gen(function* () {
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const fakeState: FakeClientState = { captured: [], responder }
-      const wrapped = buildKeychainTransformClient(creds, TEST_ENV)(makeFakeClient(fakeState))
-      const exit = yield* Effect.scoped(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
-      ).pipe(Effect.exit)
-      return { exit, captured: fakeState.captured }
-    })
   for (const status of [429, 529, 500]) {
     it.scopedLive(`a ${status} reaches the caller after one attempt`, () =>
       Effect.gen(function* () {
@@ -734,27 +704,16 @@ describe("keychainTransformClient — 401 recovery", () => {
   }
   it.scopedLive("401 once → invalidate creds → retry succeeds with fresh token", () =>
     Effect.gen(function* () {
-      const creds = yield* credentialCache(togglingCredsIO("stale", "fresh"))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: respondFirstWith(
-          new Response("auth", { status: 401 }),
-          new Response("ok", { status: 200 }),
-        ),
-      }
-      const transform = buildKeychainTransformClient(creds, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* runOk(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
+      const { exit, captured } = yield* sendOnce(
+        respondFirstWith(new Response("auth", { status: 401 }), answerOk()),
+        { io: togglingCredsIO("stale", "fresh") },
       )
-      expect(fakeState.captured).toHaveLength(2)
-      expect(response.status).toBe(200)
+      expect(captured).toHaveLength(2)
+      expect(statusOf(exit)).toBe(200)
       // Crucial: token differs across attempts — invalidate forced the
       // mapRequestEffect to re-read creds, getting the fresh token.
-      expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer stale-access")
-      expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer fresh-access")
+      expect(captured[0]!.headers["authorization"]).toBe("Bearer stale-access")
+      expect(captured[1]!.headers["authorization"]).toBe("Bearer fresh-access")
     }),
   )
   it.scopedLive("401 with the keychain unchanged → refresh with its refresh token → retry", () =>
@@ -762,31 +721,22 @@ describe("keychainTransformClient — 401 recovery", () => {
       // The server revoked a token whose expiry is still ahead; the keychain
       // still holds it, so only a refresh can replace it.
       const held: Array<Option.Option<ClaudeCredentials>> = []
-      const creds = yield* credentialCache({
-        read: Effect.succeed(makeCredsKeychain("revoked")),
-        refresh: (credential) =>
-          Effect.sync(() => {
-            held.push(credential)
-            return makeCredsKeychain("renewed")
-          }),
-      })
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: respondFirstWith(
-          new Response("auth", { status: 401 }),
-          new Response("ok", { status: 200 }),
-        ),
-      }
-      const transform = buildKeychainTransformClient(creds, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* runOk(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
+      const { exit, captured } = yield* sendOnce(
+        respondFirstWith(new Response("auth", { status: 401 }), answerOk()),
+        {
+          io: {
+            read: Effect.succeed(makeCredsKeychain("revoked")),
+            refresh: (credential) =>
+              Effect.sync(() => {
+                held.push(credential)
+                return makeCredsKeychain("renewed")
+              }),
+          },
+        },
       )
-      expect(response.status).toBe(200)
-      expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer revoked-access")
-      expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer renewed-access")
+      expect(statusOf(exit)).toBe(200)
+      expect(captured[0]!.headers["authorization"]).toBe("Bearer revoked-access")
+      expect(captured[1]!.headers["authorization"]).toBe("Bearer renewed-access")
       expect(held).toEqual([Option.some(makeCredsKeychain("revoked"))])
     }),
   )
@@ -846,23 +796,14 @@ describe("keychainTransformClient — 401 recovery", () => {
     "two consecutive 401s — second surfaces (real auth failure, no infinite loop)",
     () =>
       Effect.gen(function* () {
-        const creds = yield* credentialCache(togglingCredsIO("stale", "still-bad"))
-        const fakeState: FakeClientState = {
-          captured: [],
-          // Both attempts get 401 — the second 401 is a real auth failure
-          // (revoked session, missing scope) and must reach the caller.
-          responder: () => new Response("auth", { status: 401 }),
-        }
-        const transform = buildKeychainTransformClient(creds, TEST_ENV)
-        const wrapped = transform(makeFakeClient(fakeState))
-        const response = yield* runOk(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        )
+        // Both attempts get 401 — the second 401 is a real auth failure
+        // (revoked session, missing scope) and must reach the caller.
+        const { exit, captured } = yield* sendOnce(() => new Response("auth", { status: 401 }), {
+          io: togglingCredsIO("stale", "still-bad"),
+        })
         // 1 initial + 1 retry = 2 attempts (no third)
-        expect(fakeState.captured).toHaveLength(2)
-        expect(response.status).toBe(401)
+        expect(captured).toHaveLength(2)
+        expect(statusOf(exit)).toBe(401)
       }),
   )
   it.scopedLive("non-401 failure does not invalidate creds", () =>
@@ -871,33 +812,19 @@ describe("keychainTransformClient — 401 recovery", () => {
       // service. If a non-401 mistakenly invalidated the cache, request
       // #2 would re-read and pick up the second token. Asserting both
       // requests use the first token proves the cache survived the 500.
-      const creds = yield* credentialCache(togglingCredsIO("first", "second"))
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: respondFirstWith(
-          new Response("server error", { status: 500 }),
-          new Response("ok", { status: 200 }),
-        ),
-      }
-      const transform = buildKeychainTransformClient(creds, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const r1 = yield* runOk(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
+      const { post, captured } = yield* keychainClient(
+        respondFirstWith(new Response("server error", { status: 500 }), answerOk()),
+        togglingCredsIO("first", "second"),
       )
-      const r2 = yield* runOk(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
-      )
-      expect(fakeState.captured).toHaveLength(2)
+      const r1 = yield* runOk(post())
+      const r2 = yield* runOk(post())
+      expect(captured).toHaveLength(2)
       expect(r1.status).toBe(500)
       expect(r2.status).toBe(200)
       // Both requests used the cached "first" token. If the 500 had
       // wrongly invalidated, request #2 would carry "second-access".
-      expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer first-access")
-      expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer first-access")
+      expect(captured[0]!.headers["authorization"]).toBe("Bearer first-access")
+      expect(captured[1]!.headers["authorization"]).toBe("Bearer first-access")
     }),
   )
 })
@@ -1512,6 +1439,32 @@ const anthropicHappyResponse = (text = "ok") => ({
 })
 const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState) =>
   oneGenerate(layer, state, () => anthropicHappyResponse()).pipe(Effect.orDie)
+/**
+ * The last request `send` makes through `modelName`, resolved by a driver
+ * that holds a fresh Claude Code sign-in and no ANTHROPIC_API_KEY.
+ */
+const sentThroughSignedInDriver = (
+  modelName: string,
+  authInfo: ProviderAuthInfo,
+  hints: ProviderHints,
+  send: (
+    model: Layer.Layer<LanguageModel.LanguageModel>,
+    state: FakeFetchState,
+  ) => Effect.Effect<unknown>,
+) =>
+  Effect.gen(function* () {
+    const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+      makeDurableCell(
+        { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+        yield* Clock.currentTimeMillis,
+      ),
+    )
+    const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
+    const model = yield* driver.resolveModel(modelName, authInfo, hints)
+    const state = makeFakeFetchState()
+    yield* send(model, state)
+    return Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)))
+  })
 
 const ContextMode = Schema.Literals(["text", "object", "stream"])
 /** A streamed reply that ends with `stopReason`, as the wire names it. */
@@ -2685,20 +2638,8 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
     hints: ProviderHints = { reasoning: "high" },
   ) =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
-        makeDurableCell(
-          { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
-          yield* Clock.currentTimeMillis,
-        ),
-      )
-      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
-      const model = yield* driver.resolveModel(modelName, authInfo, hints)
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      const body = Option.flatMap(Option.fromUndefinedOr(fetchState.captured.at(-1)), (request) =>
-        Option.fromUndefinedOr(request.body),
-      )
-      return yield* Schema.decodeEffect(SentReasoning)(Option.getOrElse(body, () => "{}"))
+      const request = yield* sentThroughSignedInDriver(modelName, authInfo, hints, runOne)
+      return yield* Schema.decodeEffect(SentReasoning)(request.body ?? "{}")
     })
   /** The same request on both auth paths; the two must agree. */
   const sentOnBothPaths = (modelName: string, hints?: ProviderHints) =>
@@ -2965,22 +2906,14 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
     reasoning: Pick<ProviderHints, "reasoning"> = {},
   ) =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
-        makeDurableCell(
-          { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
-          yield* Clock.currentTimeMillis,
-        ),
+      const request = yield* sentThroughSignedInDriver(
+        "claude-sonnet-4-6",
+        authInfo,
+        // A conversation turn names its session as the cache key; the driver marks only such a request.
+        { cacheKey: "session-cache-key", child, ...reasoning },
+        (model, state) => runCachingRequest(model, state, options, after, system),
       )
-      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
-      // A conversation turn names its session as the cache key; the driver marks only such a request.
-      const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo, {
-        cacheKey: "session-cache-key",
-        child,
-        ...reasoning,
-      })
-      const state = makeFakeFetchState()
-      yield* runCachingRequest(model, state, options, after, system)
-      return Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)?.body))
+      return Option.getOrThrow(Option.fromUndefinedOr(request.body))
     })
   const sentFor = (
     authInfo: ProviderAuthInfo,
@@ -3264,39 +3197,37 @@ describe("buildAnthropicModelDriver — thinking replay", () => {
       ],
     },
   ])
+  /** The conversation's next step, sent through `model`. */
+  const sendConversation = (
+    model: Layer.Layer<LanguageModel.LanguageModel>,
+    state: FakeFetchState,
+  ) =>
+    LanguageModel.generateText({
+      prompt: conversation,
+      toolkit: Toolkit.make(ReadTool),
+      disableToolCallResolution: true,
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(
+          model,
+          fakeFetchLayer(state, () => anthropicHappyResponse()),
+        ),
+      ),
+      Effect.scoped,
+      Effect.orDie,
+    )
 
   it.live("a later step sends the thinking block back with its signature on both paths", () =>
     Effect.gen(function* () {
       for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
-        const credentialCellRef = yield* SynchronizedRef.make<
-          CredentialCacheCell<ClaudeCredentials>
-        >(
-          makeDurableCell(
-            { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
-            yield* Clock.currentTimeMillis,
-          ),
-        )
-        const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
-        const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo, {
-          reasoning: "high",
-        })
-        const state = makeFakeFetchState()
-        yield* LanguageModel.generateText({
-          prompt: conversation,
-          toolkit: Toolkit.make(ReadTool),
-          disableToolCallResolution: true,
-        }).pipe(
-          Effect.provide(
-            Layer.provideMerge(
-              model,
-              fakeFetchLayer(state, () => anthropicHappyResponse()),
-            ),
-          ),
-          Effect.scoped,
-          Effect.orDie,
+        const sent = yield* sentThroughSignedInDriver(
+          "claude-sonnet-4-6",
+          authInfo,
+          { reasoning: "high" },
+          sendConversation,
         )
         const request = yield* Schema.decodeEffect(ThinkingRequest)(
-          Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)?.body)),
+          Option.getOrThrow(Option.fromUndefinedOr(sent.body)),
         )
         const assistant = request.messages.find((message) => message.role === "assistant")
         expect(assistant?.content.map((block) => block.type)).toEqual(["thinking", "tool_use"])
@@ -3330,32 +3261,12 @@ describe("buildAnthropicModelDriver — thinking replay", () => {
       )
       const sent = (modelName: string, authInfo: ProviderAuthInfo, hints: ProviderHints) =>
         Effect.gen(function* () {
-          const credentialCellRef = yield* SynchronizedRef.make<
-            CredentialCacheCell<ClaudeCredentials>
-          >(
-            makeDurableCell(
-              { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
-              yield* Clock.currentTimeMillis,
-            ),
+          const request = yield* sentThroughSignedInDriver(
+            modelName,
+            authInfo,
+            hints,
+            sendConversation,
           )
-          const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
-          const model = yield* driver.resolveModel(modelName, authInfo, hints)
-          const state = makeFakeFetchState()
-          yield* LanguageModel.generateText({
-            prompt: conversation,
-            toolkit: Toolkit.make(ReadTool),
-            disableToolCallResolution: true,
-          }).pipe(
-            Effect.provide(
-              Layer.provideMerge(
-                model,
-                fakeFetchLayer(state, () => anthropicHappyResponse()),
-              ),
-            ),
-            Effect.scoped,
-            Effect.orDie,
-          )
-          const request = Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)))
           const body = yield* Schema.decodeEffect(BoundRequest)(
             Option.getOrThrow(Option.fromUndefinedOr(request.body)),
           )
