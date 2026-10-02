@@ -22,6 +22,38 @@ import {
 
 // The cell worker process: frames, pipes, launch failures and exit paths.
 
+// Starts `helpers/cell-host-process.ts`, a host whose cell runs `source` and writes a pid to
+// `CELL_PID_MARKER`. Returns the host and that pid; a red run must not leave the pid behind.
+const spawnCellHost = (source: string, label: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const platform = yield* GentPlatform
+    const worker = yield* buildCellWorker
+    const directory = yield* fs.makeTempDirectoryScoped()
+    const markerPath = path.join(directory, "marker.pid")
+    const hostEntry = yield* path.fromFileUrl(
+      new URL("./helpers/cell-host-process.ts", import.meta.url),
+    )
+    const host = yield* ChildProcess.make(yield* platform.execPath, [hostEntry], {
+      cwd: yield* packageDirectory,
+      forceKillAfter: "2 seconds",
+      env: {
+        CELL_WORKER_SCRIPT: worker.scriptPath,
+        CELL_SOURCE: source,
+        CELL_PID_MARKER: markerPath,
+      },
+      extendEnv: true,
+      stdout: "ignore",
+      stderr: "inherit",
+    })
+    const text = yield* waitFor(fs.readFileString(markerPath), (value) => value !== "", 5000, label)
+    const pid = Number(text)
+    expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+    yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(pid, "SIGKILL")))
+    return { host, pid }
+  })
+
 describe("cell worker process", () => {
   it.scopedLive(
     "exchanges real frames beside cell writes to stdout and stops at scope exit",
@@ -258,39 +290,12 @@ describe("cell worker process", () => {
     "a worker whose cell holds the thread exits when its host process dies",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
         const platform = yield* GentPlatform
-        const worker = yield* buildCellWorker
-        const directory = yield* fs.makeTempDirectoryScoped()
-        const marker = path.join(directory, "worker.pid")
-        const hostEntry = yield* path.fromFileUrl(
-          new URL("./helpers/cell-host-process.ts", import.meta.url),
-        )
-        const host = yield* ChildProcess.make(yield* platform.execPath, [hostEntry], {
-          cwd: yield* packageDirectory,
-          forceKillAfter: "2 seconds",
-          env: {
-            CELL_WORKER_SCRIPT: worker.scriptPath,
-            CELL_SOURCE:
-              'require("node:fs").writeFileSync(process.env.CELL_PID_MARKER, String(process.pid)); while (true) {}',
-            CELL_PID_MARKER: marker,
-          },
-          extendEnv: true,
-          stdout: "ignore",
-          stderr: "inherit",
-        })
         // The cell writes its pid right before the loop, so the loop runs once the file exists.
-        const text = yield* waitFor(
-          fs.readFileString(marker),
-          (value) => value !== "",
-          5000,
+        const { host, pid } = yield* spawnCellHost(
+          'require("node:fs").writeFileSync(process.env.CELL_PID_MARKER, String(process.pid)); while (true) {}',
           "worker pid",
         )
-        const pid = Number(text)
-        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
-        // A red run must not leave a spinning orphan behind.
-        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(pid, "SIGKILL")))
         yield* host.kill({ killSignal: "SIGKILL" })
         yield* waitFor(
           platform.signal(pid, 0).pipe(Effect.exit),
@@ -306,39 +311,12 @@ describe("cell worker process", () => {
     "a process a cell started ends with the worker when the host process dies",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
         const platform = yield* GentPlatform
-        const worker = yield* buildCellWorker
-        const directory = yield* fs.makeTempDirectoryScoped()
-        const marker = path.join(directory, "child.pid")
-        const hostEntry = yield* path.fromFileUrl(
-          new URL("./helpers/cell-host-process.ts", import.meta.url),
-        )
         // The cell starts `sleep` in the worker's process group, then holds the thread.
-        const host = yield* ChildProcess.make(yield* platform.execPath, [hostEntry], {
-          cwd: yield* packageDirectory,
-          forceKillAfter: "2 seconds",
-          env: {
-            CELL_WORKER_SCRIPT: worker.scriptPath,
-            CELL_SOURCE:
-              'const child = require("node:child_process").spawn("sleep", ["30"], { stdio: "ignore" }); require("node:fs").writeFileSync(process.env.CELL_PID_MARKER, String(child.pid)); while (true) {}',
-            CELL_PID_MARKER: marker,
-          },
-          extendEnv: true,
-          stdout: "ignore",
-          stderr: "inherit",
-        })
-        const text = yield* waitFor(
-          fs.readFileString(marker),
-          (value) => value !== "",
-          5000,
+        const { host, pid } = yield* spawnCellHost(
+          'const child = require("node:child_process").spawn("sleep", ["30"], { stdio: "ignore" }); require("node:fs").writeFileSync(process.env.CELL_PID_MARKER, String(child.pid)); while (true) {}',
           "the cell's child pid",
         )
-        const pid = Number(text)
-        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
-        // A red run must not leave the child behind.
-        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(pid, "SIGKILL")))
         yield* host.kill({ killSignal: "SIGKILL" })
         yield* waitFor(
           platform.signal(pid, 0).pipe(Effect.exit),

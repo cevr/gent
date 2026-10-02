@@ -14,7 +14,7 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { GentPlatform, BranchStorage, MessageStorage, SessionStorage } from "@gent/core/host"
+import { GentPlatform, MessageStorage } from "@gent/core/host"
 import {
   type LoadedExtension,
   captureTurnTools,
@@ -45,10 +45,7 @@ import {
   MessageId,
   SessionId,
   ToolCallId,
-  Branch,
-  dateFromMillis,
   Message,
-  Session,
   AgentDefinition,
   DEFAULT_AGENT_NAME,
   messagePartsText,
@@ -829,6 +826,41 @@ describe("a bound host call", () => {
   )
 })
 
+// ── planted cell calls ──────────────────────────────────────────────────────
+
+interface CellAddress {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly assistantMessageId: MessageId
+  readonly toolCallId: ToolCallId
+}
+
+/** Plants the session, branch and assistant message that hold a `cell` call to `code` at `address`. */
+const plantCellCall = Effect.fn("test.plantCellCall")(function* (
+  address: CellAddress,
+  code: string,
+) {
+  yield* ensureStorageParents(address)
+  yield* (yield* MessageStorage).createMessage(
+    Message.cases.regular.make({
+      id: address.assistantMessageId,
+      sessionId: address.sessionId,
+      branchId: address.branchId,
+      role: "assistant",
+      createdAt: now,
+      parts: [
+        Prompt.toolCallPart({
+          id: address.toolCallId,
+          name: "cell",
+          params: { code },
+          providerExecuted: false,
+        }),
+      ],
+    }),
+  )
+  return address
+})
+
 // ── cell tool host ──────────────────────────────────────────────────────────
 
 const cellToolHost = {
@@ -846,24 +878,7 @@ const requestToolHost = (operationId: string, name: string) =>
   })
 
 const prepareCell = Effect.gen(function* () {
-  yield* ensureStorageParents(cellToolHost)
-  yield* (yield* MessageStorage).createMessage(
-    Message.cases.regular.make({
-      id: cellToolHost.assistantMessageId,
-      sessionId: cellToolHost.sessionId,
-      branchId: cellToolHost.branchId,
-      role: "assistant",
-      createdAt: dateFromMillis(0),
-      parts: [
-        Prompt.toolCallPart({
-          id: cellToolHost.toolCallId,
-          name: "cell",
-          params: { code: "1" },
-          providerExecuted: false,
-        }),
-      ],
-    }),
-  )
+  yield* plantCellCall(cellToolHost, "1")
   yield* (yield* CellStorage).executions.claim(cellToolHost)
 })
 
@@ -1331,41 +1346,16 @@ describe("recorded host operations", () => {
 // ── cell execution storage ──────────────────────────────────────────────────
 
 const code = "await tools.write({ path: 'result.txt', content: 'once' })"
-const makeFixture = Effect.fn("test.makeCellCall")(function* (suffix: string) {
-  const sessions = yield* SessionStorage
-  const branches = yield* BranchStorage
-  const messages = yield* MessageStorage
-  const address = {
-    sessionId: SessionId.make(`cell-session-${suffix}`),
-    branchId: BranchId.make(`cell-branch-${suffix}`),
-    assistantMessageId: MessageId.make(`cell-message-${suffix}`),
-    toolCallId: ToolCallId.make(`cell-call-${suffix}`),
-  }
-  yield* sessions.createSession(
-    new Session({ id: address.sessionId, createdAt: now, updatedAt: now }),
+const makeFixture = (suffix: string) =>
+  plantCellCall(
+    {
+      sessionId: SessionId.make(`cell-session-${suffix}`),
+      branchId: BranchId.make(`cell-branch-${suffix}`),
+      assistantMessageId: MessageId.make(`cell-message-${suffix}`),
+      toolCallId: ToolCallId.make(`cell-call-${suffix}`),
+    },
+    code,
   )
-  yield* branches.createBranch(
-    new Branch({ id: address.branchId, sessionId: address.sessionId, createdAt: now }),
-  )
-  yield* messages.createMessage(
-    Message.cases.regular.make({
-      id: address.assistantMessageId,
-      sessionId: address.sessionId,
-      branchId: address.branchId,
-      role: "assistant",
-      parts: [
-        Prompt.toolCallPart({
-          id: address.toolCallId,
-          name: "cell",
-          params: { code },
-          providerExecuted: false,
-        }),
-      ],
-      createdAt: now,
-    }),
-  )
-  return address
-})
 
 describe("cell execution storage", () => {
   it.live("admits a cell once under concurrent claims and retains its first result", () =>
@@ -1545,27 +1535,7 @@ const bindingFields = {
 const binding = staticToolBinding(bindingFields)
 const params = { ...key, binding, input: { path: "file.txt", content: "once" } }
 const requestId = InteractionRequestId.make("cell-request")
-const fixture = Effect.gen(function* () {
-  yield* ensureStorageParents(cellOperationStorage)
-  const messages = yield* MessageStorage
-  yield* messages.createMessage(
-    Message.cases.regular.make({
-      id: cellOperationStorage.assistantMessageId,
-      sessionId: cellOperationStorage.sessionId,
-      branchId: cellOperationStorage.branchId,
-      role: "assistant",
-      createdAt: dateFromMillis(1_767_225_600_000),
-      parts: [
-        Prompt.toolCallPart({
-          id: cellOperationStorage.toolCallId,
-          name: "cell",
-          params: { code: "await tools.write({})" },
-          providerExecuted: false,
-        }),
-      ],
-    }),
-  )
-})
+const fixture = plantCellCall(cellOperationStorage, "await tools.write({})")
 const requestOperationStorage = InteractionRequestRecord.make({
   requestId,
   sessionId: cellOperationStorage.sessionId,
