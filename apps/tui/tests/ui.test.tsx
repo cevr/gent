@@ -352,6 +352,34 @@ describe("select list filter", () => {
     }),
   )
 
+  it.scopedLive("ctrl+w deletes the last word and ctrl+u the whole query, as in the composer", () =>
+    Effect.gen(function* () {
+      const seen: Array<string> = []
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(fruits)}
+          rowKey={(fruit) => fruit.id}
+          filter={{ onQueryChange: (next) => seen.push(next) }}
+          onSelect={() => {}}
+          onDismiss={() => {}}
+        />
+      ))
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Cherry"), "open")
+      yield* Effect.promise(() => setup.mockInput.typeText("son net"))
+      yield* waitForFrame(setup, () => seen.at(-1) === "son net", "typed")
+      setup.mockInput.pressKey("w", { ctrl: true })
+      yield* waitForFrame(setup, () => seen.at(-1) !== "son net", "a key that edits")
+      expect(seen.at(-1)).toBe("son ")
+      yield* Effect.promise(() => setup.mockInput.typeText("é"))
+      yield* waitForFrame(setup, () => seen.at(-1) === "son é", "typed again")
+      setup.mockInput.pressKey("u", { ctrl: true })
+      yield* waitForFrame(setup, () => seen.at(-1) === "", "the query cleared")
+      expect(renderFrame(setup)).toContain("Cherry")
+    }),
+  )
+
   it.scopedLive(
     "leaves shortcut keys, and a paste into a list with no filter, to the scopes under it",
     () =>

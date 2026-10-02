@@ -79,7 +79,7 @@ import {
   makeSettleTimeouts,
   refuseCommits,
 } from "./scrollback-hold-boundary"
-import { waitForFrame, waitForTerminal } from "./helpers-boundary"
+import { waitForFrame, waitForTerminal, waitUntil } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { clientContributions, defineClientExtension } from "../src/extensions/client-facets"
@@ -5202,7 +5202,9 @@ describe("sticky last prompt", () => {
 
   it.scopedLive("no pinned row while the prompt is on screen", () =>
     Effect.gen(function* () {
-      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 1)], {})
+      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 1)], {
+        streaming: true,
+      })
       // A short session: both items fit the live tail, and the terminal shows
       // the prompt once.
       const text = yield* waitForTerminal(
@@ -5232,7 +5234,10 @@ describe("sticky last prompt", () => {
   it.scopedLive("a prompt committed far into native history stays pinned, cut to the width", () =>
     Effect.gen(function* () {
       const long = `ASK-LONG ${"word ".repeat(40)}`
-      const setup = yield* mountTranscript(() => [prompt("p1", long), reply("r1", 20)], {})
+      const setup = yield* mountTranscript(
+        () => [prompt("p1", long), reply("r1", 20), { ...reply("r2", 20), draft: true }],
+        { streaming: true },
+      )
       const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-LONG"), "pinned")
       const pinned = frame.split("\n").find((line) => line.includes("↑ ASK-LONG")) ?? ""
       expect(pinned.trimEnd()).toMatch(/…$/)
@@ -5463,15 +5468,60 @@ describe("sticky last prompt", () => {
       return { setup, committed }
     })
 
-  it.scopedLive("under the pinned row every line of the live tail stays in view", () =>
+  it.scopedLive("a turn that starts over a cut answer pins nothing inside it", () =>
     Effect.gen(function* () {
-      // The tail's 11 rows fill the live rows exactly; the pinned row takes one.
+      const settledItems: ListMessage[] = [
+        prompt("p1", "ASK-ONE"),
+        reply("h1", 20),
+        reply("a1", 20),
+      ]
+      const [items, setItems] = createSignal<ListMessage[]>(settledItems)
+      const [streaming, setStreaming] = createSignal(false)
+      let extensionsLoaded = () => false
+      const setup = yield* renderScoped(
+        () => {
+          extensionsLoaded = useExtensionUI().loaded
+          return bottomTranscript({
+            items,
+            streaming,
+            footer: () => 3,
+            paneOpen: () => false,
+            overlayOpen: () => false,
+            onRenderer: () => {},
+          })
+        },
+        { width: 50, height: 16 },
+      )
+      yield* Effect.promise(() => setup.flush()).pipe(
+        Effect.repeat({ until: () => extensionsLoaded() }),
+        Effect.timeout("5 seconds"),
+      )
+      // At idle history takes the top rows of the answer; the rest stays live.
+      yield* waitForTerminal(setup, (text) => text.includes("a1 line 1"), "the answer's top rows")
+      // A turn another agent woke runs; the reader's last prompt is far up.
+      setItems([
+        ...settledItems,
+        extensionSent("w1", "PARENT-SAYS"),
+        { ...reply("d1", 1), draft: true },
+      ])
+      setStreaming(true)
+      for (let pass = 0; pass < 6; pass++) yield* Effect.promise(() => setup.flush())
+      const frame = yield* waitForFrame(setup, (next) => next.includes("d1 line 1"), "the draft")
+      expect(frame).toContain("a1 line 20")
+      expect(frame).not.toContain("↑ ASK-ONE")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("at idle a tail that fills its rows pins nothing and loses no line", () =>
+    Effect.gen(function* () {
+      // The tail's 11 rows fill the live rows exactly. At idle nothing is
+      // pinned, so no row pushes the tail's top row out of view.
       const { setup, committed } = yield* mountExact([
         { item: prompt("p0", "ASK-ONE"), name: "p0", lines: 1 },
         { item: reply("h1", 1), name: "h1", lines: 20 },
         { item: reply("tail", 1), name: "tail", lines: 11 },
       ])
-      yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+      yield* waitForFrame(setup, (next) => next.includes("tail-10"), "the tail")
       for (let pass = 0; pass < 4; pass++) yield* Effect.promise(() => setup.flush())
       const frame = renderFrame(setup)
       const history = committed.join("")
@@ -5480,6 +5530,24 @@ describe("sticky last prompt", () => {
         (line) => !frame.includes(line) && !history.includes(line),
       )
       expect(lost).toEqual([])
+      expect(frame).not.toContain("↑ ASK-ONE")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a finished answer whose top rows history took pins nothing inside it", () =>
+    Effect.gen(function* () {
+      // At idle history takes the answer's top rows; the rest stays live under them.
+      const { setup, committed } = yield* mountExact([
+        { item: prompt("p0", "ASK-ONE"), name: "p0", lines: 1 },
+        { item: reply("h1", 1), name: "h1", lines: 20 },
+        { item: reply("ans", 1), name: "ans", lines: 30 },
+      ])
+      yield* waitUntil(() => committed.join("").includes("ans-1"), "the answer's top rows")
+      for (let pass = 0; pass < 4; pass++) yield* Effect.promise(() => setup.flush())
+      const frame = renderFrame(setup)
+      expect(frame).toContain("ans-29")
+      // A pinned row here would sit between the answer's rows in history and on screen.
+      expect(frame).not.toContain("↑ ASK-ONE")
     }).pipe(Effect.timeout("10 seconds")),
   )
 })
@@ -5548,7 +5616,6 @@ describe("promptOnScreen", () => {
         liveHeight: 10,
         liveRows: 7,
         scrollbackRows: 0,
-        cut: 0,
       })
     // The prompt's text starts one row into its item, under the row's top margin.
     expect(at([3, 2, 5])).toBe(true)
@@ -5564,31 +5631,10 @@ describe("promptOnScreen", () => {
         liveHeight: 4,
         liveRows: 10,
         scrollbackRows,
-        cut: 0,
       })
     // Its text row and the reply under it: 1 + 5 rows of history.
     expect(committed(6)).toBe(true)
     expect(committed(5)).toBe(false)
-  })
-
-  // History holds the prompt's top rows, its text row among them; the live
-  // tail shows the rest. The text row is on screen while the terminal shows
-  // the history rows from it on.
-  test("a prompt whose text row is in history among the cut rows is on screen while they show", () => {
-    const cutPrompt = (scrollbackRows: number) =>
-      promptOnScreen({
-        heightAt: known([7, 12]),
-        index: 0,
-        committed: 0,
-        liveHeight: 17,
-        liveRows: 10,
-        scrollbackRows,
-        cut: 3,
-      })
-    // Three rows above the region show the margin row, the text row and one more.
-    expect(cutPrompt(0)).toBe(true)
-    expect(cutPrompt(-1)).toBe(true)
-    expect(cutPrompt(-2)).toBe(false)
   })
 
   test("an unmeasured row counts as on screen, so nothing is pinned on a guess", () => {
@@ -5600,7 +5646,6 @@ describe("promptOnScreen", () => {
         liveHeight: 40,
         liveRows: 5,
         scrollbackRows: 0,
-        cut: 0,
       }),
     ).toBe(true)
   })
@@ -5617,7 +5662,6 @@ describe("promptOnScreen", () => {
       liveHeight: 4,
       liveRows: 10,
       scrollbackRows: 12,
-      cut: 0,
     })
     expect(onScreen).toBe(false)
     expect(reads).toBeLessThanOrEqual(8)
