@@ -1007,6 +1007,51 @@ describe("listAuthProviders", () => {
     }),
   )
 
+  it.live("a key that lacks an answer a needed prompt asks is not ready and names it", () =>
+    Effect.gen(function* () {
+      const prompted: ModelDriverContribution = {
+        id: "prompted",
+        name: "Prompted",
+        resolveModel: () => Effect.succeed(stubModel),
+        auth: {
+          methods: [
+            AuthMethod.make({
+              type: "api",
+              label: "API",
+              prompts: [
+                { key: "account", label: "Account" },
+                { key: "region", label: "Region", optional: true },
+              ],
+            }),
+          ],
+        },
+      }
+      const registry = ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("test-prompted") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { modelDrivers: [prompted] },
+          } satisfies LoadedExtension,
+        ]),
+      )
+      const row = (metadata: Record<string, string>) =>
+        listAuthProviders([]).pipe(
+          Effect.provide(
+            Layer.merge(
+              Auth.Test({ prompted: AuthApi.make({ type: "api", key: "k", metadata }) }),
+              registry,
+            ),
+          ),
+          Effect.map(([listed]) => [listed?.hasKey, Option.fromNullishOr(listed?.missing)]),
+        )
+      expect(yield* row({})).toEqual([false, Option.some(["Account"])])
+      expect(yield* row({ account: "" })).toEqual([false, Option.some(["Account"])])
+      expect(yield* row({ account: "a-1" })).toEqual([true, Option.none()])
+    }),
+  )
+
   it.live("every provider carries its driver's display name", () =>
     Effect.gen(function* () {
       const result = yield* list({ anthropic: apiInfo("sk-test") }, [opus])

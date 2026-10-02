@@ -124,10 +124,17 @@ export const AuthProviderInfo = Schema.Struct({
   provider: ProviderId,
   /** The driver's display name ("OpenCode"); a client shows it in place of the id. */
   name: Schema.optional(Schema.String),
+  /** The sign-in is ready: a credential, and an answer to each prompt it needs. */
   hasKey: Schema.Boolean,
   source: Schema.optional(AuthSource),
   authType: Schema.optional(AuthMethod.fields.type),
   required: Schema.Boolean,
+  /**
+   * The labels of the prompts a credential still lacks (an `AuthPrompt` that
+   * is not `optional`, with no stored answer and no variable set). Present
+   * only on a credential that is not ready for it: `hasKey` is false.
+   */
+  missing: Schema.optional(Schema.Array(Schema.String)),
 })
 export type AuthProviderInfo = typeof AuthProviderInfo.Type
 
@@ -570,26 +577,64 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
         providers.push({
           provider,
           name,
-          hasKey: true,
           source: "env",
           required: required.has(driver.id),
+          ...readiness(yield* unansweredPrompts(driver, Option.none())),
         })
         continue
       }
       providers.push({ provider, name, hasKey: false, required: required.has(driver.id) })
       continue
     }
+    const info = stored.value.info
+    let missing: ReadonlyArray<string> = []
+    if (info.type === "api")
+      missing = yield* unansweredPrompts(driver, Option.fromUndefinedOr(info.metadata))
     providers.push({
       provider,
       name,
-      hasKey: true,
       source: "stored",
-      authType: stored.value.info.type,
+      authType: info.type,
       required: required.has(driver.id),
+      ...readiness(missing),
     })
   }
   return providers
 })
+
+/**
+ * The labels of the prompts `driver`'s API sign-in cannot run without that
+ * `metadata` leaves unanswered and whose variable is not set: the driver
+ * reads the variable when the stored key has no answer.
+ */
+const unansweredPrompts = (
+  driver: ModelDriverContribution,
+  metadata: Option.Option<AuthMetadata>,
+): Effect.Effect<ReadonlyArray<string>> => {
+  const methods = Option.match(Option.fromUndefinedOr(driver.auth), {
+    onNone: (): ReadonlyArray<AuthMethod> => [],
+    onSome: (contribution) => contribution.methods,
+  })
+  const needed = methods
+    .filter((method) => method.type === "api")
+    .flatMap((method) => Option.getOrElse(Option.fromUndefinedOr(method.prompts), () => []))
+    .filter((prompt) => prompt.optional !== true)
+  return Effect.filter(needed, (prompt) => {
+    const answered = Option.exists(metadata, (answers) =>
+      Option.exists(Option.fromUndefinedOr(answers[prompt.key]), (answer) => answer.length > 0),
+    )
+    if (answered) return Effect.succeed(false)
+    return Effect.map(envCredentialSet(Option.fromUndefinedOr(prompt.env)), (set) => !set)
+  }).pipe(Effect.map((prompts) => [...new Set(prompts.map((prompt) => prompt.label))]))
+}
+
+/** A credential is ready when no prompt it needs is missing; a row that is not names them. */
+const readiness = (
+  missing: ReadonlyArray<string>,
+): Pick<AuthProviderInfo, "hasKey" | "missing"> => {
+  if (missing.length === 0) return { hasKey: true }
+  return { hasKey: false, missing }
+}
 
 // ── provider-auth ───────────────────────────────────────────────────────────
 

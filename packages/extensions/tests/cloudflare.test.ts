@@ -512,4 +512,33 @@ describe("Cloudflare sign-in", () => {
       ).toEqual([["gatewayId"]])
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
+
+  it.live(
+    "a token with no account id is not ready and names the Account ID; the variable or the answer makes it ready",
+    () =>
+      Effect.gen(function* () {
+        const status = (env: Record<string, string>, metadata?: Record<string, string>) =>
+          Effect.gen(function* () {
+            const { client, sessionId } = yield* signInClient(env)
+            if (Predicate.isNotUndefined(metadata))
+              yield* client.auth.setKey({ provider: "cloudflare", key: TOKEN, metadata, sessionId })
+            const [row] = yield* client.auth.listProviders({ sessionId })
+            return [row?.hasKey, row?.source, Option.fromNullishOr(row?.missing)]
+          })
+        const needsAccount = Option.some(["Account ID"])
+        // A sign-in that left the account empty, and a token from the variable alone.
+        expect(yield* status({}, {})).toEqual([false, "stored", needsAccount])
+        expect(yield* status({ CLOUDFLARE_API_TOKEN: TOKEN })).toEqual([false, "env", needsAccount])
+        // The optional gateway is never missing.
+        expect(yield* status({}, { accountId: "acct-1" })).toEqual([true, "stored", Option.none()])
+        expect(yield* status({ CLOUDFLARE_ACCOUNT_ID: "acct-env" }, {})).toEqual([
+          true,
+          "stored",
+          Option.none(),
+        ])
+        expect(
+          yield* status({ CLOUDFLARE_API_TOKEN: TOKEN, CLOUDFLARE_ACCOUNT_ID: "acct-env" }),
+        ).toEqual([true, "env", Option.none()])
+      }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+  )
 })

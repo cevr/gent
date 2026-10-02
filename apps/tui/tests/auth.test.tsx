@@ -503,6 +503,48 @@ describe("Auth route", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x delete"), "the stored row")
     }).pipe(Effect.timeout("4 seconds")),
   )
+  // A key whose sign-in still lacks an answer it needs is not ready: the row
+  // says what is missing, at 120 and 60 columns.
+  it.scopedLive("a stored key that lacks a needed answer names what is missing", () =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("cloudflare"),
+                name: "Cloudflare",
+                hasKey: false,
+                required: false,
+                source: "stored",
+                authType: "api",
+                missing: ["Account ID"],
+              },
+              {
+                provider: ProviderId.make("openai"),
+                hasKey: true,
+                required: false,
+                source: "stored",
+                authType: "api",
+              },
+            ]),
+          listMethods: () => Effect.succeed({ cloudflare: [apiMethodRoute] }),
+        },
+      })
+      for (const width of [120, 60]) {
+        const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+          client,
+          runtime: createMockRuntime(),
+          width,
+        })
+        const list = yield* waitForFrame(setup, (frame) => frame.includes("openai"), "the list")
+        expect(list).toContain("Cloudflare [api] needs Account ID")
+        expect(list).toContain("openai [api]")
+        expect(list).not.toContain("openai [api] needs")
+        destroyRenderSetup(setup)
+      }
+    }).pipe(Effect.timeout("6 seconds")),
+  )
   // The session's profile decides which driver owns a sign-in, so a typed
   // key is saved in that profile, as a sign-out is.
   it.scopedLive("a typed key is saved in the session's profile", () =>

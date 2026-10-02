@@ -856,10 +856,20 @@ export function Auth(props: AuthProps) {
     if (provider.required) return theme.error
     return theme.textMuted
   }
+  // A credential that still lacks an answer its sign-in needs is not ready:
+  // the row names its source and what is missing.
   const authLabel = (provider: AuthProviderInfo) => {
-    if (!provider.hasKey) return "[none]"
-    if (provider.source === "env") return "[env]"
-    return `[${Option.getOrElse(Option.fromNullishOr(provider.authType), () => "stored")}]`
+    const missing = Option.filter(
+      Option.fromNullishOr(provider.missing),
+      (labels) => labels.length > 0,
+    )
+    if (!provider.hasKey && Option.isNone(missing)) return "[none]"
+    let source = `[${Option.getOrElse(Option.fromNullishOr(provider.authType), () => "stored")}]`
+    if (provider.source === "env") source = "[env]"
+    return Option.match(missing, {
+      onNone: () => source,
+      onSome: (labels) => `${source} needs ${labels.join(", ")}`,
+    })
   }
   const requiredLabel = (provider: AuthProviderInfo) => {
     if (provider.required) return " [required]"

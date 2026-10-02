@@ -406,6 +406,7 @@ export const buildCloudflareModelDriver = (
             label: "AI Gateway ID",
             placeholder: "optional: leave empty for no gateway",
             env: GATEWAY_ENV,
+            optional: true,
           },
         ],
       }),

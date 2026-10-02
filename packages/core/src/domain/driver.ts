@@ -34,13 +34,16 @@ export type DriverFailureId = typeof DriverFailureId.Type
  * One text field an API sign-in asks for after the key, such as an account
  * id. The answer is not a secret: the store keeps it beside the key as
  * `metadata[key]`. When `env` names a variable that is set, `/auth` does not
- * ask: the driver reads the variable instead.
+ * ask: the driver reads the variable instead. A prompt the driver cannot run
+ * without is not `optional`: until it has an answer or its variable, the
+ * sign-in is not ready, and the auth listing names it in `missing`.
  */
 export const AuthPrompt = Schema.Struct({
   key: Schema.String,
   label: Schema.String,
   placeholder: Schema.optional(Schema.String),
   env: Schema.optional(Schema.String),
+  optional: Schema.optional(Schema.Boolean),
 })
 export type AuthPrompt = typeof AuthPrompt.Type
 
