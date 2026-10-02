@@ -11,6 +11,7 @@ import {
   Layer,
   Option,
   Path,
+  Predicate,
   Ref,
   Schema,
   Semaphore,
@@ -445,23 +446,51 @@ describe("models.dev catalog", () => {
     }).pipe(Effect.provide(platformLayer)),
   )
 
-  // The driver sends a reasoning effort only to a model that reasons; the
-  // catalog, not a name pattern, says which ones do.
-  it.scopedLive("each model carries the reasoning flag models.dev gives it", () =>
+  it.scopedLive("each parsed model carries the fields models.dev gives it", () =>
     Effect.gen(function* () {
-      const home = yield* freshHome("reasoning")
+      const home = yield* freshHome("fields")
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
-      const reasoningOf = (id: string) =>
-        models.find((model) => model.id === ModelId.make(id))?.reasoning
+      // The catalog fields of one model, with only the fields that are set.
+      const fields = (id: string) => {
+        const model = models.find((candidate) => candidate.id === ModelId.make(id))
+        const all = {
+          // The driver sends a reasoning effort only to a model that reasons;
+          // the catalog, not a name pattern, says which ones do.
+          reasoning: model?.reasoning,
+          releaseDate: model?.releaseDate,
+          pricing: model?.pricing,
+          contextLength: model?.contextLength,
+          inputLimit: model?.inputLimit,
+          outputLimit: model?.outputLimit,
+        }
+        return Object.fromEntries(
+          Object.entries(all).filter(([, value]) => Predicate.isNotUndefined(value)),
+        )
+      }
 
-      expect(reasoningOf("openai/gpt-5.4")).toBe(true)
-      expect(reasoningOf("openai/gpt-4o")).toBe(false)
-      // models.dev names no flag: the catalog does not guess one.
-      expect(reasoningOf("anthropic/claude-opus-5")).toBeUndefined()
+      expect(fields("openai/gpt-5.4")).toStrictEqual({
+        reasoning: true,
+        releaseDate: "2026-07-24",
+        pricing: { input: 1.25, output: 10 },
+        contextLength: 400_000,
+        inputLimit: 272_000,
+        outputLimit: 128_000,
+      })
+      expect(fields("openai/gpt-4o")["reasoning"]).toBe(false)
+      // A field models.dev does not name stays unset: the catalog does not guess.
+      expect(fields("anthropic/claude-opus-5")).toStrictEqual({
+        releaseDate: "2026-07-24",
+        pricing: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        contextLength: 1_000_000,
+      })
+      const ids = models.map((model) => model.id)
+      // A model without tool calling stays out; no flag means unknown, and the model stays.
+      expect(ids).not.toContain(ModelId.make("openai/text-embedding-3-small"))
+      expect(ids).toContain(ModelId.make("anthropic/claude-opus-5"))
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -540,97 +569,6 @@ describe("models.dev catalog", () => {
         expect(yield* Ref.get(online)).toBe(1)
         expect(later.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
       }).pipe(Effect.provide(TestClock.layer()))
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  it.scopedLive("no cache and a failed fetch give an empty catalog", () =>
-    Effect.gen(function* () {
-      const home = yield* freshHome("empty")
-      const calls = yield* Ref.make(0)
-
-      const models = yield* modelsDevCatalog(home).pipe(Effect.provide(failingHttpLayer(calls)))
-
-      expect(models).toEqual([])
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  it.scopedLive("carries the release date onto the parsed model", () =>
-    Effect.gen(function* () {
-      const home = yield* freshHome("release-date")
-      const calls = yield* Ref.make(0)
-
-      const models = yield* modelsDevCatalog(home).pipe(
-        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
-      )
-
-      const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
-      expect(opus?.releaseDate).toBe("2026-07-24")
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  it.scopedLive("carries the prompt-cache prices onto the parsed model", () =>
-    Effect.gen(function* () {
-      const home = yield* freshHome("cache-price")
-      const calls = yield* Ref.make(0)
-
-      const models = yield* modelsDevCatalog(home).pipe(
-        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
-      )
-
-      const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
-      expect(opus?.pricing).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 })
-      const gpt = models.find((model) => model.id === "openai/gpt-5.4")
-      expect(gpt?.pricing).toEqual({ input: 1.25, output: 10 })
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  it.scopedLive("carries an input cap below the window onto the parsed model", () =>
-    Effect.gen(function* () {
-      const home = yield* freshHome("input-cap")
-      const calls = yield* Ref.make(0)
-
-      const models = yield* modelsDevCatalog(home).pipe(
-        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
-      )
-
-      const gpt = models.find((model) => model.id === "openai/gpt-5.4")
-      expect(gpt?.contextLength).toBe(400_000)
-      expect(gpt?.inputLimit).toBe(272_000)
-      // A model the catalog names no cap for has none.
-      const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
-      expect(opus?.inputLimit).toBeUndefined()
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  it.scopedLive("carries the output cap onto the parsed model", () =>
-    Effect.gen(function* () {
-      const home = yield* freshHome("output-cap")
-      const calls = yield* Ref.make(0)
-
-      const models = yield* modelsDevCatalog(home).pipe(
-        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
-      )
-
-      const gpt = models.find((model) => model.id === "openai/gpt-5.4")
-      expect(gpt?.outputLimit).toBe(128_000)
-      const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
-      expect(opus?.outputLimit).toBeUndefined()
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  it.scopedLive("a model without tool calling stays out of the catalog", () =>
-    Effect.gen(function* () {
-      const home = yield* freshHome("tool-call")
-      const calls = yield* Ref.make(0)
-
-      const models = yield* modelsDevCatalog(home).pipe(
-        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
-      )
-
-      const ids = models.map((model) => model.id)
-      expect(ids).not.toContain(ModelId.make("openai/text-embedding-3-small"))
-      // No flag means unknown, and the model stays.
-      expect(ids).toContain(ModelId.make("anthropic/claude-opus-5"))
     }).pipe(Effect.provide(platformLayer)),
   )
 

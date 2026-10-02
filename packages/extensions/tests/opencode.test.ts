@@ -326,6 +326,8 @@ const routes = [
     url: "https://opencode.ai/zen/go/v1/responses",
     auth: ["authorization", `Bearer ${API_KEY}`],
   },
+  // The Go gateway's default is Chat Completions; the catalog entry of
+  // minimax-m3 names @ai-sdk/anthropic, so it posts to Messages.
   {
     gateway: "go",
     model: "minimax-m3",
@@ -385,16 +387,6 @@ describe("OpenCode request wiring", () => {
           ])
         }
       }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
-  )
-
-  it.live("a model the catalog serves over Messages posts to /v1/messages", () =>
-    Effect.gen(function* () {
-      const { go } = yield* fixtureDrivers
-      const state = makeFakeFetchState()
-      // The gateway's default is Chat Completions; minimax-m3's entry names @ai-sdk/anthropic.
-      yield* generate(go, "minimax-m3", state, { cacheKey: "s" })
-      expect(lastRequest(state).url).toBe("https://opencode.ai/zen/go/v1/messages?beta=true")
-    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
   it.live("a call without a conversation names a session of its own", () =>
@@ -713,33 +705,7 @@ const reasonedToolStep = Prompt.make([
 // ── prompt caching ──────────────────────────────────────────────────────────
 
 describe("OpenCode prompt caching", () => {
-  it.live("Messages marks the first system block and the last block of the last two messages", () =>
-    Effect.gen(function* () {
-      const { zen } = yield* fixtureDrivers
-      const state = makeFakeFetchState()
-      const conversation = Prompt.make([
-        { role: "system", content: "be brief" },
-        { role: "user", content: "one" },
-        { role: "assistant", content: "two" },
-        { role: "user", content: "three" },
-      ])
-      yield* generate(zen, "claude-opus-5", state, { cacheKey: "s" }, conversation)
-      const body = yield* bodyOf(lastRequest(state))
-      const Blocks = Schema.Array(Schema.JsonObject)
-      const system = yield* Schema.decodeUnknownEffect(Blocks)(body["system"])
-      expect(system.map((block) => block["cache_control"])).toEqual([{ type: "ephemeral" }])
-      const messages = yield* Schema.decodeUnknownEffect(
-        Schema.Array(Schema.Struct({ role: Schema.String, content: Blocks })),
-      )(body["messages"])
-      expect(
-        messages.map((message) =>
-          message.content.map((block) => Predicate.isObject(block["cache_control"])),
-        ),
-      ).toEqual([[false], [true], [true]])
-    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
-  )
-
-  /** Which blocks of each message carry a cache marker, and how many markers the body has. */
+  /** Which blocks of each message and of the system prompt carry a cache marker. */
   const markers = (state: FakeFetchState) =>
     Effect.gen(function* () {
       const body = yield* bodyOf(lastRequest(state))
@@ -754,6 +720,24 @@ describe("OpenCode prompt caching", () => {
         system: system.map(marked),
       }
     })
+
+  it.live("Messages marks the first system block and the last block of the last two messages", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const conversation = Prompt.make([
+        { role: "system", content: "be brief" },
+        { role: "user", content: "one" },
+        { role: "assistant", content: "two" },
+        { role: "user", content: "three" },
+      ])
+      yield* generate(zen, "claude-opus-5", state, { cacheKey: "s" }, conversation)
+      expect(yield* markers(state)).toEqual({ messages: [[false], [true], [true]], system: [true] })
+      expect((yield* bodyOf(lastRequest(state)))["system"]).toMatchObject([
+        { cache_control: { type: "ephemeral" } },
+      ])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
 
   // The patched SDK sends a system message after the conversation (a turn
   // notice) as a user message of its own; caching it would spend a marker on
