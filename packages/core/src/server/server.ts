@@ -129,6 +129,7 @@ import {
   DecisionModelResolver,
   listAuthMethods,
   listAuthProviders,
+  listCatalogProviders,
   removeSignIn,
   storeSignIn,
   type ModelCatalogFailure,
@@ -1280,6 +1281,9 @@ interface LoginLease {
   done: boolean
 }
 
+/** What a sign-in call reads under the session's profile. */
+type ProfileAuthServices = ExtensionRegistry | Auth | GentPlatform | ModelCatalogSource
+
 const RpcHandlers = GentRpcs.toLayer(
   Effect.gen(function* () {
     const mutations = yield* SessionMutations
@@ -1370,19 +1374,20 @@ const RpcHandlers = GentRpcs.toLayer(
 
     const underProfile = <A, E>(
       profile: Pick<SessionProfile, "registryService" | "layerContext">,
-      effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
+      effect: Effect.Effect<A, E, ProfileAuthServices>,
     ) =>
       effect.pipe(
         Effect.provideService(ExtensionRegistry, profile.registryService),
         Effect.provideService(Auth, authStore),
         Effect.provideService(GentPlatform, platform),
+        Effect.provideService(ModelCatalogSource, catalogSource),
         Effect.provideContext(profile.layerContext),
       )
 
     /** Provider login runs against the drivers of the session's own profile. */
     const inSessionProfile = <A, E>(
       sessionId: SessionId,
-      effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
+      effect: Effect.Effect<A, E, ProfileAuthServices>,
     ) =>
       resolveSessionProfile(sessionId).pipe(
         Effect.flatMap((profile) => underProfile(profile, effect)),
@@ -1687,6 +1692,10 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "auth.listMethods": ({ sessionId }: ListAuthMethodsInput) =>
         inSessionProfile(sessionId, listAuthMethods()),
+
+      // The `/auth` search: the servable generic providers not yet active.
+      "auth.listCatalogProviders": ({ sessionId }: ListAuthMethodsInput) =>
+        inSessionProfile(sessionId, listCatalogProviders()),
 
       "auth.authorize": (input: AuthorizeAuthInput) =>
         authorizeLogin(input).pipe(Effect.map(Option.getOrNull)),

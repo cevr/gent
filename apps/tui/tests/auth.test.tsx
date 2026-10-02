@@ -10,7 +10,7 @@ import {
   ProviderId,
   SessionId,
 } from "@gent/core/protocol"
-import { Auth, type AuthEvent, AuthState, transitionAuth } from "../src/auth"
+import { Auth, type AuthEvent, AuthState, listedProviders, transitionAuth } from "../src/auth"
 import { BunServices } from "@effect/platform-bun"
 import { App } from "../src/app"
 import { LinkOpener, LinkOpenerError } from "../src/os"
@@ -60,6 +60,7 @@ const loaded = (providers: ReadonlyArray<AuthProviderInfo> = [provider]) =>
   transitionAuth(AuthState.initial(), {
     _tag: "Loaded",
     providers,
+    others: [],
     methods,
   } satisfies AuthEvent)
 
@@ -73,11 +74,32 @@ const openOAuth = (authorization: AuthAuthorization) =>
   } satisfies AuthEvent)
 
 describe("auth-state", () => {
+  test("the list shows the active providers, and a query finds the others by name or id", () => {
+    const other = (id: string, name: string): AuthProviderInfo => ({
+      provider: ProviderId.make(id),
+      name,
+      hasKey: false,
+      required: false,
+    })
+    const catalog = {
+      providers: [provider],
+      others: [other("deepseek", "DeepSeek"), other("nano-gpt", "NanoGPT")],
+      methods,
+    }
+    const ids = (query: string) =>
+      listedProviders(catalog, query).map((entry) => String(entry.provider))
+    expect(ids("")).toEqual(["anthropic"])
+    expect(ids("  ")).toEqual(["anthropic"])
+    expect(ids("deep")).toEqual(["deepseek"])
+    expect(ids("NANO-")).toEqual(["nano-gpt"])
+    expect(ids("an")).toEqual(["anthropic", "nano-gpt"])
+  })
+
   test("a load replaces the catalog and shows the provider list", () => {
     const state = loaded()
 
     expect(state.screen).toEqual({ _tag: "List" })
-    expect(state.catalog).toEqual(Option.some({ providers: [provider], methods }))
+    expect(state.catalog).toEqual(Option.some({ providers: [provider], others: [], methods }))
     expect(state.error).toEqual(Option.none())
   })
 
@@ -89,12 +111,17 @@ describe("auth-state", () => {
     const initial = AuthState.initial()
 
     expect(initial.catalog).toEqual(Option.none())
-    expect(loaded([]).catalog).toEqual(Option.some({ providers: [], methods }))
+    expect(loaded([]).catalog).toEqual(Option.some({ providers: [], others: [], methods }))
   })
 
   test("a load clears an error left by the attempt before it", () => {
     const failed = transitionAuth(AuthState.initial(), { _tag: "Failed", error: "boom" })
-    const recovered = transitionAuth(failed, { _tag: "Loaded", providers: [provider], methods })
+    const recovered = transitionAuth(failed, {
+      _tag: "Loaded",
+      providers: [provider],
+      others: [],
+      methods,
+    })
 
     expect(failed.error).toEqual(Option.some("boom"))
     expect(recovered.error).toEqual(Option.none())
@@ -451,9 +478,12 @@ describe("Auth route", () => {
       })
       const list = yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       expect(list).toContain("ctrl+x delete")
+      // A letter is the search's, never a delete; Esc clears the query.
       setup.mockInput.pressKey("d")
       yield* Effect.promise(() => setup.renderOnce())
       expect(deleted).toEqual([])
+      setup.mockInput.pressKey("ESCAPE")
+      yield* waitForFrame(setup, (frame) => frame.includes("[stored]") || frame.includes("[api]"))
       setup.mockInput.pressKey("x", { ctrl: true })
       yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again to delete openai login"))
       expect(deleted).toEqual([])
@@ -540,6 +570,76 @@ describe("Auth route", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("API key saved for anthropic"))
       expect(saved).toEqual([{ provider: "anthropic", sessionId: activeSessionId }])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A models.dev provider with no key shows only to a typed search; its
+  // sign-in asks the key, then each variable of its base URL.
+  it.scopedLive("a typed search finds a models.dev provider and signs it in", () =>
+    Effect.gen(function* () {
+      const saved: Array<{ provider: string; key: string; metadata?: Record<string, string> }> = []
+      const regionPrompt = { key: "REGION_ID", label: "REGION_ID", env: "REGION_ID" }
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              { provider: ProviderId.make("anthropic"), hasKey: true, required: false },
+            ]),
+          listMethods: () => Effect.succeed({ anthropic: [apiMethodRoute] }),
+          listCatalogProviders: () =>
+            Effect.succeed({
+              providers: [
+                {
+                  provider: ProviderId.make("deepseek"),
+                  name: "DeepSeek",
+                  hasKey: false,
+                  required: false,
+                },
+                {
+                  provider: ProviderId.make("regional"),
+                  name: "Regional",
+                  hasKey: false,
+                  required: false,
+                },
+              ],
+              methods: {
+                deepseek: [{ type: "api", label: "DeepSeek API key" }],
+                regional: [{ type: "api", label: "Regional API key", prompts: [regionPrompt] }],
+              },
+            }),
+          setKey: (input: { provider: string; key: string; metadata?: Record<string, string> }) =>
+            Effect.sync(() => {
+              saved.push({
+                provider: input.provider,
+                key: input.key,
+                ...omitUndefined({ metadata: input.metadata }),
+              })
+            }),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+      })
+      const list = yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      expect(list).not.toContain("DeepSeek")
+      expect(list).toContain("type to search")
+      yield* Effect.promise(() => setup.mockInput.typeText("regi"))
+      const found = yield* waitForFrame(setup, (frame) => frame.includes("Regional"))
+      expect(found).toContain("[models.dev]")
+      expect(found).not.toContain("DeepSeek")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Regional API key"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · Regional · API key"))
+      yield* Effect.promise(() => setup.mockInput.typeText("sk-regional"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("REGION_ID"))
+      yield* Effect.promise(() => setup.mockInput.typeText("eu"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("saved for Regional"))
+      expect(saved).toEqual([
+        { provider: "regional", key: "sk-regional", metadata: { REGION_ID: "eu" } },
+      ])
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("the key field ignores super and hyper keys and erases as the composer does", () =>

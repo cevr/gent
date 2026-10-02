@@ -1,4 +1,9 @@
-import { makeTempDirectoryScoped, seedAuthKeys, waitFor } from "@gent/core/test-utils"
+import {
+  makeTempDirectoryScoped,
+  seedAuthKeys,
+  serveModelCatalogFixture,
+  waitFor,
+} from "@gent/core/test-utils"
 import { Terminal } from "@xterm/headless"
 import {
   Clock,
@@ -37,12 +42,24 @@ const ignoreSyncDefect = (evaluate: () => void): Effect.Effect<void> =>
 /**
  * Start the TUI in a pty that belongs to the caller's scope. Closing the scope
  * sends ctrl+c, waits for the exit, and kills a child that outlives the wait.
+ * The child reads the fixture catalog from a loopback listener of the same
+ * scope, never models.dev.
  */
 const spawnWithDir = (
   tempDir: string,
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
   size: PtySize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
+): Effect.Effect<TestContext, never, Scope.Scope> =>
+  Effect.flatMap(serveModelCatalogFixture, (catalogOrigin) =>
+    spawnInPty(tempDir, extraArgs, { GENT_MODEL_CATALOG_URL: catalogOrigin, ...extraEnv }, size),
+  )
+
+const spawnInPty = (
+  tempDir: string,
+  extraArgs: string[],
+  extraEnv: Record<string, string>,
+  size: PtySize,
 ): Effect.Effect<TestContext, never, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.sync(() => {

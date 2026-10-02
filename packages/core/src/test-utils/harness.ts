@@ -10,6 +10,7 @@ import {
   Random,
   Ref,
   Schema,
+  type Scope,
   Stream,
   TxRef,
 } from "effect"
@@ -60,7 +61,13 @@ import {
   ModelCatalogSource,
   ModelRegistry,
 } from "../runtime/provider.js"
-import { HttpClient, HttpClientResponse } from "effect/http"
+import {
+  HttpClient,
+  HttpClientResponse,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/http"
 import {
   getToolMetadata,
   type ToolCapability,
@@ -126,7 +133,7 @@ import {
 import { type AgentEvent, EventStore, type EventStoreService } from "../domain/event.js"
 import { type LanguageModel, Model as AiModel } from "effect/ai"
 import { GentPlatform } from "../runtime/gent-platform.js"
-import { BunCrypto } from "@effect/platform-bun"
+import { BunCrypto, BunHttpServer } from "@effect/platform-bun"
 import type { FeatureMigrations } from "../storage/schema.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 
@@ -575,7 +582,10 @@ export const provideToolDispatch = (input: {
   readonly host: ExtensionHostContext
 }) => {
   const resolved = resolveExtensions(input.extensions)
-  const registry = ExtensionRegistry.of({ getResolved: () => resolved })
+  const registry = ExtensionRegistry.of({
+    getResolved: () => resolved,
+    providerConfig: Effect.succeed({}),
+  })
   return <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       provideCurrentHostCtx(input.host),
@@ -1503,6 +1513,42 @@ export const modelCatalogFixture = Effect.gen(function* () {
     offline: (offline: boolean) => Ref.update(served, (current) => ({ ...current, offline })),
   }
 })
+
+/**
+ * The fixture over a loopback listener on a free port, for a spawned gent:
+ * the child sets `GENT_MODEL_CATALOG_URL` to the origin this returns and
+ * reads the fixture with no network. A request that sends the current ETag
+ * gets a 304. The listener closes with the scope.
+ */
+export const serveModelCatalogFixture: Effect.Effect<string, never, Scope.Scope> = Effect.gen(
+  function* () {
+    const app = Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const url = new URL(request.url, "http://127.0.0.1")
+      const source = `${url.pathname.replace(/^\/+/, "")}${url.search}`
+      const answer = Option.fromUndefinedOr(
+        Object.entries(MODEL_CATALOG_FIXTURE).find(([name]) => name === source)?.[1],
+      )
+      if (Option.isNone(answer)) return HttpServerResponse.text("not found", { status: 404 })
+      const ifNoneMatch = Option.fromUndefinedOr(request.headers["if-none-match"])
+      if (Option.contains(ifNoneMatch, answer.value.etag)) {
+        return HttpServerResponse.empty({ status: 304 })
+      }
+      return HttpServerResponse.text(answer.value.body, {
+        headers: { etag: answer.value.etag },
+        contentType: "application/json",
+      })
+    })
+    const context = yield* Layer.build(
+      HttpServer.serve(app).pipe(
+        Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
+      ),
+    )
+    const address = Context.get(context, HttpServer.HttpServer).address
+    if (address._tag === "UnixPathAddress") return yield* Effect.die("a TCP listener has no path")
+    return `http://127.0.0.1:${address.port}`
+  },
+).pipe(Effect.orDie)
 
 /** The fixture client alone, for a test root that does not count its requests. */
 const modelCatalogFixtureLayer: Layer.Layer<HttpClient.HttpClient> = Layer.unwrap(

@@ -46,6 +46,7 @@ import {
   DecisionModelResolver,
   removeSignIn,
   listAuthMethods,
+  listCatalogProviders,
   retryProviderCall,
   listModelCatalog,
   type LoadedModelCatalog,
@@ -66,6 +67,7 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ModelId, ProviderId, Model, type ReasoningEffort } from "../../src/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
+import type { ProviderConfig } from "../../src/runtime/config"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import {
@@ -319,10 +321,16 @@ const unusedResolution = (): Effect.Effect<ProviderResolution> =>
 // oxlint-disable-next-line effect/noNullish -- The auth store answers undefined for a provider with no key.
 const noStoredAuth: AuthInfo | undefined = undefined
 
+/** A catalog with no provider: the drivers under test are the whole profile. */
+const emptyCatalogLayer = ModelCatalogSource.fixed(
+  modelCatalogFromBodies({ chat: "{}", decision: "{}" }),
+)
+
 const authLayer = Layer.succeed(
   Auth,
   Auth.of(
     serializeAuthStore({
+      list: Effect.succeed([]),
       get: () => Effect.succeed(noStoredAuth),
       set: () => Effect.void,
       remove: () => Effect.void,
@@ -334,6 +342,7 @@ const failingReadAuthLayer = Layer.succeed(
   Auth,
   Auth.of(
     serializeAuthStore({
+      list: Effect.fail(new AuthError({ message: "read failed" })),
       get: () => Effect.fail(new AuthError({ message: "read failed" })),
       set: () => Effect.void,
       remove: () => Effect.void,
@@ -435,6 +444,7 @@ describe("model catalog resolution", () => {
               },
             },
           ]),
+        providerConfig: Effect.succeed({}),
       })
       const inProject = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         Effect.provideService(effect, ExtensionRegistry, projectProfile)
@@ -481,6 +491,7 @@ describe("model catalog resolution", () => {
         Auth,
         Auth.of(
           serializeAuthStore({
+            list: Effect.succeed(["openai"]),
             get: (providerId) => {
               if (providerId !== "openai") {
                 return Effect.succeed(noStoredAuth)
@@ -994,7 +1005,7 @@ describe("listAuthProviders", () => {
   const apiInfo = (key: string): AuthInfo => AuthApi.make({ type: "api", key })
   const list = (seed: Record<string, AuthInfo>, driverIds: ReadonlyArray<string>) =>
     listAuthProviders(driverIds).pipe(
-      Effect.provide(Layer.merge(Auth.Test(seed), testRegistryLayer)),
+      Effect.provide(Layer.mergeAll(Auth.Test(seed), testRegistryLayer, emptyCatalogLayer)),
     )
   const opus = "anthropic"
 
@@ -1108,6 +1119,7 @@ const failingAuthStoreLayer = Layer.succeed(
   Auth,
   Auth.of(
     serializeAuthStore({
+      list: Effect.succeed([]),
       get: () => Effect.succeed(noStoredAuth),
       set: () => Effect.fail(new AuthError({ message: "write failed" })),
       remove: () => Effect.void,
@@ -1146,7 +1158,7 @@ describe("provider login", () => {
   it.live("listMethods returns methods from extension providers", () =>
     Effect.gen(function* () {
       const authLayer = Auth.Test()
-      const layer = Layer.mergeAll(authLayer, testRegistry, GentPlatform.Test())
+      const layer = Layer.mergeAll(authLayer, testRegistry, GentPlatform.Test(), emptyCatalogLayer)
       const methods = yield* listAuthMethods().pipe(Effect.provide(layer))
       expect(Object.keys(methods)).toContain("openai")
       expect(Object.keys(methods)).toContain("anthropic")
@@ -1196,6 +1208,7 @@ describe("provider login", () => {
 // oxlint-disable-next-line effect/noNullish -- AuthService uses undefined to represent missing credentials.
 const missingAuthInfo: AuthInfo | undefined = undefined
 const testAuthStorage: AuthService = serializeAuthStore({
+  list: Effect.succeed([]),
   get: () => Effect.succeed(missingAuthInfo),
   set: () => Effect.void,
   remove: () => Effect.void,
@@ -1846,8 +1859,11 @@ const sharedSignInDrivers = (seen: Array<string>): ReadonlyArray<ModelDriverCont
 }
 
 const sharedSignInRegistry = (seen: Array<string>) =>
-  ExtensionRegistry.fromResolved(
-    resolveExtensions([makeExt("shared-sign-in", [...sharedSignInDrivers(seen)])]),
+  Layer.merge(
+    ExtensionRegistry.fromResolved(
+      resolveExtensions([makeExt("shared-sign-in", [...sharedSignInDrivers(seen)])]),
+    ),
+    emptyCatalogLayer,
   )
 
 /** Every read a turn, a catalog and both classifiers make, from a store holding `stored`. */
@@ -1894,7 +1910,9 @@ describe("shared sign-in", () => {
         ["gateway", "none", true],
         ["solo", "none", false],
       ])
-      const methods = yield* listAuthMethods().pipe(Effect.provide(sharedSignInRegistry([])))
+      const methods = yield* listAuthMethods().pipe(
+        Effect.provide(Layer.merge(Auth.Test({}), sharedSignInRegistry([]))),
+      )
       expect(Object.keys(methods)).toEqual(["gateway"])
     }),
   )
@@ -1955,7 +1973,7 @@ describe("shared sign-in", () => {
         ]),
       )
       const inRegistry = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        effect.pipe(Effect.provide(Layer.merge(Auth.Test({}), registry)))
+        effect.pipe(Effect.provide(Layer.mergeAll(Auth.Test({}), registry, emptyCatalogLayer)))
       const listed = yield* inRegistry(listAuthProviders(["a"]))
       expect(listed.map((row) => [String(row.provider), row.required])).toEqual([
         ["a", true],
@@ -2614,5 +2632,315 @@ describe("driver composition", () => {
         [ModelId.make("gateway/judge"), "classifier", 0],
       ])
     }),
+  )
+})
+
+describe("generic providers", () => {
+  /** Four catalog providers: two a class speaks, one it does not, one an adapter serves. */
+  const genericCatalog = modelCatalogFromBodies({
+    chat: encodeCatalogJson({
+      open: {
+        id: "open",
+        name: "Open",
+        env: ["OPEN_API_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://open.test/v1",
+        models: {
+          big: { name: "Big", tool_call: true, limit: { context: 100_000, output: 8_000 } },
+          google: { name: "Google", tool_call: true, provider: { npm: "@ai-sdk/google" } },
+        },
+      },
+      regional: {
+        id: "regional",
+        name: "Regional",
+        env: ["REGION_ID", "REGIONAL_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://${REGION_ID}.regional.test/v1",
+        models: { small: { name: "Small", tool_call: true } },
+      },
+      unspoken: {
+        id: "unspoken",
+        name: "Unspoken",
+        env: ["UNSPOKEN_KEY"],
+        npm: "@ai-sdk/google",
+        models: { g: { name: "G", tool_call: true } },
+      },
+      adapted: {
+        id: "adapted",
+        name: "Adapted",
+        env: ["ADAPTED_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        models: { a: { name: "A", tool_call: true } },
+      },
+    }),
+    decision: "{}",
+  })
+
+  const chatClass = (seen: Array<ApiClassRequest>): ApiClassContribution => ({
+    id: "chat",
+    npm: ["@ai-sdk/openai-compatible"],
+    protocols: [],
+    promptCacheTtl: Option.none(),
+    resolveModel: (request) =>
+      Effect.sync(() => {
+        seen.push(request)
+        return AiModel.make("chat", request.model.id, LanguageModelLayers.failing)
+      }),
+  })
+
+  const adaptedDriver: ModelDriverContribution = {
+    id: "adapted",
+    name: "Adapted",
+    envCredential: "ADAPTED_KEY",
+    endpoint: () =>
+      Effect.succeed({
+        apiKey: Option.some("adapter-key"),
+        baseUrl: Option.none(),
+        transformClient: Option.none(),
+      }),
+  }
+
+  interface Setup {
+    readonly stored?: Record<string, AuthInfo>
+    readonly env?: Record<string, string>
+    readonly config?: ProviderConfig
+    readonly seen?: Array<ApiClassRequest>
+  }
+
+  const inProfile =
+    (setup: Setup) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>) => {
+      const registry = ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("generic-test") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: {
+              modelDrivers: [adaptedDriver],
+              apiClasses: [chatClass(setup.seen ?? [])],
+            },
+          },
+        ]),
+        Effect.succeed(setup.config ?? {}),
+      )
+      const services = Layer.mergeAll(ModelResolver.Live, ModelCatalogRecord.Live).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            Auth.Test(setup.stored ?? {}),
+            registry,
+            ModelCatalogSource.fixed(genericCatalog),
+          ),
+        ),
+        Layer.merge(ConfigProvider.layer(ConfigProvider.fromEnv({ env: setup.env ?? {} }))),
+      )
+      return Effect.provide(effect, services)
+    }
+
+  const rows = (setup: Setup) =>
+    listAuthProviders([]).pipe(
+      Effect.map((listed) => listed.map((row) => [String(row.provider), row.source ?? "none"])),
+      inProfile(setup),
+    )
+
+  const searched = (setup: Setup) =>
+    listCatalogProviders().pipe(
+      Effect.map((found) => found.providers.map((row) => String(row.provider))),
+      inProfile(setup),
+    )
+
+  const resolved = (modelId: string, setup: Setup) =>
+    Effect.gen(function* () {
+      const resolver = yield* ModelResolver
+      return yield* resolver.resolve({ modelId })
+    }).pipe(Effect.scoped, inProfile(setup))
+
+  const resolveFailure = (modelId: string, setup: Setup) =>
+    resolved(modelId, setup).pipe(
+      Effect.flip,
+      Effect.map((error) => error.message),
+    )
+
+  it.live(
+    "a provider is active with a key variable set, a stored key or a config entry; the search finds the rest a class speaks",
+    () =>
+      Effect.gen(function* () {
+        const key = AuthApi.make({ type: "api", key: "sk-stored" })
+        expect(yield* rows({})).toEqual([["adapted", "none"]])
+        expect(yield* searched({})).toEqual(["open", "regional"])
+        expect(yield* rows({ env: { OPEN_API_KEY: "sk-env" } })).toEqual([
+          ["adapted", "none"],
+          ["open", "env"],
+        ])
+        expect(yield* searched({ env: { OPEN_API_KEY: "sk-env" } })).toEqual(["regional"])
+        // The variable of a base URL holds no key: it activates nothing.
+        expect(yield* rows({ env: { REGION_ID: "eu" } })).toEqual([["adapted", "none"]])
+        expect(yield* rows({ stored: { regional: key } })).toEqual([
+          ["adapted", "none"],
+          ["regional", "stored"],
+        ])
+        expect(yield* rows({ config: { providers: { regional: {} } } })).toEqual([
+          ["adapted", "none"],
+          ["regional", "none"],
+        ])
+        // A provider a turn routes through is listed, and required, with no key.
+        const required = yield* listAuthProviders(["open"]).pipe(
+          Effect.map((listed) => listed.map((row) => [String(row.provider), row.required])),
+          inProfile({}),
+        )
+        expect(required).toEqual([
+          ["adapted", false],
+          ["open", true],
+        ])
+      }),
+  )
+
+  it.live("each ${VAR} of a base URL is a prompt of the sign-in", () =>
+    Effect.gen(function* () {
+      const found = yield* listCatalogProviders().pipe(inProfile({}))
+      expect(
+        found.methods["open"]?.map((method) => [
+          method.label,
+          Option.fromUndefinedOr(method.prompts),
+        ]),
+      ).toEqual([["Open API key", Option.none()]])
+      expect(found.methods["regional"]?.map((method) => method.prompts)).toEqual([
+        [{ key: "REGION_ID", label: "REGION_ID", env: "REGION_ID" }],
+      ])
+      // A set variable is not asked, as for an adapter's prompt.
+      const withRegion = yield* listAuthMethods().pipe(
+        inProfile({ env: { REGION_ID: "eu" }, config: { providers: { regional: {} } } }),
+      )
+      expect(withRegion["regional"]?.map((method) => method.prompts)).toEqual([[]])
+    }),
+  )
+
+  it.live(
+    "an active provider lists the models a class speaks and resolves with the stored key, then the variable",
+    () =>
+      Effect.gen(function* () {
+        const listed = yield* modelCatalog().pipe(inProfile({ env: { OPEN_API_KEY: "sk-env" } }))
+        // The registered drivers' models come first, then each generic provider's.
+        expect(listed.models.map((model) => [model.id, model.contextLength ?? 0])).toEqual([
+          [ModelId.make("adapted/a"), 0],
+          [ModelId.make("open/big"), 100_000],
+        ])
+        const seen: Array<ApiClassRequest> = []
+        yield* resolved("open/big", { env: { OPEN_API_KEY: "sk-env" }, seen })
+        yield* resolved("open/big", {
+          env: { OPEN_API_KEY: "sk-env" },
+          stored: { open: AuthApi.make({ type: "api", key: "sk-stored" }) },
+          seen,
+        })
+        expect(
+          seen.map((request) => [
+            request.providerId,
+            Option.getOrNull(request.apiKey),
+            Option.getOrNull(request.baseUrl),
+          ]),
+        ).toEqual([
+          ["open", "sk-env", "https://open.test/v1"],
+          ["open", "sk-stored", "https://open.test/v1"],
+        ])
+        expect(yield* resolveFailure("open/google", { env: { OPEN_API_KEY: "sk-env" } })).toContain(
+          "speaks the @ai-sdk/google wire format, which gent does not support",
+        )
+        expect(yield* resolveFailure("open/big", {})).toBe(
+          "Open credentials unavailable: no stored API key and no OPEN_API_KEY env var; sign in with /auth",
+        )
+      }),
+  )
+
+  it.live("a base URL variable is filled from the stored answer, then the variable", () =>
+    Effect.gen(function* () {
+      const seen: Array<ApiClassRequest> = []
+      const answered = AuthApi.make({ type: "api", key: "sk", metadata: { REGION_ID: "eu" } })
+      const bare = AuthApi.make({ type: "api", key: "sk" })
+      yield* resolved("regional/small", { stored: { regional: answered }, seen })
+      yield* resolved("regional/small", {
+        stored: { regional: bare },
+        env: { REGION_ID: "us" },
+        seen,
+      })
+      expect(seen.map((request) => Option.getOrNull(request.baseUrl))).toEqual([
+        "https://eu.regional.test/v1",
+        "https://us.regional.test/v1",
+      ])
+      expect(yield* resolveFailure("regional/small", { stored: { regional: bare } })).toBe(
+        "Regional needs REGION_ID: none stored with the sign-in and no REGION_ID env var; sign in again with /auth",
+      )
+    }),
+  )
+
+  it.live(
+    "a providers config entry adds a provider and patches a model's limits; disabledProviders hides one",
+    () =>
+      Effect.gen(function* () {
+        const config: ProviderConfig = {
+          providers: {
+            open: { models: { big: { limit: { context: 200_000, output: 16_000 } } } },
+            proxy: {
+              name: "My proxy",
+              class: "chat",
+              api: "https://proxy.test/v1",
+              env: ["PROXY_KEY"],
+              headers: { "x-team": "core" },
+              models: { m: { name: "M", tool_call: true } },
+            },
+          },
+          disabledProviders: ["regional"],
+        }
+        const listed = yield* modelCatalog().pipe(inProfile({ config }))
+        expect(
+          listed.models.map((model) => [model.id, model.name, model.contextLength ?? 0]),
+        ).toEqual([
+          [ModelId.make("adapted/a"), "A", 0],
+          [ModelId.make("open/big"), "Big", 200_000],
+          [ModelId.make("proxy/m"), "M", 0],
+        ])
+        expect(yield* rows({ config })).toEqual([
+          ["adapted", "none"],
+          ["open", "none"],
+          ["proxy", "none"],
+        ])
+        expect(yield* searched({ config })).toEqual([])
+
+        const seen: Array<ApiClassRequest> = []
+        yield* resolved("proxy/m", { config, env: { PROXY_KEY: "sk-proxy" }, seen })
+        const request = seen[0]
+        expect(request?.providerId).toBe("proxy")
+        expect(Option.getOrNull(request?.apiKey ?? Option.none())).toBe("sk-proxy")
+        expect(Option.getOrNull(request?.baseUrl ?? Option.none())).toBe("https://proxy.test/v1")
+        // The config's headers go with every request.
+        const sent = yield* Ref.make<Record<string, string>>({})
+        const client = HttpClient.make((outgoing) =>
+          Effect.as(
+            Ref.set(sent, outgoing.headers),
+            HttpClientResponse.fromWeb(outgoing, new Response("", { status: 200 })),
+          ),
+        )
+        const transform = Option.flatMap(
+          Option.fromUndefinedOr(request),
+          (each) => each.transformClient,
+        )
+        expect(Option.isSome(transform)).toBe(true)
+        if (Option.isSome(transform)) yield* transform.value(client).get("https://proxy.test/v1")
+        expect((yield* Ref.get(sent))["x-team"]).toBe("core")
+
+        expect(yield* resolveFailure("regional/small", { config })).toBe(
+          "Unknown provider: regional",
+        )
+      }),
+  )
+
+  it.live(
+    "an adapter's catalog provider resolves through the adapter, never a generic driver",
+    () =>
+      Effect.gen(function* () {
+        const seen: Array<ApiClassRequest> = []
+        yield* resolved("adapted/a", { env: { ADAPTED_KEY: "sk-env" }, seen })
+        expect(seen.map((request) => Option.getOrNull(request.apiKey))).toEqual(["adapter-key"])
+        expect(yield* searched({ env: { ADAPTED_KEY: "sk-env" } })).toEqual(["open", "regional"])
+      }),
   )
 })

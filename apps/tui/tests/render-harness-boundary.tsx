@@ -189,6 +189,7 @@ export const createMockClient = (
       setKey: () => noRpcError(absent),
       deleteKey: () => noRpcError(absent),
       listMethods: () => noRpcError({}),
+      listCatalogProviders: () => noRpcError({ providers: [], methods: {} }),
       authorize: () => noRpcError(nullValue),
       callback: () => noRpcError(absent),
     },

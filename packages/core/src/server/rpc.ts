@@ -262,6 +262,16 @@ export type ListAuthMethodsInput = typeof ListAuthMethodsInput.Type
 
 const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
 
+/**
+ * The `/auth` search: each models.dev provider a registered API class
+ * speaks that is not active yet (no key, env variable or config entry),
+ * with its sign-in methods.
+ */
+const ListCatalogProvidersSuccess = Schema.Struct({
+  providers: Schema.Array(AuthProviderInfo),
+  methods: ListAuthMethodsSuccess,
+})
+
 export const AuthorizeAuthInput = Schema.Struct({
   sessionId: SessionId,
   provider: Schema.String,
@@ -554,6 +564,11 @@ class AuthRpcs extends RpcGroup.make(
   Rpc.make("listMethods", {
     payload: ListAuthMethodsInput.fields,
     success: ListAuthMethodsSuccess,
+    error: GentRpcError,
+  }),
+  Rpc.make("listCatalogProviders", {
+    payload: ListAuthMethodsInput.fields,
+    success: ListCatalogProvidersSuccess,
     error: GentRpcError,
   }),
   Rpc.make("authorize", {

@@ -87,7 +87,7 @@ export const storedCredentialModel = (input: {
     }).pipe(
       Effect.provideService(
         ExtensionRegistry,
-        ExtensionRegistry.of({ getResolved: () => resolved }),
+        ExtensionRegistry.of({ getResolved: () => resolved, providerConfig: Effect.succeed({}) }),
       ),
       Effect.orDie,
     ),

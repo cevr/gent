@@ -1517,7 +1517,10 @@ describe("resolveTurnProfile", () => {
           }),
         )
         // A built profile's services hold its registry, as `Layer.build` makes them.
-        const profileRegistry = ExtensionRegistry.of({ getResolved: () => profileResolved })
+        const profileRegistry = ExtensionRegistry.of({
+          getResolved: () => profileResolved,
+          providerConfig: Effect.succeed({}),
+        })
         const fakeProfile: SessionProfile = {
           cwd: "/nonexistent/profile-driver-scope",
           resolved: profileResolved,
@@ -4398,7 +4401,10 @@ const makeMutationsLayer = (
   const cwd = "/nonexistent/gent-test-cwd"
   // The launch profile is the cache's profile of the host cwd, as in a server
   // root: a session with no stored cwd runs under it.
-  const launchRegistry = ExtensionRegistry.of({ getResolved: () => resolvedExtensions })
+  const launchRegistry = ExtensionRegistry.of({
+    getResolved: () => resolvedExtensions,
+    providerConfig: Effect.succeed({}),
+  })
   const launchProfile: SessionProfile = {
     cwd,
     resolved: resolvedExtensions,

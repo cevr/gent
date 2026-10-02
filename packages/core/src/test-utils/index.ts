@@ -17,6 +17,7 @@ export {
   fixtureModelCatalog,
   MODEL_CATALOG_FIXTURE,
   modelCatalogFixture,
+  serveModelCatalogFixture,
   plantInFlightTurn,
   plantToolCallBinding,
   provideToolDispatch,

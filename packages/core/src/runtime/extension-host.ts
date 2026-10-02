@@ -102,6 +102,7 @@ import {
   GENT_CONFIG_DIRECTORY,
   hasProjectScope,
   isProjectExtensionDirectoryTrusted,
+  type ProviderConfig,
   RuntimeEnvironment,
   type UserConfig,
 } from "./config.js"
@@ -918,17 +919,29 @@ export const resolveExtensions = (
  */
 export interface ExtensionRegistryService {
   readonly getResolved: () => ResolvedExtensions
+  /**
+   * The `providers` and `disabledProviders` of the profile's config, read
+   * from the files on each call: a provider edit needs no new profile.
+   */
+  readonly providerConfig: Effect.Effect<ProviderConfig>
 }
+
+/** A registry whose config names no provider. */
+const NO_PROVIDER_CONFIG: Effect.Effect<ProviderConfig> = Effect.succeed({})
 
 export class ExtensionRegistry extends Context.Service<
   ExtensionRegistry,
   ExtensionRegistryService
 >()("@gent/core/src/runtime/extension-host/ExtensionRegistry") {
-  static fromResolved = (resolved: ResolvedExtensions): Layer.Layer<ExtensionRegistry> =>
+  static fromResolved = (
+    resolved: ResolvedExtensions,
+    providerConfig: Effect.Effect<ProviderConfig> = NO_PROVIDER_CONFIG,
+  ): Layer.Layer<ExtensionRegistry> =>
     Layer.succeed(
       ExtensionRegistry,
       ExtensionRegistry.of({
         getResolved: () => resolved,
+        providerConfig,
       }),
     )
 
@@ -1892,6 +1905,7 @@ const buildSessionProfile = (params: {
   readonly coreSections: ReadonlyArray<PromptSection>
   readonly resourceContext: Context.Context<unknown>
   readonly generationId: ProcessGenerationId
+  readonly providerConfig: Effect.Effect<ProviderConfig>
 }) =>
   Effect.gen(function* () {
     // Every resource is already built. Supplying that immutable context here is
@@ -1901,7 +1915,10 @@ const buildSessionProfile = (params: {
       params.resourceContext,
     )
     const layerContext = yield* Layer.build(
-      Layer.provideMerge(resourceLayer, ExtensionRegistry.fromResolved(params.resolved)),
+      Layer.provideMerge(
+        resourceLayer,
+        ExtensionRegistry.fromResolved(params.resolved, params.providerConfig),
+      ),
     )
     return {
       cwd: params.cwd,
@@ -2234,6 +2251,10 @@ export class SessionProfileCache extends Context.Service<
                   coreSections: declarations.coreSections,
                   resourceContext: started.context,
                   generationId,
+                  providerConfig: Effect.map(configService.get(cwd), (current) => ({
+                    providers: current.providers,
+                    disabledProviders: current.disabledProviders,
+                  })),
                 }),
               )
             }).pipe(

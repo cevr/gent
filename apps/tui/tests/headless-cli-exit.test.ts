@@ -1,7 +1,7 @@
 import { it, describe, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Path } from "effect"
-import { createWorkerEnv, seedAuthKeys } from "@gent/core/test-utils"
+import { createWorkerEnv, seedAuthKeys, serveModelCatalogFixture } from "@gent/core/test-utils"
 const makeTempDir = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   return yield* fs.makeTempDirectoryScoped({ prefix: "gent-headless-exit-" })
@@ -17,21 +17,28 @@ const waitForExit = (proc: Bun.Subprocess, timeoutMs: number) => {
     timeout,
   )
 }
-const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) => {
-  // eslint-disable-next-line effect/noGlobals -- child process env must inherit the host environment.
-  const childEnv = { ...Bun.env }
-  delete childEnv["FORCE_COLOR"]
-  delete childEnv["NO_COLOR"]
-  // A key in the host's environment would satisfy the startup key check.
-  for (const name of Object.keys(childEnv)) {
-    if (name.endsWith("_API_KEY")) delete childEnv[name]
-  }
-  return {
-    ...childEnv,
-    HOME: homeDir,
-    ...env,
-  }
-}
+/**
+ * The child's environment: the host's without colour flags and keys, the
+ * worker directories, and the fixture catalog served on a loopback port for
+ * the test's scope, so the child reads the catalog with no network.
+ */
+const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) =>
+  Effect.gen(function* () {
+    // eslint-disable-next-line effect/noGlobals -- child process env must inherit the host environment.
+    const childEnv = { ...Bun.env }
+    delete childEnv["FORCE_COLOR"]
+    delete childEnv["NO_COLOR"]
+    // A key in the host's environment would satisfy the startup key check.
+    for (const name of Object.keys(childEnv)) {
+      if (name.endsWith("_API_KEY")) delete childEnv[name]
+    }
+    return {
+      ...childEnv,
+      HOME: homeDir,
+      ...env,
+      GENT_MODEL_CATALOG_URL: yield* serveModelCatalogFixture,
+    }
+  })
 /**
  * Run `gent --debug <args>` in a fresh home with stored keys and collect its
  * exit and output. `keyless` runs without `--debug` and without keys.
@@ -50,7 +57,7 @@ const runGent = (args: ReadonlyArray<string>, options: { readonly keyless?: bool
     // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
     const proc = Bun.spawn(["bun", "src/main.tsx", ...mode, ...args], {
       cwd: appDir,
-      env: makeChildEnv(homeDir, env),
+      env: yield* makeChildEnv(homeDir, env),
       stdout: "pipe",
       stderr: "pipe",
     })
@@ -248,7 +255,7 @@ describe("compiled binary", () => {
         // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
         const proc = Bun.spawn([binary, "--debug", "-H", "Say hi in 3 words"], {
           cwd: homeDir,
-          env: { ...makeChildEnv(homeDir, env), GENT_LOG_LEVEL: "debug" },
+          env: { ...(yield* makeChildEnv(homeDir, env)), GENT_LOG_LEVEL: "debug" },
           stdout: "pipe",
           stderr: "pipe",
         })

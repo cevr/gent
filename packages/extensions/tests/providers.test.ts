@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  ConfigProvider,
   Context,
   type Crypto,
   Deferred,
@@ -7,6 +8,7 @@ import {
   Effect,
   Fiber,
   type FileSystem,
+  Layer,
   Option,
   type Path,
   Schema,
@@ -21,7 +23,19 @@ import {
   ModelId,
   ProviderAuthError,
 } from "@gent/core/extensions/api"
-import { listModelCatalog } from "@gent/core/test-utils"
+import {
+  createRpcHarness,
+  fixtureModelCatalog,
+  LanguageModelLayers,
+  listModelCatalog,
+  modelCatalogFixture,
+  storedCredentialModel,
+  textStep,
+} from "@gent/core/test-utils"
+import { BuiltinExtensions } from "../src/index.js"
+import { SHIPPED_API_CLASSES } from "./helpers/api-classes.js"
+import { encodeExternalJson } from "./helpers/external-wire.js"
+import { makeFakeFetchState, oneGenerate } from "./helpers/fake-http-client.js"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/process"
@@ -216,6 +230,94 @@ describe("driver catalog", () => {
           },
         ])
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunServices.layer)),
+  )
+})
+
+// ── generic providers ───────────────────────────────────────────────────────
+
+/**
+ * A models.dev provider with no adapter (DeepSeek in the fixture) runs on
+ * the class that speaks its package, with a key and no code. Core's
+ * `tests/runtime/provider.test.ts` ("generic providers") covers activation,
+ * `${VAR}` prompts and the config entries; these run the shipped classes.
+ */
+describe("generic providers on the shipped classes", () => {
+  const chatReply = () => ({
+    status: 200,
+    headers: { "content-type": "application/json" },
+    body: encodeExternalJson({
+      id: "chatcmpl-1",
+      object: "chat.completion",
+      created: 1_700_000_000,
+      model: "deepseek-v4-pro",
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }),
+  })
+
+  const deepseekRequest = (stored: Record<string, string>, env: Record<string, string>) =>
+    Effect.gen(function* () {
+      const state = makeFakeFetchState()
+      const model = storedCredentialModel({
+        modelDrivers: [],
+        apiClasses: [...SHIPPED_API_CLASSES.values()],
+        stored,
+        modelId: "deepseek/deepseek-v4-pro",
+        catalog: fixtureModelCatalog(),
+      }).pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))))
+      yield* oneGenerate(model, state, chatReply)
+      return state.captured.map((request) => [request.url, request.headers["authorization"]])
+    })
+
+  it.live("DeepSeek's request goes to its catalog URL over Chat Completions with its key", () =>
+    Effect.gen(function* () {
+      expect(yield* deepseekRequest({}, { DEEPSEEK_API_KEY: "sk-env" })).toEqual([
+        ["https://api.deepseek.com/chat/completions", "Bearer sk-env"],
+      ])
+      expect(
+        yield* deepseekRequest({ deepseek: "sk-stored" }, { DEEPSEEK_API_KEY: "sk-env" }),
+      ).toEqual([["https://api.deepseek.com/chat/completions", "Bearer sk-stored"]])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live(
+    "with DEEPSEEK_API_KEY set, the shipped extensions list DeepSeek's models and its /auth row over RPC",
+    () =>
+      Effect.gen(function* () {
+        const listed = (env: Record<string, string>) =>
+          Effect.gen(function* () {
+            const fixture = yield* modelCatalogFixture
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            const { client, sessionId } = yield* createRpcHarness({
+              agents: [],
+              modelCatalogHttpLayer: fixture.layer,
+              extensionInputs: BuiltinExtensions,
+              providerLayer,
+            })
+            const models = (yield* client.model.list({ sessionId })).map((model) => model.id)
+            const rows = (yield* client.auth.listProviders({ sessionId })).map((row) => [
+              String(row.provider),
+              row.source ?? "none",
+            ])
+            const search = (yield* client.auth.listCatalogProviders({ sessionId })).providers.map(
+              (row) => String(row.provider),
+            )
+            return { models, rows, search }
+          }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))))
+
+        const withKey = yield* listed({ DEEPSEEK_API_KEY: "sk-env" })
+        expect(withKey.models).toContain(ModelId.make("deepseek/deepseek-v4-pro"))
+        expect(withKey.models).not.toContain(ModelId.make("google/gemini-3.6-flash"))
+        expect(withKey.rows).toContainEqual(["deepseek", "env"])
+        expect(withKey.search).not.toContain("deepseek")
+
+        const without = yield* listed({})
+        expect(without.models).not.toContain(ModelId.make("deepseek/deepseek-v4-pro"))
+        expect(without.rows.map(([provider]) => provider)).not.toContain("deepseek")
+        // The search offers it; no class speaks Google's package, so it is not offered.
+        expect(without.search).toContain("deepseek")
+        expect(without.search).not.toContain("google")
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 })
 

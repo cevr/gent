@@ -200,6 +200,7 @@ describe("tool execution", () => {
         ExtensionRegistry,
         ExtensionRegistry.of({
           getResolved: () => current,
+          providerConfig: Effect.succeed({}),
         }),
       )
 
