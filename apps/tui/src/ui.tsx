@@ -772,6 +772,22 @@ export function TrayFrame(props: { children: JSX.Element }) {
  * @module
  */
 
+// ── single-line editing ───────────────────────────────────────────
+
+/**
+ * The edit a key makes on one line of typed text, the same in every
+ * single-line input (a list's filter, an extension's ask line) as in the
+ * composer: backspace drops the last whole character, ctrl+w the last word
+ * and the spaces after it, ctrl+u the whole line.
+ */
+export const lineEdit = (event: ScopedKeyboardEvent): Option.Option<(text: string) => string> => {
+  if (event.name === "backspace") return Option.some(dropLastGrapheme)
+  if (event.ctrl !== true) return Option.none()
+  if (event.name === "w") return Option.some((text) => text.replace(/\S*\s*$/u, ""))
+  if (event.name === "u") return Option.some(() => "")
+  return Option.none()
+}
+
 // ── State ─────────────────────────────────────────────────────────
 //
 // A search query plus a wrapped selection index. Nothing here knows what the
@@ -801,11 +817,8 @@ export const SelectListEvent = Schema.TaggedUnion({
   Open: { selectedIndex: Schema.Finite },
   /** Move the cursor without disturbing the query: the pane's data arrived. */
   Anchor: { selectedIndex: Schema.Finite },
-  Backspace: {},
-  /** ctrl+w: delete the last word and the spaces after it, as the composer does. */
-  DeleteWord: {},
-  /** ctrl+u: delete the whole query, as the composer kills to the line start. */
-  ClearQuery: {},
+  /** The query after an edit key (`lineEdit`). */
+  Edit: { query: Schema.String },
   MoveUp: { itemCount: Schema.Finite },
   MoveDown: { itemCount: Schema.Finite },
   /** Text typed or pasted into the query. */
@@ -834,17 +847,9 @@ export function transitionSelectList(
       Match.tagsExhaustive({
         Open: (event) => SelectListState.initial(event.selectedIndex),
         Anchor: (event) => ({ ...state, selectedIndex: event.selectedIndex }),
-        Backspace: () => {
-          if (state.query.length === 0) return state
-          return { query: dropLastGrapheme(state.query), selectedIndex: 0, moved: false }
-        },
-        DeleteWord: () => {
-          if (state.query.length === 0) return state
-          return { query: state.query.replace(/\S*\s*$/u, ""), selectedIndex: 0, moved: false }
-        },
-        ClearQuery: () => {
-          if (state.query.length === 0) return state
-          return { query: "", selectedIndex: 0, moved: false }
+        Edit: (event) => {
+          if (event.query === state.query) return state
+          return { query: event.query, selectedIndex: 0, moved: false }
         },
         MoveUp: (event) => ({
           ...state,
@@ -1254,18 +1259,10 @@ export function SelectList<A>(props: SelectListProps<A>) {
 
       if (!props.filter) return false
 
-      if (event.name === "backspace") {
-        applyQuery(transitionSelectList(state(), SelectListEvent.cases.Backspace.make({})))
-        return true
-      }
-
-      if (event.ctrl === true && event.name === "w") {
-        applyQuery(transitionSelectList(state(), SelectListEvent.cases.DeleteWord.make({})))
-        return true
-      }
-
-      if (event.ctrl === true && event.name === "u") {
-        applyQuery(transitionSelectList(state(), SelectListEvent.cases.ClearQuery.make({})))
+      const edit = lineEdit(event)
+      if (Option.isSome(edit)) {
+        const query = edit.value(state().query)
+        applyQuery(transitionSelectList(state(), SelectListEvent.cases.Edit.make({ query })))
         return true
       }
 

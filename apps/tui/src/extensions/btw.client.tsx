@@ -16,11 +16,11 @@ import {
   ClientContext,
   clientContributions,
   defineClientExtension,
-  dropLastGrapheme,
   messageRendererContribution,
   pastedLine,
   keyHint,
   KeyHints,
+  lineEdit,
   PickerFrame,
   sessionQuery,
   typedKey,
@@ -239,8 +239,9 @@ export function ForkPane(props: {
       props.controller.ask(question)
       return true
     }
-    if (event.name === "backspace") {
-      setDraft(dropLastGrapheme)
+    const edit = lineEdit(event)
+    if (Option.isSome(edit)) {
+      setDraft(edit.value)
       return true
     }
     const typed = typedKey(event)

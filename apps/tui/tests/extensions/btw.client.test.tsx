@@ -354,6 +354,38 @@ describe("fork pane", () => {
     }),
   )
 
+  // The ask line edits as the composer and a list's filter do.
+  it.scopedLive("ctrl+w takes the last word off the ask line and ctrl+u the whole line", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      server.set(Option.some(view([{ question: "why?", answer: "because" }], false)))
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast },
+      })
+      yield* queue.drain
+      const setup = yield* renderScoped(() => (
+        <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+      ))
+      yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
+      yield* Effect.promise(() => setup.mockInput.typeText("foo bar"))
+      yield* waitForFrame(setup, (frame) => frame.includes("ask › foo bar"), "draft")
+      setup.mockInput.pressKey("w", { ctrl: true })
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("ask › foo") && !frame.includes("foo bar"),
+        "the last word gone",
+      )
+      setup.mockInput.pressKey("u", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => !frame.includes("ask › foo"), "the line gone")
+      yield* Effect.promise(() => setup.mockInput.typeText("baz"))
+      setup.mockInput.pressEnter()
+      yield* queue.drain
+      expect(server.asked).toEqual(["baz"])
+    }),
+  )
+
   it.scopedLive("a refused fork leaves the error visible and the input ready", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()

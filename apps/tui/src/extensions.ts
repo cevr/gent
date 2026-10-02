@@ -63,6 +63,7 @@ export {
   groupedRows,
   keyHint,
   KeyHints,
+  lineEdit,
   PickerFrame,
   plainRow,
   selectable,
@@ -78,7 +79,6 @@ export { useTheme } from "./theme"
 export { pastedLine, typedKey, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 export { textWidth } from "./bun-adapter"
 export {
-  dropLastGrapheme,
   fitWidth,
   formatAge,
   formatCost,
