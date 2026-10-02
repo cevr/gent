@@ -605,6 +605,23 @@ const blockKept = (current: ComposerDraft, block: RefusedBlock): boolean =>
   block.shown.length > 0 &&
   (current.draft === block.shown || current.draft.startsWith(`${block.shown}${REFUSED_SEPARATOR}`))
 
+/**
+ * A block as a kept draft holds it: each entry written as its text. A
+ * composer that leaves keeps its draft with each placeholder expanded, so its
+ * block follows the same way; the next composer writes it again
+ * (`mergeRefused`'s `rewrite`).
+ */
+const blockAsText = (block: RefusedBlock): RefusedBlock => {
+  let shown = block.shown
+  for (const entry of block.entries) {
+    if (entry.written !== entry.text) shown = shown.replace(entry.written, entry.text)
+  }
+  return {
+    entries: block.entries.map((entry) => ({ ...entry, written: entry.text })),
+    shown,
+  }
+}
+
 /** What follows a kept block: the text the reader typed since. */
 const afterBlock = (current: ComposerDraft, block: RefusedBlock): string =>
   current.draft.slice(block.shown.length + REFUSED_SEPARATOR.length)
@@ -741,7 +758,12 @@ export function ComposerMemoryProvider(props: ParentProps<ComposerMemoryProvider
     link: (branchId, link) => {
       links.set(branchId, link)
       return () => {
-        if (links.get(branchId) === link) links.delete(branchId)
+        if (links.get(branchId) !== link) return
+        links.delete(branchId)
+        // The composer leaves its draft kept as text, placeholders expanded:
+        // the block it wrote goes with it, so a later refusal still finds it.
+        const block = Option.fromUndefinedOr(blocks.get(branchId))
+        if (Option.isSome(block)) blocks.set(branchId, blockAsText(block.value))
       }
     },
     refuse: (branchId, refused, dismiss) => {

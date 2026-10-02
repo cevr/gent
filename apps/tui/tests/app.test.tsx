@@ -2476,6 +2476,49 @@ describe("App status and activity rows", () => {
       expect(at("later send")).toBeLessThan(at("queued text"))
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A refused paste-sized message comes back as a placeholder; the kept
+  // draft holds its text once the view leaves. A refusal that lands after a
+  // return still joins the block in send order.
+  it.scopedLive("a refusal after a switch joins a refused paste in send order", () =>
+    Effect.gen(function* () {
+      const large = "LARGE one\nline two\nline three"
+      const asked = { large: yield* Deferred.make<void>(), small: yield* Deferred.make<void>() }
+      const answer = { large: yield* Deferred.make<void>(), small: yield* Deferred.make<void>() }
+      const gate = (which: "large" | "small") =>
+        Deferred.complete(asked[which], Effect.void).pipe(
+          Effect.andThen(Deferred.await(answer[which])),
+          Effect.andThen(Effect.fail(refusedInA)),
+        )
+      const view = yield* mountSessionPair({
+        message: {
+          send: (input: { readonly content: string }) => {
+            if (input.content.startsWith("LARGE")) return gate("large")
+            return gate("small")
+          },
+        },
+      })
+      yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText(large))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("[Pasted"), "the paste chip")
+      view.setup.mockInput.pressEnter()
+      yield* Deferred.await(asked.large)
+      yield* Effect.promise(() => view.setup.mockInput.typeText("second send"))
+      yield* Effect.promise(() => view.setup.renderOnce())
+      view.setup.mockInput.pressEnter()
+      yield* Deferred.await(asked.small)
+      yield* Deferred.complete(answer.large, Effect.void)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("[Pasted"), "the refused paste")
+      yield* view.switchTo(pairB, "Session B")
+      yield* view.switchTo(pairA, "Session A")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("LARGE one"), "the kept text")
+      yield* Deferred.complete(answer.small, Effect.void)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("second send"), "the later refusal")
+      // The earlier text comes first, as itself or written again as a placeholder.
+      const frame = renderFrame(view.setup)
+      const first = Math.max(frame.indexOf("LARGE one"), frame.indexOf("[Pasted"))
+      expect(first).toBeGreaterThanOrEqual(0)
+      expect(first).toBeLessThan(frame.indexOf("second send"))
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("a running turn's activity row shows esc cancel", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
