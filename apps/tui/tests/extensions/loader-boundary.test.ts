@@ -833,7 +833,7 @@ export default {
   )
 
   it.scopedLive(
-    "an entry field that throws after its check fails only its extension, and a class instance's buckets still load",
+    "an entry field that throws fails only its extension, and a class instance's buckets still load",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -844,22 +844,37 @@ export default {
         const userDir = path.join(root, "home/.gent/extensions")
         const projectDir = path.join(root, "project/.gent/extensions")
         yield* fs.makeDirectory(userDir, { recursive: true })
-        // The component reads as a function once, then throws.
+        // Reading the component throws.
         yield* fs.writeFileString(
           path.join(userDir, "nested.client.ts"),
           `
 import { Effect } from "effect";
-let reads = 0;
 const widget = {
   id: "nested",
   slot: "below-input",
   get component() {
-    reads++;
-    if (reads > 1) throw new Error("nested broken");
-    return () => null;
+    throw new Error("nested broken");
   },
 };
 export default { id: "@user/nested", setup: Effect.succeed({ widgets: [widget] }) };
+`,
+        )
+        // The component answers its first read only: the loader reads it once.
+        yield* fs.writeFileString(
+          path.join(userDir, "once.client.ts"),
+          `
+import { Effect } from "effect";
+let reads = 0;
+const widget = {
+  id: "once",
+  slot: "below-input",
+  get component() {
+    reads++;
+    if (reads > 1) throw new Error("read twice");
+    return () => null;
+  },
+};
+export default { id: "@user/once", setup: Effect.succeed({ widgets: [widget] }) };
 `,
         )
         // Buckets as prototype getters of a class instance.
@@ -883,7 +898,7 @@ export default { id: "@user/instance", setup: Effect.succeed(new Contributions()
         }
         const result = yield* loadTuiExtensions({ builtins: [good], userDir, projectDir, runtime })
         expect(result.autocompleteItems.map((c) => c.prefix)).toEqual(["!"])
-        expect(result.widgets.map((w) => w.id)).toEqual(["instance"])
+        expect(result.widgets.map((w) => w.id).toSorted()).toEqual(["instance", "once"])
         expect(result.failures.map((failure) => failure.id)).toEqual(["@user/nested"])
         expect(result.failures[0]?.reason).toContain("nested broken")
       }).pipe(Effect.provide(BunServices.layer)),

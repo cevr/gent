@@ -27,28 +27,13 @@ import { textWidth } from "./bun-adapter"
 import { useTheme } from "./theme"
 import { useExtensionUI } from "./extensions/host"
 import { type Keybind, parseKeybind } from "./extensions/loader-boundary"
+import type { Command } from "./extensions/client-facets"
 
 // ── command types ───────────────────────────────────────────────────────────
 
-/**
- * One command: a palette row, and optionally a keybind and a slash name. The
- * session's own commands, client extension commands and server slash commands
- * all take this shape and resolve under one rule (`resolveCommands`).
- */
-export interface Command {
-  readonly id: string
-  readonly title: string
-  readonly description?: string
-  readonly category?: string
-  readonly keybind?: string
-  /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
-  readonly slash?: string
-  /** Additional slash names that resolve to this command */
-  readonly aliases?: readonly string[]
-  readonly onSelect: () => void
-  /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
-  readonly onSlash?: (args: string) => void
-}
+// A command's shape is its contribution schema's (`client-facets.ts`): the
+// loader decodes an extension's commands with it, so the type has one owner.
+export type { Command }
 
 /**
  * A keybind with no ctrl or meta is a key the composer also reads: an arrow
