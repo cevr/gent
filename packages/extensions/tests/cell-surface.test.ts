@@ -1276,6 +1276,7 @@ describe("branch cell lifetime", () => {
         const childMessages = yield* client.message.list({ branchId: saved.branchId })
         expect(childMessages.filter((message) => message.role === "user")).toHaveLength(1)
         expect(yield* controls.callCount).toBe(16)
+        yield* controls.assertDone
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
     20000,
   )

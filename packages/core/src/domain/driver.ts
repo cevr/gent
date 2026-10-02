@@ -207,7 +207,7 @@ interface ProviderAuthContribution {
 export interface RetryPolicy {
   /** Delay before the first retry, in milliseconds. */
   readonly initialDelay: number
-  /** Upper bound of any delay, in milliseconds. */
+  /** Upper bound of any delay, in milliseconds. A provider retry-after past it ends the retries. */
   readonly maxDelay: number
   /** Multiplier applied to the delay after each attempt. */
   readonly backoffFactor: number

@@ -1,5 +1,5 @@
 import {
-  Context,
+  type Context,
   Crypto,
   DateTime,
   Duration,
@@ -166,7 +166,6 @@ import { omitUndefined } from "../domain/guards.js"
 import { SingleRunner } from "effect/cluster"
 import { FetchHttpClient, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/process"
-import type { PromptSection } from "../domain/capability.js"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
 import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
 import { RpcSerialization, RpcServer, RpcTest } from "effect/rpc"
@@ -368,6 +367,7 @@ const makeSessionMutationsService: Effect.Effect<
   | AgentLoopSessionGovernance
   | GentPlatform
   | ExtensionRegistry
+  | SessionProfileCache
   | RuntimeEnvironment
 > = Effect.gen(function* () {
   const storageTransaction = yield* makeStorageTransaction
@@ -479,12 +479,10 @@ const makeSessionMutationsService: Effect.Effect<
     const profile = yield* resolveTurnProfile({
       sessionId,
       branchId: branch.id,
-      profileCache: Option.getOrUndefined(profileCache),
+      profileCache,
       hostProvider: deletedSessionHostProvider,
-      defaults: { baseSections: [] },
       opener: RunOpener.cases.Turn.make({ openedByClient: false }),
     }).pipe(
-      Effect.provideService(ExtensionRegistry, launchRegistry),
       Effect.provideService(SessionStorage, sessionStorage),
       Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
     )
@@ -642,7 +640,7 @@ const makeSessionMutationsService: Effect.Effect<
   })
 
   const launchRegistry = yield* ExtensionRegistry
-  const profileCache = yield* Effect.serviceOption(SessionProfileCache)
+  const profileCache = yield* SessionProfileCache
 
   /**
    * A session's agent names every turn it runs, and no verb changes it, so
@@ -676,13 +674,7 @@ const makeSessionMutationsService: Effect.Effect<
       // The agent roster is resolved data; the lease ends with the read.
       Effect.scoped,
       Effect.provideService(ExtensionRegistry, launchRegistry),
-      // The profile cache joins the context only when the server wired one.
-      Effect.updateContext((context: Context.Context<never>) =>
-        Option.match(profileCache, {
-          onNone: () => context,
-          onSome: (cache) => Context.add(context, SessionProfileCache, cache),
-        }),
-      ),
+      Effect.provideService(SessionProfileCache, profileCache),
     )
     if (registry.getResolved().agents.has(agent)) return
     return yield* new NotFoundError({ message: `Unknown agent: ${agent}` })
@@ -1027,16 +1019,14 @@ export const SessionMutationsLive = Layer.effect(SessionMutations, makeSessionMu
 // ── rpc handlers ────────────────────────────────────────────────────────────
 
 /**
- * The registry serving a cwd: its profile's when a profile cache is wired, else
- * the launch registry. The caller's scope holds the profile's lease.
+ * The registry serving a cwd: its profile's, or for no cwd the launch registry
+ * (the host cwd's profile). The caller's scope holds the profile's lease.
  */
 const resolveRegistryForCwd = Effect.fn("SessionQueries.resolveRegistryForCwd")(function* (
   cwd: Option.Option<string>,
 ) {
-  const extensionRegistry = yield* ExtensionRegistry
-  const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
-  if (Option.isNone(cwd) || Option.isNone(profileCacheOpt)) return extensionRegistry
-  const profile = yield* profileCacheOpt.value.resolve(cwd.value)
+  if (Option.isNone(cwd)) return yield* ExtensionRegistry
+  const profile = yield* (yield* SessionProfileCache).resolve(cwd.value)
   return profile.registryService
 })
 
@@ -1291,7 +1281,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const authStore = yield* Auth
     const catalogRecord = yield* ModelCatalogRecord
     const platform = yield* GentPlatform
-    const extensionRegistry = yield* ExtensionRegistry
+    const profileCache = yield* SessionProfileCache
     const sessionStorage = yield* SessionStorage
     const relationshipStorage = yield* RelationshipStorage
     const branchStorage = yield* BranchStorage
@@ -1358,22 +1348,8 @@ const RpcHandlers = GentRpcs.toLayer(
     const sessionCwd = (sessionId: SessionId) => loadSession(sessionId).pipe(Effect.map(cwdOf))
 
     // The caller's scope holds the profile's lease while it uses its services.
-    const profileForCwd = Effect.fn("RpcHandlers.profileForCwd")(function* (
-      cwd: Option.Option<string>,
-    ): Effect.fn.Return<
-      Pick<SessionProfile, "registryService" | "layerContext">,
-      never,
-      Scope.Scope
-    > {
-      const profileCache = yield* Effect.serviceOption(SessionProfileCache)
-      if (Option.isNone(profileCache)) {
-        return {
-          registryService: extensionRegistry,
-          layerContext: Context.make(ExtensionRegistry, extensionRegistry),
-        }
-      }
-      return yield* profileCache.value.resolve(Option.getOrElse(cwd, () => runtimeEnvironment.cwd))
-    })
+    const profileForCwd = (cwd: Option.Option<string>) =>
+      profileCache.resolve(Option.getOrElse(cwd, () => runtimeEnvironment.cwd))
 
     const resolveSessionProfile = (sessionId: SessionId) =>
       sessionCwd(sessionId).pipe(Effect.flatMap(profileForCwd))
@@ -1825,12 +1801,6 @@ interface DependencyOverrides {
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
 
-/** The launch profile's base prompt sections, for the loop actor's defaults. */
-class LaunchBaseSections extends Context.Service<
-  LaunchBaseSections,
-  ReadonlyArray<PromptSection>
->()("@gent/core/src/server/server/LaunchBaseSections") {}
-
 /**
  * Where a composition root keeps its state. `Disk` names the SQLite file it
  * writes, so choosing disk persistence and naming the file are one decision.
@@ -1950,14 +1920,11 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
       const profile = yield* cache
         .resolve(config.cwd)
         .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
-      // Only the launch registry and prompt sections join the server context.
-      // The profile's resource services stay in the profile: a turn, a
-      // request or a hook reads them from its session's profile, so one
-      // project's extension services never reach another project's turn.
-      return Layer.mergeAll(
-        Layer.succeed(ExtensionRegistry, profile.registryService),
-        Layer.succeed(LaunchBaseSections, profile.baseSections),
-      )
+      // Only the launch registry joins the server context. The profile's
+      // resource services stay in the profile: a turn, a request or a hook
+      // reads them from its session's profile, so one project's extension
+      // services never reach another project's turn.
+      return Layer.succeed(ExtensionRegistry, profile.registryService)
     }),
   )
 
@@ -2061,12 +2028,7 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
     SessionMutationsLive,
     Layer.provideMerge(SessionRuntime.Client, tools),
   )
-  const actor = Layer.provideMerge(
-    Layer.unwrap(
-      Effect.map(LaunchBaseSections, (baseSections) => AgentLoopLiveActor({ baseSections })),
-    ),
-    sessions,
-  )
+  const actor = Layer.provideMerge(AgentLoopLiveActor, sessions)
   return Layer.provideMerge(interactionRecoveryLive, actor)
 }
 

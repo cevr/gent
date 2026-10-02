@@ -58,6 +58,7 @@ import {
   createRpcHarness,
   emptyQueueSnapshot,
   ensureStorageParents,
+  fixedSessionProfiles,
   recordingEventStore,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
@@ -735,7 +736,6 @@ describe("concurrency", () => {
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
         const branchStorage = yield* BranchStorage
-        const loop = yield* makeAgentLoopService
         const now = dateFromMillis(1_767_225_600_000)
         const session = new Session({
           id: SessionId.make("serial-session"),
@@ -750,11 +750,7 @@ describe("concurrency", () => {
         })
         yield* sessionStorage.createSession(session)
         yield* branchStorage.createBranch(branch)
-        yield* loop.runOnce({
-          sessionId: session.id,
-          branchId: branch.id,
-          prompt: "run serial tools",
-        })
+        yield* runAgentLoop(makeMessage(session.id, branch.id, "run serial tools"))
       }).pipe(Effect.provide(layer))
       expect(maxRunning).toBeGreaterThan(1)
       expect(events.length).toBe(4)
@@ -818,9 +814,7 @@ describe("reasoning replay", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(
-          agentLoop,
           Message.cases.regular.make({
             id: MessageId.make("reasoning-replay-msg"),
             sessionId,
@@ -854,14 +848,13 @@ describe("turn stream lifecycle", () => {
       ]
       const modelEventsRef = yield* Ref.make<AgentEvent[]>([])
       const modelDraft = yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
-          SessionId.make("model-parity-session"),
-          BranchId.make("model-parity-branch"),
+          SessionId.make("stream-lifecycle-session"),
+          BranchId.make("stream-lifecycle-branch"),
           "hello",
         )
-        yield* runAgentLoop(agentLoop, message)
+        yield* runAgentLoop(message)
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
         return {
@@ -875,7 +868,7 @@ describe("turn stream lifecycle", () => {
             scriptedProvider([
               [
                 reasoningDeltaPart("thinking"),
-                textDeltaPart("hello from parity"),
+                textDeltaPart("hello from the stream"),
                 finishPart({
                   finishReason: "stop",
                   usage: { inputTokens: 3, outputTokens: 5 },
@@ -886,7 +879,7 @@ describe("turn stream lifecycle", () => {
           ),
         ),
       )
-      expect(modelDraft.text).toBe("hello from parity")
+      expect(modelDraft.text).toBe("hello from the stream")
       expect(modelDraft.reasoning).toBe("thinking")
       expect(modelDraft.toolCalls).toEqual([])
       // Context projection is logged apart from the stream lifecycle.
@@ -963,8 +956,7 @@ describe("tool projection reconciliation", () => {
             }),
           )
 
-          const agentLoop = yield* makeAgentLoopService
-          yield* runAgentLoop(agentLoop, turn)
+          yield* runAgentLoop(turn)
 
           const completed = (yield* Ref.get(eventsRef)).find(
             (event) => event._tag === "TurnCompleted" && event.messageId === turn.id,
@@ -1024,8 +1016,7 @@ describe("tool projection reconciliation", () => {
           )
           yield* operations.cancelTurn({ sessionId, branchId, messageId: turn.id })
 
-          const agentLoop = yield* makeAgentLoopService
-          yield* runAgentLoop(agentLoop, turn)
+          yield* runAgentLoop(turn)
 
           const toolMessage = yield* messageStorage.getMessage(
             toolResultMessageIdForTurn(turn.id, 1),
@@ -1113,8 +1104,7 @@ describe("tool projection reconciliation", () => {
               }),
             )
 
-            const agentLoop = yield* makeAgentLoopService
-            const exit = yield* Effect.exit(runAgentLoop(agentLoop, turn))
+            const exit = yield* Effect.exit(runAgentLoop(turn))
 
             const toolMessage = yield* messageStorage.getMessage(
               toolResultMessageIdForTurn(turn.id, 1),
@@ -1194,8 +1184,7 @@ describe("tool projection reconciliation", () => {
             }),
           )
 
-          const agentLoop = yield* makeAgentLoopService
-          yield* Effect.exit(runAgentLoop(agentLoop, turn))
+          yield* Effect.exit(runAgentLoop(turn))
 
           // The binding cannot be replayed, so the projection is closed as failed
           // and the model is not called again for this turn.
@@ -1219,7 +1208,7 @@ describe("tool projection reconciliation", () => {
   )
 })
 
-// ── model context projection ────────────────────────────────────────────────
+// ── model resolution failure ──────────────────────────────────────────────────
 
 describe("model resolution failure", () => {
   it.live("a credential failure shows the user its own message, not the error tag", () => {
@@ -1255,9 +1244,7 @@ describe("model resolution failure", () => {
         resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
       })
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(
-          agentLoop,
           makeMessage(
             SessionId.make("signed-out-session"),
             BranchId.make("signed-out-branch"),
@@ -1338,9 +1325,7 @@ const refusesClassifier = (params: {
       resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
     })
     yield* Effect.gen(function* () {
-      const agentLoop = yield* makeAgentLoopService
       yield* runAgentLoop(
-        agentLoop,
         makeMessage(
           SessionId.make("classifier-session"),
           BranchId.make("classifier-branch"),
@@ -2075,7 +2060,7 @@ describe("admitted turn withdrawal", () => {
  * second seam firing afterwards could only correct what the first already did.
  *
  * The hook runs after `TurnCompleted` is appended and delivered
- * (`agent-loop.turn-execution.ts:732`), so these tests poll with `waitFor`
+ * (`emitTurnAfter` in `runtime/turn.ts`), so these tests poll with `waitFor`
  * rather than waiting on that event.
  */
 
@@ -2632,6 +2617,105 @@ describe("loop open hooks", () => {
     20_000,
   )
 
+  it.scopedLive("a send to a terminated session is refused before its loop opens", () =>
+    Effect.gen(function* () {
+      const opened = yield* Deferred.make<void>()
+      const recording = defineExtension({
+        id: "@gent/test-loop-open-after-terminate",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("loopOpen", () => Deferred.succeed(opened, void 0))
+        }),
+      })
+      const calls = yield* Ref.make(0)
+      const context = yield* Layer.build(
+        createE2ELayer({
+          ...e2ePreset,
+          providerLayer: countingReply("never asked", calls),
+          extensionInputs: [...e2ePreset.extensionInputs, recording],
+        }),
+      )
+      const sessionId = SessionId.make("terminated-send-session")
+      const branchId = BranchId.make("terminated-send-branch")
+      yield* Effect.gen(function* () {
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* (yield* SessionStorage).createSession(
+          new Session({ id: sessionId, name: "Terminated", createdAt: now, updatedAt: now }),
+        )
+        yield* (yield* BranchStorage).createBranch(
+          new Branch({ id: branchId, sessionId, createdAt: now }),
+        )
+        const runtime = yield* SessionRuntime
+        yield* runtime.terminateSession(sessionId)
+        const sent = yield* Effect.exit(
+          runtime.sendUserMessage({ sessionId, branchId, content: "too late" }),
+        )
+        expect(sent._tag).toBe("Failure")
+        // The hook forks off the opening operation; give a wrong open time to show.
+        const hookRan = yield* Deferred.await(opened).pipe(Effect.timeoutOption("300 millis"))
+        expect(hookRan._tag).toBe("None")
+        expect(yield* Ref.get(calls)).toBe(0)
+      }).pipe(Effect.provide(context))
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a send after the session's open loop was terminated does not reopen it", () =>
+    Effect.gen(function* () {
+      const opens = yield* Ref.make(0)
+      const firstOpen = yield* Deferred.make<void>()
+      const reopened = yield* Deferred.make<void>()
+      const recording = defineExtension({
+        id: "@gent/test-loop-reopen-after-terminate",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("loopOpen", () =>
+            Ref.updateAndGet(opens, (count) => count + 1).pipe(
+              Effect.flatMap((count) => {
+                if (count === 1) return Deferred.succeed(firstOpen, void 0)
+                return Deferred.succeed(reopened, void 0)
+              }),
+            ),
+          )
+        }),
+      })
+      const calls = yield* Ref.make(0)
+      const context = yield* Layer.build(
+        createE2ELayer({
+          ...e2ePreset,
+          providerLayer: countingReply("never asked", calls),
+          extensionInputs: [...e2ePreset.extensionInputs, recording],
+        }),
+      )
+      const sessionId = SessionId.make("reopen-after-terminate-session")
+      const branchId = BranchId.make("reopen-after-terminate-branch")
+      yield* Effect.gen(function* () {
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* (yield* SessionStorage).createSession(
+          new Session({ id: sessionId, name: "Terminated", createdAt: now, updatedAt: now }),
+        )
+        yield* (yield* BranchStorage).createBranch(
+          new Branch({ id: branchId, sessionId, createdAt: now }),
+        )
+        const runtime = yield* SessionRuntime
+        // A read opens the loop and runs its hooks once.
+        yield* runtime.getState({ sessionId, branchId })
+        yield* Deferred.await(firstOpen)
+        yield* runtime.terminateSession(sessionId)
+        const sent = yield* Effect.exit(
+          runtime.sendUserMessage({ sessionId, branchId, content: "too late" }),
+        )
+        expect(sent._tag).toBe("Failure")
+        // A reopen would fork the hook off the send; give it time to show.
+        const hookRanAgain = yield* Deferred.await(reopened).pipe(
+          Effect.timeoutOption("300 millis"),
+        )
+        expect(hookRanAgain._tag).toBe("None")
+        expect(yield* Ref.get(opens)).toBe(1)
+        expect(yield* Ref.get(calls)).toBe(0)
+      }).pipe(Effect.provide(context))
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("a failing loopOpen hook leaves the loop open and later hooks still run", () =>
     Effect.gen(function* () {
       const later = yield* Deferred.make<void>()
@@ -2714,7 +2798,7 @@ describe("loop open hooks", () => {
 // ── recovery race ───────────────────────────────────────────────────────────
 
 /**
- * Regression: per-entity `handle` rebuild in `agent-loop.actor.ts` must
+ * Regression: per-entity `handle` rebuild in `runtime/agent-loop.ts` must
  * serialize against `concurrency: "unbounded"` mailbox dispatch.
  *
  * `ensureStarted` reads `lifecycleRef`, and `openLoop` yields on its first
@@ -2775,7 +2859,7 @@ const gatedQueueStorageLayer = <E>(
 
 describe("agent-loop recovery race", () => {
   it.live(
-    "recovery start failure closes without re-entering startup semaphore",
+    "a recovered loop whose first queue write fails closes, and the operation fails instead of hanging",
     () =>
       Effect.gen(function* () {
         const sessionId = SessionId.make("recovery-start-fail-session")
@@ -2861,7 +2945,7 @@ describe("agent-loop recovery race", () => {
   )
 
   it.live(
-    "second op blocks on startup semaphore until first op finishes reopen",
+    "an operation that arrives during a loop reopen waits until the reopen ends",
     () =>
       Effect.gen(function* () {
         const sessionId = SessionId.make("recovery-race-session")
@@ -3058,97 +3142,59 @@ describe("startup recovery", () => {
     15000,
   )
 
-  it.live(
-    "startup does not replay a continuation prompt as a user turn",
-    () =>
-      Effect.gen(function* () {
-        // A continuation prompt is persisted as a user message inside a turn
-        // and never gets a TurnCompleted of its own. Seen in the gamut testbed:
-        // startup took it for an unanswered turn and sent a transcript that
-        // ended with the assistant reply, which the provider rejected.
-        const sessionId = SessionId.make("session-loop-continuation-replay")
-        const branchId = BranchId.make("branch-loop-continuation-replay")
-        const providerCalled = yield* Deferred.make<void>()
-        const providerLayer = LanguageModelLayers.testStream(() =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
-            return Stream.fromIterable([
-              textDeltaPart("replayed"),
-              finishPart({ finishReason: "stop" }),
-            ] satisfies LanguageModelStreamPart[])
-          }),
-        )
-        const layer = actorTestRoot({ provider: providerLayer })
-        const messageId = MessageId.make("msg-continuation-replay")
-        const message = Message.cases.regular.make({
-          id: messageId,
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: "answer me" })],
-          createdAt: dateFromMillis(1_767_225_600_000),
-        })
+  // Each seed is a branch whose last user-role message is already answered or
+  // is history. Reopening the loop must not take it for an unanswered turn.
+  const userMessage = (
+    sessionId: SessionId,
+    branchId: BranchId,
+    id: string,
+    text: string,
+    at: number,
+  ) =>
+    Message.cases.regular.make({
+      id: MessageId.make(id),
+      sessionId,
+      branchId,
+      role: "user",
+      parts: [Prompt.textPart({ text })],
+      createdAt: dateFromMillis(1_767_225_600_000 + at),
+    })
+  const answeredSeeds: ReadonlyArray<{
+    readonly name: string
+    readonly seed: (
+      sessionId: SessionId,
+      branchId: BranchId,
+    ) => { readonly messages: ReadonlyArray<Message>; readonly completedId: MessageId }
+  }> = [
+    {
+      // A continuation prompt is persisted as a user message inside a turn
+      // and never gets a TurnCompleted of its own. Seen in the gamut testbed:
+      // startup took it for an unanswered turn and sent a transcript that
+      // ended with the assistant reply, which the provider rejected.
+      name: "startup does not replay a continuation prompt as a user turn",
+      seed: (sessionId, branchId) => {
+        const message = userMessage(sessionId, branchId, "msg-continuation", "answer me", 0)
         const continuation = Message.cases.regular.make({
-          id: MessageId.make(`${messageId}:continuation:2`),
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: "Answer the request now." })],
-          createdAt: dateFromMillis(1_767_225_600_001),
+          ...userMessage(
+            sessionId,
+            branchId,
+            `${message.id}:continuation:2`,
+            "Answer the request now.",
+            1,
+          ),
           metadata: { customType: "continuation", details: { step: 2 } },
         })
-
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* ensureStorageParents({ sessionId, branchId })
-            const eventStorage = yield* EventStorage
-            yield* eventStorage.appendEvent(MessageReceived.make({ message }))
-            yield* eventStorage.appendEvent(MessageReceived.make({ message: continuation }))
-            yield* eventStorage.appendEvent(
-              TurnCompleted.make({ sessionId, branchId, messageId, durationMs: 1 }),
-            )
-
-            const agentLoop = yield* makeAgentLoopService
-            const state = yield* agentLoop.getState({ sessionId, branchId })
-            expect(state._tag).toBe("Idle")
-            // The loop decides recovery as it opens, before `getState` answers.
-            expect(yield* Deferred.isDone(providerCalled)).toBe(false)
-          }).pipe(Effect.provide(layer)),
-        )
-      }),
-    15000,
-  )
-
-  it.live(
-    "startup does not answer a context handoff marker as a user turn",
-    () =>
-      Effect.gen(function* () {
-        // A handoff marker is a user-role message the loop persists mid-turn.
-        // Seen on the gamut at a 20k window: reopening a finished child took
-        // the marker for an unanswered turn and the provider rejected the
-        // transcript, which ended with the assistant reply.
-        const sessionId = SessionId.make("session-loop-marker-replay")
-        const branchId = BranchId.make("branch-loop-marker-replay")
-        const providerCalled = yield* Deferred.make<void>()
-        const providerLayer = LanguageModelLayers.testStream(() =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
-            return Stream.fromIterable([
-              textDeltaPart("replayed"),
-              finishPart({ finishReason: "stop" }),
-            ] satisfies LanguageModelStreamPart[])
-          }),
-        )
-        const layer = actorTestRoot({ provider: providerLayer })
-        const messageId = MessageId.make("msg-marker-replay")
-        const message = Message.cases.regular.make({
-          id: messageId,
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: "answer me" })],
-          createdAt: dateFromMillis(1_767_225_600_000),
-        })
+        return { messages: [message, continuation], completedId: message.id }
+      },
+    },
+    {
+      // A handoff marker is a user-role message the loop persists mid-turn.
+      // Seen on the gamut at a 20k window: reopening a finished child took
+      // the marker for an unanswered turn and the provider rejected the
+      // transcript, which ended with the assistant reply.
+      name: "startup does not answer a context handoff marker as a user turn",
+      seed: (sessionId, branchId) => {
+        const message = userMessage(sessionId, branchId, "msg-marker", "answer me", 0)
         const reply = Message.cases.regular.make({
           id: MessageId.make("msg-marker-reply"),
           sessionId,
@@ -3164,136 +3210,82 @@ describe("startup recovery", () => {
           notice: "Context handoff.",
           createdAt: dateFromMillis(1_767_225_600_002),
         })
-
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* ensureStorageParents({ sessionId, branchId })
-            const eventStorage = yield* EventStorage
-            yield* eventStorage.appendEvent(MessageReceived.make({ message }))
-            yield* eventStorage.appendEvent(MessageReceived.make({ message: reply }))
-            yield* eventStorage.appendEvent(MessageReceived.make({ message: marker }))
-            yield* eventStorage.appendEvent(
-              TurnCompleted.make({ sessionId, branchId, messageId, durationMs: 1 }),
-            )
-
-            const agentLoop = yield* makeAgentLoopService
-            const state = yield* agentLoop.getState({ sessionId, branchId })
-            expect(state._tag).toBe("Idle")
-            // The loop decides recovery as it opens, before `getState` answers.
-            expect(yield* Deferred.isDone(providerCalled)).toBe(false)
-          }).pipe(Effect.provide(layer)),
-        )
-      }),
-    15000,
-  )
-
-  it.live(
-    "startup does not answer delivered steering as a user turn",
-    () =>
-      Effect.gen(function* () {
-        // Steering delivered at a step boundary joins the turn already running
-        // and never gets a `TurnCompleted` of its own. Without a runtime
-        // marker, recovery reads that as an unanswered user turn and answers
-        // it a second time after a restart.
-        const sessionId = SessionId.make("session-loop-steering-replay")
-        const branchId = BranchId.make("branch-loop-steering-replay")
-        const providerCalled = yield* Deferred.make<void>()
-        const providerLayer = LanguageModelLayers.testStream(() =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
-            return Stream.fromIterable([
-              textDeltaPart("replayed"),
-              finishPart({ finishReason: "stop" }),
-            ] satisfies LanguageModelStreamPart[])
-          }),
-        )
-        const layer = actorTestRoot({ provider: providerLayer })
-        const messageId = MessageId.make("msg-steering-replay")
-        const message = Message.cases.regular.make({
-          id: messageId,
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: "answer me" })],
-          createdAt: dateFromMillis(1_767_225_600_000),
-        })
-        // The shape older builds of `deliverSteeringAtStepBoundary` wrote,
-        // still on disk: a user-role interjection carrying the `steering`
-        // marker, with no completion of its own.
+        return { messages: [message, reply, marker], completedId: message.id }
+      },
+    },
+    {
+      // Steering delivered at a step boundary joins the turn already running
+      // and never gets a `TurnCompleted` of its own. The shape older builds of
+      // `deliverSteeringAtStepBoundary` wrote is still on disk: a user-role
+      // interjection carrying the `steering` marker.
+      name: "startup does not answer delivered steering as a user turn",
+      seed: (sessionId, branchId) => {
+        const message = userMessage(sessionId, branchId, "msg-steering", "answer me", 0)
         const delivered = Message.cases.regular.make({
-          id: MessageId.make("msg-steering-replay-interject"),
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: "also do this" })],
-          createdAt: dateFromMillis(1_767_225_600_001),
+          ...userMessage(sessionId, branchId, "msg-steering-interject", "also do this", 1),
           metadata: { customType: "steering" },
         })
-
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* ensureStorageParents({ sessionId, branchId })
-            const eventStorage = yield* EventStorage
-            yield* eventStorage.appendEvent(MessageReceived.make({ message }))
-            yield* eventStorage.appendEvent(MessageReceived.make({ message: delivered }))
-            yield* eventStorage.appendEvent(
-              TurnCompleted.make({ sessionId, branchId, messageId, durationMs: 1 }),
-            )
-
-            const agentLoop = yield* makeAgentLoopService
-            const state = yield* agentLoop.getState({ sessionId, branchId })
-            expect(state._tag).toBe("Idle")
-            // The loop decides recovery as it opens, before `getState` answers.
-            expect(yield* Deferred.isDone(providerCalled)).toBe(false)
-          }).pipe(Effect.provide(layer)),
+        return { messages: [message, delivered], completedId: message.id }
+      },
+    },
+    {
+      // A turn that failed writes no `TurnCompleted`. Once a later turn has
+      // completed, the failed one is history: reopening must not answer it.
+      name: "startup does not replay a failed turn that newer completed turns followed",
+      seed: (sessionId, branchId) => {
+        const failed = userMessage(sessionId, branchId, "msg-failed", "the turn that failed", 0)
+        const answered = userMessage(
+          sessionId,
+          branchId,
+          "msg-answered",
+          "the turn that answered",
+          10,
         )
-      }),
-    15000,
-  )
+        return { messages: [failed, answered], completedId: answered.id }
+      },
+    },
+  ]
 
-  it.live(
-    "startup does not replay a failed turn that newer completed turns followed",
-    () =>
-      Effect.gen(function* () {
-        // A turn that failed writes no `TurnCompleted`. Once a later turn has
-        // completed, the failed one is history: reopening must not answer it.
-        const sessionId = SessionId.make("session-loop-stale-failure")
-        const branchId = BranchId.make("branch-loop-stale-failure")
-        const providerCalled = yield* Deferred.make<void>()
-        const providerLayer = LanguageModelLayers.testStream(() =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
-            return Stream.fromIterable([
-              textDeltaPart("replayed"),
-              finishPart({ finishReason: "stop" }),
-            ] satisfies LanguageModelStreamPart[])
-          }),
-        )
-        const failed = makeMessage(sessionId, branchId, "the turn that failed")
-        const answered = Message.cases.regular.make({
-          ...makeMessage(sessionId, branchId, "the turn that answered"),
-          createdAt: dateFromMillis(1_767_225_600_010),
-        })
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* ensureStorageParents({ sessionId, branchId })
-            const eventStorage = yield* EventStorage
-            yield* eventStorage.appendEvent(MessageReceived.make({ message: failed }))
-            yield* eventStorage.appendEvent(MessageReceived.make({ message: answered }))
-            yield* eventStorage.appendEvent(
-              TurnCompleted.make({ sessionId, branchId, messageId: answered.id, durationMs: 1 }),
-            )
+  for (const { name, seed } of answeredSeeds) {
+    it.live(
+      name,
+      () =>
+        Effect.gen(function* () {
+          const sessionId = SessionId.make("session-loop-answered-seed")
+          const branchId = BranchId.make("branch-loop-answered-seed")
+          const providerCalled = yield* Deferred.make<void>()
+          const providerLayer = LanguageModelLayers.testStream(() =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
+              return Stream.fromIterable([
+                textDeltaPart("replayed"),
+                finishPart({ finishReason: "stop" }),
+              ] satisfies LanguageModelStreamPart[])
+            }),
+          )
+          const { messages, completedId } = seed(sessionId, branchId)
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* ensureStorageParents({ sessionId, branchId })
+              const eventStorage = yield* EventStorage
+              for (const message of messages) {
+                yield* eventStorage.appendEvent(MessageReceived.make({ message }))
+              }
+              yield* eventStorage.appendEvent(
+                TurnCompleted.make({ sessionId, branchId, messageId: completedId, durationMs: 1 }),
+              )
 
-            const agentLoop = yield* makeAgentLoopService
-            const state = yield* agentLoop.getState({ sessionId, branchId })
-            expect(state._tag).toBe("Idle")
-            // The loop decides recovery as it opens, before `getState` answers.
-            expect(yield* Deferred.isDone(providerCalled)).toBe(false)
-          }).pipe(Effect.provide(makeLayer(providerLayer))),
-        )
-      }),
-    15000,
-  )
+              const agentLoop = yield* makeAgentLoopService
+              const state = yield* agentLoop.getState({ sessionId, branchId })
+              expect(state._tag).toBe("Idle")
+              // The loop decides recovery as it opens, before `getState` answers.
+              expect(yield* Deferred.isDone(providerCalled)).toBe(false)
+            }).pipe(Effect.provide(actorTestRoot({ provider: providerLayer }))),
+          )
+        }),
+      15000,
+    )
+  }
 })
 
 // ── actor commands ──────────────────────────────────────────────────────────
@@ -3331,7 +3323,7 @@ const makeRuntimeLayer = (
   tools: ReadonlyArray<ToolCapability> = [],
   requests: ReadonlyArray<RequestCapability> = [],
 ) => {
-  const resolvedExtensions = makeTestExtensions(tools, requests)
+  const registry = ExtensionRegistry.fromResolved(makeTestExtensions(tools, requests))
   const eventStoreLayer = EventStore.Memory
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   let toolRunnerLayer = ToolRunner.Test()
@@ -3341,7 +3333,8 @@ const makeRuntimeLayer = (
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
-    ExtensionRegistry.fromResolved(resolvedExtensions),
+    registry,
+    fixedSessionProfiles(new Map(), registry),
     eventStoreLayer,
     toolRunnerLayer,
     RuntimeEnvironment.Live({
@@ -3357,7 +3350,7 @@ const makeRuntimeLayer = (
   )
   const approvalLayer = ApprovalService.Live.pipe(Layer.provide(baseDeps))
   return Layer.provideMerge(
-    Layer.provideMerge(AgentLoopLiveActor({ baseSections: [] }), SessionRuntime.Client),
+    Layer.provideMerge(AgentLoopLiveActor, SessionRuntime.Client),
     Layer.mergeAll(baseDeps, approvalLayer, ProcessLocalToolReplay.Live),
   )
 }
@@ -3485,7 +3478,7 @@ describe("a submit whose caller is interrupted before its turn starts", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         // The branch already has one failed turn.
-        expect((yield* Effect.exit(runAgentLoop(agentLoop, earlier)))._tag).toBe("Failure")
+        expect((yield* Effect.exit(runAgentLoop(earlier)))._tag).toBe("Failure")
         // An extension request holds the idle loop.
         const holding = yield* Effect.forkChild(
           requestExtensionViaActor({
@@ -3498,9 +3491,9 @@ describe("a submit whose caller is interrupted before its turn starts", () => {
         )
         yield* Deferred.await(entered)
         // A Submit reserves the idle loop and waits for the permit.
-        const caller = yield* Effect.forkChild(submitAgentLoop(agentLoop, interrupted))
+        const caller = yield* Effect.forkChild(submitAgentLoop(interrupted))
         // A SubmitAndWait queues behind the reservation, with one failure as its baseline.
-        const waiter = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, waited)))
+        const waiter = yield* Effect.forkChild(Effect.exit(runAgentLoop(waited)))
         const queue = yield* waitForOption(
           () =>
             agentLoop
@@ -3550,8 +3543,7 @@ describe("a full follow-up queue", () => {
       )
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
-        const submit = (text: string) =>
-          submitAgentLoop(agentLoop, makeMessage(sessionId, branchId, text))
+        const submit = (text: string) => submitAgentLoop(makeMessage(sessionId, branchId, text))
         yield* submit("running")
         yield* Deferred.await(firstStarted)
         for (let i = 1; i <= 10; i++) yield* submit(`queued-${i}`)
@@ -3559,7 +3551,6 @@ describe("a full follow-up queue", () => {
         expect(refused._tag).toBe("FollowUpQueueFull")
         // A retry of a queued id is not a new item: it replaces that one in place.
         yield* submitAgentLoop(
-          agentLoop,
           Message.cases.regular.make({
             ...makeMessage(sessionId, branchId, "queued-4"),
             parts: [Prompt.textPart({ text: "queued-4 (retry)" })],
@@ -3628,7 +3619,7 @@ describe("a loop closed while a submitted turn waits to start", () => {
       })
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, warm)
+        yield* runAgentLoop(warm)
         expect(streamCalls).toBe(1)
         // An extension request holds the idle loop.
         const holding = yield* Effect.forkChild(
@@ -3644,9 +3635,9 @@ describe("a loop closed while a submitted turn waits to start", () => {
         )
         yield* Deferred.await(entered)
         // A SubmitAndWait reserves the idle loop and waits for the permit.
-        const waiter = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, waited)))
+        const waiter = yield* Effect.forkChild(Effect.exit(runAgentLoop(waited)))
         // A Submit queues behind the reservation, which proves it stands.
-        const submitted = yield* Effect.forkChild(Effect.exit(submitAgentLoop(agentLoop, behind)))
+        const submitted = yield* Effect.forkChild(Effect.exit(submitAgentLoop(behind)))
         const queue = yield* waitForOption(
           () =>
             agentLoop
@@ -3725,8 +3716,8 @@ describe("agent-loop actor commands", () => {
         const secondFiber = yield* Effect.forkChild(call("serialize-b", "b"))
         // The permit is held by the first command, so the second cannot even
         // enter the capability body until the first releases it.
-        const earlySecond = yield* Fiber.join(secondFiber).pipe(Effect.timeoutOption("1 millis"))
-        expect(earlySecond._tag).toBe("None")
+        yield* Effect.yieldNow.pipe(Effect.repeat({ times: 20 }))
+        expect(secondFiber.pollUnsafe()).toBeUndefined()
         expect(entered).toBe(1)
         expect(completed).toBe(0)
         yield* Deferred.succeed(releaseFirst, void 0)
@@ -3786,8 +3777,8 @@ describe("agent-loop actor commands", () => {
         )
         // The running turn owns the mutation permit, so the side mutation
         // cannot start until the turn releases it.
-        const earlyRequest = yield* Fiber.join(requestFiber).pipe(Effect.timeoutOption("1 millis"))
-        expect(earlyRequest._tag).toBe("None")
+        yield* Effect.yieldNow.pipe(Effect.repeat({ times: 20 }))
+        expect(requestFiber.pollUnsafe()).toBeUndefined()
         expect(executed).toBe(false)
         yield* Deferred.succeed(streamReleased, void 0)
         yield* Fiber.join(submitFiber)
@@ -3887,8 +3878,8 @@ describe("agent-loop actor commands", () => {
             input: "blocked until turn completes",
           }),
         )
-        const earlyRecord = yield* Fiber.join(recordFiber).pipe(Effect.timeoutOption("1 millis"))
-        expect(earlyRecord._tag).toBe("None")
+        yield* Effect.yieldNow.pipe(Effect.repeat({ times: 20 }))
+        expect(recordFiber.pollUnsafe()).toBeUndefined()
         yield* sessionRuntime.terminateSession(sessionId).pipe(Effect.timeout("1 second"))
         yield* Fiber.join(submitFiber).pipe(Effect.ignore)
         yield* Fiber.join(recordFiber).pipe(Effect.ignore)
@@ -4081,108 +4072,6 @@ describe("loop inbox", () => {
 
 describe("queued follow-ups drain", () => {
   it.live(
-    "multiple submits during a Running turn drain in submission order after TurnDone",
-    () =>
-      Effect.gen(function* () {
-        const drainSessionId = SessionId.make("session-loop-drain")
-        const drainBranchId = BranchId.make("branch-loop-drain")
-        // Provider gates each turn on a per-turn Deferred so the test can
-        // serialize "submit while Running" semantics deterministically.
-        // First model stream call is gated by gates[0], second by gates[1], etc.
-        // Each call records its index into `streamOrder` and returns a
-        // simple text+stop response when its gate resolves.
-        const gates = [
-          yield* Deferred.make<void>(),
-          yield* Deferred.make<void>(),
-          yield* Deferred.make<void>(),
-          yield* Deferred.make<void>(),
-        ]
-        const streamOrder = yield* Ref.make<readonly number[]>([])
-        const streamCallRef = yield* Ref.make(0)
-        const gatedProvider = LanguageModelLayers.testStream(() =>
-          Effect.gen(function* () {
-            const idx = yield* Ref.getAndUpdate(streamCallRef, (n) => n + 1)
-            yield* Ref.update(streamOrder, (arr) => [...arr, idx])
-            const gate = gates[idx]
-            if (!Predicate.isUndefined(gate)) {
-              yield* Deferred.await(gate)
-            }
-            return Stream.fromIterable([
-              textDeltaPart(`turn-${idx}`),
-              finishPart({ finishReason: "stop" }),
-            ] satisfies LanguageModelStreamPart[])
-          }),
-        )
-        const layer = actorTestRoot({ provider: gatedProvider })
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
-            const submitOne = (id: string, text: string) =>
-              submitAgentLoop(
-                agentLoop,
-                Message.cases.regular.make({
-                  id: MessageId.make(id),
-                  sessionId: drainSessionId,
-                  branchId: drainBranchId,
-                  role: "user",
-                  parts: [Prompt.textPart({ text })],
-                  createdAt: dateFromMillis(1_767_225_600_000),
-                }),
-              )
-            // Submit turn #0; wait until the provider's model stream has
-            // actually been entered (parked on gate[0]). Phase transitions
-            // to Running before model streaming starts, so we poll on
-            // streamCallRef instead.
-            yield* submitOne("msg-drain-0", "first")
-            yield* waitForOption(
-              () =>
-                Effect.gen(function* () {
-                  const count = yield* Ref.get(streamCallRef)
-                  if (count >= 1) {
-                    return Option.some(count)
-                  }
-                  return Option.none()
-                }),
-              "model stream call #0 to start",
-              200,
-            )
-            expect(yield* Ref.get(streamCallRef)).toBe(1)
-            // Submit #1, #2, #3 while #0 is still parked. They MUST
-            // enqueue (Running → Running re-enter) — they cannot start
-            // a new model stream until #0's gate releases.
-            yield* submitOne("msg-drain-1", "second")
-            yield* submitOne("msg-drain-2", "third")
-            yield* submitOne("msg-drain-3", "fourth")
-            // Confirm model streaming was not re-entered.
-            expect(yield* Ref.get(streamCallRef)).toBe(1)
-            // Release all gates. Drain proceeds: #0 → #1 → #2 → #3.
-            yield* Deferred.succeed(gates[0]!, void 0)
-            yield* Deferred.succeed(gates[1]!, void 0)
-            yield* Deferred.succeed(gates[2]!, void 0)
-            yield* Deferred.succeed(gates[3]!, void 0)
-            // Wait for full drain: stream call count must reach 4 and
-            // loop returns to Idle.
-            yield* waitForPhase(
-              agentLoop,
-              { sessionId: drainSessionId, branchId: drainBranchId },
-              "Idle",
-            )
-            const finalCount = yield* Ref.get(streamCallRef)
-            expect(finalCount).toBe(4)
-            const order = yield* Ref.get(streamOrder)
-            expect(order).toEqual([0, 1, 2, 3])
-            const queueStorage = yield* AgentLoopQueueStorage
-            const queue = yield* queueStorage.getQueueState(drainSessionId, drainBranchId)
-            expect(queue.inFlight).toBeUndefined()
-            expect(queue.followUp).toEqual([])
-            expect(queue.steering).toEqual([])
-          }).pipe(Effect.provide(layer)),
-        )
-      }),
-    15000,
-  )
-
-  it.live(
     "concurrent follow-up persistence keeps the full queue after actor restart",
     () =>
       Effect.gen(function* () {
@@ -4235,12 +4124,12 @@ describe("queued follow-ups drain", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const agentLoop = yield* makeAgentLoopService
-            yield* submitAgentLoop(agentLoop, makeMessage("msg-persist-race-0", "first"))
+            yield* submitAgentLoop(makeMessage("msg-persist-race-0", "first"))
             const firstQueued = yield* Effect.forkChild(
-              submitAgentLoop(agentLoop, makeMessage("msg-persist-race-1", "second")),
+              submitAgentLoop(makeMessage("msg-persist-race-1", "second")),
             )
             const secondQueued = yield* Effect.forkChild(
-              submitAgentLoop(agentLoop, makeMessage("msg-persist-race-2", "third")),
+              submitAgentLoop(makeMessage("msg-persist-race-2", "third")),
             )
             yield* Fiber.join(firstQueued)
             yield* Fiber.join(secondQueued)
@@ -4331,9 +4220,7 @@ describe("queued follow-ups drain", () => {
               parts: [Prompt.textPart({ text: "run a tool" })],
               createdAt: dateFromMillis(1_767_225_600_000),
             })
-            const fiber = yield* Effect.forkChild(
-              submitAgentLoop(agentLoop, turn).pipe(Effect.ignore),
-            )
+            const fiber = yield* Effect.forkChild(submitAgentLoop(turn).pipe(Effect.ignore))
             yield* controls.waitForCall(0)
             yield* steerAgentLoop({
               _tag: "Interject",
@@ -4408,10 +4295,10 @@ describe("queued follow-ups drain", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const agentLoop = yield* makeAgentLoopService
-            yield* submitAgentLoop(agentLoop, makeMessage("msg-persist-failure-0", "first"))
+            yield* submitAgentLoop(makeMessage("msg-persist-failure-0", "first"))
 
             const queuedExit = yield* Effect.exit(
-              submitAgentLoop(agentLoop, makeMessage("msg-persist-failure-1", "second")),
+              submitAgentLoop(makeMessage("msg-persist-failure-1", "second")),
             )
 
             expect(queuedExit._tag).toBe("Failure")
@@ -4504,7 +4391,7 @@ describe("interaction", () => {
       eventStore: recordingEventStore(events),
       toolRunner: ToolRunner.Live,
     })
-  it.live("tool triggers InteractionPendingError and machine parks", () =>
+  it.live("a tool that asks parks the turn until the answer", () =>
     Effect.gen(function* () {
       const callCount = yield* Ref.make(0)
       const resolution = yield* Deferred.make<void>()
@@ -4514,9 +4401,7 @@ describe("interaction", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const fiber = yield* Effect.forkChild(
-            runAgentLoop(agentLoop, makeIntMessage("trigger interaction")),
-          )
+          const fiber = yield* Effect.forkChild(runAgentLoop(makeIntMessage("trigger interaction")))
           const state = yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
@@ -4547,9 +4432,7 @@ describe("interaction", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const fiber = yield* Effect.forkChild(
-            runAgentLoop(agentLoop, makeIntMessage("stale interaction")),
-          )
+          const fiber = yield* Effect.forkChild(runAgentLoop(makeIntMessage("stale interaction")))
           yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
@@ -4620,9 +4503,8 @@ describe("interaction", () => {
         const layer = makeLiveToolLayer(provider, [echo])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
             const first = makeIntMessage("interrupt me mid tool call")
-            const running = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
+            const running = yield* Effect.forkChild(runAgentLoop(first))
             yield* Deferred.await(toolCallArrived)
             yield* steerAgentLoop({
               _tag: "Cancel",
@@ -4634,7 +4516,7 @@ describe("interaction", () => {
             expect(yield* Ref.get(executed)).toBe(0)
 
             const second = makeIntMessage("are you still there")
-            yield* runAgentLoop(agentLoop, second)
+            yield* runAgentLoop(second)
             const reply = yield* (yield* MessageStorage).getMessage(
               assistantMessageIdForTurn(second.id, 1),
             )
@@ -4685,9 +4567,8 @@ describe("interaction", () => {
       const layer = makeLiveToolLayer(provider, [stuck])
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
           const first = makeIntMessage("run the stuck tool")
-          const running = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
+          const running = yield* Effect.forkChild(runAgentLoop(first))
           yield* Deferred.await(started)
           yield* steerAgentLoop({
             _tag: "Cancel",
@@ -4749,10 +4630,9 @@ describe("interaction", () => {
         const layer = makeLiveToolLayer(provider, [echo])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
             const first = makeIntMessage("the stream breaks mid tool call")
             // A stream that broke with output in hand is re-prompted inside the turn.
-            yield* runAgentLoop(agentLoop, first)
+            yield* runAgentLoop(first)
             expect(yield* Ref.get(executed)).toBe(0)
             const reply = yield* (yield* MessageStorage).getMessage(
               assistantMessageIdForTurn(first.id, 2),
@@ -4771,9 +4651,7 @@ describe("interaction", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const fiber = yield* Effect.forkChild(
-            runAgentLoop(agentLoop, makeIntMessage("interrupt test")),
-          )
+          const fiber = yield* Effect.forkChild(runAgentLoop(makeIntMessage("interrupt test")))
           yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
@@ -4832,7 +4710,7 @@ describe("interaction", () => {
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
           const message = makeIntMessage("usage across a park")
-          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+          const fiber = yield* Effect.forkChild(runAgentLoop(message))
           yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
@@ -4865,7 +4743,7 @@ describe("interaction", () => {
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
           const message = makeIntMessage("interrupt parked call")
-          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+          const fiber = yield* Effect.forkChild(runAgentLoop(message))
           yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
@@ -4885,13 +4763,13 @@ describe("interaction", () => {
             expect.objectContaining({ type: "tool-result", id: "tc-1", isFailure: true }),
           ])
           // The branch still projects: a later turn runs to an answer.
-          yield* runAgentLoop(agentLoop, makeIntMessage("after the interrupt"))
+          yield* runAgentLoop(makeIntMessage("after the interrupt"))
           expect(yield* Ref.get(callCount)).toBe(1)
         }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
       )
     }),
   )
-  it.live("respondInteraction is no-op when not in WaitingForInteraction", () =>
+  it.live("an answer to a loop that waits for none changes nothing", () =>
     Effect.gen(function* () {
       const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.succeed(
@@ -4902,7 +4780,7 @@ describe("interaction", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          yield* runAgentLoop(agentLoop, makeIntMessage("no interaction"))
+          yield* runAgentLoop(makeIntMessage("no interaction"))
           yield* respondAgentLoopInteraction({
             sessionId: intSessionId,
             branchId: intBranchId,
@@ -4917,7 +4795,7 @@ describe("interaction", () => {
       )
     }),
   )
-  it.live("GUARD: interaction resume executes tool without new LLM call", () =>
+  it.live("an answered interaction runs the tool again without a new model call", () =>
     Effect.gen(function* () {
       const callCount = yield* Ref.make(0)
       const resolution = yield* Deferred.make<void>()
@@ -4950,9 +4828,7 @@ describe("interaction", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const fiber = yield* Effect.forkChild(
-            runAgentLoop(agentLoop, makeIntMessage("guard interaction")),
-          )
+          const fiber = yield* Effect.forkChild(runAgentLoop(makeIntMessage("guard interaction")))
           yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
@@ -5080,7 +4956,7 @@ describe("interaction", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+          const fiber = yield* Effect.forkChild(runAgentLoop(message))
           yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
@@ -5116,235 +4992,123 @@ describe("interaction", () => {
       )
     }),
   )
-  it.live("reuses a completed sibling tool after another sibling parks", () =>
-    Effect.gen(function* () {
-      const firstCalls = yield* Ref.make(0)
-      const secondCalls = yield* Ref.make(0)
-      const secondStarted = yield* Deferred.make<void>()
-      const secondResumed = yield* Deferred.make<void>()
-      const firstTool = tool({
-        id: "sibling-first-tool",
-        description: "Completes before the sibling parks",
-        params: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        execute: (params: { value: string }) =>
-          Effect.gen(function* () {
-            yield* ExtensionContext
-            yield* Ref.update(firstCalls, (count) => count + 1)
-            return { value: params.value }
-          }),
-      })
-      const secondTool = tool({
-        id: "sibling-second-tool",
-        description: "Parks once before completing",
-        params: Schema.Struct({ value: Schema.String }),
-        output: Schema.String,
-        execute: (params: { value: string }) =>
-          Effect.gen(function* () {
-            const ctx = yield* ExtensionContext
-            const count = yield* Ref.getAndUpdate(secondCalls, (value) => value + 1)
-            if (count === 0) {
-              yield* Deferred.succeed(secondStarted, void 0)
-              return yield* new InteractionPendingError({
-                requestId: InteractionRequestId.make("req-sibling-tools"),
-                sessionId: ctx.sessionId,
-                branchId: ctx.branchId,
-              })
-            }
-            yield* Deferred.succeed(secondResumed, void 0)
-            return params.value
-          }),
-      })
-      let streamCallIndex = 0
-      const provider = LanguageModelLayers.testStream(() => {
-        const index = streamCallIndex++
-        if (index === 0) {
+  for (const order of [
+    { name: "declared after the pending sibling", declared: ["second", "first"] },
+    { name: "declared before the pending sibling", declared: ["first", "second"] },
+  ] as const) {
+    it.live(`reuses a completed sibling tool ${order.name}`, () =>
+      Effect.gen(function* () {
+        const firstCalls = yield* Ref.make(0)
+        const secondCalls = yield* Ref.make(0)
+        const secondStarted = yield* Deferred.make<void>()
+        const secondResumed = yield* Deferred.make<void>()
+        const firstTool = tool({
+          id: "sibling-first-tool",
+          description: "Completes while its sibling parks",
+          params: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          execute: (params: { value: string }) =>
+            Effect.gen(function* () {
+              yield* ExtensionContext
+              yield* Ref.update(firstCalls, (count) => count + 1)
+              return { value: params.value }
+            }),
+        })
+        const secondTool = tool({
+          id: "sibling-second-tool",
+          description: "Parks once before completing",
+          params: Schema.Struct({ value: Schema.String }),
+          output: Schema.String,
+          execute: (params: { value: string }) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              const count = yield* Ref.getAndUpdate(secondCalls, (value) => value + 1)
+              if (count === 0) {
+                yield* Deferred.succeed(secondStarted, void 0)
+                return yield* new InteractionPendingError({
+                  requestId: InteractionRequestId.make("req-sibling-tools"),
+                  sessionId: ctx.sessionId,
+                  branchId: ctx.branchId,
+                })
+              }
+              yield* Deferred.succeed(secondResumed, void 0)
+              return params.value
+            }),
+        })
+        const toolIds = { first: getToolId(firstTool), second: getToolId(secondTool) }
+        let streamCallIndex = 0
+        const provider = LanguageModelLayers.testStream(() => {
+          const index = streamCallIndex++
+          if (index === 0) {
+            return Effect.succeed(
+              Stream.fromIterable([
+                ...order.declared.map((key) =>
+                  toolCallPart(
+                    toolIds[key],
+                    { value: key },
+                    { toolCallId: ToolCallId.make(`tc-sibling-${key}`) },
+                  ),
+                ),
+                finishPart({ finishReason: "tool-calls" }),
+              ] satisfies LanguageModelStreamPart[]),
+            )
+          }
           return Effect.succeed(
             Stream.fromIterable([
-              toolCallPart(
-                getToolId(secondTool),
-                { value: "second" },
-                { toolCallId: ToolCallId.make("tc-sibling-second") },
-              ),
-              toolCallPart(
-                getToolId(firstTool),
-                { value: "first" },
-                { toolCallId: ToolCallId.make("tc-sibling-first") },
-              ),
-              finishPart({ finishReason: "tool-calls" }),
+              textDeltaPart("siblings complete"),
+              finishPart({ finishReason: "stop" }),
             ] satisfies LanguageModelStreamPart[]),
           )
-        }
-        return Effect.succeed(
-          Stream.fromIterable([
-            textDeltaPart("siblings complete"),
-            finishPart({ finishReason: "stop" }),
-          ] satisfies LanguageModelStreamPart[]),
-        )
-      })
-      const layer = makeLiveToolLayer(provider, [firstTool, secondTool])
-      const message = makeIntMessage("sibling interaction")
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
-          yield* waitForPhase(
-            agentLoop,
-            { sessionId: intSessionId, branchId: intBranchId },
-            "WaitingForInteraction",
-          )
-          yield* Deferred.await(secondStarted)
-          expect(Ref.getUnsafe(firstCalls)).toBe(1)
-          expect(Ref.getUnsafe(secondCalls)).toBe(1)
-
-          yield* respondAgentLoopInteraction({
-            sessionId: intSessionId,
-            branchId: intBranchId,
-            requestId: InteractionRequestId.make("req-sibling-tools"),
-          })
-          yield* Deferred.await(secondResumed).pipe(Effect.timeout("1 second"))
-          yield* Fiber.join(fiber)
-
-          expect(Ref.getUnsafe(firstCalls)).toBe(1)
-          expect(Ref.getUnsafe(secondCalls)).toBe(2)
-          const messageStorage = yield* MessageStorage
-          const result = yield* messageStorage.getMessage(toolResultMessageIdForTurn(message.id, 1))
-          expect(result).not.toBeUndefined()
-          if (Predicate.isNotUndefined(result)) {
-            expect(result.parts).toHaveLength(2)
-            expect(result.parts.map((part) => part.type === "tool-result" && part.id)).toEqual([
-              "tc-sibling-second",
-              "tc-sibling-first",
-            ])
-            const firstResult = result.parts.find(
-              (part) => part.type === "tool-result" && part.id === "tc-sibling-first",
+        })
+        const layer = makeLiveToolLayer(provider, [firstTool, secondTool])
+        const message = makeIntMessage("sibling interaction")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            const fiber = yield* Effect.forkChild(runAgentLoop(message))
+            yield* waitForPhase(
+              agentLoop,
+              { sessionId: intSessionId, branchId: intBranchId },
+              "WaitingForInteraction",
             )
-            expect(Predicate.isUndefined(firstResult)).toBe(false)
-            if (Predicate.isNotUndefined(firstResult)) {
-              expect(firstResult.type).toBe("tool-result")
-              if (firstResult.type === "tool-result") {
+            yield* Deferred.await(secondStarted)
+            expect(Ref.getUnsafe(firstCalls)).toBe(1)
+            expect(Ref.getUnsafe(secondCalls)).toBe(1)
+
+            yield* respondAgentLoopInteraction({
+              sessionId: intSessionId,
+              branchId: intBranchId,
+              requestId: InteractionRequestId.make("req-sibling-tools"),
+            })
+            yield* Deferred.await(secondResumed).pipe(Effect.timeout("1 second"))
+            yield* Fiber.join(fiber)
+
+            expect(Ref.getUnsafe(firstCalls)).toBe(1)
+            expect(Ref.getUnsafe(secondCalls)).toBe(2)
+            const messageStorage = yield* MessageStorage
+            const result = yield* messageStorage.getMessage(
+              toolResultMessageIdForTurn(message.id, 1),
+            )
+            expect(result).not.toBeUndefined()
+            if (Predicate.isNotUndefined(result)) {
+              expect(result.parts.map((part) => part.type === "tool-result" && part.id)).toEqual(
+                order.declared.map((key) => `tc-sibling-${key}`),
+              )
+              const firstResult = result.parts.find(
+                (part) => part.type === "tool-result" && part.id === "tc-sibling-first",
+              )
+              expect(firstResult?.type).toBe("tool-result")
+              if (firstResult?.type === "tool-result") {
                 expect(firstResult.result).toEqual({ value: "first" })
               }
             }
-          }
-        })
-          .pipe(Effect.provide(layer))
-          .pipe(Effect.timeout("2 seconds")),
-      )
-    }),
-  )
-  it.live("reuses a completed sibling declared before the pending sibling", () =>
-    Effect.gen(function* () {
-      const firstCalls = yield* Ref.make(0)
-      const secondCalls = yield* Ref.make(0)
-      const secondStarted = yield* Deferred.make<void>()
-      const secondResumed = yield* Deferred.make<void>()
-      const firstTool = tool({
-        id: "sibling-reverse-first",
-        description: "Completes before the pending sibling",
-        params: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        execute: (params: { value: string }) =>
-          Effect.gen(function* () {
-            yield* ExtensionContext
-            yield* Ref.update(firstCalls, (count) => count + 1)
-            return { value: params.value }
-          }),
-      })
-      const secondTool = tool({
-        id: "sibling-reverse-second",
-        description: "Parks after the completed sibling",
-        params: Schema.Struct({ value: Schema.String }),
-        output: Schema.String,
-        execute: (params: { value: string }) =>
-          Effect.gen(function* () {
-            const ctx = yield* ExtensionContext
-            const count = yield* Ref.getAndUpdate(secondCalls, (value) => value + 1)
-            if (count === 0) {
-              yield* Deferred.succeed(secondStarted, void 0)
-              return yield* new InteractionPendingError({
-                requestId: InteractionRequestId.make("req-sibling-reverse"),
-                sessionId: ctx.sessionId,
-                branchId: ctx.branchId,
-              })
-            }
-            yield* Deferred.succeed(secondResumed, void 0)
-            return params.value
-          }),
-      })
-      let streamCallIndex = 0
-      const provider = LanguageModelLayers.testStream(() => {
-        const index = streamCallIndex++
-        if (index === 0) {
-          return Effect.succeed(
-            Stream.fromIterable([
-              toolCallPart(
-                getToolId(firstTool),
-                { value: "first-reverse" },
-                { toolCallId: ToolCallId.make("tc-sibling-reverse-first") },
-              ),
-              toolCallPart(
-                getToolId(secondTool),
-                { value: "second-reverse" },
-                { toolCallId: ToolCallId.make("tc-sibling-reverse-second") },
-              ),
-              finishPart({ finishReason: "tool-calls" }),
-            ] satisfies LanguageModelStreamPart[]),
-          )
-        }
-        return Effect.succeed(
-          Stream.fromIterable([
-            textDeltaPart("reverse siblings complete"),
-            finishPart({ finishReason: "stop" }),
-          ] satisfies LanguageModelStreamPart[]),
-        )
-      })
-      const layer = makeLiveToolLayer(provider, [firstTool, secondTool])
-      const message = makeIntMessage("reverse sibling interaction")
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
-          yield* waitForPhase(
-            agentLoop,
-            { sessionId: intSessionId, branchId: intBranchId },
-            "WaitingForInteraction",
-          )
-          yield* Deferred.await(secondStarted)
-          expect(Ref.getUnsafe(firstCalls)).toBe(1)
-          expect(Ref.getUnsafe(secondCalls)).toBe(1)
-
-          yield* respondAgentLoopInteraction({
-            sessionId: intSessionId,
-            branchId: intBranchId,
-            requestId: InteractionRequestId.make("req-sibling-reverse"),
           })
-          yield* Deferred.await(secondResumed).pipe(Effect.timeout("1 second"))
-          yield* Fiber.join(fiber)
-
-          expect(Ref.getUnsafe(firstCalls)).toBe(1)
-          expect(Ref.getUnsafe(secondCalls)).toBe(2)
-          const result = yield* MessageStorage.pipe(
-            Effect.flatMap((storage) =>
-              storage.getMessage(toolResultMessageIdForTurn(message.id, 1)),
-            ),
-          )
-          expect(result).not.toBeUndefined()
-          if (Predicate.isNotUndefined(result)) {
-            const firstResult = result.parts.find(
-              (part) => part.type === "tool-result" && part.id === "tc-sibling-reverse-first",
-            )
-            expect(firstResult?.type).toBe("tool-result")
-            if (firstResult?.type === "tool-result") {
-              expect(firstResult.result).toEqual({ value: "first-reverse" })
-            }
-          }
-        })
-          .pipe(Effect.provide(layer))
-          .pipe(Effect.timeout("2 seconds")),
-      )
-    }),
-  )
+            .pipe(Effect.provide(layer))
+            .pipe(Effect.timeout("2 seconds")),
+        )
+      }),
+    )
+  }
   it.live("does not rerun a tool when its persisted structured result is corrupt", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0)
@@ -5396,7 +5160,7 @@ describe("interaction", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+          const fiber = yield* Effect.forkChild(runAgentLoop(message))
           yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
@@ -5455,7 +5219,7 @@ describe("interaction", () => {
               expect(part.isFailure).toBe(true)
             }
           }
-          yield* runAgentLoop(agentLoop, makeIntMessage("after corrupt result"))
+          yield* runAgentLoop(makeIntMessage("after corrupt result"))
           const nextAssistant = yield* MessageStorage.pipe(
             Effect.flatMap((storage) =>
               storage.getMessage(
@@ -5485,7 +5249,7 @@ describe("run completion", () => {
         const agentLoop = yield* makeAgentLoopService
         const sessionId = SessionId.make("fast-run-session")
         const branchId = BranchId.make("fast-run-branch")
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "fast")).pipe(
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "fast")).pipe(
           Effect.timeout("2 seconds"),
         )
         const state = yield* agentLoop.getState({ sessionId, branchId })
@@ -5504,7 +5268,6 @@ describe("turn scheduling", () => {
         ])
         const context = yield* Layer.build(makeLayer(providerLayer))
         yield* Effect.gen(function* () {
-          const loop = yield* makeAgentLoopService
           const sessionId = SessionId.make("pre-admission-cancel-session")
           const branchId = BranchId.make("pre-admission-cancel-branch")
           const cancelled = makeMessage(sessionId, branchId, "cancel before start")
@@ -5515,13 +5278,13 @@ describe("turn scheduling", () => {
             requestId: RequestId.make("cancel-before-admission"),
             messageId: cancelled.id,
           })
-          yield* runAgentLoop(loop, cancelled)
+          yield* runAgentLoop(cancelled)
           expect(yield* controls.callCount).toBe(0)
           expect(
             (yield* (yield* MessageStorage).getMessage(cancelled.id))?.turnDurationMs,
           ).toBeDefined()
           const later = makeMessage(sessionId, branchId, "later")
-          yield* runAgentLoop(loop, later)
+          yield* runAgentLoop(later)
           expect(yield* controls.callCount).toBe(1)
           const reply = yield* (yield* MessageStorage).getMessage(
             assistantMessageIdForTurn(later.id, 1),
@@ -5547,8 +5310,8 @@ describe("turn scheduling", () => {
           const branchId = BranchId.make("targeted-cancel-branch")
           const first = makeMessage(sessionId, branchId, "first")
           const second = makeMessage(sessionId, branchId, "second")
-          yield* runAgentLoop(loop, first)
-          const running = yield* runAgentLoop(loop, second).pipe(Effect.forkChild)
+          yield* runAgentLoop(first)
+          const running = yield* runAgentLoop(second).pipe(Effect.forkChild)
           yield* controls.waitForCall(1)
           // This helper awaits the actual actor handler, not only durable send admission.
           yield* steerAgentLoop({
@@ -5575,39 +5338,18 @@ describe("turn scheduling", () => {
     "concurrent sessions run independently",
     () =>
       Effect.gen(function* () {
-        const gate = yield* Deferred.make<void>()
-        const firstStarted = yield* Deferred.make<void>()
-        let calls = 0
-        const providerLayer = LanguageModelLayers.testStream(() => {
-          calls += 1
-          if (calls === 1) {
-            return Effect.succeed(
-              Stream.fromEffect(
-                Effect.gen(function* () {
-                  yield* Deferred.succeed(firstStarted, void 0)
-                  yield* Deferred.await(gate)
-                  return finishPart({ finishReason: "stop" })
-                }),
-              ).pipe(
-                Stream.flatMap(() =>
-                  Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-                ),
-              ),
-            )
-          }
-          return Effect.succeed(
-            Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-          )
-        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("ok"), gated: true },
+          textStep("ok"),
+        ])
         const layer = makeLayer(providerLayer)
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
             const messageA = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "hello")
             const messageB = makeMessage(SessionId.make("s2"), BranchId.make("b2"), "world")
-            const fiberA = yield* Effect.forkChild(runAgentLoop(agentLoop, messageA))
-            yield* Deferred.await(firstStarted)
-            const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
+            const fiberA = yield* Effect.forkChild(runAgentLoop(messageA))
+            yield* controls.waitForCall(0)
+            const fiberB = yield* Effect.forkChild(runAgentLoop(messageB))
             // A's model stays open until the gate opens below, so B finishing
             // here is B running without A. B waiting on A never finishes, and
             // the test's deadlock bound fails it.
@@ -5615,111 +5357,63 @@ describe("turn scheduling", () => {
             expect(Exit.isSuccess(finishedB)).toBe(true)
             const statusA = fiberA.pollUnsafe()
             expect(statusA).toBeUndefined()
-            yield* Deferred.succeed(gate, void 0)
+            yield* controls.emitAll(0)
             yield* Fiber.join(fiberA)
+            yield* controls.assertDone
           }).pipe(Effect.provide(layer)),
         )
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
-  it.live("same session/branch serializes loop creation", () =>
+  it.live("a second send to a busy branch is queued and runs after the first turn", () =>
     Effect.gen(function* () {
-      const gate = yield* Deferred.make<void>()
-      const firstStarted = yield* Deferred.make<void>()
-      let calls = 0
-      const providerLayer = LanguageModelLayers.testStream(() => {
-        calls += 1
-        if (calls === 1) {
-          return Effect.succeed(
-            Stream.fromEffect(
-              Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, void 0)
-                yield* Deferred.await(gate)
-                return finishPart({ finishReason: "stop" })
-              }),
-            ).pipe(
-              Stream.flatMap(() =>
-                Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-              ),
-            ),
-          )
-        }
-        return Effect.succeed(
-          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-        )
-      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...textStep("ok"), gated: true },
+        textStep("ok"),
+      ])
       const baseStorageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
       const layer = actorTestRoot({ provider: providerLayer, storage: baseStorageLayer })
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
           const fiberA = yield* Effect.forkChild(
-            runAgentLoop(
-              agentLoop,
-              makeMessage(SessionId.make("s1"), BranchId.make("b1"), "first"),
-            ),
+            runAgentLoop(makeMessage(SessionId.make("s1"), BranchId.make("b1"), "first")),
           )
-          yield* Deferred.await(firstStarted)
+          yield* controls.waitForCall(0)
           const fiberB = yield* Effect.forkChild(
-            submitAgentLoop(
-              agentLoop,
-              makeMessage(SessionId.make("s1"), BranchId.make("b1"), "second"),
-            ),
+            submitAgentLoop(makeMessage(SessionId.make("s1"), BranchId.make("b1"), "second")),
           )
-          const queuedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
-          expect(queuedB._tag).toBe("Some")
-          expect(calls).toBe(1)
-          yield* Deferred.succeed(gate, void 0)
+          // Admission returns once B is queued, while A still holds the model open.
+          yield* Fiber.join(fiberB).pipe(Effect.timeout("2 seconds"))
+          expect(yield* controls.callCount).toBe(1)
+          yield* controls.emitAll(0)
           yield* Fiber.join(fiberA)
           yield* waitForPhase(
             agentLoop,
             { sessionId: SessionId.make("s1"), branchId: BranchId.make("b1") },
             "Idle",
           )
-          expect(calls).toBe(2)
+          expect(yield* controls.callCount).toBe(2)
+          yield* controls.assertDone
         }).pipe(Effect.provide(layer)),
       )
     }),
   )
   it.live("interrupt scoped to session/branch", () =>
     Effect.gen(function* () {
-      const gateA = yield* Deferred.make<void>()
-      const gateB = yield* Deferred.make<void>()
-      const startedA = yield* Deferred.make<void>()
-      const startedB = yield* Deferred.make<void>()
-      let calls = 0
-      const providerLayer = LanguageModelLayers.testStream(() => {
-        calls += 1
-        let gate = gateB
-        let started = startedB
-        if (calls === 1) {
-          gate = gateA
-          started = startedA
-        }
-        return Effect.succeed(
-          Stream.fromEffect(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(started, void 0)
-              yield* Deferred.await(gate)
-              return finishPart({ finishReason: "stop" })
-            }),
-          ).pipe(
-            Stream.flatMap(() =>
-              Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-            ),
-          ),
-        )
-      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...textStep("ok"), gated: true },
+        { ...textStep("ok"), gated: true },
+      ])
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
           const messageA = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "alpha")
           const messageB = makeMessage(SessionId.make("s2"), BranchId.make("b2"), "beta")
-          const fiberA = yield* Effect.forkChild(runAgentLoop(agentLoop, messageA))
-          const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
-          yield* Deferred.await(startedA)
-          yield* Deferred.await(startedB)
+          const fiberA = yield* Effect.forkChild(runAgentLoop(messageA))
+          const fiberB = yield* Effect.forkChild(runAgentLoop(messageB))
+          yield* controls.waitForCall(0)
+          yield* controls.waitForCall(1)
           // No writer sends `Interrupt` now; a stored steer row with it still cancels.
           yield* steerAgentLoop({
             _tag: "Interrupt",
@@ -5727,12 +5421,12 @@ describe("turn scheduling", () => {
             branchId: BranchId.make("b1"),
             requestId: "req-interrupt-s1",
           })
-          const finishedA = yield* Fiber.join(fiberA).pipe(Effect.timeoutOption("200 millis"))
-          expect(finishedA._tag).toBe("Some")
+          // A ends on the interrupt alone: both model gates stay shut.
+          yield* Fiber.join(fiberA).pipe(Effect.timeout("2 seconds"))
           const statusB = fiberB.pollUnsafe()
           expect(statusB).toBeUndefined()
-          yield* Deferred.succeed(gateA, void 0)
-          yield* Deferred.succeed(gateB, void 0)
+          yield* controls.emitAll(0)
+          yield* controls.emitAll(1)
           yield* Fiber.join(fiberB)
         }).pipe(Effect.provide(layer)),
       )
@@ -5741,64 +5435,22 @@ describe("turn scheduling", () => {
 })
 
 describe("a failed turn", () => {
-  it.live("publishes StreamStarted and TurnCompleted events", () =>
-    Effect.gen(function* () {
-      const providerLayer = LanguageModelLayers.testStream(() =>
-        Effect.succeed(
-          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-        ),
-      )
-      const events = yield* Ref.make<AgentEvent[]>([])
-      const layer = makeLayerWithEvents(providerLayer, events)
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          yield* runAgentLoop(
-            agentLoop,
-            makeMessage(SessionId.make("s1"), BranchId.make("b1"), "inspect me"),
-          )
-          const publishedEvents = (yield* Ref.get(events)).map((event) => event._tag)
-          expect(publishedEvents).toContain("StreamStarted")
-          expect(publishedEvents).toContain("TurnCompleted")
-        }).pipe(Effect.provide(layer)),
-      )
-    }),
-  )
   it.live("rolls back assistant message when durable MessageReceived append fails", () =>
     Effect.gen(function* () {
       const providerLayer = scriptedProvider([
         [textDeltaPart("not committed"), finishPart({ finishReason: "stop" })],
       ])
-      const failingPublisherLayer = Layer.succeed(
-        EventStore,
-        EventStore.of({
-          subscribe: () => Stream.empty,
-          removeSession: () => Effect.void,
-          append: (event: AgentEvent) => {
-            if (event._tag === "MessageReceived" && event.message.role === "assistant") {
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
-            }
-            return Effect.gen(function* () {
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: () => Effect.void,
-        }),
+      const failingPublisherLayer = failingAppendStore(
+        (event) => event._tag === "MessageReceived" && event.message.role === "assistant",
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
           SessionId.make("atomic-assistant-session"),
           BranchId.make("atomic-assistant-branch"),
           "hello",
         )
-        const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
+        const exit = yield* Effect.exit(runAgentLoop(message))
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(exit._tag).toBe("Failure")
         expect(assistant).toBeUndefined()
@@ -5814,37 +5466,18 @@ describe("a failed turn", () => {
       const record = (event: AgentEvent) => Ref.update(seen, (events) => [...events, event])
       // The assistant line's append fails: a storage failure inside a turn
       // phase, which the model stream never sees.
-      const failingPublisherLayer = Layer.succeed(
-        EventStore,
-        EventStore.of({
-          subscribe: () => Stream.empty,
-          removeSession: () => Effect.void,
-          append: (event: AgentEvent) => {
-            if (event._tag === "MessageReceived" && event.message.role === "assistant") {
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
-            }
-            return Effect.gen(function* () {
-              yield* record(event)
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: record,
-        }),
+      const failingPublisherLayer = failingAppendStore(
+        (event) => event._tag === "MessageReceived" && event.message.role === "assistant",
+        record,
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
           SessionId.make("phase-failure-session"),
           BranchId.make("phase-failure-branch"),
           "hello",
         )
-        const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
+        const exit = yield* Effect.exit(runAgentLoop(message))
         expect(exit._tag).toBe("Failure")
         const events = yield* Ref.get(seen)
         const tags = events.map((event) => event._tag)
@@ -5890,13 +5523,12 @@ describe("a failed turn", () => {
         }),
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const message = makeMessage(
           SessionId.make("late-failure-session"),
           BranchId.make("late-failure-branch"),
           "hello",
         )
-        yield* Effect.exit(runAgentLoop(agentLoop, message))
+        yield* Effect.exit(runAgentLoop(message))
         const completions = (yield* Ref.get(appended)).filter(
           (event) => event._tag === "TurnCompleted",
         )
@@ -5911,54 +5543,20 @@ describe("a failed turn", () => {
       const branchId = BranchId.make("foreign-failure-branch")
       const first = makeMessage(sessionId, branchId, "first fails")
       const second = makeMessage(sessionId, branchId, "second waits")
-      const firstStarted = yield* Deferred.make<void>()
-      const gate = yield* Deferred.make<void>()
-      let streamCalls = 0
-      const providerLayer = LanguageModelLayers.testStream(() => {
-        streamCalls += 1
-        const parts = Stream.fromIterable([
-          textDeltaPart("ok"),
-          finishPart({ finishReason: "stop" }),
-        ])
-        if (streamCalls > 1) return Effect.succeed(parts)
-        return Effect.succeed(
-          Stream.fromEffect(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(firstStarted, void 0)
-              yield* Deferred.await(gate)
-            }),
-          ).pipe(Stream.flatMap(() => parts)),
-        )
-      })
-      const failFirstAssistant = Layer.succeed(
-        EventStore,
-        EventStore.of({
-          subscribe: () => Stream.empty,
-          removeSession: () => Effect.void,
-          append: (event: AgentEvent) => {
-            if (
-              event._tag === "MessageReceived" &&
-              event.message.id === assistantMessageIdForTurn(first.id, 1)
-            ) {
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
-            }
-            return Effect.gen(function* () {
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: () => Effect.void,
-        }),
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...textStep("ok"), gated: true },
+        textStep("ok"),
+      ])
+      const failFirstAssistant = failingAppendStore(
+        (event) =>
+          event._tag === "MessageReceived" &&
+          event.message.id === assistantMessageIdForTurn(first.id, 1),
       )
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
-        const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, first)))
-        yield* Deferred.await(firstStarted)
-        const secondFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, second)))
+        const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(first)))
+        yield* controls.waitForCall(0)
+        const secondFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(second)))
         yield* waitForOption(
           () =>
             agentLoop
@@ -5966,12 +5564,12 @@ describe("a failed turn", () => {
               .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 1))),
           "second message queued",
         )
-        yield* Deferred.succeed(gate, void 0)
+        yield* controls.emitAll(0)
         const firstExit = yield* Fiber.join(firstFiber)
         const secondExit = yield* Fiber.join(secondFiber)
         expect(firstExit._tag).toBe("Failure")
         expect(secondExit._tag).toBe("Success")
-        expect(streamCalls).toBe(2)
+        expect(yield* controls.callCount).toBe(2)
       }).pipe(
         Effect.timeout("4 seconds"),
         Effect.provide(makeLayerWithEventStore(providerLayer, failFirstAssistant)),
@@ -6019,7 +5617,7 @@ describe("a failed turn", () => {
         // Storage recovers. A turn submitted now owes nothing to that failure.
         yield* Ref.set(failWrites, false)
         const submitted = yield* Effect.exit(
-          runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "after recovery")),
+          runAgentLoop(makeMessage(sessionId, branchId, "after recovery")),
         )
         expect(submitted._tag).toBe("Success")
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
@@ -6032,53 +5630,21 @@ describe("a failed turn", () => {
       const first = makeMessage(sessionId, branchId, "first completes")
       const second = makeMessage(sessionId, branchId, "second is never saved")
       const third = makeMessage(sessionId, branchId, "third runs")
-      const firstStarted = yield* Deferred.make<void>()
-      const gate = yield* Deferred.make<void>()
-      let streamCalls = 0
       let secondAttempts = 0
-      const providerLayer = LanguageModelLayers.testStream(() => {
-        streamCalls += 1
-        const parts = Stream.fromIterable([
-          textDeltaPart("ok"),
-          finishPart({ finishReason: "stop" }),
-        ])
-        if (streamCalls > 1) return Effect.succeed(parts)
-        return Effect.succeed(
-          Stream.fromEffect(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(firstStarted, void 0)
-              yield* Deferred.await(gate)
-            }),
-          ).pipe(Stream.flatMap(() => parts)),
-        )
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...textStep("ok"), gated: true },
+        textStep("ok"),
+      ])
+      const failSecondUserMessage = failingAppendStore((event) => {
+        const fails = event._tag === "MessageReceived" && event.message.id === second.id
+        if (fails) secondAttempts += 1
+        return fails
       })
-      const failSecondUserMessage = Layer.succeed(
-        EventStore,
-        EventStore.of({
-          subscribe: () => Stream.empty,
-          removeSession: () => Effect.void,
-          append: (event: AgentEvent) => {
-            if (event._tag === "MessageReceived" && event.message.id === second.id) {
-              secondAttempts += 1
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
-            }
-            return Effect.gen(function* () {
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: () => Effect.void,
-        }),
-      )
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
-        const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, first)))
-        yield* Deferred.await(firstStarted)
-        const secondFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, second)))
+        const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(first)))
+        yield* controls.waitForCall(0)
+        const secondFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(second)))
         yield* waitForOption(
           () =>
             agentLoop
@@ -6086,7 +5652,7 @@ describe("a failed turn", () => {
               .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 1))),
           "second message queued",
         )
-        const thirdFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, third)))
+        const thirdFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(third)))
         yield* waitForOption(
           () =>
             agentLoop
@@ -6094,55 +5660,33 @@ describe("a failed turn", () => {
               .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 2))),
           "third message queued",
         )
-        yield* Deferred.succeed(gate, void 0)
+        yield* controls.emitAll(0)
         expect((yield* Fiber.join(firstFiber))._tag).toBe("Success")
         expect((yield* Fiber.join(secondFiber))._tag).toBe("Failure")
         expect((yield* Fiber.join(thirdFiber))._tag).toBe("Success")
         // The failed admission runs once; it is not taken again.
         expect(secondAttempts).toBe(1)
-        expect(streamCalls).toBe(2)
+        expect(yield* controls.callCount).toBe(2)
       }).pipe(
         Effect.timeout("4 seconds"),
         Effect.provide(makeLayerWithEventStore(providerLayer, failSecondUserMessage)),
       )
     }),
   )
-  /** The last user message a model call answers. */
   it.live("rolls back turn duration when TurnCompleted append fails", () =>
     Effect.gen(function* () {
       const providerLayer = scriptedProvider([
         [textDeltaPart("committed before finalize"), finishPart({ finishReason: "stop" })],
       ])
-      const failingPublisherLayer = Layer.succeed(
-        EventStore,
-        EventStore.of({
-          subscribe: () => Stream.empty,
-          removeSession: () => Effect.void,
-          append: (event: AgentEvent) => {
-            if (event._tag === "TurnCompleted") {
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
-            }
-            return Effect.gen(function* () {
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: () => Effect.void,
-        }),
-      )
+      const failingPublisherLayer = failingAppendStore((event) => event._tag === "TurnCompleted")
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
           SessionId.make("atomic-turn-session"),
           BranchId.make("atomic-turn-branch"),
           "hello",
         )
-        const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
+        const exit = yield* Effect.exit(runAgentLoop(message))
         const user = yield* messageStorage.getMessage(message.id)
         expect(exit._tag).toBe("Failure")
         expect(user?.turnDurationMs).toBeUndefined()
@@ -6180,10 +5724,10 @@ describe("queued follow-ups", () => {
       const messageStorage = yield* MessageStorage
       const x = makeMessage(sessionId, branchId, "x")
       const y = makeMessage(sessionId, branchId, "y")
-      yield* submitAgentLoop(agentLoop, makeMessage(sessionId, branchId, "a"))
+      yield* submitAgentLoop(makeMessage(sessionId, branchId, "a"))
       yield* Deferred.await(params.aStarted)
-      yield* submitAgentLoop(agentLoop, x)
-      yield* submitAgentLoop(agentLoop, y)
+      yield* submitAgentLoop(x)
+      yield* submitAgentLoop(y)
       const settled = waitForOption(
         () =>
           Effect.gen(function* () {
@@ -6201,7 +5745,6 @@ describe("queued follow-ups", () => {
         "loop idle with an empty queue",
       )
       return {
-        agentLoop,
         sessionId,
         branchId,
         x,
@@ -6276,6 +5819,14 @@ describe("queued follow-ups", () => {
         yield* context.settled
         expect(userTexts(yield* context.userRows)).toEqual(["a", "x", "y"])
         expect(context.promptTails()).toEqual(["a", "x", "y"])
+        // The drained queue is empty in storage too, not only in the actor.
+        const stored = yield* (yield* AgentLoopQueueStorage).getQueueState(
+          context.sessionId,
+          context.branchId,
+        )
+        expect(stored.inFlight).toBeUndefined()
+        expect(stored.followUp).toEqual([])
+        expect(stored.steering).toEqual([])
       }),
     ),
   )
@@ -6283,9 +5834,9 @@ describe("queued follow-ups", () => {
   it.live("a retried follow-up keeps every queued message once", () =>
     queuedFollowUpScenario("retry", (context) =>
       Effect.gen(function* () {
-        yield* submitAgentLoop(context.agentLoop, context.y)
+        yield* submitAgentLoop(context.y)
         expect(yield* context.followUpContents).toEqual(["x", "y"])
-        yield* submitAgentLoop(context.agentLoop, context.x)
+        yield* submitAgentLoop(context.x)
         expect(yield* context.followUpContents).toEqual(["x", "y"])
         yield* context.release
         yield* context.settled
@@ -6346,7 +5897,7 @@ describe("queued follow-ups", () => {
         const callsBefore = context.streamCalls()
         const yRow = (yield* context.userRows).find((row) => row.id === context.y.id)
         expect(yRow?.turnDurationMs).toBeDefined()
-        yield* runAgentLoop(context.agentLoop, context.y)
+        yield* runAgentLoop(context.y)
         expect(context.streamCalls()).toBe(callsBefore)
         expect(userTexts(yield* context.userRows)).toEqual(["a", "x", "y"])
       }),
@@ -6400,12 +5951,11 @@ describe("queued follow-ups", () => {
               actorTestRoot({ provider: providerLayer, storage: Layer.succeedContext(storage) })
             yield* Effect.scoped(
               Effect.gen(function* () {
-                const agentLoop = yield* makeAgentLoopService
-                yield* submitAgentLoop(agentLoop, a)
+                yield* submitAgentLoop(a)
                 yield* Deferred.await(aStarted)
-                yield* submitAgentLoop(agentLoop, x)
-                yield* submitAgentLoop(agentLoop, y)
-                yield* submitAgentLoop(agentLoop, z)
+                yield* submitAgentLoop(x)
+                yield* submitAgentLoop(y)
+                yield* submitAgentLoop(z)
                 yield* Deferred.succeed(aGate, void 0)
                 yield* Deferred.await(xStarted)
               }).pipe(Effect.provide(processLayer(firstProvider))),
@@ -6442,76 +5992,7 @@ describe("queued follow-ups", () => {
       }),
     15_000,
   )
-  it.live("interjection runs before queued follow-up with scoped agent override", () =>
-    Effect.gen(function* () {
-      const gate = yield* Deferred.make<void>()
-      const firstStarted = yield* Deferred.make<void>()
-      const providerCalls: Array<{
-        latestUserText: string
-      }> = []
-      let streamCount = 0
-      const providerLayer = LanguageModelLayers.testStream((options) => {
-        const latestUserText = [...Prompt.make(options.prompt).content]
-          .reverse()
-          .find((message) => message.role === "user")
-          ?.content.filter((part): part is Prompt.TextPart => part.type === "text")
-          .map((part) => part.text)
-          .join("\n")
-        providerCalls.push({
-          latestUserText: latestUserText ?? "",
-        })
-        streamCount += 1
-        if (streamCount === 1) {
-          return Effect.succeed(
-            Stream.fromEffect(
-              Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, void 0)
-                yield* Deferred.await(gate)
-                return finishPart({ finishReason: "stop" })
-              }),
-            ).pipe(
-              Stream.flatMap(() =>
-                Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-              ),
-            ),
-          )
-        }
-        return Effect.succeed(
-          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-        )
-      })
-      const layer = makeLayer(providerLayer)
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          const first = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "first")
-          const queued = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "queued")
-          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
-          yield* Deferred.await(firstStarted)
-          yield* submitAgentLoop(agentLoop, queued)
-          yield* steerAgentLoop({
-            _tag: "Interject",
-            sessionId: SessionId.make("s1"),
-            branchId: BranchId.make("b1"),
-            requestId: "req-interject-priority",
-            message: "steer now",
-          })
-          yield* Deferred.succeed(gate, void 0)
-          yield* Fiber.join(fiber)
-          yield* waitForPhase(
-            agentLoop,
-            { sessionId: SessionId.make("s1"), branchId: BranchId.make("b1") },
-            "Idle",
-          )
-          expect(providerCalls.length).toBe(3)
-          expect(providerCalls[0]!.latestUserText).toBe("first")
-          expect(providerCalls[1]!.latestUserText).toBe("steer now")
-          expect(providerCalls[2]!.latestUserText).toBe("queued")
-        }).pipe(Effect.provide(layer)),
-      )
-    }),
-  )
-  it.live("getQueue reads without draining", () =>
+  it.live("reading the queue leaves its items queued", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
       const firstStarted = yield* Deferred.make<void>()
@@ -6544,10 +6025,10 @@ describe("queued follow-ups", () => {
           const first = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "first")
           const queuedA = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "queued a")
           const queuedB = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "queued b")
-          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
+          const fiber = yield* Effect.forkChild(runAgentLoop(first))
           yield* Deferred.await(firstStarted)
-          yield* submitAgentLoop(agentLoop, queuedA)
-          yield* submitAgentLoop(agentLoop, queuedB)
+          yield* submitAgentLoop(queuedA)
+          yield* submitAgentLoop(queuedB)
           yield* steerAgentLoop({
             _tag: "Interject",
             sessionId: SessionId.make("s1"),
@@ -6632,9 +6113,9 @@ describe("queued follow-ups", () => {
             BranchId.make("b1"),
             "queued after failure",
           )
-          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
+          const fiber = yield* Effect.forkChild(runAgentLoop(first))
           yield* Deferred.await(firstStarted)
-          yield* submitAgentLoop(agentLoop, queued)
+          yield* submitAgentLoop(queued)
           const snapshotWhileRunning = yield* agentLoop.getQueue({
             sessionId: SessionId.make("s1"),
             branchId: BranchId.make("b1"),
@@ -6685,9 +6166,8 @@ describe("provider retry in a turn", () => {
         }),
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const message = makeMessage(sessionId, branchId, "wait for the rate limit")
-        const turn = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+        const turn = yield* Effect.forkChild(runAgentLoop(message))
         yield* waitForOption(
           () =>
             Ref.get(eventsRef).pipe(
@@ -6736,14 +6216,13 @@ describe("provider retry in a turn", () => {
         }),
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
           SessionId.make("stream-retry-session"),
           BranchId.make("stream-retry-branch"),
           "retry",
         )
-        yield* runAgentLoop(agentLoop, message)
+        yield* runAgentLoop(message)
         const events = yield* Ref.get(eventsRef)
         const tags = events.map((event) => event._tag)
         expect(streamCalls).toBe(2)
@@ -6791,14 +6270,13 @@ describe("provider retry in a turn", () => {
           }),
         )
         yield* Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
           const messageStorage = yield* MessageStorage
           const message = makeMessage(
             SessionId.make("stream-metadata-retry-session"),
             BranchId.make("stream-metadata-retry-branch"),
             "retry",
           )
-          yield* runAgentLoop(agentLoop, message)
+          yield* runAgentLoop(message)
           const events = yield* Ref.get(eventsRef)
           const tags = events.map((event) => event._tag)
           expect(streamCalls).toBe(2)
@@ -6822,14 +6300,13 @@ describe("provider retry in a turn", () => {
         }),
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
           SessionId.make("stream-retry-exhausted-session"),
           BranchId.make("stream-retry-exhausted-branch"),
           "retry",
         )
-        yield* runAgentLoop(agentLoop, message)
+        yield* runAgentLoop(message)
         const events = yield* Ref.get(eventsRef)
         const tags = events.map((event) => event._tag)
         expect(streamCalls).toBe(3)
@@ -6875,14 +6352,13 @@ describe("provider retry in a turn", () => {
           }),
         )
         yield* Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
           const messageStorage = yield* MessageStorage
           const message = makeMessage(
             SessionId.make("stream-no-retry-session"),
             BranchId.make("stream-no-retry-branch"),
             "retry",
           )
-          yield* runAgentLoop(agentLoop, message)
+          yield* runAgentLoop(message)
           const events = yield* Ref.get(eventsRef)
           const tags = events.map((event) => event._tag)
           // The second call is a continuation step with the partial output kept,
@@ -6909,13 +6385,12 @@ describe("provider stream parts", () => {
   it.live("persists assistant image parts from provider response streams", () =>
     Effect.gen(function* () {
       const messageStorage = yield* MessageStorage
-      const agentLoop = yield* makeAgentLoopService
       const message = makeMessage(
         SessionId.make("image-session"),
         BranchId.make("image-branch"),
         "show image",
       )
-      yield* runAgentLoop(agentLoop, message)
+      yield* runAgentLoop(message)
       const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
       expect(assistant).toBeDefined()
       expect(assistant?.parts).toEqual([
@@ -6954,14 +6429,13 @@ describe("provider stream parts", () => {
         ),
       )
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
           SessionId.make("native-error-session"),
           BranchId.make("native-error-branch"),
           "fail natively",
         )
-        yield* runAgentLoop(agentLoop, message)
+        yield* runAgentLoop(message)
         const events = yield* Ref.get(eventsRef)
         const tags = events.map((event) => event._tag)
         expect(tags).toContain("StreamStarted")
@@ -7098,6 +6572,35 @@ const scriptedProvider = (
     ),
   )
 }
+
+/**
+ * An event store that fails each append `fails` picks and keeps no other
+ * event. `observe` sees each event it appends or publishes.
+ */
+const failingAppendStore = (
+  fails: (event: AgentEvent) => boolean,
+  observe: (event: AgentEvent) => Effect.Effect<void> = () => Effect.void,
+) =>
+  Layer.succeed(
+    EventStore,
+    EventStore.of({
+      subscribe: () => Stream.empty,
+      removeSession: () => Effect.void,
+      append: (event: AgentEvent) => {
+        if (fails(event)) return Effect.fail(new EventStoreError({ message: "append failed" }))
+        return Effect.gen(function* () {
+          yield* observe(event)
+          return EventEnvelope.make({
+            id: EventId.make(0),
+            event,
+            createdAt: yield* Clock.currentTimeMillis,
+          })
+        })
+      },
+      deliver: () => Effect.void,
+      publish: observe,
+    }),
+  )
 
 const retryableStreamError = () =>
   AiError.make({

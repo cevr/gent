@@ -248,8 +248,8 @@ export interface LoadedExtension {
   readonly artifactIdentity?: LoadedArtifactIdentity
   /**
    * Typed contribution buckets produced by the extension's setup function.
-   * Consumers (registries, workflow runtime, scheduler, lifecycle hooks,
-   * etc.) read each bucket directly — `contributions.tools`,
+   * Consumers (the registry, the hook compiler, the profile build) read each
+   * bucket directly — `contributions.tools`,
    * `contributions.requests`, `contributions.resources`, etc. The bucket name
    * is the discrimination.
    */

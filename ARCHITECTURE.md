@@ -355,8 +355,14 @@ rebuilt for a config edit keeps the resources the edit leaves alone, and their
 state with them (an open `/btw` fork, the agents-view watchers, a running
 background job); a resource closes when the last profile that holds it
 retires. `buildSessionProfile` then stages the `ExtensionRegistry` and the base
-prompt sections over the built resource context. Profile tests use the live
-cache. The tool test layer uses the production composition root. Neither has a
+prompt sections over the built resource context. The cache is a required
+service of the loop behavior and of the server's session wiring: every turn
+resolves its profile through it (`resolveTurnProfile`), so every turn has a
+resource generation (`turnGenerationId`) for binding identity and replay, and
+no launch-registry fallback exists. A session with no stored cwd resolves the
+host cwd's profile. Test roots provide `fixedSessionProfiles(profiles,
+fallbackRegistry)` from `test-utils` when they do not need the live cache.
+Profile tests use the live cache. The tool test layer uses the production composition root. Neither has a
 separate activation implementation.
 
 The production server uses one live profile owner:
@@ -598,13 +604,20 @@ Shape:
   only re-runs the step. Transient means the provider library's typed
   `AiError` says so, or a mid-stream error event matches the driver's
   `transientStreamEvent` schema (Anthropic names a `type`, OpenAI a `code`).
-  A typed rate limit's `retryAfter` replaces the backoff. Nothing is inferred
-  from message text.
+  A typed rate limit's `retryAfter` replaces the backoff; one longer than the
+  policy's `maxDelay` (a usage limit that resets in hours) fails the step
+  without a retry. Nothing is inferred from message text.
   After partial output the partial assistant message stays, a durable
   continuation instruction (`<turn>:continuation:<step>`, `customType`
   `continuation`) follows it, and the same turn runs one more model step. Two
   continuations per turn; a further partial failure ends the turn as
-  `streamFailed`.
+  `streamFailed`. A stream failure's `ErrorOccurred` carries the provider
+  error's own message.
+- A reply the provider blocks (a `content-filter` finish; Anthropic's
+  `refusal`) ends the turn with one `ErrorOccurred` ("the provider blocked the
+  response") and no continuation: a re-prompt would send the same window to
+  the same filter. The text the reply kept stays; a reply with no text ends
+  the turn unanswered.
 - `Cancel` and `Interrupt` steering can include an expected message ID. Omission
   preserves branch-wide behavior. The worker checks the target before signaling
   and again when resuming an interaction. A local interruption permit serializes
@@ -1032,6 +1045,11 @@ starts cleanly forks the extensions' `loopOpen` hooks into the loop scope, after
 the recovered turn (if any) started; closing the loop interrupts them. Loops are
 lazy: no startup pass rebuilds them, so a session nobody opens runs no
 `loopOpen` until a client or another loop reaches it (a snapshot is enough).
+A terminated session opens no loop: each operation that would start one
+(a submit, a queued follow-up, an extension request, a mutation) checks the
+termination marker first and fails with `Session terminated`, and an actor
+built for a terminated session skips its eager open. So a send after a delete
+or a terminate runs no `loopOpen` hook and builds no branch Resources.
 The loop behavior in `runtime/agent-loop.ts` uses this supplied scope to build `CellExecution.Branch`
 and supplies the service to turn execution. Each branch owns a separate service and lazy
 worker. Closing the loop scope closes that worker. Source runs have no
@@ -1051,7 +1069,9 @@ made inner calls, so the transcript keeps effects visible after reload. A
 receipt summary, like the `summary` on a terminal tool event, comes from the
 tool's optional `summary(input, output)` over wire values when the tool has one
 (read, write, edit, grep and bash do); otherwise, or when it throws, the head of
-the output. Recovery resolves each completed operation's recorded binding the
+the output. A failed call's summary is the head of its error text
+(`summarizeToolResult` in `domain/message.ts`), not of the JSON that carries
+it; rows stored before keep their clipped JSON, and the TUI still reads them. Recovery resolves each completed operation's recorded binding the
 way a resume does; a binding that no longer resolves keeps the head of the
 output. The TUI
 nests live inner calls under the cell, counts them in the compact tree, and shows
@@ -1813,6 +1833,12 @@ Use the smallest honest boundary:
 
 **Banned test primitives**: `Provider.Test`, provider-wrapper statics, and `EventStore.Test` are deleted. Use `LanguageModelLayers.debug()` / `LanguageModelLayers.sequence([...])` from `@gent/core/test-utils` for model mocking and `EventStore.Memory` for in-memory event stores.
 
+**A scripted model checks its own script**: `controls.assertDone` on a
+`LanguageModelLayers.sequence` dies when a step's `assertOptions` or
+`assertRequest` check failed, not only when steps are left. The failed check
+also fails its model call, which a turn reads as a provider error and goes
+past, so only `assertDone` makes the test fail on it.
+
 **Banned test control flow**: test files do not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive` and scoped Effect resources so finalizers run under the test runtime.
 
 **Names describe behavior**: active test modules are behavior-named. Historical process names belong only in `plans/` and dated audit receipts; a guard (`findProcessNames` in `packages/tooling/src/guards.ts`) refuses a ledger id or a pass name in source and tests.
@@ -1821,11 +1847,16 @@ Use the smallest honest boundary:
 
 ### Commands
 
-| Command            | Scope                                                 | Target  |
-| ------------------ | ----------------------------------------------------- | ------- |
-| `bun run test`     | product behavior: core + tui + sdk + fast integration | ~2-4s   |
-| `bun run test:e2e` | PTY e2e + focused server-process lifecycle coverage   | ~50-70s |
-| `bun run gate`     | typecheck + lint + fmt + build + test                 | ~15s    |
+| Command            | Scope                                                 | Measured (Pass 28) |
+| ------------------ | ----------------------------------------------------- | ------------------ |
+| `bun run test`     | product behavior: core + tui + sdk + fast integration | 1m23s-1m26s        |
+| `bun run test:e2e` | PTY e2e + focused server-process lifecycle coverage   | 1m37s-1m46s        |
+| `bun run gate`     | typecheck + lint + fmt + build + test                 | 1m23s-1m31s        |
+
+The times are wall clock on the workbox with cached builds, from the Pass 28
+receipts in `plans/architecture-loop-2026-09-22.md` (runtime and extension
+kernel acceptance). No guard reads them: measure again after a change to the
+suite's size.
 
 ### Test structure
 

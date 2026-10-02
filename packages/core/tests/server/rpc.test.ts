@@ -74,6 +74,7 @@ import {
 } from "../../src/domain/agent"
 import {
   createE2ELayer,
+  type E2ELayerConfig,
   fixedSessionProfiles,
   createRpcClient,
   createRpcHarness,
@@ -217,8 +218,8 @@ describe("ExtensionRpcs", () => {
         const { client, sessionId } = yield* clientWithConfig
         const before = yield* client.driver.list({ sessionId })
         expect(before).toBeInstanceOf(DriverListResult)
-        // Built-in agents extension contributes the "anthropic" model driver
-        // (and friends); the registered list is non-empty.
+        // The preset's `testTurnExtension` contributes the test driver, so the
+        // registered list is non-empty.
         expect(before.drivers.length).toBeGreaterThan(0)
         expect(before.agents.map((agent) => agent.name)).toContain(DEFAULT_AGENT_NAME)
       }).pipe(Effect.timeout("4 seconds")),
@@ -833,130 +834,115 @@ describe("auth.listProviders", () => {
   )
 })
 describe("auth persistence RPC failures", () => {
-  it.live("auth.listProviders surfaces auth read failures", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(
-          createE2ELayer({
-            ...e2ePreset,
-            providerLayer,
-            authLayer: failingReadAuthStoreLayer,
+  it.live("each auth call surfaces its store failure", () => {
+    const rows: ReadonlyArray<{
+      readonly call: string
+      readonly root: (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => E2ELayerConfig
+      readonly run: (
+        client: GentNamespacedClient,
+        sessionId: SessionId,
+      ) => Effect.Effect<
+        Exit.Exit<unknown, unknown>,
+        Effect.Error<ReturnType<GentNamespacedClient["auth"]["authorize"]>>
+      >
+      readonly message: string
+    }> = [
+      {
+        call: "auth.listProviders",
+        root: (providerLayer) => ({
+          ...e2ePreset,
+          providerLayer,
+          authLayer: failingReadAuthStoreLayer,
+        }),
+        run: (client, sessionId) => Effect.exit(client.auth.listProviders({ sessionId })),
+        message: "read failed",
+      },
+      {
+        call: "auth.setKey",
+        root: (providerLayer) => ({
+          ...e2ePreset,
+          providerLayer,
+          authLayer: failingAuthStoreLayer,
+        }),
+        run: (client, sessionId) =>
+          Effect.exit(client.auth.setKey({ provider: "openai", key: "sk-test", sessionId })),
+        message: "Failed to set auth",
+      },
+      {
+        call: "auth.deleteKey",
+        root: (providerLayer) => ({
+          ...e2ePreset,
+          providerLayer,
+          authLayer: failingAuthStoreLayer,
+        }),
+        run: (client, sessionId) =>
+          Effect.exit(client.auth.deleteKey({ provider: "openai", sessionId })),
+        message: "Failed to delete auth",
+      },
+      {
+        call: "auth.authorize",
+        root: (providerLayer) => ({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensions: makePersistingExtensions(),
+          authLayer: failingAuthStoreLayer,
+        }),
+        run: (client, sessionId) =>
+          Effect.exit(
+            client.auth.authorize({ sessionId, provider: "persisting-authorize", method: 0 }),
+          ),
+        message: "Failed to persist auth",
+      },
+      {
+        call: "auth.callback",
+        root: (providerLayer) => ({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensions: makePersistingExtensions(),
+          authLayer: failingAuthStoreLayer,
+        }),
+        run: (client, sessionId) =>
+          Effect.gen(function* () {
+            const authorization = yield* client.auth.authorize({
+              sessionId,
+              provider: "persisting-oauth",
+              method: 0,
+            })
+            if (Predicate.isNull(authorization)) return yield* Effect.die("auth setup failed")
+            return yield* Effect.exit(
+              client.auth.callback({
+                sessionId,
+                provider: "persisting-oauth",
+                method: 0,
+                authorizationId: authorization.authorizationId,
+                code: "sk-callback",
+              }),
+            )
           }),
-        )
-        const { sessionId } = yield* client.session.create({})
-        const exit = yield* Effect.exit(client.auth.listProviders({ sessionId }))
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag === "Failure") {
-          expect(exit.cause.toString()).toContain("read failed")
-        }
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
-  it.live("auth.setKey surfaces write failures", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(
-          createE2ELayer({
-            ...e2ePreset,
-            providerLayer,
-            authLayer: failingAuthStoreLayer,
+        message: "Failed to persist auth",
+      },
+    ]
+    return Effect.forEach(
+      rows,
+      (row) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            const { client } = yield* createRpcClient(createE2ELayer(row.root(providerLayer)))
+            const { sessionId } = yield* client.session.create({})
+            const exit = yield* row.run(client, sessionId)
+            expect({ call: row.call, exit: exit._tag }).toEqual({
+              call: row.call,
+              exit: "Failure",
+            })
+            if (exit._tag === "Failure") {
+              expect(exit.cause.toString()).toContain(row.message)
+            }
           }),
-        )
-        const { sessionId } = yield* client.session.create({})
-        const exit = yield* Effect.exit(
-          client.auth.setKey({ provider: "openai", key: "sk-test", sessionId }),
-        )
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag === "Failure") {
-          expect(exit.cause.toString()).toContain("Failed to set auth")
-        }
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
-  it.live("auth.deleteKey surfaces delete failures", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(
-          createE2ELayer({
-            ...e2ePreset,
-            providerLayer,
-            authLayer: failingAuthStoreLayer,
-          }),
-        )
-        const { sessionId } = yield* client.session.create({})
-        const exit = yield* Effect.exit(client.auth.deleteKey({ provider: "openai", sessionId }))
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag === "Failure") {
-          expect(exit.cause.toString()).toContain("Failed to delete auth")
-        }
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
-  it.live("auth.authorize surfaces credentials persisted during authorize", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(
-          createE2ELayer({
-            agents: e2ePreset.agents,
-            providerLayer,
-            extensions: makePersistingExtensions(),
-            authLayer: failingAuthStoreLayer,
-          }),
-        )
-        const { sessionId } = yield* client.session.create({})
-        const exit = yield* Effect.exit(
-          client.auth.authorize({
-            sessionId,
-            provider: "persisting-authorize",
-            method: 0,
-          }),
-        )
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag === "Failure") {
-          expect(exit.cause.toString()).toContain("Failed to persist auth")
-        }
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
-  it.live("auth.callback surfaces callback credential persistence failures", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(
-          createE2ELayer({
-            agents: e2ePreset.agents,
-            providerLayer,
-            extensions: makePersistingExtensions(),
-            authLayer: failingAuthStoreLayer,
-          }),
-        )
-        const { sessionId } = yield* client.session.create({})
-        const authorization = yield* client.auth.authorize({
-          sessionId,
-          provider: "persisting-oauth",
-          method: 0,
-        })
-        if (Predicate.isNull(authorization)) return yield* Effect.die("auth setup failed")
-        const exit = yield* Effect.exit(
-          client.auth.callback({
-            sessionId,
-            provider: "persisting-oauth",
-            method: 0,
-            authorizationId: authorization.authorizationId,
-            code: "sk-callback",
-          }),
-        )
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag === "Failure") {
-          expect(exit.cause.toString()).toContain("Failed to persist auth")
-        }
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
+        ),
+      { discard: true },
+    ).pipe(Effect.timeout("8 seconds"))
+  })
 })
 describe("provider login", () => {
   // Reads try the owner's key first, so a key stored under the sharing
@@ -3761,6 +3747,31 @@ class ProfileToken extends Context.Service<
     readonly read: Effect.Effect<string, never, never>
   }
 >()("@gent/core/tests/server/rpc.test/ProfileToken") {}
+/** `SessionProfileCache.Live` over `home` with its own storage, built in the scope that builds it. */
+const liveSessionProfiles = (
+  home: string,
+  extensions: Parameters<typeof SessionProfileCache.Live>[0]["extensions"],
+) =>
+  Layer.unwrap(
+    Effect.map(Effect.scope, (scope) =>
+      SessionProfileCache.Live({
+        home,
+        failOnExtensionFailure: true,
+        platform: "test",
+        extensions,
+      }).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            BunPlatformLive,
+            ConfigService.Test(),
+            SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+          ),
+        ),
+        Layer.orDie,
+        Layer.provide(Layer.succeed(Scope.Scope, scope)),
+      ),
+    ),
+  )
 const expectExtensionProtocolFailure = (cause: Cause.Cause<unknown>, message?: string) => {
   const error = Cause.squash(cause)
   expect(Schema.is(ExtensionProtocolError)(error)).toBe(true)
@@ -3824,15 +3835,16 @@ const TestCommandsExtension: GentExtension = {
         output: Schema.Struct({ value: Schema.String }),
         execute: (input: { value: string }) => Effect.succeed({ value: input.value }),
       }),
+      // A request without `slash`: callable, never listed as a command.
+      request({
+        id: "plain",
+        input: Schema.String,
+        output: Schema.Void,
+        execute: () => Effect.void,
+      }),
     ],
   }),
 }
-const layer = createE2ELayer({
-  agents: [],
-  providerLayer: LanguageModelLayers.debug(),
-  extensionInputs: [TestCommandsExtension],
-  toolRunner: "test",
-})
 const makeCommandExtension = (extensionId: string, commandId: string): LoadedExtension => ({
   manifest: { id: ExtensionId.make(extensionId) },
   scope: "builtin",
@@ -3851,18 +3863,7 @@ const makeCommandExtension = (extensionId: string, commandId: string): LoadedExt
 })
 
 describe("extension requests and slash commands", () => {
-  it.live("resolved slash commands list registered commands", () =>
-    Effect.gen(function* () {
-      const registry = yield* ExtensionRegistry
-      const cmds = registry.getResolved().slashCommands
-      const testCmds = cmds.filter((c) => c.name === "greet" || c.name === "noop")
-      expect(testCmds).toHaveLength(2)
-      expect(testCmds.find((c) => c.name === "greet")?.description).toBe("Say hello")
-      expect(testCmds.find((c) => c.name === "noop")?.description).toBe("noop")
-    }).pipe(Effect.provide(layer)),
-  )
-
-  it.live("RPC listSlashCommands + request round-trip through the transport boundary", () =>
+  it.live("RPC lists slash-decorated requests only and round-trips a request", () =>
     Effect.gen(function* () {
       invoked.length = 0
       let createdSessionId = ""
@@ -4211,46 +4212,6 @@ describe("extension requests and slash commands", () => {
             )
           }
           expect(invoked).toEqual([])
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-
-  it.live("RPC listSlashCommands lists slash-decorated requests only", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/public-filter")
-      const ext: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          requests: [
-            request({
-              id: "visible",
-              slash: { name: "visible", description: "visible" },
-              input: Schema.String,
-              output: Schema.Void,
-              execute: () => Effect.void,
-            }),
-            request({
-              id: "hidden",
-              input: Schema.String,
-              output: Schema.Void,
-              execute: () => Effect.void,
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId } = yield* createRpcHarness({
-            agents: e2ePreset.agents,
-            providerLayer,
-            extensions: [ext],
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual(["visible"])
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
@@ -4869,65 +4830,6 @@ describe("session threads", () => {
 })
 
 describe("extension resources", () => {
-  it.live("RPC request provides profile resource services to public capabilities", () =>
-    Effect.gen(function* () {
-      const profileCwd = "/nonexistent/gent-extension-request-profile-service"
-      const ext: LoadedExtension = {
-        manifest: { id: ExtensionId.make("@test/profile-service-request") },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          resources: [
-            defineResource({
-              id: "test/extension-commands-rpc/profile-token",
-              scope: "process",
-              layer: Layer.succeed(
-                ProfileToken,
-                ProfileToken.of({
-                  read: Effect.succeed("profile-token"),
-                }),
-              ),
-            }),
-          ],
-          requests: [
-            request({
-              id: "read-profile-token",
-              input: Schema.String,
-              output: Schema.String,
-              execute: () =>
-                Effect.gen(function* () {
-                  const token = yield* ProfileToken
-                  return yield* token.read
-                }),
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const profile = yield* makeProfile(profileCwd, [ext])
-          const sessionProfileCacheLayer = fixedSessionProfiles(new Map([[profileCwd, profile]]))
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            agents: e2ePreset.agents,
-            providerLayer,
-            extensions: [],
-            sessionProfileCacheLayer,
-            cwd: profileCwd,
-          })
-          const result = yield* client.extension.request({
-            sessionId,
-            extensionId: ExtensionId.make("@test/profile-service-request"),
-            capabilityId: "read-profile-token",
-            input: "token",
-            branchId,
-          })
-          expect(result).toBe("profile-token")
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-
   it.scoped("RPC request resolves resources from SessionProfileCache.Live", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -4967,28 +4869,7 @@ describe("extension resources", () => {
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const sessionProfileCacheLayer = Layer.unwrap(
-            Effect.map(Effect.scope, (scope) =>
-              SessionProfileCache.Live({
-                home,
-                failOnExtensionFailure: true,
-                platform: "test",
-                extensions: [ext],
-              }).pipe(
-                Layer.provide(
-                  Layer.mergeAll(
-                    BunPlatformLive,
-                    ConfigService.Test(),
-                    SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(
-                      Layer.provide(BunPlatformLive),
-                    ),
-                  ),
-                ),
-                Layer.orDie,
-                Layer.provide(Layer.succeed(Scope.Scope, scope)),
-              ),
-            ),
-          )
+          const sessionProfileCacheLayer = liveSessionProfiles(home, [ext])
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             agents: e2ePreset.agents,
@@ -5047,28 +4928,7 @@ describe("extension resources", () => {
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const sessionProfileCacheLayer = Layer.unwrap(
-            Effect.map(Effect.scope, (scope) =>
-              SessionProfileCache.Live({
-                home,
-                failOnExtensionFailure: true,
-                platform: "test",
-                extensions: [ext],
-              }).pipe(
-                Layer.provide(
-                  Layer.mergeAll(
-                    BunPlatformLive,
-                    ConfigService.Test(),
-                    SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(
-                      Layer.provide(BunPlatformLive),
-                    ),
-                  ),
-                ),
-                Layer.orDie,
-                Layer.provide(Layer.succeed(Scope.Scope, scope)),
-              ),
-            ),
-          )
+          const sessionProfileCacheLayer = liveSessionProfiles(home, [ext])
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           // The launch registry does not load the extension: only the
           // profile for the session's cwd knows its branch resource.
@@ -5228,28 +5088,11 @@ export default defineExtension({
         }
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const sessionProfileCacheLayer = Layer.unwrap(
-              Effect.map(Effect.scope, (scope) =>
-                SessionProfileCache.Live({
-                  home,
-                  failOnExtensionFailure: true,
-                  platform: "test",
-                  extensions: [agents, testTurnExtension, working],
-                }).pipe(
-                  Layer.provide(
-                    Layer.mergeAll(
-                      BunPlatformLive,
-                      ConfigService.Test(),
-                      SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(
-                        Layer.provide(BunPlatformLive),
-                      ),
-                    ),
-                  ),
-                  Layer.orDie,
-                  Layer.provide(Layer.succeed(Scope.Scope, scope)),
-                ),
-              ),
-            )
+            const sessionProfileCacheLayer = liveSessionProfiles(home, [
+              agents,
+              testTurnExtension,
+              working,
+            ])
             const offered: Array<string> = []
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
               {

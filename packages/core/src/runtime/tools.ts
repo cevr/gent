@@ -218,13 +218,11 @@ export const captureCurrentToolBinding = Effect.fn("ToolBinding.captureCurrent")
 /**
  * The identity a dispatching tool records for one inner host operation. A
  * build-owned binding is durable. A source run has none, so the operation names
- * the live process instead; resume is then valid only inside that process. A
- * turn without a process identity cannot bind a source-run tool at all.
+ * the live process instead; resume is then valid only inside that process.
  */
 export const innerOperationBindingIdentity = Effect.fn("ToolBinding.innerOperationIdentity")(
-  function* (entry: ResolvedToolCapability, generationId?: ProcessGenerationId) {
+  function* (entry: ResolvedToolCapability, generationId: ProcessGenerationId) {
     if (Predicate.isNotUndefined(entry.binding)) return Option.some(entry.binding)
-    if (Predicate.isUndefined(generationId)) return Option.none<ToolBindingIdentity>()
     return yield* processLocalToolBindingIdentity(entry, generationId)
   },
 )
@@ -237,7 +235,7 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
   readonly assistantMessageId: MessageId
   readonly toolCallId: ToolCallId
   readonly binding: ToolBindingIdentity
-  readonly generationId?: ProcessGenerationId
+  readonly generationId: ProcessGenerationId
 }) {
   const toolName = String(params.binding.toolId)
   const fail = (reason: ToolBindingReplayReason, message: string) =>
@@ -256,14 +254,7 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
     )
   }
   if (params.binding.source._tag === "ProcessLocal") {
-    const generationId = Option.fromUndefinedOr(params.generationId)
-    if (Option.isNone(generationId)) {
-      return yield* fail(
-        "SourceMismatch",
-        `Tool ${toolName} was bound to a process that is no longer live`,
-      )
-    }
-    const live = yield* processLocalToolBindingIdentity(current.value, generationId.value)
+    const live = yield* processLocalToolBindingIdentity(current.value, params.generationId)
     if (Option.isNone(live)) {
       return yield* fail(
         "SourceMismatch",
@@ -300,7 +291,7 @@ export const resolveReplayToolBinding = Effect.fn("ToolBinding.resolveReplay")(f
   readonly branchId: BranchId
   readonly assistantMessageId: MessageId
   readonly toolCall: Prompt.ToolCallPart
-  readonly generationId?: ProcessGenerationId
+  readonly generationId: ProcessGenerationId
 }) {
   const storage = yield* ToolCallBindingStorage
   const localReplay = yield* ProcessLocalToolReplay
@@ -1232,7 +1223,8 @@ export const compileToolPolicy = (
   // 1. Agent allow/deny filtering
   let tools = filterToolsForAgent(allTools, agent)
 
-  // 2. Extension `include` fragments
+  // 2. Extension `include` fragments. An include may add a tool the agent's
+  // allow list leaves out; only the deny list holds against it (step 3).
   for (const projection of extensionProjections) {
     tools = applyToolProjection(tools, projection, allToolsByName)
   }

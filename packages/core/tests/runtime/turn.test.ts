@@ -53,6 +53,7 @@ import {
   ExtensionId,
   RequestId,
   ToolId,
+  ProcessGenerationId,
 } from "../../src/domain/ids"
 import {
   AgentDefinition,
@@ -73,6 +74,7 @@ import {
 } from "../../src/runtime/provider"
 import {
   type AgentEvent,
+  ErrorOccurred,
   EventEnvelope,
   EventId,
   EventStore,
@@ -287,7 +289,6 @@ describe("agent turn response collectors", () => {
         branchId,
         modelId: ModelId.make("test/model"),
         activeStream,
-        formatStreamError: (error) => error.message,
       }).pipe(Effect.flip, Effect.provide(layer))
 
       expect(error._tag).toBe("ProviderError")
@@ -306,7 +307,6 @@ describe("agent turn response collectors", () => {
         sessionId,
         branchId,
         activeStream,
-        formatStreamError: (error) => error.message,
         contextOverflow: false,
       }).pipe(Effect.provide(layer))
 
@@ -331,12 +331,12 @@ describe("agent turn response collectors", () => {
         branchId,
         modelId: ModelId.make("test/model"),
         activeStream,
-        formatStreamError: (error) => error.message,
       }).pipe(Effect.provide(layer))
 
       expect(collected.streamFailed).toBe(true)
       expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["text"])
-      expect((yield* Ref.get(events)).map((event) => event._tag)).toContain("ErrorOccurred")
+      const errors = (yield* Ref.get(events)).filter(Schema.is(ErrorOccurred))
+      expect(errors.map((event) => event.error)).toEqual(["late boom"])
     }),
   )
 })
@@ -444,6 +444,7 @@ describe("classifyStep", () => {
       empty: false,
       truncated: false,
       contextOverflow: false,
+      blocked: false,
     })
   })
 
@@ -454,6 +455,7 @@ describe("classifyStep", () => {
       empty: true,
       truncated: false,
       contextOverflow: false,
+      blocked: false,
     })
   })
 
@@ -466,6 +468,7 @@ describe("classifyStep", () => {
       empty: false,
       truncated: true,
       contextOverflow: false,
+      blocked: false,
     })
   })
 
@@ -478,6 +481,7 @@ describe("classifyStep", () => {
       empty: false,
       truncated: false,
       contextOverflow: false,
+      blocked: false,
     })
   })
 
@@ -488,6 +492,7 @@ describe("classifyStep", () => {
       empty: false,
       truncated: true,
       contextOverflow: true,
+      blocked: false,
     })
     // A window already handed off this turn is only continued.
     expect(classifyStep(collected(parts, { windowFull: true }))).toEqual({
@@ -495,6 +500,21 @@ describe("classifyStep", () => {
       empty: false,
       truncated: true,
       contextOverflow: false,
+      blocked: false,
+    })
+  })
+
+  test("a content-filter finish marks the answer blocked, with or without text", () => {
+    const blockedFinish = finishPart({ finishReason: "content-filter" })
+    expect(classifyStep(collected([blockedFinish]))).toMatchObject({
+      _tag: "Answered",
+      empty: true,
+      blocked: true,
+    })
+    expect(classifyStep(collected([textDeltaPart("partial"), blockedFinish]))).toMatchObject({
+      _tag: "Answered",
+      empty: false,
+      blocked: true,
     })
   })
 })
@@ -788,8 +808,7 @@ describe("continuation", () => {
         textStep("Done with tools."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, makeContMessage("test auto-continue"))
+        yield* runAgentLoop(makeContMessage("test auto-continue"))
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
@@ -801,8 +820,7 @@ describe("continuation", () => {
         textStep("Just text, no tools."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, makeContMessage("text only"))
+        yield* runAgentLoop(makeContMessage("text only"))
         expect(yield* controls.callCount).toBe(1)
         yield* controls.assertDone
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
@@ -817,8 +835,7 @@ describe("continuation", () => {
         textStep("Finally done."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, makeContMessage("multi-hop"))
+        yield* runAgentLoop(makeContMessage("multi-hop"))
         expect(yield* controls.callCount).toBe(4)
         yield* controls.assertDone
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
@@ -833,8 +850,7 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, makeContMessage("turn-events"))
+        yield* runAgentLoop(makeContMessage("turn-events"))
         expect(yield* controls.callCount).toBe(3)
         const events = yield* Ref.get(eventsRef)
         const turnCompleted = events.filter((e) => e._tag === "TurnCompleted")
@@ -865,10 +881,9 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const turn = makeContMessage("steer at step boundary")
-        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, turn))
+        const fiber = yield* Effect.forkChild(runAgentLoop(turn))
         yield* controls.waitForCall(0)
         yield* steerAgentLoop({
           _tag: "Interject",
@@ -907,10 +922,9 @@ describe("continuation", () => {
         textStep("Done after the sender's message."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const turn = makeContMessage("a sender steers this turn")
-        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, turn))
+        const fiber = yield* Effect.forkChild(runAgentLoop(turn))
         yield* controls.waitForCall(0)
         yield* steerAgentLoop({
           _tag: "Interject",
@@ -963,7 +977,7 @@ describe("continuation", () => {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const fiber = yield* Effect.forkChild(
-          runAgentLoop(agentLoop, makeContMessage("a turn the sender does not own")),
+          runAgentLoop(makeContMessage("a turn the sender does not own")),
         )
         yield* controls.waitForCall(0)
         yield* steerAgentLoop({
@@ -1027,7 +1041,7 @@ describe("continuation", () => {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const fiber = yield* Effect.forkChild(
-          runAgentLoop(agentLoop, makeContMessage("a turn the steer would join")),
+          runAgentLoop(makeContMessage("a turn the steer would join")),
         )
         yield* controls.waitForCall(0)
         // The stop's handler runs first; the steer it names is not admitted yet.
@@ -1074,7 +1088,7 @@ describe("continuation", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const message = makeContMessage("a turn a stop names")
-        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+        const fiber = yield* Effect.forkChild(runAgentLoop(message))
         yield* controls.waitForCall(0)
         const stop = { sessionId: contSessionId, branchId: contBranchId, messageId: message.id }
         expect(yield* stopAgentLoopMessage({ ...stop, requestId: "req-stop-running" })).toBe(true)
@@ -1112,7 +1126,7 @@ describe("continuation", () => {
         const parent = { sessionId: SessionId.make("parent"), branchId: BranchId.make("parent") }
         const sibling = { sessionId: SessionId.make("sibling"), branchId: BranchId.make("sibling") }
         const message = makeContMessage("a turn the parent stops")
-        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+        const fiber = yield* Effect.forkChild(runAgentLoop(message))
         yield* controls.waitForCall(0)
         const steer = (requestId: string, text: string, sender: typeof parent) =>
           steerAgentLoop(
@@ -1198,7 +1212,7 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
-  it.live("interrupt during tool execution stops continuation", () =>
+  it.live("a cancel during the continuation step ends the turn interrupted", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
@@ -1206,10 +1220,7 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        const fiber = yield* Effect.forkChild(
-          runAgentLoop(agentLoop, makeContMessage("interrupt test")),
-        )
+        const fiber = yield* Effect.forkChild(runAgentLoop(makeContMessage("interrupt test")))
         yield* controls.waitForCall(1)
         yield* steerAgentLoop({
           _tag: "Cancel",
@@ -1230,24 +1241,7 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
-  it.live("GUARD: ToolsFinished without interrupt routes to Resolving", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-        toolCallStep("echo", { text: "tool" }),
-        textStep("Continuation reached."),
-      ])
-      const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, makeContMessage("structural guard"))
-        expect(yield* controls.callCount).toBe(2)
-        yield* controls.assertDone
-        const events = yield* Ref.get(eventsRef)
-        expect(events.filter((e) => e._tag === "TurnCompleted").length).toBe(1)
-      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
-    }),
-  )
-  it.live("GUARD: multi-hop persists distinct messages per step", () =>
+  it.live("each step of a multi-hop turn persists its own message", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
@@ -1255,29 +1249,23 @@ describe("continuation", () => {
         textStep("Final answer."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const msg = makeContMessage("multi-hop persistence")
-        yield* runAgentLoop(agentLoop, msg)
+        yield* runAgentLoop(msg)
         const a1 = yield* messageStorage.getMessage(assistantMessageIdForTurn(msg.id, 1))
         const t1 = yield* messageStorage.getMessage(toolResultMessageIdForTurn(msg.id, 1))
-        expect(a1).toBeDefined()
-        expect(t1).toBeDefined()
-        expect(a1!.role).toBe("assistant")
-        expect(t1!.role).toBe("tool")
+        expect(a1?.role).toBe("assistant")
+        expect(t1?.role).toBe("tool")
         const a2 = yield* messageStorage.getMessage(assistantMessageIdForTurn(msg.id, 2))
         const t2 = yield* messageStorage.getMessage(toolResultMessageIdForTurn(msg.id, 2))
-        expect(a2).toBeDefined()
-        expect(t2).toBeDefined()
-        expect(a2!.role).toBe("assistant")
-        expect(t2!.role).toBe("tool")
+        expect(a2?.role).toBe("assistant")
+        expect(t2?.role).toBe("tool")
         const a3 = yield* messageStorage.getMessage(assistantMessageIdForTurn(msg.id, 3))
         const t3 = yield* messageStorage.getMessage(toolResultMessageIdForTurn(msg.id, 3))
-        expect(a3).toBeDefined()
-        expect(a3!.role).toBe("assistant")
+        expect(a3?.role).toBe("assistant")
         expect(t3).toBeUndefined()
-        expect(new Set([a1!.id, a2!.id, a3!.id]).size).toBe(3)
-        expect(new Set([t1!.id, t2!.id]).size).toBe(2)
+        expect(new Set([a1?.id, a2?.id, a3?.id]).size).toBe(3)
+        expect(new Set([t1?.id, t2?.id]).size).toBe(2)
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -1290,15 +1278,14 @@ describe("continuation", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const first = makeContMessage("first message")
         const followUp = makeContMessage("follow-up after interrupt")
         // Start first turn — tool call auto-continues to gated step
-        yield* Effect.forkChild(runAgentLoop(agentLoop, first))
+        yield* Effect.forkChild(runAgentLoop(first))
         // Wait for the gated step (second stream call) to start
         yield* controls.waitForCall(1)
         // Queue a follow-up while step 1 is gated
-        yield* submitAgentLoop(agentLoop, followUp)
+        yield* submitAgentLoop(followUp)
         // Interrupt the current turn. `agentLoop.steer` issues
         // `actor.call(Interrupt)` which is serialized request-reply — by the
         // time it returns, the actor has already set `interruptedRef = true`
@@ -1374,10 +1361,9 @@ describe("continuation", () => {
         })
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
             const messageStorage = yield* MessageStorage
             const message = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "write it")
-            yield* runAgentLoop(agentLoop, message)
+            yield* runAgentLoop(message)
             expect(streamCalls).toBe(2)
             expect(latestUserTexts[1]).toContain("Continue from where you stopped")
             const messages = yield* messageStorage.listMessages(BranchId.make("b1"))
@@ -1426,10 +1412,9 @@ describe("continuation", () => {
       })
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
           const messageStorage = yield* MessageStorage
           const message = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "write it")
-          yield* runAgentLoop(agentLoop, message)
+          yield* runAgentLoop(message)
           // Two continuations, then the third partial failure ends the turn.
           expect(streamCalls).toBe(3)
           const messages = yield* messageStorage.listMessages(BranchId.make("b1"))
@@ -1487,15 +1472,14 @@ describe("empty final step", () => {
   it.live("stores an assistant message even when the last step is empty", () =>
     Effect.gen(function* () {
       // Third step answers the re-prompt the loop should issue after the
-      // empty one. Without the fix the loop never asks, and it goes unused.
+      // empty one. A loop that does not re-prompt never reads it.
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "hello" }),
         emptyStep(),
         textStep("Here is the answer."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+        yield* runAgentLoop(userMessage("do the thing"))
 
         const messageStorage = yield* MessageStorage
         const stored = yield* messageStorage.listMessages(branchId)
@@ -1529,8 +1513,7 @@ describe("empty final step", () => {
         textStep("Here is the answer."),
       ])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+        yield* runAgentLoop(userMessage("do the thing"))
 
         const messageStorage = yield* MessageStorage
         const stored = yield* messageStorage.listMessages(branchId)
@@ -1550,12 +1533,13 @@ describe("empty final step", () => {
     }),
   )
 
-  it.live("marks the turn unanswered once every continuation is spent", () =>
+  it.live("spends every continuation, then marks the turn unanswered", () =>
     Effect.gen(function* () {
       // Three empty steps: the first two burn both continuations, the third
-      // still says nothing. The loop has no move left, so the receipt must
+      // still says nothing. The loop must re-prompt rather than stop at the
+      // first empty step, and stop rather than loop forever. The receipt must
       // record that it gave up rather than reporting an ordinary reply.
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         emptyStep(),
         emptyStep(),
         emptyStep(),
@@ -1563,14 +1547,15 @@ describe("empty final step", () => {
       const events = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+          yield* runAgentLoop(userMessage("do the thing"))
 
+          expect(yield* controls.callCount).toBe(3)
+          yield* controls.assertDone
           const turnCompleted = (yield* Ref.get(events)).filter(
             (event) => event._tag === "TurnCompleted",
           )
 
-          expect(turnCompleted.length).toBeGreaterThan(0)
+          expect(turnCompleted).toHaveLength(1)
           // Without the flag every field here reads exactly like a successful
           // turn, and the caller cannot tell "gave up" from "replied".
           expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
@@ -1578,27 +1563,84 @@ describe("empty final step", () => {
       )
     }),
   )
+})
 
-  it.live("spends every continuation before giving up", () =>
+// ── provider refusal ────────────────────────────────────────────────────────
+
+/**
+ * A provider that blocks a reply (Effect AI maps Anthropic's `refusal` to the
+ * `content-filter` finish) blocked the request, not the model's answer. A
+ * re-prompt resends the same window to the same filter, so the turn stops
+ * with one error that says so and keeps any text the reply had.
+ */
+describe("provider refusal", () => {
+  const sessionId = SessionId.make("refusal-session")
+  const branchId = BranchId.make("refusal-branch")
+
+  const userMessage = (text: string) =>
+    Message.cases.regular.make({
+      id: MessageId.make("refusal-msg-0"),
+      sessionId,
+      branchId,
+      role: "user",
+      parts: [Prompt.textPart({ text })],
+      createdAt: dateFromMillis(1_767_225_600_000),
+    })
+
+  const blockedStep = (text: ReadonlyArray<string>) => ({
+    parts: [
+      ...text.map((delta) => textDeltaPart(delta)),
+      finishPart({ finishReason: "content-filter", usage: { inputTokens: 10, outputTokens: 1 } }),
+    ],
+  })
+
+  const runBlocked = (step: ReturnType<typeof blockedStep>) =>
     Effect.gen(function* () {
-      // `LanguageModelLayers.empty` is the layer `gent --mock-empty` runs on,
-      // so this pins the same path the CLI exercises: the loop must re-prompt
-      // MAX_CONTINUATIONS_PER_TURN times rather than stopping at the first
-      // empty step, and it must stop rather than looping forever.
-      const providerLayer = LanguageModelLayers.empty
-      const events = yield* Ref.make<AgentEvent[]>([])
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([step])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      return yield* Effect.gen(function* () {
+        yield* runAgentLoop(userMessage("say the blocked thing"))
+        expect(yield* controls.callCount).toBe(1)
+        yield* controls.assertDone
+        const stored = yield* (yield* MessageStorage).listMessages(branchId)
+        const events = yield* Ref.get(eventsRef)
+        return { stored, events }
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
+    }).pipe(Effect.timeout("4 seconds"))
 
-          const turnCompleted = (yield* Ref.get(events)).filter(
-            (event) => event._tag === "TurnCompleted",
-          )
-          expect(turnCompleted.length).toBeGreaterThan(0)
-          expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
-        }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, events))),
+  it.live("a refusal with no text stops the turn unanswered with one error and no re-prompt", () =>
+    Effect.gen(function* () {
+      const { stored, events } = yield* runBlocked(blockedStep([]))
+      expect(stored.filter((message) => message.metadata?.customType === "continuation")).toEqual(
+        [],
       )
+      expect(events.filter(Schema.is(ErrorOccurred)).map((event) => event.error)).toEqual([
+        "the provider blocked the response",
+      ])
+      expect(events.filter((event) => event._tag === "TurnCompleted")).toMatchObject([
+        { unanswered: true },
+      ])
+    }),
+  )
+
+  it.live("a refusal after partial text keeps the text and reports the block", () =>
+    Effect.gen(function* () {
+      const { stored, events } = yield* runBlocked(blockedStep(["Here is the start"]))
+      const assistantTexts = stored
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+      expect(assistantTexts).toEqual(["Here is the start"])
+      expect(stored.filter((message) => message.metadata?.customType === "continuation")).toEqual(
+        [],
+      )
+      expect(events.filter(Schema.is(ErrorOccurred)).map((event) => event.error)).toEqual([
+        "the provider blocked the response",
+      ])
+      const completed = events.filter((event) => event._tag === "TurnCompleted")
+      expect(completed).toHaveLength(1)
+      expect(completed[0]).not.toMatchObject({ unanswered: true })
     }),
   )
 })
@@ -1668,10 +1710,9 @@ describe("max turn steps", () => {
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         // The budget is the agent's to lower; three steps prove the same exit
         // the default two hundred do.
-        yield* runAgentLoop(agentLoop, userMessage("loop forever"), {
+        yield* runAgentLoop(userMessage("loop forever"), {
           runSpec: { overrides: { maxSteps: 3 } },
         })
 
@@ -1699,8 +1740,7 @@ describe("max turn steps", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("two steps at most"), {
+        yield* runAgentLoop(userMessage("two steps at most"), {
           runSpec: { overrides: { maxSteps: 2 } },
         })
         const events = yield* Ref.get(eventsRef)
@@ -1735,12 +1775,10 @@ describe("max turn steps", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("two steps at most"), {
+        yield* runAgentLoop(userMessage("two steps at most"), {
           runSpec: { overrides: { maxSteps: 2 } },
         })
         yield* controls.assertDone
-        // A failed `assertOptions` fails the stream, not the test: read the outcome.
         const events = yield* Ref.get(eventsRef)
         expect(events.some((event) => event._tag === "ErrorOccurred")).toBe(false)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
@@ -1763,8 +1801,7 @@ describe("max turn steps", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("answer once"), {
+        yield* runAgentLoop(userMessage("answer once"), {
           runSpec: { overrides: { maxSteps: 1 } },
         })
 
@@ -1806,9 +1843,8 @@ describe("max turn steps", () => {
       ])
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const fiber = yield* Effect.forkChild(
-          runAgentLoop(agentLoop, userMessage("answer once"), {
+          runAgentLoop(userMessage("answer once"), {
             runSpec: { overrides: { maxSteps: 1 } },
           }),
         )
@@ -1832,16 +1868,14 @@ describe("max turn steps", () => {
    * The same failure at the loop's other give-up exit.
    *
    * `resolveTurnContext` publishes `ErrorOccurred` and returns undefined for an
-   * agent no extension defines (`turn-resolve.ts:134`). `runTurnStep` turned
-   * that into a `Stop` with every flag false, so the turn published a
-   * `TurnCompleted` indistinguishable from a reply.
+   * agent no extension defines (`turn.ts`). The turn must then mark its
+   * `TurnCompleted` unanswered, so it never reads as a reply.
    */
   it.live("a turn for an unknown agent is marked unanswered", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("who are you"), {
+        yield* runAgentLoop(userMessage("who are you"), {
           agent: AgentName.make("no-such-agent"),
         })
 
@@ -1858,6 +1892,162 @@ describe("max turn steps", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(alwaysToolCalls, eventsRef, [echoTool])))
     }),
   )
+})
+
+// ── model driver and catalog ────────────────────────────────────────────────
+
+describe("model driver and catalog", () => {
+  it.live("the driver learns from the catalog whether the model reasons", () => {
+    const sessionId = SessionId.make("catalog-reasoning-session")
+    const branchId = BranchId.make("catalog-reasoning-branch")
+    const observedHints: Array<ProviderHints> = []
+    const providerLayer = LanguageModelLayers.testStream(() =>
+      Effect.succeed(
+        Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+      ),
+    )
+    const driver: ModelDriverContribution = {
+      id: "catalog-driver",
+      name: "Catalog driver",
+      resolveModel: (_modelName, _authInfo, hints) =>
+        Effect.sync(() => {
+          if (Predicate.isNotUndefined(hints)) observedHints.push(hints)
+          return AiModel.make("catalog-driver", "model", providerLayer)
+        }),
+    }
+    const layer = actorTestRoot({
+      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      registry: ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("catalog-driver") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { agents: testAgents, modelDrivers: [driver] },
+          },
+        ]),
+      ),
+      models: [
+        Model.make({
+          id: ModelId.make("catalog-driver/plain"),
+          name: "Plain model",
+          provider: ProviderId.make("catalog-driver"),
+          contextLength: 128_000,
+          reasoning: false,
+        }),
+        Model.make({
+          id: ModelId.make("catalog-driver/unlisted"),
+          name: "Model the catalog says nothing about",
+          provider: ProviderId.make("catalog-driver"),
+          contextLength: 128_000,
+        }),
+      ],
+    })
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        for (const modelId of ["catalog-driver/plain", "catalog-driver/unlisted"]) {
+          const admission: SessionAdmission = {
+            runSpec: { overrides: { modelId: ModelId.make(modelId), reasoningEffort: "high" } },
+          }
+          const name = modelId.split("/")[1]
+          const session = SessionId.make(`${sessionId}-${name}`)
+          const branch = BranchId.make(`${branchId}-${name}`)
+          yield* ensureStorageParents({ sessionId: session, branchId: branch, admission })
+          yield* runAgentLoop(makeMessage(session, branch, "hello"), admission)
+        }
+        expect(
+          observedHints.map((hints) => Option.fromUndefinedOr(hints.supportsReasoning)),
+        ).toEqual([Option.some(false), Option.none()])
+      }),
+    ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
+  })
+
+  it.live("a step's cache writes cost the rate of the lifetime each one lives", () => {
+    const sessionId = SessionId.make("lifetime-cost-session")
+    const branchId = BranchId.make("lifetime-cost-branch")
+    const modelId = ModelId.make("lifetime-driver/model")
+    // The driver's own usage detail: 6,000 tokens written for 5 minutes, 4,000 for 1 hour.
+    const providerLayer = LanguageModelLayers.testStream(() =>
+      Effect.succeed(
+        Stream.fromIterable([
+          textDeltaPart("ok"),
+          finishPart({
+            finishReason: "stop",
+            usage: { inputTokens: 10_000, outputTokens: 0, cacheWriteTokens: 10_000 },
+            metadata: { "lifetime-driver": { fiveMinutes: 6_000, oneHour: 4_000 } },
+          }),
+        ]),
+      ),
+    )
+    const LifetimeWrites = Schema.Struct({
+      "lifetime-driver": Schema.Struct({ fiveMinutes: Schema.Finite, oneHour: Schema.Finite }),
+    })
+    const driver: ModelDriverContribution = {
+      id: "lifetime-driver",
+      name: "Lifetime driver",
+      resolveModel: () => Effect.succeed(AiModel.make("lifetime-driver", "model", providerLayer)),
+      cacheWritesByLifetime: (metadata) =>
+        Option.match(Schema.decodeUnknownOption(LifetimeWrites)(metadata), {
+          onNone: () => [],
+          onSome: ({ "lifetime-driver": writes }) => [
+            { ttlMs: 300_000, tokens: writes.fiveMinutes },
+            { ttlMs: 3_600_000, tokens: writes.oneHour },
+          ],
+        }),
+    }
+    const events = Ref.makeUnsafe<Array<AgentEvent>>([])
+    const layer = actorTestRoot({
+      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      eventStore: recordingEventStore(events),
+      registry: ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("lifetime-driver") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { agents: testAgents, modelDrivers: [driver] },
+          },
+        ]),
+      ),
+      models: [
+        Model.make({
+          id: modelId,
+          name: "Lifetime model",
+          provider: ProviderId.make("lifetime-driver"),
+          contextLength: 128_000,
+          // Dollars per million tokens: a 1-hour write costs 2x input, a 5-minute one 1.25x.
+          pricing: {
+            input: 5,
+            output: 25,
+            cacheWrite: 10,
+            cacheWriteByLifetime: [
+              { ttlMs: 300_000, price: 6.25 },
+              { ttlMs: 3_600_000, price: 10 },
+            ],
+          },
+        }),
+      ],
+    })
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const admission: SessionAdmission = { runSpec: { overrides: { modelId } } }
+        yield* ensureStorageParents({ sessionId, branchId, admission })
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "hello"), admission)
+        const ended = (yield* Ref.get(events)).filter((event) => event._tag === "StreamEnded")
+        const costs = ended.map((event) => event.costUsd)
+        // 6,000 x $6.25 + 4,000 x $10 per million, not 10,000 x $10.
+        expect(costs).toHaveLength(1)
+        expect(costs[0]).toBeCloseTo((6_000 * 6.25 + 4_000 * 10) / 1_000_000, 12)
+        // The step's end carries the split, so a client prices a miss by it too.
+        expect(ended[0]?.cacheWritesByLifetime).toEqual([
+          { ttlMs: 300_000, tokens: 6_000 },
+          { ttlMs: 3_600_000, tokens: 4_000 },
+        ])
+      }),
+    ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
+  })
 })
 
 // ── native model compaction ─────────────────────────────────────────────────
@@ -1890,13 +2080,12 @@ describe("native model compaction integration", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         yield* ensureStorageParents({ sessionId, branchId })
         const storage = yield* MessageStorage
         yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
           discard: true,
         })
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "native current turn"))
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "native current turn"))
 
         expect(providerCalls).toBe(2)
         expect(Option.isSome(mainPrompt)).toBe(true)
@@ -1982,7 +2171,6 @@ describe("native model compaction integration", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const admission: SessionAdmission = {
           runSpec: { overrides: { modelId, reasoningEffort: "high" } },
         }
@@ -1991,11 +2179,7 @@ describe("native model compaction integration", () => {
         yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
           discard: true,
         })
-        yield* runAgentLoop(
-          agentLoop,
-          makeMessage(sessionId, branchId, "summarize then answer"),
-          admission,
-        )
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "summarize then answer"), admission)
         // A turn step asks for the output its 128k window reserves; the summary
         // asks for its own small cap.
         const turnOutput = 32_000
@@ -2011,160 +2195,6 @@ describe("native model compaction integration", () => {
         expect(
           observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.cacheKey,
         ).toBe(sessionId)
-      }),
-    ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
-  })
-
-  it.live("the driver learns from the catalog whether the model reasons", () => {
-    const sessionId = SessionId.make("catalog-reasoning-session")
-    const branchId = BranchId.make("catalog-reasoning-branch")
-    const observedHints: Array<ProviderHints> = []
-    const providerLayer = LanguageModelLayers.testStream(() =>
-      Effect.succeed(
-        Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-      ),
-    )
-    const driver: ModelDriverContribution = {
-      id: "catalog-driver",
-      name: "Catalog driver",
-      resolveModel: (_modelName, _authInfo, hints) =>
-        Effect.sync(() => {
-          if (Predicate.isNotUndefined(hints)) observedHints.push(hints)
-          return AiModel.make("catalog-driver", "model", providerLayer)
-        }),
-    }
-    const layer = actorTestRoot({
-      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
-      registry: ExtensionRegistry.fromResolved(
-        resolveExtensions([
-          {
-            manifest: { id: ExtensionId.make("catalog-driver") },
-            scope: "builtin",
-            sourcePath: "test",
-            contributions: { agents: testAgents, modelDrivers: [driver] },
-          },
-        ]),
-      ),
-      models: [
-        Model.make({
-          id: ModelId.make("catalog-driver/plain"),
-          name: "Plain model",
-          provider: ProviderId.make("catalog-driver"),
-          contextLength: 128_000,
-          reasoning: false,
-        }),
-        Model.make({
-          id: ModelId.make("catalog-driver/unlisted"),
-          name: "Model the catalog says nothing about",
-          provider: ProviderId.make("catalog-driver"),
-          contextLength: 128_000,
-        }),
-      ],
-    })
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        for (const modelId of ["catalog-driver/plain", "catalog-driver/unlisted"]) {
-          const admission: SessionAdmission = {
-            runSpec: { overrides: { modelId: ModelId.make(modelId), reasoningEffort: "high" } },
-          }
-          const name = modelId.split("/")[1]
-          const session = SessionId.make(`${sessionId}-${name}`)
-          const branch = BranchId.make(`${branchId}-${name}`)
-          yield* ensureStorageParents({ sessionId: session, branchId: branch, admission })
-          yield* runAgentLoop(agentLoop, makeMessage(session, branch, "hello"), admission)
-        }
-        expect(
-          observedHints.map((hints) => Option.fromUndefinedOr(hints.supportsReasoning)),
-        ).toEqual([Option.some(false), Option.none()])
-      }),
-    ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
-  })
-
-  it.live("a step's cache writes cost the rate of the lifetime each one lives", () => {
-    const sessionId = SessionId.make("lifetime-cost-session")
-    const branchId = BranchId.make("lifetime-cost-branch")
-    const modelId = ModelId.make("lifetime-driver/model")
-    // The driver's own usage detail: 6,000 tokens written for 5 minutes, 4,000 for 1 hour.
-    const providerLayer = LanguageModelLayers.testStream(() =>
-      Effect.succeed(
-        Stream.fromIterable([
-          textDeltaPart("ok"),
-          finishPart({
-            finishReason: "stop",
-            usage: { inputTokens: 10_000, outputTokens: 0, cacheWriteTokens: 10_000 },
-            metadata: { "lifetime-driver": { fiveMinutes: 6_000, oneHour: 4_000 } },
-          }),
-        ]),
-      ),
-    )
-    const LifetimeWrites = Schema.Struct({
-      "lifetime-driver": Schema.Struct({ fiveMinutes: Schema.Finite, oneHour: Schema.Finite }),
-    })
-    const driver: ModelDriverContribution = {
-      id: "lifetime-driver",
-      name: "Lifetime driver",
-      resolveModel: () => Effect.succeed(AiModel.make("lifetime-driver", "model", providerLayer)),
-      cacheWritesByLifetime: (metadata) =>
-        Option.match(Schema.decodeUnknownOption(LifetimeWrites)(metadata), {
-          onNone: () => [],
-          onSome: ({ "lifetime-driver": writes }) => [
-            { ttlMs: 300_000, tokens: writes.fiveMinutes },
-            { ttlMs: 3_600_000, tokens: writes.oneHour },
-          ],
-        }),
-    }
-    const events = Ref.makeUnsafe<Array<AgentEvent>>([])
-    const layer = actorTestRoot({
-      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
-      eventStore: recordingEventStore(events),
-      registry: ExtensionRegistry.fromResolved(
-        resolveExtensions([
-          {
-            manifest: { id: ExtensionId.make("lifetime-driver") },
-            scope: "builtin",
-            sourcePath: "test",
-            contributions: { agents: testAgents, modelDrivers: [driver] },
-          },
-        ]),
-      ),
-      models: [
-        Model.make({
-          id: modelId,
-          name: "Lifetime model",
-          provider: ProviderId.make("lifetime-driver"),
-          contextLength: 128_000,
-          // Dollars per million tokens: a 1-hour write costs 2x input, a 5-minute one 1.25x.
-          pricing: {
-            input: 5,
-            output: 25,
-            cacheWrite: 10,
-            cacheWriteByLifetime: [
-              { ttlMs: 300_000, price: 6.25 },
-              { ttlMs: 3_600_000, price: 10 },
-            ],
-          },
-        }),
-      ],
-    })
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        const admission: SessionAdmission = { runSpec: { overrides: { modelId } } }
-        yield* ensureStorageParents({ sessionId, branchId, admission })
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "hello"), admission)
-        const ended = (yield* Ref.get(events)).filter((event) => event._tag === "StreamEnded")
-        const costs = ended.map((event) => event.costUsd)
-        // 6,000 x $6.25 + 4,000 x $10 per million, not 10,000 x $10.
-        expect(costs).toHaveLength(1)
-        expect(costs[0]).toBeCloseTo((6_000 * 6.25 + 4_000 * 10) / 1_000_000, 12)
-        // The step's end carries the split, so a client prices a miss by it too.
-        expect(ended[0]?.cacheWritesByLifetime).toEqual([
-          { ttlMs: 300_000, tokens: 6_000 },
-          { ttlMs: 3_600_000, tokens: 4_000 },
-        ])
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
   })
@@ -2195,18 +2225,13 @@ describe("native model compaction integration", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const admission = { runSpec: { overrides: { contextLength: 6_000 } } }
         yield* ensureStorageParents({ sessionId, branchId, admission })
         const storage = yield* MessageStorage
         yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
           discard: true,
         })
-        yield* runAgentLoop(
-          agentLoop,
-          makeMessage(sessionId, branchId, "small current turn"),
-          admission,
-        )
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "small current turn"), admission)
 
         expect(providerCalls).toBe(2)
         const durable = yield* storage.listMessages(branchId)
@@ -2247,7 +2272,6 @@ describe("native model context projection", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         yield* ensureStorageParents({ sessionId, branchId })
         const messageStorage = yield* MessageStorage
         yield* messageStorage.createMessage(
@@ -2261,7 +2285,7 @@ describe("native model context projection", () => {
           }),
         )
 
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "fresh request"))
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "fresh request"))
 
         expect(Option.isSome(capturedPrompt)).toBe(true)
         if (Option.isNone(capturedPrompt)) return yield* Effect.die("provider did not run")
@@ -2307,10 +2331,9 @@ describe("native model context projection", () => {
         },
       ])
       const run = Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         const sessionId = SessionId.make("model-context-tool-session")
         const branchId = BranchId.make("model-context-tool-branch")
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "run parallel tools"))
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "run parallel tools"))
         yield* controls.assertDone
 
         expect(Option.isSome(capturedPrompt)).toBe(true)
@@ -2379,9 +2402,7 @@ describe("native model context projection", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(
-          agentLoop,
           makeMessage(
             SessionId.make("model-context-driver-session"),
             BranchId.make("model-context-driver-branch"),
@@ -2392,7 +2413,6 @@ describe("native model context projection", () => {
         // The catalog cap is under 32k, so the request asks for all of it.
         expect(observedMaxTokens).toEqual(Option.some(16_000))
         yield* runAgentLoop(
-          agentLoop,
           makeMessage(
             SessionId.make("model-context-driver-session"),
             BranchId.make("model-context-driver-branch"),
@@ -2939,12 +2959,10 @@ describe("turn record", () => {
         )
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
-            yield* submitAgentLoop(
-              agentLoop,
-              makeMessage(sessionId, branchId, "child task before restart"),
-              { agent: helperAgent.name, runSpec },
-            )
+            yield* submitAgentLoop(makeMessage(sessionId, branchId, "child task before restart"), {
+              agent: helperAgent.name,
+              runSpec,
+            })
             yield* Deferred.await(firstCalled)
           }).pipe(Effect.provide(layerFor(firstProvider)), Effect.timeout("10 seconds")),
         )
@@ -3037,12 +3055,9 @@ describe("turn record", () => {
         )
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
-            yield* submitAgentLoop(
-              agentLoop,
-              makeMessage(sessionId, branchId, "work under the helper"),
-              { agent: helperAgent.name },
-            )
+            yield* submitAgentLoop(makeMessage(sessionId, branchId, "work under the helper"), {
+              agent: helperAgent.name,
+            })
             yield* Deferred.await(firstCalled)
           }).pipe(
             Effect.provide(layerFor(firstProvider, [...testAgents, helperAgent])),
@@ -3123,12 +3138,9 @@ describe("turn record", () => {
         ])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentLoop = yield* makeAgentLoopService
-            yield* submitAgentLoop(
-              agentLoop,
-              makeMessage(sessionId, branchId, "dispatch under the helper"),
-              { agent: helperAgent.name },
-            )
+            yield* submitAgentLoop(makeMessage(sessionId, branchId, "dispatch under the helper"), {
+              agent: helperAgent.name,
+            })
             yield* Deferred.await(entered)
           }).pipe(
             Effect.provide(layerFor(firstProvider.layer, [...testAgents, helperAgent])),
@@ -3532,7 +3544,7 @@ describe("turn record", () => {
           db.close()
         })
 
-        // Second process: the stale row says step 0 with nothing pending. If
+        // Second process: the stale row says step 1 with nothing pending. If
         // the resolver believes it, the turn re-issues the step whose tool call
         // already ran, and the probe fires a second time.
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
@@ -3652,6 +3664,8 @@ const makeBinding = () =>
   })
 
 describe("tool binding replay", () => {
+  // The process a test resolves its bindings in.
+  const liveGeneration = ProcessGenerationId.make("test")
   const bindingLayerFor = (extensions: ReadonlyArray<LoadedExtension>) =>
     Layer.mergeAll(
       ExtensionRegistry.fromResolved(resolveExtensions(extensions)),
@@ -3684,6 +3698,7 @@ describe("tool binding replay", () => {
           assistantMessageId: MessageId.make("same-id-project-outer"),
           toolCallId: ToolCallId.make("same-id-project-operation"),
           binding,
+          generationId: liveGeneration,
         }).pipe(Effect.exit)
         expect(Exit.isFailure(refused)).toBe(true)
         if (Exit.isFailure(refused)) {
@@ -3725,6 +3740,7 @@ describe("tool binding replay", () => {
         assistantMessageId: MessageId.make("same-id-other-outer"),
         toolCallId: ToolCallId.make("same-id-other-operation"),
         binding,
+        generationId: liveGeneration,
       }).pipe(Effect.provide(bindingLayerFor([builtin, project])))
       expect(selected.capability).toBe(builtinTool)
       expect(selected.binding).toEqual(binding)
@@ -3752,6 +3768,7 @@ describe("tool binding replay", () => {
             sessionId,
             assistantMessageId: MessageId.make("outer-cell-message"),
             toolCallId: ToolCallId.make("inner-operation-call"),
+            generationId: liveGeneration,
           }
           const resolved = yield* resolveStoredToolBinding({ ...address, binding })
           expect(resolved.capability).toBe(capability)
@@ -3903,7 +3920,6 @@ describe("tool binding replay", () => {
         if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
         // A source-loaded extension has no build artifact, so no durable identity.
         expect(current.value.binding).toBeUndefined()
-        expect(Option.isNone(yield* innerOperationBindingIdentity(current.value))).toBe(true)
         const identity = yield* innerOperationBindingIdentity(current.value, generationId)
         if (Option.isNone(identity)) return yield* Effect.die("Expected process-local identity")
         expect(identity.value.source).toEqual({
@@ -3929,15 +3945,6 @@ describe("tool binding replay", () => {
           generationId,
         }).pipe(Effect.flip)
         expect(retired).toMatchObject({ _tag: "ToolBindingReplayError", reason: "SourceMismatch" })
-
-        const withoutProcess = yield* resolveStoredToolBinding({
-          ...address,
-          binding: identity.value,
-        }).pipe(Effect.flip)
-        expect(withoutProcess).toMatchObject({
-          _tag: "ToolBindingReplayError",
-          reason: "SourceMismatch",
-        })
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.timeout("5 seconds")),
   )

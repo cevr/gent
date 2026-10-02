@@ -20,6 +20,7 @@ import {
   messagePartsTextLines,
   messagePartsToolCallParts,
   projectMessagesWithToolInteractions,
+  normalizeResponseParts,
   projectResponsePartsToMessageParts,
   splitLines,
   SteerCommand,
@@ -157,6 +158,17 @@ describe("tool summary", () => {
     )
     expect(clipSummary("\n  done\n")).toBe("done")
     expect(clipSummary("y".repeat(150))).toBe(`${"y".repeat(100)}...`)
+  })
+})
+
+describe("line count", () => {
+  test("a final newline ends the last line and does not start one", () => {
+    expect(lineCount("")).toBe(0)
+    expect(lineCount("\n")).toBe(1)
+    expect(lineCount("hello\n")).toBe(1)
+    expect(lineCount("a\nb\n")).toBe(2)
+    expect(lineCount("a\n\n")).toBe(2)
+    expect(lineCount("a\nb\nc")).toBe(3)
   })
 })
 
@@ -1644,6 +1656,132 @@ describe("message part projection", () => {
     ])
   })
 
+  test("reasoning keeps the provider state a later step sends back", () => {
+    const thinking = (signature: string): Response.ReasoningDeltaPartMetadata => ({
+      anthropic: { info: { type: "thinking", signature } },
+    })
+    const projection = projectResponsePartsToMessageParts([
+      // Anthropic: the signature arrives on a delta. Two blocks keep two signatures.
+      Response.makePart("reasoning-start", { id: "0" }),
+      Response.makePart("reasoning-delta", { id: "0", delta: "plan" }),
+      Response.makePart("reasoning-delta", { id: "0", delta: "", metadata: thinking("sig-a") }),
+      Response.makePart("reasoning-end", { id: "0" }),
+      Response.makePart("reasoning-start", { id: "1" }),
+      Response.makePart("reasoning-delta", { id: "1", delta: "check" }),
+      Response.makePart("reasoning-delta", { id: "1", delta: "", metadata: thinking("sig-b") }),
+      Response.makePart("reasoning-end", { id: "1" }),
+      // OpenAI: an item with no summary text; its encrypted content arrives at the end.
+      Response.makePart("reasoning-start", {
+        id: "rs_1:0",
+        metadata: { openai: { itemId: "rs_1" } },
+      }),
+      Response.makePart("reasoning-end", {
+        id: "rs_1:0",
+        metadata: { openai: { itemId: "rs_1", encryptedContent: "enc-1" } },
+      }),
+      Response.makePart("tool-call", {
+        id: "call_1",
+        name: "cell",
+        params: {},
+        providerExecuted: false,
+        metadata: { openai: { itemId: "fc_1" } },
+      }),
+    ])
+    expect(projection.assistant.map((part) => [part.type, part.options])).toEqual([
+      ["reasoning", thinking("sig-a")],
+      ["reasoning", thinking("sig-b")],
+      ["reasoning", { openai: { itemId: "rs_1", encryptedContent: "enc-1" } }],
+      ["tool-call", { openai: { itemId: "fc_1" } }],
+    ])
+    expect(
+      projection.assistant.flatMap((part) => {
+        if (part.type !== "reasoning") return []
+        return [part.text]
+      }),
+    ).toEqual(["plan", "check", ""])
+  })
+
+  test("reasoning without provider state still joins into one part", () => {
+    const projection = projectResponsePartsToMessageParts([
+      Response.makePart("reasoning-delta", { id: "a", delta: "thin" }),
+      Response.makePart("reasoning-delta", { id: "b", delta: "king" }),
+      Response.makePart("reasoning-start", { id: "c" }),
+      Response.makePart("reasoning-end", { id: "c" }),
+    ])
+    expect(projection.assistant).toEqual([Prompt.reasoningPart({ text: "thinking" })])
+  })
+
+  test("normalizing keeps Response parts canonical and the projection splits assistant from tool parts", () => {
+    const responseParts = normalizeResponseParts([
+      Response.makePart("text-delta", { id: MessageId.make("text-1"), delta: "hel" }),
+      Response.makePart("text-delta", { id: MessageId.make("text-2"), delta: "lo" }),
+      Response.makePart("tool-call", {
+        id: MessageId.make("tc-3"),
+        name: "inspect",
+        params: { deep: true },
+        providerExecuted: false,
+      }),
+      Response.makePart("tool-approval-request", {
+        approvalId: "approval-1",
+        toolCallId: ToolCallId.make("tc-3"),
+      }),
+      Response.makePart("file", {
+        mediaType: "image/png",
+        data: new Uint8Array([104, 105]),
+      }),
+      Response.makePart("tool-result", {
+        id: MessageId.make("tc-3"),
+        name: "inspect",
+        isFailure: false,
+        result: { ok: true },
+        encodedResult: { ok: true },
+        providerExecuted: false,
+        preliminary: false,
+      }),
+      Response.makePart("finish", {
+        reason: "tool-calls",
+        usage: new Response.Usage({
+          inputTokens: {
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
+            uncached: undefined,
+            total: 12,
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
+            cacheRead: undefined,
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
+            cacheWrite: undefined,
+          },
+          outputTokens: {
+            total: 4,
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
+            text: undefined,
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
+            reasoning: undefined,
+          },
+        }),
+        // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
+        response: undefined,
+      }),
+    ])
+
+    expect(responseParts.map((part) => part.type)).toEqual([
+      "text",
+      "tool-call",
+      "tool-approval-request",
+      "file",
+      "tool-result",
+      "finish",
+    ])
+
+    const projection = projectResponsePartsToMessageParts(responseParts)
+    expect(projection.assistant.map((part) => part.type)).toEqual([
+      "text",
+      "tool-call",
+      "tool-approval-request",
+      "file",
+    ])
+    expect(projection.tool.map((part) => part.type)).toEqual(["tool-result"])
+  })
+
   test("a child's answer is its last assistant text, or its reasoning when the model wrote nothing else", () => {
     const reasoningOnly = [
       makeMessage("a-1", "assistant", [
@@ -1692,5 +1830,75 @@ describe("message part projection", () => {
       ]),
     ]
     expect(latestAssistantText(emptyFirstItem)).toBe("the answer")
+  })
+
+  const callThenResult = (
+    id: string,
+    result: Prompt.ToolResultPart["result"],
+    isFailure = false,
+  ) => [
+    makeMessage(`a-${id}`, "assistant", [
+      Prompt.toolCallPart({ id, name: "read", params: {}, providerExecuted: false }),
+    ]),
+    makeMessage(`t-${id}`, "tool", [
+      Prompt.toolResultPart({ id, name: "read", result, isFailure, providerExecuted: false }),
+    ]),
+  ]
+
+  test("a failed result projects an error interaction that shows its text", () => {
+    const [projected] = projectMessagesWithToolInteractions(
+      callThenResult("tc-failed", "File not found", true),
+    )
+    expect(projected?.toolInteractions).toEqual([
+      {
+        id: ToolCallId.make("tc-failed"),
+        toolName: "read",
+        status: "error",
+        input: {},
+        summary: "File not found",
+        output: "File not found",
+        durationMs: absent,
+      },
+    ])
+  })
+
+  test("a failed call's summary is its error text, not the JSON that carries it", () => {
+    const error = `Tool 'read' failed: ${"no such file ".repeat(12)}`
+    const [projected] = projectMessagesWithToolInteractions(
+      callThenResult("tc-failed-json", { error }, true),
+    )
+    expect(projected?.toolInteractions[0]?.summary).toBe(clipSummary(error))
+  })
+
+  test("an object result summarizes as one line of JSON and shows its full text", () => {
+    const [projected] = projectMessagesWithToolInteractions(
+      callThenResult("tc-object", { files: ["a.ts", "b.ts"] }),
+    )
+    const interaction = projected?.toolInteractions[0]
+    expect(interaction?.summary).toBe('{"files":["a.ts","b.ts"]}')
+    expect(interaction?.output).toContain('"files"')
+  })
+
+  test("a result with no call before it projects no interaction", () => {
+    const projected = projectMessagesWithToolInteractions([
+      makeMessage("a-orphan", "assistant", [Prompt.textPart({ text: "Hi there" })]),
+      makeMessage("t-orphan", "tool", [
+        Prompt.toolResultPart({
+          id: "tc-orphan",
+          name: "read",
+          result: "orphan",
+          isFailure: false,
+          providerExecuted: false,
+        }),
+      ]),
+    ])
+    expect(projected.flatMap((message) => message.toolInteractions)).toEqual([])
+  })
+
+  test("an assistant answer with no tool call has no tool interactions", () => {
+    const [projected] = projectMessagesWithToolInteractions([
+      makeMessage("a-text-only", "assistant", [Prompt.textPart({ text: "Just text" })]),
+    ])
+    expect(projected?.toolInteractions).toEqual([])
   })
 })

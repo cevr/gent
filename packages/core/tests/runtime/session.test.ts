@@ -62,6 +62,7 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
+  fixedSessionProfiles,
   runtimeHostContext,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
@@ -130,81 +131,64 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
     },
   ])
 }
-const sessionRuntimeLayers = (config: Parameters<typeof AgentLoopLiveActor>[0]) =>
-  Layer.provideMerge(AgentLoopLiveActor(config), SessionRuntime.Client)
+const sessionRuntimeLayers = Layer.provideMerge(AgentLoopLiveActor, SessionRuntime.Client)
 const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof testSqliteStorage<A>>) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
   )
+/**
+ * The session runtime root over sqlite storage. `toolRunner: "live"` runs the
+ * registered tools through `ToolRunner.Live`; the default stubs them.
+ */
 const makeRuntimeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-  tools: ReadonlyArray<ToolCapability> = [],
-  profileCacheLayer?: Layer.Layer<SessionProfileCache>,
+  options: {
+    readonly tools?: ReadonlyArray<ToolCapability>
+    readonly profileCache?: Layer.Layer<SessionProfileCache>
+    readonly toolRunner?: "test" | "live"
+  } = {},
 ) => {
-  const resolvedExtensions = makeTestExtensions(tools)
-  const eventStoreLayer = EventStore.Memory
-  const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
-  const baseDepsWithoutProfile = Layer.mergeAll(
-    storageLayer,
-    makeClusterRunnerLayer(storageLayer),
-    providerLayer,
-    LanguageModelLayers.resolver(providerLayer),
-    ExtensionRegistry.fromResolved(resolvedExtensions),
-    eventStoreLayer,
-    ToolRunner.Test(),
-    ApprovalService.Test(),
-    RuntimeEnvironment.Live({
-      cwd: "/nonexistent/gent-test-cwd",
-      home: "/nonexistent/gent-test-home",
-    }),
-    ConfigService.Test(),
-    BunServices.layer,
-    ModelRegistry.Test(),
-    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
-    GentPlatform.Test(),
-    AgentLoopSessionGovernance.Live,
-  )
-  let baseDeps = baseDepsWithoutProfile
-  if (!Predicate.isUndefined(profileCacheLayer)) {
-    baseDeps = Layer.merge(baseDepsWithoutProfile, profileCacheLayer)
-  }
-  const sessionRuntimeLayer = Layer.provide(sessionRuntimeLayers({ baseSections: [] }), baseDeps)
-  const sessionMutationsLayer = Layer.provide(
-    SessionMutationsLive,
-    Layer.mergeAll(baseDeps, sessionRuntimeLayer),
-  )
-  return Layer.mergeAll(baseDeps, sessionRuntimeLayer, sessionMutationsLayer)
-}
-const makeLiveToolRuntimeLayer = (
-  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-  tools: ReadonlyArray<ToolCapability>,
-) => {
-  const resolvedExtensions = makeTestExtensions(tools)
-  const eventStoreLayer = EventStore.Memory
+  const registry = ExtensionRegistry.fromResolved(makeTestExtensions(options.tools))
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
     LanguageModelLayers.resolver(providerLayer),
-    ExtensionRegistry.fromResolved(resolvedExtensions),
-    eventStoreLayer,
+    registry,
+    options.profileCache ?? fixedSessionProfiles(new Map(), registry),
+    EventStore.Memory,
+    ApprovalService.Test(),
     RuntimeEnvironment.Live({
       cwd: "/nonexistent/gent-test-cwd",
       home: "/nonexistent/gent-test-home",
     }),
     ConfigService.Test(),
-    ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
     DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
-  return Layer.provideMerge(sessionRuntimeLayers({ baseSections: [] }), deps)
+  let toolRunnerLayer = Layer.provide(ToolRunner.Test(), baseDeps)
+  if (options.toolRunner === "live") toolRunnerLayer = Layer.provide(ToolRunner.Live, baseDeps)
+  const deps = Layer.mergeAll(baseDeps, toolRunnerLayer)
+  const sessionRuntimeLayer = Layer.provide(sessionRuntimeLayers, deps)
+  const sessionMutationsLayer = Layer.provide(
+    SessionMutationsLive,
+    Layer.mergeAll(deps, sessionRuntimeLayer),
+  )
+  return Layer.mergeAll(deps, sessionRuntimeLayer, sessionMutationsLayer)
 }
+/** The head of the branch's state stream, the state it is in now. */
+const currentState = (
+  sessionRuntime: SessionRuntime["Service"],
+  target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+) =>
+  sessionRuntime
+    .watchState(target)
+    .pipe(Effect.flatMap(Stream.runHead), Effect.map(Option.getOrUndefined))
 const createSessionBranch = Effect.gen(function* () {
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
@@ -414,7 +398,7 @@ describe("SessionRuntime", () => {
           resolve: () => Effect.die("control-plane writes must not resolve session profiles"),
         }),
       )
-      const layer = makeRuntimeLayer(providerLayer, [], profileCacheLayer)
+      const layer = makeRuntimeLayer(providerLayer, { profileCache: profileCacheLayer })
       yield* Effect.gen(function* () {
         const sessionRuntime = yield* SessionRuntime
         const { sessionId, branchId } = yield* createCwdSessionBranch
@@ -677,7 +661,6 @@ describe("SessionRuntime", () => {
             expect(latestUserText(options)).toBe("first")
           },
         },
-        textStep("should not run"),
       ])
       const layer = makeRuntimeLayer(providerLayer)
       yield* Effect.gen(function* () {
@@ -707,14 +690,7 @@ describe("SessionRuntime", () => {
         } satisfies QueueSnapshot)
         yield* controls.emitAll(0)
         yield* waitFor(
-          Effect.gen(function* () {
-            const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
-            const state = yield* Stream.runHead(stream)
-            if (state._tag === "Some") {
-              return state.value
-            }
-            return Option.getOrUndefined(state)
-          }),
+          currentState(sessionRuntime, { sessionId, branchId }),
           (state) => state?._tag === "Idle",
           5000,
           "idle after drained follow-up",
@@ -725,61 +701,49 @@ describe("SessionRuntime", () => {
             (message) => message.role === "user",
           ),
         ).toHaveLength(1)
+        yield* controls.assertDone
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
-  it.scopedLive(
-    "dispatch RespondInteraction resumes a waiting interaction through the live loop",
-    () =>
-      Effect.gen(function* () {
-        const callCount = yield* Ref.make(0)
-        const resolution = yield* Deferred.make<void>()
-        const toolDef = makeInteractionTool(callCount, resolution)
-        const layer = makeLiveToolRuntimeLayer(makeInteractionProviderLayer(), [toolDef])
-        yield* Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const { sessionId, branchId } = yield* createSessionBranch
-          yield* sessionRuntime.sendUserMessage({
-            sessionId,
-            branchId,
-            content: "trigger interaction",
-          })
-          yield* waitFor(
-            Effect.gen(function* () {
-              const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
-              const state = yield* Stream.runHead(stream)
-              if (state._tag === "Some") {
-                return state.value
-              }
-              return Option.getOrUndefined(state)
-            }),
-            (current) => current?._tag === "WaitingForInteraction",
-            5000,
-            "waiting interaction state",
-          )
-          yield* sessionRuntime.respondInteraction({
-            sessionId,
-            branchId,
-            requestId: InteractionRequestId.make("req-test-1"),
-          })
-          yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
-          const state = yield* waitFor(
-            Effect.gen(function* () {
-              const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
-              const state = yield* Stream.runHead(stream)
-              if (state._tag === "Some") {
-                return state.value
-              }
-              return Option.getOrUndefined(state)
-            }),
-            (current) => current?._tag === "Idle",
-            5000,
-            "idle after interaction response",
-          )
-          expect(state?._tag).toBe("Idle")
-          expect(Ref.getUnsafe(callCount)).toBe(2)
-        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
-      }),
+  it.scopedLive("an answer resumes a waiting interaction through the live loop", () =>
+    Effect.gen(function* () {
+      const callCount = yield* Ref.make(0)
+      const resolution = yield* Deferred.make<void>()
+      const toolDef = makeInteractionTool(callCount, resolution)
+      const layer = makeRuntimeLayer(makeInteractionProviderLayer(), {
+        tools: [toolDef],
+        toolRunner: "live",
+      })
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const { sessionId, branchId } = yield* createSessionBranch
+        yield* sessionRuntime.sendUserMessage({
+          sessionId,
+          branchId,
+          content: "trigger interaction",
+        })
+        yield* waitFor(
+          currentState(sessionRuntime, { sessionId, branchId }),
+          (current) => current?._tag === "WaitingForInteraction",
+          5000,
+          "waiting interaction state",
+        )
+        yield* sessionRuntime.respondInteraction({
+          sessionId,
+          branchId,
+          requestId: InteractionRequestId.make("req-test-1"),
+        })
+        yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
+        const state = yield* waitFor(
+          currentState(sessionRuntime, { sessionId, branchId }),
+          (current) => current?._tag === "Idle",
+          5000,
+          "idle after interaction response",
+        )
+        expect(state?._tag).toBe("Idle")
+        expect(Ref.getUnsafe(callCount)).toBe(2)
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
+    }),
   )
 })
 
@@ -879,7 +843,7 @@ describe("session metrics", () => {
           )
         return { streamEndeds, metrics, receipts }
       }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
-      expect(result.streamEndeds.length).toBeGreaterThanOrEqual(1)
+      expect(result.streamEndeds).toHaveLength(2)
       // Each turn receipt carries that turn's totals, summed over its steps.
       expect(result.receipts.map((receipt) => receipt.usage)).toEqual(
         result.streamEndeds.map((ev) => ev.usage),

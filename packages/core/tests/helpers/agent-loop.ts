@@ -5,7 +5,6 @@ import * as Prompt from "effect/ai/Prompt"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopError,
-  type FollowUpQueueFull,
   entityIdOf,
   type SessionRuntimeState,
 } from "../../src/domain/agent-loop"
@@ -39,9 +38,9 @@ import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../src/domain/extension"
 import { type AgentEvent, EventStore } from "../../src/domain/event"
 import { BranchStorage, SessionStorage } from "../../src/storage/storage"
-import type { StorageError } from "../../src/domain/errors"
 import {
   ensureStorageParents,
+  fixedSessionProfiles,
   recordingEventStore,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
@@ -106,15 +105,6 @@ const ensureAgentLoopStorageParents = (input: {
     ),
   )
 interface AgentLoopService {
-  readonly runOnce: (input: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly prompt: string
-  }) => Effect.Effect<
-    void,
-    AgentLoopError | FollowUpQueueFull | StorageError,
-    BranchStorage | SessionStorage
-  >
   readonly getQueue: (input: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -132,34 +122,11 @@ export const makeAgentLoopService = Effect.gen(function* () {
   const refFor = (sessionId: SessionId, branchId: BranchId) =>
     actorClientFactory(entityIdOf(DefaultWorkspaceId, sessionId, branchId))
   const ensureParents = (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
-    ensureStorageParents(input).pipe(
+    ensureAgentLoopStorageParents(input).pipe(
       Effect.provideService(SessionStorage, sessionStorage),
       Effect.provideService(BranchStorage, branchStorage),
-      Effect.mapError(
-        (cause) =>
-          new AgentLoopError({
-            message: `Failed to ensure storage parents for ${input.sessionId}/${input.branchId}`,
-            cause,
-          }),
-      ),
     )
   return {
-    runOnce: (input) =>
-      Effect.gen(function* () {
-        const message = Message.cases.regular.make({
-          id: MessageId.make(yield* platform.randomId),
-          sessionId: input.sessionId,
-          branchId: input.branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: input.prompt })],
-          createdAt: dateFromMillis(1_767_225_600_000),
-        })
-        yield* ensureStorageParents({ sessionId: input.sessionId, branchId: input.branchId })
-        const ref = yield* refFor(input.sessionId, input.branchId)
-        yield* ref.execute(
-          AgentLoopActor.SubmitAndWait.make({ workspaceId: DefaultWorkspaceId, message }),
-        )
-      }),
     getQueue: (input) =>
       Effect.gen(function* () {
         yield* ensureParents(input)
@@ -187,7 +154,6 @@ export const makeAgentLoopService = Effect.gen(function* () {
   } satisfies AgentLoopService
 })
 export const runAgentLoop = (
-  _agentLoop: AgentLoopService,
   message: Message,
   /** The agent the session runs as; set when the test's first turn creates it. */
   admission?: SessionAdmission,
@@ -210,7 +176,6 @@ export const runAgentLoop = (
     ),
   )
 export const submitAgentLoop = (
-  _agentLoop: AgentLoopService,
   message: Message,
   /** The agent the session runs as; set when the test's first turn creates it. */
   admission?: SessionAdmission,
@@ -300,8 +265,10 @@ const actorTestModelLayer = (model: ActorTestModel) => {
 
 /**
  * The actor test root: the loop actor over real storage, an in-memory event
- * store and the test registry. Each option replaces one piece; `overrides`
- * merges last, so it wins over any service the root already provides.
+ * store and the test registry. Every cwd's profile serves that registry, as
+ * the launch profile does in production. Each option replaces one piece;
+ * `overrides` merges last, so it wins over any service the root already
+ * provides.
  */
 export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
   params: ActorTestModel & {
@@ -313,10 +280,12 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     readonly toolRunner?: typeof ToolRunner.Live
   },
 ) => {
+  const registry = params.registry ?? makeExtRegistry()
   const baseDeps = Layer.mergeAll(
     params.storage ?? testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
     actorTestModelLayer(params),
-    params.registry ?? makeExtRegistry(),
+    registry,
+    fixedSessionProfiles(new Map(), registry),
     RuntimeEnvironment.Live({
       cwd: "/nonexistent/gent-test-cwd",
       home: "/nonexistent/gent-test-home",
@@ -334,7 +303,7 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     baseDeps,
     Layer.provide(params.toolRunner ?? ToolRunner.Test(), baseDeps),
   )
-  return AgentLoopTestActor({ baseSections: [] }).pipe(
+  return AgentLoopTestActor.pipe(
     Layer.provideMerge(Layer.mergeAll(deps, AgentLoopSessionGovernance.Live)),
   )
 }

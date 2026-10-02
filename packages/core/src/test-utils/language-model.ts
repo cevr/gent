@@ -394,6 +394,12 @@ interface SequenceLanguageModelControls {
   readonly waitForCall: (index: number) => Effect.Effect<void>
   readonly emitAll: (index: number) => Effect.Effect<void>
   readonly callCount: Effect.Effect<number>
+  /**
+   * Dies when a scripted step was not consumed, or when an `assertOptions` or
+   * `assertRequest` check failed. A failed check also fails its call, which a
+   * turn reads as a provider error and goes past, so only this read makes the
+   * test fail on it.
+   */
   readonly assertDone: Effect.Effect<void>
 }
 
@@ -470,6 +476,9 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
   Effect.gen(function* () {
     const indexRef = yield* Ref.make(0)
     const requestIndexRef = yield* Ref.make(0)
+    const checkFailures = yield* Ref.make<ReadonlyArray<string>>([])
+    const recordCheckFailure = (message: string) =>
+      Ref.update(checkFailures, (failures) => [...failures, message])
     const callStarted = yield* Effect.forEach(steps, () => Deferred.make<void>())
     const emitGates = yield* Effect.forEach(steps, () => Deferred.make<void>())
 
@@ -494,19 +503,17 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
           const started = callStarted[idx]
           const gate = emitGates[idx]
 
-          if (!Predicate.isUndefined(started)) yield* Deferred.succeed(started, void 0)
-
+          // The check runs, and a failure is recorded, before `waitForCall`
+          // resolves, so an `assertDone` after `waitForCall` sees it.
           const assertOptions = step.assertOptions
-          if (Predicate.isNotUndefined(assertOptions)) {
-            yield* Effect.try({
-              try: () => assertOptions(options),
-              catch: (e) =>
-                aiError(
-                  "Sequence.streamText",
-                  `Sequence language model: assertOptions failed at step ${idx}: ${e}`,
-                ),
-            })
-          }
+          const checked = yield* Effect.exit(
+            Effect.try({
+              try: () => assertOptions?.(options),
+              catch: (e) => `Sequence language model: assertOptions failed at step ${idx}: ${e}`,
+            }).pipe(Effect.tapError(recordCheckFailure)),
+          )
+          if (!Predicate.isUndefined(started)) yield* Deferred.succeed(started, void 0)
+          yield* checked.pipe(Effect.mapError((message) => aiError("Sequence.streamText", message)))
 
           if (Predicate.isNotUndefined(step.stopReason)) {
             yield* reportProviderStopReason(step.stopReason)
@@ -543,7 +550,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
                 model: request.modelId,
                 cause: e,
               }),
-          })
+          }).pipe(Effect.tapError((error) => recordCheckFailure(error.message)))
         }),
       ),
     )
@@ -568,6 +575,10 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
       },
       callCount: Ref.get(indexRef),
       assertDone: Effect.gen(function* () {
+        const failures = yield* Ref.get(checkFailures)
+        if (failures.length > 0) {
+          return yield* Effect.die(new Error(failures.join("\n")))
+        }
         const consumed = yield* Ref.get(indexRef)
         if (consumed >= steps.length) return
         return yield* Effect.die(

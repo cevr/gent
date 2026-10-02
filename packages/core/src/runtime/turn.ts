@@ -41,7 +41,7 @@ import {
   responseUsage,
   type SessionAdmission,
   stringifyOutput,
-  summarizeOutput,
+  summarizeToolResult,
   openedByClient,
 } from "../domain/message.js"
 import {
@@ -177,10 +177,8 @@ import type { LoopInbox } from "./agent-loop.js"
 
 /**
  * Build the per-turn prompt sections (base + agent addendum + tool list +
- * tool guidelines + extension extras). Returns the
- * unsorted section list so prompt slots can rewrite specific sections
- * (e.g. codemode replacing `tool-list` / `tool-guidelines`) before final
- * compilation.
+ * tool guidelines + extension extras). Returns the unsorted section list;
+ * `compileSystemPrompt` sorts it by priority.
  */
 export const buildTurnPromptSections = (
   baseSections: ReadonlyArray<PromptSection>,
@@ -290,12 +288,8 @@ export interface AgentLoopTurnProfile {
    * extension (a failed branch Resource) writes the narrowed registry here.
    */
   readonly turnCapabilityContext: Context.Context<ExtensionRegistry>
-  /**
-   * Identity of the process that built the profile. Absent for direct actor
-   * tests and runtimes without a profile cache, where no process-local tool
-   * binding can be recorded or resumed.
-   */
-  readonly turnGenerationId?: ProcessGenerationId
+  /** Identity of the process that built the profile; a process-local tool binding replays only inside it. */
+  readonly turnGenerationId: ProcessGenerationId
 }
 
 export class CurrentAgentLoopTurnProfile extends Context.Service<
@@ -535,16 +529,15 @@ interface StreamFailureNote {
  * error. The end names the model: the step ran on it, settled or not. A
  * `note` adds to the error; one the turn recovers from makes it a notice.
  */
-const reportStreamFailure = <E>(
+const reportStreamFailure = (
   params: {
     messageId: MessageId
     step: number
     sessionId: SessionId
     branchId: BranchId
     modelId: ModelIdType
-    formatStreamError: (streamError: E) => string
   },
-  streamError: E,
+  streamError: ProviderError,
   message: string,
   note: Option.Option<StreamFailureNote> = Option.none(),
 ) =>
@@ -560,7 +553,7 @@ const reportStreamFailure = <E>(
         outcome: "Failed",
       }),
     )
-    const error = params.formatStreamError(streamError)
+    const error = streamError.message
     yield* publishEventOrDie(
       Option.match(note, {
         onNone: () =>
@@ -587,7 +580,6 @@ export const collectModelTurnResponse = (params: {
   branchId: BranchId
   modelId: ModelIdType
   activeStream: ActiveStreamHandle
-  formatStreamError: (streamError: ProviderError) => string
 }) =>
   Effect.gen(function* () {
     const responseParts: Response.AnyPart[] = []
@@ -646,7 +638,6 @@ export const collectFailedModelTurnResponse = (params: {
   branchId: BranchId
   modelId: ModelIdType
   activeStream: ActiveStreamHandle
-  formatStreamError: (streamError: ProviderError) => string
   /** The provider refused the request as too long, and the turn will hand off and retry. */
   contextOverflow: boolean
   /** The provider refused as too long a window this turn already handed off. */
@@ -1032,7 +1023,7 @@ const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProjections
         branchId: params.branchId,
         toolCallId,
         toolName: part.name,
-        summary: summarizeOutput(part.result),
+        summary: summarizeToolResult(part),
         output: stringifyOutput(part.result),
         resultJson: encodeToolOutput(part.result),
         assistantMessageId: params.assistantMessageId,
@@ -1506,7 +1497,6 @@ type ModelTurnSource = {
   /** The chars/4 estimate of the system prompt, notices and tools this request carries. */
   readonly overheadTokens: number
   readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
-  readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
   ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R | EventStore>
@@ -1841,7 +1831,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
           }),
       ),
     ),
-    formatStreamError: causeMessage,
     collect: <R>(
       effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
     ) =>
@@ -1875,7 +1864,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             branchId: params.branchId,
             modelId: resolved.modelId,
             activeStream: params.activeStream,
-            formatStreamError: causeMessage,
             // One recovery per refusal: a step that already handed off, or the
             // last step of the budget, fails the turn as any failure does.
             contextOverflow:
@@ -1953,12 +1941,15 @@ const StepOutcome = Schema.TaggedUnion({
   /**
    * No tool calls: an answer, nothing at all, or output cut off at the output
    * limit or by a full window. `contextOverflow`: the window filled, and the
-   * continuation hands the window off first.
+   * continuation hands the window off first. `blocked`: the provider blocked
+   * the reply (a `content-filter` finish, Anthropic's `refusal`); the same
+   * window would be blocked again, so no continuation follows.
    */
   Answered: {
     empty: Schema.Boolean,
     truncated: Schema.Boolean,
     contextOverflow: Schema.Boolean,
+    blocked: Schema.Boolean,
   },
 })
 type StepOutcome = Schema.Schema.Type<typeof StepOutcome>
@@ -1983,8 +1974,13 @@ export const classifyStep = (collected: CollectedTurnResponse): StepOutcome => {
       collected.windowFull ||
       collected.responseParts.some((part) => part.type === "finish" && part.reason === "length"),
     contextOverflow,
+    blocked: collected.responseParts.some(
+      (part) => part.type === "finish" && part.reason === "content-filter",
+    ),
   })
 }
+
+const PROVIDER_BLOCKED_RESPONSE = "the provider blocked the response"
 
 const MAX_TURN_STEPS = 200
 /** Continuation instructions one turn may persist after a failed, empty, or truncated step. */
@@ -2608,7 +2604,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           branchId: scope.branchId,
           modelId: params.resolved.modelId,
           activeStream: params.activeStream,
-          formatStreamError: source.formatStreamError,
         }),
       )
 
@@ -3580,7 +3575,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           // Re-prompt rather than report the fragment as the reply; once
           // continuations are spent, say so. A full window has no room for
           // the continuation, so the step that runs it hands the window off.
-          Answered: ({ empty, truncated, contextOverflow }) => {
+          Answered: ({ empty, truncated, contextOverflow, blocked }) => {
+            // The provider blocked the request, not the answer: a re-prompt
+            // resends the same window to the same filter. The text it kept
+            // stays; the error says why the reply ends there.
+            if (blocked) {
+              return publishEventOrDie(
+                ErrorOccurred.make({
+                  sessionId: scope.sessionId,
+                  branchId: scope.branchId,
+                  error: PROVIDER_BLOCKED_RESPONSE,
+                }),
+              ).pipe(Effect.as(stop({ unanswered: empty })))
+            }
             if (!empty && !truncated) {
               // Steering that arrived while the answer streamed joins this
               // turn. Left for the next one, it would be answered in a turn

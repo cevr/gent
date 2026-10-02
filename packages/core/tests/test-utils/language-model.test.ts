@@ -7,6 +7,9 @@ import {
   toolCallStep,
 } from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/tools"
+import { ModelResolver } from "../../src/runtime/provider"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
+import { ModelId } from "../../src/domain/agent"
 import { LanguageModel } from "effect/ai"
 import type * as Response from "effect/ai/Response"
 import { tool } from "@gent/core/extensions/api"
@@ -154,6 +157,56 @@ describe("LanguageModelLayers.sequence", () => {
       if (exit._tag === "Failure") {
         const pretty = Cause.pretty(exit.cause)
         expect(pretty).toContain("assertOptions failed at step 0")
+      }
+    }),
+  )
+
+  it.scoped("assertDone fails after an assertOptions failure the loop swallowed", () =>
+    Effect.gen(function* () {
+      const step: SequenceStep = {
+        ...textStep("guarded"),
+        assertOptions: () => {
+          expect("sent").toBe("expected")
+        },
+      }
+      const { layer, controls } = yield* LanguageModelLayers.sequence([step])
+
+      // A turn reads the failed stream as a provider error and goes on, so the
+      // failure must reach the test through `assertDone`.
+      yield* Effect.exit(Effect.provide(callProvider, layer))
+      const done = yield* Effect.exit(controls.assertDone)
+      expect(done._tag).toBe("Failure")
+      if (done._tag === "Failure") {
+        expect(Cause.pretty(done.cause)).toContain("assertOptions failed at step 0")
+      }
+    }),
+  )
+
+  it.scoped("assertDone fails after an assertRequest failure", () =>
+    Effect.gen(function* () {
+      const step: SequenceStep = {
+        ...textStep("guarded"),
+        assertRequest: () => {
+          expect("sent-model").toBe("expected-model")
+        },
+      }
+      const { layer, controls } = yield* LanguageModelLayers.sequence([step])
+      const resolve = Effect.gen(function* () {
+        const resolver = yield* ModelResolver
+        return yield* resolver.resolve({ modelId: ModelId.make("test/model") })
+      }).pipe(
+        Effect.provideService(
+          ExtensionRegistry,
+          ExtensionRegistry.of({ getResolved: () => resolveExtensions([]) }),
+        ),
+      )
+
+      yield* Effect.exit(Effect.provide(resolve, LanguageModelLayers.resolver(layer)))
+      yield* Effect.provide(callProvider, layer)
+      const done = yield* Effect.exit(controls.assertDone)
+      expect(done._tag).toBe("Failure")
+      if (done._tag === "Failure") {
+        expect(Cause.pretty(done.cause)).toContain("assertRequest failed at step 0")
       }
     }),
   )
