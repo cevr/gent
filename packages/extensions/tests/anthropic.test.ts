@@ -34,7 +34,6 @@ import {
   Option,
   Path,
   PlatformError,
-  Predicate,
   Ref,
   Schema,
   Stream,
@@ -54,7 +53,6 @@ import {
   turnNoticesText,
 } from "@gent/core/test-utils"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/http"
-import { HttpClientError, TransportError } from "effect/http/HttpClientError"
 import {
   type CredentialCacheCell,
   type CredentialFailure,
@@ -71,6 +69,13 @@ import {
 } from "@gent/core/extensions/api"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
+import {
+  type FakeClientState,
+  makeFakeClient,
+  respondFirstWith,
+  transportFailure,
+  type TransportFailure,
+} from "./helpers/fake-http-client.js"
 import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { AnthropicClient as AnthropicSdkClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 
@@ -519,68 +524,6 @@ const makeCredsKeychain = (label: string): ClaudeCredentials => ({
   refreshToken: `${label}-refresh`,
   expiresAt: 1_800_000_000_000,
 })
-interface CapturedRequest {
-  url: string
-  method: string
-  headers: Record<string, string>
-  body?: string
-}
-// Sentinel object the responder can return to ask the fake client to
-// emit `HttpClientError(TransportError)` instead of a successful
-// response — exercises the wire-failure retry branch.
-interface TransportFailure {
-  readonly _tag: "TransportFailure"
-  readonly message: string
-}
-const transportFailure = (message: string): TransportFailure => ({
-  _tag: "TransportFailure",
-  message,
-})
-const hasTransportFailureTag = Predicate.isTagged("TransportFailure")
-const isTransportFailure = (v: Response | TransportFailure): v is TransportFailure =>
-  hasTransportFailureTag(v)
-interface FakeClientState {
-  captured: Array<CapturedRequest>
-  responder: (call: number) => Response | TransportFailure
-}
-const respondFirstWith =
-  (first: Response | TransportFailure, later: Response | TransportFailure) =>
-  (call: number): Response | TransportFailure => {
-    if (call === 0) return first
-    return later
-  }
-const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
-  HttpClient.make((request) => {
-    const headersObj: Record<string, string> = {}
-    for (const [key, value] of Object.entries(request.headers)) {
-      if (Schema.is(Schema.String)(value)) headersObj[key] = value
-    }
-    let bodyText = Option.none<string>()
-    if (request.body._tag === "Uint8Array") {
-      bodyText = Option.some(new TextDecoder().decode(request.body.body))
-    } else if (request.body._tag === "Raw" && Schema.is(Schema.String)(request.body.body)) {
-      bodyText = Option.some(request.body.body)
-    }
-    state.captured.push({
-      url: request.url,
-      method: request.method,
-      headers: headersObj,
-      body: Option.getOrUndefined(bodyText),
-    })
-    const result = state.responder(state.captured.length - 1)
-    if (isTransportFailure(result)) {
-      return Effect.fail(
-        new HttpClientError({
-          reason: new TransportError({
-            request,
-            cause: result,
-            description: result.message,
-          }),
-        }),
-      )
-    }
-    return Effect.succeed(HttpClientResponse.fromWeb(request, result))
-  })
 // A credential cache over a fresh cell, on the test host's platform.
 const credentialCache = (io: AnthropicCredentialIO) => {
   const host = testHostFacts().host

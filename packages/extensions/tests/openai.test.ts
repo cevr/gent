@@ -8,7 +8,6 @@ import {
   Fiber,
   Layer,
   Option,
-  Predicate,
   Ref,
   Schema,
   Semaphore,
@@ -42,11 +41,16 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/http"
-import { EncodeError, HttpClientError, TransportError } from "effect/http/HttpClientError"
+import { EncodeError, HttpClientError } from "effect/http/HttpClientError"
 import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import { e2ePreset } from "./helpers/test-preset.js"
+import {
+  type FakeClientState,
+  makeFakeClient,
+  respondFirstWith,
+} from "./helpers/fake-http-client.js"
 import {
   type CapturedRequest,
   fakeFetchLayer,
@@ -746,70 +750,11 @@ describe("OpenAI device-code login", () => {
 /**
  * codexClient — auth-headers middleware.
  *
- * Builds a fake `HttpClient` (via `HttpClient.make`) that captures
- * incoming requests and returns canned responses. The transform under
- * test wraps that fake client; tests assert that the headers seen by
- * the fake match the expected ChatGPT OAuth shape.
- *
- * No global fetch swap; the fake is a real `HttpClient.HttpClient`
- * passed in directly — same composition production uses.
+ * The transform under test wraps the fake client (`helpers/fake-http-client.ts`),
+ * which records each request and returns canned responses; tests assert that
+ * the headers the fake sees match the expected ChatGPT OAuth shape.
  */
-// ── Fake HttpClient ──
-interface CapturedRequestCodexTransform {
-  url: string
-  method: string
-  headers: Record<string, string>
-  body?: string
-}
-interface TransportFailure {
-  readonly _tag: "TransportFailure"
-  readonly message: string
-}
-const hasTransportFailureTag = Predicate.isTagged("TransportFailure")
-const isTransportFailure = (v: Response | TransportFailure): v is TransportFailure =>
-  hasTransportFailureTag(v)
-interface FakeClientState {
-  captured: Array<CapturedRequestCodexTransform>
-  responder: (call: number) => Response | TransportFailure
-}
-const respondFirstWith =
-  (first: Response | TransportFailure, later: Response | TransportFailure) =>
-  (call: number): Response | TransportFailure => {
-    if (call === 0) return first
-    return later
-  }
-const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
-  HttpClient.make((request) => {
-    const headersObj: Record<string, string> = {}
-    for (const [key, value] of Object.entries(request.headers)) {
-      if (Schema.is(Schema.String)(value)) headersObj[key] = value
-    }
-    let bodyText = Option.none<string>()
-    if (request.body._tag === "Uint8Array") {
-      bodyText = Option.some(new TextDecoder().decode(request.body.body))
-    } else if (request.body._tag === "Raw" && Schema.is(Schema.String)(request.body.body)) {
-      bodyText = Option.some(request.body.body)
-    }
-    state.captured.push({
-      url: request.url,
-      method: request.method,
-      headers: headersObj,
-      body: Option.getOrUndefined(bodyText),
-    })
-    const result = state.responder(state.captured.length - 1)
-    if (isTransportFailure(result)) {
-      return Effect.fail(
-        new HttpClientError({
-          reason: new TransportError({
-            request,
-            cause: result,
-            description: result.message,
-          }),
-        }),
-      )
-    }
-    return Effect.succeed(HttpClientResponse.fromWeb(request, result))
-  })
+
 /**
  * The SDK's step over the Codex client, as `OpenAiClient.layer` runs it: the
  * client sees the relative path the SDK posts, then the Codex base is prefixed.
