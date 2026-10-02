@@ -1,6 +1,7 @@
 import {
   ByteSize,
   Cause,
+  Clock,
   Context,
   Crypto,
   DateTime,
@@ -30,6 +31,7 @@ import {
   type ExtensionContextService,
   ExtensionHost,
   ExtensionId,
+  runProcess,
   headChars,
   headTailChars,
   lineCount,
@@ -127,14 +129,34 @@ interface BackgroundBashStorageService {
   readonly markInterrupted: (
     key: BackgroundBashJobKeyFields,
   ) => Effect.Effect<void, BackgroundBashStorageError>
-  /** Marks the running jobs an earlier server process started as interrupted. */
-  readonly reconcileInterrupted: Effect.Effect<void, BackgroundBashStorageError>
+  /**
+   * Records the process a running job started: its pid and its start time
+   * (`processStartIdentity`), so a later server can tell that pid still
+   * names this job's process.
+   */
+  readonly recordProcess: (
+    key: BackgroundBashJobKeyFields,
+    process: JobProcess,
+  ) => Effect.Effect<void, BackgroundBashStorageError>
+  /** The jobs an earlier server process left running that recorded their process. */
+  readonly staleProcesses: Effect.Effect<ReadonlyArray<JobProcess>, BackgroundBashStorageError>
+  /**
+   * Marks the running jobs an earlier server process started as interrupted.
+   * Run after `staleProcesses` were stopped: a job that recorded its process
+   * is not running, unless its pid is in `unstopped`; one that did not record
+   * its process, or could not be stopped, may still run.
+   */
+  readonly reconcileInterrupted: (
+    unstopped: ReadonlyArray<number>,
+  ) => Effect.Effect<void, BackgroundBashStorageError>
   /** The branch's jobs that did not finish and no answered turn has read, oldest first. */
   readonly interruptedJobs: (branch: BackgroundBashBranch) => Effect.Effect<
     ReadonlyArray<{
       readonly toolCallId: ToolCallId
       readonly command: string
       readonly outputFile?: string
+      /** A restart could not tell whether its process still runs. */
+      readonly mayStillRun: boolean
     }>,
     BackgroundBashStorageError
   >
@@ -165,6 +187,18 @@ interface BackgroundBashBranch {
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
+
+/** The process a job started: the group leader's pid and its start time. */
+interface JobProcess {
+  readonly pid: number
+  readonly startIdentity: string
+}
+
+/** The message of a job a restart found running and stopped, or found gone. */
+const RESTART_STOPPED_MESSAGE = "Background command stopped when the server restarted"
+/** The message of a job a restart found running with no process it could check. */
+const RESTART_UNCHECKED_MESSAGE =
+  "Background command may still be running: the server restarted and could not check its process"
 
 const mapError = (message: string) => (cause: unknown) =>
   new BackgroundBashStorageError({ message, cause })
@@ -241,6 +275,8 @@ export class BackgroundBashStorage extends Context.Service<
               notice_read_at INTEGER,
               undelivered_at INTEGER,
               output_file TEXT,
+              pid INTEGER,
+              process_start_id TEXT,
               PRIMARY KEY (session_id, branch_id, tool_call_id)
             )
           `,
@@ -258,6 +294,10 @@ export class BackgroundBashStorage extends Context.Service<
         // NULL belongs to the earlier sanitized layout. New claims retain
         // their exact artifact pointer even if opening the file fails or stops.
         yield* addBackgroundBashColumn(columns, "output_file", "TEXT")
+        // NULL: the job recorded no process (an earlier build, or a start time
+        // that could not be read), so a restart cannot check it.
+        yield* addBackgroundBashColumn(columns, "pid", "INTEGER")
+        yield* addBackgroundBashColumn(columns, "process_start_id", "TEXT")
         // The server process that owns the jobs this layer starts: every
         // profile in one process shares it, a restarted server has another.
         const generation = yield* Effect.sync(() => String(performance.timeOrigin))
@@ -375,14 +415,42 @@ export class BackgroundBashStorage extends Context.Service<
             Effect.mapError(mapError("Failed to mark background bash job interrupted")),
           ),
 
+          recordProcess: Effect.fn("BackgroundBashStorage.recordProcess")(
+            function* (key, process) {
+              yield* sql`
+                UPDATE background_bash_jobs
+                SET pid = ${process.pid},
+                    process_start_id = ${process.startIdentity}
+                WHERE session_id = ${key.sessionId}
+                  AND branch_id = ${key.branchId}
+                  AND tool_call_id = ${key.toolCallId}
+                  AND status = 'running'
+              `
+            },
+            Effect.mapError(mapError("Failed to record background bash job process")),
+          ),
+
+          staleProcesses: Effect.gen(function* () {
+            const rows = yield* sql<{ readonly pid: number; readonly process_start_id: string }>`
+              SELECT pid, process_start_id
+              FROM background_bash_jobs
+              WHERE status = 'running'
+                AND (owner_generation IS NULL OR owner_generation != ${generation})
+                AND pid IS NOT NULL
+                AND process_start_id IS NOT NULL
+            `
+            return rows.map((row) => ({ pid: row.pid, startIdentity: row.process_start_id }))
+          }).pipe(Effect.mapError(mapError("Failed to read stale background bash processes"))),
+
           interruptedJobs: Effect.fn("BackgroundBashStorage.interruptedJobs")(
             function* (branch) {
               const rows = yield* sql<{
                 readonly tool_call_id: string
                 readonly command: string
                 readonly output_file: BackgroundBashJobRow["output_file"]
+                readonly message: BackgroundBashJobRow["message"]
               }>`
-                SELECT tool_call_id, command, output_file
+                SELECT tool_call_id, command, output_file, message
                 FROM background_bash_jobs
                 WHERE session_id = ${branch.sessionId}
                   AND branch_id = ${branch.branchId}
@@ -394,6 +462,7 @@ export class BackgroundBashStorage extends Context.Service<
                 toolCallId: ToolCallId.make(row.tool_call_id),
                 command: row.command,
                 outputFile: Option.getOrUndefined(Option.fromNullishOr(row.output_file)),
+                mayStillRun: row.message === RESTART_UNCHECKED_MESSAGE,
               }))
             },
             Effect.mapError(mapError("Failed to read interrupted background bash jobs")),
@@ -462,17 +531,25 @@ export class BackgroundBashStorage extends Context.Service<
             Effect.mapError(mapError("Failed to mark background bash notices read")),
           ),
 
-          reconcileInterrupted: Effect.gen(function* () {
-            const completedAt = (yield* DateTime.nowAsDate).getTime()
-            yield* sql`
-              UPDATE background_bash_jobs
-              SET status = 'interrupted',
-                  completed_at = ${completedAt},
-                  message = 'Background command interrupted by server restart'
-              WHERE status = 'running'
-                AND (owner_generation IS NULL OR owner_generation != ${generation})
-            `
-          }).pipe(
+          reconcileInterrupted: Effect.fn("BackgroundBashStorage.reconcileInterrupted")(
+            function* (unstopped: ReadonlyArray<number>) {
+              const completedAt = (yield* DateTime.nowAsDate).getTime()
+              let stopped = sql`pid IS NOT NULL AND process_start_id IS NOT NULL`
+              if (unstopped.length > 0) {
+                stopped = sql`pid IS NOT NULL AND process_start_id IS NOT NULL AND pid NOT IN ${sql.in(unstopped)}`
+              }
+              yield* sql`
+                UPDATE background_bash_jobs
+                SET status = 'interrupted',
+                    completed_at = ${completedAt},
+                    message = CASE
+                      WHEN ${stopped} THEN ${RESTART_STOPPED_MESSAGE}
+                      ELSE ${RESTART_UNCHECKED_MESSAGE}
+                    END
+                WHERE status = 'running'
+                  AND (owner_generation IS NULL OR owner_generation != ${generation})
+              `
+            },
             Effect.mapError(mapError("Failed to reconcile interrupted background bash jobs")),
           ),
         })
@@ -863,14 +940,75 @@ interface OutputSinks {
   readonly stderr: (text: string) => Effect.Effect<void>
 }
 
+const PROCESS_CHECK_TIMEOUT = Duration.seconds(5)
+
+/**
+ * The start time of process `pid` as `ps` prints it, in a fixed locale and
+ * zone, or none when no such process runs. A pid with the same start time is
+ * the same process: the system reuses a pid only after its process ended.
+ */
+const processStartIdentity = (pid: number) =>
+  runProcess("ps", ["-o", "lstart=", "-p", String(pid)], {
+    env: { LC_ALL: "C", TZ: "UTC0" },
+    extendEnv: true,
+    timeout: PROCESS_CHECK_TIMEOUT,
+  }).pipe(
+    Effect.map((result) =>
+      Option.some(result.stdout.trim()).pipe(
+        Option.filter((identity) => result.exitCode === 0 && identity !== ""),
+      ),
+    ),
+  )
+
+/** Send `signal` to process group `pid`; true when the group took it. */
+const signalProcessGroup = (pid: number, signal: "TERM" | "KILL" | "0") =>
+  runProcess("kill", [`-${signal}`, "--", `-${pid}`], { timeout: PROCESS_CHECK_TIMEOUT }).pipe(
+    Effect.map((result) => result.exitCode === 0),
+  )
+
+/**
+ * Stop the process group an earlier server left running, when its leader is
+ * still the recorded process: SIGTERM, then SIGKILL after `SIGKILL_DELAY_MS`.
+ * True when no process of the job runs afterwards.
+ */
+const stopStaleProcess = (job: JobProcess) =>
+  Effect.gen(function* () {
+    const identity = yield* processStartIdentity(job.pid)
+    // Another process took the pid, or none has it: the job's leader is gone.
+    if (Option.getOrUndefined(identity) !== job.startIdentity) return true
+    if (!(yield* signalProcessGroup(job.pid, "TERM"))) return true
+    const deadline = (yield* Clock.currentTimeMillis) + SIGKILL_DELAY_MS
+    while ((yield* Clock.currentTimeMillis) < deadline) {
+      if (!(yield* signalProcessGroup(job.pid, "0"))) return true
+      yield* Effect.sleep(Duration.millis(100))
+    }
+    yield* signalProcessGroup(job.pid, "KILL")
+    return !(yield* signalProcessGroup(job.pid, "0"))
+  }).pipe(
+    Effect.catchTag("ProcessError", (error) =>
+      Effect.logWarning("exec-tools.stale-process.stop.failed").pipe(
+        Effect.annotateLogs({ pid: job.pid, error: error.message }),
+        Effect.as(false),
+      ),
+    ),
+  )
+
 /**
  * Spawn `bash -c <command>`: the one spawn every shell command shares. Each
  * stream's text goes to its sink as it arrives, one piece at a time, in
- * arrival order across the two; nothing else is kept. The scope owns the
- * spawn finalizer: closing it kills the process group via SIGTERM, with
- * SIGKILL after `SIGKILL_DELAY_MS`.
+ * arrival order across the two; nothing else is kept. `started` runs beside
+ * the streams with the pid of `bash`, which leads its own process group. The
+ * scope owns the spawn finalizer: closing it ends the process group via
+ * SIGTERM, with SIGKILL after `SIGKILL_DELAY_MS`.
  */
-const spawnBashCommand = (command: string, cwd: Option.Option<string>, sinks: OutputSinks) =>
+const spawnBashCommand = (
+  command: string,
+  cwd: Option.Option<string>,
+  sinks: OutputSinks,
+  started: (
+    pid: number,
+  ) => Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner> = () => Effect.void,
+) =>
   Effect.gen(function* () {
     const handle = yield* ChildProcess.make("bash", ["-c", command], {
       cwd: Option.getOrUndefined(cwd),
@@ -908,6 +1046,7 @@ const spawnBashCommand = (command: string, cwd: Option.Option<string>, sinks: Ou
           Effect.andThen(Effect.suspend(() => deliver(sinks.stdout, stdout.decode()))),
           Effect.andThen(Effect.suspend(() => deliver(sinks.stderr, stderr.decode()))),
         ),
+        started(handle.pid),
       ],
       { concurrency: "unbounded" },
     )
@@ -988,10 +1127,15 @@ export const runBashCommand = (
 
 /**
  * Spawn a background job. Its stdout and stderr go to `file` from the start,
- * in arrival order; memory keeps the ends. The scope owns the process and
- * the open file.
+ * in arrival order; memory keeps the ends. `started` gets the job's pid. The
+ * scope owns the process and the open file.
  */
-const streamBackgroundCommand = (command: string, cwd: Option.Option<string>, file: string) =>
+const streamBackgroundCommand = (
+  command: string,
+  cwd: Option.Option<string>,
+  file: string,
+  started: (pid: number) => Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner>,
+) =>
   Effect.gen(function* () {
     const sink = yield* makeOutputFile(file, 0)
     yield* sink.open
@@ -1001,7 +1145,12 @@ const streamBackgroundCommand = (command: string, cwd: Option.Option<string>, fi
         output = appendOutput(output, text, jobOutputEndChars)
         return sink.write(text)
       })
-    const exitCode = yield* spawnBashCommand(command, cwd, { stdout: record, stderr: record })
+    const exitCode = yield* spawnBashCommand(
+      command,
+      cwd,
+      { stdout: record, stderr: record },
+      started,
+    )
     const job: JobOutput = { ...output, file: sink.written() }
     return { exitCode, output: job }
   })
@@ -1140,9 +1289,12 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const interrupted = jobNotice(stopped, {
     id: "exec-tools-interrupted",
     intro:
-      "# Interrupted background commands\n\nThese background commands stopped before they finished (a server restart or a reload). They are not running. A file named below holds only the output written before the stop; output after that is lost. Tell the user which commands did not finish; start one again only when the user asks for it.",
-    line: (job) =>
-      `- \`${noticeCommand(job.command)}\` · call ${job.toolCallId} · ${saved.get(job.toolCallId) ?? "no output was saved"}`,
+      "# Interrupted background commands\n\nThese background commands stopped before they finished (a server restart or a reload). They are not running, except one marked as possibly still running. A file named below holds only the output written before the stop; output after that is lost. Tell the user which commands did not finish; start one again only when the user asks for it.",
+    line: (job) => {
+      let state = ""
+      if (job.mayStillRun) state = " · may still be running: check before starting it again"
+      return `- \`${noticeCommand(job.command)}\` · call ${job.toolCallId}${state} · ${saved.get(job.toolCallId) ?? "no output was saved"}`
+    },
     rest: "interrupted commands",
   })
   const finished = yield* storage.undeliveredJobs(branch)
@@ -1233,7 +1385,30 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
       target: BackgroundBashTarget,
     ) {
       const file = target.outputFile
-      const { exitCode, output } = yield* streamBackgroundCommand(job.command, job.cwd, file).pipe(
+      // A server that ends without its finalizers leaves the process behind;
+      // the row names it so the next server can stop it. A failed record
+      // leaves the job running, and a restart reports it as unchecked.
+      const recordProcess = (pid: number) =>
+        processStartIdentity(pid).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.void,
+              onSome: (startIdentity) =>
+                storage.recordProcess(backgroundJobKeyFields(target), { pid, startIdentity }),
+            }),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("exec-tools.job-process.record.failed").pipe(
+              Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+            ),
+          ),
+        )
+      const { exitCode, output } = yield* streamBackgroundCommand(
+        job.command,
+        job.cwd,
+        file,
+        recordProcess,
+      ).pipe(
         Effect.scoped,
         Effect.catchTag("PlatformError", (e) =>
           Effect.fail(
@@ -1499,13 +1674,17 @@ export const BashTool = tool({
 
 const EXEC_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/exec-tools")
 
-// A job still marked running that an earlier server process started belongs
-// to a process that is gone: mark it interrupted before the supervisor takes
-// new work. A job this process runs stays running when another profile builds.
+// A job still marked running that an earlier server process started has lost
+// its server. A crash skips the finalizers, so its process may still run:
+// stop each recorded process group whose leader is still the recorded
+// process, then mark the jobs interrupted before the supervisor takes new
+// work. A job this process runs stays running when another profile builds.
 const ReconcileInterruptedJobs = Layer.effectDiscard(
   Effect.gen(function* () {
     const storage = yield* BackgroundBashStorage
-    yield* storage.reconcileInterrupted
+    const stale = yield* storage.staleProcesses
+    const stopped = yield* Effect.forEach(stale, stopStaleProcess, { concurrency: 8 })
+    yield* storage.reconcileInterrupted(stale.filter((_, i) => !stopped[i]).map((job) => job.pid))
   }),
 )
 

@@ -61,11 +61,12 @@ import {
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { BunPlatformLive } from "@gent/core/host"
+import { BunPlatformLive, GentPlatform } from "@gent/core/host"
 import { ExtensionServiceError, maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/sql"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import type * as Prompt from "effect/ai/Prompt"
+import { ChildProcess } from "effect/process"
 import * as AiError from "effect/ai/AiError"
 
 const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
@@ -1198,6 +1199,18 @@ describe("BashTool execution", () => {
           ctx,
         ).pipe(Effect.provideContext(firstContext))
         expect(started.exitCode).toBe(0)
+        // The row names the job's process before the server stops.
+        yield* waitFor(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            return yield* sql<{
+              readonly recorded: number
+            }>`SELECT COUNT(*) AS recorded FROM background_bash_jobs WHERE tool_call_id = 'tc-restart' AND pid IS NOT NULL`
+          }).pipe(Effect.provide(storageLayer)),
+          (rows) => rows.some((row) => row.recorded > 0),
+          5_000,
+          "the job's recorded process",
+        )
         yield* Scope.close(scope, Exit.void)
         // The server restarts: the job belongs to the process that is gone.
         yield* Effect.gen(function* () {
@@ -1230,6 +1243,7 @@ describe("BashTool execution", () => {
             toolCallId: ToolCallId.make("tc-restart"),
             command: "sleep 2; printf should-not-arrive",
             outputFile: startedOutputFile(started.stdout),
+            mayStillRun: false,
           },
         ])
       }).pipe(withProcessTimeout),
@@ -1295,7 +1309,7 @@ describe("BashTool execution", () => {
       `
       const claim = yield* Effect.gen(function* () {
         const storage = yield* BackgroundBashStorage
-        yield* storage.reconcileInterrupted
+        yield* storage.reconcileInterrupted([])
         return yield* storage.claimStart({
           sessionId: SessionId.make("s"),
           branchId: BranchId.make("b"),
@@ -1352,7 +1366,7 @@ describe("BashTool execution", () => {
         const branch = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
         const unread = yield* Effect.gen(function* () {
           const storage = yield* BackgroundBashStorage
-          yield* storage.reconcileInterrupted
+          yield* storage.reconcileInterrupted([])
           const before = yield* storage.interruptedJobs(branch)
           yield* storage.markNoticesRead(branch, [
             ToolCallId.make("earlier"),
@@ -1360,9 +1374,10 @@ describe("BashTool execution", () => {
           ])
           return { before, after: yield* storage.interruptedJobs(branch) }
         }).pipe(Effect.provide(BackgroundBashStorage.Live))
+        // `running` recorded no process, so nothing tells whether it still runs.
         expect(unread.before).toEqual([
-          { toolCallId: ToolCallId.make("earlier"), command: "sleep 8" },
-          { toolCallId: ToolCallId.make("running"), command: "sleep 9" },
+          { toolCallId: ToolCallId.make("earlier"), command: "sleep 8", mayStillRun: false },
+          { toolCallId: ToolCallId.make("running"), command: "sleep 9", mayStillRun: true },
         ])
         expect(unread.after).toEqual([])
       }).pipe(
@@ -2559,6 +2574,125 @@ describe("a background job the server stopped", () => {
         if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
       }).pipe(withProcessTimeout),
     processTestTimeout,
+  )
+
+  it.scopedLive.layer(BunPlatformLive)(
+    "a quiet job that outlived a crashed server stops when the next server starts",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const platform = yield* GentPlatform
+        const directory = yield* fs.realPath(yield* makeTempDirectoryScoped("gent-bg-crash-"))
+        const storagePath = `${directory}/gent.db`
+        const pidFile = `${directory}/job.pid`
+        // Quiet: the job writes nothing to the pipe the dead server held, so
+        // no write ends it.
+        const command = `echo $$ > ${pidFile}; sleep 30; touch ${directory}/late`
+        const hostEntry = yield* path.fromFileUrl(
+          new URL("./helpers/background-bash-host.ts", import.meta.url),
+        )
+        const host = yield* ChildProcess.make(yield* platform.execPath, [hostEntry], {
+          cwd: directory,
+          forceKillAfter: "2 seconds",
+          env: { BG_STORAGE_PATH: storagePath, BG_HOME: directory, BG_COMMAND: command },
+          extendEnv: true,
+          stdout: "ignore",
+          stderr: "inherit",
+        })
+        const pid = Number(
+          yield* waitFor(
+            fs.readFileString(pidFile).pipe(Effect.orElseSucceed(() => "")),
+            (text) => text.trim() !== "",
+            10_000,
+            "the job's pid",
+          ),
+        )
+        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+        // A red run must not leave the job's group behind.
+        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-pid, "SIGKILL")))
+        const storageLayer = SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
+          Layer.provide(BunPlatformLive),
+        )
+        // The host names the job's process in the row before it crashes.
+        yield* waitFor(
+          Effect.gen(function* () {
+            return yield* (yield* BackgroundBashStorage).staleProcesses
+          }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)))),
+          (processes) => processes.some((job) => job.pid === pid),
+          10_000,
+          "the job's recorded process",
+        )
+        yield* host.kill({ killSignal: "SIGKILL" })
+        yield* host.exitCode.pipe(Effect.ignore)
+        // The server died without a finalizer: the job runs on.
+        yield* platform.signal(pid, 0)
+
+        // The next server's background resource builds over the same store.
+        const unread = yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          return yield* storage.interruptedJobs({
+            sessionId: stubCtx.sessionId,
+            branchId: BranchId.make("test-branch"),
+          })
+        }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+
+        // Every process of the job's group is gone, and the notice says it stopped.
+        yield* waitFor(
+          platform.signal(-pid, 0).pipe(Effect.exit),
+          Exit.isFailure,
+          5_000,
+          "the job's process group stopped",
+        )
+        expect(yield* fs.exists(`${directory}/late`)).toBe(false)
+        expect(unread).toMatchObject([
+          { toolCallId: ToolCallId.make("crashed-host-job"), command, mayStillRun: false },
+        ])
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive.layer(BunPlatformLive)(
+    "a restart leaves alone a process that took a stale job's pid",
+    () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const directory = yield* makeTempDirectoryScoped("gent-bg-reused-pid-")
+        // A live process the job does not own: same pid, another start time.
+        const other = yield* ChildProcess.make("sleep", ["30"], {
+          forceKillAfter: "2 seconds",
+          stdout: "ignore",
+          stderr: "ignore",
+        })
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `${directory}/gent.db`,
+          Layer.empty,
+          {},
+        ).pipe(Layer.provide(BunPlatformLive))
+        yield* Effect.gen(function* () {
+          yield* BackgroundBashStorage
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`
+            INSERT INTO background_bash_jobs
+              (session_id, branch_id, tool_call_id, command, status, started_at, owner_generation, pid, process_start_id)
+            VALUES ('s', 'b', 'reused', 'sleep 30', 'running', 0, 'earlier-process', ${other.pid}, 'Thu Jan  1 00:00:00 1970')
+          `
+        }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provideMerge(storageLayer))))
+
+        const unread = yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          return yield* storage.interruptedJobs({
+            sessionId: SessionId.make("s"),
+            branchId: BranchId.make("b"),
+          })
+        }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+
+        yield* platform.signal(other.pid, 0)
+        expect(unread).toMatchObject([
+          { toolCallId: ToolCallId.make("reused"), mayStillRun: false },
+        ])
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 
   it.scopedLive.layer(BunFileSystem.layer)(
