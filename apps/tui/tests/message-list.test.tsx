@@ -20,6 +20,7 @@ import {
   promptOnScreen,
   readerPrompt,
   reasoningMarkdown,
+  type AssistantSegment,
   type RetryOutcome,
   type SessionEvent,
   type SessionItem,
@@ -486,7 +487,7 @@ const cellBindingsMessage = (
   bindings: ReadonlyArray<string>,
   bindingCount: number,
 ): ListMessage =>
-  assistantToolMessage("assistant-cell", {
+  assistantToolMessage(`assistant-${id}`, {
     id,
     toolName: "cell",
     status: "completed",
@@ -1948,19 +1949,20 @@ describe("bash row line counts", () => {
           status: "background",
         }),
       ]
-      // The open rows (the full level) count lines; the preview rows name the command only.
+      // The open rows (the full level) count lines; the preview rows name the
+      // command only. The four steps are one run: one group, a row each.
       const setup = yield* renderScoped(
         () => <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />,
         { width: 80, height: 60 },
       )
       const rows = renderFrame(setup)
         .split("\n")
-        .filter((line) => line.includes("└ bash"))
+        .filter((line) => /[├└] bash/.test(line))
         .map((line) => line.trim().split(/\s{2,}/)[0])
       expect(rows).toEqual([
-        "└ bash echo hello · ↓ 1 line",
-        "└ bash echo hello · ↓ 2 lines",
-        "└ bash echo hello",
+        "├ bash echo hello · ↓ 1 line",
+        "├ bash echo hello · ↓ 2 lines",
+        "├ bash echo hello",
         "└ bash echo hello",
       ])
     }),
@@ -2191,11 +2193,18 @@ describe("transcript block spacing", () => {
     cellStep(3, "git log --oneline -1", "497f1c6 ledgerline\n"),
     answer,
   ]
-  const views: ReadonlyArray<{ disclosure: DisclosureLevel; fullDetail: boolean }> = [
-    { disclosure: "collapsed", fullDetail: false },
-    { disclosure: "preview", fullDetail: false },
-    { disclosure: "full", fullDetail: false },
-    { disclosure: "collapsed", fullDetail: true },
+  // The three tool-only steps are one run, one block, then the answer. The
+  // full level parts the run's open rows by a blank line each, and the
+  // transcript view (full detail) draws each step as its own block.
+  const views: ReadonlyArray<{
+    disclosure: DisclosureLevel
+    fullDetail: boolean
+    blocks: number
+  }> = [
+    { disclosure: "collapsed", fullDetail: false, blocks: 2 },
+    { disclosure: "preview", fullDetail: false, blocks: 2 },
+    { disclosure: "full", fullDetail: false, blocks: items.length },
+    { disclosure: "collapsed", fullDetail: true, blocks: items.length },
   ]
   for (const view of views) {
     it.scopedLive(
@@ -2222,7 +2231,7 @@ describe("transcript block spacing", () => {
             .split(/[^\n]+/)
             .map((run) => Math.max(0, run.length - 1))
             .filter((run) => run > 0)
-          expect(blankRuns).toEqual(Array.from({ length: items.length - 1 }, () => 1))
+          expect(blankRuns).toEqual(Array.from({ length: view.blocks - 1 }, () => 1))
           expect(body.findIndex((line) => line.trim() === "done")).toBeGreaterThan(0)
         }),
     )
@@ -5202,7 +5211,8 @@ describe("tool group rows", () => {
         80,
         "/work/other",
       )
-      expect(callLabels(rows)).toEqual([`└ Read ${cwd}/config.ts`, "└ Read src/app.tsx"])
+      // Two tool-only steps are one run: one row folds both reads.
+      expect(callLabels(rows)).toEqual([`└ Read ${cwd}/config.ts, src/app.tsx`])
       const ReadToolRenderer = builtinRenderer("read")
       const frame = yield* renderScoped(
         () => <ReadToolRenderer expanded={false} toolCall={inSession} />,
@@ -5301,5 +5311,261 @@ describe("message rows", () => {
       expect(frame).toContain("Stop and switch agent")
       expect(frame).toContain("Considering current todo state")
     }),
+  )
+})
+
+// ── tool runs across steps ──────────────────────────────────────────────────
+
+describe("tool runs across steps", () => {
+  /** One step: a cell whose ops are commands, then the segments given after it. */
+  const step = (
+    id: string,
+    commands: ReadonlyArray<string>,
+    options: {
+      readonly before?: ReadonlyArray<AssistantSegment>
+      readonly after?: ReadonlyArray<AssistantSegment>
+      readonly tool?: string
+      readonly stdout?: string
+    } = {},
+  ): ListMessage => {
+    const tool = options.tool ?? "bash"
+    const toolCall: ToolCall = {
+      id: `${id}-cell`,
+      toolName: "cell",
+      status: "completed",
+      input: { code: "await tools.bash({ command: 'x' })" },
+      summary: absent,
+      output: encodeJson({ display: "", bindings: [], truncated: false }),
+      operations: commands.map((command, index) => ({
+        id: `${id}-op-${index}`,
+        toolName: tool,
+        status: "completed",
+        input: { command, question: command, path: command },
+        summary: absent,
+        output: encodeJson({
+          stdout: options.stdout ?? `${command} ok\n`,
+          stderr: "",
+          exitCode: 0,
+        }),
+      })),
+    }
+    return {
+      _tag: "regular-message",
+      id,
+      role: "assistant",
+      content: "",
+      reasoning: "",
+      images: [],
+      createdAt: 0,
+      segments: [
+        ...(options.before ?? []),
+        { _tag: "tool-call", toolCall },
+        ...(options.after ?? []),
+      ],
+    }
+  }
+  const text = (content: string): AssistantSegment => ({ _tag: "text", content })
+  const reasoning = (content: string): AssistantSegment => ({ _tag: "reasoning", content })
+  const headers = (frame: string) =>
+    frame
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => /^[●✗] \d+ tools?\b/.test(line))
+  const draw = (items: SessionItem[], disclosure: DisclosureLevel, width = 100) =>
+    renderScoped(
+      () => <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />,
+      { width, height: 60 },
+    ).pipe(Effect.map(renderFrame))
+
+  it.scopedLive("the tool-only steps of a turn draw one group", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        clientPrompt("run-prompt", "check the tree"),
+        step("s1", ["git status"]),
+        step("s2", ["bun test", "bun run lint"]),
+        step("s3", ["git diff"], { after: [text("All clean.")] }),
+      ]
+      const collapsed = yield* draw(items, "collapsed")
+      expect(headers(collapsed)).toEqual(["● 4 tools · 4 commands"])
+      expect(collapsed).toContain("All clean.")
+      const preview = yield* draw(items, "preview")
+      expect(preview).toContain("└ Ran git status, bun test, bun run lint, git diff")
+    }),
+  )
+
+  it.scopedLive("answer text between steps ends a run, and a new one starts after it", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        step("t1", ["git status"]),
+        step("t2", ["bun test"], { after: [text("Tests pass; now the lint.")] }),
+        step("t3", ["bun run lint"]),
+        step("t4", ["git diff"]),
+      ]
+      const frame = yield* draw(items, "collapsed")
+      expect(headers(frame)).toEqual(["● 2 tools · 2 commands", "● 2 tools · 2 commands"])
+      const first = frame.indexOf("● 2 tools")
+      const prose = frame.indexOf("Tests pass")
+      expect(prose).toBeGreaterThan(first)
+      expect(frame.indexOf("● 2 tools", first + 1)).toBeGreaterThan(prose)
+    }),
+  )
+
+  it.scopedLive("an ask ends a run after its call", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        step("a1", ["git status"]),
+        step("a2", ["Ship it?"], { tool: "ask_user" }),
+        step("a3", ["git push"]),
+      ]
+      const frame = yield* draw(items, "preview")
+      expect(headers(frame)).toEqual(["● 2 tools · 1 command · 1 ask_user", "● 1 tool · 1 command"])
+      expect(frame).toContain("└ Asked Ship it?")
+    }),
+  )
+
+  it.scopedLive("reasoning between steps stays in the run and shows at the full level", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        step("r1", ["git status"], { before: [reasoning("FIRST-THOUGHT")] }),
+        step("r2", ["bun test"], { before: [reasoning("SECOND-THOUGHT"), text("  ")] }),
+      ]
+      const collapsed = yield* draw(items, "collapsed")
+      expect(headers(collapsed)).toEqual(["● 2 tools · 2 commands"])
+      // The thought before the run draws as before; the one inside it waits for the full level.
+      expect(collapsed).toContain("FIRST-THOUGHT")
+      expect(collapsed).not.toContain("SECOND-THOUGHT")
+      const full = yield* draw(items, "full")
+      const lines = full.split("\n")
+      const thought = lines.findIndex((line) => line.includes("SECOND-THOUGHT"))
+      const secondRow = lines.findIndex((line) => line.includes("└ cell"))
+      expect(thought).toBeGreaterThan(lines.findIndex((line) => line.includes("├ cell")))
+      expect(secondRow).toBeGreaterThan(thought)
+    }),
+  )
+
+  it.scopedLive("a run's rows clip to one line each at 60 columns", () =>
+    Effect.gen(function* () {
+      const paths = Array.from({ length: 6 }, (_, index) => `src/module-${index}/file.ts`)
+      const items: SessionItem[] = [
+        step("w1", paths.slice(0, 3), { tool: "read" }),
+        step("w2", paths.slice(3), { tool: "read" }),
+        step("w3", ["bun run test --filter a-very-long-filter-name-that-does-not-fit"]),
+      ]
+      const frame = yield* draw(items, "preview", 60)
+      const drawn = frame.split("\n").filter((line) => line.trim().length > 0)
+      expect(drawn.every((line) => line.trimEnd().length <= 60)).toBe(true)
+      expect(headers(frame)).toEqual(["● 7 tools · 6 read · 1 command"])
+      // The reads fold into one row: the subjects that fit, then a count.
+      const reads = drawn.find((line) => line.includes("├ Read")) ?? ""
+      expect(reads.trimEnd()).toMatch(/├ Read src\/module-0\/file\.ts, .* \+\d$/)
+      expect(drawn.some((line) => line.includes("└ Ran bun run test"))).toBe(true)
+    }),
+  )
+
+  it.scopedLive(
+    "native history takes a run's head only once the run ends, with every step in it",
+    () =>
+      Effect.gen(function* () {
+        const prompt = clientPrompt("history-prompt", "RUN-PROMPT")
+        const thinking = (body: string): ListMessage => ({
+          ...assistant("thinking", ""),
+          segments: [reasoning(body)],
+          draft: true,
+        })
+        const [items, setItems] = createSignal<ListMessage[]>([
+          assistant("earlier", longBody("EARLIER")),
+          prompt,
+          step("h1", ["git status"]),
+          step("h2", ["bun test"]),
+          thinking(longBody("THINKING")),
+        ])
+        const committedText: string[] = []
+        const setup = yield* renderScoped(
+          () => (
+            <Transcript
+              items={items()}
+              streaming={true}
+              onRenderer={(renderer) => {
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              }}
+            />
+          ),
+          { width: 60, height: 14 },
+        )
+        const flushUntil = (done: () => boolean) =>
+          Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({ until: done, schedule: Schedule.spaced("10 millis") }),
+            Effect.timeout("4 seconds"),
+            Effect.ignore,
+          )
+        // The prompt moves to history; the run is open (a step may still
+        // join it), so its head waits in the live view with both steps.
+        yield* flushUntil(() => committedText.join("").includes("RUN-PROMPT"))
+        expect(committedText.join("")).toContain("RUN-PROMPT")
+        expect(committedText.join("")).not.toContain("tool")
+        yield* flushUntil(() => false).pipe(Effect.timeout("300 millis"), Effect.ignore)
+        expect(committedText.join("")).not.toContain("tool")
+        // A third step joins, and the stored answer ends the run: the head
+        // moves to history once, with all three steps under one header.
+        setItems([
+          assistant("earlier", longBody("EARLIER")),
+          prompt,
+          step("h1", ["git status"]),
+          step("h2", ["bun test"]),
+          step("h3", ["git diff"]),
+          assistant("answer", longBody("ANSWER")),
+        ])
+        yield* flushUntil(() => committedText.join("").includes("ANSWER line 1"))
+        const history = committedText.join("")
+        expect(history.match(/● \d+ tools?/g)).toEqual(["● 3 tools"])
+        expect(history).toContain("● 3 tools · 3 commands")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive("a run that grows after history took its head replays history", () =>
+    Effect.gen(function* () {
+      const stdout = Array.from({ length: 40 }, (_, index) => `OUT line ${index + 1}`).join("\n")
+      const [items, setItems] = createSignal<ListMessage[]>([
+        clientPrompt("grow-prompt", "GROW-PROMPT"),
+        step("g1", ["seq 30"], { stdout }),
+      ])
+      const committedText: string[] = []
+      const setup = yield* renderScoped(
+        () => (
+          <Transcript
+            items={items()}
+            disclosure="full"
+            onRenderer={(renderer) => {
+              renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                committedText.push(committedTextOf(event))
+              })
+            }}
+          />
+        ),
+        { width: 60, height: 12 },
+      )
+      const flushUntil = (done: () => boolean) =>
+        Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({ until: done, schedule: Schedule.spaced("10 millis") }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+      // At idle the run's top rows move to history: its header with one tool.
+      yield* flushUntil(() => committedText.join("").includes("● 1 tool"))
+      expect(committedText.join("")).toContain("● 1 tool · 1 command")
+      // A step joins the run history holds: history replays with the run's new header.
+      committedText.splice(0)
+      setItems([
+        clientPrompt("grow-prompt", "GROW-PROMPT"),
+        step("g1", ["seq 30"], { stdout }),
+        step("g2", ["git diff"]),
+      ])
+      yield* flushUntil(() => committedText.join("").includes("● 2 tools"))
+      expect(committedText.join("")).toContain("● 2 tools · 2 commands")
+      expect(committedText.join("")).toContain("GROW-PROMPT")
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })

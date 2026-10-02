@@ -192,7 +192,8 @@ the activity row going at a turn's end shows kept rows, not blank ones; rows
 the tail does not fill sit above it, never above the composer. The rows above
 the canvas go to native history in order: during a turn only whole final
 items (`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits
-for its stored answer, and a message waits while a call of it runs); at idle
+for its stored answer, a message waits while a call of it runs, and the head
+of a tool run waits until the run ends); at idle
 an item's top rows too (`partialRows`; the live view cuts them off), so each
 row is in history or on screen, once. A commit shrinks the region by its rows
 first and then writes them, so they land where they were drawn; a write
@@ -248,6 +249,21 @@ row per call with its renderer body and its line counts. Inside a cell's body
 a run of one tool's ops folds into one frame (`read 30 files`), its body a
 tight list and a click opening each op's frame; the transcript view (full
 detail) draws every op on its own (`FoldOperationsProvider`).
+
+A group is one run of tool calls across the steps of a turn, as in fx
+(`projectToolRuns` in `message-list.tsx`): reasoning and blank text between
+calls do not end it; answer text, a user message, a session row, or a call
+that asks the reader (`ask_user`, `prompt`, `handoff`, in a cell's ops too)
+does. A queued follow-up and a pending retry end nothing. The run draws at its
+first tool-call segment (its head); the later steps skip the segments it took.
+The reasoning it took draws before its call at the full level only. The
+native transcript draws each item on its own, so it projects the runs once over
+every displayed item and gives them to the live view and to each history
+surface (`ToolRunsContext`). A message that heads a run is final only once the
+run has ended, holds no streamed step and no running call; its fingerprint
+holds the run's calls (`historyFingerprints`), so a run that grows after
+history took its top rows at idle replays history. The transcript view (full
+detail) groups each message's calls on their own.
 
 The transcript pins the reader's last prompt in one row (`↑ <first line>`) above
 the live tail while that prompt's own row is off screen: cut off the top of the

@@ -533,6 +533,179 @@ function UserMessage(props: MessageRowProps & { customType?: string; fullDetail:
 /** The columns an answer is indented by; its text is fitted to the rest. */
 const ANSWER_INDENT = 2
 
+// ── tool runs ───────────────────────────────────────────────────────────────
+
+/**
+ * A run of tool calls: what one group header draws. As in fx, a run spans the
+ * steps of a turn. Reasoning and blank text between its calls do not end it;
+ * answer text, an image, a user message, a session row, or an ask does.
+ */
+interface ToolRun {
+  readonly calls: ReadonlyArray<ToolCall>
+  /** The reasoning the run took from between its calls, by the id of the call it came before. */
+  readonly reasoning: ReadonlyMap<string, ReadonlyArray<string>>
+  /** Nothing after the run has ended it yet: another step may join it. */
+  readonly open: boolean
+  /** A step the run took is still a streamed answer (a `draft`) that its stored answer replaces. */
+  readonly streamed: boolean
+}
+
+/** The runs of a transcript, keyed by segment (`<message id>#<segment index>`). */
+interface ToolRuns {
+  /** The run each run's first tool-call segment draws. */
+  readonly heads: ReadonlyMap<string, ToolRun>
+  /** Segments a run draws at its head, so their own message skips them. */
+  readonly absorbed: ReadonlySet<string>
+  /** The runs each message heads, in order. */
+  readonly headedBy: ReadonlyMap<string, ReadonlyArray<ToolRun>>
+}
+
+const segmentKey = (messageId: string, index: number) => `${messageId}#${index}`
+
+/** The tools that ask the reader: the run ends after the call that holds one. */
+const ASK_TOOLS: ReadonlySet<string> = new Set(["ask_user", "prompt", "handoff"])
+
+const asksReader = (call: ToolCall): boolean =>
+  ASK_TOOLS.has(call.toolName) || (call.operations ?? []).some(asksReader)
+
+/** A run while the projection walks the transcript. */
+interface RunDraft {
+  readonly head: string
+  readonly headMessage: string
+  readonly calls: ToolCall[]
+  readonly reasoning: Map<string, ReadonlyArray<string>>
+  /** Reasoning and blank text since the last call: the run takes them only if another call joins. */
+  readonly held: { keys: string[]; reasoning: string[] }
+}
+
+/** A run while the walk may still change it. */
+interface RunState {
+  readonly draft: RunDraft
+  open: boolean
+  streamed: boolean
+}
+
+/**
+ * The tool runs of `items`. `acrossSteps` lets a run span messages and pass
+ * over reasoning; without it a run is one message's consecutive calls, as the
+ * transcript view (full detail) draws them. A queued follow-up and a pending
+ * retry sit at the transcript's end only until they take their place, so
+ * they end nothing.
+ */
+const projectToolRuns = (items: ReadonlyArray<SessionItem>, acrossSteps: boolean): ToolRuns => {
+  const drafts: RunState[] = []
+  const absorbed = new Set<string>()
+  let current = Option.none<RunState>()
+  // Whatever ends a run ends it for good: no later call joins it.
+  const close = () => {
+    Option.map(current, (entry) => {
+      entry.open = false
+    })
+    current = Option.none()
+  }
+  const takeCall = (message: StepMessage, call: ToolCall, key: string) => {
+    Option.match(current, {
+      onSome: (entry) => joinRun(entry, call, key, absorbed, message.draft === true),
+      onNone: () => {
+        const entry = startRun(call, key, message.id)
+        drafts.push(entry)
+        current = Option.some(entry)
+      },
+    })
+    if (asksReader(call)) close()
+  }
+  const takeSegment = (message: StepMessage, segment: AssistantSegment, index: number) => {
+    const key = segmentKey(message.id, index)
+    if (segment._tag === "tool-call") return takeCall(message, segment.toolCall, key)
+    if (acrossSteps && passesRun(segment) && Option.isSome(current)) {
+      return holdSegment(current.value, segment, key)
+    }
+    close()
+  }
+  for (const item of items) {
+    if (waitsInPlace(item)) continue
+    if (!isMessageItem(item) || item.role !== "assistant") {
+      close()
+      continue
+    }
+    for (const [index, segment] of (item.segments ?? []).entries()) {
+      takeSegment(item, segment, index)
+    }
+    if (!acrossSteps) close()
+  }
+  return toolRunsOf(drafts, absorbed)
+}
+
+/** The message a step comes from: its id keys the segments, and a draft marks the run streamed. */
+interface StepMessage {
+  readonly id: string
+  readonly draft?: true
+}
+
+/** A queued follow-up and a pending retry wait at the end until they take their place. */
+const waitsInPlace = (item: SessionItem): boolean => {
+  if (!isMessageItem(item)) return item._tag === "retrying" && item.outcome === "pending"
+  return item.role !== "assistant" && Predicate.isNotUndefined(item.pendingMode)
+}
+
+/** Reasoning and blank text between calls leave a run open. */
+const passesRun = (segment: AssistantSegment): boolean =>
+  segment._tag === "reasoning" || (segment._tag === "text" && segment.content.trim().length === 0)
+
+const startRun = (call: ToolCall, key: string, messageId: string): RunState => ({
+  draft: {
+    head: key,
+    headMessage: messageId,
+    calls: [call],
+    reasoning: new Map<string, ReadonlyArray<string>>(),
+    held: { keys: [], reasoning: [] },
+  },
+  open: true,
+  streamed: false,
+})
+
+/** A call joins the run, and the segments held since the last call go with it. */
+const joinRun = (
+  entry: RunState,
+  call: ToolCall,
+  key: string,
+  absorbed: Set<string>,
+  streamed: boolean,
+) => {
+  const { draft } = entry
+  draft.calls.push(call)
+  absorbed.add(key)
+  for (const held of draft.held.keys) absorbed.add(held)
+  if (draft.held.reasoning.length > 0) draft.reasoning.set(call.id, draft.held.reasoning)
+  draft.held.keys = []
+  draft.held.reasoning = []
+  if (streamed) entry.streamed = true
+}
+
+/** A segment that passes the run waits: the run takes it only if another call joins. */
+const holdSegment = (entry: RunState, segment: AssistantSegment, key: string) => {
+  entry.draft.held.keys.push(key)
+  if (segment._tag === "reasoning") entry.draft.held.reasoning.push(segment.content)
+}
+
+const toolRunsOf = (drafts: ReadonlyArray<RunState>, absorbed: ReadonlySet<string>): ToolRuns => {
+  const heads = new Map<string, ToolRun>()
+  const headedBy = new Map<string, ToolRun[]>()
+  for (const { draft, open, streamed } of drafts) {
+    const run: ToolRun = { calls: draft.calls, reasoning: draft.reasoning, open, streamed }
+    heads.set(draft.head, run)
+    headedBy.set(draft.headMessage, [...(headedBy.get(draft.headMessage) ?? []), run])
+  }
+  return { heads, absorbed, headedBy }
+}
+
+/**
+ * The transcript's runs, from the transcript that holds every item. The
+ * native transcript draws each item on its own (in the live view and on each
+ * history surface), so a run's head reads its later steps from here.
+ */
+const ToolRunsContext = createContext(Option.none<() => ToolRuns>())
+
 // ── plain answers ───────────────────────────────────────────────────────────
 
 /**
@@ -690,6 +863,8 @@ const plainRenderable = (
 const ANSWER_TABLE = { style: "grid", cellPaddingX: 1, widthMode: "content" } as const
 
 function AssistantMessage(props: {
+  id: string
+  runs: ToolRuns
   content: string
   reasoning: string
   images: ReadonlyArray<ImagePartProjection>
@@ -724,7 +899,9 @@ function AssistantMessage(props: {
       ),
     )
 
+  // A message whose every segment a run took draws nothing, not even its gap.
   const hasContent = () => {
+    if (segments().length > 0 && drawnSegments().length === 0) return false
     if (props.content.length > 0) return true
     if (props.reasoning.length > 0) return true
     if (props.images.length > 0) return true
@@ -737,20 +914,30 @@ function AssistantMessage(props: {
   }
 
   const segments = () => Option.getOrElse(Option.fromNullishOr(props.segments), () => [])
-  const groupedSegments = createMemo(() => {
-    const groups: { segment: AssistantSegment; calls: ToolCall[] }[] = []
-    for (const segment of segments()) {
-      const previous = groups.at(-1)
-      if (segment._tag === "tool-call" && previous?.segment._tag === "tool-call") {
-        previous.calls.push(segment.toolCall)
-      } else {
-        const calls: ToolCall[] = []
-        if (segment._tag === "tool-call") calls.push(segment.toolCall)
-        groups.push({ segment, calls })
-      }
-    }
-    return groups
-  })
+  // The segments this message draws: a run's first call draws the whole run,
+  // and the segments a run took (its later calls, the reasoning between them)
+  // draw there, not here.
+  const drawnSegments = createMemo(() =>
+    segments().flatMap((segment, index) => {
+      const key = segmentKey(props.id, index)
+      if (props.runs.absorbed.has(key)) return []
+      return [{ segment, run: Option.fromUndefinedOr(props.runs.heads.get(key)) }]
+    }),
+  )
+  const reasoningMarkdownBlock = (content: string) => (
+    <box flexDirection="column" marginBottom={1}>
+      <markdown
+        syntaxStyle={props.syntaxStyle()}
+        streaming
+        internalBlockMode="top-level"
+        tableOptions={ANSWER_TABLE}
+        renderNode={reasoningBlocks()}
+        content={reasoningMarkdown(content)}
+        fg={theme.textMuted}
+        conceal
+      />
+    </box>
+  )
 
   return (
     <box marginTop={contentMargin()} paddingLeft={ANSWER_INDENT} flexDirection="column">
@@ -758,32 +945,27 @@ function AssistantMessage(props: {
           no segments has no text, no reasoning, no image and no tool call to
           draw either. */}
       <Show when={segments().length > 0}>
-        <For each={groupedSegments()}>
-          {({ segment, calls }) =>
+        <For each={drawnSegments()}>
+          {({ segment, run }) =>
             Match.value(segment).pipe(
               Match.tagsExhaustive({
-                reasoning: (segment) => (
-                  <box flexDirection="column" marginBottom={1}>
-                    <markdown
-                      syntaxStyle={props.syntaxStyle()}
-                      streaming
-                      internalBlockMode="top-level"
-                      tableOptions={ANSWER_TABLE}
-                      renderNode={reasoningBlocks()}
-                      content={reasoningMarkdown(segment.content)}
-                      fg={theme.textMuted}
-                      conceal
-                    />
-                  </box>
-                ),
+                reasoning: (segment) => reasoningMarkdownBlock(segment.content),
                 image: (segment) => (
                   <text style={{ fg: theme.info }}>
                     [Image: {segment.image.mediaType.replace("image/", "")}]
                   </text>
                 ),
-                "tool-call": () => (
+                "tool-call": (segment) => (
                   <ToolCallGroup
-                    calls={calls}
+                    calls={Option.match(run, {
+                      onNone: () => [segment.toolCall],
+                      onSome: (value) => [...value.calls],
+                    })}
+                    reasoning={Option.match(run, {
+                      onNone: () => new Map<string, ReadonlyArray<string>>(),
+                      onSome: (value) => value.reasoning,
+                    })}
+                    renderReasoning={reasoningMarkdownBlock}
                     disclosure={props.disclosure}
                     fullDetail={props.fullDetail}
                   />
@@ -810,6 +992,9 @@ function AssistantMessage(props: {
 
 function ToolCallGroup(props: {
   calls: ToolCall[]
+  /** Reasoning from between the run's steps, by the id of the call it came before: the full level draws it. */
+  reasoning: ReadonlyMap<string, ReadonlyArray<string>>
+  renderReasoning: (content: string) => JSX.Element
   disclosure: DisclosureLevel
   fullDetail: boolean
 }) {
@@ -942,41 +1127,55 @@ function ToolCallGroup(props: {
                 if (text.length === 0) return ""
                 return ` · ${text}`
               }
+              // The open rows draw the reasoning a step gave before this call.
+              const reasoningBefore = () => {
+                if (!rowsOpen()) return []
+                return props.reasoning.get(call.id) ?? []
+              }
+              // Open rows draw their bodies: a blank line parts each from the last,
+              // as it parts transcript blocks.
+              const gap = () => {
+                if (rowsOpen() && index() > 0) return 1
+                return 0
+              }
               return (
-                <Show
-                  when={call.status === "error"}
-                  fallback={
-                    <box flexDirection="column">
-                      {/* The raw call id is detail: the open frame (ctrl+o) names it, the row does not. */}
-                      <box flexDirection="row">
-                        <text
-                          flexGrow={1}
-                          flexShrink={1}
-                          wrapMode="none"
-                          truncate
-                          style={{ fg: color() }}
-                        >
-                          {connector()} {call.toolName} {label()}
-                          {counts()}
-                          {status()}
-                        </text>
-                        <Show when={rowsOpen()}>
-                          <text flexShrink={0} wrapMode="none" style={{ fg: theme.textMuted }}>
-                            {" "}
-                            #{formatToolCallIdentity(call.id)}
+                <box flexDirection="column" marginTop={gap()}>
+                  <For each={reasoningBefore()}>{(content) => props.renderReasoning(content)}</For>
+                  <Show
+                    when={call.status === "error"}
+                    fallback={
+                      <box flexDirection="column">
+                        {/* The raw call id is detail: the open frame (ctrl+o) names it, the row does not. */}
+                        <box flexDirection="row">
+                          <text
+                            flexGrow={1}
+                            flexShrink={1}
+                            wrapMode="none"
+                            truncate
+                            style={{ fg: color() }}
+                          >
+                            {connector()} {call.toolName} {label()}
+                            {counts()}
+                            {status()}
                           </text>
+                          <Show when={rowsOpen()}>
+                            <text flexShrink={0} wrapMode="none" style={{ fg: theme.textMuted }}>
+                              {" "}
+                              #{formatToolCallIdentity(call.id)}
+                            </text>
+                          </Show>
+                        </box>
+                        <Show when={rowsOpen()}>
+                          <ToolFrameBody>
+                            <SingleToolCall toolCall={call} expanded={true} />
+                          </ToolFrameBody>
                         </Show>
                       </box>
-                      <Show when={rowsOpen()}>
-                        <ToolFrameBody>
-                          <SingleToolCall toolCall={call} expanded={true} />
-                        </ToolFrameBody>
-                      </Show>
-                    </box>
-                  }
-                >
-                  <SingleToolCall toolCall={call} expanded={rowsOpen()} />
-                </Show>
+                    }
+                  >
+                    <SingleToolCall toolCall={call} expanded={rowsOpen()} />
+                  </Show>
+                </box>
               )
             }}
           </For>
@@ -1038,6 +1237,17 @@ interface MessageListProps {
 }
 
 export function MessageList(props: MessageListProps) {
+  // The transcript view (full detail) draws each message's own calls. Every
+  // other view draws runs across steps: the native transcript's own, which
+  // see every item, else the runs of the items given here.
+  const shared = useContext(ToolRunsContext)
+  const runs = createMemo((): ToolRuns => {
+    if (props.fullDetail === true) return projectToolRuns(props.items, false)
+    return Option.match(shared, {
+      onNone: () => projectToolRuns(props.items, true),
+      onSome: (read) => read(),
+    })
+  })
   return (
     <FoldOperationsProvider value={props.fullDetail !== true}>
       <box flexDirection="column">
@@ -1052,6 +1262,8 @@ export function MessageList(props: MessageListProps) {
                   when={item.role === "user"}
                   fallback={
                     <AssistantMessage
+                      id={item.id}
+                      runs={runs()}
                       content={item.content}
                       reasoning={item.reasoning}
                       images={item.images}
@@ -1164,6 +1376,26 @@ export const transcriptFingerprint = (item: SessionItem): string => {
   return encodeFingerprint([item._tag, item.createdAt, item.seq])
 }
 
+/**
+ * Each item's fingerprint as history compares it. A message that heads a
+ * tool run draws the run's later steps too, so its value holds them: a run
+ * that grows after history took its head replays.
+ */
+const historyFingerprints = (
+  items: ReadonlyArray<SessionItem>,
+  runs: ToolRuns,
+): ReadonlyArray<string> =>
+  items.map((item) => {
+    const own = transcriptFingerprint(item)
+    if (!isMessageItem(item)) return own
+    const headed = runs.headedBy.get(item.id) ?? []
+    if (headed.length === 0) return own
+    return encodeFingerprint([
+      own,
+      headed.map((run) => [run.calls.map(toolFingerprint), Array.from(run.reasoning.values())]),
+    ])
+  })
+
 /** A call still running, a cell's inner operation included. */
 const isRunningCall = (call: ToolCall): boolean =>
   call.status === "running" || (call.operations ?? []).some(isRunningCall)
@@ -1172,17 +1404,23 @@ const isRunningCall = (call: ToolCall): boolean =>
  * Whether an item draws its last look, which is all history may take. While
  * a turn runs, a streamed answer waits for the stored answer that replaces
  * it, a queued follow-up has not run, a pending retry counts down, and a
- * running call has rows still to change. Once no turn runs, every item is
- * final: nothing is left to change them, and a row that does change later
- * is replayed.
+ * running call has rows still to change. A message that heads a tool run
+ * waits for the run to end: a later step's calls draw at its head, so it
+ * moves only once no step can join, none of the run's calls runs, and no
+ * step of it is still streamed. Once no turn runs, every item is final:
+ * nothing is left to change them, and a row that does change later is
+ * replayed.
  */
-const isFinalItem = (item: SessionItem, turnRunning: boolean): boolean => {
+const isFinalItem = (item: SessionItem, turnRunning: boolean, runs: ToolRuns): boolean => {
   if (!turnRunning) return true
   if (isMessageItem(item))
     return (
       item.draft !== true &&
       Predicate.isUndefined(item.pendingMode) &&
-      !messageToolCalls(item).some(isRunningCall)
+      !messageToolCalls(item).some(isRunningCall) &&
+      (runs.headedBy.get(item.id) ?? []).every(
+        (run) => !run.open && !run.streamed && !run.calls.some(isRunningCall),
+      )
     )
   if (item._tag === "retrying") return item.outcome !== "pending"
   return true
@@ -1653,6 +1891,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const unsettledTries = new Map<string, number>()
   const [displayBoundary, setDisplayBoundary] = createSignal(captureTranscriptDisplay([]))
   const displayedItems = createMemo(() => projectTranscriptDisplay(props.items, displayBoundary()))
+  /** The tool runs across the displayed items: each item draws alone, so its run comes from here. */
+  const toolRuns = createMemo(() => projectToolRuns(displayedItems(), true))
   let viewport = Option.none<ScrollBoxRenderable>()
   let settlingNative = false
   let leftRegion = Option.none<RegionPlace>()
@@ -1789,9 +2029,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
               insert(surface.root, () => (
                 <RendererContext.Provider value={surfaceRenderer}>
                   <PlainHistoryContext.Provider value={plain}>
-                    <box flexDirection="column" paddingRight={FREE_LAST_COLUMN}>
-                      {props.renderItems(items)}
-                    </box>
+                    <ToolRunsContext.Provider value={Option.some(toolRuns)}>
+                      <box flexDirection="column" paddingRight={FREE_LAST_COLUMN}>
+                        {props.renderItems(items)}
+                      </box>
+                    </ToolRunsContext.Provider>
                   </PlainHistoryContext.Provider>
                 </RendererContext.Provider>
               ))
@@ -2044,7 +2286,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     }
     if (!canCommitNatively()) return Effect.void
     const items = displayedItems()
-    const next = items.map((item) => transcriptFingerprint(item))
+    const next = historyFingerprints(items, toolRuns())
     if (!untrack(committed).every((value, index) => next[index] === value)) return Effect.void
     while (queued < items.length) {
       const item = items[queued]
@@ -2178,7 +2420,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   // top rows of an item move too, so every row is in history or on screen.
   // A measurement runs it again: what it reads per item it reads from the
   // memos below, so a growing tail costs the same in a session of any length.
-  const fingerprints = createMemo(() => displayedItems().map((item) => transcriptFingerprint(item)))
+  const fingerprints = createMemo(() => historyFingerprints(displayedItems(), toolRuns()))
   // An answer with a diagram commits once the diagram library has loaded,
   // so history never keeps its fence as code. Read in the memo, so the load
   // runs the pass again.
@@ -2200,6 +2442,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     const items = displayedItems()
     const next = fingerprints()
     const unfinished = undrawn()
+    const runs = toolRuns()
     const turnRunning = props.streaming
     retryVersion()
     measurementVersion()
@@ -2222,6 +2465,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         excess: tailRows - (maximum - floor - pinnedRows) - pendingRows,
         unfinished,
         turnRunning,
+        runs,
       })
     })
   })
@@ -2260,12 +2504,14 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       readonly excess: number
       readonly unfinished: ReadonlySet<SessionItem>
       readonly turnRunning: boolean
+      readonly runs: ToolRuns
     },
   ) => {
     let excess = plan.excess
     while (excess > 0 && queued < items.length) {
       const item = items[queued]
-      if (!item || !isFinalItem(item, plan.turnRunning) || plan.unfinished.has(item)) return
+      if (!item || !isFinalItem(item, plan.turnRunning, plan.runs) || plan.unfinished.has(item))
+        return
       const value = next[queued]
       const height = itemHeights.get(item)
       if (!Predicate.isString(value) || Predicate.isUndefined(height)) return
@@ -2462,29 +2708,31 @@ export function NativeTranscript(props: NativeTranscriptProps) {
             setLiveHeight(this.height)
           }}
         >
-          <For each={liveItems()}>
-            {(item, index) => (
-              <box
-                flexDirection="column"
-                flexShrink={0}
-                overflow={cutOverflow(index())}
-                height={cutHeight(item, index())}
-              >
+          <ToolRunsContext.Provider value={Option.some(toolRuns)}>
+            <For each={liveItems()}>
+              {(item, index) => (
                 <box
                   flexDirection="column"
                   flexShrink={0}
-                  marginTop={-cutRows(index())}
-                  onSizeChange={function () {
-                    if (itemHeights.get(item) === this.height) return
-                    itemHeights.set(item, this.height)
-                    setMeasurementVersion((version) => version + 1)
-                  }}
+                  overflow={cutOverflow(index())}
+                  height={cutHeight(item, index())}
                 >
-                  {props.renderItems([item])}
+                  <box
+                    flexDirection="column"
+                    flexShrink={0}
+                    marginTop={-cutRows(index())}
+                    onSizeChange={function () {
+                      if (itemHeights.get(item) === this.height) return
+                      itemHeights.set(item, this.height)
+                      setMeasurementVersion((version) => version + 1)
+                    }}
+                  >
+                    {props.renderItems([item])}
+                  </box>
                 </box>
-              </box>
-            )}
-          </For>
+              )}
+            </For>
+          </ToolRunsContext.Provider>
           {props.children}
         </box>
       </scrollbox>

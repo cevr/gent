@@ -4,7 +4,7 @@ import { Match, Option, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
 import { useClient } from "./client"
-import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
+import { GutterText, NoToolCallIdentity, ToolCallIdentityProvider, ToolFrame } from "./ui"
 import { formatHeadTail, headTail, lineCount, OutputCut, splitLines } from "@gent/core/protocol"
 import {
   type ActivityOperation,
@@ -887,29 +887,31 @@ function CellToolRenderer(props: ToolRendererProps) {
       return "completed"
     }
     return (
-      <ToolFrame
-        title={tool()}
-        subtitle={plural(folded.calls.length, FOLD_NOUNS.get(tool()) ?? "call")}
-        status={status()}
-        expanded={false}
-        collapsedContent={
-          <box flexDirection="column">
-            <For each={folded.calls}>
-              {(call) =>
-                OperationRow({
-                  tool: toolArgSummary(call.toolName, call.input, pathPlace()),
-                  outcome: callOutcome(call.status),
-                  summary: Option.getOrElse(failureReason(call), () => call.summary ?? ""),
-                })
-              }
-            </For>
+      <NoToolCallIdentity>
+        <ToolFrame
+          title={tool()}
+          subtitle={plural(folded.calls.length, FOLD_NOUNS.get(tool()) ?? "call")}
+          status={status()}
+          expanded={false}
+          collapsedContent={
+            <box flexDirection="column">
+              <For each={folded.calls}>
+                {(call) =>
+                  OperationRow({
+                    tool: toolArgSummary(call.toolName, call.input, pathPlace()),
+                    outcome: callOutcome(call.status),
+                    summary: Option.getOrElse(failureReason(call), () => call.summary ?? ""),
+                  })
+                }
+              </For>
+            </box>
+          }
+        >
+          <box flexDirection="column" gap={1}>
+            <For each={folded.calls}>{(call) => OperationCall(call)}</For>
           </box>
-        }
-      >
-        <box flexDirection="column" gap={1}>
-          <For each={folded.calls}>{(call) => OperationCall(call)}</For>
-        </box>
-      </ToolFrame>
+        </ToolFrame>
+      </NoToolCallIdentity>
     )
   }
 
