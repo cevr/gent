@@ -95,6 +95,45 @@ describe("user configuration", () => {
   })
 
   describe("concurrent writes", () => {
+    it.scopedLive("first-run setup preserves a config created before its default write", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const createdConfig = encodeJson({
+          trustedProjects: ["/owner/project"],
+          disabledExtensions: ["@owner/disabled"],
+          ownerSetting: "keep verbatim",
+        })
+        const firstWrite = yield* Ref.make(true)
+        const competingCreator = FileSystem.makeNoop({
+          ...fs,
+          writeFileString: (filePath, content, options) =>
+            Effect.gen(function* () {
+              if (filePath === userConfigPath && (yield* Ref.getAndSet(firstWrite, false))) {
+                // A separate real writer wins after the initializer saw no file.
+                yield* fs.writeFileString(userConfigPath, createdConfig)
+              }
+              yield* fs.writeFileString(filePath, content, options)
+            }),
+        })
+        const live = ConfigService.Live.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(FileSystem.FileSystem, competingCreator),
+              Path.layer,
+              RuntimeEnvironment.Live({ cwd, home }),
+            ),
+          ),
+        )
+        const loaded = yield* ConfigService.use((cfg) => cfg.get()).pipe(Effect.provide(live))
+        expect(loaded.disabledExtensions).toEqual(["@owner/disabled"])
+        expect(yield* fs.readFileString(userConfigPath)).toBe(createdConfig)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
     it.scopedLive("concurrent live writes preserve every user entry", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem

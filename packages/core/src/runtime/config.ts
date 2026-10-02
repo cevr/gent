@@ -348,7 +348,12 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         const configDir = path.dirname(userConfigPath)
         yield* fs.makeDirectory(configDir, { recursive: true })
         const json = yield* Schema.encodeEffect(UserConfigJson)(defaultUserConfig)
-        yield* fs.writeFileString(userConfigPath, json)
+        yield* fs.writeFileString(userConfigPath, json, { flag: "wx" }).pipe(
+          Effect.catchEager((error) => {
+            if (error.reason._tag === "AlreadyExists") return Effect.void
+            return Effect.fail(error)
+          }),
+        )
       }).pipe(
         Effect.catchEager((e) =>
           Effect.logWarning("Config init failed").pipe(Effect.annotateLogs({ error: String(e) })),
