@@ -59,6 +59,7 @@ bun run --cwd apps/tui dev sessions
 - **bun:test timeouts bypass Effect finalizers** - Always use `Effect.timeout` inside the Effect, shorter than the bun timeout, so scope finalizers run on timeout.
 - **A failed extension fails the test** - Test roots stop with `Extensions failed to load: <id> (<scope>, <phase>): <reason>`. Fix the extension; set `allowFailedExtensions: true` only in a test about the failure report.
 - **Integration tests: in-process first** - Prefer `createRpcClient(baseLocalLayer())` or `createRpcHarness(...)` from `@gent/core/test-utils`; `Gent.test` from `@gent/sdk` is for SDK and app tests. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
+- **Model catalog in tests** - Tests never reach models.dev. An in-process root takes `modelCatalogFixture` (a counting HTTP client that answers 304 to a current ETag) or `fixtureModelCatalog` (the parsed catalog, for a driver test with no server); a spawned gent sets `GENT_MODEL_CATALOG_URL` to the origin `serveModelCatalogFixture` returns. All come from `@gent/core/test-utils`.
 - **Signal language model for lifecycle assertions** - Use `LanguageModelLayers.signal(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `streamText()` calls — multi-turn tests need multiple `emitAll()` rounds.
 - **`LanguageModelLayers.debug({ delayMs })`** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
 - **Test control flow** - Test files must not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive`, `Effect.promise` only at real async boundaries, and scoped resources such as `makeTempDirectoryScoped`.
@@ -202,18 +203,20 @@ Core tests record the event sequence for assertions with `recordingEventStore(re
 
 ## Key Files
 
-| File                                             | Purpose                                             |
-| ------------------------------------------------ | --------------------------------------------------- |
-| `packages/core/src/storage/storage.ts`           | SQLite layer composition for focused storage tags   |
-| `packages/core/src/storage/schema.ts`            | SQLite schema, migration, and initialization logic  |
-| `packages/core/src/test-utils/harness.ts`        | recorders, harnesses, and the in-process layers     |
-| `packages/core/src/server/server.ts`             | startup wiring + dependency graph                   |
-| `packages/core/src/server/rpc.ts`                | shared client contract                              |
-| `packages/core/src/domain/agent-loop.ts`         | loop state, entity id, and the actor protocol       |
-| `packages/core/src/runtime/agent-loop.ts`        | mailbox, worker, behavior, and the actor            |
-| `packages/core/src/runtime/turn.ts`              | per-branch turn engine used by the actor            |
-| `packages/core/src/test-utils/language-model.ts` | `LanguageModelLayers`, step and stream-part helpers |
-| `apps/tui/tsconfig.json`                         | `jsxImportSource: "@opentui/solid"` required        |
+| File                                             | Purpose                                                               |
+| ------------------------------------------------ | --------------------------------------------------------------------- |
+| `packages/core/src/storage/storage.ts`           | SQLite layer composition for focused storage tags                     |
+| `packages/core/src/storage/schema.ts`            | SQLite schema, migration, and initialization logic                    |
+| `packages/core/src/test-utils/harness.ts`        | recorders, harnesses, and the in-process layers                       |
+| `packages/core/src/server/server.ts`             | startup wiring + dependency graph                                     |
+| `packages/core/src/server/rpc.ts`                | shared client contract                                                |
+| `packages/core/src/domain/agent-loop.ts`         | loop state, entity id, and the actor protocol                         |
+| `packages/core/src/runtime/agent-loop.ts`        | mailbox, worker, behavior, and the actor                              |
+| `packages/core/src/runtime/turn.ts`              | per-branch turn engine used by the actor                              |
+| `packages/core/src/runtime/provider.ts`          | models.dev catalog snapshot, API class match, generic providers, auth |
+| `packages/core/src/domain/driver.ts`             | `ApiClassContribution`, `ModelDriverContribution`, catalog overrides  |
+| `packages/core/src/test-utils/language-model.ts` | `LanguageModelLayers`, step and stream-part helpers                   |
+| `apps/tui/tsconfig.json`                         | `jsxImportSource: "@opentui/solid"` required                          |
 
 ## Documentation
 
