@@ -1328,7 +1328,20 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
                   value: toolDetailsOf(found),
                 }),
             })
-            return yield* child.send(reply).pipe(Effect.mapError(processError))
+            return yield* child.send(reply).pipe(
+              Effect.catchTag("CellProcessError", (error) => {
+                // The encoder refuses before queueing any bytes; keep discovery catchable.
+                if (error.reason !== "frame-too-large") return Effect.fail(error)
+                return child.send(
+                  CellRequest.cases.HostFailed.make({
+                    cellId,
+                    operationId: frame.operationId,
+                    message: "Tool description exceeds the cell frame byte limit",
+                  }),
+                )
+              }),
+              Effect.mapError(processError),
+            )
           }
           if (frame._tag === "HostCall") {
             if (

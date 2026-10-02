@@ -626,6 +626,50 @@ describe("cell worker kernel", () => {
   )
 
   it.scopedLive(
+    "an oversized description fails catchably and preserves retained functions",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: yield* packageDirectory,
+        })
+        const host = CellOperationHost.of({
+          catalog: {
+            hash: "oversized-description",
+            tools: [
+              {
+                name: "huge",
+                description: "A small listing with large guidelines",
+                guidelines: ["😀".repeat(maximumCellFrameBytes / 4)],
+                parameters: {},
+                signature: "",
+                summary: "",
+              },
+            ],
+          },
+          call: () => Effect.die("Description must not execute a tool"),
+        })
+        const seeded = yield* kernel
+          .evaluate('var retainedDescriptionValue = () => 41; "seeded"')
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(seeded.display).toBe("seeded")
+        const described = yield* kernel
+          .evaluate(
+            'try { await tools("huge") } catch (error) { console.log(error.message) }; retainedDescriptionValue() + 1',
+          )
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(described.display).toContain("description exceeds the cell frame byte limit")
+        expect(described.display.length).toBeLessThan(200)
+        expect(kernel.isLost()).toBe(false)
+        const retained = yield* kernel
+          .evaluate("retainedDescriptionValue() + 1")
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(retained.display).toBe("42")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
+    10000,
+  )
+
+  it.scopedLive(
     "a listing too large for one frame fails the cell and names the tool count to cut",
     () =>
       Effect.gen(function* () {
