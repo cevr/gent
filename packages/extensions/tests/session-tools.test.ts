@@ -7,6 +7,7 @@ import {
   createRpcHarness,
   finishPart,
   LanguageModelLayers,
+  makeTempDirectoryScoped,
   textDeltaPart,
   toolCallPart,
   textStep,
@@ -130,7 +131,7 @@ describe("session naming", () => {
   })
 })
 
-// ── read session ────────────────────────────────────────────────────────────
+// ── session tool output ─────────────────────────────────────────────────────
 
 describe("session.send summary", () => {
   it.live("a sent message reads as who got it and what it said, not JSON", () =>
@@ -220,7 +221,7 @@ const toolEventsFor = <E>(stream: Stream.Stream<EventEnvelope, E>, toolName: str
 
 describe("Session tools via model turn", () => {
   it.live(
-    "read_session uses the request-scoped session host facet",
+    "read_session of a session that does not exist fails with the load reason",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -323,13 +324,15 @@ describe("Session tools via model turn", () => {
               ]),
             )
           })
+          const cwd = yield* makeTempDirectoryScoped("gent-session-tools-")
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
+            cwd,
             providerLayer,
             extensionInputs: [AgentsExtension, SessionToolsExtension],
           })
           const handoff = yield* client.session.create({
-            cwd: process.cwd(),
+            cwd,
             parentSessionId: sessionId,
             parentBranchId: branchId,
             continueThread: true,

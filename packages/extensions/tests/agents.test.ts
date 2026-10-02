@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, FileSystem, Stream } from "effect"
 import {
   finishPart,
@@ -40,22 +40,20 @@ const writeFile = (path: string, content: string) =>
   })
 
 describe("agents extension", () => {
-  it.effect("the persona is four sections ahead of the environment", () =>
-    Effect.sync(() => {
-      expect(basePromptSections.map((section) => section.id)).toEqual([
-        "identity",
-        "work",
-        "communication",
-        "boundaries",
-      ])
-      expect(basePromptSections.every((section) => section.priority < 60)).toBe(true)
-      const compiled = basePromptSections.map((section) => section.content).join("\n\n")
-      expect(compiled).toContain("You are Gent, a general purpose agent.")
-      expect(compiled).toContain("For slow or independent work, start it")
-      expect(compiled).toContain("Never revert changes you did not make.")
-      expect(String(main.name)).toBe("main")
-    }),
-  )
+  test("the persona is four sections ahead of the environment", () => {
+    expect(basePromptSections.map((section) => section.id)).toEqual([
+      "identity",
+      "work",
+      "communication",
+      "boundaries",
+    ])
+    expect(basePromptSections.every((section) => section.priority < 60)).toBe(true)
+    const compiled = basePromptSections.map((section) => section.content).join("\n\n")
+    expect(compiled).toContain("You are Gent, a general purpose agent.")
+    expect(compiled).toContain("For slow or independent work, start it")
+    expect(compiled).toContain("Never revert changes you did not make.")
+    expect(String(main.name)).toBe("main")
+  })
 })
 
 describe("project instructions", () => {

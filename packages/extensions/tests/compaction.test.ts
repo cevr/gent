@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Cause, Effect, Exit, Fiber, Layer, Option, Predicate, Schema, Stream } from "effect"
 import { LanguageModel } from "effect/ai"
 import * as Prompt from "effect/ai/Prompt"
@@ -180,24 +180,16 @@ describe("context handoff", () => {
     )
   })
 
-  it.effect("only names the kept window still uses reach the bindings note", () =>
-    Effect.sync(() => {
-      const kept = [
-        textMessage("new-1", "user", "now join rows with the $index and print total", 5),
-        textMessage("new-2", "assistant", "rows.length is 40; indexed = rows.map(r => r.id)", 6),
-      ]
-      const retained = ["rows", "index", "$index", "total", "r", "indexed", "a.b"]
-      expect(referencedBindings(retained, kept)).toEqual([
-        "rows",
-        "$index",
-        "total",
-        "r",
-        "indexed",
-      ])
-      expect(referencedBindings(retained, [])).toEqual([])
-      expect(referencedBindings([], kept)).toEqual([])
-    }),
-  )
+  test("only names the kept window still uses reach the bindings note", () => {
+    const kept = [
+      textMessage("new-1", "user", "now join rows with the $index and print total", 5),
+      textMessage("new-2", "assistant", "rows.length is 40; indexed = rows.map(r => r.id)", 6),
+    ]
+    const retained = ["rows", "index", "$index", "total", "r", "indexed", "a.b"]
+    expect(referencedBindings(retained, kept)).toEqual(["rows", "$index", "total", "r", "indexed"])
+    expect(referencedBindings(retained, [])).toEqual([])
+    expect(referencedBindings([], kept)).toEqual([])
+  })
 
   it.scopedLive(
     "the compactor lists retained names, then keeps the ones the window references",
@@ -236,31 +228,27 @@ describe("context handoff", () => {
     },
   )
 
-  it.effect("the summary input is the newest run that fits; what falls before is named", () =>
-    Effect.sync(() => {
-      const long = [
-        textMessage("old-1", "assistant", "a".repeat(1_800), 1),
-        textMessage("old-2", "assistant", "b".repeat(1_800), 2),
-      ]
-      const source = selectSummarySource(long, 600, [])
-      expect(source.map((message) => message.id)).toEqual([MessageId.make("old-2")])
-      expect(selectSummarySource(long, 100, [])).toEqual([])
-      expect(selectSummarySource(long, 10_000, []).length).toBe(2)
-    }),
-  )
+  test("the summary input is the newest run that fits; what falls before is named", () => {
+    const long = [
+      textMessage("old-1", "assistant", "a".repeat(1_800), 1),
+      textMessage("old-2", "assistant", "b".repeat(1_800), 2),
+    ]
+    const source = selectSummarySource(long, 600, [])
+    expect(source.map((message) => message.id)).toEqual([MessageId.make("old-2")])
+    expect(selectSummarySource(long, 100, [])).toEqual([])
+    expect(selectSummarySource(long, 10_000, []).length).toBe(2)
+  })
 
-  it.effect("a long branch picks its newest fitting run without formatting every suffix", () =>
-    Effect.sync(() => {
-      // 5,000 messages at the clip size: a per-suffix search formats billions of characters.
-      const long = Array.from({ length: 5_000 }, (_, index) =>
-        textMessage(`m-${index}`, "assistant", "c".repeat(8_000), index),
-      )
-      const source = selectSummarySource(long, 32_768, [])
-      // 32,768 tokens hold 131,072 characters: 16 messages of about 8,020 fit, a 17th does not.
-      expect(source.length).toBe(16)
-      expect(source.at(-1)?.id).toBe(MessageId.make("m-4999"))
-    }),
-  )
+  test("a long branch picks its newest fitting run without formatting every suffix", () => {
+    // 5,000 messages at the clip size: a per-suffix search formats billions of characters.
+    const long = Array.from({ length: 5_000 }, (_, index) =>
+      textMessage(`m-${index}`, "assistant", "c".repeat(8_000), index),
+    )
+    const source = selectSummarySource(long, 32_768, [])
+    // 32,768 tokens hold 131,072 characters: 16 messages of about 8,020 fit, a 17th does not.
+    expect(source.length).toBe(16)
+    expect(source.at(-1)?.id).toBe(MessageId.make("m-4999"))
+  })
 
   it.scopedLive("one oversized message is clipped so the older turns still get summarized", () => {
     let user = ""
@@ -567,17 +555,13 @@ describe("context handoff", () => {
     )
   })
 
-  it.scopedLive("an empty, oversized, or failed summary is a compaction error", () => {
+  // The oversized summary is refused in "the summary bound uses the projection's token estimate".
+  it.scopedLive("an empty or failed summary is a compaction error", () => {
     const attempt = (layer: Layer.Layer<LanguageModel.LanguageModel>) =>
       Effect.exit(compact()).pipe(Effect.provide(layer), Effect.map(failureOf))
     return Effect.gen(function* () {
       const empty = yield* attempt(summaryProvider("   "))
       expect(Option.map(empty, (error) => error.reason)).toEqual(Option.some("SummaryEmpty"))
-
-      const oversize = yield* attempt(
-        summaryProvider("x".repeat((MODEL_COMPACTION_OUTPUT_TOKENS + 10) * 4)),
-      )
-      expect(Option.map(oversize, (error) => error.reason)).toEqual(Option.some("SummaryOversize"))
 
       const failed = yield* attempt(
         LanguageModelLayers.testStream(() =>
@@ -595,7 +579,7 @@ describe("context handoff", () => {
       expect(Option.map(failed, (error) => error.reason)).toEqual(
         Option.some("SummaryGenerationFailed: ModelCompactionTest.streamText: summary failed"),
       )
-      for (const failure of [empty, oversize, failed]) {
+      for (const failure of [empty, failed]) {
         expect(Option.map(failure, Schema.is(ModelCompactionError))).toEqual(Option.some(true))
       }
     }).pipe(Effect.timeout("10 seconds"))

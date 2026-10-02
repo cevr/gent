@@ -14,10 +14,9 @@ import {
   waitFor,
 } from "@gent/core/test-utils"
 import { WorkflowsExtension } from "../src/workflows.js"
-
-const WORKFLOWS_EXTENSION_ID = WorkflowsExtension.manifest.id
 import { e2ePreset } from "./helpers/test-preset"
 
+const WORKFLOWS_EXTENSION_ID = WorkflowsExtension.manifest.id
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("WorkflowsExtension via RPC", () => {
@@ -99,31 +98,8 @@ describe("WorkflowsExtension via RPC", () => {
     15_000,
   )
 
-  it.scopedLive("keeps repeated commands as distinct requests", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-      const { client, sessionId, branchId } = yield* createRpcHarness({
-        ...e2ePreset,
-        providerLayer,
-      })
-      for (const input of ["first task", "second task"]) {
-        yield* client.extension.request({
-          sessionId,
-          branchId,
-          extensionId: WORKFLOWS_EXTENSION_ID,
-          capabilityId: "plan-command",
-          input,
-        })
-      }
-      const { followUp } = yield* client.queue.get({ sessionId, branchId })
-      expect(followUp).toHaveLength(2)
-      expect(followUp[0]?.content).toContain("first task")
-      expect(followUp[1]?.content).toContain("second task")
-    }).pipe(Effect.timeout("4 seconds")),
-  )
-
   it.live(
-    "slash commands are listed and /plan queues a recipe over host tools",
+    "slash commands are listed and each /plan queues its own recipe over host tools",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -151,17 +127,21 @@ describe("WorkflowsExtension via RPC", () => {
             keybind: "ctrl+shift+p",
           })
 
-          yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: WORKFLOWS_EXTENSION_ID,
-            capabilityId: "plan-command",
-            input: "implement caching",
-          })
+          // Each command is its own request: a repeat queues a second recipe.
+          for (const input of ["implement caching", "then the second task"]) {
+            yield* client.extension.request({
+              sessionId,
+              branchId,
+              extensionId: WORKFLOWS_EXTENSION_ID,
+              capabilityId: "plan-command",
+              input,
+            })
+          }
 
           // The recipe is a queued follow-up; it runs as the next turn.
           const queue = yield* client.queue.get({ sessionId, branchId })
-          expect(queue.followUp).toHaveLength(1)
+          expect(queue.followUp).toHaveLength(2)
+          expect(queue.followUp[1]?.content).toContain("then the second task")
           const content = queue.followUp[0]?.content ?? ""
           expect(content).toContain("implement caching")
           expect(content).toContain(`/.gent/results/${sessionId}/${branchId}/plan.md`)
