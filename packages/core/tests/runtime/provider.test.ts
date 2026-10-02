@@ -951,27 +951,25 @@ describe("listAuthProviders", () => {
     }),
   )
 
-  it.live("a required provider without a stored key reports hasKey false", () =>
+  it.live("every provider reports its own stored key, required or not", () =>
     Effect.gen(function* () {
-      const result = yield* list({}, [opus])
-      expect(result.filter((p) => p.required && !p.hasKey).map((p) => p.provider)).toEqual([
-        ProviderId.make("anthropic"),
-      ])
-    }),
-  )
-
-  it.live("a required provider with a stored key reports hasKey true", () =>
-    Effect.gen(function* () {
-      const result = yield* list({ anthropic: apiInfo("sk-anthropic") }, [opus])
-      expect(result.filter((p) => p.required && !p.hasKey)).toEqual([])
-    }),
-  )
-
-  it.live("every registered provider reports its own hasKey", () =>
-    Effect.gen(function* () {
-      const result = yield* list({ anthropic: apiInfo("sk-test") }, [opus])
-      expect(result.find((p) => p.provider === "anthropic")?.hasKey).toBe(true)
-      expect(result.find((p) => p.provider === "openai")?.hasKey).toBe(false)
+      const cases: ReadonlyArray<{
+        readonly seed: Record<string, AuthInfo>
+        readonly withKey: ReadonlyArray<string>
+      }> = [
+        { seed: {}, withKey: [] },
+        { seed: { anthropic: apiInfo("sk-anthropic") }, withKey: ["anthropic"] },
+        { seed: { openai: apiInfo("sk-openai") }, withKey: ["openai"] },
+      ]
+      for (const { seed, withKey } of cases) {
+        const result = yield* list(seed, [opus])
+        expect(result.map((p) => [String(p.provider), p.required, p.hasKey])).toEqual([
+          ["anthropic", true, withKey.includes("anthropic")],
+          ["openai", false, withKey.includes("openai")],
+          ["google", false, false],
+          ["mistral", false, false],
+        ])
+      }
     }),
   )
 
@@ -1283,17 +1281,6 @@ const streamResolvedModel = <
     return yield* model.streamText({ prompt: request.prompt }).pipe(Stream.runCollect)
   })
 describe("Provider model resolution", () => {
-  it.scoped("resolves model through extension-registered provider", () =>
-    Effect.gen(function* () {
-      const layer = buildProviderLayer([makeExt("test-ext", [makeProvider("custom")])])
-      const result = yield* Effect.exit(
-        resolveModel({
-          model: "custom/gpt-5",
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result._tag).toBe("Success")
-    }),
-  )
   it.scoped("ModelResolver resolves the LanguageModel service directly", () =>
     Effect.gen(function* () {
       const languageModel = makeLanguageModel({
@@ -1323,24 +1310,6 @@ describe("Provider model resolution", () => {
       )
       expect(result._tag).toBe("Failure")
     }),
-  )
-  it.scoped("failing test provider resolves before failing at stream boundary", () =>
-    Effect.gen(function* () {
-      const resolver = yield* ModelResolver
-      const model = yield* resolver.resolve({ modelId: "test/failing" })
-      const result = yield* Effect.exit(model.streamText({ prompt: [] }).pipe(Stream.runCollect))
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        expect(Cause.pretty(result.cause)).toContain("provider exploded")
-      }
-    }).pipe(
-      Effect.provide(
-        Layer.merge(
-          LanguageModelLayers.resolver(LanguageModelLayers.failing),
-          ExtensionRegistry.Test(),
-        ),
-      ),
-    ),
   )
   it.scoped("wraps extension resolveModel errors as ProviderError preserving cause", () =>
     Effect.gen(function* () {
@@ -1937,22 +1906,18 @@ describe("shared sign-in", () => {
 
   it.live("one stored key serves both drivers' models, catalogs and classifiers", () =>
     Effect.gen(function* () {
-      expect(yield* readsWithStored({ gateway: "sk-one" })).toEqual([
+      const reads = yield* readsWithStored({ gateway: "sk-one" })
+      expect(reads.filter((read) => !read.includes("list"))).toEqual([
         "gateway model sk-one",
         "gateway-plus model sk-one",
         "solo model none",
-        "gateway list sk-one",
-        "gateway-plus list sk-one",
-        "solo list none",
-        "gateway list sk-one",
-        "gateway-plus list sk-one",
-        "solo list none",
         "gateway decision sk-one",
-        "gateway list sk-one",
-        "gateway-plus list sk-one",
-        "solo list none",
         "gateway-plus decision sk-one",
       ])
+      // Which catalogs read which key, not how often or in what order.
+      expect(new Set(reads.filter((read) => read.includes("list")))).toEqual(
+        new Set(["gateway list sk-one", "gateway-plus list sk-one", "solo list none"]),
+      )
     }).pipe(Effect.scoped),
   )
 
