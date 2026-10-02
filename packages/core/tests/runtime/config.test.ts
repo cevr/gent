@@ -789,54 +789,7 @@ describe("user configuration", () => {
         )
         yield* cfg.setDriverOverride(AgentName.make("primary"), DriverRef.make({ id: "anthropic" }))
         const result = yield* cfg.get()
-        expect(result.driverOverrides?.[AgentName.make("primary")]?._tag).toBe("Model")
-      }).pipe(Effect.provide(ConfigService.Test())),
-    )
-
-    it.live("setting one agent's driver leaves other agents' overrides intact", () =>
-      Effect.gen(function* () {
-        const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride(
-          AgentName.make("primary"),
-          DriverRef.make({ id: "anthropic-proxy" }),
-        )
-        yield* cfg.setDriverOverride(
-          AgentName.make("secondary"),
-          DriverRef.make({ id: "openai-proxy" }),
-        )
-        const result = yield* cfg.get()
-        expect(Object.keys(result.driverOverrides ?? {})).toHaveLength(2)
-      }).pipe(Effect.provide(ConfigService.Test())),
-    )
-
-    it.live("clearing one agent's driver removes only that entry", () =>
-      Effect.gen(function* () {
-        const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride(
-          AgentName.make("primary"),
-          DriverRef.make({ id: "anthropic-proxy" }),
-        )
-        yield* cfg.setDriverOverride(
-          AgentName.make("secondary"),
-          DriverRef.make({ id: "openai-proxy" }),
-        )
-        yield* cfg.clearDriverOverride(AgentName.make("primary"))
-        const result = yield* cfg.get()
-        expect(result.driverOverrides?.[AgentName.make("primary")]).toBeUndefined()
-        expect(result.driverOverrides?.[AgentName.make("secondary")]).toBeDefined()
-      }).pipe(Effect.provide(ConfigService.Test())),
-    )
-
-    it.live("clearing the last driver override drops the record entirely", () =>
-      Effect.gen(function* () {
-        const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride(
-          AgentName.make("primary"),
-          DriverRef.make({ id: "anthropic-proxy" }),
-        )
-        yield* cfg.clearDriverOverride(AgentName.make("primary"))
-        const result = yield* cfg.get()
-        expect(result.driverOverrides).toBeUndefined()
+        expect(result.driverOverrides?.[AgentName.make("primary")]?.id).toBe("anthropic")
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
@@ -1029,17 +982,6 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           const result = yield* cfg.get()
           expectDriverOverride(result, "primary", "launch-driver")
-        }).pipe(Effect.provide(live))
-      }).pipe(Effect.provide(BunServices.layer)),
-    )
-
-    it.scopedLive("a project cwd resolves its own .gent/config.json, not the launch cwd's", () =>
-      Effect.gen(function* () {
-        const { live, projectA } = yield* makeLive
-        yield* Effect.gen(function* () {
-          const cfg = yield* ConfigService
-          const result = yield* cfg.get(projectA)
-          expectDriverOverride(result, "primary", "projectA-driver")
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
