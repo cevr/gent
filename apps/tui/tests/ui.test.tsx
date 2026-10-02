@@ -380,6 +380,35 @@ describe("select list filter", () => {
     }),
   )
 
+  it.scopedLive("alt+backspace and ctrl+backspace delete the last word, as in the composer", () =>
+    Effect.gen(function* () {
+      const seen: Array<string> = []
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(fruits)}
+          rowKey={(fruit) => fruit.id}
+          filter={{ onQueryChange: (next) => seen.push(next) }}
+          onSelect={() => {}}
+          onDismiss={() => {}}
+        />
+      ))
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Cherry"), "open")
+      yield* Effect.promise(() => setup.mockInput.typeText("one son net"))
+      yield* waitForFrame(setup, () => seen.at(-1) === "one son net", "typed")
+      setup.mockInput.pressKey("BACKSPACE", { meta: true })
+      yield* waitForFrame(setup, () => seen.at(-1) !== "one son net", "alt+backspace edits")
+      expect(seen.at(-1)).toBe("one son ")
+      setup.mockInput.pressKey("BACKSPACE", { ctrl: true })
+      yield* waitForFrame(setup, () => seen.at(-1) !== "one son ", "ctrl+backspace edits")
+      expect(seen.at(-1)).toBe("one ")
+      setup.mockInput.pressKey("BACKSPACE")
+      yield* waitForFrame(setup, () => seen.at(-1) !== "one ", "backspace edits")
+      expect(seen.at(-1)).toBe("one")
+    }),
+  )
+
   it.scopedLive(
     "leaves shortcut keys, and a paste into a list with no filter, to the scopes under it",
     () =>
