@@ -44,9 +44,9 @@ For the smallest complete product loop, see
 `examples/extensions/session-notes.ts`. It is still one file, but covers the
 real shape an author reaches for after the first tool: process-scoped state,
 a model-callable tool, a slash-presented request, and a turn projection hook.
-Its regression test loads the file through the public package path and executes
-the contributed tool and hook under the real resource layer while checking the
-slash request through the registry surface.
+Its regression test (`examples/tests/session-notes.test.ts`) loads the file and
+runs its tool, slash request and hooks over the RPC path, under the real
+resource layer.
 
 ## Named Concepts
 
@@ -479,9 +479,10 @@ builtin).
 
 | Extension                              | Demonstrates                                  |
 | -------------------------------------- | --------------------------------------------- |
-| `packages/extensions/src/agents.ts`    | `tool` + turn projection prompt sections      |
+| `packages/extensions/src/agents.ts`    | `agent` + turn projection prompt sections     |
 | `packages/extensions/src/mcp.ts`       | tools read at setup + a lazy process resource |
 | `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook  |
+| `examples/extensions/prompt-rules.ts`  | `systemPrompt` hook                           |
 
 ## Surface Invariants
 
@@ -503,6 +504,5 @@ builtin).
   storage Tags, event stores, and process helpers are not public extension API.
 - Tagged-union variant tags are PascalCase. Extension health reports
   `"Healthy"` or `"Degraded"`, and a degraded extension carries
-  `"ActivationFailed"` issues. An extension written against the earlier
-  lowercase spellings (`"healthy"`, `"activation-failed"`) must be updated; match on the tag through
-  the exported schema rather than a string literal where possible.
+  `"ActivationFailed"` or `"ModelCatalogFailed"` issues. Match on the tag
+  through the exported schema rather than a string literal where possible.
