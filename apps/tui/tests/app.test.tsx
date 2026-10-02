@@ -2147,6 +2147,78 @@ describe("App status and activity rows", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // Two forks out at once: the one asked for last is the reader's choice,
+  // whichever answers first.
+  for (const order of [
+    ["older", "newer"],
+    ["newer", "older"],
+  ] as const) {
+    it.scopedLive(`of two forks the newer is shown when the ${order[0]} answers first`, () =>
+      Effect.gen(function* () {
+        const asked = { older: yield* Deferred.make<void>(), newer: yield* Deferred.make<void>() }
+        const answer = { older: yield* Deferred.make<void>(), newer: yield* Deferred.make<void>() }
+        const answered = {
+          older: yield* Deferred.make<void>(),
+          newer: yield* Deferred.make<void>(),
+        }
+        const switched: Array<BranchId> = []
+        let forks = 0
+        const view = yield* mountSessionPair({
+          message: {
+            list: () =>
+              Effect.succeed([
+                StoredMessage.cases.regular.make({
+                  id: MessageId.make("fork-here"),
+                  sessionId: pairA.sessionId,
+                  branchId: pairA.branchId,
+                  role: "user",
+                  parts: [Prompt.textPart({ text: "fork from this" })],
+                  createdAt: dateFromMillis(1),
+                }),
+              ]),
+          },
+          branch: {
+            fork: () =>
+              Effect.suspend(() => {
+                forks += 1
+                let which: "older" | "newer" = "newer"
+                if (forks === 1) which = "older"
+                return Deferred.complete(asked[which], Effect.void).pipe(
+                  Effect.andThen(Deferred.await(answer[which])),
+                  Effect.as({ branchId: BranchId.make(`branch-${which}`) }),
+                  Effect.ensuring(Deferred.complete(answered[which], Effect.void)),
+                )
+              }),
+            switch: (input: { readonly toBranchId: BranchId }) =>
+              Effect.sync(() => {
+                switched.push(input.toBranchId)
+              }),
+          },
+        })
+        const forkFromPane = Effect.gen(function* () {
+          yield* Effect.promise(() => view.setup.mockInput.typeText("/fork"))
+          view.setup.mockInput.pressEnter()
+          yield* waitForFrame(
+            view.setup,
+            (frame) => frame.includes("Fork from message"),
+            "the fork pane",
+          )
+          view.setup.mockInput.pressEnter()
+        })
+        yield* forkFromPane
+        yield* Deferred.await(asked.older)
+        yield* forkFromPane
+        yield* Deferred.await(asked.newer)
+        for (const which of order) {
+          yield* Deferred.complete(answer[which], Effect.void)
+          yield* Deferred.await(answered[which])
+          yield* view.settle
+        }
+        yield* waitForFrame(view.setup, () => switched.length > 0, "a switch")
+        expect(switched).toEqual([BranchId.make("branch-newer")])
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   // The drain commits on the server before it answers: the text it took
   // belongs to A's draft, even when A's view is gone by then.
   it.scopedLive("a queue taken back after a switch lands in its own session's draft", () =>

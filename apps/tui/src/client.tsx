@@ -1220,10 +1220,10 @@ export function ClientProvider(props: ClientProviderProps) {
     finishReplay,
   }
 
-  // Each navigation (a create sent, a session switch, a branch switch asked
-  // for) takes the next number. A create or a fork answers late, so it takes
-  // the view only while its number is the latest: a later /new or switch has
-  // overtaken it otherwise.
+  // Each navigation (a create sent, a fork asked for, a session switch, a
+  // branch switch asked for) takes the next number. A create or a fork
+  // answers late, so it takes the view only while its number is the latest:
+  // a later /new, fork or switch has overtaken it otherwise.
   let navigation = 0
 
   /**
@@ -1393,7 +1393,9 @@ export function ClientProvider(props: ClientProviderProps) {
 
     forkBranch: (messageId) => {
       const from = sessionIdentity()
-      const ownNavigation = navigation
+      // The fork is a navigation from the moment it is asked for: a later
+      // fork or switch overtakes it, and it overtakes an earlier one.
+      const ownNavigation = ++navigation
       return Effect.gen(function* () {
         const requestId = yield* randomId
         const result = yield* client.branch.fork({
