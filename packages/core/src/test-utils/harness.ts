@@ -624,18 +624,20 @@ export const storedEvents = Effect.fn("test.storedEvents")(function* (run: Harne
 // ── e2e layer ───────────────────────────────────────────────────────────────
 
 /**
- * A session profile cache over fixed profiles, for per-cwd routing tests. A
- * cwd with no profile gets one with no extensions; its registry is built once,
- * in the layer's scope.
+ * A session profile cache over fixed profiles, for per-cwd routing tests and
+ * the actor test roots. A cwd with no profile gets one over the `fallback`
+ * registry (default: no extensions), with no base sections; the registry is
+ * built once, in the layer's scope.
  */
 export const fixedSessionProfiles = (
   profiles: ReadonlyMap<string, SessionProfile> = new Map(),
+  fallback: Layer.Layer<ExtensionRegistry> = ExtensionRegistry.Test(),
 ): Layer.Layer<SessionProfileCache> =>
   Layer.effect(
     SessionProfileCache,
     Effect.gen(function* () {
-      const resolved = resolveExtensions([])
-      const layerContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
+      const layerContext = yield* Layer.build(fallback)
+      const resolved = Context.get(layerContext, ExtensionRegistry).getResolved()
       const cache = new Map(profiles)
       return SessionProfileCache.of({
         resolve: (cwd) =>

@@ -45,6 +45,7 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
+  fixedSessionProfiles,
   testSqliteStorage,
   emptyQueueSnapshot,
 } from "../../src/test-utils/harness"
@@ -235,6 +236,7 @@ const sessionMutationsTestLayer = (
     GentPlatform.Test(),
     testRuntimeEnvironment,
     ExtensionRegistry.Test(),
+    fixedSessionProfiles(),
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
 }
@@ -596,6 +598,7 @@ const sessionQueriesActorFailureLayer = Layer.mergeAll(
   GentPlatform.Test(),
   ConfigService.Test(),
   ExtensionRegistry.Test(),
+  fixedSessionProfiles(),
   sessionRuntimeLayer({
     getState: () =>
       Effect.fail(new SessionRuntimeError({ message: "injected runtime state failure" })),
@@ -2384,7 +2387,11 @@ describe("requestId idempotency", () => {
             Effect.provide(
               Layer.provide(
                 SessionMutationsLive,
-                Layer.merge(Layer.succeedContext(shared), registry),
+                Layer.mergeAll(
+                  Layer.succeedContext(shared),
+                  registry,
+                  fixedSessionProfiles(new Map(), registry),
+                ),
               ),
             ),
           )

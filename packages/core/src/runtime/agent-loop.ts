@@ -133,17 +133,12 @@ import {
   resolveTurnProfile as resolveSessionTurnProfile,
   RunOpener,
   SessionProfileCache,
-  type SessionProfileCacheService,
   sessionWorkingDirectory,
   suspendExtensions,
 } from "./extension-host.js"
 import type { ConfigService } from "./config.js"
 import { RuntimeEnvironment } from "./config.js"
-import type {
-  CapabilityError,
-  CapabilityNotFoundError,
-  PromptSection,
-} from "../domain/capability.js"
+import type { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 import type { StorageError } from "../domain/errors.js"
 import { type DecisionModelResolver, type ModelRegistry, ModelResolver } from "./provider.js"
 import { GentPlatform } from "./gent-platform.js"
@@ -1648,9 +1643,7 @@ const makeAgentLoopBehavior = (
   branchId: BranchId,
   loopScope: Scope.Closeable,
   sideMutationSemaphore: Semaphore.Semaphore,
-  baseSections: ReadonlyArray<PromptSection>,
   initialQueue: LoopQueueState = emptyLoopQueueState(),
-  profileCache?: SessionProfileCacheService,
 ): Effect.Effect<
   AgentLoopBehavior,
   AgentLoopError,
@@ -1668,7 +1661,7 @@ const makeAgentLoopBehavior = (
   | SqlClient.SqlClient
   | ModelResolver
   | DecisionModelResolver
-  | ExtensionRegistry
+  | SessionProfileCache
   | EventStore
   | ToolRunner
   | ProcessLocalToolReplay
@@ -1684,7 +1677,7 @@ const makeAgentLoopBehavior = (
 > =>
   Effect.gen(function* () {
     yield* ModelResolver
-    const extensionRegistry = yield* ExtensionRegistry
+    const profileCache = yield* SessionProfileCache
     const runtimeEnvironment = yield* RuntimeEnvironment
     const eventStore = yield* EventStore
     yield* ToolCallBindingStorage
@@ -1763,9 +1756,7 @@ const makeAgentLoopBehavior = (
           branchId,
           profileCache,
           hostProvider,
-          defaults: { baseSections },
         }).pipe(
-          Effect.provideService(ExtensionRegistry, extensionRegistry),
           Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
           asAgentLoopError(`Cannot read session ${sessionId} for its profile`),
         ),
@@ -2350,886 +2341,868 @@ const awaitTurnCompletion = (
  * Encore exposes `CurrentAddress` while keeping that entity-provided service
  * out of the resulting layer requirements.
  */
-const buildAgentLoopActorHandlers = (config: {
-  readonly baseSections: ReadonlyArray<PromptSection>
-}) =>
-  Effect.gen(function* () {
-    const actorScope = yield* Effect.scope
-    const sideMutationSemaphore = yield* Semaphore.make(1)
-    // Set by admissions that run under the side-mutation permit. The wake runs
-    // after the permit is released, so admission never starts a turn re-entrantly.
-    const wakeRequested = yield* Ref.make(false)
-    // The client requests running on this branch (`RequestExtension`). An
-    // admission reads a message's grant here under `clientRequestPermit`,
-    // which a request's end takes too: the message gets the client origin
-    // only if its request still ran when it was admitted.
-    const liveClientRequests = yield* Ref.make<ReadonlySet<ClientRequestGrant>>(new Set())
-    const clientRequestPermit = yield* Semaphore.make(1)
-    // Serializes per-entity `handle` rebuild. The actor mailbox is
-    // `concurrency: "unbounded"`, so concurrent ops can both observe a
-    // closed loop and race into `openLoop`, leaking the first behavior's
-    // fibers and leaving `lifecycleRef` holding a state the other built.
-    const startupSemaphore = yield* Semaphore.make(1)
-    const residency = yield* makeAgentLoopResidency
-    const sessionGovernance = yield* AgentLoopSessionGovernance
-    const platform = yield* GentPlatform
-    const fileSystem = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const addr = yield* Actor.CurrentAddress
-    const { workspaceId, sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(
-      Effect.orDie,
+const agentLoopActorHandlers = Effect.gen(function* () {
+  const actorScope = yield* Effect.scope
+  const sideMutationSemaphore = yield* Semaphore.make(1)
+  // Set by admissions that run under the side-mutation permit. The wake runs
+  // after the permit is released, so admission never starts a turn re-entrantly.
+  const wakeRequested = yield* Ref.make(false)
+  // The client requests running on this branch (`RequestExtension`). An
+  // admission reads a message's grant here under `clientRequestPermit`,
+  // which a request's end takes too: the message gets the client origin
+  // only if its request still ran when it was admitted.
+  const liveClientRequests = yield* Ref.make<ReadonlySet<ClientRequestGrant>>(new Set())
+  const clientRequestPermit = yield* Semaphore.make(1)
+  // Serializes per-entity `handle` rebuild. The actor mailbox is
+  // `concurrency: "unbounded"`, so concurrent ops can both observe a
+  // closed loop and race into `openLoop`, leaking the first behavior's
+  // fibers and leaving `lifecycleRef` holding a state the other built.
+  const startupSemaphore = yield* Semaphore.make(1)
+  const residency = yield* makeAgentLoopResidency
+  const sessionGovernance = yield* AgentLoopSessionGovernance
+  const platform = yield* GentPlatform
+  const fileSystem = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const addr = yield* Actor.CurrentAddress
+  const { workspaceId, sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(
+    Effect.orDie,
+  )
+  // Storage Tags yield CurrentWorkspaceId internally — every reachable
+  // call path is piped through `provideActorWorkspace` below, so storage
+  // operations see the correct workspace from fiber context without any
+  // per-method wrapping layer.
+  const brandedWorkspaceId = workspaceId
+  const provideActorWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(Effect.provideService(CurrentWorkspaceId, brandedWorkspaceId))
+  const queueStorage = yield* AgentLoopQueueStorage
+  const operations = yield* SessionOperationStorage
+  const operationSeen = yield* Ref.make(false)
+
+  type ExtensionRequestEffect = Effect.Effect<
+    unknown,
+    CapabilityError | CapabilityNotFoundError,
+    CurrentExtensionHostContext | FileSystem.FileSystem | Path.Path
+  >
+
+  const extensionRequestError = (
+    error: AgentLoopError | CapabilityError | CapabilityNotFoundError,
+  ): AgentLoopError => {
+    if (Schema.is(AgentLoopError)(error)) return error
+    let message: string = error._tag
+    if ("reason" in error) message = `${error._tag}: ${error.reason}`
+    return new AgentLoopError({ message, cause: error })
+  }
+
+  const runExtensionRequest = (
+    environment: AgentLoopTurnProfile,
+    requestEffect: ExtensionRequestEffect,
+  ) =>
+    requestEffect.pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      runAgentLoopTurnProfile(environment),
+      Effect.mapError(extensionRequestError),
     )
-    // Storage Tags yield CurrentWorkspaceId internally — every reachable
-    // call path is piped through `provideActorWorkspace` below, so storage
-    // operations see the correct workspace from fiber context without any
-    // per-method wrapping layer.
-    const brandedWorkspaceId = workspaceId
-    const provideActorWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      effect.pipe(Effect.provideService(CurrentWorkspaceId, brandedWorkspaceId))
-    const queueStorage = yield* AgentLoopQueueStorage
-    const operations = yield* SessionOperationStorage
-    const sessionProfileCacheOption = yield* Effect.serviceOption(SessionProfileCache)
-    const operationSeen = yield* Ref.make(false)
 
-    type ExtensionRequestEffect = Effect.Effect<
-      unknown,
-      CapabilityError | CapabilityNotFoundError,
-      CurrentExtensionHostContext | FileSystem.FileSystem | Path.Path
-    >
+  // Every read happens inside `ensureStarted`, which holds
+  // `startupSemaphore` across the rebuild and the handle return, so no
+  // caller can be handed a handle from a cycle that has since closed.
+  const lifecycleRef = yield* Ref.make<LoopLifecycle>(LoopLifecycle.cases.Building.make({}))
 
-    const extensionRequestError = (
-      error: AgentLoopError | CapabilityError | CapabilityNotFoundError,
-    ): AgentLoopError => {
-      if (Schema.is(AgentLoopError)(error)) return error
-      let message: string = error._tag
-      if ("reason" in error) message = `${error._tag}: ${error.reason}`
-      return new AgentLoopError({ message, cause: error })
-    }
+  /** Close once. A second call finds `Closed` and leaves the behavior alone. */
+  const closeBehaviorWithHeldStartupPermit = (loop: AgentLoopBehavior) =>
+    Effect.gen(function* () {
+      const closing = LoopLifecycle.cases.Closed.make({ handle: loop })
+      const previous = yield* Ref.getAndSet(lifecycleRef, closing)
+      if (previous._tag === "Closed") return
+      yield* loop.close
+    }).pipe(Effect.ignore)
 
-    const runExtensionRequest = (
-      environment: AgentLoopTurnProfile,
-      requestEffect: ExtensionRequestEffect,
-    ) =>
-      requestEffect.pipe(
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
-        runAgentLoopTurnProfile(environment),
-        Effect.mapError(extensionRequestError),
-      )
+  // Holds `startupSemaphore` across the closed-flip + close so a
+  // concurrent `openLoop` cannot observe a half-torn-down loop nor
+  // publish a fresh handle while the old one is closing.
+  const closeBehavior = (loop: AgentLoopBehavior) =>
+    closeBehaviorWithHeldStartupPermit(loop).pipe(startupSemaphore.withPermits(1))
 
-    // Every read happens inside `ensureStarted`, which holds
-    // `startupSemaphore` across the rebuild and the handle return, so no
-    // caller can be handed a handle from a cycle that has since closed.
-    const lifecycleRef = yield* Ref.make<LoopLifecycle>(LoopLifecycle.cases.Building.make({}))
-
-    /** Close once. A second call finds `Closed` and leaves the behavior alone. */
-    const closeBehaviorWithHeldStartupPermit = (loop: AgentLoopBehavior) =>
-      Effect.gen(function* () {
-        const closing = LoopLifecycle.cases.Closed.make({ handle: loop })
-        const previous = yield* Ref.getAndSet(lifecycleRef, closing)
-        if (previous._tag === "Closed") return
-        yield* loop.close
-      }).pipe(Effect.ignore)
-
-    // Holds `startupSemaphore` across the closed-flip + close so a
-    // concurrent `openLoop` cannot observe a half-torn-down loop nor
-    // publish a fresh handle while the old one is closing.
-    const closeBehavior = (loop: AgentLoopBehavior) =>
-      closeBehaviorWithHeldStartupPermit(loop).pipe(startupSemaphore.withPermits(1))
-
-    /**
-     * A loop or persistence failure closes the loop before the error reaches
-     * the caller. A refusal (`FollowUpQueueFull`) is an answer, not a broken
-     * loop: the loop and its running turn go on.
-     */
-    const orCleanup =
-      (handle: AgentLoopBehavior) =>
-      <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-        effect.pipe(
-          Effect.catchEager((error) => {
-            if (Schema.is(FollowUpQueueFull)(error)) return Effect.fail(error)
-            return closeBehavior(handle).pipe(Effect.andThen(Effect.fail(error)))
-          }),
-        )
-
-    // Typed reentrant-only handle lookup. The only legitimate caller is the
-    // `AgentLoopFollowUp` enqueue implementation provided to the behavior — it
-    // fires from inside the behavior itself (during turn execution), so
-    // `lifecycleRef` provably holds `Open` by then. Mailbox handlers
-    // (which arrive from outside the behavior) MUST go through `ensureStarted`
-    // instead — that path holds `startupSemaphore` across the rebuild/publish,
-    // ensuring no one observes a half-reopened loop.
-    const reentrantHandle = Effect.gen(function* () {
-      const value = lifecycleHandle(yield* Ref.get(lifecycleRef))
-      if (Option.isNone(value)) {
-        return yield* new AgentLoopError({
-          message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
-        })
-      }
-      return value.value
-    })
-
-    /** A cold loop wakes for an explicit ask, an unfinished turn, or any prior history. */
-    const shouldWake = (handle: AgentLoopBehavior, input: { readonly wake?: boolean }) =>
-      Effect.gen(function* () {
-        if (input.wake === true) return true
-        // An incomplete turn is a stored user message, so history answers first
-        // and the event-log scan runs only for a branch with no messages.
-        if (yield* handle.hasPriorHistory) return true
-        return Option.isSome(yield* handle.incompleteUserTurn)
-      })
-
-    const startNextQueuedTurnIfIdle = (
-      handle: AgentLoopBehavior,
-      options?: { readonly startupPermitHeld?: boolean },
-    ) =>
-      handle.startNextIfIdle().pipe(
+  /**
+   * A loop or persistence failure closes the loop before the error reaches
+   * the caller. A refusal (`FollowUpQueueFull`) is an answer, not a broken
+   * loop: the loop and its running turn go on.
+   */
+  const orCleanup =
+    (handle: AgentLoopBehavior) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+      effect.pipe(
         Effect.catchEager((error) => {
-          let cleanup = closeBehavior
-          const startupPermitHeld = Option.fromUndefinedOr(options).pipe(
-            Option.map(({ startupPermitHeld: held }) => held),
-          )
-          if (Option.isSome(startupPermitHeld) && startupPermitHeld.value === true) {
-            cleanup = closeBehaviorWithHeldStartupPermit
-          }
-          return cleanup(handle).pipe(Effect.andThen(Effect.fail(error)))
+          if (Schema.is(FollowUpQueueFull)(error)) return Effect.fail(error)
+          return closeBehavior(handle).pipe(Effect.andThen(Effect.fail(error)))
         }),
       )
 
-    /**
-     * Refuse an operation on a terminated session. Every handler runs it before
-     * `ensureStarted`, so a terminated session never opens its loop (and never
-     * runs its `loopOpen` hooks) only to refuse the operation.
-     */
-    const rejectIfTerminated = Effect.gen(function* () {
-      if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
-        return yield* new AgentLoopError({
-          message: `Session terminated: ${sessionId}`,
-        })
-      }
-    })
-
-    /** A write: refused on a terminated session; answers whether an op was seen before. */
-    const markWrite = rejectIfTerminated.pipe(
-      Effect.andThen(Ref.modify(operationSeen, (seen) => [seen, true] as const)),
-    )
-
-    const ensureTarget = (target: {
-      readonly sessionId: SessionId
-      readonly branchId: BranchId
-    }) => {
-      if (target.sessionId === sessionId && target.branchId === branchId) {
-        return Effect.void
-      }
-      return Effect.fail(
-        new AgentLoopError({
-          message: `AgentLoop op target mismatch: entity=${sessionId}/${branchId} payload=${target.sessionId}/${target.branchId}`,
-        }),
-      )
-    }
-
-    /** One branch command on the started loop: check the target, apply the guard, run. */
-    const branchCommand = <A, E, R>(
-      operation: BranchCommandInput,
-      guard: Effect.Effect<unknown, AgentLoopError>,
-      run: (handle: AgentLoopBehavior) => Effect.Effect<A, E, R>,
-    ) =>
-      Effect.gen(function* () {
-        yield* ensureTarget(operation)
-        yield* guard
-        const handle = yield* ensureStarted
-        return yield* run(handle)
-      }).pipe(provideActorWorkspace)
-
-    // Both call sites supply an already-resolved `handle`, so no admission can
-    // reach the behavior without going through one of the two safe lookups:
-    //   - the `AgentLoopFollowUp` enqueue implementation reads
-    //     `reentrantHandle` lazily — it fires during turn execution, well after
-    //     `openLoop` published the handle, so the read is provably safe.
-    //   - the `QueueFollowUp` mailbox handler resolves it via `ensureStarted`.
-    type FollowUpInput = {
-      /** Keys the message id so repeated admissions and later removal target one item. */
-      readonly sourceId?: string
-      readonly message?: Message
-      readonly content?: string
-      readonly metadata?: MessageMetadata
-      readonly wake?: boolean
-      readonly clientRequest?: ClientRequestGrant
-    }
-
-    /**
-     * Admits an item with its origin decided at this point. A grant still live
-     * (see `liveClientRequests`) gives it the client origin; the check and the
-     * admission hold the permit a request's end takes, so no request ends
-     * between them. Returns what `admit` returns and the item it admitted.
-     */
-    const admitWithOrigin = <A, E, R>(
-      item: QueuedTurnItem,
-      grant: Option.Option<ClientRequestGrant>,
-      admit: (item: QueuedTurnItem) => Effect.Effect<A, E, R>,
-    ) =>
-      Effect.gen(function* () {
-        const live = yield* Ref.get(liveClientRequests)
-        const running = Option.filter(grant, (value) => live.has(value))
-        const admitted = Option.match(running, {
-          onNone: () => item,
-          onSome: (): QueuedTurnItem => ({
-            ...item,
-            message: { ...item.message, metadata: { ...item.message.metadata, fromClient: true } },
-          }),
-        })
-        return { result: yield* admit(admitted), item: admitted }
-      }).pipe(clientRequestPermit.withPermits(1))
-
-    /** Marks a client request running on this branch until the scope closes. */
-    const holdClientRequest = Effect.fn("AgentLoopActor.holdClientRequest")(function* () {
-      const grant = ClientRequestGrant.make(yield* platform.randomId)
-      yield* Effect.acquireRelease(
-        Ref.update(liveClientRequests, (live) => new Set([...live, grant])),
-        () =>
-          Ref.update(liveClientRequests, (live) => {
-            const rest = new Set(live)
-            rest.delete(grant)
-            return rest
-          }).pipe(clientRequestPermit.withPermits(1)),
-      )
-      return grant
-    })
-
-    const buildFollowUpItem = Effect.fn("AgentLoopActor.buildFollowUpItem")(function* (
-      input: FollowUpInput,
-    ) {
-      const platformRandomId = yield* platform.randomId
-      const message =
-        input.message ??
-        Message.cases.regular.make({
-          id: Option.match(Option.fromUndefinedOr(input.sourceId), {
-            onNone: () => MessageId.make(platformRandomId),
-            onSome: (sourceId) =>
-              followUpMessageIdForSource({
-                workspaceId: brandedWorkspaceId,
-                sessionId,
-                branchId,
-                sourceId,
-              }),
-          }),
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: input.content ?? "" })],
-          createdAt: yield* DateTime.nowAsDate,
-          metadata: input.metadata,
-        })
-      yield* ensureTarget(message)
-      const item: QueuedTurnItem = {
-        message,
-        wake: input.wake,
-      }
-      return item
-    })
-
-    /**
-     * Re-entrant admission from this branch's facade. The queue has its own
-     * permit, so requests that answer during a turn can also enqueue. The
-     * item starts once the side-mutation permit is available.
-     */
-    const admitFollowUp = Effect.fn("AgentLoopActor.admitFollowUp")(function* (
-      handle: AgentLoopBehavior,
-      input: FollowUpInput,
-    ) {
-      yield* markWrite
-      // A settled or running message id is not a new turn: the inbox makes a
-      // replayed follow-up a no-op.
-      const item = yield* buildFollowUpItem(input)
-      yield* admitWithOrigin(item, Option.fromUndefinedOr(input.clientRequest), (admitted) =>
-        handle.inbox.admit(admitted, { queueOnly: true }),
-      )
-      // A retained facade can enqueue after its original turn has ended.
-      // The actor owns this wake; an active mutation releases its permit first.
-      if (yield* shouldWake(handle, input)) yield* wakeAfterPermit(handle)
-    })
-
-    /**
-     * Mailbox admission from another branch or the runtime. It carries no
-     * client grant: a grant is live only on its own branch, whose follow-ups
-     * take the re-entrant path (`admitFollowUp`).
-     */
-    const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (
-      handle: AgentLoopBehavior,
-      input: FollowUpInput,
-    ) {
-      const wasAlreadyWarm = yield* markWrite
-      const item = yield* buildFollowUpItem(input)
-      yield* handle.admitAndStart(item, { queueOnly: !wasAlreadyWarm }).pipe(orCleanup(handle))
-      if (!wasAlreadyWarm && (yield* shouldWake(handle, input))) {
-        yield* startNextQueuedTurnIfIdle(handle)
-      }
-    })
-
-    /**
-     * Ask for a turn from inside a caller that holds the side-mutation permit.
-     * The start is forked, so it waits for that permit instead of deadlocking.
-     *
-     * The ask holds the entity resident until the start is decided, and a
-     * started turn holds it from its hand-over to the worker. The hold is
-     * taken here, before the caller goes on: a caller may let go of the loop
-     * as soon as this returns (a wake timer's hold ends with its fire), and
-     * the reaper could passivate the idle loop before the turn starts.
-     */
-    const wakeAfterPermit = (handle: AgentLoopBehavior): Effect.Effect<void> =>
-      Effect.uninterruptible(
-        Effect.gen(function* () {
-          const resident = yield* Scope.make()
-          yield* residency.held.pipe(Scope.provide(resident))
-          yield* Ref.set(wakeRequested, true)
-          yield* drainWake(handle).pipe(
-            Effect.ensuring(Scope.close(resident, Exit.void)),
-            provideActorWorkspace,
-            Effect.forkIn(actorScope),
-          )
-        }),
-      )
-
-    /** Start a queued turn requested by a re-entrant admission once the permit is free. */
-    const drainWake = (handle: AgentLoopBehavior) =>
-      Effect.gen(function* () {
-        if (!(yield* Ref.getAndSet(wakeRequested, false))) return
-        yield* startNextQueuedTurnIfIdle(handle)
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("failed to start a queued turn after admission").pipe(
-            Effect.annotateLogs({ sessionId, branchId, error: Cause.pretty(cause) }),
-          ),
-        ),
-      )
-
-    const openLoop = Effect.gen(function* () {
-      const loadedQueue = yield* Effect.result(
-        queueStorage
-          .getQueueState(sessionId, branchId)
-          .pipe(asAgentLoopError(`Failed to load loop queue for ${sessionId}/${branchId}`)),
-      )
-      const initialQueue = Result.getOrElse(loadedQueue, emptyLoopQueueState)
-      const initialQueueFailure = Result.getFailure(loadedQueue)
-      if (Option.isSome(initialQueueFailure)) {
-        yield* Effect.logWarning("failed to load loop queue").pipe(
-          Effect.annotateLogs({
-            sessionId,
-            branchId,
-            error: initialQueueFailure.value.message,
-          }),
-        )
-      }
-      // Each rebuild owns a child of the actor scope, never the request scope.
-      // Transfer it only after construction and handle publication both succeed.
-      const handle = yield* Effect.acquireUseRelease(
-        Scope.fork(actorScope),
-        (loopScope) =>
-          makeAgentLoopBehavior(
-            sessionId,
-            branchId,
-            loopScope,
-            sideMutationSemaphore,
-            config.baseSections,
-            initialQueue,
-            Option.getOrUndefined(sessionProfileCacheOption),
-          ).pipe(
-            Effect.provideService(AgentLoopResidency, residency),
-            Effect.provideService(AgentLoopFollowUp, {
-              enqueue: (input) =>
-                reentrantHandle.pipe(Effect.flatMap((h) => admitFollowUp(h, input))),
-              steer: (command, clientRequest) =>
-                reentrantHandle.pipe(
-                  Effect.flatMap((h) => admitInterjection(h, command, clientRequest)),
-                ),
-              dequeue: (input) =>
-                reentrantHandle.pipe(
-                  Effect.flatMap((h) =>
-                    h.withdrawFollowUp(
-                      followUpMessageIdForSource({ workspaceId: brandedWorkspaceId, ...input }),
-                    ),
-                  ),
-                ),
-            }),
-            Scope.provide(loopScope),
-            // Published before startup runs: a turn recovered below can enqueue
-            // a follow-up through `reentrantHandle` while startup is still in
-            // flight. `ensureStarted` cannot see this state — it holds the
-            // startup permit across the whole rebuild.
-            Effect.tap((handle) =>
-              Ref.set(lifecycleRef, LoopLifecycle.cases.Open.make({ handle })),
-            ),
-          ),
-        (loopScope, exit) => {
-          if (Exit.isFailure(exit)) return Scope.close(loopScope, exit)
-          return Effect.void
-        },
-      )
-      if (Option.isSome(initialQueueFailure)) {
-        yield* Ref.set(
-          lifecycleRef,
-          LoopLifecycle.cases.Failed.make({ handle, error: initialQueueFailure.value }),
-        )
-        return
-      }
-
-      const exit = yield* Effect.exit(
-        handle.start.pipe(
-          Effect.andThen(handle.inbox.writeInitialQueue),
-          Effect.andThen(
-            Effect.gen(function* () {
-              const incompleteTurn = yield* handle.incompleteUserTurn
-              if (Option.isSome(incompleteTurn)) {
-                yield* handle
-                  .startRecovered(incompleteTurn.value)
-                  .pipe(
-                    Effect.catchEager((error) =>
-                      closeBehaviorWithHeldStartupPermit(handle).pipe(
-                        Effect.andThen(Effect.fail(error)),
-                      ),
-                    ),
-                  )
-                return
-              }
-              const recovered = wantsWakeOnRecovery(initialQueue)
-              if (Option.isNone(recovered)) return
-              if (recovered.value.unconditional || (yield* handle.hasPriorHistory)) {
-                yield* startNextQueuedTurnIfIdle(handle, { startupPermitHeld: true })
-              }
-            }),
-          ),
-        ),
-      )
-      // One write settles the cycle: success leaves the published `Open`, and
-      // a failure replaces it with the error every later op will be handed.
-      // A startup that closed the behavior on its way out always fails too, so
-      // `Failed` never hides a live loop.
-      if (Exit.isFailure(exit)) {
-        yield* Ref.set(
-          lifecycleRef,
-          LoopLifecycle.cases.Failed.make({
-            handle,
-            error: causeToAgentLoopError(exit.cause),
-          }),
-        )
-        return
-      }
-      // Once per build, after startup and the recovery above: the extensions
-      // repair what a previous process or a closed loop left on this branch.
-      yield* handle.runOpenHooks
-    })
-
-    // An open that fails (the session cannot be read) leaves `Building`, and
-    // the next op opens again. A terminated session does not open: every op
-    // on it is refused.
-    if (!(yield* sessionGovernance.isTerminated(workspaceId, sessionId))) {
-      yield* openLoop.pipe(
-        provideActorWorkspace,
-        Effect.catchEager((error) =>
-          Effect.logWarning("agent loop open failed").pipe(
-            Effect.annotateLogs({ sessionId, branchId, error: error.message }),
-          ),
-        ),
-      )
-    }
-    yield* Effect.addFinalizer(() =>
-      Effect.flatMap(Ref.get(lifecycleRef), (lifecycle) => {
-        const loop = lifecycleHandle(lifecycle)
-        if (Option.isNone(loop)) return Effect.void
-        return closeBehavior(loop.value)
-      }),
-    )
-
-    // Serialize the full read/rebuild/check path so concurrent ops cannot
-    // observe a partially-rebuilt loop. The rebuild and the read share one
-    // permit window, so the handle a caller is handed belongs to the cycle
-    // this call just settled.
-    const ensureStarted = Effect.gen(function* () {
-      const before = (yield* Ref.get(lifecycleRef))._tag
-      if (before === "Closed" || before === "Building") {
-        yield* openLoop.pipe(provideActorWorkspace)
-      }
-      // The rebuild above settles `Open` or `Failed`, or fails this op. The
-      // other two mean the rebuild left no usable loop, and handing back a
-      // closed handle would run the op against a behavior whose fibers are gone.
-      const unavailable = Effect.fail(
-        new AgentLoopError({
-          message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
-        }),
-      )
-      return yield* Match.type<LoopLifecycle>().pipe(
-        Match.tagsExhaustive({
-          Open: ({ handle }) => Effect.succeed(handle),
-          Failed: ({ error }) => Effect.fail(error),
-          Closed: () => unavailable,
-          Building: () => unavailable,
-        }),
-      )(yield* Ref.get(lifecycleRef))
-    }).pipe(startupSemaphore.withPermits(1))
-
-    const currentRegisteredState = Effect.gen(function* () {
-      yield* rejectIfTerminated
-      const handle = yield* ensureStarted
-      return yield* handle.inbox.runtimeState
-    })
-
-    // A watcher holds the entity resident for as long as it watches: a
-    // passivated entity would end the stream under an idle client.
-    const registeredStateChanges = Stream.unwrap(
-      Effect.gen(function* () {
-        yield* rejectIfTerminated
-        yield* residency.held
-        const handle = yield* ensureStarted
-        return handle.inbox.runtimeChanges.pipe(Stream.interruptWhen(handle.awaitExit))
-      }),
-    )
-
-    const registeredState = Actor.State.makeReadable(
-      currentRegisteredState.pipe(provideActorWorkspace),
-      registeredStateChanges.pipe(Stream.provideService(CurrentWorkspaceId, brandedWorkspaceId)),
-    )
-    yield* Actor.registerState(registeredState)
-
-    /**
-     * Admit one submitted turn: target check, warm mark, reservation, and the
-     * start when the reservation grants it.
-     */
-    const admitTurn = (handle: AgentLoopBehavior, operation: TurnSubmissionInput) =>
-      Effect.gen(function* () {
-        yield* ensureTarget(operation.message)
-        yield* markWrite
-        const item: QueuedTurnItem = { message: operation.message }
-        yield* handle.admitAndStart(item, { queueOnly: false }).pipe(orCleanup(handle))
+  // Typed reentrant-only handle lookup. The only legitimate caller is the
+  // `AgentLoopFollowUp` enqueue implementation provided to the behavior — it
+  // fires from inside the behavior itself (during turn execution), so
+  // `lifecycleRef` provably holds `Open` by then. Mailbox handlers
+  // (which arrive from outside the behavior) MUST go through `ensureStarted`
+  // instead — that path holds `startupSemaphore` across the rebuild/publish,
+  // ensuring no one observes a half-reopened loop.
+  const reentrantHandle = Effect.gen(function* () {
+    const value = lifecycleHandle(yield* Ref.get(lifecycleRef))
+    if (Option.isNone(value)) {
+      return yield* new AgentLoopError({
+        message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
       })
-
-    const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
-      operation: TurnSubmissionInput,
-    ) {
-      yield* rejectIfTerminated
-      const handle = yield* ensureStarted
-      yield* admitTurn(handle, operation)
-    })
-
-    const submitTurnAndWait = Effect.fn("AgentLoopActor.submitTurnAndWait")(function* (
-      operation: TurnSubmissionInput,
-    ) {
-      yield* rejectIfTerminated
-      const handle = yield* ensureStarted
-      const baseline = yield* waitBaseline(handle)
-      yield* admitTurn(handle, operation)
-      // This turn is done when the loop lets *its* message go, which can
-      // happen while the loop stays busy with a follow-up.
-      yield* awaitTurnCompletion(handle, baseline, operation.message.id, orCleanup(handle))
-    })
-
-    const isCancellation = Predicate.or(
-      Predicate.isTagged("Cancel"),
-      Predicate.isTagged("Interrupt"),
-    )
-
-    const interjectionItem = Effect.fn("AgentLoopActor.interjectionItem")(function* (
-      commandId: ActorCommandId,
-      command: InterjectCommand,
-      sender: Option.Option<RequesterBranch>,
-    ) {
-      const message = Message.cases.interjection.make({
-        id: interjectionMessageId(commandId),
-        sessionId: command.sessionId,
-        branchId: command.branchId,
-        role: "user",
-        parts: [Prompt.textPart({ text: command.message })],
-        createdAt: yield* DateTime.nowAsDate,
-        ...Record.filter({ metadata: command.metadata }, Predicate.isNotUndefined),
-      })
-      const item: QueuedTurnItem = {
-        message,
-        wake: command.wake,
-        ...Record.filter({ sender: Option.getOrUndefined(sender) }, Predicate.isNotUndefined),
-      }
-      return item
-    })
-
-    /**
-     * Queue one steering item, and start a turn for it when the caller asked to
-     * wake an idle branch.
-     *
-     * Steering joins the running turn at its next step boundary; the open
-     * stream is not interrupted. An idle branch has no turn to join, so the
-     * item waits in the queue where `queue.get` can still show it. Only a
-     * caller that asked to wake gets a turn of its own — the same signal
-     * recovery uses at startup. `inbox.steer` answers with the state the queue
-     * had *before* the append, so the idle test is made on that: a caller that
-     * read the state first and steered second would race a turn that ended in
-     * between.
-     *
-     * `start` and `sender` are the differences between the two callers. The
-     * mailbox starts at once (`startNextQueuedTurnIfIdle`: the take and the
-     * start run in one permit region), and carries the other branch that sent
-     * the steer. A re-entrant caller holds the side-mutation permit, so its
-     * wake starts after the permit is released (`wakeAfterPermit`); its steer
-     * comes from this branch and names no sender.
-     */
-    const interject = Effect.fn("AgentLoopActor.interject")(function* (
-      handle: AgentLoopBehavior,
-      commandId: ActorCommandId,
-      command: InterjectCommand,
-      clientRequest: Option.Option<ClientRequestGrant>,
-      start: (handle: AgentLoopBehavior) => Effect.Effect<void, AgentLoopError>,
-      sender: Option.Option<RequesterBranch>,
-    ) {
-      const item = yield* interjectionItem(commandId, command, sender)
-      const { result: before } = yield* admitWithOrigin(item, clientRequest, (admitted) =>
-        handle.inbox.steer(admitted),
-      )
-      if (command.wake !== true || Option.isNone(before) || before.value._tag !== "Idle") return
-      yield* start(handle)
-    })
-
-    /**
-     * Re-entrant steer into this branch (see `admitFollowUp`). The origin is
-     * decided at admission, while the caller runs.
-     */
-    const admitInterjection = Effect.fn("AgentLoopActor.admitInterjection")(function* (
-      handle: AgentLoopBehavior,
-      command: InterjectCommand,
-      clientRequest: Option.Option<ClientRequestGrant>,
-    ) {
-      yield* ensureTarget(command)
-      yield* markWrite
-      yield* interject(
-        handle,
-        ActorCommandId.make(command.requestId),
-        command,
-        clientRequest,
-        wakeAfterPermit,
-        Option.none(),
-      )
-    })
-
-    /**
-     * Stop what one message opens. The recorded cancellation stops a turn
-     * that has not started yet when it starts; a steer no step has read yet
-     * is taken back; a running turn the message opened is interrupted.
-     * True when this stop reached the message in one of these places. False
-     * when the loop no longer holds it (its turn ended, or a step already
-     * joined it into a turn that another message opened), or when an earlier
-     * interrupt already stops its turn: that stop is not this one's doing.
-     * A steer taken back is this stop's news, with one exception: when an
-     * earlier stop from the same `requester` already stops the turn the steer
-     * waited to join, that stop answered true and its caller reports the
-     * branch, so the take-back answers false and the branch is named once.
-     * A take-back while any other stop (the user's, another branch's) stops
-     * that turn is true: nobody else tells the requester its steer is gone.
-     * A stop that reaches the running turn takes the requester's own waiting
-     * steers with it (`interrupt`), so a later stop of one finds nothing,
-     * whether that turn has ended by then or not.
-     */
-    const stopMessage = Effect.fn("AgentLoopActor.stopMessage")(function* (
-      messageId: MessageId,
-      requester: Option.Option<RequesterBranch>,
-    ) {
-      const by = Option.map(requester, requesterBranchKey)
-      // Read before the cancellation is recorded: a turn that starts after
-      // the record latches itself, and that latch is this stop's.
-      const latch = yield* Option.match(lifecycleHandle(yield* Ref.get(lifecycleRef)), {
-        onNone: () => Effect.succeed(Option.none<StopLatch>()),
-        onSome: (loop) => loop.stopLatch(),
-      })
-      // An interrupt already stops the turn this message opened.
-      const alreadyStopping = Option.exists(
-        latch,
-        (turn) => turn.messageId === messageId && turn.stopped,
-      )
-      // The stop that first latched the running turn came from this requester.
-      const requesterStopsTurn = Option.exists(latch, (turn) =>
-        Option.exists(by, (key) => Option.contains(turn.by, key)),
-      )
-      yield* operations
-        .cancelTurn({ sessionId, branchId, messageId })
-        .pipe(asAgentLoopError("Cannot record targeted cancellation"))
-      const handle = yield* ensureStarted
-      const takenBack = yield* handle.inbox.withdrawSteering(messageId)
-      // An idle loop has no turn to interrupt: the interrupt reports false.
-      const interrupted = yield* handle
-        .interrupt(messageId, Option.getOrUndefined(by))
-        .pipe(orCleanup(handle))
-      const held = handle.inbox.holds(yield* handle.inbox.read, messageId)
-      return (takenBack && !requesterStopsTurn) || (!alreadyStopping && (interrupted || held))
-    })
-
-    const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
-      commandId: ActorCommandId,
-      command: SteerCommand,
-      sender: Option.Option<RequesterBranch>,
-    ) {
-      yield* ensureTarget(command)
-      yield* markWrite
-      if (isCancellation(command) && Predicate.isNotUndefined(command.messageId)) {
-        yield* stopMessage(command.messageId, Option.none())
-        return
-      }
-      const handle = yield* ensureStarted
-
-      switch (command._tag) {
-        case "Cancel":
-        case "Interrupt":
-          // A cancellation that names a message took the `stopMessage` path above.
-          if (isActiveLoopState(yield* handle.inbox.phase)) {
-            yield* handle.interrupt().pipe(orCleanup(handle))
-          }
-          return
-
-        case "Interject":
-          // A mailbox steer carries no client grant: it came from outside the branch.
-          yield* interject(
-            handle,
-            commandId,
-            command,
-            Option.none(),
-            (h) => startNextQueuedTurnIfIdle(h),
-            sender,
-          )
-          return
-      }
-    })
-
-    return AgentLoop.of({
-      Submit: Effect.fn("AgentLoop.Submit")(({ operation }: HandlerRequest<TurnSubmissionInput>) =>
-        submitTurn(operation).pipe(provideActorWorkspace),
-      ),
-      SubmitAndWait: Effect.fn("AgentLoop.SubmitAndWait")(
-        ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
-          submitTurnAndWait(operation).pipe(provideActorWorkspace),
-      ),
-      // Same body as `Submit` by design. `persisted` is a static RPC
-      // annotation compiled into the protocol, not a payload field, so the
-      // durable variant has to be its own operation. Do not merge the two.
-      SubmitDurable: Effect.fn("AgentLoop.SubmitDurable")(
-        ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
-          submitTurn(operation).pipe(provideActorWorkspace),
-      ),
-      QueueFollowUp: Effect.fn("AgentLoop.QueueFollowUp")(
-        ({ operation }: HandlerRequest<QueueFollowUpInput>) =>
-          Effect.gen(function* () {
-            yield* rejectIfTerminated
-            const handle = yield* ensureStarted
-            yield* enqueueMessage(handle, {
-              message: operation.message,
-              wake: operation.wake,
-            })
-          }).pipe(provideActorWorkspace),
-      ),
-      Steer: Effect.fn("AgentLoop.Steer")(({ operation }: HandlerRequest<SteerInput>) =>
-        applySteer(
-          operation.commandId,
-          operation.command,
-          Option.fromUndefinedOr(operation.sender),
-        ).pipe(provideActorWorkspace),
-      ),
-      RespondInteraction: Effect.fn("AgentLoop.RespondInteraction")(
-        ({ operation }: HandlerRequest<RespondInteractionInput>) =>
-          Effect.gen(function* () {
-            yield* ensureTarget(operation)
-            yield* markWrite
-            const handle = yield* ensureStarted
-            // A reply to a loop that lost its turn (a restart mid-interaction)
-            // needs nothing here: opening the loop resumed that turn, and it
-            // reads the stored answer when it reaches the interaction.
-            const phase = yield* handle.inbox.phase
-            if (phase._tag !== "WaitingForInteraction") return
-            yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
-          }).pipe(provideActorWorkspace),
-      ),
-      DrainQueue: Effect.fn("AgentLoop.DrainQueue")(
-        ({ operation }: HandlerRequest<BranchCommandInput>) =>
-          branchCommand(operation, markWrite, (handle) => handle.inbox.drain),
-      ),
-      RemoveFollowUp: Effect.fn("AgentLoop.RemoveFollowUp")(
-        ({ operation }: HandlerRequest<RemoveFollowUpInput>) =>
-          branchCommand(operation, markWrite, (handle) =>
-            handle.withdrawFollowUp(operation.messageId),
-          ),
-      ),
-      StopMessage: Effect.fn("AgentLoop.StopMessage")(
-        ({ operation }: HandlerRequest<StopMessageInput>) =>
-          branchCommand(operation, markWrite, () =>
-            stopMessage(operation.messageId, Option.fromUndefinedOr(operation.requester)),
-          ),
-      ),
-      GetQueue: Effect.fn("AgentLoop.GetQueue")(
-        ({ operation }: HandlerRequest<BranchCommandInput>) =>
-          branchCommand(operation, rejectIfTerminated, (handle) => handle.inbox.snapshot),
-      ),
-      GetState: Effect.fn("AgentLoop.GetState")(
-        ({ operation }: HandlerRequest<BranchCommandInput>) =>
-          branchCommand(operation, rejectIfTerminated, (handle) => handle.inbox.runtimeState),
-      ),
-      RequestExtension: Effect.fn("AgentLoop.RequestExtension")(
-        ({ operation }: HandlerRequest<RequestExtensionInput>) =>
-          Effect.gen(function* () {
-            yield* ensureTarget(operation)
-            yield* rejectIfTerminated
-            const handle = yield* ensureStarted
-            // A request comes from a client, which can answer, and sends to
-            // its own branch as that client until the request ends.
-            const grant = yield* holdClientRequest()
-            const environment = yield* handle.resolveTurnProfile(
-              RunOpener.cases.ClientRequest.make({ grant }),
-            )
-            const rpcRegistry = turnRegistry(environment).getResolved().rpcRegistry
-            const capabilityId = RpcId.make(operation.capabilityId)
-            let input: unknown
-            if (operation.input._tag === "Present") input = operation.input.value
-            const run = runExtensionRequest(
-              environment,
-              rpcRegistry.run(operation.extensionId, capabilityId, input),
-            ).pipe(
-              // Branch Resources live on the loop scope, not on the turn
-              // profile. Without this an extension leaf reached over RPC
-              // cannot see a `scope: "branch"` service.
-              Effect.provideContext(yield* handle.branchContext),
-            )
-            // Reads, extension-owned writes and independently serialized queue
-            // verbs answer during a turn; other mutations wait for its permit.
-            if (rpcRegistry.answersDuringTurn(operation.extensionId, capabilityId)) {
-              return yield* run
-            }
-            // A follow-up the request admitted wakes the loop from
-            // `admitFollowUp`, which forks the drain in the actor scope.
-            return yield* run.pipe(handle.withSideMutation)
-          }).pipe(
-            // The request's profile lease ends with the request.
-            Effect.scoped,
-            Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
-            provideActorWorkspace,
-          ),
-      ),
-      TerminateBranch: Effect.fn("AgentLoop.TerminateBranch")(
-        ({ operation }: HandlerRequest<BranchCommandInput>) =>
-          Effect.gen(function* () {
-            yield* ensureTarget(operation)
-            yield* sessionGovernance.markTerminated(workspaceId, sessionId)
-            // Lifecycle stop must not depend on the loop being open. If the
-            // mailbox closed before we got here, `lifecycleRef` may still be
-            // `Building`; skip cleanup in that case rather than triggering a
-            // rebuild via `ensureStarted`.
-            const handle = lifecycleHandle(yield* Ref.get(lifecycleRef))
-            if (Option.isSome(handle)) {
-              yield* closeBehavior(handle.value)
-            }
-          }).pipe(provideActorWorkspace),
-      ),
-    })
+    }
+    return value.value
   })
 
-export const AgentLoopLiveActor = (config: {
-  readonly baseSections: ReadonlyArray<PromptSection>
-}) =>
+  /** A cold loop wakes for an explicit ask, an unfinished turn, or any prior history. */
+  const shouldWake = (handle: AgentLoopBehavior, input: { readonly wake?: boolean }) =>
+    Effect.gen(function* () {
+      if (input.wake === true) return true
+      // An incomplete turn is a stored user message, so history answers first
+      // and the event-log scan runs only for a branch with no messages.
+      if (yield* handle.hasPriorHistory) return true
+      return Option.isSome(yield* handle.incompleteUserTurn)
+    })
+
+  const startNextQueuedTurnIfIdle = (
+    handle: AgentLoopBehavior,
+    options?: { readonly startupPermitHeld?: boolean },
+  ) =>
+    handle.startNextIfIdle().pipe(
+      Effect.catchEager((error) => {
+        let cleanup = closeBehavior
+        const startupPermitHeld = Option.fromUndefinedOr(options).pipe(
+          Option.map(({ startupPermitHeld: held }) => held),
+        )
+        if (Option.isSome(startupPermitHeld) && startupPermitHeld.value === true) {
+          cleanup = closeBehaviorWithHeldStartupPermit
+        }
+        return cleanup(handle).pipe(Effect.andThen(Effect.fail(error)))
+      }),
+    )
+
+  /**
+   * Refuse an operation on a terminated session. Every handler runs it before
+   * `ensureStarted`, so a terminated session never opens its loop (and never
+   * runs its `loopOpen` hooks) only to refuse the operation.
+   */
+  const rejectIfTerminated = Effect.gen(function* () {
+    if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
+      return yield* new AgentLoopError({
+        message: `Session terminated: ${sessionId}`,
+      })
+    }
+  })
+
+  /** A write: refused on a terminated session; answers whether an op was seen before. */
+  const markWrite = rejectIfTerminated.pipe(
+    Effect.andThen(Ref.modify(operationSeen, (seen) => [seen, true] as const)),
+  )
+
+  const ensureTarget = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) => {
+    if (target.sessionId === sessionId && target.branchId === branchId) {
+      return Effect.void
+    }
+    return Effect.fail(
+      new AgentLoopError({
+        message: `AgentLoop op target mismatch: entity=${sessionId}/${branchId} payload=${target.sessionId}/${target.branchId}`,
+      }),
+    )
+  }
+
+  /** One branch command on the started loop: check the target, apply the guard, run. */
+  const branchCommand = <A, E, R>(
+    operation: BranchCommandInput,
+    guard: Effect.Effect<unknown, AgentLoopError>,
+    run: (handle: AgentLoopBehavior) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.gen(function* () {
+      yield* ensureTarget(operation)
+      yield* guard
+      const handle = yield* ensureStarted
+      return yield* run(handle)
+    }).pipe(provideActorWorkspace)
+
+  // Both call sites supply an already-resolved `handle`, so no admission can
+  // reach the behavior without going through one of the two safe lookups:
+  //   - the `AgentLoopFollowUp` enqueue implementation reads
+  //     `reentrantHandle` lazily — it fires during turn execution, well after
+  //     `openLoop` published the handle, so the read is provably safe.
+  //   - the `QueueFollowUp` mailbox handler resolves it via `ensureStarted`.
+  type FollowUpInput = {
+    /** Keys the message id so repeated admissions and later removal target one item. */
+    readonly sourceId?: string
+    readonly message?: Message
+    readonly content?: string
+    readonly metadata?: MessageMetadata
+    readonly wake?: boolean
+    readonly clientRequest?: ClientRequestGrant
+  }
+
+  /**
+   * Admits an item with its origin decided at this point. A grant still live
+   * (see `liveClientRequests`) gives it the client origin; the check and the
+   * admission hold the permit a request's end takes, so no request ends
+   * between them. Returns what `admit` returns and the item it admitted.
+   */
+  const admitWithOrigin = <A, E, R>(
+    item: QueuedTurnItem,
+    grant: Option.Option<ClientRequestGrant>,
+    admit: (item: QueuedTurnItem) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.gen(function* () {
+      const live = yield* Ref.get(liveClientRequests)
+      const running = Option.filter(grant, (value) => live.has(value))
+      const admitted = Option.match(running, {
+        onNone: () => item,
+        onSome: (): QueuedTurnItem => ({
+          ...item,
+          message: { ...item.message, metadata: { ...item.message.metadata, fromClient: true } },
+        }),
+      })
+      return { result: yield* admit(admitted), item: admitted }
+    }).pipe(clientRequestPermit.withPermits(1))
+
+  /** Marks a client request running on this branch until the scope closes. */
+  const holdClientRequest = Effect.fn("AgentLoopActor.holdClientRequest")(function* () {
+    const grant = ClientRequestGrant.make(yield* platform.randomId)
+    yield* Effect.acquireRelease(
+      Ref.update(liveClientRequests, (live) => new Set([...live, grant])),
+      () =>
+        Ref.update(liveClientRequests, (live) => {
+          const rest = new Set(live)
+          rest.delete(grant)
+          return rest
+        }).pipe(clientRequestPermit.withPermits(1)),
+    )
+    return grant
+  })
+
+  const buildFollowUpItem = Effect.fn("AgentLoopActor.buildFollowUpItem")(function* (
+    input: FollowUpInput,
+  ) {
+    const platformRandomId = yield* platform.randomId
+    const message =
+      input.message ??
+      Message.cases.regular.make({
+        id: Option.match(Option.fromUndefinedOr(input.sourceId), {
+          onNone: () => MessageId.make(platformRandomId),
+          onSome: (sourceId) =>
+            followUpMessageIdForSource({
+              workspaceId: brandedWorkspaceId,
+              sessionId,
+              branchId,
+              sourceId,
+            }),
+        }),
+        sessionId,
+        branchId,
+        role: "user",
+        parts: [Prompt.textPart({ text: input.content ?? "" })],
+        createdAt: yield* DateTime.nowAsDate,
+        metadata: input.metadata,
+      })
+    yield* ensureTarget(message)
+    const item: QueuedTurnItem = {
+      message,
+      wake: input.wake,
+    }
+    return item
+  })
+
+  /**
+   * Re-entrant admission from this branch's facade. The queue has its own
+   * permit, so requests that answer during a turn can also enqueue. The
+   * item starts once the side-mutation permit is available.
+   */
+  const admitFollowUp = Effect.fn("AgentLoopActor.admitFollowUp")(function* (
+    handle: AgentLoopBehavior,
+    input: FollowUpInput,
+  ) {
+    yield* markWrite
+    // A settled or running message id is not a new turn: the inbox makes a
+    // replayed follow-up a no-op.
+    const item = yield* buildFollowUpItem(input)
+    yield* admitWithOrigin(item, Option.fromUndefinedOr(input.clientRequest), (admitted) =>
+      handle.inbox.admit(admitted, { queueOnly: true }),
+    )
+    // A retained facade can enqueue after its original turn has ended.
+    // The actor owns this wake; an active mutation releases its permit first.
+    if (yield* shouldWake(handle, input)) yield* wakeAfterPermit(handle)
+  })
+
+  /**
+   * Mailbox admission from another branch or the runtime. It carries no
+   * client grant: a grant is live only on its own branch, whose follow-ups
+   * take the re-entrant path (`admitFollowUp`).
+   */
+  const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (
+    handle: AgentLoopBehavior,
+    input: FollowUpInput,
+  ) {
+    const wasAlreadyWarm = yield* markWrite
+    const item = yield* buildFollowUpItem(input)
+    yield* handle.admitAndStart(item, { queueOnly: !wasAlreadyWarm }).pipe(orCleanup(handle))
+    if (!wasAlreadyWarm && (yield* shouldWake(handle, input))) {
+      yield* startNextQueuedTurnIfIdle(handle)
+    }
+  })
+
+  /**
+   * Ask for a turn from inside a caller that holds the side-mutation permit.
+   * The start is forked, so it waits for that permit instead of deadlocking.
+   *
+   * The ask holds the entity resident until the start is decided, and a
+   * started turn holds it from its hand-over to the worker. The hold is
+   * taken here, before the caller goes on: a caller may let go of the loop
+   * as soon as this returns (a wake timer's hold ends with its fire), and
+   * the reaper could passivate the idle loop before the turn starts.
+   */
+  const wakeAfterPermit = (handle: AgentLoopBehavior): Effect.Effect<void> =>
+    Effect.uninterruptible(
+      Effect.gen(function* () {
+        const resident = yield* Scope.make()
+        yield* residency.held.pipe(Scope.provide(resident))
+        yield* Ref.set(wakeRequested, true)
+        yield* drainWake(handle).pipe(
+          Effect.ensuring(Scope.close(resident, Exit.void)),
+          provideActorWorkspace,
+          Effect.forkIn(actorScope),
+        )
+      }),
+    )
+
+  /** Start a queued turn requested by a re-entrant admission once the permit is free. */
+  const drainWake = (handle: AgentLoopBehavior) =>
+    Effect.gen(function* () {
+      if (!(yield* Ref.getAndSet(wakeRequested, false))) return
+      yield* startNextQueuedTurnIfIdle(handle)
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to start a queued turn after admission").pipe(
+          Effect.annotateLogs({ sessionId, branchId, error: Cause.pretty(cause) }),
+        ),
+      ),
+    )
+
+  const openLoop = Effect.gen(function* () {
+    const loadedQueue = yield* Effect.result(
+      queueStorage
+        .getQueueState(sessionId, branchId)
+        .pipe(asAgentLoopError(`Failed to load loop queue for ${sessionId}/${branchId}`)),
+    )
+    const initialQueue = Result.getOrElse(loadedQueue, emptyLoopQueueState)
+    const initialQueueFailure = Result.getFailure(loadedQueue)
+    if (Option.isSome(initialQueueFailure)) {
+      yield* Effect.logWarning("failed to load loop queue").pipe(
+        Effect.annotateLogs({
+          sessionId,
+          branchId,
+          error: initialQueueFailure.value.message,
+        }),
+      )
+    }
+    // Each rebuild owns a child of the actor scope, never the request scope.
+    // Transfer it only after construction and handle publication both succeed.
+    const handle = yield* Effect.acquireUseRelease(
+      Scope.fork(actorScope),
+      (loopScope) =>
+        makeAgentLoopBehavior(
+          sessionId,
+          branchId,
+          loopScope,
+          sideMutationSemaphore,
+          initialQueue,
+        ).pipe(
+          Effect.provideService(AgentLoopResidency, residency),
+          Effect.provideService(AgentLoopFollowUp, {
+            enqueue: (input) =>
+              reentrantHandle.pipe(Effect.flatMap((h) => admitFollowUp(h, input))),
+            steer: (command, clientRequest) =>
+              reentrantHandle.pipe(
+                Effect.flatMap((h) => admitInterjection(h, command, clientRequest)),
+              ),
+            dequeue: (input) =>
+              reentrantHandle.pipe(
+                Effect.flatMap((h) =>
+                  h.withdrawFollowUp(
+                    followUpMessageIdForSource({ workspaceId: brandedWorkspaceId, ...input }),
+                  ),
+                ),
+              ),
+          }),
+          Scope.provide(loopScope),
+          // Published before startup runs: a turn recovered below can enqueue
+          // a follow-up through `reentrantHandle` while startup is still in
+          // flight. `ensureStarted` cannot see this state — it holds the
+          // startup permit across the whole rebuild.
+          Effect.tap((handle) => Ref.set(lifecycleRef, LoopLifecycle.cases.Open.make({ handle }))),
+        ),
+      (loopScope, exit) => {
+        if (Exit.isFailure(exit)) return Scope.close(loopScope, exit)
+        return Effect.void
+      },
+    )
+    if (Option.isSome(initialQueueFailure)) {
+      yield* Ref.set(
+        lifecycleRef,
+        LoopLifecycle.cases.Failed.make({ handle, error: initialQueueFailure.value }),
+      )
+      return
+    }
+
+    const exit = yield* Effect.exit(
+      handle.start.pipe(
+        Effect.andThen(handle.inbox.writeInitialQueue),
+        Effect.andThen(
+          Effect.gen(function* () {
+            const incompleteTurn = yield* handle.incompleteUserTurn
+            if (Option.isSome(incompleteTurn)) {
+              yield* handle
+                .startRecovered(incompleteTurn.value)
+                .pipe(
+                  Effect.catchEager((error) =>
+                    closeBehaviorWithHeldStartupPermit(handle).pipe(
+                      Effect.andThen(Effect.fail(error)),
+                    ),
+                  ),
+                )
+              return
+            }
+            const recovered = wantsWakeOnRecovery(initialQueue)
+            if (Option.isNone(recovered)) return
+            if (recovered.value.unconditional || (yield* handle.hasPriorHistory)) {
+              yield* startNextQueuedTurnIfIdle(handle, { startupPermitHeld: true })
+            }
+          }),
+        ),
+      ),
+    )
+    // One write settles the cycle: success leaves the published `Open`, and
+    // a failure replaces it with the error every later op will be handed.
+    // A startup that closed the behavior on its way out always fails too, so
+    // `Failed` never hides a live loop.
+    if (Exit.isFailure(exit)) {
+      yield* Ref.set(
+        lifecycleRef,
+        LoopLifecycle.cases.Failed.make({
+          handle,
+          error: causeToAgentLoopError(exit.cause),
+        }),
+      )
+      return
+    }
+    // Once per build, after startup and the recovery above: the extensions
+    // repair what a previous process or a closed loop left on this branch.
+    yield* handle.runOpenHooks
+  })
+
+  // An open that fails (the session cannot be read) leaves `Building`, and
+  // the next op opens again. A terminated session does not open: every op
+  // on it is refused.
+  if (!(yield* sessionGovernance.isTerminated(workspaceId, sessionId))) {
+    yield* openLoop.pipe(
+      provideActorWorkspace,
+      Effect.catchEager((error) =>
+        Effect.logWarning("agent loop open failed").pipe(
+          Effect.annotateLogs({ sessionId, branchId, error: error.message }),
+        ),
+      ),
+    )
+  }
+  yield* Effect.addFinalizer(() =>
+    Effect.flatMap(Ref.get(lifecycleRef), (lifecycle) => {
+      const loop = lifecycleHandle(lifecycle)
+      if (Option.isNone(loop)) return Effect.void
+      return closeBehavior(loop.value)
+    }),
+  )
+
+  // Serialize the full read/rebuild/check path so concurrent ops cannot
+  // observe a partially-rebuilt loop. The rebuild and the read share one
+  // permit window, so the handle a caller is handed belongs to the cycle
+  // this call just settled.
+  const ensureStarted = Effect.gen(function* () {
+    const before = (yield* Ref.get(lifecycleRef))._tag
+    if (before === "Closed" || before === "Building") {
+      yield* openLoop.pipe(provideActorWorkspace)
+    }
+    // The rebuild above settles `Open` or `Failed`, or fails this op. The
+    // other two mean the rebuild left no usable loop, and handing back a
+    // closed handle would run the op against a behavior whose fibers are gone.
+    const unavailable = Effect.fail(
+      new AgentLoopError({
+        message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
+      }),
+    )
+    return yield* Match.type<LoopLifecycle>().pipe(
+      Match.tagsExhaustive({
+        Open: ({ handle }) => Effect.succeed(handle),
+        Failed: ({ error }) => Effect.fail(error),
+        Closed: () => unavailable,
+        Building: () => unavailable,
+      }),
+    )(yield* Ref.get(lifecycleRef))
+  }).pipe(startupSemaphore.withPermits(1))
+
+  const currentRegisteredState = Effect.gen(function* () {
+    yield* rejectIfTerminated
+    const handle = yield* ensureStarted
+    return yield* handle.inbox.runtimeState
+  })
+
+  // A watcher holds the entity resident for as long as it watches: a
+  // passivated entity would end the stream under an idle client.
+  const registeredStateChanges = Stream.unwrap(
+    Effect.gen(function* () {
+      yield* rejectIfTerminated
+      yield* residency.held
+      const handle = yield* ensureStarted
+      return handle.inbox.runtimeChanges.pipe(Stream.interruptWhen(handle.awaitExit))
+    }),
+  )
+
+  const registeredState = Actor.State.makeReadable(
+    currentRegisteredState.pipe(provideActorWorkspace),
+    registeredStateChanges.pipe(Stream.provideService(CurrentWorkspaceId, brandedWorkspaceId)),
+  )
+  yield* Actor.registerState(registeredState)
+
+  /**
+   * Admit one submitted turn: target check, warm mark, reservation, and the
+   * start when the reservation grants it.
+   */
+  const admitTurn = (handle: AgentLoopBehavior, operation: TurnSubmissionInput) =>
+    Effect.gen(function* () {
+      yield* ensureTarget(operation.message)
+      yield* markWrite
+      const item: QueuedTurnItem = { message: operation.message }
+      yield* handle.admitAndStart(item, { queueOnly: false }).pipe(orCleanup(handle))
+    })
+
+  const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
+    operation: TurnSubmissionInput,
+  ) {
+    yield* rejectIfTerminated
+    const handle = yield* ensureStarted
+    yield* admitTurn(handle, operation)
+  })
+
+  const submitTurnAndWait = Effect.fn("AgentLoopActor.submitTurnAndWait")(function* (
+    operation: TurnSubmissionInput,
+  ) {
+    yield* rejectIfTerminated
+    const handle = yield* ensureStarted
+    const baseline = yield* waitBaseline(handle)
+    yield* admitTurn(handle, operation)
+    // This turn is done when the loop lets *its* message go, which can
+    // happen while the loop stays busy with a follow-up.
+    yield* awaitTurnCompletion(handle, baseline, operation.message.id, orCleanup(handle))
+  })
+
+  const isCancellation = Predicate.or(Predicate.isTagged("Cancel"), Predicate.isTagged("Interrupt"))
+
+  const interjectionItem = Effect.fn("AgentLoopActor.interjectionItem")(function* (
+    commandId: ActorCommandId,
+    command: InterjectCommand,
+    sender: Option.Option<RequesterBranch>,
+  ) {
+    const message = Message.cases.interjection.make({
+      id: interjectionMessageId(commandId),
+      sessionId: command.sessionId,
+      branchId: command.branchId,
+      role: "user",
+      parts: [Prompt.textPart({ text: command.message })],
+      createdAt: yield* DateTime.nowAsDate,
+      ...Record.filter({ metadata: command.metadata }, Predicate.isNotUndefined),
+    })
+    const item: QueuedTurnItem = {
+      message,
+      wake: command.wake,
+      ...Record.filter({ sender: Option.getOrUndefined(sender) }, Predicate.isNotUndefined),
+    }
+    return item
+  })
+
+  /**
+   * Queue one steering item, and start a turn for it when the caller asked to
+   * wake an idle branch.
+   *
+   * Steering joins the running turn at its next step boundary; the open
+   * stream is not interrupted. An idle branch has no turn to join, so the
+   * item waits in the queue where `queue.get` can still show it. Only a
+   * caller that asked to wake gets a turn of its own — the same signal
+   * recovery uses at startup. `inbox.steer` answers with the state the queue
+   * had *before* the append, so the idle test is made on that: a caller that
+   * read the state first and steered second would race a turn that ended in
+   * between.
+   *
+   * `start` and `sender` are the differences between the two callers. The
+   * mailbox starts at once (`startNextQueuedTurnIfIdle`: the take and the
+   * start run in one permit region), and carries the other branch that sent
+   * the steer. A re-entrant caller holds the side-mutation permit, so its
+   * wake starts after the permit is released (`wakeAfterPermit`); its steer
+   * comes from this branch and names no sender.
+   */
+  const interject = Effect.fn("AgentLoopActor.interject")(function* (
+    handle: AgentLoopBehavior,
+    commandId: ActorCommandId,
+    command: InterjectCommand,
+    clientRequest: Option.Option<ClientRequestGrant>,
+    start: (handle: AgentLoopBehavior) => Effect.Effect<void, AgentLoopError>,
+    sender: Option.Option<RequesterBranch>,
+  ) {
+    const item = yield* interjectionItem(commandId, command, sender)
+    const { result: before } = yield* admitWithOrigin(item, clientRequest, (admitted) =>
+      handle.inbox.steer(admitted),
+    )
+    if (command.wake !== true || Option.isNone(before) || before.value._tag !== "Idle") return
+    yield* start(handle)
+  })
+
+  /**
+   * Re-entrant steer into this branch (see `admitFollowUp`). The origin is
+   * decided at admission, while the caller runs.
+   */
+  const admitInterjection = Effect.fn("AgentLoopActor.admitInterjection")(function* (
+    handle: AgentLoopBehavior,
+    command: InterjectCommand,
+    clientRequest: Option.Option<ClientRequestGrant>,
+  ) {
+    yield* ensureTarget(command)
+    yield* markWrite
+    yield* interject(
+      handle,
+      ActorCommandId.make(command.requestId),
+      command,
+      clientRequest,
+      wakeAfterPermit,
+      Option.none(),
+    )
+  })
+
+  /**
+   * Stop what one message opens. The recorded cancellation stops a turn
+   * that has not started yet when it starts; a steer no step has read yet
+   * is taken back; a running turn the message opened is interrupted.
+   * True when this stop reached the message in one of these places. False
+   * when the loop no longer holds it (its turn ended, or a step already
+   * joined it into a turn that another message opened), or when an earlier
+   * interrupt already stops its turn: that stop is not this one's doing.
+   * A steer taken back is this stop's news, with one exception: when an
+   * earlier stop from the same `requester` already stops the turn the steer
+   * waited to join, that stop answered true and its caller reports the
+   * branch, so the take-back answers false and the branch is named once.
+   * A take-back while any other stop (the user's, another branch's) stops
+   * that turn is true: nobody else tells the requester its steer is gone.
+   * A stop that reaches the running turn takes the requester's own waiting
+   * steers with it (`interrupt`), so a later stop of one finds nothing,
+   * whether that turn has ended by then or not.
+   */
+  const stopMessage = Effect.fn("AgentLoopActor.stopMessage")(function* (
+    messageId: MessageId,
+    requester: Option.Option<RequesterBranch>,
+  ) {
+    const by = Option.map(requester, requesterBranchKey)
+    // Read before the cancellation is recorded: a turn that starts after
+    // the record latches itself, and that latch is this stop's.
+    const latch = yield* Option.match(lifecycleHandle(yield* Ref.get(lifecycleRef)), {
+      onNone: () => Effect.succeed(Option.none<StopLatch>()),
+      onSome: (loop) => loop.stopLatch(),
+    })
+    // An interrupt already stops the turn this message opened.
+    const alreadyStopping = Option.exists(
+      latch,
+      (turn) => turn.messageId === messageId && turn.stopped,
+    )
+    // The stop that first latched the running turn came from this requester.
+    const requesterStopsTurn = Option.exists(latch, (turn) =>
+      Option.exists(by, (key) => Option.contains(turn.by, key)),
+    )
+    yield* operations
+      .cancelTurn({ sessionId, branchId, messageId })
+      .pipe(asAgentLoopError("Cannot record targeted cancellation"))
+    const handle = yield* ensureStarted
+    const takenBack = yield* handle.inbox.withdrawSteering(messageId)
+    // An idle loop has no turn to interrupt: the interrupt reports false.
+    const interrupted = yield* handle
+      .interrupt(messageId, Option.getOrUndefined(by))
+      .pipe(orCleanup(handle))
+    const held = handle.inbox.holds(yield* handle.inbox.read, messageId)
+    return (takenBack && !requesterStopsTurn) || (!alreadyStopping && (interrupted || held))
+  })
+
+  const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
+    commandId: ActorCommandId,
+    command: SteerCommand,
+    sender: Option.Option<RequesterBranch>,
+  ) {
+    yield* ensureTarget(command)
+    yield* markWrite
+    if (isCancellation(command) && Predicate.isNotUndefined(command.messageId)) {
+      yield* stopMessage(command.messageId, Option.none())
+      return
+    }
+    const handle = yield* ensureStarted
+
+    switch (command._tag) {
+      case "Cancel":
+      case "Interrupt":
+        // A cancellation that names a message took the `stopMessage` path above.
+        if (isActiveLoopState(yield* handle.inbox.phase)) {
+          yield* handle.interrupt().pipe(orCleanup(handle))
+        }
+        return
+
+      case "Interject":
+        // A mailbox steer carries no client grant: it came from outside the branch.
+        yield* interject(
+          handle,
+          commandId,
+          command,
+          Option.none(),
+          (h) => startNextQueuedTurnIfIdle(h),
+          sender,
+        )
+        return
+    }
+  })
+
+  return AgentLoop.of({
+    Submit: Effect.fn("AgentLoop.Submit")(({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+      submitTurn(operation).pipe(provideActorWorkspace),
+    ),
+    SubmitAndWait: Effect.fn("AgentLoop.SubmitAndWait")(
+      ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+        submitTurnAndWait(operation).pipe(provideActorWorkspace),
+    ),
+    // Same body as `Submit` by design. `persisted` is a static RPC
+    // annotation compiled into the protocol, not a payload field, so the
+    // durable variant has to be its own operation. Do not merge the two.
+    SubmitDurable: Effect.fn("AgentLoop.SubmitDurable")(
+      ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+        submitTurn(operation).pipe(provideActorWorkspace),
+    ),
+    QueueFollowUp: Effect.fn("AgentLoop.QueueFollowUp")(
+      ({ operation }: HandlerRequest<QueueFollowUpInput>) =>
+        Effect.gen(function* () {
+          yield* rejectIfTerminated
+          const handle = yield* ensureStarted
+          yield* enqueueMessage(handle, {
+            message: operation.message,
+            wake: operation.wake,
+          })
+        }).pipe(provideActorWorkspace),
+    ),
+    Steer: Effect.fn("AgentLoop.Steer")(({ operation }: HandlerRequest<SteerInput>) =>
+      applySteer(
+        operation.commandId,
+        operation.command,
+        Option.fromUndefinedOr(operation.sender),
+      ).pipe(provideActorWorkspace),
+    ),
+    RespondInteraction: Effect.fn("AgentLoop.RespondInteraction")(
+      ({ operation }: HandlerRequest<RespondInteractionInput>) =>
+        Effect.gen(function* () {
+          yield* ensureTarget(operation)
+          yield* markWrite
+          const handle = yield* ensureStarted
+          // A reply to a loop that lost its turn (a restart mid-interaction)
+          // needs nothing here: opening the loop resumed that turn, and it
+          // reads the stored answer when it reaches the interaction.
+          const phase = yield* handle.inbox.phase
+          if (phase._tag !== "WaitingForInteraction") return
+          yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
+        }).pipe(provideActorWorkspace),
+    ),
+    DrainQueue: Effect.fn("AgentLoop.DrainQueue")(
+      ({ operation }: HandlerRequest<BranchCommandInput>) =>
+        branchCommand(operation, markWrite, (handle) => handle.inbox.drain),
+    ),
+    RemoveFollowUp: Effect.fn("AgentLoop.RemoveFollowUp")(
+      ({ operation }: HandlerRequest<RemoveFollowUpInput>) =>
+        branchCommand(operation, markWrite, (handle) =>
+          handle.withdrawFollowUp(operation.messageId),
+        ),
+    ),
+    StopMessage: Effect.fn("AgentLoop.StopMessage")(
+      ({ operation }: HandlerRequest<StopMessageInput>) =>
+        branchCommand(operation, markWrite, () =>
+          stopMessage(operation.messageId, Option.fromUndefinedOr(operation.requester)),
+        ),
+    ),
+    GetQueue: Effect.fn("AgentLoop.GetQueue")(({ operation }: HandlerRequest<BranchCommandInput>) =>
+      branchCommand(operation, rejectIfTerminated, (handle) => handle.inbox.snapshot),
+    ),
+    GetState: Effect.fn("AgentLoop.GetState")(({ operation }: HandlerRequest<BranchCommandInput>) =>
+      branchCommand(operation, rejectIfTerminated, (handle) => handle.inbox.runtimeState),
+    ),
+    RequestExtension: Effect.fn("AgentLoop.RequestExtension")(
+      ({ operation }: HandlerRequest<RequestExtensionInput>) =>
+        Effect.gen(function* () {
+          yield* ensureTarget(operation)
+          yield* rejectIfTerminated
+          const handle = yield* ensureStarted
+          // A request comes from a client, which can answer, and sends to
+          // its own branch as that client until the request ends.
+          const grant = yield* holdClientRequest()
+          const environment = yield* handle.resolveTurnProfile(
+            RunOpener.cases.ClientRequest.make({ grant }),
+          )
+          const rpcRegistry = turnRegistry(environment).getResolved().rpcRegistry
+          const capabilityId = RpcId.make(operation.capabilityId)
+          let input: unknown
+          if (operation.input._tag === "Present") input = operation.input.value
+          const run = runExtensionRequest(
+            environment,
+            rpcRegistry.run(operation.extensionId, capabilityId, input),
+          ).pipe(
+            // Branch Resources live on the loop scope, not on the turn
+            // profile. Without this an extension leaf reached over RPC
+            // cannot see a `scope: "branch"` service.
+            Effect.provideContext(yield* handle.branchContext),
+          )
+          // Reads, extension-owned writes and independently serialized queue
+          // verbs answer during a turn; other mutations wait for its permit.
+          if (rpcRegistry.answersDuringTurn(operation.extensionId, capabilityId)) {
+            return yield* run
+          }
+          // A follow-up the request admitted wakes the loop from
+          // `admitFollowUp`, which forks the drain in the actor scope.
+          return yield* run.pipe(handle.withSideMutation)
+        }).pipe(
+          // The request's profile lease ends with the request.
+          Effect.scoped,
+          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+          provideActorWorkspace,
+        ),
+    ),
+    TerminateBranch: Effect.fn("AgentLoop.TerminateBranch")(
+      ({ operation }: HandlerRequest<BranchCommandInput>) =>
+        Effect.gen(function* () {
+          yield* ensureTarget(operation)
+          yield* sessionGovernance.markTerminated(workspaceId, sessionId)
+          // Lifecycle stop must not depend on the loop being open. If the
+          // mailbox closed before we got here, `lifecycleRef` may still be
+          // `Building`; skip cleanup in that case rather than triggering a
+          // rebuild via `ensureStarted`.
+          const handle = lifecycleHandle(yield* Ref.get(lifecycleRef))
+          if (Option.isSome(handle)) {
+            yield* closeBehavior(handle.value)
+          }
+        }).pipe(provideActorWorkspace),
+    ),
+  })
+})
+
+export const AgentLoopLiveActor =
   // The replay store is built at the server actor-layer scope. Agent-loop
   // behaviors can be rebuilt for one entity, but their live tool identities
   // must remain available until the owning server scope closes.
   Layer.unwrap(
-    Actor.provideLayerBuildContext(buildAgentLoopActorHandlers(config)).pipe(
+    Actor.provideLayerBuildContext(agentLoopActorHandlers).pipe(
       Effect.map((build) =>
         Actor.toLayer(AgentLoop, build, {
           // Long-lived turn execution is owned by AgentLoopBehavior's worker queue.
@@ -3241,16 +3214,13 @@ export const AgentLoopLiveActor = (config: {
     ),
   ).pipe(Layer.provide(ProcessLocalToolReplay.Live))
 
-export const AgentLoopTestActor = (config: {
-  readonly baseSections: ReadonlyArray<PromptSection>
-}) =>
-  Layer.unwrap(
-    Actor.provideLayerBuildContext(buildAgentLoopActorHandlers(config)).pipe(
-      Effect.map((build) =>
-        Actor.toTestLayer(AgentLoop, build, {
-          // Match the production mailbox behavior used by AgentLoopLiveActor.
-          concurrency: "unbounded",
-        }).pipe(Layer.provide(ShardingConfig.layerDefaults)),
-      ),
+export const AgentLoopTestActor = Layer.unwrap(
+  Actor.provideLayerBuildContext(agentLoopActorHandlers).pipe(
+    Effect.map((build) =>
+      Actor.toTestLayer(AgentLoop, build, {
+        // Match the production mailbox behavior used by AgentLoopLiveActor.
+        concurrency: "unbounded",
+      }).pipe(Layer.provide(ShardingConfig.layerDefaults)),
     ),
-  ).pipe(Layer.provide(ProcessLocalToolReplay.Live))
+  ),
+).pipe(Layer.provide(ProcessLocalToolReplay.Live))

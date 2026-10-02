@@ -288,12 +288,8 @@ export interface AgentLoopTurnProfile {
    * extension (a failed branch Resource) writes the narrowed registry here.
    */
   readonly turnCapabilityContext: Context.Context<ExtensionRegistry>
-  /**
-   * Identity of the process that built the profile. Absent for direct actor
-   * tests and runtimes without a profile cache, where no process-local tool
-   * binding can be recorded or resumed.
-   */
-  readonly turnGenerationId?: ProcessGenerationId
+  /** Identity of the process that built the profile; a process-local tool binding replays only inside it. */
+  readonly turnGenerationId: ProcessGenerationId
 }
 
 export class CurrentAgentLoopTurnProfile extends Context.Service<

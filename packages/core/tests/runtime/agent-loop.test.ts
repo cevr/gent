@@ -58,6 +58,7 @@ import {
   createRpcHarness,
   emptyQueueSnapshot,
   ensureStorageParents,
+  fixedSessionProfiles,
   recordingEventStore,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
@@ -3430,7 +3431,7 @@ const makeRuntimeLayer = (
   tools: ReadonlyArray<ToolCapability> = [],
   requests: ReadonlyArray<RequestCapability> = [],
 ) => {
-  const resolvedExtensions = makeTestExtensions(tools, requests)
+  const registry = ExtensionRegistry.fromResolved(makeTestExtensions(tools, requests))
   const eventStoreLayer = EventStore.Memory
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   let toolRunnerLayer = ToolRunner.Test()
@@ -3440,7 +3441,8 @@ const makeRuntimeLayer = (
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
-    ExtensionRegistry.fromResolved(resolvedExtensions),
+    registry,
+    fixedSessionProfiles(new Map(), registry),
     eventStoreLayer,
     toolRunnerLayer,
     RuntimeEnvironment.Live({
@@ -3456,7 +3458,7 @@ const makeRuntimeLayer = (
   )
   const approvalLayer = ApprovalService.Live.pipe(Layer.provide(baseDeps))
   return Layer.provideMerge(
-    Layer.provideMerge(AgentLoopLiveActor({ baseSections: [] }), SessionRuntime.Client),
+    Layer.provideMerge(AgentLoopLiveActor, SessionRuntime.Client),
     Layer.mergeAll(baseDeps, approvalLayer, ProcessLocalToolReplay.Live),
   )
 }

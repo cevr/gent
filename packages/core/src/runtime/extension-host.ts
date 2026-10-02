@@ -3109,10 +3109,6 @@ export const makeExtensionHostContextProvider = (
 
 // ── session-runtime-context ─────────────────────────────────────────────────
 
-interface TurnProfileDefaults {
-  readonly baseSections: ReadonlyArray<PromptSection>
-}
-
 interface ExistingSessionBranch {
   readonly session: Session
   readonly branch: Branch
@@ -3149,27 +3145,23 @@ export const sessionWorkingDirectory = (
   })
 
 /**
- * Resolve the turn profile for one branch. With a cache, the profile of the
- * session's working directory (the stored cwd, else the host's) is the one
- * owner of the turn's extension services. Without a cache, the launch
- * registry and the host defaults apply. A failed session read fails the
- * resolve. The caller's scope holds the profile's lease for as long as it
- * uses it.
+ * Resolve the turn profile for one branch. The profile of the session's
+ * working directory (the stored cwd, else the host's) is the one owner of the
+ * turn's extension services. A failed session read fails the resolve. The
+ * caller's scope holds the profile's lease for as long as it uses it.
  */
 export const resolveTurnProfile = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly profileCache?: SessionProfileCacheService
+  readonly profileCache: SessionProfileCacheService
   readonly hostProvider: ExtensionHostContextProvider
-  readonly defaults: TurnProfileDefaults
   readonly opener: RunOpener
 }): Effect.Effect<
   AgentLoopTurnProfile,
   StorageError,
-  ExtensionRegistry | SessionStorage | RuntimeEnvironment | ScopeType.Scope
+  SessionStorage | RuntimeEnvironment | ScopeType.Scope
 > =>
   Effect.gen(function* () {
-    const launchRegistry = yield* ExtensionRegistry
     const environment = yield* RuntimeEnvironment
     const hostProvider = params.hostProvider
     const session = yield* storedSession(params.sessionId)
@@ -3185,27 +3177,15 @@ export const resolveTurnProfile = (params: {
       interactive,
       clientRequest: clientRequestOf(params.opener),
     }
-    const profile = yield* Option.match(Option.fromUndefinedOr(params.profileCache), {
-      onNone: () => Effect.succeedNone,
-      onSome: (profileCache) =>
-        profileCache
-          .resolve(Option.getOrElse(sessionCwd, () => environment.cwd))
-          .pipe(Effect.asSome),
-    })
-    if (Option.isNone(profile)) {
-      return {
-        turnBaseSections: params.defaults.baseSections,
-        turnHostCtx: hostProvider.forRun(runInfo),
-        turnInteractive: interactive,
-        turnCapabilityContext: Context.make(ExtensionRegistry, launchRegistry),
-      }
-    }
+    const profile = yield* params.profileCache.resolve(
+      Option.getOrElse(sessionCwd, () => environment.cwd),
+    )
     return {
-      turnBaseSections: profile.value.baseSections,
+      turnBaseSections: profile.baseSections,
       turnHostCtx: hostProvider.forRun(runInfo),
       turnInteractive: interactive,
-      turnCapabilityContext: profile.value.layerContext,
-      turnGenerationId: profile.value.generationId,
+      turnCapabilityContext: profile.layerContext,
+      turnGenerationId: profile.generationId,
     }
   })
 

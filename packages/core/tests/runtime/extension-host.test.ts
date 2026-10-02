@@ -1392,27 +1392,25 @@ describe("resolveTurnProfile", () => {
           opener: RunOpener.cases.Turn.make({ openedByClient: true }),
           profileCache,
           hostProvider,
-          defaults: { baseSections: [] },
         })
         expect(resolved.turnHostCtx.cwd).toBe(secondary)
       }).pipe(Effect.provide(testLayer), Effect.scoped)
     }).pipe(Effect.provide(BunPlatformLive)),
   )
-  it.scopedLive("falls back to host deps and defaults when no session profile is available", () =>
+  it.scopedLive("a session with no stored cwd runs in the host cwd's profile", () =>
     Effect.gen(function* () {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/nonexistent/runtime-context-default",
         home: "/nonexistent/runtime-context-home",
       })
-      const defaults = {
-        baseSections: [{ id: "default", content: "Default", priority: 1 }],
-      }
       const testLayer = Layer.mergeAll(
         testSqliteStorage(Layer.empty, {}),
-        emptyRegistryLayer,
+        fixedSessionProfiles(),
         runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
+        const profiles = yield* SessionProfileCache
+        const asked: Array<string> = []
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
         })
@@ -1420,13 +1418,15 @@ describe("resolveTurnProfile", () => {
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
           opener: RunOpener.cases.Turn.make({ openedByClient: true }),
+          profileCache: {
+            resolve: (cwd) =>
+              Effect.sync(() => asked.push(cwd)).pipe(Effect.andThen(profiles.resolve(cwd))),
+          },
           hostProvider,
-          defaults,
         })
+        expect(asked).toEqual(["/nonexistent/runtime-context-default"])
         expect(resolved.turnHostCtx.cwd).toBe("/nonexistent/runtime-context-default")
-        expect(resolved.turnBaseSections).toEqual([
-          { id: "default", content: "Default", priority: 1 },
-        ])
+        expect(resolved.turnGenerationId).toBe(ProcessGenerationId.make("test"))
       }).pipe(Effect.provide(testLayer))
     }),
   )
@@ -1440,7 +1440,7 @@ describe("resolveTurnProfile", () => {
       })
       const testLayer = Layer.mergeAll(
         testSqliteStorage(Layer.empty, {}),
-        emptyRegistryLayer,
+        fixedSessionProfiles(),
         runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
@@ -1458,8 +1458,8 @@ describe("resolveTurnProfile", () => {
             sessionId,
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
             opener: RunOpener.cases.Turn.make({ openedByClient: true }),
+            profileCache: yield* SessionProfileCache,
             hostProvider,
-            defaults: { baseSections: [] },
           }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
         )
         const cwdFailure = yield* Effect.flip(
@@ -1471,76 +1471,79 @@ describe("resolveTurnProfile", () => {
       }).pipe(Effect.provide(testLayer))
     }),
   )
-  it.scopedLive("prefers the profile registry and its drivers over fallback defaults", () =>
-    Effect.gen(function* () {
-      const profileResolved = resolveExtensions([
-        {
-          manifest: { id: ExtensionId.make("profile-driver-ext") },
-          scope: "project",
-          sourcePath: "/test/profile-driver-ext",
-          contributions: {
-            modelDrivers: [
-              {
-                id: "profile-driver",
-                name: "Profile driver",
-                resolveModel: () => stubResolution(),
-              },
-            ],
+  it.scopedLive(
+    "the turn runs with its profile's registry and drivers, not the launch registry's",
+    () =>
+      Effect.gen(function* () {
+        const profileResolved = resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("profile-driver-ext") },
+            scope: "project",
+            sourcePath: "/test/profile-driver-ext",
+            contributions: {
+              modelDrivers: [
+                {
+                  id: "profile-driver",
+                  name: "Profile driver",
+                  resolveModel: () => stubResolution(),
+                },
+              ],
+            },
           },
-        },
-      ])
-      const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
-        cwd: "/nonexistent/runtime-context-default",
-        home: "/nonexistent/runtime-context-home",
-      })
-      const testLayer = Layer.mergeAll(
-        testSqliteStorage(Layer.empty, {}),
-        emptyRegistryLayer,
-        runtimeEnvironmentLayer,
-      )
-      yield* Effect.gen(function* () {
-        const sessionStorage = yield* SessionStorage
-        const extensionRegistry = yield* ExtensionRegistry
-        const now = dateFromMillis(1_767_225_600_000)
-        yield* sessionStorage.createSession(
-          new Session({
-            id: SessionId.make("session-runtime-context-driver"),
-            cwd: "/nonexistent/profile-driver-scope",
-            createdAt: now,
-            updatedAt: now,
-          }),
+        ])
+        const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
+          cwd: "/nonexistent/runtime-context-default",
+          home: "/nonexistent/runtime-context-home",
+        })
+        const testLayer = Layer.mergeAll(
+          testSqliteStorage(Layer.empty, {}),
+          emptyRegistryLayer,
+          runtimeEnvironmentLayer,
         )
-        // A built profile's services hold its registry, as `Layer.build` makes them.
-        const profileRegistry = ExtensionRegistry.of({ getResolved: () => profileResolved })
-        const fakeProfile: SessionProfile = {
-          cwd: "/nonexistent/profile-driver-scope",
-          resolved: profileResolved,
-          layerContext: Context.make(ExtensionRegistry, profileRegistry),
-          registryService: profileRegistry,
-          baseSections: [],
-          generationId: ProcessGenerationId.make("test"),
-        }
-        const fakeProfileCache: SessionProfileCacheService = {
-          resolve: () => Effect.succeed(fakeProfile),
-        }
-        const hostProvider = yield* makeExtensionHostContextProvider({
-          host: testHostFacts().host,
-        })
-        const resolved = yield* resolveTurnProfile({
-          sessionId: SessionId.make("session-runtime-context-driver"),
-          branchId: BranchId.make("branch-runtime-context-driver"),
-          opener: RunOpener.cases.Turn.make({ openedByClient: true }),
-          profileCache: fakeProfileCache,
-          hostProvider,
-          defaults: { baseSections: [] },
-        })
-        const drivers = Context.get(resolved.turnCapabilityContext, ExtensionRegistry).getResolved()
-          .modelDrivers
-        expect(resolved.turnHostCtx.cwd).toBe("/nonexistent/profile-driver-scope")
-        expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
-        expect(extensionRegistry.getResolved().modelDrivers.has("profile-driver")).toBe(false)
-      }).pipe(Effect.provide(testLayer))
-    }),
+        yield* Effect.gen(function* () {
+          const sessionStorage = yield* SessionStorage
+          const extensionRegistry = yield* ExtensionRegistry
+          const now = dateFromMillis(1_767_225_600_000)
+          yield* sessionStorage.createSession(
+            new Session({
+              id: SessionId.make("session-runtime-context-driver"),
+              cwd: "/nonexistent/profile-driver-scope",
+              createdAt: now,
+              updatedAt: now,
+            }),
+          )
+          // A built profile's services hold its registry, as `Layer.build` makes them.
+          const profileRegistry = ExtensionRegistry.of({ getResolved: () => profileResolved })
+          const fakeProfile: SessionProfile = {
+            cwd: "/nonexistent/profile-driver-scope",
+            resolved: profileResolved,
+            layerContext: Context.make(ExtensionRegistry, profileRegistry),
+            registryService: profileRegistry,
+            baseSections: [],
+            generationId: ProcessGenerationId.make("test"),
+          }
+          const fakeProfileCache: SessionProfileCacheService = {
+            resolve: () => Effect.succeed(fakeProfile),
+          }
+          const hostProvider = yield* makeExtensionHostContextProvider({
+            host: testHostFacts().host,
+          })
+          const resolved = yield* resolveTurnProfile({
+            sessionId: SessionId.make("session-runtime-context-driver"),
+            branchId: BranchId.make("branch-runtime-context-driver"),
+            opener: RunOpener.cases.Turn.make({ openedByClient: true }),
+            profileCache: fakeProfileCache,
+            hostProvider,
+          })
+          const drivers = Context.get(
+            resolved.turnCapabilityContext,
+            ExtensionRegistry,
+          ).getResolved().modelDrivers
+          expect(resolved.turnHostCtx.cwd).toBe("/nonexistent/profile-driver-scope")
+          expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
+          expect(extensionRegistry.getResolved().modelDrivers.has("profile-driver")).toBe(false)
+        }).pipe(Effect.provide(testLayer))
+      }),
   )
 })
 
@@ -4857,7 +4860,7 @@ const makeMutationsLayer = (
     AgentLoopSessionGovernance.Live,
   )
   const sessionRuntimeLayer = Layer.provide(
-    Layer.provideMerge(AgentLoopLiveActor({ baseSections: [] }), SessionRuntime.Client),
+    Layer.provideMerge(AgentLoopLiveActor, SessionRuntime.Client),
     baseDeps,
   )
   const sessionMutationsLayer = Layer.provide(

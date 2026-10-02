@@ -42,6 +42,7 @@ import { BranchStorage, SessionStorage } from "../../src/storage/storage"
 import type { StorageError } from "../../src/domain/errors"
 import {
   ensureStorageParents,
+  fixedSessionProfiles,
   recordingEventStore,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
@@ -300,8 +301,10 @@ const actorTestModelLayer = (model: ActorTestModel) => {
 
 /**
  * The actor test root: the loop actor over real storage, an in-memory event
- * store and the test registry. Each option replaces one piece; `overrides`
- * merges last, so it wins over any service the root already provides.
+ * store and the test registry. Every cwd's profile serves that registry, as
+ * the launch profile does in production. Each option replaces one piece;
+ * `overrides` merges last, so it wins over any service the root already
+ * provides.
  */
 export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
   params: ActorTestModel & {
@@ -313,10 +316,12 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     readonly toolRunner?: typeof ToolRunner.Live
   },
 ) => {
+  const registry = params.registry ?? makeExtRegistry()
   const baseDeps = Layer.mergeAll(
     params.storage ?? testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
     actorTestModelLayer(params),
-    params.registry ?? makeExtRegistry(),
+    registry,
+    fixedSessionProfiles(new Map(), registry),
     RuntimeEnvironment.Live({
       cwd: "/nonexistent/gent-test-cwd",
       home: "/nonexistent/gent-test-home",
@@ -334,7 +339,7 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     baseDeps,
     Layer.provide(params.toolRunner ?? ToolRunner.Test(), baseDeps),
   )
-  return AgentLoopTestActor({ baseSections: [] }).pipe(
+  return AgentLoopTestActor.pipe(
     Layer.provideMerge(Layer.mergeAll(deps, AgentLoopSessionGovernance.Live)),
   )
 }

@@ -53,6 +53,7 @@ import {
   ExtensionId,
   RequestId,
   ToolId,
+  ProcessGenerationId,
 } from "../../src/domain/ids"
 import {
   AgentDefinition,
@@ -3747,6 +3748,8 @@ const makeBinding = () =>
   })
 
 describe("tool binding replay", () => {
+  // The process a test resolves its bindings in.
+  const liveGeneration = ProcessGenerationId.make("test")
   const bindingLayerFor = (extensions: ReadonlyArray<LoadedExtension>) =>
     Layer.mergeAll(
       ExtensionRegistry.fromResolved(resolveExtensions(extensions)),
@@ -3779,6 +3782,7 @@ describe("tool binding replay", () => {
           assistantMessageId: MessageId.make("same-id-project-outer"),
           toolCallId: ToolCallId.make("same-id-project-operation"),
           binding,
+          generationId: liveGeneration,
         }).pipe(Effect.exit)
         expect(Exit.isFailure(refused)).toBe(true)
         if (Exit.isFailure(refused)) {
@@ -3820,6 +3824,7 @@ describe("tool binding replay", () => {
         assistantMessageId: MessageId.make("same-id-other-outer"),
         toolCallId: ToolCallId.make("same-id-other-operation"),
         binding,
+        generationId: liveGeneration,
       }).pipe(Effect.provide(bindingLayerFor([builtin, project])))
       expect(selected.capability).toBe(builtinTool)
       expect(selected.binding).toEqual(binding)
@@ -3847,6 +3852,7 @@ describe("tool binding replay", () => {
             sessionId,
             assistantMessageId: MessageId.make("outer-cell-message"),
             toolCallId: ToolCallId.make("inner-operation-call"),
+            generationId: liveGeneration,
           }
           const resolved = yield* resolveStoredToolBinding({ ...address, binding })
           expect(resolved.capability).toBe(capability)
@@ -3998,7 +4004,6 @@ describe("tool binding replay", () => {
         if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
         // A source-loaded extension has no build artifact, so no durable identity.
         expect(current.value.binding).toBeUndefined()
-        expect(Option.isNone(yield* innerOperationBindingIdentity(current.value))).toBe(true)
         const identity = yield* innerOperationBindingIdentity(current.value, generationId)
         if (Option.isNone(identity)) return yield* Effect.die("Expected process-local identity")
         expect(identity.value.source).toEqual({
@@ -4024,15 +4029,6 @@ describe("tool binding replay", () => {
           generationId,
         }).pipe(Effect.flip)
         expect(retired).toMatchObject({ _tag: "ToolBindingReplayError", reason: "SourceMismatch" })
-
-        const withoutProcess = yield* resolveStoredToolBinding({
-          ...address,
-          binding: identity.value,
-        }).pipe(Effect.flip)
-        expect(withoutProcess).toMatchObject({
-          _tag: "ToolBindingReplayError",
-          reason: "SourceMismatch",
-        })
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.timeout("5 seconds")),
   )

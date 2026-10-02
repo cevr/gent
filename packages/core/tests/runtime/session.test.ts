@@ -62,6 +62,7 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
+  fixedSessionProfiles,
   runtimeHostContext,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
@@ -130,8 +131,7 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
     },
   ])
 }
-const sessionRuntimeLayers = (config: Parameters<typeof AgentLoopLiveActor>[0]) =>
-  Layer.provideMerge(AgentLoopLiveActor(config), SessionRuntime.Client)
+const sessionRuntimeLayers = Layer.provideMerge(AgentLoopLiveActor, SessionRuntime.Client)
 const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof testSqliteStorage<A>>) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
@@ -142,15 +142,16 @@ const makeRuntimeLayer = (
   tools: ReadonlyArray<ToolCapability> = [],
   profileCacheLayer?: Layer.Layer<SessionProfileCache>,
 ) => {
-  const resolvedExtensions = makeTestExtensions(tools)
+  const registry = ExtensionRegistry.fromResolved(makeTestExtensions(tools))
   const eventStoreLayer = EventStore.Memory
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
-  const baseDepsWithoutProfile = Layer.mergeAll(
+  const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
     LanguageModelLayers.resolver(providerLayer),
-    ExtensionRegistry.fromResolved(resolvedExtensions),
+    registry,
+    profileCacheLayer ?? fixedSessionProfiles(new Map(), registry),
     eventStoreLayer,
     ToolRunner.Test(),
     ApprovalService.Test(),
@@ -165,11 +166,7 @@ const makeRuntimeLayer = (
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  let baseDeps = baseDepsWithoutProfile
-  if (!Predicate.isUndefined(profileCacheLayer)) {
-    baseDeps = Layer.merge(baseDepsWithoutProfile, profileCacheLayer)
-  }
-  const sessionRuntimeLayer = Layer.provide(sessionRuntimeLayers({ baseSections: [] }), baseDeps)
+  const sessionRuntimeLayer = Layer.provide(sessionRuntimeLayers, baseDeps)
   const sessionMutationsLayer = Layer.provide(
     SessionMutationsLive,
     Layer.mergeAll(baseDeps, sessionRuntimeLayer),
@@ -180,7 +177,7 @@ const makeLiveToolRuntimeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolCapability>,
 ) => {
-  const resolvedExtensions = makeTestExtensions(tools)
+  const registry = ExtensionRegistry.fromResolved(makeTestExtensions(tools))
   const eventStoreLayer = EventStore.Memory
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const baseDeps = Layer.mergeAll(
@@ -188,7 +185,8 @@ const makeLiveToolRuntimeLayer = (
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
     LanguageModelLayers.resolver(providerLayer),
-    ExtensionRegistry.fromResolved(resolvedExtensions),
+    registry,
+    fixedSessionProfiles(new Map(), registry),
     eventStoreLayer,
     RuntimeEnvironment.Live({
       cwd: "/nonexistent/gent-test-cwd",
@@ -203,7 +201,7 @@ const makeLiveToolRuntimeLayer = (
     AgentLoopSessionGovernance.Live,
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
-  return Layer.provideMerge(sessionRuntimeLayers({ baseSections: [] }), deps)
+  return Layer.provideMerge(sessionRuntimeLayers, deps)
 }
 const createSessionBranch = Effect.gen(function* () {
   const sessionStorage = yield* SessionStorage
