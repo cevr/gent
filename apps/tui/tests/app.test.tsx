@@ -80,7 +80,7 @@ import {
   snapshotNaming,
 } from "./render-harness-boundary"
 import { LinkOpener, LinkOpenerError } from "../src/os"
-import { createSignal, type JSX, onMount, Show, type Signal } from "solid-js"
+import { createSignal, onMount, Show, type Signal } from "solid-js"
 import { ExtensionId, ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
 import {
@@ -101,6 +101,7 @@ import {
   type AnyExtensionClientModule,
   type NoticeRow,
   noticeRowContribution,
+  statusLabelContribution,
   widgetContribution,
 } from "../src/extensions/client-facets"
 import { NOTICE_ROWS_BOUND, useSessionController } from "../src/session"
@@ -1574,30 +1575,70 @@ describe("App session view and fatal screen", () => {
         "the draft",
       )
       expect(frame).not.toContain("Fatal error")
-      expect(frame).toContain("ready ·")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // A render throw replaces the whole view. The screen it leaves names a way
-  // out, ctrl+c takes it and prints the way back, and the client log keeps
-  // the error.
+  // A client extension's render code fails that extension, by name, as a
+  // setup throw does: the session view stays and takes keys.
+  for (const surface of ["widget", "status label"] as const) {
+    it.scopedLive(`a ${surface} whose render throws fails its extension and the view stays`, () =>
+      Effect.gen(function* () {
+        const [broken, setBroken] = createSignal(false)
+        // Throws once `broken` turns true: its decode fails.
+        const explode = () => Schema.decodeUnknownSync(Schema.Literal("fine"))("render broke")
+        const Breaks = () => (
+          <Show when={broken()}>
+            <text>{explode()}</text>
+          </Show>
+        )
+        const contribution = () => {
+          if (surface === "widget")
+            return widgetContribution({ id: "breaks", slot: "below-input", component: Breaks })
+          return statusLabelContribution({
+            produce: () => {
+              if (broken()) explode()
+              return [{ text: "breaks-label", color: "info" as const }]
+            },
+          })
+        }
+        const extension = defineClientExtension("@test/breaks", {
+          setup: Effect.succeed(clientContributions(contribution())),
+        })
+        const setup = yield* renderScoped(() => <App />, {
+          client: createMockClient({
+            auth: { listProviders: () => Effect.succeed([]) },
+            branch: { getTree: () => Effect.succeed([]) },
+          }),
+          builtins: [...builtinClientModules, extension],
+          width: 120,
+          initialSession: {
+            id: SessionId.make("session-breaks"),
+            activeBranchId: BranchId.make("branch-breaks"),
+            name: "Breaks",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        })
+        yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+        setBroken(true)
+        const frame = yield* waitForFrame(
+          setup,
+          (current) =>
+            current.includes("@test/breaks: render failed") && current.includes("ready ·"),
+          "the failure named",
+        )
+        expect(frame).not.toContain("Fatal error")
+        expect(frame).toContain("ready ·")
+        yield* Effect.promise(() => setup.mockInput.typeText("still here"))
+        yield* waitForFrame(setup, (current) => current.includes("┃ still here"), "the draft")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // A host render throw replaces the whole view: a server reply the client
+  // takes as is (an extension health report without its lists). The screen
+  // it leaves names a way out, ctrl+c takes it and prints the way back, and
+  // the client log keeps the error.
   it.scopedLive("the fatal screen logs the error and exits on ctrl+c with the resume hint", () =>
     Effect.gen(function* () {
-      const [broken, setBroken] = createSignal(false)
-      // A widget whose render throws once `broken` turns true: its decode fails.
-      const Explodes = (): JSX.Element =>
-        Schema.decodeUnknownSync(Schema.Literal("fine"))("widget broke")
-      const Breaks = () => (
-        <Show when={broken()}>
-          <Explodes />
-        </Show>
-      )
-      const extension = defineClientExtension("@test/breaks", {
-        setup: Effect.succeed(
-          clientContributions(
-            widgetContribution({ id: "breaks", slot: "below-input", component: Breaks }),
-          ),
-        ),
-      })
       const logged: Array<string> = []
       const record = (msg: string) => logged.push(msg)
       const written: Array<string> = []
@@ -1605,8 +1646,8 @@ describe("App session view and fatal screen", () => {
         client: createMockClient({
           auth: { listProviders: () => Effect.succeed([]) },
           branch: { getTree: () => Effect.succeed([]) },
+          extension: { listStatus: () => Effect.succeed({ _tag: "Degraded" }) },
         }),
-        builtins: [...builtinClientModules, extension],
         log: { debug: () => {}, info: () => {}, warn: () => {}, error: record },
         writeTerminal: (text) => written.push(text),
         initialSession: {
@@ -1617,15 +1658,12 @@ describe("App session view and fatal screen", () => {
           updatedAt: dateFromMillis(0),
         },
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       const { shutdowns } = yield* countShutdowns(setup)
-      setBroken(true)
       const frame = yield* waitForFrame(
         setup,
         (current) => current.includes("Fatal error"),
         "fatal",
       )
-      expect(frame).toContain(`Expected "fine"`)
       expect(frame).toContain("ctrl+c")
       expect(logged).toContain("app.fatal")
       setup.mockInput.pressKey("c", { ctrl: true })

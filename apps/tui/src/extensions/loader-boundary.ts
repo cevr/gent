@@ -168,13 +168,17 @@ export interface LoadedTuiExtension {
 }
 
 export interface ResolvedWidget {
+  /** The extension that contributed it, named when its render fails. */
+  readonly extensionId: string
   readonly id: string
   readonly slot: WidgetSlot
   readonly priority: number
   readonly component: WidgetComponent
 }
 
-export interface ResolvedStatusLabel {
+interface ResolvedStatusLabel {
+  /** The extension that contributed it, named when it fails. */
+  readonly extensionId: string
   readonly priority: number
   readonly produce: () => ReadonlyArray<StatusLabelItem>
 }
@@ -545,10 +549,10 @@ export const resolveTuiExtensions = (
       name: contribution.customType,
     })),
   )
-  const widgets = resolveKeyed(sorted, failures, "widget", (contributions) =>
+  const widgets = resolveKeyed(sorted, failures, "widget", (contributions, extensionId) =>
     itemsOrEmpty(contributions.widgets).map((contribution) => ({
       key: contribution.id,
-      value: { ...contribution, priority: priorityOrDefault(contribution.priority) },
+      value: { ...contribution, extensionId, priority: priorityOrDefault(contribution.priority) },
       name: contribution.id,
     })),
   )
@@ -582,10 +586,13 @@ export const resolveTuiExtensions = (
     })),
     interactionRenderers,
     statusLabels: byPriority(
-      collected((contributions) => contributions.statusLabels).map((contribution) => ({
-        priority: priorityOrDefault(contribution.priority),
-        produce: contribution.produce,
-      })),
+      sorted.flatMap((ext) =>
+        itemsOrEmpty(ext.contributions.statusLabels).map((contribution) => ({
+          extensionId: ext.id,
+          priority: priorityOrDefault(contribution.priority),
+          produce: contribution.produce,
+        })),
+      ),
     ),
     noticeRows: [...noticeRows.values()],
     autocompleteItems: collected((contributions) => contributions.autocomplete),
