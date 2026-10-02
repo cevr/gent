@@ -7,12 +7,11 @@
  *     `ExtensionContext.sessionId`: each session reads only its own.
  *   - one model-callable tool
  *   - one slash-presented request
- *   - one turn projection hook
+ *   - one turn projection hook, showing the notes as a per-step notice
  *   - one sessionDeleted hook: a deleted session's notes leave the Ref
  */
 import { Context, Effect, HashMap, Layer, Option, Ref, Schema } from "effect"
 import {
-  AGENT_PROMPT_PRIORITY,
   defineExtension,
   defineResource,
   ExtensionContext,
@@ -102,13 +101,15 @@ export default defineExtension({
         const notes = yield* currentNotes
         if (notes.length === 0) return {}
         return {
-          promptSections: [
+          // Notes change mid-session, so they ride as a notice after the
+          // conversation: a prompt section that changed would make the next
+          // step write the agent block and the whole conversation again.
+          // Every step shows them; the extension never clears them as read.
+          notices: [
             {
               id: "session-notes",
-              // Per-session text sorts after the agent, outside the part a
-              // session shares byte for byte with its children.
-              priority: AGENT_PROMPT_PRIORITY + 20,
               content: notes.map((note) => `- ${note}`).join("\n"),
+              keys: [],
             },
           ],
         }

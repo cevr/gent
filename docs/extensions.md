@@ -330,6 +330,12 @@ derivation. Hook handlers receive their event input only. Host authority follows
 the same authoring model as tools and requests: `yield* ExtensionContext` or the
 smallest extension-owned service Tag needed.
 
+`promptSections` is standing content: keep it byte-identical from step to
+step. A section that changes makes the next step write the agent block and the
+whole conversation again at the cache-write price. Content that changes during
+a session goes in `notices`, which ride after the conversation and are never
+cached (`examples/extensions/session-notes.ts` shows its notes this way).
+
 ```ts
 import { defineExtension, ExtensionContext, ExtensionHost } from "@gent/core/extensions/api"
 import { Effect } from "effect"
