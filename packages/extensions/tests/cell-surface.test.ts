@@ -328,6 +328,28 @@ describe("cell context host", () => {
     }),
   )
 
+  test("a page never ends inside a surrogate pair", () => {
+    const text = "a😀b😀"
+    expect(pageText(text, 0, 2)).toEqual({
+      text: "a",
+      totalChars: 6,
+      offset: 0,
+      nextOffset: 1,
+      done: false,
+    })
+    // A one-character page takes the pair whole, so a read always moves on.
+    expect(pageText(text, 1, 1).text).toBe("😀")
+    const pages: Array<string> = []
+    let offset = 0
+    for (let guard = 0; guard < 10; guard += 1) {
+      const page = pageText(text, offset, 1)
+      pages.push(page.text)
+      offset = page.nextOffset
+      if (page.done) break
+    }
+    expect(pages).toEqual(["a", "😀", "b", "😀"])
+  })
+
   it.effect("a large single-line result is read in full by continuing from nextOffset", () =>
     Effect.sync(() => {
       const text = "x".repeat(250_000)
