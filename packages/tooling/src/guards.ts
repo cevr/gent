@@ -1,14 +1,22 @@
 import { Option, Predicate, Schema } from "effect"
 import picomatch from "picomatch"
 import {
+  type ArrowFunctionExpression,
   type CallExpression,
+  type Class,
   type Expression,
+  type Function,
+  type MemberExpression,
   type ModuleExportName,
+  type ParamPattern,
   type ParseResult,
   parseSync,
   type Program,
+  type PropertyKey,
   type Super,
   type TSImportTypeQualifier,
+  type TSInterfaceDeclaration,
+  type TSType,
   Visitor,
 } from "oxc-parser"
 // A write or a caller in test support proves a reader works, not that
@@ -63,6 +71,7 @@ interface SourceForms {
   readonly module: ModuleSyntax
   /** Text imports and rows of the module's actual bundled-skill collection. */
   readonly bundledSkills: BundledSkillsSyntax
+  readonly seams: SeamSyntax
   /**
    * `codeOnly` with regex bodies blanked too, and the line breaks inside
    * blanked text: every bracket left is structure, and a line end left is a
@@ -143,6 +152,7 @@ interface ParsedText {
   readonly spans: ReadonlyArray<Span>
   readonly module: ModuleSyntax
   readonly bundledSkills: BundledSkillsSyntax
+  readonly seams: SeamSyntax
 }
 
 /** Whether an import entry is `import * as NS`; oxc types the kinds as a const enum, which the runtime does not carry. */
@@ -387,6 +397,7 @@ const parsedText = (file: string, text: string): ParsedText => {
       .sort((a, b) => a.start - b.start),
     module: moduleSyntaxOf(result, lineOf, dynamicReads, literalSpecifiers),
     bundledSkills: bundledSkillsSyntaxOf(result.program, lineOf),
+    seams: seamSyntaxOf(result.program, lineOf),
   }
 }
 
@@ -427,7 +438,7 @@ const sourceForms = (file: string, text: string): SourceForms => {
   let cache = sourceFormsCache[parseLanguage(file)]
   if (isJsonFile(file)) cache = sourceFormsCache.json
   return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
-    const { errors, comments, names, spans, module, bundledSkills } = parsedText(file, text)
+    const { errors, comments, names, spans, module, bundledSkills, seams } = parsedText(file, text)
     const forms: SourceForms = {
       errors,
       comments,
@@ -436,6 +447,7 @@ const sourceForms = (file: string, text: string): SourceForms => {
       codeOnly: blankedSpans(text, spans, ["comment", "string", "template", "jsx-text"], false),
       module,
       bundledSkills,
+      seams,
       structure: blankedSpans(
         text,
         spans,
@@ -642,8 +654,8 @@ export const findCoreFeatureIndependenceFindings = (
  *   - resource scopes -- the members of `ResourceScope`, reached as
  *     `scope: "<scope>"` on a resource definition
  *
- * Each family is named differently in adapter code, so each contributes its
- * own pattern to `adaptedSeamsIn` rather than sharing one.
+ * Each family keeps its own identity. The shared parse reads declarations
+ * and actual uses; lexical bindings decide which context a use reaches.
  *
  * Only shipped code counts as an adapter. A test registrant proves the
  * mechanism runs, not that anything needs it -- that is exactly the state
@@ -659,52 +671,424 @@ const SEAM_DECLARATION_FILE = "packages/core/src/domain/extension.ts"
 const isAdapterSource = (file: string): boolean =>
   isShippedSource(file) && (file.startsWith("packages/extensions/src/") || file.startsWith("apps/"))
 
-/**
- * Reads the member names of a single interface or object-literal body.
- *
- * Deliberately a brace-depth scan rather than a regex over the whole file: a
- * member name and a string literal elsewhere in the file look identical to a
- * pattern match, and counting a seam that was never declared would fail the
- * build for a name that does not exist.
- */
-const declaredMembers = (text: string, blockPattern: RegExp): ReadonlyArray<string> => {
-  const start = text.search(blockPattern)
-  if (start < 0) return []
-  const open = text.indexOf("{", start)
-  if (open < 0) return []
-  const structure = sourceForms(SEAM_DECLARATION_FILE, text).structure
-  const body = text.slice(open + 1, topLevelStop(structure, open + 1))
-  return [...body.matchAll(/^\s*readonly\s+([A-Za-z][A-Za-z0-9]*)\s*:/gm)].flatMap((match) =>
-    Option.match(Option.fromNullishOr(match[1]), {
-      onNone: (): ReadonlyArray<string> => [],
-      onSome: (name) => [name],
+const SeamFamily = Schema.Literals(["registration", "hook", "facet", "resource"])
+type SeamFamily = typeof SeamFamily.Type
+export type SeamKey = `${SeamFamily}:${string}`
+const seamKey = (family: SeamFamily, name: string): SeamKey => `${family}:${name}`
+const SEAM_LABELS: Readonly<Record<SeamFamily, string>> = {
+  registration: "registration domain",
+  hook: "hook kind",
+  facet: "extension context facet",
+  resource: "resource scope",
+}
+interface DeclaredSeam {
+  readonly family: SeamFamily
+  readonly name: string
+  readonly line: number
+}
+interface SeamSyntax {
+  readonly declarations: ReadonlyArray<DeclaredSeam>
+  readonly uses: ReadonlySet<SeamKey>
+}
+
+const staticNameOf = (node: PropertyKey): Option.Option<string> => {
+  if (node.type === "Identifier") return Option.some(node.name)
+  if (node.type === "Literal" && Predicate.isString(node.value)) return Option.some(node.value)
+  return Option.none()
+}
+
+const literalTypeNames = (node: TSType): ReadonlyArray<string> => {
+  if (node.type === "TSParenthesizedType") return literalTypeNames(node.typeAnnotation)
+  if (node.type === "TSUnionType") return node.types.flatMap(literalTypeNames)
+  if (
+    node.type === "TSLiteralType" &&
+    node.literal.type === "Literal" &&
+    Predicate.isString(node.literal.value)
+  )
+    return [node.literal.value]
+  return []
+}
+
+const interfaceSeamsOf = (
+  declaration: TSInterfaceDeclaration,
+  lineOf: (index: number) => number,
+): ReadonlyArray<DeclaredSeam> => {
+  const families = new Map<string, SeamFamily>([
+    ["RegistrationDomainMap", "registration"],
+    ["ExtensionHookSignatures", "hook"],
+    ["ExtensionContextService", "facet"],
+  ])
+  const family = families.get(declaration.id.name)
+  if (!family) return []
+  return declaration.body.body.flatMap((member): ReadonlyArray<DeclaredSeam> => {
+    if (member.type !== "TSPropertySignature" || member.computed) return []
+    return Option.toArray(staticNameOf(member.key))
+      .filter((name) => family !== "facet" || /^[A-Z]/.test(name))
+      .map((name) => ({ family, name, line: lineOf(member.start) }))
+  })
+}
+
+const declaredSeamsOf = (
+  program: Program,
+  lineOf: (index: number) => number,
+): ReadonlyArray<DeclaredSeam> => {
+  const declarations: Array<DeclaredSeam> = []
+  for (const statement of program.body) {
+    let declaration = statement
+    if (declaration.type === "ExportNamedDeclaration") {
+      if (!declaration.declaration) continue
+      declaration = declaration.declaration
+    }
+    if (declaration.type === "TSTypeAliasDeclaration" && declaration.id.name === "ResourceScope") {
+      for (const name of literalTypeNames(declaration.typeAnnotation)) {
+        if (!EXTENSION_LOAD_SCOPES.has(name))
+          declarations.push({ family: "resource", name, line: lineOf(declaration.start) })
+      }
+    }
+    if (declaration.type === "TSInterfaceDeclaration")
+      declarations.push(...interfaceSeamsOf(declaration, lineOf))
+  }
+  return declarations
+}
+
+const SeamAuthorityKind = Schema.Literals([
+  "api",
+  "host-tag",
+  "context-tag",
+  "host",
+  "context",
+  "register",
+  "on",
+  "resource",
+  "facet",
+])
+type SeamAuthorityKind = typeof SeamAuthorityKind.Type
+interface SeamAuthority {
+  readonly kind: SeamAuthorityKind
+  readonly member?: string
+}
+interface SeamScope {
+  readonly parent?: SeamScope
+  readonly functionScope: boolean
+  readonly bindings: Map<string, SeamBinding>
+}
+interface SeamBinding {
+  readonly scope: SeamScope
+  readonly authority?: SeamAuthority
+  readonly initializer?: Expression
+  readonly member?: string
+}
+
+const namedSeamAuthority = (name: string): Option.Option<SeamAuthority> => {
+  switch (name) {
+    case "ExtensionHost":
+      return Option.some({ kind: "host-tag" })
+    case "ExtensionContext":
+      return Option.some({ kind: "context-tag" })
+    case "defineResource":
+      return Option.some({ kind: "resource" })
+    default:
+      return Option.none()
+  }
+}
+
+const findSeamBinding = (name: string, scope: SeamScope): Option.Option<SeamBinding> => {
+  const binding = scope.bindings.get(name)
+  if (binding) return Option.some(binding)
+  if (scope.parent) return findSeamBinding(name, scope.parent)
+  return Option.none()
+}
+
+const memberSeamAuthority = (
+  authority: SeamAuthority,
+  name: string,
+): Option.Option<SeamAuthority> => {
+  if (authority.kind === "api") return namedSeamAuthority(name)
+  if (authority.kind === "host" && (name === "register" || name === "on"))
+    return Option.some({ kind: name })
+  if (authority.kind === "context" && /^[A-Z]/.test(name))
+    return Option.some({ kind: "facet", member: name })
+  return Option.none()
+}
+
+const memberNameOf = (node: MemberExpression): Option.Option<string> => {
+  if (!node.computed && node.property.type === "Identifier") return Option.some(node.property.name)
+  if (node.computed && node.property.type === "Literal" && Predicate.isString(node.property.value))
+    return Option.some(node.property.value)
+  return Option.none()
+}
+
+const seamAuthorityOf = (
+  input: Expression,
+  scope: SeamScope,
+  seen: ReadonlySet<SeamBinding> = new Set(),
+): Option.Option<SeamAuthority> => {
+  const node = runtimeExpression(input)
+  if (node.type === "Identifier") {
+    return findSeamBinding(node.name, scope).pipe(
+      Option.flatMap((binding) => {
+        if (seen.has(binding)) return Option.none()
+        if (binding.authority) return Option.some(binding.authority)
+        if (!binding.initializer) return Option.none()
+        const next = seamAuthorityOf(
+          binding.initializer,
+          binding.scope,
+          new Set([...seen, binding]),
+        )
+        const member = binding.member
+        if (!member) return next
+        return next.pipe(Option.flatMap((authority) => memberSeamAuthority(authority, member)))
+      }),
+    )
+  }
+  if (node.type === "YieldExpression" && node.delegate && node.argument) {
+    return seamAuthorityOf(node.argument, scope, seen).pipe(
+      Option.flatMap((authority) => {
+        if (authority.kind === "host-tag") return Option.some({ kind: "host" })
+        if (authority.kind === "context-tag") return Option.some({ kind: "context" })
+        return Option.none()
+      }),
+    )
+  }
+  if (node.type === "MemberExpression") {
+    return seamAuthorityOf(node.object, scope, seen).pipe(
+      Option.flatMap((authority) =>
+        memberNameOf(node).pipe(Option.flatMap((name) => memberSeamAuthority(authority, name))),
+      ),
+    )
+  }
+  return Option.none()
+}
+
+const bindSeamPattern = (
+  pattern: ParamPattern,
+  scope: SeamScope,
+  initializer?: Expression,
+  member?: string,
+): void => {
+  switch (pattern.type) {
+    case "Identifier":
+      scope.bindings.set(pattern.name, { scope, initializer, member })
+      return
+    case "AssignmentPattern":
+      bindSeamPattern(pattern.left, scope)
+      return
+    case "RestElement":
+      bindSeamPattern(pattern.argument, scope)
+      return
+    case "TSParameterProperty":
+      bindSeamPattern(pattern.parameter, scope)
+      return
+    case "ArrayPattern":
+      for (const element of pattern.elements) if (element) bindSeamPattern(element, scope)
+      return
+    case "ObjectPattern":
+      for (const property of pattern.properties) {
+        if (property.type === "RestElement") {
+          bindSeamPattern(property.argument, scope)
+          continue
+        }
+        const key = Option.toArray(staticNameOf(property.key))[0]
+        if (!property.computed && property.value.type === "Identifier") {
+          bindSeamPattern(property.value, scope, initializer, key)
+        } else bindSeamPattern(property.value, scope)
+      }
+  }
+}
+
+const seamObjectOf = (
+  input: Expression,
+  scope: SeamScope,
+  seen: ReadonlySet<SeamBinding> = new Set(),
+): Option.Option<Expression> => {
+  const node = runtimeExpression(input)
+  if (node.type === "ObjectExpression") return Option.some(node)
+  if (node.type !== "Identifier") return Option.none()
+  return findSeamBinding(node.name, scope).pipe(
+    Option.flatMap((binding) => {
+      if (seen.has(binding) || !binding.initializer || binding.member) return Option.none()
+      return seamObjectOf(binding.initializer, binding.scope, new Set([...seen, binding]))
     }),
   )
 }
 
-/** Line number (1-indexed) of a seam's declaration, for the failure message. */
-const lineOf = (text: string, name: string): number => {
-  const lines = text.split("\n")
-  const index = lines.findIndex((line) => new RegExp(`readonly\\s+${name}\\s*:`).test(line))
-  // A seam read out of this very file always matches; the fallback only
-  // guards a caller passing a name from somewhere else.
-  if (index < 0) return 1
-  return index + 1
+const resourceScopeOf = (input: Expression, scope: SeamScope): Option.Option<string> =>
+  seamObjectOf(input, scope).pipe(
+    Option.flatMap((object) => {
+      if (object.type !== "ObjectExpression") return Option.none()
+      let resourceScope = Option.none<string>()
+      for (const property of object.properties) {
+        if (property.type === "SpreadElement") {
+          resourceScope = Option.none()
+          continue
+        }
+        if (property.computed) {
+          resourceScope = Option.none()
+          continue
+        }
+        if (!Option.contains(staticNameOf(property.key), "scope")) continue
+        const value = runtimeExpression(property.value)
+        resourceScope = Option.none()
+        if (value.type === "Literal" && Predicate.isString(value.value))
+          resourceScope = Option.some(value.value)
+      }
+      return resourceScope
+    }),
+  )
+
+const callSeamUses = (node: CallExpression, scope: SeamScope): ReadonlyArray<SeamKey> => {
+  const input = node.arguments[0]
+  if (!input || input.type === "SpreadElement") return []
+  return seamAuthorityOf(node.callee, scope).pipe(
+    Option.match({
+      onNone: () => [],
+      onSome: (authority) => {
+        if (authority.kind === "resource")
+          return Option.toArray(resourceScopeOf(input, scope)).map((name) =>
+            seamKey("resource", name),
+          )
+        const name = runtimeExpression(input)
+        if (name.type !== "Literal" || !Predicate.isString(name.value)) return []
+        if (authority.kind === "register") return [seamKey("registration", name.value)]
+        if (authority.kind === "on") return [seamKey("hook", name.value)]
+        return []
+      },
+    }),
+  )
 }
 
-/**
- * How each seam family is spelled where it is filled. Registrations name the
- * seam in a string argument; a facet is reached as a property on the yielded
- * context; a resource scope is a literal field on the definition. The
- * registration pattern matches across newlines because `host.register(` and
- * its domain argument are often formatted apart, and a single-line pattern
- * would report a filled seam as empty.
- */
-const ADAPTER_PATTERNS: ReadonlyArray<RegExp> = [
-  /(?:register|\.on|hook)\(\s*"([A-Za-z][A-Za-z0-9]*)"/g,
-  /\bctx\.([A-Z][A-Za-z0-9]*)/g,
-  /\bscope:\s*"([a-z][A-Za-z0-9]*)"/g,
-]
+/** Resolve deferred reads after every lexical declaration has been collected. */
+const seamSyntaxOf = (program: Program, lineOf: (index: number) => number): SeamSyntax => {
+  const root: SeamScope = { functionScope: true, bindings: new Map() }
+  let scope = root
+  const reads: Array<() => ReadonlyArray<SeamKey>> = []
+  const kinds: Array<string> = []
+  const push = (functionScope = false): void => {
+    scope = { parent: scope, functionScope, bindings: new Map() }
+  }
+  const pop = (): void => {
+    scope = scope.parent ?? root
+  }
+  const enterFunction = (node: Function | ArrowFunctionExpression): void => {
+    if (node.type === "FunctionDeclaration" && node.id) bindSeamPattern(node.id, scope)
+    push(true)
+    if (node.type === "FunctionExpression" && node.id) bindSeamPattern(node.id, scope)
+    for (const param of node.params) bindSeamPattern(param, scope)
+  }
+  const enterClass = (node: Class): void => {
+    if (node.type === "ClassDeclaration" && node.id) bindSeamPattern(node.id, scope)
+    push()
+    if (node.id) bindSeamPattern(node.id, scope)
+  }
+  const variableScope = (): SeamScope => {
+    let owner = scope
+    if (kinds.at(-1) !== "var") return owner
+    while (!owner.functionScope && owner.parent) owner = owner.parent
+    return owner
+  }
+  new Visitor({
+    ImportDeclaration: (node) => {
+      for (const entry of node.specifiers) {
+        const binding: SeamBinding = { scope }
+        scope.bindings.set(entry.local.name, binding)
+        if (node.importKind === "type" || node.source.value !== "@gent/core/extensions/api")
+          continue
+        if (entry.type === "ImportNamespaceSpecifier") {
+          scope.bindings.set(entry.local.name, { scope, authority: { kind: "api" } })
+        }
+        if (entry.type !== "ImportSpecifier" || entry.importKind === "type") continue
+        for (const authority of Option.toArray(namedSeamAuthority(moduleNameOf(entry.imported)))) {
+          scope.bindings.set(entry.local.name, { scope, authority })
+        }
+      }
+    },
+    FunctionDeclaration: enterFunction,
+    "FunctionDeclaration:exit": pop,
+    FunctionExpression: enterFunction,
+    "FunctionExpression:exit": pop,
+    ArrowFunctionExpression: enterFunction,
+    "ArrowFunctionExpression:exit": pop,
+    TSDeclareFunction: enterFunction,
+    "TSDeclareFunction:exit": pop,
+    TSEmptyBodyFunctionExpression: enterFunction,
+    "TSEmptyBodyFunctionExpression:exit": pop,
+    ClassDeclaration: enterClass,
+    "ClassDeclaration:exit": pop,
+    ClassExpression: enterClass,
+    "ClassExpression:exit": pop,
+    BlockStatement: () => push(),
+    "BlockStatement:exit": pop,
+    ForStatement: () => push(),
+    "ForStatement:exit": pop,
+    ForInStatement: () => push(),
+    "ForInStatement:exit": pop,
+    ForOfStatement: () => push(),
+    "ForOfStatement:exit": pop,
+    SwitchStatement: () => push(),
+    "SwitchStatement:exit": pop,
+    StaticBlock: () => push(true),
+    "StaticBlock:exit": pop,
+    CatchClause: (node) => {
+      push()
+      if (node.param) bindSeamPattern(node.param, scope)
+    },
+    "CatchClause:exit": pop,
+    TSEnumDeclaration: (node) => bindSeamPattern(node.id, scope),
+    VariableDeclaration: (node) => {
+      kinds.push(node.kind)
+    },
+    "VariableDeclaration:exit": () => {
+      kinds.pop()
+    },
+    VariableDeclarator: (node) => {
+      const current = scope
+      let initializer = Option.none<Expression>()
+      if (kinds.at(-1) === "const") initializer = Option.fromNullishOr(node.init)
+      bindSeamPattern(node.id, variableScope(), Option.getOrUndefined(initializer))
+      if (node.id.type !== "ObjectPattern" || !node.init) return
+      const pattern = node.id
+      const input = node.init
+      reads.push(() =>
+        seamAuthorityOf(input, current).pipe(
+          Option.match({
+            onNone: () => [],
+            onSome: (authority) => {
+              if (authority.kind !== "context") return []
+              return pattern.properties.flatMap((property) => {
+                if (property.type !== "Property" || property.computed) return []
+                return Option.toArray(staticNameOf(property.key))
+                  .filter((name) => /^[A-Z]/.test(name))
+                  .map((name) => seamKey("facet", name))
+              })
+            },
+          }),
+        ),
+      )
+    },
+    MemberExpression: (node) => {
+      const current = scope
+      reads.push(() =>
+        seamAuthorityOf(node, current).pipe(
+          Option.match({
+            onNone: () => [],
+            onSome: (authority) => {
+              if (authority.kind !== "facet" || !authority.member) return []
+              return [seamKey("facet", authority.member)]
+            },
+          }),
+        ),
+      )
+    },
+    CallExpression: (node) => {
+      const current = scope
+      reads.push(() => callSeamUses(node, current))
+    },
+  }).visit(program)
+  return {
+    declarations: declaredSeamsOf(program, lineOf),
+    uses: new Set(reads.flatMap((read) => read())),
+  }
+}
 
 /**
  * Only a shipped extension fills a facet. The seam-declaration file copies
@@ -712,34 +1096,10 @@ const ADAPTER_PATTERNS: ReadonlyArray<RegExp> = [
  * crediting that plumbing would make every facet permanently adapted, which
  * is the dead-facet check this guard exists for.
  */
-export const adaptedSeamsIn = (file: string, text: string): ReadonlySet<string> => {
+export const adaptedSeamsIn = (file: string, text: string): ReadonlySet<SeamKey> => {
   if (!isAdapterSource(file)) return new Set()
-  const names = new Set<string>()
-  for (const pattern of ADAPTER_PATTERNS) {
-    for (const match of text.matchAll(pattern)) {
-      Option.match(Option.fromNullishOr(match[1]), {
-        onNone: () => {},
-        onSome: (name) => {
-          names.add(name)
-        },
-      })
-    }
-  }
-  return names
+  return sourceForms(file, text).seams.uses
 }
-
-/**
- * The service facets of `ExtensionContextService`.
- *
- * The interface mixes plain facts (`extensionId`, `cwd`) with the facades an
- * extension actually reaches through, and only the facades are seams. The
- * capitalized name is the distinction the codebase already draws, so it is
- * the one used here rather than a hand-kept list that would drift.
- */
-const declaredFacets = (text: string): ReadonlyArray<string> =>
-  declaredMembers(text, /export interface ExtensionContextService/).filter((name) =>
-    /^[A-Z]/.test(name),
-  )
 
 /**
  * The members of the `ResourceScope` union.
@@ -749,83 +1109,24 @@ const declaredFacets = (text: string): ReadonlyArray<string> =>
  *
  * Extensions carry an unrelated load scope on the same field name
  * (`scope: "builtin"`), so a `ResourceScope` sharing one of those names would
- * be credited by a load-scope site and never reported. Those names are
- * excluded rather than left to chance -- a seam this guard cannot actually
- * measure must not read as filled.
+ * be credited by a load-scope site and never reported. Keep those names
+ * excluded from this resource-only contract.
  */
 const EXTENSION_LOAD_SCOPES: ReadonlySet<string> = new Set(["builtin", "user", "project"])
 
-const declaredResourceScopes = (text: string): ReadonlyArray<string> => {
-  const match = Option.fromNullishOr(/export type ResourceScope =([^\n]*)/.exec(text))
-  if (Option.isNone(match)) return []
-  const body = match.value[1] ?? ""
-  return [...body.matchAll(/"([a-z][A-Za-z0-9]*)"/g)].flatMap((literal) =>
-    Option.match(Option.fromNullishOr(literal[1]), {
-      onNone: (): ReadonlyArray<string> => [],
-      onSome: (name): ReadonlyArray<string> => {
-        if (EXTENSION_LOAD_SCOPES.has(name)) return []
-        return [name]
-      },
-    }),
-  )
-}
-
 export const findUnadaptedSeams = (
   sources: ReadonlyMap<string, string>,
-  adapted: ReadonlySet<string>,
+  adapted: ReadonlySet<SeamKey>,
 ): ReadonlyArray<Finding> => {
-  const findings: Finding[] = []
-
-  const report = (
-    file: string,
-    text: string,
-    seams: ReadonlyArray<string>,
-    kindLabel: string,
-    lineFor: (seam: string) => number,
-  ): void => {
-    for (const seam of seams) {
-      if (adapted.has(seam)) continue
-      findings.push({
-        file,
-        line: lineFor(seam),
-        message: `${kindLabel} "${seam}" has no shipped adapter; a seam nothing implements is dead surface. Ship an adapter or remove the seam.`,
-      })
-    }
-  }
-
-  const inFile = (file: string, use: (text: string) => void): void => {
-    const text = Option.fromNullishOr(sources.get(file))
-    if (Option.isNone(text)) return
-    use(text.value)
-  }
-
-  const check = (file: string, blockPattern: RegExp, kindLabel: string): void => {
-    inFile(file, (text) => {
-      report(file, text, declaredMembers(text, blockPattern), kindLabel, (seam) =>
-        lineOf(text, seam),
-      )
-    })
-  }
-
-  check(SEAM_DECLARATION_FILE, /interface RegistrationDomainMap/, "registration domain")
-  check(SEAM_DECLARATION_FILE, /interface ExtensionHookSignatures/, "hook kind")
-  inFile(SEAM_DECLARATION_FILE, (text) => {
-    report(SEAM_DECLARATION_FILE, text, declaredFacets(text), "extension context facet", (seam) =>
-      lineOf(text, seam),
-    )
-  })
-  inFile(SEAM_DECLARATION_FILE, (text) => {
-    const declarationLine =
-      text.split("\n").findIndex((line) => line.includes("export type ResourceScope =")) + 1
-    report(
-      SEAM_DECLARATION_FILE,
-      text,
-      declaredResourceScopes(text),
-      "resource scope",
-      () => declarationLine,
-    )
-  })
-  return findings
+  const text = sources.get(SEAM_DECLARATION_FILE)
+  if (!text) return []
+  return sourceForms(SEAM_DECLARATION_FILE, text)
+    .seams.declarations.filter(({ family, name }) => !adapted.has(seamKey(family, name)))
+    .map(({ family, name, line }) => ({
+      file: SEAM_DECLARATION_FILE,
+      line,
+      message: `${SEAM_LABELS[family]} "${name}" has no shipped adapter; a seam nothing implements is dead surface. Ship an adapter or remove the seam.`,
+    }))
 }
 
 // ── core pins no vendor model ───────────────────────────────────────────────

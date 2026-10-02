@@ -5,6 +5,7 @@ import {
   collectExportFacts,
   type ExportFacts,
   type Finding,
+  type SeamKey,
   findBannedEslintDisableBlocks,
   findBlanketEslintDisables,
   findCoreFeatureIndependenceFindings,
@@ -474,7 +475,7 @@ export const scanTrackedTexts = (
   // Seam scan needs the whole tree too: the declarations live in core, the
   // adapters that fill them live in the shipped extensions and the apps.
   const sourceTexts = new Map<string, string>()
-  const adaptedSeams = new Set<string>()
+  const adaptedSeams = new Set<SeamKey>()
   // A package script is a writer of the variables it sets.
   const manifestTexts = new Map<string, string>()
 

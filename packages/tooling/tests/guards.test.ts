@@ -315,18 +315,145 @@ const scopeSource = `export type ResourceScope = "process" | "branch"
 `
 
 describe("unadapted seam guard", () => {
+  const adapterFile = "packages/extensions/src/notes.ts"
+  const adapterFindings = (source: string, declarations: string = facetsSource) =>
+    findUnadaptedSeams(new Map([[SEAMS_FILE, declarations]]), adaptedSeamsIn(adapterFile, source))
+
+  test("renamed yielded contexts and their stable aliases fill the same facets", () => {
+    const source = [
+      'import { ExtensionContext as Facade } from "@gent/core/extensions/api"',
+      "export function* run() {",
+      "  const context = yield* Facade",
+      "  const alias = context",
+      "  yield* alias.State.publish()",
+      "  yield* context.Telepathy.read()",
+      "}",
+    ].join("\n")
+    expect(adapterFindings(source)).toEqual([])
+    const namespaceSource = [
+      'import * as api from "@gent/core/extensions/api"',
+      "export function* run() {",
+      "  const { State } = yield* api.ExtensionContext",
+      "  yield* State.publish()",
+      '  yield* (yield* api.ExtensionContext)["Telepathy"].read()',
+      "}",
+    ].join("\n")
+    expect(adapterFindings(namespaceSource)).toEqual([])
+  })
+
+  test("comments and examples cannot fill declared facets", () => {
+    const source = [
+      "// ctx.State.publish(); ctx.Telepathy.read()",
+      'const example = "ctx.Telepathy.read()"',
+      "const template = `ctx.State.publish()`",
+    ].join("\n")
+    expect(adapterFindings(source)).toHaveLength(2)
+  })
+
+  test("a shadowed context parameter cannot fill an outer context facet", () => {
+    for (const shadow of [
+      "function example(ctx) { return ctx.Telepathy.read() }",
+      "{ const ctx = unrelated; ctx.Telepathy.read() }",
+      "try {} catch (ctx) { ctx.Telepathy.read() }",
+      "const example = function ctx() { return ctx.Telepathy.read() }",
+      "function example() { ctx.Telepathy.read(); { var ctx = unrelated } }",
+      "for (const ctx of unrelated) { ctx.Telepathy.read() }",
+      "const example = (ctx = unrelated) => ctx.Telepathy.read()",
+    ]) {
+      const source = [
+        'import { ExtensionContext } from "@gent/core/extensions/api"',
+        "export function* run() {",
+        "  const ctx = yield* ExtensionContext",
+        "  yield* ctx.State.publish()",
+        shadow,
+        "}",
+      ].join("\n")
+      expect(adapterFindings(source)).toMatchObject([
+        { message: expect.stringContaining('extension context facet "Telepathy"') },
+      ])
+    }
+  })
+
+  test("a resource scope cannot fill a registration or hook of the same name", () => {
+    const declarations = [
+      "interface RegistrationDomainMap {",
+      '  readonly process: "processes"',
+      "}",
+      "interface ExtensionHookSignatures {",
+      "  readonly process: Hook",
+      "}",
+      'export type ResourceScope = "process"',
+    ].join("\n")
+    const source = [
+      'import { defineResource } from "@gent/core/extensions/api"',
+      'export const resource = defineResource({ id: "notes", scope: "process", layer })',
+    ].join("\n")
+    expect(adapterFindings(source, declarations).map((finding) => finding.message)).toEqual([
+      expect.stringContaining('registration domain "process"'),
+      expect.stringContaining('hook kind "process"'),
+    ])
+    const hostSource = [
+      source,
+      'import { ExtensionHost as Host } from "@gent/core/extensions/api"',
+      "export function* setup() {",
+      "  const host = yield* Host",
+      "  const { register: add, on: listen } = host",
+      '  yield* add("process", service)',
+      '  yield* listen("process", handler)',
+      "}",
+    ].join("\n")
+    expect(adapterFindings(hostSource, declarations)).toEqual([])
+    for (const decoy of [
+      'const unrelated = { scope: "process" }',
+      'const example = `defineResource({ scope: "process" })`',
+      'function example(defineResource) { return defineResource({ scope: "process" }) }',
+      'defineResource({ scope: "process", ...unknown })',
+      'defineResource({ scope: "process", scope: "other" })',
+    ]) {
+      expect(
+        adapterFindings(
+          'import { defineResource } from "@gent/core/extensions/api"\n' + decoy,
+          'export type ResourceScope = "process"',
+        ),
+      ).toMatchObject([{ message: expect.stringContaining('resource scope "process"') }])
+    }
+    const resourceAlias = [
+      'import { defineResource as resource } from "@gent/core/extensions/api"',
+      'const spec = { ...unknown, id: "notes", scope: "process", layer } as const',
+      "const alias = spec",
+      "const create = resource",
+      "export const service = create(alias)",
+    ].join("\n")
+    expect(adapterFindings(resourceAlias, 'export type ResourceScope = "process"')).toEqual([])
+  })
+
+  test("declaration examples create no seams and multiline scope unions do", () => {
+    expect(adapterFindings("", `const example = \`\n${facetsSource}\n\``)).toEqual([])
+    const scopeUnion = 'export type ResourceScope =\n  | "process"\n  | "branch"'
+    expect(adapterFindings("", scopeUnion).map((finding) => finding.message)).toEqual([
+      expect.stringContaining('resource scope "process"'),
+      expect.stringContaining('resource scope "branch"'),
+    ])
+  })
+
   test("reads facets from a yielded context and scopes from a resource definition", () => {
     const seams = adaptedSeamsIn(
       "packages/extensions/src/notes/index.ts",
-      `const ctx = yield* ExtensionContext
-       yield* ctx.State.publish("notes")
-       defineResource({ id: "notes", scope: "process", layer })`,
+      `import { ExtensionContext, defineResource } from "@gent/core/extensions/api"
+       export function* run() {
+         const ctx = yield* ExtensionContext
+         yield* ctx.State.publish("notes")
+         defineResource({ id: "notes", scope: "process", layer })
+       }`,
     )
-    expect([...seams].sort()).toEqual(["State", "process"])
+    expect([...seams].sort()).toEqual(["facet:State", "resource:process"])
   })
 
   test("a facet nothing reaches is reported", () => {
-    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, facetsSource]]), new Set(["State"]))
+    const findings = findUnadaptedSeams(
+      new Map([[SEAMS_FILE, facetsSource]]),
+      new Set(["facet:State"]),
+    )
     expect(findings).toHaveLength(1)
     expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
     expect(findings[0]?.line).toBe(5)
@@ -337,13 +464,16 @@ describe("unadapted seam guard", () => {
     // reaches through. Reporting them would make the guard unusable.
     const findings = findUnadaptedSeams(
       new Map([[SEAMS_FILE, facetsSource]]),
-      new Set(["State", "Telepathy"]),
+      new Set(["facet:State", "facet:Telepathy"]),
     )
     expect(findings).toHaveLength(0)
   })
 
   test("a resource scope nothing declares is reported", () => {
-    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, scopeSource]]), new Set(["process"]))
+    const findings = findUnadaptedSeams(
+      new Map([[SEAMS_FILE, scopeSource]]),
+      new Set(["resource:process"]),
+    )
     expect(findings).toHaveLength(1)
     expect(findings[0]?.message).toContain('resource scope "branch"')
   })
@@ -354,7 +484,7 @@ describe("unadapted seam guard", () => {
     // rather than reported as filled by something that never filled it.
     const findings = findUnadaptedSeams(
       new Map([[SEAMS_FILE, `export type ResourceScope = "process" | "builtin"\n`]]),
-      new Set(["process"]),
+      new Set(["resource:process"]),
     )
     expect(findings).toHaveLength(0)
   })
@@ -372,7 +502,7 @@ describe("unadapted seam guard", () => {
       "  readonly afterTurn: Hook",
       "}",
     ].join("\n")
-    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, hooks]]), new Set(["note"]))
+    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, hooks]]), new Set(["hook:note"]))
     expect(findings.map((finding) => finding.message.split('"')[1])).toEqual([
       "beforeTurn",
       "afterTurn",
@@ -397,7 +527,7 @@ export const requireTelepathy = Effect.gen(function* () {
 })`
     const adapted = adaptedSeamsIn(SEAMS_FILE, source)
     expect(adapted.size).toBe(0)
-    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), new Set(["State"]))
+    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), new Set(["facet:State"]))
     expect(findings).toHaveLength(1)
     expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
   })
