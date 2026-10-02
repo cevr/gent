@@ -1,5 +1,5 @@
 import { Crypto, Duration, Effect, Layer, Option, Redacted, Schema } from "effect"
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
+import { HttpClient, HttpClientRequest } from "effect/http"
 import { Model as AiModel } from "effect/ai"
 import type { AnthropicLanguageModel } from "@effect/ai-anthropic"
 import type { OpenAiLanguageModel as OpenAiResponsesLanguageModel } from "@effect/ai-openai"
@@ -43,6 +43,7 @@ import {
   writesPromptCache,
   MessagesTransientStreamEvent,
   ResponsesTransientStreamEvent,
+  ModelHttpClient,
 } from "./providers.js"
 
 // Test seam: only tests read OPENCODE_GATEWAYS and buildOpenCodeModelDriver,
@@ -597,7 +598,7 @@ const responsesModel = (
         rewriteJsonBody(withEncryptedReasoning(reasons)),
         gatewayHeaders(resolution.sessionId),
       ),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
+  }).pipe(Layer.provide(ModelHttpClient))
   return OpenAiResponsesLanguageModel.layer({
     model: resolution.modelName,
     config: responsesConfig(
@@ -624,7 +625,7 @@ const chatCompletionsModel = (
         rewriteJsonBody(reasoningInField(reasoningField)),
         gatewayHeaders(resolution.sessionId),
       ),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
+  }).pipe(Layer.provide(ModelHttpClient))
   return OpenAiChatLanguageModel.layer({
     model: resolution.modelName,
     config: chatConfig(resolution.hints, resolution.wire),
@@ -644,7 +645,7 @@ const messagesModel = (
     apiUrl: resolution.gateway.origin,
     transformClient: (http) =>
       http.pipe(rewriteJsonBody(rewrite), gatewayHeaders(resolution.sessionId)),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
+  }).pipe(Layer.provide(ModelHttpClient))
   return AnthropicLanguageModel.layer({
     model: resolution.modelName,
     config: messagesConfig(resolution.hints, plan),

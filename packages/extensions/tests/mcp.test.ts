@@ -442,6 +442,64 @@ describe("mcp config", () => {
   )
 
   it.scopedLive(
+    "an entry that does not decode is reported by /mcp, and the file's other servers still run",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const home = path.join(fixture.directory, "home")
+        yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(home, ".gent", "mcp.json"),
+          encodeJson({
+            mcpServers: {
+              user: fixture.stdio(),
+              switched: { enabled: false },
+              typo: { comand: "x" },
+            },
+          }),
+        )
+        const contributions = yield* collectTestContributions(McpExtension.setup, {
+          home,
+          cwd: home,
+        })
+        expect(toolIds(contributions).filter((id) => id.startsWith("mcp.user."))).toHaveLength(5)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+          home,
+          cwd: home,
+        })
+        yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@gent/mcp"),
+          capabilityId: "mcp-command",
+          input: "",
+        })
+        const shown = yield* waitFor(
+          client.message.list({ branchId }),
+          (all) => all.some((message) => messagePartsText(message.parts).includes("- user")),
+          10_000,
+          "the /mcp report",
+        )
+        const report =
+          shown
+            .map((message) => messagePartsText(message.parts))
+            .find((text) => text.includes("- user")) ?? ""
+        expect(report).toContain("- user (stdio): unknown, 5 tools, not connected")
+        for (const name of ["switched", "typo"]) {
+          expect(report).toContain(
+            `- ${name} (auto): misconfigured, 0 tools, not connected\n  config: Missing key at ["command"]; Missing key at ["url"]\n`,
+          )
+        }
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
     "a cold catalog starts the server once at setup; a cached one starts nothing",
     () =>
       Effect.gen(function* () {
@@ -1360,12 +1418,15 @@ interface OAuthFixtureState {
  * refresh grant is held until a second one arrives, or a second passes.
  * `holdRegister`: a registration waits for `registerGate`. `slowRefreshes`:
  * a refresh grant rotates the token at once but answers a second later.
+ * `sseOnly`: `/mcp` routes before it authenticates, so a POST gets 405 and
+ * only the SSE GET learns that the server wants a login.
  */
 interface OAuthFixtureOptions {
   readonly headerOnly: boolean
   readonly overlapRefreshes: boolean
   readonly holdRegister: boolean
   readonly slowRefreshes: boolean
+  readonly sseOnly: boolean
 }
 
 const defaultOAuthFixture: OAuthFixtureOptions = {
@@ -1373,6 +1434,7 @@ const defaultOAuthFixture: OAuthFixtureOptions = {
   overlapRefreshes: false,
   holdRegister: false,
   slowRefreshes: false,
+  sseOnly: false,
 }
 
 /** Where the authorization server lives: the origin, or `/as` under `headerOnly`. */
@@ -1585,7 +1647,9 @@ const oauthFixtureApp = (state: OAuthFixtureState) =>
     // a GET without a token it accepts learns that the server wants a login.
     const token = (request.headers["authorization"] ?? "").replace(/^Bearer /, "")
     if (request.method === "GET" && !state.valid.has(token)) return refuseLogin(state)
-    if (request.method !== "POST") return HttpServerResponse.empty({ status: 405 })
+    if (request.method !== "POST" || state.options.sseOnly) {
+      return HttpServerResponse.empty({ status: 405 })
+    }
     return yield* answerMcp(state, request)
   }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
 
@@ -1743,20 +1807,28 @@ const revokeThenCall = (oauth: OAuthFixtureState) =>
 
 describe("mcp oauth", () => {
   it.scopedLive(
-    "an SSE server that wants a login reports logged-out, as streamable HTTP does",
+    "an SSE server that wants a login reports logged-out, as streamable HTTP does, also when auto falls back to it",
     () =>
       Effect.gen(function* () {
-        const oauth = yield* serveOAuthFixture
-        const data = yield* makeDataDir
-        const listed = yield* Effect.gen(function* () {
-          const { request, shown } = yield* commandSession(oauth, "sse")
-          yield* request("")
-          return yield* shown("- secure")
-        }).pipe(Effect.provide(data.layer))
-        expect(listed).toContain("- secure (sse): logged-out, 0 tools, not connected")
-        expect(listed).toContain("run /mcp login secure")
-      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
-    20_000,
+        const listedFor = (sseOnly: boolean, type: "auto" | "sse") =>
+          Effect.gen(function* () {
+            const oauth = yield* serveOAuthFixtureWith({ ...defaultOAuthFixture, sseOnly })
+            const data = yield* makeDataDir
+            return yield* Effect.gen(function* () {
+              const { request, shown } = yield* commandSession(oauth, type)
+              yield* request("")
+              return yield* shown("- secure")
+            }).pipe(Effect.provide(data.layer))
+          })
+        const pinned = yield* listedFor(false, "sse")
+        expect(pinned).toContain("- secure (sse): logged-out, 0 tools, not connected")
+        expect(pinned).toContain("run /mcp login secure")
+        // The POST gets 405, so auto tries SSE, whose GET wants the login.
+        const fellBack = yield* listedFor(true, "auto")
+        expect(fellBack).toContain("- secure (auto): logged-out, 0 tools, not connected")
+        expect(fellBack).toContain("run /mcp login secure")
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
   )
   it.scopedLive(
     "/mcp login signs in through the loopback redirect, stores the token 0600, and the next session calls with it",

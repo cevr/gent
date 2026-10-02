@@ -79,6 +79,7 @@ import {
   modelReasons,
   withHeaders,
   ResponsesTransientStreamEvent,
+  ModelHttpClient,
 } from "./providers.js"
 import type {
   OpenAiClient as OpenAiResponsesClient,
@@ -1568,7 +1569,7 @@ const reasoningReplayClient =
 
 /**
  * API-key path: the Responses client with the key as Bearer auth over
- * `FetchHttpClient`, with the summary-refusal retry. No Codex transform — the
+ * `ModelHttpClient`, with the summary-refusal retry. No Codex transform — the
  * Codex backend rewrite + OAuth headers are specific to the ChatGPT OAuth path.
  */
 const makeApiKeyOpenAIResolution = (
@@ -1590,7 +1591,7 @@ const makeApiKeyOpenAIResolution = (
         apiKey,
       )(reasoningReplayClient(rejectedReasoning, reasons)(client)),
     ),
-  ).pipe(Layer.provide(FetchHttpClient.layer))
+  ).pipe(Layer.provide(ModelHttpClient))
   const clientLayer = OpenAiResponsesClient.layer({ apiKey: Redacted.make(apiKey) }).pipe(
     Layer.provide(httpClientLayer),
   )
@@ -1632,7 +1633,7 @@ const makeOauthOpenAILayer = (
       const client = yield* HttpClient.HttpClient
       return buildCodexClient(creds)(reasoningReplayClient(rejectedReasoning, reasons)(client))
     }),
-  ).pipe(Layer.provide(FetchHttpClient.layer))
+  ).pipe(Layer.provide(ModelHttpClient))
   const clientLayer = OpenAiResponsesClient.layer({
     apiUrl: "https://chatgpt.com/backend-api/codex",
   }).pipe(Layer.provide(codexHttpClientLayer))

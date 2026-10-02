@@ -104,17 +104,22 @@ const HttpServerConfig = Schema.Struct({
 const McpServerConfig = Schema.Union([StdioServerConfig, HttpServerConfig])
 type McpServerConfig = typeof McpServerConfig.Type
 
+/** Each entry decodes on its own, so one bad entry never drops the file's other servers. */
 const McpConfigFile = Schema.Struct({
-  mcpServers: Schema.optional(Schema.Record(Schema.String, McpServerConfig)),
+  mcpServers: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 })
+const decodeServerConfig = Schema.decodeUnknownResult(McpServerConfig)
 
 /** The file an entry came from: the user's `~/.gent/mcp.json`, or a project's `.gent/mcp.json`. */
 const McpConfigSource = Schema.Literals(["user", "project"])
 type McpConfigSource = typeof McpConfigSource.Type
 
-/** An entry as written, and the file it came from. */
+/**
+ * An entry as written, and the file it came from. `config` fails with why
+ * the entry does not decode; such an entry is reported and never started.
+ */
 interface McpConfigEntry {
-  readonly config: McpServerConfig
+  readonly config: Result.Result<McpServerConfig, string>
   readonly source: McpConfigSource
 }
 
@@ -303,13 +308,30 @@ const expandConfig = (config: McpServerConfig): Effect.Effect<McpServerConfig, s
   })
 }
 
-/** A file that is missing has no servers; one that does not decode is reported and skipped. */
+type ConfigEntries = Readonly<Record<string, Result.Result<McpServerConfig, string>>>
+
+/** A schema error on one line: `Missing key at ["command"]; Missing key at ["url"]`. */
+const configReason = (error: Schema.SchemaError) =>
+  `config: ${error.message.replace(/\n\s+at /g, " at ").replace(/\n/g, "; ")}`
+
+/**
+ * A file that is missing has no servers, and one that is not an `mcpServers`
+ * object is logged and skipped. Each entry decodes on its own: one that does
+ * not decode fails with why, and the others still run.
+ */
 const readConfigFile = Effect.fn("Mcp.readConfigFile")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem
   if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) return {}
   return yield* fs.readFileString(file).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(McpConfigFile))),
-    Effect.map((decoded) => decoded.mcpServers ?? {}),
+    Effect.map((decoded): ConfigEntries =>
+      Object.fromEntries(
+        Object.entries(decoded.mcpServers ?? {}).map(([name, raw]) => [
+          name,
+          Result.mapError(decodeServerConfig(raw), configReason),
+        ]),
+      ),
+    ),
     Effect.catchCause((cause) =>
       Effect.logWarning("mcp.config.unreadable").pipe(
         Effect.annotateLogs({ file, error: String(cause) }),
@@ -343,7 +365,7 @@ const projectTrusted = Effect.fn("Mcp.projectTrusted")(function* (home: string, 
 })
 
 const fromSource = (
-  entries: Readonly<Record<string, McpServerConfig>>,
+  entries: ConfigEntries,
   source: McpConfigSource,
 ): Readonly<Record<string, McpConfigEntry>> =>
   Object.fromEntries(Object.entries(entries).map(([name, config]) => [name, { config, source }]))
@@ -351,8 +373,8 @@ const fromSource = (
 /**
  * The servers `~/.gent/mcp.json` names, and a trusted project's
  * `.gent/mcp.json` over them by name, each with the file it came from. A
- * disabled entry, or one whose variables do not expand, is left out with a
- * warning.
+ * project entry that does not decode still replaces the user entry of its
+ * name, and is reported instead of started.
  */
 const readMcpConfig = Effect.fn("Mcp.readConfig")(function* (home: string, cwd: string) {
   const path = yield* Path.Path
@@ -367,13 +389,15 @@ const readMcpConfig = Effect.fn("Mcp.readConfig")(function* (home: string, cwd: 
 /** An enabled entry that cannot run, and why; `mcp.status` reports it. */
 interface MisconfiguredServer {
   readonly name: string
-  readonly config: McpServerConfig
+  /** The transport the entry names; `auto` for an entry that does not decode. */
+  readonly transport: McpServerStatus["transport"]
   readonly reason: string
 }
 
 /**
- * The enabled entries as servers, and the ones whose variables do not expand
- * or whose key cannot be computed, which are reported and never started.
+ * The enabled entries as servers, and the ones that do not decode, whose
+ * variables do not expand or whose key cannot be computed, which are
+ * reported and never started.
  */
 const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
   entries: Readonly<Record<string, McpConfigEntry>>,
@@ -383,21 +407,31 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
   const servers: Array<McpServer> = []
   const misconfigured: Array<MisconfiguredServer> = []
   const enabled = Object.entries(entries)
-    .filter(([, entry]) => entry.config.enabled !== false)
+    .filter(([, entry]) => Result.isFailure(entry.config) || entry.config.success.enabled !== false)
     .toSorted(([left], [right]) => compareIds(left, right))
   const names = allocateSegments(
     enabled.map(([written]) => written),
     SERVER_SEGMENT_LIMIT,
     "server",
   )
-  for (const [written, { config, source }] of enabled) {
+  for (const [written, entry] of enabled) {
     const name = names.get(written) ?? "server"
+    if (Result.isFailure(entry.config)) {
+      yield* Effect.logWarning("mcp.server.config").pipe(
+        Effect.annotateLogs({ server: written, error: entry.config.failure }),
+      )
+      misconfigured.push({ name, transport: "auto", reason: entry.config.failure })
+      continue
+    }
+    const { source } = entry
+    const config = entry.config.success
+    const transport = configuredTransport(config)
     const expanded = yield* Effect.result(expandConfig(config))
     if (Result.isFailure(expanded)) {
       yield* Effect.logWarning("mcp.server.config").pipe(
         Effect.annotateLogs({ server: written, error: expanded.failure }),
       )
-      misconfigured.push({ name, config, reason: expanded.failure })
+      misconfigured.push({ name, transport, reason: expanded.failure })
       continue
     }
     let cwd = sessionCwd
@@ -409,7 +443,7 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
       yield* Effect.logWarning("mcp.server.key").pipe(
         Effect.annotateLogs({ server: written, error: key.failure.message }),
       )
-      misconfigured.push({ name, config, reason: key.failure.message })
+      misconfigured.push({ name, transport, reason: key.failure.message })
       continue
     }
     servers.push({ name, key: key.success, config: expanded.success, cwd })
@@ -1607,12 +1641,14 @@ const connect = (
     return yield* streamable.pipe(
       Effect.catchTag("McpError", (error) => {
         if (!SSE_FALLBACK_STATUSES.has(error.status ?? 0)) return Effect.fail(error)
+        // The SSE attempt decides the health: its refusal keeps `status` and `loggedOut`.
         return dial(server, "sse", {}, oauth, onToolsChanged).pipe(
           Effect.mapError(
             (sse) =>
               new McpError({
                 server: server.name,
                 message: `streamable HTTP ${error.message}; SSE ${sse.message}`,
+                ...omitUndefined({ status: sse.status, loggedOut: sse.loggedOut }),
               }),
           ),
         )
@@ -2334,7 +2370,7 @@ const mcpClientsLive = ({
           for (const entry of misconfigured) {
             servers.push({
               name: entry.name,
-              transport: configuredTransport(entry.config),
+              transport: entry.transport,
               health: "misconfigured",
               connected: false,
               tools: 0,
@@ -2855,5 +2891,13 @@ export const McpExtension = defineExtension({
 export const McpServers = (id: string, entries: Readonly<Record<string, McpServerConfig>>) =>
   defineExtension({
     id,
-    setup: registerServers(id, fromSource(entries, "user")),
+    setup: registerServers(
+      id,
+      fromSource(
+        Object.fromEntries(
+          Object.entries(entries).map(([name, config]) => [name, Result.succeed(config)]),
+        ),
+        "user",
+      ),
+    ),
   })

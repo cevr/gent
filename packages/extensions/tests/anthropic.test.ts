@@ -43,15 +43,7 @@ import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/process"
-import {
-  captureProviderStopReason,
-  testHostFacts,
-  fakeFetchLayer,
-  type FakeFetchState,
-  makeFakeFetchState,
-  oneGenerate,
-  turnNoticesText,
-} from "@gent/core/test-utils"
+import { captureProviderStopReason, testHostFacts, turnNoticesText } from "@gent/core/test-utils"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/http"
 import {
   type CredentialCacheCell,
@@ -71,10 +63,14 @@ import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import {
   type FakeClientState,
+  fakeFetchLayer,
+  type FakeFetchState,
+  type FakeResponder,
   makeFakeClient,
+  makeFakeFetchState,
+  oneGenerate,
   respondFirstWith,
   transportFailure,
-  type TransportFailure,
 } from "./helpers/fake-http-client.js"
 import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { AnthropicClient as AnthropicSdkClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
@@ -546,15 +542,12 @@ const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 // `Effect.orDie` collapses typed errors to defects so test bodies can
 // assert success without `as Effect<unknown, never, never>` casts.
 const runOk = <A, E, R>(eff: Effect.Effect<A, E, R>) => Effect.scoped(eff.pipe(Effect.orDie))
-const answerOk = () => new Response("ok", { status: 200 })
+const answerOk = () => ({ status: 200, body: "ok" })
 /**
  * A keychain-transform client over a fake that records each request and
  * answers with `responder`. `post` sends one claude-opus-4-6 message.
  */
-const keychainClient = (
-  responder: (call: number) => Response | TransportFailure,
-  io: AnthropicCredentialIO = validCredsIO("k1"),
-) =>
+const keychainClient = (responder: FakeResponder, io: AnthropicCredentialIO = validCredsIO("k1")) =>
   Effect.gen(function* () {
     const creds = yield* credentialCache(io)
     const fakeState: FakeClientState = { captured: [], responder }
@@ -568,7 +561,7 @@ const keychainClient = (
   })
 /** One message through a fresh keychain-transform client: its exit and the requests the fake saw. */
 const sendOnce = (
-  responder: (call: number) => Response | TransportFailure,
+  responder: FakeResponder,
   options: { readonly io?: AnthropicCredentialIO; readonly headers?: Record<string, string> } = {},
 ) =>
   Effect.gen(function* () {
@@ -658,7 +651,7 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
   for (const status of [429, 529, 500]) {
     it.scopedLive(`a ${status} reaches the caller after one attempt`, () =>
       Effect.gen(function* () {
-        const { exit, captured } = yield* sendOnce(() => new Response("busy", { status }))
+        const { exit, captured } = yield* sendOnce(() => ({ status, body: "busy" }))
         expect(captured).toHaveLength(1)
         expect(Exit.isSuccess(exit) && exit.value.status).toBe(status)
       }),
@@ -668,7 +661,7 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
     Effect.gen(function* () {
       const body =
         '{"type":"error","error":{"message":"Extra usage is required for long context requests"}}'
-      const { exit, captured } = yield* sendOnce(() => new Response(body, { status: 400 }))
+      const { exit, captured } = yield* sendOnce(() => ({ status: 400, body: body }))
       expect(captured).toHaveLength(1)
       expect(Exit.isSuccess(exit) && exit.value.status).toBe(400)
       expect(captured[0]!.headers["anthropic-beta"]).toContain("interleaved-thinking-2025-05-14")
@@ -705,7 +698,7 @@ describe("keychainTransformClient — 401 recovery", () => {
   it.scopedLive("401 once → invalidate creds → retry succeeds with fresh token", () =>
     Effect.gen(function* () {
       const { exit, captured } = yield* sendOnce(
-        respondFirstWith(new Response("auth", { status: 401 }), answerOk()),
+        respondFirstWith({ status: 401, body: "auth" }, answerOk()),
         { io: togglingCredsIO("stale", "fresh") },
       )
       expect(captured).toHaveLength(2)
@@ -722,7 +715,7 @@ describe("keychainTransformClient — 401 recovery", () => {
       // still holds it, so only a refresh can replace it.
       const held: Array<Option.Option<ClaudeCredentials>> = []
       const { exit, captured } = yield* sendOnce(
-        respondFirstWith(new Response("auth", { status: 401 }), answerOk()),
+        respondFirstWith({ status: 401, body: "auth" }, answerOk()),
         {
           io: {
             read: Effect.succeed(makeCredsKeychain("revoked")),
@@ -798,7 +791,7 @@ describe("keychainTransformClient — 401 recovery", () => {
       Effect.gen(function* () {
         // Both attempts get 401 — the second 401 is a real auth failure
         // (revoked session, missing scope) and must reach the caller.
-        const { exit, captured } = yield* sendOnce(() => new Response("auth", { status: 401 }), {
+        const { exit, captured } = yield* sendOnce(() => ({ status: 401, body: "auth" }), {
           io: togglingCredsIO("stale", "still-bad"),
         })
         // 1 initial + 1 retry = 2 attempts (no third)
@@ -813,7 +806,7 @@ describe("keychainTransformClient — 401 recovery", () => {
       // #2 would re-read and pick up the second token. Asserting both
       // requests use the first token proves the cache survived the 500.
       const { post, captured } = yield* keychainClient(
-        respondFirstWith(new Response("server error", { status: 500 }), answerOk()),
+        respondFirstWith({ status: 500, body: "server error" }, answerOk()),
         togglingCredsIO("first", "second"),
       )
       const r1 = yield* runOk(post())
@@ -1544,6 +1537,42 @@ describe("Anthropic stop reason", () => {
       // Effect AI's map lacks the reason, so the finish part alone cannot tell.
       expect(finishes).toEqual(["unknown"])
       expect(reported).toEqual(Option.some("model_context_window_exceeded"))
+    }),
+  )
+})
+
+describe("Anthropic lost connection", () => {
+  it.live("a stream whose connection drops mid-reply fails as a retryable lost connection", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const model = yield* driver.resolveModel("claude-sonnet-4-5", makeApiAuthInfo("test-key"))
+      const reply = streamReplyEnding("end_turn")
+      const firstEvent = `${reply.body.split("\n\n")[0] ?? ""}\n\n`
+      // The server sends the first event, then the socket closes under the read.
+      const dropped = () => ({
+        ...reply,
+        body: new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            controller.enqueue(new TextEncoder().encode(firstEvent))
+            controller.error("socket closed")
+          },
+        }),
+      })
+      const error = yield* LanguageModel.streamText({ prompt: "hi" }).pipe(
+        Stream.runDrain,
+        Effect.provide(Layer.provideMerge(model, fakeFetchLayer(makeFakeFetchState(), dropped))),
+        Effect.scoped,
+        Effect.flip,
+      )
+      expect(error.reason).toMatchObject({
+        _tag: "NetworkError",
+        reason: "TransportError",
+        description: "connection lost while reading the response",
+      })
+      expect(error.isRetryable).toBe(true)
+      expect(error.message).toContain("connection lost while reading the response")
     }),
   )
 })

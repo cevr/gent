@@ -1,6 +1,6 @@
 import { Effect, Layer, Option, Schema } from "effect"
 import { Decision, DecisionModel } from "effect/ai"
-import { type CapturedRequest, type FakeFetchState, fakeFetchLayer } from "@gent/core/test-utils"
+import { type CapturedRequest, type FakeFetchState, fakeFetchLayer } from "./fake-http-client.js"
 import { encodeExternalJson } from "./external-wire.js"
 
 /**

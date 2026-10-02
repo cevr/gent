@@ -61,6 +61,7 @@ import {
   withHeaders,
   writesPromptCache,
   MessagesTransientStreamEvent,
+  ModelHttpClient,
 } from "./providers.js"
 import { ChildProcessSpawner } from "effect/process"
 import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/http"
@@ -2448,7 +2449,7 @@ const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): Json
 // ── Layer construction helpers ──
 
 /**
- * API-key path: plain `AnthropicClient.layer` over `FetchHttpClient`.
+ * API-key path: plain `AnthropicClient.layer` over `ModelHttpClient`.
  * No keychain wrapper — `buildKeychainTransformClient` injects Claude Code OAuth
  * billing-header system blocks + identity prefix, which API-key users
  * are not on the hook for.
@@ -2466,7 +2467,7 @@ const makeApiKeyAnthropicLayer = (
     apiKeyClientPath(request.cacheLifetimes),
     (rewriteBody) =>
       AnthropicClient.layer({ apiKey: Redacted.make(apiKey), transformClient: rewriteBody }),
-  ).pipe(Layer.provide(FetchHttpClient.layer))
+  ).pipe(Layer.provide(ModelHttpClient))
   return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
     Layer.provide(clientLayer),
   )
@@ -2500,7 +2501,7 @@ const makeOauthAnthropicLayer = (
     claudeCodeClientPath(sdk, creds, request.cacheLifetimes),
     (rewriteBody) =>
       AnthropicClient.layer({ transformClient: (client) => keychain(rewriteBody(client)) }),
-  ).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(Layer.succeedContext(services)))
+  ).pipe(Layer.provide(ModelHttpClient), Layer.provide(Layer.succeedContext(services)))
   return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
     Layer.provide(wrappedClient),
   )

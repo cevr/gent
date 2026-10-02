@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Exit, Option } from "effect"
 import { ModelId, ProviderAuthError, ProviderAuthInfo } from "@gent/core/extensions/api"
-import { makeFakeFetchState } from "@gent/core/test-utils"
+import { makeFakeFetchState } from "./helpers/fake-http-client.js"
 import { buildTypeSafeModelDriver } from "../src/typesafe.js"
 import { decideTicket, systemOneBody, TICKET, TICKET_QUESTIONS } from "./helpers/decision-wire.js"
 

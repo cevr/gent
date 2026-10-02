@@ -9,5 +9,5 @@ Every delegation boundary has a budget. Account for delegation overhead itself, 
 - **Budget before delegating:** Estimate turns per phase: setup, read context, implement, verify + fix, commit. If total exceeds budget, scope is too large
 - **Front-load context to avoid rediscovery costs:** Every piece of analysis withheld is a turn wasted. Cost of a longer prompt is one read; cost of rediscovery is multiple turns
 - **Hard-cap scope:** Limit files per phase. One function/type + tests per unit of work. Without caps, work expands
-- **Account for coordination overhead:** Team coordination costs turns. Direct task delegation returns results without coordination tax
+- **Account for coordination overhead:** Children that coordinate with each other cost turns. A child started with `delegate.start` does one task and returns its result as one message, with no coordination tax
 - **Exit smart, not late:** Commit passing work before your budget runs out, not at the last moment

@@ -10,14 +10,10 @@ import {
   ProviderId,
 } from "@gent/core/extensions/api"
 import {
-  type CapturedRequest,
   createE2ELayer,
   createRpcClient,
-  type FakeFetchState,
   LanguageModelLayers,
-  makeFakeFetchState,
   makeTempDirectoryScoped,
-  oneGenerate,
   textStep,
 } from "@gent/core/test-utils"
 import {
@@ -35,6 +31,12 @@ import {
   TICKET_ANSWER,
   TICKET_QUESTIONS,
 } from "./helpers/decision-wire.js"
+import {
+  type CapturedRequest,
+  type FakeFetchState,
+  makeFakeFetchState,
+  oneGenerate,
+} from "./helpers/fake-http-client.js"
 
 /**
  * The Cloudflare driver: Workers AI and AI Gateway models over Cloudflare's

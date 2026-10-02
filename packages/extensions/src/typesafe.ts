@@ -1,5 +1,5 @@
 import { Effect, Layer, Option, Redacted, Schema } from "effect"
-import { FetchHttpClient, type HttpClient } from "effect/http"
+import type { HttpClient } from "effect/http"
 import type { DecisionModel } from "effect/ai"
 import {
   AuthMethod,
@@ -13,7 +13,7 @@ import {
   ProviderAuthError,
   ProviderId,
 } from "@gent/core/extensions/api"
-import { apiKeyFrom, readOptionalEnv } from "./providers.js"
+import { apiKeyFrom, ModelHttpClient, readOptionalEnv } from "./providers.js"
 
 // Test seam: only tests read buildTypeSafeModelDriver, which lets a test run
 // the driver against a fake fetch.
@@ -58,7 +58,7 @@ export const typeSafeDecisionModel = (
               transformClient: endpoint.transformClient,
             }),
           ),
-          Layer.provide(FetchHttpClient.layer),
+          Layer.provide(ModelHttpClient),
         ),
     ),
   )

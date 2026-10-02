@@ -134,8 +134,8 @@ updates this list in the same commit.
     before it continues, and carries a summary of at most 150 words.
     When the newest turn alone overflows, the handoff anchors inside the turn
     at a step boundary and keeps the newest steps that fit half the budget.
-    A summary that cannot be produced degrades to truncation with a visible
-    notice. The budget is the smaller of the model's input cap
+    A summary that cannot be produced (empty, oversized, failed, or blocked
+    by the provider) degrades to truncation with a visible notice. The budget is the smaller of the model's input cap
     (`Model.inputLimit`, from models.dev `limit.input`) and its window less
     the output reserve. The reserve is the model's output cap
     (`Model.outputLimit`, from models.dev `limit.output`) up to 32k, and at
@@ -1432,7 +1432,9 @@ the loose result schema); core has no MCP concept. The one Promise edge, the
 `fetch` function an OAuth transport takes, lives in `mcp-boundary.ts`. Config
 is the `mcpServers` object Claude Code, Cursor, and opencode share, in
 `~/.gent/mcp.json` and, for a project root `trustedProjects` names, in
-`<project>/.gent/mcp.json` (a project entry wins by name). A `command` entry
+`<project>/.gent/mcp.json` (a project entry wins by name). Each entry decodes on
+its own: one that does not decode is `misconfigured` with the schema issue as
+its reason, and the file's other servers still run. A `command` entry
 runs over stdio with the process's flat environment, empty values included and
 read in one pass at the first setup, its own `env` winning (its stderr is ignored, so it never
 draws on the TUI). A `url` entry sends its
@@ -1529,7 +1531,7 @@ The read-only `mcp.status` host tool and the `/mcp` slash command report each
 server's transport, tool count, connection, and health: `healthy` (listed or
 connected), `expired` (the server refused the credential; the reason names
 `/mcp login`), `logged-out` (the server refused an OAuth entry that has no
-stored login; the reason names `/mcp login`), `misconfigured` (the entry cannot run: an unset variable),
+stored login; the reason names `/mcp login`), `misconfigured` (the entry cannot run: it does not decode, or names an unset variable),
 `degraded` (a connect, list or call failed in the transport), or `unknown`
 (read from the cache, not yet connected). With no server configured, only
 `/mcp` is registered, and it says where to add one.
@@ -1962,7 +1964,7 @@ This doc describes the architecture we want to keep, not the migration history w
 
 ## Bundled guidance
 
-Skills are discovered once per branch resource; an unreadable entry or dangling link in a skills directory is skipped with a warning. Frontmatter is YAML; a missing `name` falls back to the file name. Turn prompts list skills under a Local and a Global heading, grouped by skills directory. The model reads these files through the existing read tool or cell runtime. There are no skill search/load model tools. Typed skill RPCs still serve TUI discovery and content access; `$skill`, `$skill:local`, and `$skill:global` retain local-first or explicit-scope selection.
+Skills are discovered once per branch resource; an unreadable entry or dangling link in a skills directory is skipped with a warning. Frontmatter is YAML; a missing `name` falls back to the file name, and a missing `description` to the first body paragraph that has text after its heading lines. A skill marked `disable-model-invocation: true` (Claude Code's key) is user-invoked only: the listing names it on one line per directory, with no description, and the model reads it only on its `$name`. Turn prompts list skills under a Local and a Global heading, grouped by skills directory. The model reads these files through the existing read tool or cell runtime. There are no skill search/load model tools. Typed skill RPCs still serve TUI discovery and content access; `$skill`, `$skill:local`, and `$skill:global` retain local-first or explicit-scope selection.
 
 The skills listing goes into every request, so its size is a per-step input cost. The listing names each skills directory once and gives each skill its name and lead sentence (about 110 characters); the file is `<directory>/<name>/SKILL.md` unless the line names another file. The model reads the full text through the same read path: names and paths up front, content on read. On the owner's home this listing is 6.7k characters, against 21.5k for the former listing that gave every skill its full description and absolute path. The measurement that made it the only listing (a $0 Codex run, two prompts, each listing once): the first request of every turn fell from 8,905 to 5,162 input tokens (−42%), turn totals from 52,956 to 32,647, and both listings found the right skill for both prompts (the short listing read a wrong skill first once and corrected itself in the same turn).
 

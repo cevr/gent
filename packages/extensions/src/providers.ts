@@ -8,11 +8,13 @@ import {
   Exit,
   FileSystem,
   Hash,
+  Layer,
   Option,
   Path,
   Predicate,
   Schema,
   Scope,
+  Stream,
   SynchronizedRef,
 } from "effect"
 import {
@@ -389,6 +391,51 @@ export const makeCredentialCache = <C>(
   })
 
 // ── http ────────────────────────────────────────────────────────────────────
+
+/** What a lost connection reports: on the retry notice, and as the final error. */
+const CONNECTION_LOST = "connection lost while reading the response"
+
+/**
+ * A body read failure as the lost connection it is. Effect reports any failed
+ * read of a response body stream as a `DecodeError` with no description,
+ * before a byte is decoded, and the AI SDKs turn that into "Invalid output:
+ * Failed to decode response". As a `TransportError` the SDKs map it to a
+ * retryable `NetworkError` that names the cause. A `DecodeError` with a
+ * description is a real decode failure and stays.
+ */
+const asLostConnection = (error: HttpClientError): HttpClientError => {
+  const reason = error.reason
+  if (reason._tag !== "DecodeError" || Predicate.isNotUndefined(reason.description)) return error
+  return new HttpClientError({
+    reason: new TransportError({
+      request: reason.request,
+      cause: reason.cause,
+      description: CONNECTION_LOST,
+    }),
+  })
+}
+
+/** The response, with its body stream's read failures named as a lost connection. */
+const namingLostConnection = (
+  response: HttpClientResponse.HttpClientResponse,
+): HttpClientResponse.HttpClientResponse => {
+  const named: HttpClientResponse.HttpClientResponse = Object.create(response, {
+    stream: { get: () => response.stream.pipe(Stream.mapError(asLostConnection)) },
+  })
+  return named
+}
+
+/**
+ * The `HttpClient` every model client sends through: `FetchHttpClient`, with
+ * a connection lost mid-body reported as one (see `asLostConnection`). The
+ * Anthropic, OpenAI, OpenCode and TypeSafe model clients build on it.
+ */
+export const ModelHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.effect(
+  HttpClient.HttpClient,
+  Effect.map(HttpClient.HttpClient, (client) =>
+    HttpClient.transformResponse(client, Effect.map(namingLostConnection)),
+  ),
+).pipe(Layer.provide(FetchHttpClient.layer))
 
 /**
  * Shared HTTP middleware for provider `transformClient` callbacks.

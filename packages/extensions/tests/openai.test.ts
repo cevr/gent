@@ -48,19 +48,14 @@ import { testCatalogSource } from "./helpers/catalog-source.js"
 import { e2ePreset } from "./helpers/test-preset.js"
 import {
   type FakeClientState,
-  makeFakeClient,
-  respondFirstWith,
-} from "./helpers/fake-http-client.js"
-import {
   fakeFetchLayer,
   type FakeFetchState,
-  freePort,
+  makeFakeClient,
   makeFakeFetchState,
-  createRpcHarness,
   oneGenerate,
-  turnNoticesText,
-  waitFor,
-} from "@gent/core/test-utils"
+  respondFirstWith,
+} from "./helpers/fake-http-client.js"
+import { freePort, createRpcHarness, turnNoticesText, waitFor } from "@gent/core/test-utils"
 import { SessionId } from "@gent/core/protocol"
 import { BunCrypto } from "@effect/platform-bun"
 
@@ -759,7 +754,7 @@ const runOk = <A, E, R>(eff: Effect.Effect<A, E, R>) => Effect.scoped(eff.pipe(E
 /** A fake client that answers every request with `status`. */
 const answering = (status: number, body = "ok"): FakeClientState => ({
   captured: [],
-  responder: () => new Response(body, { status }),
+  responder: () => ({ status, body: body }),
 })
 /**
  * The Codex client as the driver builds it, over the fake client: the
@@ -1210,8 +1205,8 @@ describe("codexClient — 401 recovery", () => {
         captured: [],
         // First call returns 401, second returns 200.
         responder: respondFirstWith(
-          new Response("unauthorized", { status: 401 }),
-          new Response("ok", { status: 200 }),
+          { status: 401, body: "unauthorized" },
+          { status: 200, body: "ok" },
         ),
       }
       const client = yield* codexClientOver(state, staleAuthInfo, rotateIO)

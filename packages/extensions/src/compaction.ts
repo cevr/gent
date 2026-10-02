@@ -232,7 +232,7 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
   const failure = (reason: string) => new ModelCompactionError({ modelId: params.modelId, reason })
   const text: Array<string> = []
   let usage = Option.none<Usage>()
-  let cut = false
+  let finish = Option.none<Response.FinishReason>()
   yield* Effect.scoped(
     Stream.runForEach(
       params.model.streamText({
@@ -241,7 +241,7 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
       (part: Response.AnyPart) => {
         if (part.type === "finish") {
           usage = responseUsage(part.usage)
-          cut = part.reason === "length"
+          finish = Option.some(part.reason)
         }
         if (part.type !== "text-delta") return Effect.void
         text.push(part.delta)
@@ -257,10 +257,13 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
       }),
     ),
   )
+  // A summary the provider blocked is a fragment, not a summary: it fails as
+  // every other summary failure does, and the window degrades to truncation.
+  if (Option.contains(finish, "content-filter")) return yield* failure("SummaryBlocked")
   const result = text.join("").trim()
   if (result.length === 0) return yield* failure("SummaryEmpty")
   // A summary stopped by the provider cap may end mid-sentence; say so.
-  if (cut) return { text: `${result}${SUMMARY_CUT_MARK}`, usage }
+  if (Option.contains(finish, "length")) return { text: `${result}${SUMMARY_CUT_MARK}`, usage }
   return { text: result, usage }
 })
 

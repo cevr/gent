@@ -152,6 +152,11 @@ export const SkillEntry = Schema.Struct({
   description: Schema.String,
   filePath: Schema.String,
   level: SkillLevel,
+  /**
+   * The author marked the skill `disable-model-invocation: true` (Claude Code's
+   * key): the user runs it by `$name`, and the model does not read it on its own.
+   */
+  userInvokedOnly: Schema.optionalKey(Schema.Boolean),
 })
 export type SkillEntry = typeof SkillEntry.Type
 
@@ -317,16 +322,26 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
 const SkillFrontmatter = Schema.Struct({
   name: Schema.optionalKey(Schema.Unknown),
   description: Schema.optionalKey(Schema.Unknown),
+  "disable-model-invocation": Schema.optionalKey(Schema.Unknown),
 })
 const decodeFrontmatter = Schema.decodeUnknownOption(SkillFrontmatter)
 const decodeText = Schema.decodeUnknownOption(Schema.NonEmptyString)
+/** A YAML boolean, or the quoted text of one. */
+const decodeFlag = Schema.decodeUnknownOption(
+  Schema.Union([Schema.Boolean, Schema.Literals(["true", "false"])]),
+)
 
 interface SkillHeader {
   readonly name: Option.Option<string>
   readonly description: Option.Option<string>
+  readonly userInvokedOnly: boolean
 }
 
-const NO_HEADER: SkillHeader = { name: Option.none(), description: Option.none() }
+const NO_HEADER: SkillHeader = {
+  name: Option.none(),
+  description: Option.none(),
+  userInvokedOnly: false,
+}
 
 /** One prompt line: a folded or literal block scalar collapses to single spaces. */
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
@@ -347,7 +362,14 @@ const parseFrontmatter = (yaml: string): SkillHeader =>
             Option.map(oneLine),
             Option.filter((line) => line.length > 0),
           )
-        return { name: text(raw.name), description: text(raw.description) }
+        return {
+          name: text(raw.name),
+          description: text(raw.description),
+          userInvokedOnly: Option.exists(
+            decodeFlag(raw["disable-model-invocation"]),
+            (flag) => flag === true || flag === "true",
+          ),
+        }
       },
     },
   )
@@ -368,17 +390,21 @@ export function parseSkillFile(content: string, filename: string) {
   }
 
   const name = Option.getOrElse(header.name, () => filename.replace(/\.md$/, ""))
-  // Without a description key, the first body paragraph (minus a heading) describes the skill.
+  // Without a description key, the first body paragraph with text after its
+  // leading heading lines describes the skill; a heading-only paragraph is skipped.
   const description = header.description.pipe(
     Option.orElse(() =>
-      Option.fromNullishOr(body.split(/\r?\n\r?\n/)[0]).pipe(
-        Option.map((paragraph) => headChars(oneLine(paragraph.replace(/^#.*(\r?\n|$)/, "")), 100)),
-        Option.filter((text) => text.length > 0),
-      ),
+      Option.fromUndefinedOr(
+        body
+          .split(/\r?\n\r?\n/)
+          .map((paragraph) => oneLine(paragraph.replace(/^(#.*(\r?\n|$))+/, "")))
+          .find((text) => text.length > 0),
+      ).pipe(Option.map((text) => headChars(text, 100))),
     ),
     Option.getOrElse(() => `Skill: ${name}`),
   )
 
+  if (header.userInvokedOnly) return { name, description, userInvokedOnly: true }
   return { name, description }
 }
 
@@ -418,20 +444,32 @@ const skillLocation = (skill: SkillEntry) => {
   }
 }
 
+/**
+ * One block per directory: a line per skill the model may read on a match,
+ * then one line naming the user-invoked-only skills, with no description,
+ * so `$name` still finds their files.
+ */
 const formatList = (list: ReadonlyArray<SkillEntry>): string => {
-  const byDirectory = new Map<string, Array<string>>()
+  const byDirectory = new Map<
+    string,
+    { readonly lines: Array<string>; readonly userOnly: Array<string> }
+  >()
   for (const skill of list) {
     const { directory, file } = skillLocation(skill)
     let named = ""
     if (file !== `${skill.name}/SKILL.md`) named = ` (${file})`
-    const lines = byDirectory.get(directory) ?? []
-    lines.push(`- ${skill.name}${named}: ${firstSentence(skill.description)}`)
-    byDirectory.set(directory, lines)
+    const entry = byDirectory.get(directory) ?? { lines: [], userOnly: [] }
+    if (skill.userInvokedOnly === true) entry.userOnly.push(`${skill.name}${named}`)
+    else entry.lines.push(`- ${skill.name}${named}: ${firstSentence(skill.description)}`)
+    byDirectory.set(directory, entry)
   }
-  return Array.from(
-    byDirectory,
-    ([directory, lines]) => `Directory ${quoted(directory)}:\n${lines.join("\n")}`,
-  ).join("\n")
+  return Array.from(byDirectory, ([directory, { lines, userOnly }]) => {
+    const all = [...lines]
+    if (userOnly.length > 0) {
+      all.push(`User-invoked only, read on \`$name\` alone: ${userOnly.join(", ")}`)
+    }
+    return `Directory ${quoted(directory)}:\n${all.join("\n")}`
+  }).join("\n")
 }
 
 const READ_RULE = `Each skill's file is <directory>/<name>/SKILL.md unless another file is named in parentheses. Read it with the read tool or from a cell when its name or description matches the task.`

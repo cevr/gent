@@ -45,9 +45,6 @@ import {
   systemTextOf,
   testLeafContext,
   testToolContext,
-  type FakeFetchState,
-  fakeFetchLayer,
-  makeFakeFetchState,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import { FetchHttpClient } from "effect/http"
@@ -115,6 +112,11 @@ import { CancelTool, MonitorTool, WakeTool } from "../src/wake.js"
 import { CellResponse } from "../src/cell-protocol.js"
 import { shippedPreset } from "./helpers/test-preset.js"
 import { jsonReply, systemOneBody } from "./helpers/decision-wire.js"
+import {
+  fakeFetchLayer,
+  type FakeFetchState,
+  makeFakeFetchState,
+} from "./helpers/fake-http-client.js"
 import {
   ChildAgentHandle,
   CancelChild,

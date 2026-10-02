@@ -35,12 +35,8 @@ import {
   type ProviderAuthError,
   ProviderAuthInfo,
 } from "@gent/core/extensions/api"
-import {
-  createRpcHarness,
-  fakeFetchLayer,
-  makeFakeFetchState,
-  makeTempDirectoryScoped,
-} from "@gent/core/test-utils"
+import { createRpcHarness, makeTempDirectoryScoped } from "@gent/core/test-utils"
+import { fakeFetchLayer, makeFakeFetchState } from "./helpers/fake-http-client.js"
 import type { AgentEvent } from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
