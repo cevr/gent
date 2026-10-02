@@ -187,8 +187,8 @@ export const buildOwnedServer = (
   })
 
 /**
- * Start the server that owns the database. The caller holds the kernel lock in
- * this scope, so an entry on disk names a server that is gone.
+ * Start the server that owns the database. The caller holds the server lock in
+ * this scope (`serverLock.hold`), which removed the entry of any server gone.
  */
 export const startOwnedServer = (
   options: GentServerOptions,
@@ -199,9 +199,6 @@ export const startOwnedServer = (
   fingerprint: string,
 ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope | LocalPlatform> =>
   Effect.gen(function* () {
-    const stale = yield* serverLockFile.read(home)
-    if (Option.isSome(stale)) yield* serverLockFile.remove(home, stale.value.serverId)
-
     const platform = yield* GentPlatform
     const osInfo = yield* platform.osInfo
     const pid = yield* platform.pid
