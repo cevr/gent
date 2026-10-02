@@ -20,6 +20,7 @@ import {
   promptOnScreen,
   readerPrompt,
   reasoningMarkdown,
+  type AssistantSegment,
   type RetryOutcome,
   type SessionEvent,
   type SessionItem,
@@ -64,9 +65,11 @@ import {
 } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
+import { useTheme } from "../src/theme"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import {
   BUILTIN_TOOL_RENDERERS,
+  FoldOperationsProvider,
   ToolRenderersProvider,
   EditToolRenderer,
   GenericToolRenderer,
@@ -484,7 +487,7 @@ const cellBindingsMessage = (
   bindings: ReadonlyArray<string>,
   bindingCount: number,
 ): ListMessage =>
-  assistantToolMessage("assistant-cell", {
+  assistantToolMessage(`assistant-${id}`, {
     id,
     toolName: "cell",
     status: "completed",
@@ -1734,8 +1737,11 @@ describe("cell rows", () => {
         (next) => next.includes("#call-cell-7") && next.includes("hello from a.txt"),
         "cell renderer",
       )
-      // The compact tree says what the cell did: ops counted in the header, named in the row.
-      expect(frame).toContain("1 cell · 2 ops · 1 failed")
+      // The header counts the ops by kind; the preview rows name them in
+      // past-tense words; the open row names them as the cell ran them.
+      expect(frame).toContain("● 2 tools · 1 read · 1 edit · 1 failed")
+      expect(frame).toContain("├ Read")
+      expect(frame).toContain("└ Wrote · failed")
       expect(frame).toContain("└ cell read · ✕ write")
       // The detail frame shows each receipt, the display value, and bindings.
       expect(frame).toContain("✓ read 12 lines")
@@ -1781,7 +1787,8 @@ describe("cell rows", () => {
         { width: 80, height: 40 },
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("└ bash seq 25 · ↓ 25 lines")
+      expect(frame).toContain("● 1 tool · 1 command")
+      expect(frame).toContain("└ Ran seq 25")
       expect(frame).toContain("row 1")
       expect(frame).toContain("row 20")
       expect(frame).not.toContain("row 21")
@@ -1821,21 +1828,22 @@ describe("cell rows", () => {
           (frame) => frame.includes("… +5 lines (ctrl+o)"),
           "cell preview",
         )
-        const row = Option.getOrThrow(
-          Option.fromUndefinedOr(preview.split("\n").find((line) => line.includes("└ cell"))),
-        ).trim()
-        expect(row).toContain("↑ 2 ↓ 25 lines")
-        // The preview row names no call id; the open rows add it at the end of the same words.
-        expect(row).not.toContain("#call-stable")
-        const isOpenRow = (line: string) =>
-          line.trim().startsWith(row) && line.trim().endsWith("#call-stable")
+        // The preview rows name the ops in past-tense words and no call id.
+        expect(preview).toContain("└ Wrote · failed")
+        expect(preview).not.toContain("#call-stable")
         yield* Effect.sync(() => setDisclosure("full"))
         const full = yield* waitForFrame(
           setup,
           (frame) => frame.includes("CELL-OUTPUT-025") && frame.includes("note.content"),
           "full cell output",
         )
-        expect(full.split("\n").some(isOpenRow)).toBe(true)
+        // The open row names the cell, its line counts, and its id at the end.
+        const row = Option.getOrThrow(
+          Option.fromUndefinedOr(full.split("\n").find((line) => line.includes("└ cell"))),
+        ).trim()
+        expect(row).toContain("↑ 2 ↓ 25 lines")
+        expect(row).toEndWith("#call-stable")
+        const isOpenRow = (line: string) => line.trim() === row
         expect(full.match(/#call-stable/g)).toHaveLength(1)
         expect(full).not.toContain("… +5 lines")
         yield* Effect.sync(() => {
@@ -1844,7 +1852,7 @@ describe("cell rows", () => {
         })
         const transcript = yield* waitForFrame(
           setup,
-          (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("1 cell ·"),
+          (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("2 tools ·"),
           "full transcript from preview",
         )
         expect(transcript.split("\n").some(isOpenRow)).toBe(true)
@@ -1856,6 +1864,59 @@ describe("cell rows", () => {
       }),
   )
 
+  it.scopedLive("the glyph warns when only ops failed, and errs when a call failed", () =>
+    Effect.gen(function* () {
+      const cellWith = (id: string, status: ToolCall["status"], opStatus: ToolCall["status"]) =>
+        assistantToolMessage(`assistant-${id}`, {
+          id,
+          toolName: "cell",
+          status,
+          input: { code: "await tools.bash({ command: 'x' })" },
+          summary: absent,
+          output: absent,
+          operations: [
+            { id: `${id}-op`, toolName: "bash", status: opStatus, input: { command: "x" } },
+          ],
+        })
+      let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+      const setup = yield* renderScoped(
+        () => {
+          colors = Option.some(useTheme().theme)
+          return (
+            <box flexDirection="column">
+              <MessageList
+                items={[cellWith("glyph-done", "completed", "completed")]}
+                disclosure="collapsed"
+                syntaxStyle={syntaxStyle}
+              />
+              <MessageList
+                items={[cellWith("glyph-warn", "completed", "error")]}
+                disclosure="collapsed"
+                syntaxStyle={syntaxStyle}
+              />
+              <MessageList
+                items={[cellWith("glyph-fail", "error", "error")]}
+                disclosure="collapsed"
+                syntaxStyle={syntaxStyle}
+              />
+            </box>
+          )
+        },
+        { width: 60, height: 30 },
+      )
+      const theme = Option.getOrThrow(colors)
+      const glyphs = setup
+        .captureSpans()
+        .lines.flatMap((line) => line.spans.filter((span) => /^\s*[●✗] \d+ tool/.test(span.text)))
+        .map((span) => ({ glyph: span.text.trim().slice(0, 1), fg: span.fg }))
+      expect(glyphs.map((entry) => entry.glyph)).toEqual(["●", "●", "✗"])
+      expect(glyphs[0]?.fg.equals(theme.textMuted)).toBe(true)
+      expect(glyphs[1]?.fg.equals(theme.warning)).toBe(true)
+      expect(glyphs[2]?.fg.equals(theme.error)).toBe(true)
+      expect(renderFrame(setup)).toContain("● 1 tool · 1 command · 1 failed")
+    }),
+  )
+
   it.scopedLive("collapsed keeps the group header and hides finished rows and output", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
@@ -1864,8 +1925,8 @@ describe("cell rows", () => {
         { width: 80, height: 20 },
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("1 tool call · 1 bash")
-      expect(frame).not.toContain("└ bash")
+      expect(frame).toContain("1 tool · 1 command")
+      expect(frame).not.toContain("└ Ran")
       expect(frame).not.toContain("row 1")
     }),
   )
@@ -1888,18 +1949,20 @@ describe("bash row line counts", () => {
           status: "background",
         }),
       ]
+      // The open rows (the full level) count lines; the preview rows name the
+      // command only. The four steps are one run: one group, a row each.
       const setup = yield* renderScoped(
-        () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
-        { width: 80, height: 40 },
+        () => <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />,
+        { width: 80, height: 60 },
       )
       const rows = renderFrame(setup)
         .split("\n")
-        .filter((line) => line.includes("└ bash"))
+        .filter((line) => /[├└] bash/.test(line))
         .map((line) => line.trim().split(/\s{2,}/)[0])
       expect(rows).toEqual([
-        "└ bash echo hello · ↓ 1 line",
-        "└ bash echo hello · ↓ 2 lines",
-        "└ bash echo hello",
+        "├ bash echo hello · ↓ 1 line",
+        "├ bash echo hello · ↓ 2 lines",
+        "├ bash echo hello",
         "└ bash echo hello",
       ])
     }),
@@ -1911,11 +1974,11 @@ describe("bash row line counts", () => {
         () => (
           <MessageList
             items={[assistantToolMessage("assistant-cut", cutBashCall)]}
-            disclosure="preview"
+            disclosure="full"
             syntaxStyle={syntaxStyle}
           />
         ),
-        { width: 80, height: 20 },
+        { width: 80, height: 30 },
       )
       const row = renderFrame(list)
         .split("\n")
@@ -2130,11 +2193,18 @@ describe("transcript block spacing", () => {
     cellStep(3, "git log --oneline -1", "497f1c6 ledgerline\n"),
     answer,
   ]
-  const views: ReadonlyArray<{ disclosure: DisclosureLevel; fullDetail: boolean }> = [
-    { disclosure: "collapsed", fullDetail: false },
-    { disclosure: "preview", fullDetail: false },
-    { disclosure: "full", fullDetail: false },
-    { disclosure: "collapsed", fullDetail: true },
+  // The three tool-only steps are one run, one block, then the answer. The
+  // full level parts the run's open rows by a blank line each, and the
+  // transcript view (full detail) draws each step as its own block.
+  const views: ReadonlyArray<{
+    disclosure: DisclosureLevel
+    fullDetail: boolean
+    blocks: number
+  }> = [
+    { disclosure: "collapsed", fullDetail: false, blocks: 2 },
+    { disclosure: "preview", fullDetail: false, blocks: 2 },
+    { disclosure: "full", fullDetail: false, blocks: items.length },
+    { disclosure: "collapsed", fullDetail: true, blocks: items.length },
   ]
   for (const view of views) {
     it.scopedLive(
@@ -2161,7 +2231,7 @@ describe("transcript block spacing", () => {
             .split(/[^\n]+/)
             .map((run) => Math.max(0, run.length - 1))
             .filter((run) => run > 0)
-          expect(blankRuns).toEqual(Array.from({ length: items.length - 1 }, () => 1))
+          expect(blankRuns).toEqual(Array.from({ length: view.blocks - 1 }, () => 1))
           expect(body.findIndex((line) => line.trim() === "done")).toBeGreaterThan(0)
         }),
     )
@@ -2207,10 +2277,13 @@ describe("transcript block spacing", () => {
       () =>
         Effect.gen(function* () {
           const CellToolRenderer = builtinRenderer("cell")
+          // The transcript view draws each op on its own, the two commands too.
           const setup = yield* renderScoped(
             () => (
               <ToolRenderersProvider value={builtinRenderers}>
-                <CellToolRenderer expanded={expanded} toolCall={twoOpCell} />
+                <FoldOperationsProvider value={false}>
+                  <CellToolRenderer expanded={expanded} toolCall={twoOpCell} />
+                </FoldOperationsProvider>
               </ToolRenderersProvider>
             ),
             { width: 100, height: 40 },
@@ -2235,6 +2308,52 @@ describe("transcript block spacing", () => {
         }),
     )
   }
+
+  it.scopedLive("a run of one tool's ops folds into one frame that a click opens", () =>
+    Effect.gen(function* () {
+      const CellToolRenderer = builtinRenderer("cell")
+      const reads: ReadonlyArray<ToolCall> = Array.from({ length: 30 }, (_, index) => ({
+        id: `fold-read-${index}`,
+        toolName: "read",
+        status: "completed",
+        input: { path: `/workspace/src/file-${index}.ts` },
+        summary: `file-${index}.ts · 3 lines`,
+        output: encodeJson({ content: "1\ta\n2\tb\n3\tc", lineCount: 3 }),
+      }))
+      const foldedCell: ToolCall = {
+        ...twoOpCell,
+        id: "cell-thirty-reads",
+        operations: [...reads, ...(twoOpCell.operations ?? [])],
+      }
+      const setup = yield* renderScoped(
+        () => (
+          <ToolRenderersProvider value={builtinRenderers}>
+            <CellToolRenderer expanded={true} toolCall={foldedCell} />
+          </ToolRenderersProvider>
+        ),
+        { width: 100, height: 120 },
+      )
+      const frame = renderFrame(setup)
+      // Thirty reads draw one frame, its body a tight list; the two commands another.
+      expect(frame.match(/● read 30 files/g)).toHaveLength(1)
+      expect(frame.match(/● bash 2 commands/g)).toHaveLength(1)
+      expect(frame).toContain("✓ /workspace/src/file-0.ts file-0.ts · 3 lines")
+      expect(frame).toContain("✓ /workspace/src/file-29.ts")
+      // The list has no blank line between its rows.
+      const lines = frame.split("\n").map((line) => line.trim())
+      const first = lines.findIndex((line) => line.includes("file-0.ts · 3 lines"))
+      expect(lines[first + 1]).toContain("file-1.ts")
+      // A click on the folded frame's header opens each read as its own frame.
+      const row = lines.findIndex((line) => line.startsWith("● read 30 files"))
+      yield* Effect.promise(() => setup.mockMouse.click(4, row))
+      const opened = yield* waitForFrame(
+        setup,
+        (next) => next.includes("● read /workspace/src/file-0.ts"),
+        "the folded reads opened",
+      )
+      expect(opened).toContain("● read /workspace/src/file-29.ts")
+    }),
+  )
 
   it.scopedLive(
     "native history keeps one blank line between committed blocks in full disclosure",
@@ -3837,6 +3956,95 @@ describe("native transcript region at the terminal's bottom", () => {
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
   )
+
+  // A commit shrinks the region, and the next frame writes its rows into the
+  // rows the region gave up. A region that grows again before that frame (the
+  // footer grows back as a late runtime state marks the turn running) takes
+  // those rows back, and the rows land over the history rows above them.
+  it.scopedLive(
+    "a region grows only after the frame that writes the rows it gave up",
+    () =>
+      Effect.gen(function* () {
+        const [streaming, setStreaming] = createSignal(true)
+        const [footer, setFooter] = createSignal(5)
+        let screen = Option.none<CliRenderer>()
+        const sizes: Array<{ readonly shrunk: number; readonly after: number }> = []
+        let grows = 0
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items: () => [...longSession(), assistant("tall", longBody("TALL"))],
+              streaming,
+              footer,
+              paneOpen: () => false,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", () => {
+                  if (grows === 0) return
+                  grows--
+                  const shrunk = renderer.footerHeight
+                  setFooter(5)
+                  sizes.push({ shrunk, after: renderer.footerHeight })
+                })
+              },
+            }),
+          { width: 60, height },
+        )
+        const renderer = Option.getOrThrow(screen)
+        yield* waitForFrame(
+          setup,
+          () => rowsUnderRegion(renderer) === 0 && renderer.footerHeight === regionRows,
+          "the session at the terminal's bottom",
+          6_000,
+        )
+        yield* waitForStableFrame(setup)
+        // The turn ends: history takes the tall answer's top rows, and the
+        // footer shrinks while those commits are queued.
+        grows = 1
+        setStreaming(false)
+        setFooter(3)
+        yield* waitUntil(() => sizes.length > 0, "a commit after the turn's end", 6_000)
+        const [size] = sizes
+        expect(size?.after).toBe(size?.shrunk)
+        // The frame wrote the rows; the region then takes the rows it wants.
+        yield* waitForFrame(
+          setup,
+          () => renderer.footerHeight === regionRows && rowsUnderRegion(renderer) === 0,
+          "the region back at its rows",
+          6_000,
+        )
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // History takes the rows above the canvas, which the footer's smallest base
+  // sizes. A base that drops while those rows are on their way (the turn ends
+  // and its status row goes) makes the canvas taller: rows offered for the
+  // old base would leave the tail short of it, and the region at the
+  // terminal's bottom would shrink and later grow back over history.
+  it.scopedLive(
+    "a footer that shrinks while history takes rows leaves the tail its full canvas",
+    () =>
+      Effect.gen(function* () {
+        const [streaming, setStreaming] = createSignal(true)
+        const [footer, setFooter] = createSignal(5)
+        const { setup, renderer } = yield* settledLongSession({
+          items: () => [...longSession(), assistant("tall", longBody("TALL"))],
+          streaming,
+          footer,
+          paneOpen: () => false,
+          overlayOpen: () => false,
+        })
+        setStreaming(false)
+        setFooter(3)
+        yield* waitForStableFrame(setup)
+        expect(renderer.footerHeight).toBe(regionRows)
+        expect(rowsUnderRegion(renderer)).toBe(0)
+        expect(blankRowsAboveComposer(renderFrame(setup))).toBe(0)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
 })
 
 // ── native transcript exit ──────────────────────────────────────────────────
@@ -5064,7 +5272,7 @@ describe("tool group rows", () => {
     Effect.gen(function* () {
       const call = readCall("call-read-path", `${cwd}/apps/tui/src/app.tsx`)
       const rows = yield* groupRows([assistantToolMessage("assistant-read-path", call)], 80)
-      expect(callLabels(rows)).toEqual(["└ read apps/tui/src/app.tsx"])
+      expect(callLabels(rows)).toEqual(["└ Read apps/tui/src/app.tsx"])
       const ReadToolRenderer = builtinRenderer("read")
       const frame = yield* renderScoped(
         () => <ReadToolRenderer expanded={false} toolCall={call} />,
@@ -5092,7 +5300,8 @@ describe("tool group rows", () => {
         80,
         "/work/other",
       )
-      expect(callLabels(rows)).toEqual([`└ read ${cwd}/config.ts`, "└ read src/app.tsx"])
+      // Two tool-only steps are one run: one row folds both reads.
+      expect(callLabels(rows)).toEqual([`└ Read ${cwd}/config.ts, src/app.tsx`])
       const ReadToolRenderer = builtinRenderer("read")
       const frame = yield* renderScoped(
         () => <ReadToolRenderer expanded={false} toolCall={inSession} />,
@@ -5111,7 +5320,7 @@ describe("tool group rows", () => {
     Effect.gen(function* () {
       const call = readCall("call-read-outside", "/etc/hosts")
       const rows = yield* groupRows([assistantToolMessage("assistant-read-outside", call)], 80)
-      expect(callLabels(rows)).toEqual(["└ read /etc/hosts"])
+      expect(callLabels(rows)).toEqual(["└ Read /etc/hosts"])
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -5142,8 +5351,8 @@ describe("tool group rows", () => {
       }
       for (const width of [59, 60, 61]) {
         const lines = yield* groupRows([assistantToolMessage("assistant-long-row", call)], width)
-        const row = lines.findIndex((line) => line.includes("└ bash"))
-        expect(lines[row]).toContain("└ bash echo sanity-")
+        const row = lines.findIndex((line) => line.includes("└ Ran"))
+        expect(lines[row]).toContain("└ Ran echo sanity-")
         expect(lines.join("\n")).not.toContain("dbg-review")
         expect(lines.slice(row + 1).join("\n")).not.toContain("semantics")
       }
@@ -5191,5 +5400,308 @@ describe("message rows", () => {
       expect(frame).toContain("Stop and switch agent")
       expect(frame).toContain("Considering current todo state")
     }),
+  )
+})
+
+// ── tool runs across steps ──────────────────────────────────────────────────
+
+describe("tool runs across steps", () => {
+  /** One step: a cell whose ops are commands, then the segments given after it. */
+  const step = (
+    id: string,
+    commands: ReadonlyArray<string>,
+    options: {
+      readonly before?: ReadonlyArray<AssistantSegment>
+      readonly after?: ReadonlyArray<AssistantSegment>
+      readonly tool?: string
+      readonly stdout?: string
+      /** What the cell's last expression showed: the preview draws it under the rows. */
+      readonly display?: string
+    } = {},
+  ): ListMessage => {
+    const tool = options.tool ?? "bash"
+    const toolCall: ToolCall = {
+      id: `${id}-cell`,
+      toolName: "cell",
+      status: "completed",
+      input: { code: "await tools.bash({ command: 'x' })" },
+      summary: absent,
+      output: encodeJson({ display: options.display ?? "", bindings: [], truncated: false }),
+      operations: commands.map((command, index) => ({
+        id: `${id}-op-${index}`,
+        toolName: tool,
+        status: "completed",
+        input: { command, question: command, path: command },
+        summary: absent,
+        output: encodeJson({
+          stdout: options.stdout ?? `${command} ok\n`,
+          stderr: "",
+          exitCode: 0,
+        }),
+      })),
+    }
+    return {
+      _tag: "regular-message",
+      id,
+      role: "assistant",
+      content: "",
+      reasoning: "",
+      images: [],
+      createdAt: 0,
+      segments: [
+        ...(options.before ?? []),
+        { _tag: "tool-call", toolCall },
+        ...(options.after ?? []),
+      ],
+    }
+  }
+  const text = (content: string): AssistantSegment => ({ _tag: "text", content })
+  const reasoning = (content: string): AssistantSegment => ({ _tag: "reasoning", content })
+  const headers = (frame: string) =>
+    frame
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => /^[●✗] \d+ tools?\b/.test(line))
+  const draw = (items: SessionItem[], disclosure: DisclosureLevel, width = 100) =>
+    renderScoped(
+      () => <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />,
+      { width, height: 60 },
+    ).pipe(Effect.map(renderFrame))
+
+  it.scopedLive("the tool-only steps of a turn draw one group", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        clientPrompt("run-prompt", "check the tree"),
+        step("s1", ["git status"]),
+        step("s2", ["bun test", "bun run lint"]),
+        step("s3", ["git diff"], { after: [text("All clean.")] }),
+      ]
+      const collapsed = yield* draw(items, "collapsed")
+      expect(headers(collapsed)).toEqual(["● 4 tools · 4 commands"])
+      expect(collapsed).toContain("All clean.")
+      const preview = yield* draw(items, "preview")
+      expect(preview).toContain("└ Ran git status, bun test, bun run lint, git diff")
+    }),
+  )
+
+  // The preview's output head belongs to the run's last call. While a step may
+  // still join, that call changes with each step: a head drawn for one step
+  // and dropped at the next would shrink the live tail, and the rows it
+  // pushed into scrollback come back blank. So the head waits for the run's end.
+  it.scopedLive("the preview draws the last call's output only once the run has ended", () =>
+    Effect.gen(function* () {
+      const open: SessionItem[] = [
+        clientPrompt("head-prompt", "look around"),
+        step("o1", ["ls"], { display: "FIRST-STEP-OUTPUT" }),
+        step("o2", ["git status"], { display: "SECOND-STEP-OUTPUT" }),
+      ]
+      const [streaming, setStreaming] = createSignal(true)
+      const committed: string[] = []
+      const setup = yield* renderScoped(
+        () => (
+          <Transcript
+            items={open}
+            streaming={streaming()}
+            disclosure="preview"
+            onRenderer={(renderer) =>
+              renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                committed.push(committedTextOf(event))
+              })
+            }
+          />
+        ),
+        { width: 100, height: 40 },
+      )
+      // The screen and the rows already handed to native history.
+      const shown = () =>
+        Effect.promise(() => setup.renderOnce()).pipe(
+          Effect.map(() => [...committed, renderFrame(setup)].join("\n")),
+        )
+      // A turn runs and no answer ended the run: a step may still join it.
+      const running = yield* shown()
+      expect(running).toContain("● 2 tools · 2 commands")
+      expect(running).not.toContain("STEP-OUTPUT")
+      // A turn that ends with no answer (an interrupt) ends the run.
+      setStreaming(false)
+      const ended = yield* shown()
+      expect(ended).toContain("SECOND-STEP-OUTPUT")
+      expect(ended).not.toContain("FIRST-STEP-OUTPUT")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("answer text between steps ends a run, and a new one starts after it", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        step("t1", ["git status"]),
+        step("t2", ["bun test"], { after: [text("Tests pass; now the lint.")] }),
+        step("t3", ["bun run lint"]),
+        step("t4", ["git diff"]),
+      ]
+      const frame = yield* draw(items, "collapsed")
+      expect(headers(frame)).toEqual(["● 2 tools · 2 commands", "● 2 tools · 2 commands"])
+      const first = frame.indexOf("● 2 tools")
+      const prose = frame.indexOf("Tests pass")
+      expect(prose).toBeGreaterThan(first)
+      expect(frame.indexOf("● 2 tools", first + 1)).toBeGreaterThan(prose)
+    }),
+  )
+
+  it.scopedLive("an ask ends a run after its call", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        step("a1", ["git status"]),
+        step("a2", ["Ship it?"], { tool: "ask_user" }),
+        step("a3", ["git push"]),
+      ]
+      const frame = yield* draw(items, "preview")
+      expect(headers(frame)).toEqual(["● 2 tools · 1 command · 1 ask_user", "● 1 tool · 1 command"])
+      expect(frame).toContain("└ Asked Ship it?")
+    }),
+  )
+
+  it.scopedLive("reasoning between steps stays in the run and shows at the full level", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        step("r1", ["git status"], { before: [reasoning("FIRST-THOUGHT")] }),
+        step("r2", ["bun test"], { before: [reasoning("SECOND-THOUGHT"), text("  ")] }),
+      ]
+      const collapsed = yield* draw(items, "collapsed")
+      expect(headers(collapsed)).toEqual(["● 2 tools · 2 commands"])
+      // The thought before the run draws as before; the one inside it waits for the full level.
+      expect(collapsed).toContain("FIRST-THOUGHT")
+      expect(collapsed).not.toContain("SECOND-THOUGHT")
+      const full = yield* draw(items, "full")
+      const lines = full.split("\n")
+      const thought = lines.findIndex((line) => line.includes("SECOND-THOUGHT"))
+      const secondRow = lines.findIndex((line) => line.includes("└ cell"))
+      expect(thought).toBeGreaterThan(lines.findIndex((line) => line.includes("├ cell")))
+      expect(secondRow).toBeGreaterThan(thought)
+    }),
+  )
+
+  it.scopedLive("a run's rows clip to one line each at 60 columns", () =>
+    Effect.gen(function* () {
+      const paths = Array.from({ length: 6 }, (_, index) => `src/module-${index}/file.ts`)
+      const items: SessionItem[] = [
+        step("w1", paths.slice(0, 3), { tool: "read" }),
+        step("w2", paths.slice(3), { tool: "read" }),
+        step("w3", ["bun run test --filter a-very-long-filter-name-that-does-not-fit"]),
+      ]
+      const frame = yield* draw(items, "preview", 60)
+      const drawn = frame.split("\n").filter((line) => line.trim().length > 0)
+      expect(drawn.every((line) => line.trimEnd().length <= 60)).toBe(true)
+      expect(headers(frame)).toEqual(["● 7 tools · 6 read · 1 command"])
+      // The reads fold into one row: the subjects that fit, then a count.
+      const reads = drawn.find((line) => line.includes("├ Read")) ?? ""
+      expect(reads.trimEnd()).toMatch(/├ Read src\/module-0\/file\.ts, .* \+\d$/)
+      expect(drawn.some((line) => line.includes("└ Ran bun run test"))).toBe(true)
+    }),
+  )
+
+  it.scopedLive(
+    "native history takes a run's head only once the run ends, with every step in it",
+    () =>
+      Effect.gen(function* () {
+        const prompt = clientPrompt("history-prompt", "RUN-PROMPT")
+        const thinking = (body: string): ListMessage => ({
+          ...assistant("thinking", ""),
+          segments: [reasoning(body)],
+          draft: true,
+        })
+        const [items, setItems] = createSignal<ListMessage[]>([
+          assistant("earlier", longBody("EARLIER")),
+          prompt,
+          step("h1", ["git status"]),
+          step("h2", ["bun test"]),
+          thinking(longBody("THINKING")),
+        ])
+        const committedText: string[] = []
+        const setup = yield* renderScoped(
+          () => (
+            <Transcript
+              items={items()}
+              streaming={true}
+              onRenderer={(renderer) => {
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              }}
+            />
+          ),
+          { width: 60, height: 14 },
+        )
+        const flushUntil = (done: () => boolean) =>
+          Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({ until: done, schedule: Schedule.spaced("10 millis") }),
+            Effect.timeout("4 seconds"),
+            Effect.ignore,
+          )
+        // The prompt moves to history; the run is open (a step may still
+        // join it), so its head waits in the live view with both steps.
+        yield* flushUntil(() => committedText.join("").includes("RUN-PROMPT"))
+        expect(committedText.join("")).toContain("RUN-PROMPT")
+        expect(committedText.join("")).not.toContain("tool")
+        yield* flushUntil(() => false).pipe(Effect.timeout("300 millis"), Effect.ignore)
+        expect(committedText.join("")).not.toContain("tool")
+        // A third step joins, and the stored answer ends the run: the head
+        // moves to history once, with all three steps under one header.
+        setItems([
+          assistant("earlier", longBody("EARLIER")),
+          prompt,
+          step("h1", ["git status"]),
+          step("h2", ["bun test"]),
+          step("h3", ["git diff"]),
+          assistant("answer", longBody("ANSWER")),
+        ])
+        yield* flushUntil(() => committedText.join("").includes("ANSWER line 1"))
+        const history = committedText.join("")
+        expect(history.match(/● \d+ tools?/g)).toEqual(["● 3 tools"])
+        expect(history).toContain("● 3 tools · 3 commands")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive("a run that grows after history took its head replays history", () =>
+    Effect.gen(function* () {
+      const stdout = Array.from({ length: 40 }, (_, index) => `OUT line ${index + 1}`).join("\n")
+      const [items, setItems] = createSignal<ListMessage[]>([
+        clientPrompt("grow-prompt", "GROW-PROMPT"),
+        step("g1", ["seq 30"], { stdout }),
+      ])
+      const committedText: string[] = []
+      const setup = yield* renderScoped(
+        () => (
+          <Transcript
+            items={items()}
+            disclosure="full"
+            onRenderer={(renderer) => {
+              renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                committedText.push(committedTextOf(event))
+              })
+            }}
+          />
+        ),
+        { width: 60, height: 12 },
+      )
+      const flushUntil = (done: () => boolean) =>
+        Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({ until: done, schedule: Schedule.spaced("10 millis") }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+      // At idle the run's top rows move to history: its header with one tool.
+      yield* flushUntil(() => committedText.join("").includes("● 1 tool"))
+      expect(committedText.join("")).toContain("● 1 tool · 1 command")
+      // A step joins the run history holds: history replays with the run's new header.
+      committedText.splice(0)
+      setItems([
+        clientPrompt("grow-prompt", "GROW-PROMPT"),
+        step("g1", ["seq 30"], { stdout }),
+        step("g2", ["git diff"]),
+      ])
+      yield* flushUntil(() => committedText.join("").includes("● 2 tools"))
+      expect(committedText.join("")).toContain("● 2 tools · 2 commands")
+      expect(committedText.join("")).toContain("GROW-PROMPT")
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })

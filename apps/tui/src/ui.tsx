@@ -1464,6 +1464,15 @@ export function ToolCallIdentityProvider(props: ToolCallIdentityProviderProps) {
   )
 }
 
+/** A frame that stands for several calls (a cell's folded ops) names none of them. */
+export function NoToolCallIdentity(props: { children: JSX.Element }) {
+  return (
+    <ToolCallIdentityContext.Provider value={Option.none()}>
+      {props.children}
+    </ToolCallIdentityContext.Provider>
+  )
+}
+
 const ToolFrameBodyContext = createContext(false)
 
 /**

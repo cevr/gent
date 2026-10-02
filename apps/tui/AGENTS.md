@@ -192,7 +192,8 @@ the activity row going at a turn's end shows kept rows, not blank ones; rows
 the tail does not fill sit above it, never above the composer. The rows above
 the canvas go to native history in order: during a turn only whole final
 items (`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits
-for its stored answer, and a message waits while a call of it runs); at idle
+for its stored answer, a message waits while a call of it runs, and the head
+of a tool run waits until the run ends); at idle
 an item's top rows too (`partialRows`; the live view cuts them off), so each
 row is in history or on screen, once. A commit shrinks the region by its rows
 first and then writes them, so they land where they were drawn; a write
@@ -228,6 +229,47 @@ streams it draws each statement once it ends (a newline, or a `;` outside a
 label) and keeps its last diagram when they do not draw; once closed, a
 source that does not draw shows as its code block. Tests give their own
 library through `DiagramLibraryContext`.
+
+A tool group reads in tool words, as fx does, not in the cell mechanism
+(`ToolCallGroup` in `message-list.tsx`, the projections in `utils.ts`). Its
+header counts the tools a group ran (a cell's ops; any other call is the one
+tool it is; a cell with no ops is one tool that names its source's verbs) by
+kind, largest first: `● 7 tools · 4 read · 2 edit · 1 command · 1 failed · 4.2s`
+(`formatActivityHeader`). A narrow header drops kinds from the right and keeps
+the count, the failures and the time. The glyph is `●` when done, the pulse
+while a call runs, `✗` in the error colour when a call failed, and `●` in the
+warning colour when only ops failed inside a cell that recovered. A bash op
+whose command exits nonzero is a failed op, as fx counts it, though its call
+succeeded (`callOperation`). The
+`ctrl+o` ladder keeps three levels: collapsed draws the header and each failed
+call's frame; preview adds one row per run of one tool and one outcome, in
+past-tense words (`activityRows`, `formatActivityRow`): `├ Read a.ts, b.ts +1`
+(the subjects that fit, then a count), `├ Edited x.ts +12 / -3` (the diff
+counts in the success and error colours), `└ Ran bun test · failed`, and the
+running op last as `Running …`; one line a row, never a second. Under the
+rows preview draws the head of the last call's output, but only once the run
+has ended: while a turn can still add a step, the last call changes each step,
+and a body that came and went would shrink the live tail and leave blank rows
+in native scrollback. Full opens a
+row per call with its renderer body and its line counts. Inside a cell's body
+a run of one tool's ops folds into one frame (`read 30 files`), its body a
+tight list and a click opening each op's frame; the transcript view (full
+detail) draws every op on its own (`FoldOperationsProvider`).
+
+A group is one run of tool calls across the steps of a turn, as in fx
+(`projectToolRuns` in `message-list.tsx`): reasoning and blank text between
+calls do not end it; answer text, a user message, a session row, or a call
+that asks the reader (`ask_user`, `prompt`, `handoff`, in a cell's ops too)
+does. A queued follow-up and a pending retry end nothing. The run draws at its
+first tool-call segment (its head); the later steps skip the segments it took.
+The reasoning it took draws before its call at the full level only. The
+native transcript draws each item on its own, so it projects the runs once over
+every displayed item and gives them to the live view and to each history
+surface (`ToolRunsContext`). A message that heads a run is final only once the
+run has ended, holds no streamed step and no running call; its fingerprint
+holds the run's calls (`historyFingerprints`), so a run that grows after
+history took its top rows at idle replays history. The transcript view (full
+detail) groups each message's calls on their own.
 
 The transcript pins the reader's last prompt in one row (`↑ <first line>`) above
 the live tail while that prompt's own row is off screen: cut off the top of the
@@ -366,7 +408,7 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter                    |
 | `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane (the session browser), tray    |
 | `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                           |
-| `@gent/cache`                             | `cache.client.tsx`       | Cache-miss notice rows, cache waste total  |
+| `@gent/cache`                             | `cache.client.tsx`       | Cache-miss rows, waste total, cache timer  |
 | `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child-completion row |
 | `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                             |
 | `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row            |
@@ -394,10 +436,11 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - Extensions have no overlays. A pane is a `below-input` widget that renders while `shell.pane.isOpen(id)` is true. The extension opens and closes it by name with `shell.pane.open(id)` and `shell.pane.close(id)` (agents, thread, btw). The session view owns the one pane slot: it is the session overlay, shared with the model, reasoning, branch, fork-from-message, prompt-search and sign-in panes, so at most one pane is open. The boot branch picker and an enforced sign-in hold the slot: nothing opens over them until they close, Esc does nothing over them, and ctrl+c over them arms the exit (the second press quits). Ctrl+C over any other session pane (model, reasoning, fork, prompt search) closes it as Esc does, and the next ctrl+c goes on down the ladder (see Keys). Opening a pane replaces the open one, and the replaced overlay's cancel runs in the reducer (`cancelOverlay` in `session.tsx`): prompt search gives the composer back the draft it opened over, and a late event from its list does nothing. `close(id)` of a pane that is no longer open does nothing. A pane does not hold the composer. A pane that takes typed text reads keys through `useScopedKeyboard`, as the agents filter, the btw ask line and the sign-in key line do: an `<input>` would take the terminal's focus from the composer, and the composer would not get it back. A key or paste a pane takes still reaches every `useInputWatch` watcher, which runs before the scopes and takes nothing; the session disarms an armed key there.
 - The TUI host (`src/` outside `extensions/`) never imports `@gent/extensions`; the `gent/core-entry-boundary` oxlint rule enforces it. One extension's view is a client extension that reads its server state through `ClientContext.transport`
 - `useExtensionUI()` provides the resolved contributions (tool renderers excepted: `useToolRenderers()`), the load `failures`, and `clientRuntime`; widgets read the session from `transport.currentSession()`
-- **Tool renderers**: `rendererContribution(toolNames, component)` keys a renderer on a real tool id. The model sees only `cell`, so the cell renderer hands each live op to the renderer registered for the op's tool (`RegisteredToolCall` in `tool-renderers.tsx`, the one lookup the transcript also uses). An op draws collapsed, as a sub-row with its own header: a cell that reads thirty files must not draw thirty file bodies. `ToolFrameBody` hides the header of one frame only; a frame nested in its body draws its header again. An op with no renderer keeps its one-line receipt. After a reload the session snapshot projects each cell's ops from the branch's stored tool events (`ToolInteraction.operations`), keyed by the cell's message and call id. A projected op carries only what its collapsed row draws, within one 8 KB encoded budget, keys included: the tool, the status, the summary, the scalar input fields (each whole or left out, up to 4 KB), and a bounded output (top-level scalars such as a bash `exitCode`; each string whole, or its head, a marker line and its tail, cut at code points). A cut string has a `cuts` record with its whole line count, the line its tail starts on, and whether its head or tail keeps only part of a line; renderers count and number lines through `outputRows` in `tool-renderers.tsx`, so a cut output draws true counts and line numbers, and marks a part of a line with `…` on the side it lost. A cut array (a grep's matches) draws its whole total and a `· ··· N more matches` gap between its head and tail. Every line count, the cut record's included, uses `lineCount` from `@gent/core/protocol`: a final newline ends the last line. A head or tail that keeps nothing is absent from the excerpt. It draws through its renderer again, with the same collapsed row as before the reload. A forked branch copies messages, not events, so there the saved result's receipts draw as lines. The host provides the map through `ToolRenderersProvider`. The "tool renderer reach" test in `loader-boundary.test.ts` fails on a renderer name that no shipped extension registers as a tool
+- **Tool renderers**: `rendererContribution(toolNames, component)` keys a renderer on a real tool id. The model sees only `cell`, so the cell renderer hands each live op to the renderer registered for the op's tool (`RegisteredToolCall` in `tool-renderers.tsx`, the one lookup the transcript also uses). An op draws collapsed, as a sub-row with its own header: a cell that reads thirty files must not draw thirty file bodies, and outside the transcript view consecutive ops of one tool fold into one frame. `ToolFrameBody` hides the header of one frame only; a frame nested in its body draws its header again. An op with no renderer keeps its one-line receipt. After a reload the session snapshot projects each cell's ops from the branch's stored tool events (`ToolInteraction.operations`), keyed by the cell's message and call id. A projected op carries only what its collapsed row draws, within one 8 KB encoded budget, keys included: the tool, the status, the summary, the scalar input fields (each whole or left out, up to 4 KB), and a bounded output (top-level scalars such as a bash `exitCode`; each string whole, or its head, a marker line and its tail, cut at code points). A cut string has a `cuts` record with its whole line count, the line its tail starts on, and whether its head or tail keeps only part of a line; renderers count and number lines through `outputRows` in `tool-renderers.tsx`, so a cut output draws true counts and line numbers, and marks a part of a line with `…` on the side it lost. A cut array (a grep's matches) draws its whole total and a `· ··· N more matches` gap between its head and tail. Every line count, the cut record's included, uses `lineCount` from `@gent/core/protocol`: a final newline ends the last line. A head or tail that keeps nothing is absent from the excerpt. It draws through its renderer again, with the same collapsed row as before the reload. A forked branch copies messages, not events, so there the saved result's receipts draw as lines. The host provides the map through `ToolRenderersProvider`. The "tool renderer reach" test in `loader-boundary.test.ts` fails on a renderer name that no shipped extension registers as a tool
 - A setup that returns a key outside the contribution buckets fails to load with `unknown contribution "<key>"`
 - **Message rows**: `messageRendererContribution(customType, component, { prompt? })` draws the user-role messages whose `metadata.customType` matches exactly. `prompt(content)` marks the type as a prompt the reader asked though an extension sent it, and gives its text; the transcript pins it (see the sticky prompt above). The component composes `UserRow` or `CollapsedRow` from `src/ui.tsx`. `message-list.tsx` names only the runtime's own kinds (`context-window`, `model-change`), and full detail draws every message as the plain row
-- Status labels (`statusLabelContribution`) draw on the composer's one status row, after the host's labels and before the right-anchored context gauge and cost, ordered by `priority`. The row has no placement: a label that needs its own place is a widget
+- Status labels (`statusLabelContribution`) draw on the composer's one status row, ordered by `priority`: in the left group after the host's labels, or, with `anchor: "right"`, in the right group before the context gauge and cost. The right group is laid out first and keeps its place on a narrow row; the left group truncates. A glance number anchors right (the `@gent/cache` timer); a label that needs more than one row is a widget
+- `transport.selectedModel()` is the model the session in view runs next, as the status row names it: a model switch changes it before any request goes out
 - **Notice rows**: `noticeRowContribution({ id, rows })` adds transcript rows that are not messages: nothing stores them and the model never reads them. `rows(session)` answers one branch's `NoticeRow`s (`key`, `createdAt`, one `glyph` drawn in `color`, muted `text`), or `None` while the source cannot yet say (native history commits nothing until every source answers, so a row is born with its final text; history holds for a source only `NOTICE_ROWS_BOUND` (5 s) after the extensions loaded, then commits without it; the source is no failure and stays, and a later answer draws its rows among those not yet committed); the session view merges them into the feed's rows by `createdAt` and draws each as the notice row. A higher scope's claim on an `id` replaces a lower one. An extension derives its rows from `transport.onSessionEvent`: the feed opens without waiting for extensions, and a subscriber that joins late first receives what the feed already delivered on the branch, then the live envelopes; a reconnect repeats envelope ids the subscriber must skip. `@gent/cache` is the example
 - `transport.modelCatalog()` reads the model catalog the shell loaded for its model picker (prices included); it is the session in view's own catalog, reactive, and `None` until that session's first load settles (a failed load settles empty). Another session's catalog is never offered for it
 - `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups

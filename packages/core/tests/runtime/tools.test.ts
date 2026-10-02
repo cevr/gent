@@ -45,13 +45,8 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import { test } from "bun:test"
-import {
-  LanguageModelLayers,
-  multiToolCallStep,
-  textStep,
-  toolCallStep,
-  waitFor,
-} from "../../src/test-utils/language-model"
+import { LanguageModelLayers, waitFor } from "../../src/test-utils/language-model"
+import { multiToolCallStep, textStep, toolCallStep } from "../../src/runtime/provider"
 import { messagePartsText } from "../../src/domain/message"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 

@@ -60,7 +60,7 @@ import {
 } from "./session"
 import { ExtensionRenderBoundary, useExtensionUI } from "./extensions/host"
 import { Auth, providerLabel } from "./auth"
-import type { StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js"
+import type { StatusLabelAnchor, StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js"
 
 // ── boot flow ───────────────────────────────────────────────────────────────
 
@@ -546,9 +546,11 @@ export function Session(props: SessionProps) {
   // Map semantic color names from extensions to resolved theme colors
   const resolveColor = (color: StatusLabelColor): RGBA => resolveThemeColor(theme, color)
 
-  /** Every extension status label, by priority, after the host's own. */
-  const extensionLabels = (): StatusRowLabel[] =>
-    ext.statusLabelItems().map((item) => ({ text: item.text, color: resolveColor(item.color) }))
+  /** The extension status labels of one group, by priority. */
+  const extensionLabels = (anchor: StatusLabelAnchor): StatusRowLabel[] =>
+    ext
+      .statusLabelItems(anchor)
+      .map((item) => ({ text: item.text, color: resolveColor(item.color) }))
 
   const connectionLabels = (): StatusRowLabel[] => {
     const items: StatusRowLabel[] = []
@@ -595,16 +597,22 @@ export function Session(props: SessionProps) {
   }
 
   /**
-   * The labels anchored to the right edge: the context gauge and the running
-   * total. Both are numbers a reader checks at a glance without reading the
-   * row, so they hold their place and the left group truncates instead.
+   * The labels anchored to the right edge: the right-anchored extension
+   * labels (the cache timer), the context gauge and the running total. Each
+   * is a number a reader checks at a glance without reading the row, so they
+   * hold their place and the left group truncates instead. An empty label
+   * takes no place in the count.
    */
   const rightAnchoredLabels = (): StatusRowLabel[] =>
-    buildContextLabels({
-      metrics: client.sessionMetrics(),
-      model: client.modelInfo(),
-      theme,
-    }).concat(costLabels())
+    [
+      ...extensionLabels("right"),
+      ...buildContextLabels({
+        metrics: client.sessionMetrics(),
+        model: client.modelInfo(),
+        theme,
+      }),
+      ...costLabels(),
+    ].filter((label) => label.text.length > 0)
 
   const phaseLabels = (): StatusRowLabel[] => {
     const a = controller.activity()
@@ -733,7 +741,7 @@ export function Session(props: SessionProps) {
                     ...phaseLabels(),
                     ...connectionLabels(),
                     ...modelLabels(),
-                    ...extensionLabels(),
+                    ...extensionLabels("left"),
                     ...rightAnchoredLabels(),
                   ]}
                   rightLabels={rightAnchoredLabels().length}

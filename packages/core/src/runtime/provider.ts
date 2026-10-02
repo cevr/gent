@@ -1,6 +1,7 @@
 import {
   Array as Arr,
   Cause,
+  Clock,
   Config,
   Context,
   Duration,
@@ -1509,7 +1510,8 @@ export const retryProviderCall =
  * Language models that answer from a script instead of a provider.
  *
  * `ScriptedLanguageModel.debug` drives the real agent loop with canned
- * replies (and a deterministic 429 retry budget), and `empty` finishes every
+ * replies (and a deterministic 429 retry budget), or with a multi-step tool
+ * turn when the message asks for it (`DEBUG_TOOL_SCENARIO_PHRASE`), and `empty` finishes every
  * step with nothing. `Gent.provider.mock()` ships both; the test harness
  * builds its gated and sequenced models from the same stream-part helpers.
  */
@@ -1672,26 +1674,32 @@ const buildReply = (latestUserText: string): string =>
     "This turn is flowing through the real agent loop with a scripted language model.",
   ].join(" ")
 
-const makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => {
-  const parts = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)
-  const stream = Stream.fromIterable([
-    ...parts.map((text) => textDeltaPart(`${text} `)),
-    finishPart({
-      finishReason: "stop",
-      usage: {
-        inputTokens: Math.max(1, Math.ceil(latestUserText.length / 4)),
-        outputTokens: Math.max(1, Math.ceil(reply.length / 4)),
-      },
-    }),
-  ])
-
+/** The stream with `delayMs` before each part; none at 0. */
+const paced = <A, E>(stream: Stream.Stream<A, E>, delayMs: number): Stream.Stream<A, E> => {
   if (delayMs <= 0) return stream
-
   return stream.pipe(
     Stream.flatMap((chunk) =>
       Stream.fromEffect(Effect.sleep(Duration.millis(delayMs)).pipe(Effect.as(chunk))),
     ),
   )
+}
+
+/** The plain reply, sentence by sentence; its request writes its prompt to the cache. */
+const makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => {
+  const parts = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)
+  const inputTokens = Math.max(1, Math.ceil(latestUserText.length / 4))
+  const stream = Stream.fromIterable([
+    ...parts.map((text) => textDeltaPart(`${text} `)),
+    finishPart({
+      finishReason: "stop",
+      usage: {
+        inputTokens,
+        outputTokens: Math.max(1, Math.ceil(reply.length / 4)),
+        cacheWriteTokens: inputTokens,
+      },
+    }),
+  ])
+  return paced(stream, delayMs)
 }
 
 export const makeLanguageModelLayer = (params: {
@@ -1712,6 +1720,223 @@ export const makeLanguageModelLayer = (params: {
     }),
   )
 
+// ── scripted steps ──────────────────────────────────────────────────────────
+
+/** One model step as stream parts: what one `streamText` call emits. */
+export interface ScriptedStep {
+  readonly parts: ReadonlyArray<LanguageModelStreamPart>
+}
+
+let _stepCallIdCounter = 0
+const makeStepToolCallId = () => ToolCallId.make(`step-tc-${++_stepCallIdCounter}`)
+
+export const textStep = (text: string): ScriptedStep => ({
+  parts: [
+    textDeltaPart(text),
+    finishPart({
+      finishReason: "stop",
+      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) },
+    }),
+  ],
+})
+
+export const toolCallStep = (
+  toolName: string,
+  // oxlint-disable-next-line effect/noUnknownParameters -- Tool arguments enter the Effect AI codec as unknown JSON data.
+  input: unknown,
+  options?: { toolCallId?: ToolCallId },
+): ScriptedStep => ({
+  parts: [
+    toolCallPart(toolName, input, { toolCallId: options?.toolCallId ?? makeStepToolCallId() }),
+    finishPart({
+      finishReason: "tool-calls",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    }),
+  ],
+})
+
+export const multiToolCallStep = (
+  ...calls: ReadonlyArray<{ toolName: string; input: unknown; toolCallId?: ToolCallId }>
+): ScriptedStep => ({
+  parts: [
+    ...calls.map((call) =>
+      toolCallPart(call.toolName, call.input, {
+        toolCallId: call.toolCallId ?? makeStepToolCallId(),
+      }),
+    ),
+    finishPart({
+      finishReason: "tool-calls",
+      usage: { inputTokens: 10, outputTokens: 20 * calls.length },
+    }),
+  ],
+})
+
+// ── debug tool scenario ─────────────────────────────────────────────────────
+
+/**
+ * A user message holding this phrase plays the debug model's tool turn: six
+ * steps that call the real tools in the session's directory. Step 1 writes
+ * three files under `gent-debug-tools/` with bash, then the steps read the
+ * three at once, grep them, edit one, and run a bash command that exits 2.
+ * Each step opens with reasoning; the last answers. The two bash commands
+ * sleep, so the run stays open long enough to resize or scroll during it.
+ *
+ * A step calls the tools the request advertises: each op as its own call, or,
+ * on a turn narrowed to `cell`, one `cell` call whose code awaits the ops.
+ */
+const DEBUG_TOOL_SCENARIO_PHRASE = "debug tools"
+
+const SCENARIO_DIR = "gent-debug-tools"
+
+/** One host tool call of the scenario. */
+interface ScenarioOp {
+  readonly tool: string
+  readonly input: Readonly<Record<string, string>>
+}
+
+const scenarioFile = (name: string) => `${SCENARIO_DIR}/${name}`
+
+const SCENARIO: ReadonlyArray<{
+  readonly reasoning: string
+  /** The ops of a tool step, run together; none on the answer step. */
+  readonly ops: ReadonlyArray<ScenarioOp>
+}> = [
+  {
+    reasoning: "Set up a scratch fixture to work on.",
+    ops: [
+      {
+        tool: "bash",
+        input: {
+          command: [
+            `mkdir -p ${SCENARIO_DIR}`,
+            `printf 'export const greeting = "hello"\\n// TODO: say goodbye\\n' > ${scenarioFile("a.ts")}`,
+            `printf 'export const count = 3\\n' > ${scenarioFile("b.ts")}`,
+            `printf '// TODO: wire count into greeting\\nexport {}\\n' > ${scenarioFile("c.ts")}`,
+            "sleep 1",
+          ].join(" && "),
+        },
+      },
+    ],
+  },
+  {
+    reasoning: "Read the three files together.",
+    ops: ["a.ts", "b.ts", "c.ts"].map((name) => ({
+      tool: "read",
+      input: { path: scenarioFile(name) },
+    })),
+  },
+  {
+    reasoning: "Find the open TODOs.",
+    ops: [{ tool: "grep", input: { pattern: "TODO", path: SCENARIO_DIR } }],
+  },
+  {
+    reasoning: "Widen the greeting.",
+    ops: [
+      {
+        tool: "edit",
+        input: { path: scenarioFile("a.ts"), oldString: '"hello"', newString: '"hello, world"' },
+      },
+    ],
+  },
+  {
+    reasoning: "Check for the file the TODO wants; it does not exist yet.",
+    ops: [{ tool: "bash", input: { command: `sleep 2; ls ${scenarioFile("d.ts")}` } }],
+  },
+  { reasoning: "Summarize.", ops: [] },
+]
+
+const SCENARIO_ANSWER = `Read three files in ${SCENARIO_DIR}, found two TODOs, widened the greeting in a.ts. The check for d.ts failed: it does not exist yet.`
+
+const encodeOpInput = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+)
+
+/** The `cell` code that awaits a step's ops: one call, or all of them together. */
+const cellCode = (ops: ReadonlyArray<ScenarioOp>): string => {
+  const calls = ops.map((op) => `tools.${op.tool}(${encodeOpInput(op.input)})`)
+  if (calls.length === 1) return `await ${calls[0]}`
+  return `await Promise.all([${calls.join(", ")}])`
+}
+
+/** Scenario step `index` as the request's tool surface takes it; none past the last. */
+const scenarioStep = (
+  index: number,
+  viaCell: boolean,
+  callId: (call: number) => ToolCallId,
+): Option.Option<ScriptedStep> =>
+  Option.map(Option.fromUndefinedOr(SCENARIO[index]), ({ reasoning, ops }) => {
+    let scripted = textStep(SCENARIO_ANSWER)
+    if (viaCell && ops.length > 0) {
+      scripted = toolCallStep("cell", { code: cellCode(ops) }, { toolCallId: callId(0) })
+    } else if (ops.length > 0) {
+      scripted = multiToolCallStep(
+        ...ops.map((op, call) => ({
+          toolName: op.tool,
+          input: op.input,
+          toolCallId: callId(call),
+        })),
+      )
+    }
+    return { parts: [reasoningDeltaPart(reasoning), ...scripted.parts] }
+  })
+
+/** The steps the prompt already holds since its latest user message: one assistant message each. */
+const stepsSinceLatestUser = (promptInput: Prompt.RawInput): number => {
+  const content = Prompt.make(promptInput).content
+  let count = 0
+  for (let i = content.length - 1; i >= 0; i--) {
+    const message = content[i]
+    if (message?.role === "user") break
+    if (message?.role === "assistant") count++
+  }
+  return count
+}
+
+/**
+ * The step's usage, as a provider that caches explicitly reports it: the
+ * first step writes the prompt to the cache, a later one reads it. The cache
+ * timer counts from a request that reported cache activity.
+ */
+const withCacheUsage = (step: ScriptedStep, index: number, inputTokens: number): ScriptedStep => ({
+  parts: step.parts.map((part) => {
+    if (part.type !== "finish") return part
+    let cacheWriteTokens = inputTokens
+    let cacheReadTokens = 0
+    if (index > 0) {
+      cacheWriteTokens = 0
+      cacheReadTokens = inputTokens
+    }
+    return finishPart({
+      finishReason: part.reason,
+      usage: {
+        inputTokens,
+        outputTokens: part.usage.outputTokens.total ?? 1,
+        cacheWriteTokens,
+        cacheReadTokens,
+      },
+    })
+  }),
+})
+
+const scenarioStream = (options: ProviderOptions, latestUserText: string, delayMs: number) =>
+  Effect.gen(function* () {
+    const index = stepsSinceLatestUser(options.prompt)
+    const advertised = new Set(options.tools.map((tool) => tool.name))
+    const viaCell = advertised.has("cell") && !advertised.has("read")
+    // Ids unique across runs: a resumed session may already hold an earlier run's.
+    const run = (yield* Clock.currentTimeMillis).toString(36)
+    const step = scenarioStep(index, viaCell, (call) =>
+      ToolCallId.make(`debug-${run}-${index}-${call}`),
+    )
+    const inputTokens = Math.max(1, Math.ceil(latestUserText.length / 4))
+    return Option.match(step, {
+      // Past the last step the turn is over; answer as the plain debug reply does.
+      onNone: () => makeReplyStream(latestUserText, buildReply(latestUserText), delayMs),
+      onSome: (scripted) =>
+        paced(Stream.fromIterable(withCacheUsage(scripted, index, inputTokens).parts), delayMs),
+    })
+  })
+
 const debug = (options?: { delayMs?: number; retries?: boolean }) => {
   const delayMs = options?.delayMs ?? 0
   const retries = options?.retries ?? delayMs === 0
@@ -1721,6 +1946,9 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
     streamText: (modelOptions) =>
       Effect.suspend(() => {
         const latestUserText = extractLatestUserText(modelOptions.prompt)
+        if (latestUserText.toLowerCase().includes(DEBUG_TOOL_SCENARIO_PHRASE)) {
+          return scenarioStream(modelOptions, latestUserText, delayMs)
+        }
         const seen = attempts.get(latestUserText) ?? 0
         let retryBudget = 0
         if (retries) retryBudget = retryBudgetFor(latestUserText)

@@ -51,6 +51,7 @@ export {
   rendererContribution,
   sessionQuery,
   statusLabelContribution,
+  type StatusLabelItem,
   widgetContribution,
 } from "./extensions/client-facets.js"
 

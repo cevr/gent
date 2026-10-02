@@ -708,16 +708,28 @@ export const CellOperationReceipts = Schema.Struct({
   ),
 })
 
+/** The lines an edit adds and removes. */
+interface DiffCount {
+  readonly added: number
+  readonly removed: number
+}
+
 export interface ActivityOperation {
   readonly tool: string
   readonly outcome: ActivityOutcome
   /** Argument summary for live calls; empty for saved receipts. */
   readonly detail: string
+  /** The lines an edit op changed, read from its input. */
+  readonly diff?: DiffCount
 }
 
 export interface ActivityCall {
   readonly toolName: string
   readonly status: "running" | "completed" | "error"
+  /**
+   * The tools the call ran: a cell's ops, or the call itself for any other
+   * tool. Empty for a cell with no ops, which counts as one tool.
+   */
   readonly operations: ReadonlyArray<ActivityOperation>
   /** The cell source; empty for other tools. */
   readonly code: string
@@ -831,40 +843,233 @@ export const countNoun = (count: number, singular: string, pluralForm = `${singu
 export const plural = (count: number, singular: string, pluralForm = `${singular}s`) =>
   `${count} ${countNoun(count, singular, pluralForm)}`
 
-const isChildOperation = (operation: ActivityOperation) => operation.tool === "delegate.start"
+// ── Tool group header and rows ──
+// A group reads in tool words, not in the cell mechanism: what was read,
+// searched, edited and run. The cell count is detail the full level shows.
 
-/** Header for a group of calls. Cell-only turns count cells, ops, children, and failures. */
-export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string {
-  if (calls.length === 0) return ""
-  if (calls.some((call) => call.toolName !== "cell")) {
-    const names = new Map<string, number>()
-    for (const call of calls) names.set(call.toolName, (names.get(call.toolName) ?? 0) + 1)
-    const counts = Array.from(names, ([name, count]) => `${count} ${name}`).join(" · ")
-    return `${plural(calls.length, "tool call")} · ${counts}`
-  }
-  const operations = calls.flatMap((call) => call.operations)
-  const children = operations.filter(isChildOperation).length
-  // "N failed" counts ops whose exit or status failed. A cell that failed with
-  // no failed op (a throw after its ops, or a restart) is its own failure,
-  // worded apart; one that failed with a failed op is that op's failure.
-  const isFailedOp = (operation: ActivityOperation) => operation.outcome === "failed"
-  const failed = operations.filter(isFailedOp).length
-  const failedCells = calls.filter(
-    (call) => call.status === "error" && !call.operations.some(isFailedOp),
-  ).length
-  const parts = [plural(calls.length, "cell")]
-  if (operations.length > 0) parts.push(plural(operations.length, "op"))
-  else {
-    const verbs = calls.flatMap((call) => describeCellCode(call.code)).slice(0, 4)
-    if (verbs.length > 0) parts.push(verbs.join(" · "))
-  }
-  if (children > 0) parts.push(plural(children, "child", "children"))
-  if (failed > 0) parts.push(`${failed} failed`)
-  if (failedCells > 0) parts.push(`${plural(failedCells, "cell")} failed`)
-  const duration = formatGroupDuration(calls)
-  if (duration.length > 0) parts.push(duration)
-  return parts.join(" · ")
+/** A call's status as the outcome of the one tool it stands for. */
+export const callOutcome = (status: ActivityCall["status"]): ActivityOutcome => {
+  if (status === "running") return "running"
+  if (status === "error") return "failed"
+  return "succeeded"
 }
+
+const isFailedOp = (operation: ActivityOperation) => operation.outcome === "failed"
+
+/**
+ * One line of a group: a tool the run called, or a cell's own failure. A
+ * cell's own failure is no tool, so the header leaves it out of the tool
+ * count and counts it among the failures.
+ */
+interface ActivityEntry {
+  readonly operation: ActivityOperation
+  readonly tool: boolean
+}
+
+/**
+ * What a call with no ops did: its source's verbs, else its first line. A
+ * failed call's reason is its frame's, which every level draws.
+ */
+const opLessDetail = (call: ActivityCall): string => {
+  const verbs = describeCellCode(call.code).join(" · ")
+  if (verbs.length > 0) return verbs
+  return truncate(call.code.split("\n")[0] ?? "", 60)
+}
+
+/**
+ * The tools of a group in call order. A cell with no ops is one tool that
+ * names its source's verbs. A cell that failed with no failed op (a throw
+ * after its ops, or a restart) adds its own failure after its ops; one that
+ * failed with a failed op is that op's failure.
+ */
+const activityEntries = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<ActivityEntry> =>
+  calls.flatMap((call): ReadonlyArray<ActivityEntry> => {
+    if (call.operations.length === 0) {
+      const operation = {
+        tool: call.toolName,
+        outcome: callOutcome(call.status),
+        detail: opLessDetail(call),
+      }
+      return [{ operation, tool: true }]
+    }
+    const entries = call.operations.map((operation) => ({ operation, tool: true }))
+    if (call.status !== "error" || call.operations.some(isFailedOp)) return entries
+    const failure: ActivityOperation = { tool: call.toolName, outcome: "failed", detail: "" }
+    return [...entries, { operation: failure, tool: false }]
+  })
+
+/** The header word of each tool kind; a tool not named here counts under its own id. */
+const TOOL_KINDS: ReadonlyMap<string, readonly [string, string]> = new Map([
+  ["read", ["read", "read"]],
+  ["read_session", ["read", "read"]],
+  ["grep", ["search", "search"]],
+  ["glob", ["search", "search"]],
+  ["websearch", ["search", "search"]],
+  ["edit", ["edit", "edit"]],
+  ["write", ["edit", "edit"]],
+  ["bash", ["command", "commands"]],
+  ["delegate.start", ["child", "children"]],
+])
+
+/**
+ * Header for a group of calls: `7 tools · 4 read · 2 edit · 1 command ·
+ * 1 failed · 4.2s`. Kinds go largest first, ties in the order they ran. A
+ * cell with no ops names its source's verbs in place of a kind. Where the
+ * header is wider than `width` columns, kinds drop from the right first: the
+ * tool count, the failures and the time stay.
+ */
+export function formatActivityHeader(
+  calls: ReadonlyArray<ActivityCall>,
+  width = Number.POSITIVE_INFINITY,
+): string {
+  if (calls.length === 0) return ""
+  const entries = activityEntries(calls)
+  const tools = entries.filter((entry) => entry.tool)
+  const kinds = new Map<
+    string,
+    { readonly count: number; readonly words: readonly [string, string] }
+  >()
+  for (const { operation } of tools) {
+    if (operation.tool === "cell") continue
+    const words = TOOL_KINDS.get(operation.tool) ?? [operation.tool, operation.tool]
+    const count = (kinds.get(words[0])?.count ?? 0) + 1
+    kinds.set(words[0], { count, words })
+  }
+  const verbs = calls
+    .filter((call) => call.operations.length === 0 && call.toolName === "cell")
+    .flatMap((call) => describeCellCode(call.code))
+  const counted = Array.from(kinds.values())
+    .toSorted((left, right) => right.count - left.count)
+    .map(({ count, words }) => `${count} ${countNoun(count, words[0], words[1])}`)
+  const optional = [...counted, ...verbs.slice(0, 4)]
+  const failed = entries.filter((entry) => isFailedOp(entry.operation)).length
+  const tail: string[] = []
+  if (failed > 0) tail.push(`${failed} failed`)
+  const duration = formatGroupDuration(calls)
+  if (duration.length > 0) tail.push(duration)
+  const head = plural(tools.length, "tool")
+  const join = (parts: ReadonlyArray<string>) => [head, ...parts, ...tail].join(" · ")
+  let kept = optional.length
+  while (kept > 0 && textWidth(join(optional.slice(0, kept))) > width) kept -= 1
+  return join(optional.slice(0, kept))
+}
+
+/** Past and running tense of each tool's verb; a tool not named here shows its id. */
+const TOOL_VERBS: ReadonlyMap<string, readonly [string, string]> = new Map([
+  ["read", ["Read", "Reading"]],
+  ["read_session", ["Read", "Reading"]],
+  ["grep", ["Searched", "Searching"]],
+  ["glob", ["Searched", "Searching"]],
+  ["websearch", ["Searched", "Searching"]],
+  ["webfetch", ["Fetched", "Fetching"]],
+  ["edit", ["Edited", "Editing"]],
+  ["write", ["Wrote", "Writing"]],
+  ["bash", ["Ran", "Running"]],
+  ["delegate.start", ["Started", "Starting"]],
+  ["ask_user", ["Asked", "Asking"]],
+])
+
+/** One row of a group at the preview level: a run of ops of one tool and one outcome. */
+interface ActivityRow {
+  readonly tool: string
+  readonly outcome: ActivityOutcome
+  readonly subjects: ReadonlyArray<string>
+  /** The summed lines the row's edits changed; none for a row with no edit. */
+  readonly diff: Option.Option<DiffCount>
+}
+
+const addDiff = (
+  total: Option.Option<DiffCount>,
+  next: Option.Option<DiffCount>,
+): Option.Option<DiffCount> =>
+  Option.match(next, {
+    onNone: () => total,
+    onSome: (count) =>
+      Option.some(
+        Option.match(total, {
+          onNone: () => count,
+          onSome: (sum) => ({
+            added: sum.added + count.added,
+            removed: sum.removed + count.removed,
+          }),
+        }),
+      ),
+  })
+
+/**
+ * The rows of a group, one per run of ops: consecutive ops of one tool and
+ * one outcome fold into one row, so a cell that reads 3 files draws one
+ * `Read` row. A running op keeps its own row, last.
+ */
+export const activityRows = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<ActivityRow> => {
+  const rows: ActivityRow[] = []
+  for (const { operation } of activityEntries(calls)) {
+    const subjects = Option.toArray(
+      Option.liftPredicate(operation.detail, (detail) => detail.length > 0),
+    )
+    const diff = Option.fromUndefinedOr(operation.diff)
+    const previous = Option.filter(
+      Option.fromUndefinedOr(rows.at(-1)),
+      (row) =>
+        row.tool === operation.tool &&
+        row.outcome === operation.outcome &&
+        operation.outcome !== "running",
+    )
+    if (Option.isSome(previous)) {
+      const row = previous.value
+      rows[rows.length - 1] = {
+        ...row,
+        subjects: [...row.subjects, ...subjects],
+        diff: addDiff(row.diff, diff),
+      }
+    } else {
+      rows.push({ tool: operation.tool, outcome: operation.outcome, subjects, diff })
+    }
+  }
+  return rows
+}
+
+/** A row as text, in parts: the diff counts draw in their own colours between head and tail. */
+interface ActivityRowText {
+  readonly head: string
+  readonly diff: Option.Option<DiffCount>
+  readonly tail: string
+}
+
+/**
+ * A row in past-tense words, fitted to `width` columns: `Read a.ts, b.ts +1`,
+ * `Edited x.ts +12 / -3`, `Ran bun test · failed`, `Running bun test`. The
+ * subjects that fit the width show, then `+N` counts the rest.
+ */
+export function formatActivityRow(
+  row: ActivityRow,
+  width = Number.POSITIVE_INFINITY,
+): ActivityRowText {
+  const tense = TOOL_VERBS.get(row.tool) ?? [row.tool, row.tool]
+  let verb = tense[0]
+  if (row.outcome === "running") verb = tense[1]
+  let tail = ""
+  if (row.outcome === "failed") tail = " · failed"
+  if (row.outcome === "incomplete") tail = " · incomplete"
+  const diffWidth = Option.match(row.diff, {
+    onNone: () => 0,
+    onSome: (diff) => textWidth(formatDiffCount(diff)) + 1,
+  })
+  const room = width - textWidth(verb) - 1 - diffWidth - textWidth(tail)
+  const subjects = row.subjects
+  const listed = (kept: number) => {
+    const text = subjects.slice(0, kept).join(", ")
+    if (kept < subjects.length) return `${text} +${subjects.length - kept}`
+    return text
+  }
+  let kept = subjects.length
+  while (kept > 1 && textWidth(listed(kept)) > room) kept -= 1
+  if (subjects.length === 0) return { head: verb, diff: row.diff, tail }
+  return { head: `${verb} ${listed(kept)}`, diff: row.diff, tail }
+}
+
+/** `+12 / -3` */
+const formatDiffCount = (diff: DiffCount): string => `+${diff.added} / -${diff.removed}`
 
 /** The ops a cell ran, in order: each tool with its arguments, a failed one marked, repeats folded. */
 export const formatOperationLabels = (operations: ReadonlyArray<ActivityOperation>): string =>

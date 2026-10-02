@@ -4,10 +4,11 @@ import { Match, Option, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
 import { useClient } from "./client"
-import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
+import { GutterText, NoToolCallIdentity, ToolCallIdentityProvider, ToolFrame } from "./ui"
 import { formatHeadTail, headTail, lineCount, OutputCut, splitLines } from "@gent/core/protocol"
 import {
   type ActivityOperation,
+  callOutcome,
   CellOperationReceipts,
   decodeToolOutput,
   countNoun,
@@ -92,6 +93,13 @@ export type ToolRenderer = (props: ToolRendererProps) => JSX.Element
 const ToolRenderersContext = createContext<() => ReadonlyMap<string, ToolRenderer>>(() => new Map())
 export const ToolRenderersProvider = ToolRenderersContext.Provider
 export const useToolRenderers = () => useContext(ToolRenderersContext)
+
+/**
+ * Whether a cell folds a run of one tool's ops into one frame. The transcript
+ * view (full detail) draws every op on its own; every other view folds.
+ */
+const FoldOperationsContext = createContext(true)
+export const FoldOperationsProvider = FoldOperationsContext.Provider
 
 /**
  * The one renderer lookup, for a transcript call and for an op a cell admitted:
@@ -700,11 +708,84 @@ interface OperationLine {
   readonly summary: string
 }
 
-const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
-  if (status === "running") return "running"
-  if (status === "error") return "failed"
-  return "succeeded"
+/**
+ * A bash call that returned a command which exited nonzero. The call
+ * succeeded, but the command failed; one still running in the background has
+ * no exit code yet.
+ */
+const commandFailed = (call: ToolCall): boolean =>
+  call.toolName === "bash" &&
+  call.status === "completed" &&
+  Option.exists(
+    parseBashOutput(call.output),
+    (value) => Option.isNone(value.status) && value.exitCode !== 0,
+  )
+
+/** One call as the tool a group counts: its outcome, its arguments, and an edit's line counts. */
+export const callOperation = (call: ToolCall, place: PathPlace): ActivityOperation => {
+  let outcome = callOutcome(call.status)
+  if (commandFailed(call)) outcome = "failed"
+  const operation = {
+    tool: call.toolName,
+    outcome,
+    detail: toolArgSummary(call.toolName, call.input, place),
+  }
+  if (call.toolName !== "edit") return operation
+  return Option.match(getEditUnifiedDiff(call.input), {
+    onNone: () => operation,
+    onSome: ({ added, removed }) => ({ ...operation, diff: { added, removed } }),
+  })
 }
+
+/** Consecutive live ops of one tool. */
+interface OperationRun {
+  readonly first: ToolCall
+  readonly calls: ReadonlyArray<ToolCall>
+}
+
+/** What a folded frame counts: `12 files`, `3 commands`; a tool not named here counts calls. */
+const FOLD_NOUNS: ReadonlyMap<string, string> = new Map([
+  ["read", "file"],
+  ["edit", "file"],
+  ["write", "file"],
+  ["grep", "search"],
+  ["glob", "search"],
+  ["bash", "command"],
+])
+
+const sameToolRuns = (calls: ReadonlyArray<ToolCall>): ReadonlyArray<OperationRun> => {
+  const runs: OperationRun[] = []
+  for (const call of calls) {
+    const previous = Option.filter(
+      Option.fromUndefinedOr(runs.at(-1)),
+      (run) => run.first.toolName === call.toolName,
+    )
+    if (Option.isSome(previous)) {
+      const { first, calls: before } = previous.value
+      runs[runs.length - 1] = { first, calls: [...before, call] }
+    } else {
+      runs.push({ first: call, calls: [call] })
+    }
+  }
+  return runs
+}
+
+/** The runs of `next`, each one that holds the same calls as before kept as its old object. */
+const keepUnchangedRuns = (
+  previous: ReadonlyArray<OperationRun>,
+  next: ReadonlyArray<OperationRun>,
+): ReadonlyArray<OperationRun> =>
+  next.map((run, index) =>
+    Option.getOrElse(
+      Option.filter(
+        Option.fromUndefinedOr(previous[index]),
+        (old) =>
+          old.calls.length === run.calls.length &&
+          old.calls.every((call, at) => call === run.calls[at]),
+      ),
+      () => run,
+    ),
+  )
 
 /** Calls a cell admitted: live nested calls carry arguments; saved receipts carry tool and outcome. */
 export const cellOperations = (
@@ -713,11 +794,7 @@ export const cellOperations = (
 ): ReadonlyArray<ActivityOperation> => {
   const live = Option.fromNullishOr(call.operations)
   if (Option.isSome(live) && live.value.length > 0) {
-    return live.value.map((operation) => ({
-      tool: operation.toolName,
-      outcome: liveOutcome(operation.status),
-      detail: toolArgSummary(operation.toolName, operation.input, place),
-    }))
+    return live.value.map((operation) => callOperation(operation, place))
   }
   return Option.match(decodeToolOutputOption(CellOperationReceipts, call.output), {
     onNone: () => [],
@@ -733,6 +810,7 @@ export const cellOperations = (
 function CellToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
   const { pathPlace } = useClient()
+  const fold = useContext(FoldOperationsContext)
 
   const data = createMemo(() => decodeToolOutputOption(CellOutputSchema, props.toolCall.output))
   const code = createMemo(() => getString(props.toolCall.input, "code"))
@@ -754,6 +832,13 @@ function CellToolRenderer(props: ToolRendererProps) {
   // fallback where the branch has no events for them (a fork).
   const liveOperations = createMemo((): ReadonlyArray<ToolCall> =>
     Option.getOrElse(Option.fromNullishOr(props.toolCall.operations), () => []),
+  )
+  // A run that did not change keeps its object, so its frame, and a click
+  // that opened it, outlive the next op's arrival.
+  const operationRuns = createMemo(
+    (previous: ReadonlyArray<OperationRun>) =>
+      keepUnchangedRuns(previous, sameToolRuns(liveOperations())),
+    [],
   )
   const receipts = createMemo((): ReadonlyArray<OperationLine> =>
     Option.match(decodeToolOutputOption(CellOperationReceipts, props.toolCall.output), {
@@ -807,11 +892,62 @@ function CellToolRenderer(props: ToolRendererProps) {
     </text>
   )
 
+  // A run of one tool: one frame whose collapsed body is a tight list, one
+  // line an op; opened, it draws each op as its own frame.
+  const FoldedOperations = (folded: { readonly calls: ReadonlyArray<ToolCall> }) => {
+    const tool = () => folded.calls[0]?.toolName ?? ""
+    const status = (): ToolCall["status"] => {
+      if (folded.calls.some((call) => call.status === "running")) return "running"
+      if (folded.calls.some((call) => call.status === "error")) return "error"
+      return "completed"
+    }
+    return (
+      <NoToolCallIdentity>
+        <ToolFrame
+          title={tool()}
+          subtitle={plural(folded.calls.length, FOLD_NOUNS.get(tool()) ?? "call")}
+          status={status()}
+          expanded={false}
+          collapsedContent={
+            <box flexDirection="column">
+              <For each={folded.calls}>
+                {(call) =>
+                  OperationRow({
+                    tool: toolArgSummary(call.toolName, call.input, pathPlace()),
+                    outcome: callOutcome(call.status),
+                    summary: Option.getOrElse(failureReason(call), () => call.summary ?? ""),
+                  })
+                }
+              </For>
+            </box>
+          }
+        >
+          <box flexDirection="column" gap={1}>
+            <For each={folded.calls}>{(call) => OperationCall(call)}</For>
+          </box>
+        </ToolFrame>
+      </NoToolCallIdentity>
+    )
+  }
+
+  const OperationCall = (call: ToolCall) => (
+    <RegisteredToolCall
+      toolCall={call}
+      expanded={false}
+      fallback={OperationRow({
+        tool: call.toolName,
+        outcome: callOutcome(call.status),
+        summary: Option.getOrElse(failureReason(call), () => call.summary ?? ""),
+      })}
+    />
+  )
+
   // Each live op draws through the renderer registered for its tool, as a
   // collapsed sub-row: its header and its summary, never its full body. An op
-  // with no renderer keeps its one-line receipt. A blank line separates each op
-  // and the cell's own text after them, as it separates transcript blocks;
-  // one-line receipts stay a tight list.
+  // with no renderer keeps its one-line receipt. Consecutive ops of one tool
+  // fold into one frame, so a cell that reads 30 files draws one. A blank line
+  // separates each frame and the cell's own text after them, as it separates
+  // transcript blocks; one-line receipts stay a tight list.
   const Operations = () => (
     <Show
       when={liveOperations().length > 0}
@@ -824,17 +960,14 @@ function CellToolRenderer(props: ToolRendererProps) {
       }
     >
       <box flexDirection="column" gap={1}>
-        <For each={liveOperations()}>
-          {(call) => (
-            <RegisteredToolCall
-              toolCall={call}
-              expanded={false}
-              fallback={OperationRow({
-                tool: call.toolName,
-                outcome: liveOutcome(call.status),
-                summary: Option.getOrElse(failureReason(call), () => call.summary ?? ""),
-              })}
-            />
+        <For each={operationRuns()}>
+          {(run) => (
+            <Show
+              when={fold && run.calls.length > 1}
+              fallback={<For each={run.calls}>{(call) => OperationCall(call)}</For>}
+            >
+              <FoldedOperations calls={run.calls} />
+            </Show>
           )}
         </For>
       </box>

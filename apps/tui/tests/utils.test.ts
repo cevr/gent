@@ -13,12 +13,14 @@ import { RpcClientError } from "effect/rpc/RpcClientError"
 import { SocketCloseError } from "effect/socket/Socket"
 import {
   type ActivityCall,
+  activityRows,
   describeCellCode,
   dropLastGrapheme,
   expandFileRefs,
   fitWidth,
   fileHref,
   formatActivityHeader,
+  formatActivityRow,
   formatAge,
   formatCost,
   formatCellRowLabel,
@@ -773,35 +775,46 @@ const cell = (
 ): ActivityCall => ({ toolName: "cell", status, operations, code: "" })
 
 describe("formatActivityHeader", () => {
-  test("a cell-only turn counts cells, ops, children, and failures instead of tool calls", () => {
-    expect(formatActivityHeader([cell([op("bash", "pwd"), op("read", "a.ts")])])).toBe(
-      "1 cell · 2 ops",
-    )
+  test("counts the tools by kind, largest first, ties in the order they ran", () => {
+    expect(
+      formatActivityHeader([
+        cell([op("bash", "pwd"), op("read", "a.ts"), op("edit", "x.ts")]),
+        cell([op("read", "b.ts"), op("write", "y.ts"), op("read", "c.ts"), op("read", "d.ts")]),
+      ]),
+    ).toBe("7 tools · 4 read · 2 edit · 1 command")
     expect(
       formatActivityHeader([
         cell([op("delegate.start", "compute"), op("delegate.start", "verify")]),
-        cell([op("write", "b.ts", "failed")]),
-        cell([], "error"),
+        cell([op("grep", "/x/ in ."), op("read_session", "s1"), op("mcp.query", "q")]),
       ]),
-    ).toBe("3 cells · 3 ops · 2 children · 1 failed · 1 cell failed")
-    expect(formatActivityHeader([cell([])])).toBe("1 cell")
+    ).toBe("5 tools · 2 children · 1 search · 1 read · 1 mcp.query")
+    expect(formatActivityHeader([cell([op("bash", "a"), op("bash", "b")])])).toBe(
+      "2 tools · 2 commands",
+    )
+  })
+
+  test("a cell with no ops is one tool that names its source's verbs", () => {
+    expect(formatActivityHeader([cell([])])).toBe("1 tool")
+    expect(formatActivityHeader([{ ...cell([]), code: "await Bun.$`bun test`.text()" }])).toBe(
+      "1 tool · $ bun test",
+    )
   })
 
   test("a cell that failed with its op counts one failure", () => {
     // An interrupted cell: live its op is settled to failed when the cell ends,
     // and a reload projects the same op as failed.
     expect(formatActivityHeader([cell([op("bash", "git checkout", "failed")], "error")])).toBe(
-      "1 cell · 1 op · 1 failed",
+      "1 tool · 1 command · 1 failed",
     )
     expect(
       formatActivityHeader([cell([op("bash", "a", "failed"), op("bash", "b", "failed")], "error")]),
-    ).toBe("1 cell · 2 ops · 2 failed")
+    ).toBe("2 tools · 2 commands · 2 failed")
   })
 
-  test("a cell that failed while its ops succeeded is worded apart from op failures", () => {
-    // After a restart the op row shows exit 0; the header must not call it failed.
+  test("a cell that failed while its ops succeeded is one failure and no extra tool", () => {
+    // After a restart the op row shows exit 0; the op stays a success.
     expect(formatActivityHeader([cell([op("bash", "pwd")], "error")])).toBe(
-      "1 cell · 1 op · 1 cell failed",
+      "1 tool · 1 command · 1 failed",
     )
     expect(
       formatActivityHeader([
@@ -809,12 +822,12 @@ describe("formatActivityHeader", () => {
         cell([op("read", "c.ts")], "error"),
         cell([], "error"),
       ]),
-    ).toBe("3 cells · 2 ops · 1 failed · 2 cells failed")
+    ).toBe("3 tools · 1 command · 1 read · 3 failed")
   })
 
   test("a finished group carries the sum of its call durations", () => {
     expect(formatActivityHeader([{ ...cell([op("bash", "pwd")]), durationMs: 1_250 }])).toBe(
-      "1 cell · 1 op · 1.3s",
+      "1 tool · 1 command · 1.3s",
     )
     expect(
       formatActivityHeader([
@@ -822,21 +835,112 @@ describe("formatActivityHeader", () => {
         { ...cell([]), durationMs: 700 },
         cell([], "running"),
       ]),
-    ).toBe("3 cells · 1.5s")
+    ).toBe("3 tools · 1.5s")
     expect(formatGroupDuration([cell([], "running")])).toBe("")
-    expect(formatActivityHeader([{ ...cell([]), code: "await Bun.$`bun test`.text()" }])).toBe(
-      "1 cell · $ bun test",
-    )
   })
 
-  test("a turn with direct tools keeps the tool call counts", () => {
+  test("a direct tool call counts as the one tool it is", () => {
     expect(
       formatActivityHeader([
         { toolName: "read", status: "completed", operations: [], code: "" },
-        { toolName: "read", status: "completed", operations: [], code: "" },
+        { toolName: "read", status: "error", operations: [], code: "" },
         cell([op("bash")]),
       ]),
-    ).toBe("3 tool calls · 2 read · 1 cell")
+    ).toBe("3 tools · 2 read · 1 command · 1 failed")
+  })
+
+  test("a narrow header drops kinds from the right and keeps the count, failures and time", () => {
+    const calls = [
+      {
+        ...cell([
+          op("read", "a"),
+          op("read", "b"),
+          op("read", "c"),
+          op("grep", "x"),
+          op("edit", "e"),
+          op("bash", "t", "failed"),
+        ]),
+        durationMs: 9_700,
+      },
+    ]
+    expect(formatActivityHeader(calls)).toBe(
+      "6 tools · 3 read · 1 search · 1 edit · 1 command · 1 failed · 9.7s",
+    )
+    expect(formatActivityHeader(calls, 50)).toBe("6 tools · 3 read · 1 search · 1 failed · 9.7s")
+    expect(formatActivityHeader(calls, 10)).toBe("6 tools · 1 failed · 9.7s")
+  })
+})
+
+describe("activity rows", () => {
+  const rows = (calls: ReadonlyArray<ActivityCall>, width?: number) =>
+    activityRows(calls).map((row) => {
+      const text = formatActivityRow(row, width)
+      const diff = Option.match(text.diff, {
+        onNone: () => "",
+        onSome: ({ added, removed }) => ` +${added} / -${removed}`,
+      })
+      return `${text.head}${diff}${text.tail}`
+    })
+
+  test("ops read in past-tense verbs, consecutive ops of one tool folded into one row", () => {
+    expect(
+      rows([
+        cell([op("read", "a.ts"), op("read", "b.ts")]),
+        cell([op("read", "c.ts"), op("grep", "/x/ in src"), op("bash", "bun test")]),
+      ]),
+    ).toEqual(["Read a.ts, b.ts, c.ts", "Searched /x/ in src", "Ran bun test"])
+    expect(
+      rows([
+        cell([
+          op("delegate.start", "compute"),
+          op("write", "out.json"),
+          op("ask_user", "pick one"),
+          op("mcp.query", "q"),
+        ]),
+      ]),
+    ).toEqual(["Started compute", "Wrote out.json", "Asked pick one", "mcp.query q"])
+  })
+
+  test("the subjects that fit the width show, then a count of the rest", () => {
+    const reads = cell(["a.ts", "b.ts", "c.ts", "d.ts"].map((path) => op("read", path)))
+    expect(rows([reads], 100)).toEqual(["Read a.ts, b.ts, c.ts, d.ts"])
+    expect(rows([reads], 20)).toEqual(["Read a.ts, b.ts +2"])
+    // The first subject always shows; the row's own clip cuts it.
+    expect(rows([reads], 4)).toEqual(["Read a.ts +3"])
+  })
+
+  test("an edit row sums the lines its edits changed", () => {
+    const edit = (path: string, added: number, removed: number) => ({
+      ...op("edit", path),
+      diff: { added, removed },
+    })
+    expect(rows([cell([edit("x.ts", 10, 3), edit("y.ts", 2, 0)])])).toEqual([
+      "Edited x.ts, y.ts +12 / -3",
+    ])
+  })
+
+  test("a failed op keeps its own row, and the running op shows last in the running tense", () => {
+    expect(
+      rows([
+        cell([op("bash", "lint"), op("bash", "test", "failed"), op("bash", "build", "running")]),
+      ]),
+    ).toEqual(["Ran lint", "Ran test · failed", "Running build"])
+    expect(rows([cell([op("bash", "a", "running")]), cell([op("bash", "b", "running")])])).toEqual([
+      "Running a",
+      "Running b",
+    ])
+  })
+
+  test("a cell's own failure is a row after its ops; a cell with no ops names its verbs", () => {
+    expect(rows([cell([op("read", "a.ts")], "error")])).toEqual(["Read a.ts", "cell · failed"])
+    expect(rows([{ ...cell([], "error"), code: "await tools.ask_user({})" }])).toEqual([
+      "cell ask_user · failed",
+    ])
+    // A saved receipt carries no arguments: the verb stands alone.
+    expect(rows([cell([op("read"), op("write", "", "failed")])])).toEqual([
+      "Read",
+      "Wrote · failed",
+    ])
   })
 })
 

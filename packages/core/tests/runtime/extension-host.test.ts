@@ -122,13 +122,14 @@ import {
   type ProviderResolution,
 } from "../../src/domain/driver"
 import { Model as AiModel, type LanguageModel } from "effect/ai"
-import { Auth, DecisionModelResolver, ModelRegistry } from "../../src/runtime/provider"
 import {
-  LanguageModelLayers,
+  Auth,
+  DecisionModelResolver,
+  ModelRegistry,
   textStep,
   toolCallStep,
-  waitFor,
-} from "../../src/test-utils/language-model"
+} from "../../src/runtime/provider"
+import { LanguageModelLayers, waitFor } from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
   AgentName,

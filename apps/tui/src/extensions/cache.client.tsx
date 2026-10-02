@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
-import { Effect, Option, Schema } from "effect"
+import { Clock, Effect, Option, Schedule, Schema } from "effect"
 import { type Accessor, createMemo, createRoot, createSignal, type Setter } from "solid-js"
 import {
   AgentEvent,
   cacheWriteRate,
+  coldHandoffThresholdTokens,
   type EventEnvelope,
   type Model,
   promptCacheTtlMsFor,
@@ -20,6 +21,7 @@ import {
   type NoticeRow,
   noticeRowContribution,
   statusLabelContribution,
+  type StatusLabelItem,
 } from "@gent/tui/extensions"
 
 // ── cache-miss notices ──────────────────────────────────────────────────────
@@ -45,7 +47,10 @@ import {
  * lifetime an expiry cannot be told from a changed prefix.
  *
  * Nothing is stored and the model never sees it. A notice row shows a miss
- * large enough to matter; the status row shows the branch's total.
+ * large enough to matter; the status row shows the branch's total, and, in
+ * its right group, the time the cached prefix has left (`cache 42m`, then
+ * `cache cold`, with `next turn compacts` when the loop would hand the
+ * window off first).
  */
 
 const CACHE_EXTENSION_ID = "@gent/cache"
@@ -190,6 +195,32 @@ const longest = (spans: ReadonlyArray<Span>): Option.Option<Span> => {
 const covers = (span: Option.Option<Span>, gapMs: number): Option.Option<Span> =>
   Option.filter(span, (value) => value.ms * 2 >= gapMs)
 
+/**
+ * The request the branch's prompt cache lives on, as the timer reads it: when
+ * it started, and whose cache it is.
+ */
+export interface CacheRefresh {
+  /** When the newest request went out (a retry: when the retry went out). */
+  readonly startedAt: number
+  /** The model the request ran on, to tell a switch. */
+  readonly model: string
+  /** The catalog id the step was priced by: its entry names the lifetime. */
+  readonly catalogModel: string
+  /** The step ran in a spawned child session, whose requests ask for the child lifetime. */
+  readonly child: boolean
+  /**
+   * The model reports no cache writes: it caches implicitly, and the lifetime
+   * the catalog names is a measured guess, not one the request asked for.
+   */
+  readonly estimated: boolean
+}
+
+/** The last window the loop projected: its size and the input budget it fits. */
+interface CacheWindow {
+  readonly estimatedTokens: number
+  readonly availableInputTokens: number
+}
+
 export interface CacheScan {
   /**
    * Fold one envelope and answer the miss it settled, if any. An envelope at
@@ -197,6 +228,15 @@ export interface CacheScan {
    * adds nothing.
    */
   readonly fold: (envelope: EventEnvelope) => Option.Option<ScannedMiss>
+  /**
+   * The request the cache lifetime runs from: the one in flight, else the
+   * last that went out. `None` before a step settled with a model, on a
+   * branch that never reported cache activity, and after a compaction until
+   * the next request goes out: the old prefix is gone.
+   */
+  readonly refresh: () => Option.Option<CacheRefresh>
+  /** The window of the last projection; `None` before one. */
+  readonly window: () => Option.Option<CacheWindow>
 }
 
 /** One branch's incremental fold. Feed it that branch's envelopes in id order. */
@@ -220,6 +260,17 @@ export const makeCacheScan = (): CacheScan => {
    * zero read inside the lifetime is no evidence of anything.
    */
   const writers = new Set<string>()
+  /** The model and session kind of the last step that named its model. */
+  let lastStep = Option.none<{
+    readonly model: string
+    readonly catalogModel: string
+    readonly child: boolean
+  }>()
+  /** Some step on the branch reported a cache read or write. */
+  let cacheReported = false
+  /** A compaction since the last request went out: the prefix that request cached is gone. */
+  let compactedSince = false
+  let lastWindow = Option.none<CacheWindow>()
 
   const reset = () => {
     previous = Option.none()
@@ -271,6 +322,7 @@ export const makeCacheScan = (): CacheScan => {
     const model = event.model ?? ""
     const pricedModel = event.pricedModel ?? model
     const reported = cacheReadTokens + cacheWriteTokens > 0
+    if (reported) cacheReported = true
     if (cacheWriteTokens > 0) writers.add(model)
     const miss = Option.flatMap(
       Option.all([previous, refreshed]),
@@ -318,6 +370,20 @@ export const makeCacheScan = (): CacheScan => {
     }))
     started = Option.none()
     const miss = scanMiss(envelope, event, begun)
+    // An interrupted step names its model but not its session kind: the
+    // session's kind does not change, so the last known one holds.
+    Option.map(Option.fromUndefinedOr(event.model), (model) => {
+      lastStep = Option.some({
+        model,
+        catalogModel: event.pricedModel ?? model,
+        child:
+          event.child ??
+          Option.getOrElse(
+            Option.map(lastStep, (step) => step.child),
+            () => false,
+          ),
+      })
+    })
     // Every request that went out refreshed the cache, with usage or without.
     refreshed = Option.some({
       startedAt: begun.at,
@@ -341,10 +407,18 @@ export const makeCacheScan = (): CacheScan => {
         return Option.none()
       }
       case "ModelContextProjected":
+        lastWindow = Option.some({
+          estimatedTokens: event.estimatedTokens,
+          availableInputTokens: event.availableInputTokens,
+        })
         // A compaction rewrote the context: the next prompt is new content, not a re-bill.
-        if (event.compacted) reset()
+        if (event.compacted) {
+          reset()
+          compactedSince = true
+        }
         return Option.none()
       case "StreamStarted":
+        compactedSince = false
         started = Option.some({
           at: envelope.createdAt,
           input: Option.fromUndefinedOr(event.messageId),
@@ -388,8 +462,98 @@ export const makeCacheScan = (): CacheScan => {
     }
   }
 
-  return { fold }
+  const refresh = (): Option.Option<CacheRefresh> => {
+    if (!cacheReported || compactedSince) return Option.none()
+    const startedAt = Option.orElse(
+      Option.map(started, (begun) => begun.at),
+      () => Option.map(refreshed, (last) => last.startedAt),
+    )
+    return Option.map(Option.all([startedAt, lastStep]), ([at, step]) => ({
+      startedAt: at,
+      model: step.model,
+      catalogModel: step.catalogModel,
+      child: step.child,
+      estimated: !writers.has(step.model),
+    }))
+  }
+
+  return { fold, refresh, window: () => lastWindow }
 }
+
+// ── cache timer ─────────────────────────────────────────────────────────────
+
+const MINUTE_MS = 60_000
+
+/** The share of the lifetime under which the count turns to the warning color. */
+const WARN_SHARE = 0.2
+
+/** How often the timer reads the clock. The label has minute grain. */
+const CLOCK_PERIOD = "5 seconds"
+
+/** What the branch's prompt cache holds now, by its lifetime and the model in view. */
+export const CacheClock = Schema.TaggedUnion({
+  /** The prefix is cached for `leftMs` more of its `ttlMs` lifetime. */
+  Warm: { leftMs: Schema.Finite, ttlMs: Schema.Finite },
+  /** The lifetime ran out: the next request resends the prefix uncached. */
+  Expired: {},
+  /** The session runs another model now: its cache holds nothing of this prefix. */
+  Switched: {},
+})
+export type CacheClock = typeof CacheClock.Type
+
+/**
+ * The cache's state at `now`. The lifetime runs from the start of the last
+ * request, as the loop counts it when it decides a turn starts cold, and the
+ * cache belongs to that request's model: another selected model reads cold at
+ * once. No refresh, or no lifetime (the catalog names none), says nothing.
+ */
+export const cacheClock = (
+  refresh: Option.Option<CacheRefresh>,
+  lifetimeMs: Option.Option<number>,
+  selectedModel: string,
+  now: number,
+): Option.Option<CacheClock> =>
+  Option.map(Option.all([refresh, lifetimeMs]), ([last, ttlMs]): CacheClock => {
+    if (last.model !== selectedModel) return CacheClock.cases.Switched.make({})
+    const elapsedMs = now - last.startedAt
+    if (elapsedMs >= ttlMs) return CacheClock.cases.Expired.make({})
+    // A retry still waiting to go out starts the lifetime later: it is all left.
+    return CacheClock.cases.Warm.make({ leftMs: Math.min(ttlMs, ttlMs - elapsedMs), ttlMs })
+  })
+
+/**
+ * The status label of a cache clock: `cache 42m`, minutes rounded up, so the
+ * number keeps one unit while it falls; `~` when the lifetime is a measured
+ * guess; the warning color in the last fifth, and `cache <1m` under a minute.
+ * A lapsed cache on a window the next turn hands off says so: that turn
+ * compacts before it calls the model.
+ */
+export const cacheClockLabel = (
+  clock: CacheClock,
+  opts: { readonly estimated: boolean; readonly compactsNext: boolean },
+): StatusLabelItem =>
+  CacheClock.match(clock, {
+    Warm: (warm): StatusLabelItem => {
+      let color: StatusLabelItem["color"] = "textMuted"
+      if (warm.leftMs <= warm.ttlMs * WARN_SHARE) color = "warning"
+      if (warm.leftMs < MINUTE_MS) return { text: "cache <1m", color: "warning" }
+      let mark = ""
+      if (opts.estimated) mark = "~"
+      return { text: `cache ${mark}${Math.ceil(warm.leftMs / MINUTE_MS)}m`, color }
+    },
+    Expired: (): StatusLabelItem => {
+      if (opts.compactsNext) return { text: "cache cold · next turn compacts", color: "warning" }
+      return { text: "cache cold", color: "textMuted" }
+    },
+    Switched: (): StatusLabelItem => ({ text: "cache cold", color: "textMuted" }),
+  })
+
+/** Whether a turn that starts now on this window hands it off first, as the loop decides. */
+export const handsOffCold = (window: Option.Option<CacheWindow>): boolean =>
+  Option.exists(
+    window,
+    (value) => value.estimatedTokens >= coldHandoffThresholdTokens(value.availableInputTokens),
+  )
 
 // ── price and text ──────────────────────────────────────────────────────────
 
@@ -492,11 +656,31 @@ interface BranchMisses {
   readonly setMisses: Setter<ReadonlyArray<ScannedMiss>>
   /** Each miss as priced the first time the catalog was there to price it. */
   readonly born: Map<number, PricedMiss>
+  /** What the timer reads: the scan's refresh and window after the last fold. */
+  readonly clock: Accessor<BranchClock>
+  readonly setClock: Setter<BranchClock>
+}
+
+interface BranchClock {
+  readonly refresh: Option.Option<CacheRefresh>
+  readonly window: Option.Option<CacheWindow>
 }
 
 export default defineClientExtension(CACHE_EXTENSION_ID, {
   setup: Effect.gen(function* () {
     const { transport, lifecycle } = yield* ClientContext
+    // The timer's clock: a slow fiber on the client runtime reads `Clock`, so
+    // a test clock moves it. The label has minute grain; Solid's equality
+    // check keeps a tick that changes no text from drawing.
+    const [now, setNow] = createSignal(yield* Clock.currentTimeMillis)
+    yield* lifecycle.scoped(
+      Effect.forkScoped(
+        Clock.currentTimeMillis.pipe(
+          Effect.flatMap((millis) => Effect.sync(() => setNow(millis))),
+          Effect.repeat(Schedule.spaced(CLOCK_PERIOD)),
+        ),
+      ),
+    )
     return createRoot((dispose) => {
       lifecycle.addCleanup(dispose)
       const branches = new Map<string, BranchMisses>()
@@ -504,7 +688,18 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
         const known = Option.fromUndefinedOr(branches.get(key))
         if (Option.isSome(known)) return known.value
         const [misses, setMisses] = createSignal<ReadonlyArray<ScannedMiss>>([])
-        const created = { scan: makeCacheScan(), misses, setMisses, born: new Map() }
+        const [clock, setClock] = createSignal<BranchClock>({
+          refresh: Option.none(),
+          window: Option.none(),
+        })
+        const created = {
+          scan: makeCacheScan(),
+          misses,
+          setMisses,
+          born: new Map(),
+          clock,
+          setClock,
+        }
         branches.set(key, created)
         return created
       }
@@ -517,6 +712,7 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
             Option.map(target.scan.fold(envelope), (miss) =>
               target.setMisses((misses) => [...misses, miss]),
             )
+            target.setClock({ refresh: target.scan.refresh(), window: target.scan.window() })
           }),
         ),
       )
@@ -589,6 +785,32 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
             )
             if (total <= 0) return []
             return [{ text: `cache waste ${formatCost(total)}`, color: "textMuted" }]
+          },
+        }),
+        // The time the cached prefix has left: a glance number, so it sits in
+        // the right group, before the context gauge, and keeps its place on a
+        // narrow row.
+        statusLabelContribution({
+          priority: 55,
+          anchor: "right",
+          produce: (): ReadonlyArray<StatusLabelItem> => {
+            const state = branch(branchKey(transport.currentSession())).clock()
+            const lifetime = Option.flatMap(
+              Option.all([state.refresh, catalogModels()]),
+              ([last, catalog]) =>
+                Option.flatMap(Option.fromUndefinedOr(catalog.get(last.catalogModel)), (entry) =>
+                  promptCacheTtlMsFor(entry, last.child),
+                ),
+            )
+            const clock = cacheClock(state.refresh, lifetime, transport.selectedModel(), now())
+            return Option.toArray(
+              Option.map(clock, (value) =>
+                cacheClockLabel(value, {
+                  estimated: Option.exists(state.refresh, (last) => last.estimated),
+                  compactsNext: handsOffCold(state.window),
+                }),
+              ),
+            )
           },
         }),
       )

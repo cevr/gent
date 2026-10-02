@@ -72,12 +72,12 @@ import {
   DecisionModelResolver,
   ModelRegistry,
   ModelResolver,
+  textStep,
+  toolCallStep,
 } from "../../src/runtime/provider"
 import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
-  textStep,
-  toolCallStep,
   turnRequestText,
   waitFor,
 } from "../../src/test-utils/language-model"

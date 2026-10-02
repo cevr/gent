@@ -1483,7 +1483,7 @@ describe("App session view and fatal screen", () => {
           })
           if (surface === "tool renderer") {
             // ctrl+o opens the collapsed call to its full rows.
-            yield* waitForFrame(setup, (frame) => frame.includes("1 tool call"), "the call")
+            yield* waitForFrame(setup, (frame) => frame.includes("1 tool ·"), "the call")
             setup.mockInput.pressKey("o", { ctrl: true })
             setup.mockInput.pressKey("o", { ctrl: true })
           }
@@ -5890,8 +5890,8 @@ describe("debug playground", () => {
             5_000,
           )
           setup.renderer.destroy()
-          expect(frame).toContain("✓ 5 tool calls · 1 read · 1 grep · 1 bash · 1 edit · 1 write")
-          expect(frame).toContain("✓ 3 tool calls · 2 delegate.start · 1 read_session")
+          expect(frame).toContain("● 5 tools · 2 edit · 1 read · 1 search · 1 command")
+          expect(frame).toContain("● 3 tools · 2 children · 1 read")
           expect(frame).toContain("Audit lines up")
         }).pipe(Effect.timeout("15 seconds")),
       ),

@@ -1,13 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Fiber, Schema, Stream } from "effect"
-import {
-  LanguageModelLayers,
-  type SequenceStep,
-  textStep,
-  toolCallStep,
-} from "../../src/test-utils/language-model"
+import { LanguageModelLayers, type SequenceStep } from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/tools"
-import { ModelResolver } from "../../src/runtime/provider"
+import { ModelResolver, textStep, toolCallStep } from "../../src/runtime/provider"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
 import { ModelId } from "../../src/domain/agent"
 import { LanguageModel } from "effect/ai"

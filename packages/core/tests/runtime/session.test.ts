@@ -55,8 +55,9 @@ import {
   DecisionModelResolver,
   ModelRegistry,
   TEST_MODEL_CONTEXT_LIMIT_TOKENS,
+  textStep,
 } from "../../src/runtime/provider"
-import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
+import { LanguageModelLayers, waitFor } from "../../src/test-utils/language-model"
 import {
   baseLocalLayerWithProvider,
   createE2ELayer,

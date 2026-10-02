@@ -1,7 +1,14 @@
 import { describe, expect, test } from "effect-bun-test"
 import { Option, Schema } from "effect"
 import { OutputCut } from "@gent/core/protocol"
-import { bashOutputRows, getEditUnifiedDiff, getFiletype } from "../src/tool-renderers"
+import {
+  bashOutputRows,
+  callOperation,
+  cellOperations,
+  getEditUnifiedDiff,
+  getFiletype,
+  type ToolCall,
+} from "../src/tool-renderers"
 
 // ── edit utils ──────────────────────────────────────────────────────────────
 
@@ -60,6 +67,76 @@ describe("edit diff counts", () => {
       )
     })
   }
+})
+
+// A group row reads each op as the tool it is: its outcome, its arguments
+// from the cwd, and an edit's own line counts.
+describe("group ops", () => {
+  const place = { cwd: "/work/proj", home: "/home/me" }
+  const op = (
+    id: string,
+    toolName: string,
+    input: Readonly<Record<string, string>>,
+    status: ToolCall["status"] = "completed",
+  ): ToolCall => ({ id, toolName, status, input })
+
+  test("an edit op carries the lines it changed; any other op carries none", () => {
+    const edit = op("e1", "edit", {
+      path: "/work/proj/src/a.ts",
+      oldString: "a\nb\nc",
+      newString: "a\nB\nc\nd",
+    })
+    expect(callOperation(edit, place)).toEqual({
+      tool: "edit",
+      outcome: "succeeded",
+      detail: "src/a.ts",
+      diff: { added: 2, removed: 1 },
+    })
+    expect(callOperation(op("r1", "read", { path: "/home/me/x.md" }, "error"), place)).toEqual({
+      tool: "read",
+      outcome: "failed",
+      detail: "~/x.md",
+    })
+  })
+
+  // fx counts a command that exits nonzero among a group's failures; the
+  // call itself succeeded, but the command did not.
+  test("a bash op that exits nonzero failed; one that exits 0 or runs on in the background did not", () => {
+    const bash = (output: string): ToolCall => ({
+      ...op("b1", "bash", { command: "ls d.ts" }),
+      output,
+    })
+    const outcome = (output: string) => callOperation(bash(output), place).outcome
+    expect(outcome('{"stdout":"","stderr":"ls: no d.ts\\n","exitCode":2}')).toBe("failed")
+    expect(outcome('{"stdout":"d.ts\\n","stderr":"","exitCode":0}')).toBe("succeeded")
+    expect(outcome('{"stdout":"started","stderr":"","exitCode":0,"status":"background"}')).toBe(
+      "succeeded",
+    )
+    const cell: ToolCall = {
+      ...op("c1", "cell", { code: "…" }),
+      operations: [bash('{"stdout":"","stderr":"","exitCode":1}')],
+    }
+    expect(cellOperations(cell, place).map((operation) => operation.outcome)).toEqual(["failed"])
+  })
+
+  test("a cell's live ops read as group ops, in the order they ran", () => {
+    const cell: ToolCall = {
+      ...op("c1", "cell", { code: "…" }),
+      operations: [
+        op("o1", "read", { path: "/work/proj/a.ts" }),
+        op("o2", "edit", { path: "/work/proj/a.ts", oldString: "x", newString: "y" }),
+        op("o3", "bash", { command: "bun test" }, "running"),
+      ],
+    }
+    expect(
+      cellOperations(cell, place).map((operation) => [operation.tool, operation.outcome]),
+    ).toEqual([
+      ["read", "succeeded"],
+      ["edit", "succeeded"],
+      ["bash", "running"],
+    ])
+    expect(cellOperations(cell, place)[1]?.diff).toEqual({ added: 1, removed: 1 })
+  })
 })
 
 describe("edit diff", () => {

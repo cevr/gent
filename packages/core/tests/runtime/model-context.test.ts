@@ -72,10 +72,9 @@ import { rangeCompactorLayer } from "../helpers/test-preset"
 import {
   LanguageModelLayers,
   type SequenceStep,
-  textStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { finishPart, textDeltaPart, toolCallPart } from "../../src/runtime/provider"
+import { finishPart, textDeltaPart, textStep, toolCallPart } from "../../src/runtime/provider"
 import { SessionRuntime } from "../../src/runtime/session"
 import { getSessionSnapshot } from "../../src/server/server"
 import {
