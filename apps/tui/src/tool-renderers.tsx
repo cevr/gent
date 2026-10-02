@@ -254,15 +254,6 @@ export function GenericToolRenderer(props: ToolRendererProps) {
   )
 }
 
-// ── bash renderer ───────────────────────────────────────────────────────────
-
-/**
- * Bash tool renderer.
- *
- * Collapsed: exit code + head-3/tail-3 of stdout
- * Expanded: head-100/tail-100 of the stored output
- */
-
 // ── output rows ─────────────────────────────────────────────────────────────
 
 /**
@@ -530,6 +521,8 @@ function SummaryLine(props: { toolCall: ToolCall }) {
   )
 }
 
+// ── bash renderer ───────────────────────────────────────────────────────────
+
 /**
  * A bash result as numbered rows: stdout then stderr, each numbered and
  * counted as in the whole output, a cut stream by its cut record. The row
@@ -555,6 +548,11 @@ function getCommand(input: ToolInput): string {
   return getString(input, "command")
 }
 
+/**
+ * The bash row: the command, then its exit code and line count (or
+ * "declined" or "in background"). Collapsed, the first and last 3 lines of
+ * stdout and stderr; expanded, the first and last 50 of the stored output.
+ */
 function BashToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
