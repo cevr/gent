@@ -1,4 +1,6 @@
 // Reads that want the record, and scopes that track only the identity.
+import { createEffect, createResource, on, untrack } from "solid-js"
+import * as Solid from "solid-js"
 declare const client: {
   readonly session: () => { readonly name: string; readonly sessionId: string }
   readonly activeSessionId: () => string
@@ -6,10 +8,6 @@ declare const client: {
 }
 declare const transport: { readonly currentSession: () => { readonly sessionId: string } }
 declare const emitter: { readonly on: (event: string, fn: () => void) => void }
-declare const createEffect: (fn: () => void) => void
-declare const on: <A>(deps: () => A, fn: (a: A) => void) => () => void
-declare const createResource: (...args: ReadonlyArray<unknown>) => void
-declare const untrack: <A>(fn: () => A) => A
 declare const render: (value: unknown) => void
 
 // An emitter's `.on(` is a listener, not Solid's `on`.
@@ -69,3 +67,29 @@ createEffect(() => {
 createEffect(() => {
   queueMicrotask(() => render(client.session()))
 })
+
+// Options objects and their aliases select the untracked fetcher overload.
+const options = { initialValue: undefined }
+const aliasOptions = options
+createResource(() => client.session(), options)
+createResource(() => client.session(), aliasOptions)
+Solid.createResource(() => client.session(), options)
+
+// A local callback runner named like Solid's primitive is not a tracker.
+export const unknownTracker = (createEffect) => createEffect(() => client.session())
+
+// A shadowing parameter does not inherit a session-accessor binding.
+const getter = client.session
+export const shadowedAccessor = (getter) => createEffect(() => getter())
+
+// The fetcher remains untracked when source/fetcher are named functions.
+const source = () => client.activeSessionId()
+const fetcher = () => client.session()
+Solid.createResource(source, fetcher)
+
+const typedOptions = options as typeof options
+Solid.createResource(() => client.session(), typedOptions)
+createResource(() => client.session(), undefined)
+Solid.createEffect(() => Solid.untrack(() => client.session()))
+const Foreign = { createEffect: (fn) => fn() }
+Foreign.createEffect(() => client.session())

@@ -313,8 +313,9 @@ const CASES: ReadonlyArray<RuleCase> = [
     // lines into an effect, an aliased accessor, a function handed to `on` by
     // name, a function a tracked scope calls, a createResource source, and a
     // callback an array method runs in a tracked scope, a deps-array source, a
-    // function called where it is built, and a resource source read by name
-    expectedCount: 12,
+    // function called where it is built, resource source read by name,
+    // aliased/namespace trackers, deps/resource source/batch, and a lexically distinct helper
+    expectedCount: 19,
   },
 ]
 

@@ -1,16 +1,11 @@
 // Every `.session()` read below runs inside a scope Solid tracks.
+import { createEffect, createMemo, createResource, on, createEffect as observe, on as watch } from "solid-js"
+import * as Solid from "solid-js"
 declare const client: {
   readonly session: () => { readonly name: string; readonly sessionId: string }
   readonly activeSessionId: () => string
 }
 declare const sessionClient: typeof client
-declare const createEffect: (fn: () => void) => void
-declare const createMemo: <A>(fn: () => A) => () => A
-declare const createResource: <A, B>(source: () => A, fetcher: (a: A) => B) => void
-declare const on: <A>(
-  deps: (() => A) | ReadonlyArray<() => unknown>,
-  fn: (a: A) => void,
-) => () => void
 declare const startTracking: (value: unknown) => void
 
 // 1. the record as an `on` source
@@ -89,3 +84,25 @@ createEffect(() => {
 // 12. a createResource source read through a name
 const resourceSource = () => client.session().sessionId
 createResource(resourceSource, (id) => id)
+
+// 13–15. Imported aliases and namespace members retain tracking semantics.
+observe(() => startTracking(client.session()))
+export const renamedIdentity = Solid.createMemo(() => client.session().sessionId)
+Solid["createEffect"](() => startTracking(client.session()))
+
+// 16. The deps of an imported aliased `on` run tracked.
+createEffect(watch(() => client.session(), (session) => startTracking(session)))
+
+// 17. An unrelated lexical binding does not replace the tracked helper.
+function actualRead() { return client.session() }
+createEffect(() => startTracking(actualRead()))
+export function unrelatedScope() {
+  const actualRead = () => "independent"
+  return actualRead()
+}
+
+// 18. A namespace resource tracks its source, not its fetcher.
+Solid.createResource(() => client.session(), (session) => session)
+
+// 19. Solid's batch callback runs inside the surrounding tracked scope.
+observe(() => Solid.batch(() => startTracking(client.session())))

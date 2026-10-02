@@ -757,7 +757,8 @@ const plugin: Plugin = {
      * -- calls `admitChildSessionDepth`, or calls a same-file function whose
      * own body does (`admitParent` in `server.ts` checks the parent, then
      * admits). Imported and same-file helpers are resolved by lexical binding;
-     * a shadowing local name grants no admission. An admission in an outer function does not cover a writer in a
+     * a shadowing local name grants no admission. An admission in an outer
+     * function does not cover a writer in a
      * nested one: the nested function can run where the outer one never
      * admitted.
      *
@@ -930,12 +931,17 @@ const plugin: Plugin = {
      * with an equivalence on the ids.
      *
      * What is reported, in `apps/tui/src/`: a `.session()` call in a function
-     * Solid tracks. Solid tracks one position of each primitive
+     * Solid tracks. Imported aliases and namespace calls resolve to their
+     * original Solid primitive; unrelated local names confer no tracking.
+     * Same-file functions and accessor aliases retain their lexical binding.
+     * Solid tracks one position of each primitive
      * (`TRACKED_POSITIONS`): the body of `createEffect`, `createMemo`,
      * `createRenderEffect` and `createComputed`; the source of
      * `createResource(source, fetcher)`, not the fetcher, and nothing of
-     * `createResource(fetcher)`; the deps of `on(deps, fn)`, one function or
-     * each of an array, not `fn`. A member call such as `emitter.on(` is a
+     * `createResource(fetcher)`. Immutable local options aliases resolve to
+     * the untracked `createResource(fetcher, options)` overload; dynamic
+     * values remain unknown. The deps of `on(deps, fn)`, one function or
+     * each of an array, are tracked, not `fn`. A member call such as `emitter.on(` is a
      * listener, not Solid's `on`. The scope also runs a function called where
      * it is built, a callback an array method or `batch` runs at once
      * (`SYNC_CALLERS`), and a same-file function it names or calls. Any other
@@ -950,6 +956,55 @@ const plugin: Plugin = {
     "no-tracked-session-record": {
       create(context) {
         if (!/^apps\/tui\/src\//.test(ruleSubject(context))) return {}
+        /** Solid's original primitive name, through a named or namespace import. */
+        const solidPrimitive = (callee: AstNode | undefined): string | undefined => {
+          const imported = importedSymbol(context, callee)
+          if (imported?.source === "solid-js") return imported.name
+          if (callee?.type !== "MemberExpression") return undefined
+          const binding = lexicalBinding(context, getNodeField(callee, "object"))
+          if (
+            binding?.defs.some(
+              (definition) =>
+                definition.type === "ImportBinding" &&
+                definition.node.type === "ImportNamespaceSpecifier" &&
+                definition.parent !== null &&
+                importSourceOf(definition.parent) === "solid-js",
+            )
+          )
+            return staticPropertyName(callee)
+          return undefined
+        }
+        /** Follow immutable local options aliases; dynamic values remain unknown. */
+        const initializedValue = (node: AstNode | undefined): AstNode | undefined => {
+          let at = node
+          const seen = new Set<Variable>()
+          while (at !== undefined) {
+            if (
+              [
+                "TSAsExpression",
+                "TSSatisfiesExpression",
+                "TSNonNullExpression",
+                "ParenthesizedExpression",
+              ].includes(at.type)
+            ) {
+              at = getNodeField(at, "expression")
+              continue
+            }
+            const binding = lexicalBinding(context, at)
+            if (binding === undefined || seen.has(binding)) return at
+            const definition = binding.defs.find(
+              (definition) =>
+                definition.type === "Variable" &&
+                definition.node.type === "VariableDeclarator" &&
+                definition.parent !== null &&
+                getStringField(definition.parent, "kind") === "const",
+            )
+            if (definition === undefined) return at
+            seen.add(binding)
+            at = getNodeField(definition.node, "init")
+          }
+          return undefined
+        }
         /** The arguments of a Solid primitive that Solid runs while it tracks. */
         const TRACKED_POSITIONS: ReadonlyMap<
           string,
@@ -962,8 +1017,14 @@ const plugin: Plugin = {
           [
             "createResource",
             (args: ReadonlyArray<AstNode>) => {
-              const fetcher = args[1]
+              const fetcher = initializedValue(args[1])
               if (fetcher === undefined || fetcher.type === "ObjectExpression") return []
+              if (
+                fetcher.type === "Identifier" &&
+                getStringField(fetcher, "name") === "undefined" &&
+                (lexicalBinding(context, fetcher)?.defs.length ?? 0) === 0
+              )
+                return []
               return [args[0]]
             },
           ],
@@ -978,7 +1039,6 @@ const plugin: Plugin = {
         ])
         /** Calls that run a function argument at once, inside the caller's scope. */
         const SYNC_CALLERS = new Set([
-          "batch",
           "every",
           "filter",
           "find",
@@ -1000,15 +1060,14 @@ const plugin: Plugin = {
           "FunctionExpression",
           "ArrowFunctionExpression",
         ])
-        /** Same-file functions by the name they are bound to. */
-        const named = new Map<string, AstNode>()
-        /** Names bound to a `.session` accessor without calling it. */
-        const accessors = new Set<string>()
+        /** Same-file functions and accessors, keyed by their lexical binding. */
+        const named = new Map<Variable, AstNode>()
+        const accessors = new Set<Variable>()
         /** Functions Solid tracks directly, and names handed to a tracker. */
         const tracked = new Set<AstNode>()
-        const trackedNames: Array<string> = []
+        const trackedNames: Array<Variable> = []
         /** Every call by name, for the functions a tracked one reaches. */
-        const namedCalls: Array<{ readonly node: AstNode; readonly name: string }> = []
+        const namedCalls: Array<{ readonly node: AstNode; readonly binding: Variable }> = []
         const reads: Array<AstNode> = []
 
         const isSessionMember = (node: AstNode | undefined): boolean => {
@@ -1032,6 +1091,7 @@ const plugin: Plugin = {
           const holder = getNodeField(fn, "parent")
           if (holder?.type !== "CallExpression") return false
           if (getNodeField(holder, "callee") === fn) return true
+          if (solidPrimitive(getNodeField(holder, "callee")) === "batch") return true
           return SYNC_CALLERS.has(calleeName(holder) ?? "")
         }
         /**
@@ -1051,43 +1111,42 @@ const plugin: Plugin = {
           }
           return found
         }
-        const bind = (name: string | undefined, init: AstNode | undefined) => {
-          if (name === undefined || init === undefined) return
-          if (FUNCTION_TYPES.has(init.type)) named.set(name, init)
-          if (isSessionMember(init)) accessors.add(name)
+        const bind = (id: AstNode | undefined, init: AstNode | undefined) => {
+          const binding = lexicalBinding(context, id)
+          if (binding === undefined || init === undefined) return
+          if (FUNCTION_TYPES.has(init.type)) named.set(binding, init)
+          if (isSessionMember(init)) accessors.add(binding)
         }
 
         return {
           FunctionDeclaration(node) {
             if (!isAstNode(node)) return
             const id = getNodeField(node, "id")
-            if (id !== undefined) bind(getStringField(id, "name"), node)
+            bind(id, node)
           },
           VariableDeclarator(node) {
             if (!isAstNode(node)) return
             const id = getNodeField(node, "id")
-            if (id?.type === "Identifier")
-              bind(getStringField(id, "name"), getNodeField(node, "init"))
+            if (id?.type === "Identifier") bind(id, getNodeField(node, "init"))
           },
           CallExpression(node) {
             if (!isAstNode(node)) return
             const callee = getNodeField(node, "callee")
             if (isSessionMember(callee)) reads.push(node)
-            if (callee?.type !== "Identifier") return
-            const name = getStringField(callee, "name") ?? ""
-            namedCalls.push({ node, name })
-            const positions = TRACKED_POSITIONS.get(name)
+            const binding = lexicalBinding(context, callee)
+            if (binding !== undefined) namedCalls.push({ node, binding })
+            const positions = TRACKED_POSITIONS.get(solidPrimitive(callee) ?? "")
             if (positions === undefined) return
             for (const argument of positions(callExpressionArgs(node))) {
               if (argument === undefined) continue
               if (FUNCTION_TYPES.has(argument.type)) tracked.add(argument)
-              if (argument.type === "Identifier")
-                trackedNames.push(getStringField(argument, "name") ?? "")
+              const binding = lexicalBinding(context, argument)
+              if (binding !== undefined) trackedNames.push(binding)
             }
           },
           "Program:exit"() {
-            for (const name of trackedNames) {
-              const fn = named.get(name)
+            for (const binding of trackedNames) {
+              const fn = named.get(binding)
               if (fn !== undefined) tracked.add(fn)
             }
             const isTracked = (node: AstNode) =>
@@ -1096,14 +1155,14 @@ const plugin: Plugin = {
             while (grew) {
               grew = false
               for (const call of namedCalls) {
-                const fn = named.get(call.name)
+                const fn = named.get(call.binding)
                 if (fn === undefined || tracked.has(fn) || !isTracked(call.node)) continue
                 tracked.add(fn)
                 grew = true
               }
             }
             const aliasReads = namedCalls.flatMap((call) =>
-              accessors.has(call.name) ? [call.node] : [],
+              accessors.has(call.binding) ? [call.node] : [],
             )
             for (const read of [...reads, ...aliasReads]) {
               if (!isTracked(read)) continue
