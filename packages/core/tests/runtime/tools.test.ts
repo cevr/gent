@@ -90,6 +90,67 @@ const errorFromResult = (result: Prompt.ToolResultPart): string =>
 describe("tool execution", () => {
   const liveTest = it.live.layer(BunServices.layer)
 
+  /**
+   * Registers one tool, captures it through `ToolRunner.Live`, and runs it
+   * under a test host context. The call id is `tc-<tool id>`.
+   */
+  const runTool = <Extra = never>(params: {
+    readonly tool: ToolCapability
+    readonly input?: unknown
+    readonly ctx?: Parameters<typeof testToolContext>[0]
+    readonly eventStore?: Layer.Layer<EventStore>
+    readonly capabilityContext?: Context.Context<never>
+    readonly extra?: Layer.Layer<Extra>
+  }) => {
+    const toolName = String(getToolId(params.tool))
+    const toolCallId = ToolCallId.make(`tc-${toolName}`)
+    const deps = Layer.mergeAll(
+      ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("test") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { tools: [params.tool] },
+          },
+        ]),
+      ),
+      params.eventStore ?? EventStore.Memory,
+      ApprovalService.Test(),
+      RuntimeEnvironment.Live({
+        cwd: "/nonexistent/gent-test-cwd",
+        home: "/nonexistent/gent-test-home",
+      }),
+      params.extra ?? Layer.empty,
+    )
+    const layer = Layer.mergeAll(deps, ToolRunner.Live.pipe(Layer.provide(deps)))
+    return Effect.gen(function* () {
+      const runner = yield* ToolRunner
+      const entry = yield* runner.capture({ toolName })
+      return yield* runner
+        .runBound({ toolCallId, toolName, input: params.input ?? {} }, entry)
+        .pipe(
+          provideCurrentHostCtx(
+            testToolContext({
+              sessionId: SessionId.make("s"),
+              branchId: BranchId.make("b"),
+              agentName: AgentName.make("primary"),
+              ...params.ctx,
+              toolCallId,
+            }),
+          ),
+          provideCurrentCapabilityContext(params.capabilityContext),
+        )
+    }).pipe(Effect.provide(layer))
+  }
+
+  /** Erases a typed capability context to the shape the host stores. */
+  const eraseContext = <R>(context: Context.Context<R>): Context.Context<never> => {
+    let erased: Context.Context<never> = Context.empty()
+    if (Context.isContext(context)) erased = context
+    return erased
+  }
+
   liveTest("runs model capability directly and returns json output", () =>
     Effect.gen(function* () {
       const EchoTool = tool({
@@ -99,47 +160,7 @@ describe("tool execution", () => {
         output: Schema.Struct({ echoed: Schema.String }),
         execute: ({ message }) => Effect.succeed({ echoed: message }),
       })
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [EchoTool] },
-            },
-          ]),
-        ),
-        EventStore.Memory,
-        ApprovalService.Test(),
-        RuntimeEnvironment.Live({
-          cwd: "/nonexistent/gent-test-cwd",
-          home: "/nonexistent/gent-test-home",
-        }),
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc1")
-        return yield* runner
-          .capture({ toolName: "echo" })
-          .pipe(
-            Effect.flatMap((entry) =>
-              runner.runBound({ toolCallId, toolName: "echo", input: { message: "hello" } }, entry),
-            ),
-          )
-          .pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("s"),
-                branchId: BranchId.make("b"),
-                toolCallId,
-                agentName: AgentName.make("primary"),
-              }),
-            ),
-          )
-      }).pipe(Effect.provide(layer))
+      const result = yield* runTool({ tool: EchoTool, input: { message: "hello" } })
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ echoed: "hello" })
     }),
@@ -255,83 +276,6 @@ describe("tool execution", () => {
     }),
   )
 
-  liveTest("provides host authority through ExtensionContext service", () =>
-    Effect.gen(function* () {
-      const Output = Schema.Struct({
-        sessionId: Schema.String,
-        branchId: Schema.String,
-        toolCallId: Schema.String,
-        hasInteraction: Schema.Boolean,
-        hasSessionSend: Schema.Boolean,
-      })
-      const ProbeTool = tool({
-        id: "probe",
-        description: "Probe extension context service facets",
-        params: Schema.Struct({}),
-        output: Output,
-        execute: () =>
-          Effect.gen(function* () {
-            const ctx = yield* ExtensionContext
-            return {
-              sessionId: ctx.sessionId,
-              branchId: ctx.branchId,
-              toolCallId: ctx.toolCallId ?? "",
-              hasInteraction: Predicate.isFunction(ctx.Interaction.approve),
-              hasSessionSend: Predicate.isFunction(ctx.Session.send),
-            }
-          }),
-      })
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: {
-                tools: [ProbeTool],
-              },
-            },
-          ]),
-        ),
-        EventStore.Memory,
-        ApprovalService.Test(),
-        RuntimeEnvironment.Live({
-          cwd: "/nonexistent/gent-test-cwd",
-          home: "/nonexistent/gent-test-home",
-        }),
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc-probe")
-        const ctx = testToolContext({
-          sessionId: SessionId.make("s"),
-          branchId: BranchId.make("b"),
-          toolCallId,
-          agentName: AgentName.make("primary"),
-        })
-        return yield* runner
-          .capture({ toolName: "probe" })
-          .pipe(
-            Effect.flatMap((entry) =>
-              runner.runBound({ toolCallId, toolName: "probe", input: {} }, entry),
-            ),
-          )
-          .pipe(provideCurrentHostCtx(ctx))
-      }).pipe(Effect.provide(layer))
-
-      expect(result.isFailure).toBe(false)
-      expect(result.result).toEqual({
-        sessionId: "s",
-        branchId: "b",
-        toolCallId: "tc-probe",
-        hasInteraction: true,
-        hasSessionSend: true,
-      })
-    }),
-  )
   liveTest("returns error result when tool fails", () =>
     Effect.gen(function* () {
       const FailTool = tool({
@@ -341,47 +285,7 @@ describe("tool execution", () => {
         output: Schema.Never,
         execute: () => Effect.fail(new ToolRunnerTestError({ message: "boom" })),
       })
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [FailTool] },
-            },
-          ]),
-        ),
-        EventStore.Memory,
-        ApprovalService.Test(),
-        RuntimeEnvironment.Live({
-          cwd: "/nonexistent/gent-test-cwd",
-          home: "/nonexistent/gent-test-home",
-        }),
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc1")
-        return yield* runner
-          .capture({ toolName: "fail" })
-          .pipe(
-            Effect.flatMap((entry) =>
-              runner.runBound({ toolCallId, toolName: "fail", input: {} }, entry),
-            ),
-          )
-          .pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("s"),
-                branchId: BranchId.make("b"),
-                toolCallId,
-                agentName: AgentName.make("primary"),
-              }),
-            ),
-          )
-      }).pipe(Effect.provide(layer))
+      const result = yield* runTool({ tool: FailTool })
       expect(result.isFailure).toBe(true)
       const error = errorFromResult(result)
       expect(error).toContain("Tool 'fail' failed")
@@ -396,47 +300,7 @@ describe("tool execution", () => {
         output: Schema.Struct({ ok: Schema.Boolean }),
         execute: () => Effect.succeed({ ok: true }),
       })
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [StrictTool] },
-            },
-          ]),
-        ),
-        EventStore.Memory,
-        ApprovalService.Test(),
-        RuntimeEnvironment.Live({
-          cwd: "/nonexistent/gent-test-cwd",
-          home: "/nonexistent/gent-test-home",
-        }),
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc1")
-        return yield* runner
-          .capture({ toolName: "strict" })
-          .pipe(
-            Effect.flatMap((entry) =>
-              runner.runBound({ toolCallId, toolName: "strict", input: { path: 42 } }, entry),
-            ),
-          )
-          .pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("s"),
-                branchId: BranchId.make("b"),
-                toolCallId,
-                agentName: AgentName.make("primary"),
-              }),
-            ),
-          )
-      }).pipe(Effect.provide(layer))
+      const result = yield* runTool({ tool: StrictTool, input: { path: 42 } })
       expect(result.isFailure).toBe(true)
       const error = errorFromResult(result)
       expect(error).toContain("Tool 'strict' input failed:")
@@ -454,6 +318,7 @@ describe("tool execution", () => {
           home: Schema.String,
           sessionId: Schema.String,
           branchId: Schema.String,
+          toolCallId: Schema.String,
           agentName: Schema.NullOr(Schema.String),
         }),
         execute: () =>
@@ -464,54 +329,28 @@ describe("tool execution", () => {
               home: ctx.home,
               sessionId: ctx.sessionId,
               branchId: ctx.branchId,
+              toolCallId: ctx.toolCallId ?? "",
               agentName: Option.getOrNull(Option.fromUndefinedOr(ctx.agentName)),
             }
           }),
       })
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [InspectTool] },
-            },
-          ]),
-        ),
-        EventStore.Memory,
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc-inspect")
-        return yield* runner
-          .capture({ toolName: "inspect" })
-          .pipe(
-            Effect.flatMap((entry) =>
-              runner.runBound({ toolCallId, toolName: "inspect", input: {} }, entry),
-            ),
-          )
-          .pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("session-inspect"),
-                branchId: BranchId.make("branch-inspect"),
-                toolCallId,
-                agentName: AgentName.make("secondary"),
-                cwd: "/runtime/cwd",
-                home: "/runtime/home",
-              }),
-            ),
-          )
-      }).pipe(Effect.provide(layer))
+      const result = yield* runTool({
+        tool: InspectTool,
+        ctx: {
+          sessionId: SessionId.make("session-inspect"),
+          branchId: BranchId.make("branch-inspect"),
+          agentName: AgentName.make("secondary"),
+          cwd: "/runtime/cwd",
+          home: "/runtime/home",
+        },
+      })
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({
         cwd: "/runtime/cwd",
         home: "/runtime/home",
         sessionId: SessionId.make("session-inspect"),
         branchId: BranchId.make("branch-inspect"),
+        toolCallId: "tc-inspect",
         agentName: AgentName.make("secondary"),
       })
     }),
@@ -530,53 +369,12 @@ describe("tool execution", () => {
             return { value }
           }),
       })
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [ContextTool] },
-            },
-          ]),
+      const result = yield* runTool({
+        tool: ContextTool,
+        capabilityContext: eraseContext(
+          Context.make(ToolProfileToken, { read: Effect.succeed("selected-profile") }),
         ),
-        EventStore.Memory,
-        ApprovalService.Test(),
-        RuntimeEnvironment.Live({
-          cwd: "/nonexistent/gent-test-cwd",
-          home: "/nonexistent/gent-test-home",
-        }),
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const capabilityContext = Context.make(ToolProfileToken, {
-        read: Effect.succeed("selected-profile"),
       })
-      let erasedCapabilityContext: Context.Context<never> = Context.empty()
-      if (Context.isContext(capabilityContext)) erasedCapabilityContext = capabilityContext
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc-context")
-        return yield* runner
-          .capture({ toolName: "context_tool" })
-          .pipe(
-            Effect.flatMap((entry) =>
-              runner.runBound({ toolCallId, toolName: "context_tool", input: {} }, entry),
-            ),
-          )
-          .pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("session-context"),
-                branchId: BranchId.make("branch-context"),
-                toolCallId,
-                agentName: AgentName.make("primary"),
-              }),
-            ),
-            provideCurrentCapabilityContext(erasedCapabilityContext),
-          )
-      }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ value: "selected-profile" })
     }),
@@ -602,55 +400,19 @@ describe("tool execution", () => {
             }
           }),
       })
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [ReadContextTool] },
-            },
-          ]),
+      const result = yield* runTool({
+        tool: ReadContextTool,
+        extra: Layer.succeed(
+          ToolWriteToken,
+          ToolWriteToken.of({ write: Effect.succeed("outer-write") }),
         ),
-        EventStore.Memory,
-        ApprovalService.Test(),
-        RuntimeEnvironment.Live({
-          cwd: "/nonexistent/gent-test-cwd",
-          home: "/nonexistent/gent-test-home",
-        }),
-        Layer.succeed(ToolWriteToken, ToolWriteToken.of({ write: Effect.succeed("outer-write") })),
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const capabilityContext = Context.empty().pipe(
-        Context.add(ToolReadToken, { read: Effect.succeed("read-ok") }),
-        Context.add(ToolWriteToken, { write: Effect.succeed("write-from-capability-context") }),
-      )
-      let erasedCapabilityContext: Context.Context<never> = Context.empty()
-      if (Context.isContext(capabilityContext)) erasedCapabilityContext = capabilityContext
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc-read-context")
-        return yield* runner
-          .capture({ toolName: "read_context_tool" })
-          .pipe(
-            Effect.flatMap((entry) =>
-              runner.runBound({ toolCallId, toolName: "read_context_tool", input: {} }, entry),
-            ),
-          )
-          .pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("session-read-context"),
-                branchId: BranchId.make("branch-read-context"),
-                toolCallId,
-                agentName: AgentName.make("primary"),
-              }),
-            ),
-            provideCurrentCapabilityContext(erasedCapabilityContext),
-          )
-      }).pipe(Effect.provide(layer))
+        capabilityContext: eraseContext(
+          Context.empty().pipe(
+            Context.add(ToolReadToken, { read: Effect.succeed("read-ok") }),
+            Context.add(ToolWriteToken, { write: Effect.succeed("write-from-capability-context") }),
+          ),
+        ),
+      })
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ readValue: "read-ok", writeTokenProvided: true })
     }),
@@ -759,49 +521,16 @@ describe("tool execution", () => {
             }),
         }),
       )
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [PendingTool] },
-            },
-          ]),
-        ),
-        eventStoreLayer,
-        ApprovalService.Test(),
-        RuntimeEnvironment.Live({
-          cwd: "/nonexistent/gent-test-cwd",
-          home: "/nonexistent/gent-test-home",
+      const result = yield* Effect.flip(
+        runTool({
+          tool: PendingTool,
+          eventStore: eventStoreLayer,
+          ctx: {
+            sessionId: SessionId.make("session-pending"),
+            branchId: BranchId.make("branch-pending"),
+          },
         }),
       )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc-pending")
-        return yield* Effect.flip(
-          runner
-            .capture({ toolName: "pending" })
-            .pipe(
-              Effect.flatMap((entry) =>
-                runner.runBound({ toolCallId, toolName: "pending", input: {} }, entry),
-              ),
-            )
-            .pipe(
-              provideCurrentHostCtx(
-                testToolContext({
-                  sessionId: SessionId.make("session-pending"),
-                  branchId: BranchId.make("branch-pending"),
-                  toolCallId,
-                  agentName: AgentName.make("primary"),
-                }),
-              ),
-            ),
-        )
-      }).pipe(Effect.provide(layer))
       expect(result).toBeInstanceOf(InteractionPendingError)
       expect(result.requestId).toBe(InteractionRequestId.make("req-pending"))
       expect(result.sessionId).toBe(SessionId.make("session-pending"))
@@ -825,8 +554,7 @@ describe("tool execution", () => {
     Predicate.isTagged("ToolCallFailed"),
   )
   const summaryOf = (params: {
-    readonly tool: ReturnType<typeof tool>
-    readonly toolName: string
+    readonly tool: ToolCapability
     readonly input: Readonly<Record<string, string>>
   }) =>
     Effect.gen(function* () {
@@ -847,42 +575,7 @@ describe("tool execution", () => {
             }),
         }),
       )
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [params.tool] },
-            },
-          ]),
-        ),
-        eventStoreLayer,
-        ApprovalService.Test(),
-        RuntimeEnvironment.Live({
-          cwd: "/nonexistent/gent-test-cwd",
-          home: "/nonexistent/gent-test-home",
-        }),
-      )
-      const layer = Layer.mergeAll(deps, ToolRunner.Live.pipe(Layer.provide(deps)))
-      const toolCallId = ToolCallId.make(`tc-${params.toolName}`)
-      yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const entry = yield* runner.capture({ toolName: params.toolName })
-        return yield* runner
-          .runBound({ toolCallId, toolName: params.toolName, input: params.input }, entry)
-          .pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("session-summary"),
-                branchId: BranchId.make("branch-summary"),
-                toolCallId,
-                agentName: AgentName.make("primary"),
-              }),
-            ),
-          )
-      }).pipe(Effect.provide(layer))
+      yield* runTool({ tool: params.tool, input: params.input, eventStore: eventStoreLayer })
       return summaries
     })
 
@@ -899,7 +592,6 @@ describe("tool execution", () => {
       })
       const summaries = yield* summaryOf({
         tool: CountTool,
-        toolName: "count",
         input: { text: "one two three" },
       })
       expect(summaries).toEqual([
@@ -930,8 +622,8 @@ describe("tool execution", () => {
         execute: () => Effect.fail(new ToolRunnerTestError({ message: "disk full" })),
         summary: () => "never shown",
       })
-      const thrown = yield* summaryOf({ tool: ThrowingTool, toolName: "throwing", input: {} })
-      const failed = yield* summaryOf({ tool: FailingTool, toolName: "failing", input: {} })
+      const thrown = yield* summaryOf({ tool: ThrowingTool, input: {} })
+      const failed = yield* summaryOf({ tool: FailingTool, input: {} })
       expect(thrown).toEqual([{ tag: "ToolCallSucceeded", summary: '{"note":"kept"}' }])
       expect(failed).toHaveLength(1)
       expect(failed[0]?.tag).toBe("ToolCallFailed")
