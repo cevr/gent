@@ -255,13 +255,6 @@ const moduleSyntaxOf = (
     }),
     specifiers: [
       ...result.module.staticImports.map((statement) => statement.moduleRequest.value),
-      ...result.module.staticExports.flatMap((statement) =>
-        statement.entries.flatMap((entry) =>
-          Option.toArray(
-            Option.map(Option.fromNullishOr(entry.moduleRequest), (path) => path.value),
-          ),
-        ),
-      ),
       ...literalSpecifiers,
       ...result.comments.flatMap((comment) => {
         if (comment.type !== "Line") return []
@@ -355,6 +348,12 @@ const parsedText = (file: string, text: string): ParsedText => {
     ImportExpression: (node) => {
       if (node.source.type === "Literal" && Predicate.isString(node.source.value))
         literalSpecifiers.push(node.source.value)
+    },
+    ExportNamedDeclaration: (node) => {
+      if (node.source) literalSpecifiers.push(node.source.value)
+    },
+    ExportAllDeclaration: (node) => {
+      literalSpecifiers.push(node.source.value)
     },
     TSExternalModuleReference: (node) => {
       literalSpecifiers.push(node.expression.value)

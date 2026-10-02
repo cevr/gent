@@ -4399,7 +4399,15 @@ describe("a declared dependency must have a use", () => {
   })
 
   test("actual module expressions keep dependencies even without named reads", () => {
-    const names = ["side-effect", "star-export", "import-type", "commonjs", "mocked", "bun"]
+    const names = [
+      "side-effect",
+      "star-export",
+      "empty-export",
+      "import-type",
+      "commonjs",
+      "mocked",
+      "bun",
+    ]
     const scope = dependencyScope({
       packageJson: { devDependencies: Object.fromEntries(names.map((name) => [name, "1"])) },
       files: new Map([
@@ -4409,6 +4417,7 @@ describe("a declared dependency must have a use", () => {
             'import { mock } from "bun:test"',
             'await import("side-effect")',
             'export * from "star-export"',
+            'export {} from "empty-export"',
             'type X = import("import-type")',
             'import commonjs = require("commonjs")',
             'mock.module("mocked", () => ({}))',
