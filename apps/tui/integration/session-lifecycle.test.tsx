@@ -1,10 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { onMount } from "solid-js"
 import { App, resolveInteractiveState, resolveInteractiveBootstrap } from "../src/app"
-import { type ClientContextValue, useClient } from "../src/client"
-import { renderScoped } from "../tests/render-harness-boundary"
+import { mountClient } from "../tests/render-harness-boundary"
 import {
   baseLocalLayer,
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
@@ -17,13 +15,6 @@ import { waitForFrame } from "../tests/helpers-boundary"
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
   _baseLocalLayerWithProvider(p, { agents: [testAgent] })
 const localLayer = () => baseLocalLayer({ agents: [testAgent] })
-function StateProbe(props: { readonly onReady: (ctx: { client: ClientContextValue }) => void }) {
-  const client = useClient()
-  onMount(() => {
-    props.onReady({ client })
-  })
-  return <box />
-}
 describe("app bootstrap", () => {
   it.live(
     "continue mode resumes the latest session for cwd",
@@ -87,7 +78,6 @@ describe("session lifecycle", () => {
           const { client, runtime } = yield* Gent.test(
             baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
           )
-          let ctx = Option.none<{ client: ClientContextValue }>()
           // Pre-resolve bootstrap
           const bootstrap = yield* resolveInteractiveBootstrap({
             client,
@@ -95,23 +85,16 @@ describe("session lifecycle", () => {
             continue_: false,
           })
           expect(Option.isNone(bootstrap.initialBranches)).toBe(true)
-          const setup = yield* renderScoped(
-            () => (
-              <>
-                <StateProbe onReady={(c) => (ctx = Option.some(c))} />
-                <App />
-              </>
-            ),
-            {
-              client,
-              runtime,
-              initialPrompt: bootstrap.initialPrompt,
-              initialSession: bootstrap.initialSession,
-              cwd,
-              width: 100,
-              height: 32,
-            },
-          )
+          const { setup, client: shellClient } = yield* mountClient({
+            client,
+            runtime,
+            initialPrompt: bootstrap.initialPrompt,
+            initialSession: bootstrap.initialSession,
+            cwd,
+            width: 100,
+            height: 32,
+            view: () => <App />,
+          })
           const composer = yield* waitForFrame(
             setup,
             (frame) => frame.includes("ready") || frame.includes("idle") || frame.includes("❯"),
@@ -123,9 +106,7 @@ describe("session lifecycle", () => {
           // Send a message through the client (simulates user input).
           // The downstream waitForFrame polls until the response arrives;
           // the response itself confirms the feed fiber was subscribed.
-          expect(Option.isSome(ctx)).toBe(true)
-          if (Option.isNone(ctx)) return
-          const session = ctx.value.client.session()
+          const session = shellClient.session()
           // The shell mounts the session the bootstrap handed it.
           expect(session.sessionId).toBe(bootstrap.initialSession.sessionId)
           yield* client.message

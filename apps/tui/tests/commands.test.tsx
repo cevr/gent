@@ -10,10 +10,9 @@ import {
 import { createEffect, ErrorBoundary, For, onCleanup, onMount } from "solid-js"
 import { Effect, Option, Schema } from "effect"
 import { BranchId, dateFromMillis, GentRpcError, SessionId } from "@gent/core/protocol"
-import { type ClientContextValue, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
 import type { AgentRowEntry } from "@gent/extensions/client"
-import { createMockClient, renderFrame, renderScoped } from "./render-harness-boundary"
+import { createMockClient, mountClient, renderFrame, renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import { makePaneSlot } from "./extension-test-harness-boundary"
 
@@ -66,7 +65,7 @@ describe("executeSlashCommand", () => {
     expect(executeSlashCommand("unknown", "", [])).toBe(false)
   })
 
-  test("prefers onSlash over onSelect when args present", () => {
+  test("a slash with arguments hands them to the command's slash handler", () => {
     let receivedArgs = ""
     const commands = [
       cmd({
@@ -82,7 +81,7 @@ describe("executeSlashCommand", () => {
     expect(receivedArgs).toBe("high")
   })
 
-  test("falls back to onSelect when no onSlash", () => {
+  test("a command without a slash handler runs its select action and drops the arguments", () => {
     let selectCalled = false
     const commands = [
       cmd({
@@ -120,14 +119,6 @@ function OpenPaletteOnMount() {
     command.handleKeybind({ name: "p", ctrl: true }, [], true)
   })
   return <CommandPalette />
-}
-
-function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
-  const client = useClient()
-  onMount(() => {
-    props.onReady(client)
-  })
-  return <box />
 }
 
 function ExtensionProbe(props: {
@@ -312,18 +303,18 @@ describe("CommandPalette renderer", () => {
 
   it.scopedLive("the palette Sessions item opens the agents pane and a row switches to it", () =>
     Effect.gen(function* () {
-      let ctx: Option.Option<ClientContextValue> = Option.none()
-      const setup = yield* renderScoped(
-        () => (
+      const { setup, client } = yield* mountClient({
+        client: storedSessionsClient(),
+        initialSession: rootSession,
+        width: 90,
+        height: 28,
+        view: () => (
           <>
             <OpenPaletteOnMount />
             <AgentsPaneWidget />
-            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
           </>
         ),
-        { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
-      )
-      if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
+      })
       yield* waitForFrame(
         setup,
         (frame) => frame.includes("Commands") && frame.includes("Sessions"),
@@ -345,7 +336,7 @@ describe("CommandPalette renderer", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => !frame.includes("Sessions ·"), "agents pane closed")
-      expect(ctx.value.session()).toEqual({
+      expect(client.session()).toEqual({
         sessionId: delegateId,
         branchId: delegateBranchId,
         name: "Delegate",

@@ -4,8 +4,6 @@ import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Scope } from "ef
 import type { GentRuntime } from "@gent/sdk"
 import {
   AgentName,
-  BranchId,
-  dateFromMillis,
   type AuthAuthorization,
   type AuthMethod,
   type AuthProviderInfo,
@@ -16,18 +14,19 @@ import { Auth, type AuthEvent, AuthState, transitionAuth } from "../src/auth"
 import { BunServices } from "@effect/platform-bun"
 import { App } from "../src/app"
 import { LinkOpener, LinkOpenerError } from "../src/os"
-import { type ClientContextValue, useClient } from "../src/client"
+import { useClient } from "../src/client"
 import {
   applySnapshotAgent,
   createMockClient,
   createMockRuntime,
   destroyRenderSetup,
+  mountClient,
   renderFrame,
   renderScoped,
+  sessionFixture,
 } from "./render-harness-boundary"
 import { waitForFrame, waitUntil } from "./helpers-boundary"
 import { ProviderAuthError } from "@gent/core/extensions/api"
-import { onMount } from "solid-js"
 
 // ── auth state ──────────────────────────────────────────────────────────────
 
@@ -222,19 +221,6 @@ const oauthMethodRoute = { label: "Browser OAuth", type: "oauth" } satisfies {
   type: "oauth"
 }
 
-const requireClient = (
-  context: Option.Option<ClientContextValue>,
-): Effect.Effect<ClientContextValue, never> =>
-  Option.match(context, {
-    onNone: () => Effect.die("client context not ready"),
-    onSome: Effect.succeed,
-  })
-
-function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => void }) {
-  const client = useClient()
-  onMount(() => props.onReady(client))
-  return <box />
-}
 /** Lands a snapshot naming `agent` before the panes after it mount, as the session view does. */
 function SnapshotAgent(props: { readonly agent: AgentName }) {
   applySnapshotAgent(useClient(), props.agent)
@@ -530,7 +516,6 @@ describe("Auth route", () => {
   )
   it.scopedLive("ignores stale auth loads after the selected agent changes", () =>
     Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
       const pending: Array<{
         agentName?: string
         /** The load's own fiber: its end is the end of the pane's handling of the reply. */
@@ -559,21 +544,17 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* renderScoped(
-        () => (
+      const { setup, client: clientContext } = yield* mountClient({
+        client,
+        runtime,
+        view: () => (
           <>
             <SnapshotAgent agent={AgentName.make("primary")} />
-            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
             <Auth sessionId={activeSessionId} />
           </>
         ),
-        {
-          client,
-          runtime,
-        },
-      )
+      })
       expect(pending.map((entry) => entry.agentName)).toEqual(["primary"])
-      const clientContext = yield* requireClient(ctx)
       applySnapshotAgent(clientContext, AgentName.make("secondary"))
       yield* Effect.promise(() => setup.renderOnce())
       expect(pending.map((entry) => entry.agentName)).toEqual(["primary", "secondary"])
@@ -603,7 +584,6 @@ describe("Auth route", () => {
   )
   it.scopedLive("ignores stale auth mutations after the selected agent changes", () =>
     Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
       const oldKeySave = yield* Deferred.make<void>()
       const client = createMockClient({
         auth: {
@@ -643,18 +623,15 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* renderScoped(
-        () => (
+      const { setup, client: clientContext } = yield* mountClient({
+        client,
+        runtime,
+        view: () => (
           <>
-            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
             <Auth sessionId={activeSessionId} />
           </>
         ),
-        {
-          client,
-          runtime,
-        },
-      )
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -665,7 +642,6 @@ describe("Auth route", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      const clientContext = yield* requireClient(ctx)
       applySnapshotAgent(clientContext, AgentName.make("secondary"))
       const reloaded = yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       expect(reloaded).toContain("openai")
@@ -687,7 +663,6 @@ describe("Auth route", () => {
   )
   it.scopedLive("ignores stale oauth callbacks after the selected agent changes", () =>
     Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
       const authorizeDeferred = yield* Deferred.make<
         | {
             authorizationId: string
@@ -755,24 +730,20 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* renderScoped(
-        () => (
+      const { setup, client: clientContext } = yield* mountClient({
+        client,
+        runtime,
+        view: () => (
           <>
-            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
             <Auth sessionId={activeSessionId} />
           </>
         ),
-        {
-          client,
-          runtime,
-        },
-      )
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      const clientContext = yield* requireClient(ctx)
       applySnapshotAgent(clientContext, AgentName.make("secondary"))
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       yield* Deferred.succeed(authorizeDeferred, {
@@ -1075,7 +1046,6 @@ describe("Auth route", () => {
 
   it.scopedLive("ignores stale oauth opener failures after the selected agent changes", () =>
     Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
       let rejectOpen = Option.none<(error: LinkOpenerError) => void>()
       const calls: Array<{
         agentName?: string
@@ -1135,26 +1105,22 @@ describe("Auth route", () => {
         }),
       )
       const runtime = createMockRuntime()
-      const setup = yield* renderScoped(
-        () => (
+      const { setup, client: clientContext } = yield* mountClient({
+        client,
+        runtime,
+        services,
+        view: () => (
           <>
-            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
             <Auth sessionId={activeSessionId} />
           </>
         ),
-        {
-          client,
-          runtime,
-          services,
-        },
-      )
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       yield* waitForFrame(setup, (frame) => frame.includes("Open the URL below"))
-      const clientContext = yield* requireClient(ctx)
       applySnapshotAgent(clientContext, AgentName.make("secondary"))
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
@@ -1343,7 +1309,6 @@ describe("Auth route", () => {
     "a reconnect snapshot keeps a device-code flow on screen and its poll running",
     () =>
       Effect.gen(function* () {
-        let ctx = Option.none<ClientContextValue>()
         const signedIn = yield* Deferred.make<void>()
         const callbackCalls: Array<{ provider: string; authorizationId: string }> = []
         let providerLoads = 0
@@ -1373,20 +1338,17 @@ describe("Auth route", () => {
           },
         })
         const services = yield* servicesWithLinkOpener(noBrowser)
-        const setup = yield* renderScoped(
-          () => (
+        const { setup, client: clientContext } = yield* mountClient({
+          client,
+          runtime: createMockRuntime(),
+          services,
+          view: () => (
             <>
               <SnapshotAgent agent={AgentName.make("primary")} />
-              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
               <Auth sessionId={activeSessionId} />
             </>
           ),
-          {
-            client,
-            runtime: createMockRuntime(),
-            services,
-          },
-        )
+        })
         yield* waitForFrame(setup, (frame) => frame.includes("openai"))
         setup.mockInput.pressEnter()
         yield* Effect.promise(() => setup.renderOnce())
@@ -1397,7 +1359,7 @@ describe("Auth route", () => {
           "device flow waits for the poll",
         )
 
-        applySnapshotAgent(yield* requireClient(ctx), AgentName.make("primary"))
+        applySnapshotAgent(clientContext, AgentName.make("primary"))
         yield* Effect.yieldNow
         const reconnected = yield* waitForFrame(setup, () => true)
         expect(reconnected).toContain("Sign in · openai ·")
@@ -1481,13 +1443,7 @@ describe("Auth route", () => {
         client,
         runtime: createMockRuntime(),
         services,
-        initialSession: {
-          id: SessionId.make("session-oauth"),
-          activeBranchId: BranchId.make("branch-oauth"),
-          name: "A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+        initialSession: sessionFixture("session-oauth", "branch-oauth", "A"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("ChatGPT sign-in"), "the methods")
       setup.mockInput.pressEnter()
