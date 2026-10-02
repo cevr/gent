@@ -1774,6 +1774,39 @@ describe("AutocompletePopup renderer", () => {
     }),
   )
 
+  // The popup and the palette share one name column rule: on a narrow
+  // terminal the description gives way and the name stays whole.
+  it.scopedLive("a long command name stays whole in a narrow popup", () =>
+    Effect.gen(function* () {
+      const items: ReadonlyArray<AutocompleteItem> = [
+        {
+          id: "frecency-reset",
+          label: "/frecency-reset",
+          description: "Reset the autocomplete ranking this reader built",
+        },
+        { id: "model", label: "/model", description: "Switch model" },
+      ]
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ContributePopup items={items} />
+            <AutocompletePopup
+              state={{ type: "/", filter: "", triggerPos: 0 }}
+              onSelect={() => {}}
+              onComplete={() => {}}
+              onClose={() => {}}
+              onGhostChange={() => {}}
+            />
+          </>
+        ),
+        { width: 60, height: 20 },
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("/model"), "items")
+      expect(frame).toContain("/frecency-reset")
+      expect(frame).toContain("Reset the")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("the ghost names the row tab completes after the cursor moves", () =>
     Effect.gen(function* () {
       const items: ReadonlyArray<AutocompleteItem> = [

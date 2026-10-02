@@ -245,6 +245,16 @@ const filterItems = (items: readonly PaletteItem[], query: string): readonly Pal
   })
 }
 
+/**
+ * The name column of a picker row that also draws a description: the longest
+ * name and a gap of 2, so a name stays whole while the description gives way,
+ * up to 60 % of `width` and at least 8. The palette and the `/` popup share it.
+ */
+export const nameColumnWidth = (names: ReadonlyArray<string>, width: number): number => {
+  const longest = names.reduce((widest, name) => Math.max(widest, textWidth(name)), 0)
+  return Math.max(8, Math.min(longest + 2, Math.floor(width * 0.6)))
+}
+
 const selectedTitle = (title: string, selected: boolean): string => {
   if (selected) return `${title} •`
   return title
@@ -478,11 +488,10 @@ export function CommandPalette() {
   // the description gives way: a name is what the reader picks by.
   const labelWidth = () => {
     if (!hasDetails()) return dimensions().width
-    const longest = filteredItems().reduce(
-      (width, item) => Math.max(width, textWidth(item.title)),
-      0,
+    return nameColumnWidth(
+      filteredItems().map((item) => item.title),
+      dimensions().width,
     )
-    return Math.max(8, Math.min(longest + 2, Math.floor(dimensions().width * 0.6)))
   }
 
   const keys = () => {

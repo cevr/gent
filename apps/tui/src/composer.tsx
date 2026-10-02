@@ -70,7 +70,7 @@ import {
   type TextareaRenderable,
 } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
-import { isSlashCommandName, parseSlashCommand, useCommand } from "./commands"
+import { isSlashCommandName, nameColumnWidth, parseSlashCommand, useCommand } from "./commands"
 import { useEnv, useWorkspace } from "./workspace"
 import { openExternalEditor, resolveEditor } from "./os"
 import {
@@ -548,7 +548,12 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       .title
 
   const loading = () => items.loading && !hasItems()
-  const labelWidth = () => Math.max(8, Math.min(24, Math.floor(dimensions().width * 0.28)))
+  // The palette's rule: a name stays whole while the description gives way.
+  const labelWidth = () =>
+    nameColumnWidth(
+      visibleItems().map((entry) => entry.item.label),
+      dimensions().width,
+    )
   // A row pads 1, gives the label labelWidth - 2 and a gap of 2: the description has the rest.
   const { rowWidth } = usePickerGeometry()
   const descriptionWidth = () => Math.max(0, rowWidth() - labelWidth() - 1)
