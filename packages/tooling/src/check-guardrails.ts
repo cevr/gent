@@ -34,8 +34,6 @@ import {
   findUnmatchedTsconfigOverrides,
   findUnhashedSteeringFiles,
   findDeadTurboInputs,
-  findUnshippedSkillFiles,
-  BUNDLED_SKILLS_MODULE,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
   isSteeringFile,
@@ -513,8 +511,6 @@ export const scanTrackedTexts = (
     ...findUnpairedBuildDefines(sourceTexts),
     // A steering receipt whose file no longer holds the name it cites.
     ...findStaleSteeringReceipts(new Map(files.map(({ file, text }) => [file, text])), indexFiles),
-    // A bundled skill file the skills module does not import never ships.
-    ...findUnshippedSkillFiles(sourceTexts.get(BUNDLED_SKILLS_MODULE) ?? "", indexFiles),
   )
   return { findings, sourceTexts }
 }

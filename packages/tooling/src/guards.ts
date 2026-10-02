@@ -69,8 +69,6 @@ interface SourceForms {
    * in a template is no import.
    */
   readonly module: ModuleSyntax
-  /** Text imports and rows of the module's actual bundled-skill collection. */
-  readonly bundledSkills: BundledSkillsSyntax
   readonly seams: SeamSyntax
   /**
    * `codeOnly` with regex bodies blanked too, and the line breaks inside
@@ -151,7 +149,6 @@ interface ParsedText {
   readonly names: ReadonlyArray<CommentBody>
   readonly spans: ReadonlyArray<Span>
   readonly module: ModuleSyntax
-  readonly bundledSkills: BundledSkillsSyntax
   readonly seams: SeamSyntax
 }
 
@@ -396,7 +393,6 @@ const parsedText = (file: string, text: string): ParsedText => {
       .map((span) => ({ ...span, start: span.start - shift, end: span.end - shift }))
       .sort((a, b) => a.start - b.start),
     module: moduleSyntaxOf(result, lineOf, dynamicReads, literalSpecifiers),
-    bundledSkills: bundledSkillsSyntaxOf(result.program, lineOf),
     seams: seamSyntaxOf(result.program, lineOf),
   }
 }
@@ -438,7 +434,7 @@ const sourceForms = (file: string, text: string): SourceForms => {
   let cache = sourceFormsCache[parseLanguage(file)]
   if (isJsonFile(file)) cache = sourceFormsCache.json
   return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
-    const { errors, comments, names, spans, module, bundledSkills, seams } = parsedText(file, text)
+    const { errors, comments, names, spans, module, seams } = parsedText(file, text)
     const forms: SourceForms = {
       errors,
       comments,
@@ -446,7 +442,6 @@ const sourceForms = (file: string, text: string): SourceForms => {
       code: blankedSpans(text, spans, ["comment"], false),
       codeOnly: blankedSpans(text, spans, ["comment", "string", "template", "jsx-text"], false),
       module,
-      bundledSkills,
       seams,
       structure: blankedSpans(
         text,
@@ -790,6 +785,25 @@ const namedSeamAuthority = (name: string): Option.Option<SeamAuthority> => {
     default:
       return Option.none()
   }
+}
+
+/** Parentheses and TypeScript assertions change no runtime value. */
+const runtimeExpression = (node: Expression): Expression => {
+  switch (node.type) {
+    case "ParenthesizedExpression":
+    case "TSAsExpression":
+    case "TSSatisfiesExpression":
+    case "TSTypeAssertion":
+    case "TSNonNullExpression":
+      return runtimeExpression(node.expression)
+    default:
+      return node
+  }
+}
+
+const moduleNameOf = (node: ModuleExportName): string => {
+  if (node.type === "Identifier") return node.name
+  return node.value
 }
 
 const findSeamBinding = (name: string, scope: SeamScope): Option.Option<SeamBinding> => {
@@ -2713,166 +2727,6 @@ export const findStaleSteeringReceipts = (
       )
       .toArray()
   })
-}
-
-// ── every bundled skill file ships ──────────────────────────────────────────
-
-/**
- * Guard: every Markdown file under the bundled skills directory ships.
- *
- * The skills module imports each bundled file as text and lists it in
- * `bundledSkillFiles` under its path in the skill tree, which is where the
- * skill's own links find it once installed. A file added to the directory
- * without an import is not shipped, and nothing fails: the build, the
- * typecheck and the skill tests read only what is imported. A listed path
- * that differs from the imported file installs the right text under the wrong
- * name, so a `SKILL.md` link to it dangles.
- *
- * Read: the tracked files under `BUNDLED_SKILLS_DIRECTORY` and the text of
- * `BUNDLED_SKILLS_MODULE`, as parsed code. Reported: a Markdown file with no text import (at the
- * file), and an import whose `bundledSkillFiles` row is missing or names
- * another path (at the import).
- */
-export const BUNDLED_SKILLS_MODULE = "packages/extensions/src/skills.ts"
-const BUNDLED_SKILLS_DIRECTORY = "packages/extensions/src/skills/bundled/"
-
-interface BundledSkillsSyntax {
-  readonly imported: ReadonlyMap<string, { readonly path: string; readonly line: number }>
-  readonly rows: ReadonlyArray<{ readonly path: string; readonly name: string }>
-}
-
-/** Parentheses and TypeScript assertions change no installed value. */
-const runtimeExpression = (node: Expression): Expression => {
-  switch (node.type) {
-    case "ParenthesizedExpression":
-    case "TSAsExpression":
-    case "TSSatisfiesExpression":
-    case "TSTypeAssertion":
-    case "TSNonNullExpression":
-      return runtimeExpression(node.expression)
-    default:
-      return node
-  }
-}
-
-const moduleNameOf = (node: ModuleExportName): string => {
-  if (node.type === "Identifier") return node.name
-  return node.value
-}
-
-const bundledTextImports = (
-  program: Program,
-  lineOf: (index: number) => number,
-): BundledSkillsSyntax["imported"] => {
-  const prefix = "./skills/bundled/"
-  const imported = new Map<string, { readonly path: string; readonly line: number }>()
-  for (const statement of program.body) {
-    if (statement.type !== "ImportDeclaration" || statement.importKind === "type") continue
-    if (!statement.source.value.startsWith(prefix)) continue
-    if (
-      !statement.attributes.some(
-        ({ key, value }) => moduleNameOf(key) === "type" && value.value === "text",
-      )
-    )
-      continue
-    for (const specifier of statement.specifiers) {
-      const isDefault =
-        specifier.type === "ImportDefaultSpecifier" ||
-        (specifier.type === "ImportSpecifier" &&
-          specifier.importKind !== "type" &&
-          moduleNameOf(specifier.imported) === "default")
-      if (isDefault)
-        imported.set(specifier.local.name, {
-          path: statement.source.value.slice(prefix.length),
-          line: lineOf(statement.start),
-        })
-    }
-  }
-  return imported
-}
-
-const bundledSkillRows = (node: Expression): BundledSkillsSyntax["rows"] => {
-  const row = runtimeExpression(node)
-  if (row.type !== "ArrayExpression") return []
-  const [path, value] = row.elements
-  if (!path || path.type === "SpreadElement" || !value || value.type === "SpreadElement") return []
-  const installedPath = runtimeExpression(path)
-  const content = runtimeExpression(value)
-  if (
-    installedPath.type !== "Literal" ||
-    !Predicate.isString(installedPath.value) ||
-    content.type !== "Identifier"
-  )
-    return []
-  return [{ path: installedPath.value, name: content.name }]
-}
-
-const bundledCollectionRows = (program: Program): BundledSkillsSyntax["rows"] => {
-  const rows: Array<BundledSkillsSyntax["rows"][number]> = []
-  for (const statement of program.body) {
-    // Nested declarations and unrelated arrays cannot populate this collection.
-    let declaration = statement
-    if (declaration.type === "ExportNamedDeclaration") {
-      if (!declaration.declaration) continue
-      declaration = declaration.declaration
-    }
-    if (declaration?.type !== "VariableDeclaration") continue
-    for (const { id, init } of declaration.declarations) {
-      if (id.type !== "Identifier" || id.name !== "bundledSkillFiles" || !init) continue
-      const collection = runtimeExpression(init)
-      if (collection.type !== "ArrayExpression") continue
-      rows.push(
-        ...collection.elements.flatMap((element) => {
-          if (!element || element.type === "SpreadElement") return []
-          return bundledSkillRows(element)
-        }),
-      )
-    }
-  }
-  return rows
-}
-
-/** Extract only facts, during the shared parse; retain no tree or second parse. */
-const bundledSkillsSyntaxOf = (
-  program: Program,
-  lineOf: (index: number) => number,
-): BundledSkillsSyntax => ({
-  imported: bundledTextImports(program, lineOf),
-  rows: bundledCollectionRows(program),
-})
-
-export const findUnshippedSkillFiles = (
-  moduleText: string,
-  trackedFiles: ReadonlyArray<string>,
-): ReadonlyArray<Finding> => {
-  const { imported, rows } = sourceForms(BUNDLED_SKILLS_MODULE, moduleText).bundledSkills
-  const importedPaths = new Set([...imported.values()].map((entry) => entry.path))
-  const findings: Array<Finding> = trackedFiles
-    .values()
-    .filter((file) => file.startsWith(BUNDLED_SKILLS_DIRECTORY) && file.endsWith(".md"))
-    .filter((file) => !importedPaths.has(file.slice(BUNDLED_SKILLS_DIRECTORY.length)))
-    .map((file) => ({
-      file,
-      line: 1,
-      message: `a bundled skill file that \`${BUNDLED_SKILLS_MODULE}\` does not import never ships; import it as text and list it in \`bundledSkillFiles\`, or delete it`,
-    }))
-    .toArray()
-  for (const [name, entry] of imported) {
-    const namedRows = rows.filter((row) => row.name === name)
-    if (namedRows.some((row) => row.path === entry.path)) continue
-    const listed = Option.fromNullishOr(namedRows[0]?.path)
-    findings.push({
-      file: BUNDLED_SKILLS_MODULE,
-      line: entry.line,
-      message: Option.match(listed, {
-        onNone: () =>
-          `\`${name}\` imports \`${entry.path}\`, but no \`bundledSkillFiles\` row lists it, so it never installs`,
-        onSome: (path) =>
-          `\`${name}\` imports \`${entry.path}\`, but its \`bundledSkillFiles\` row installs it as \`${path}\`, where the skill's links do not find it`,
-      }),
-    })
-  }
-  return findings
 }
 
 /** The part of a package's `turbo.json` the guide input check reads. */

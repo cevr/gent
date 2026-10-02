@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Option, Path, Schema } from "effect"
+import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import {
   bundledSkillFiles,
   formatSkillsForPrompt,
@@ -10,8 +10,10 @@ import {
   SkillsExtension,
   SkillsRpc,
 } from "../src/skills.js"
-import { BunServices } from "@effect/platform-bun"
-import { ref } from "@gent/core/extensions/api"
+import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
+import { getToolId, ref } from "@gent/core/extensions/api"
+import { GentPlatform } from "@gent/core/host"
+import { BuiltinExtensions } from "../src/index.js"
 import {
   LanguageModelLayers,
   textStep,
@@ -398,6 +400,58 @@ describe("SkillsExtension via RPC", () => {
 // ── bundled skills ──────────────────────────────────────────────────────────
 
 describe("bundled skills", () => {
+  it.live("every bundled skill file on disk installs under its own path with its own text", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* path.fromFileUrl(new URL("../src/skills/bundled/", import.meta.url))
+      const onDisk = (yield* fs.readDirectory(root, { recursive: true }))
+        .filter((file) => file.endsWith(".md"))
+        .toSorted()
+      const rows = new Map(bundledSkillFiles)
+      expect([...rows.keys()].toSorted()).toEqual(onDisk)
+      for (const [file, text] of rows) {
+        expect(yield* fs.readFileString(path.join(root, file))).toBe(text)
+      }
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("a bundled skill sends the model only to tools and skills gent ships", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-skill-tools-" })
+      const shipped = new Set(
+        bundledSkillFiles
+          .filter(([file]) => file.endsWith("/SKILL.md"))
+          .map(([file]) => file.slice(0, -"/SKILL.md".length)),
+      )
+      for (const extension of BuiltinExtensions) {
+        const contributions = yield* collectTestContributions(extension.setup, { home, cwd: home })
+        for (const tool of contributions.tools ?? []) shipped.add(getToolId(tool))
+      }
+      // "the `x` tool", "the `x` skill" and "via `x`" send the model to `x`;
+      // "no `x` tool" says it is absent.
+      const reference = /(?<!\bno )`([\w-]+)` (?:tool|skill)\b|\bvia `([\w-]+)`/g
+      const unshipped = bundledSkillFiles.flatMap(([file, text]) =>
+        text
+          .matchAll(reference)
+          .map((match) => match[1] ?? match[2] ?? "")
+          .filter((name) => !shipped.has(name))
+          .map((name) => `${file}: ${name}`)
+          .toArray(),
+      )
+      expect(unshipped).toEqual([])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          BunServices.layer,
+          BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+          GentPlatform.Test(),
+        ),
+      ),
+    ),
+  )
+
   it.scopedLive("concurrent profiles publish one complete bundle of readable files", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
