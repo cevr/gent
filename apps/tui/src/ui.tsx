@@ -19,7 +19,7 @@ import {
   KeyboardGate,
   pastedLine,
   type ScopedKeyboardEvent,
-  typedText,
+  typedKey,
   useScopedKeyboard,
   useTerminalDimensions,
 } from "./terminal"
@@ -872,16 +872,6 @@ export function transitionSelectList(
 }
 
 // ── Component ─────────────────────────────────────────────────────
-
-/**
- * The text a key types into the filter: printable text, Unicode included,
- * from a key without a shortcut modifier. A shortcut goes on to the scopes
- * under the list.
- */
-const typedKey = (event: ScopedKeyboardEvent): Option.Option<string> => {
-  if (event.ctrl || event.meta || event.option || event.super || event.hyper) return Option.none()
-  return typedText(Option.fromNullishOr(event.sequence))
-}
 
 /**
  * What the pane draws for one row.

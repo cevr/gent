@@ -75,7 +75,7 @@ export {
   useSpinnerClock,
 } from "./ui"
 export { useTheme } from "./theme"
-export { pastedLine, typedText, useScopedKeyboard, useTerminalDimensions } from "./terminal"
+export { pastedLine, typedKey, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 export { textWidth } from "./bun-adapter"
 export {
   dropLastGrapheme,

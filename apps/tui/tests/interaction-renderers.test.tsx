@@ -107,6 +107,47 @@ describe("AskUserRenderer", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  // The scroll keys are hints of the one footer row, in the style of the
+  // other hints, not free sentences under it.
+  it.scopedLive(
+    "a question and choices too long to fit name their scroll keys in the hint row",
+    () =>
+      Effect.gen(function* () {
+        const question = Array.from({ length: 30 }, (_, index) => `context line ${index + 1}`).join(
+          "\n",
+        )
+        const options = Array.from({ length: 12 }, (_, index) => ({ label: `Choice ${index + 1}` }))
+        const setup = yield* renderScoped(
+          () => (
+            <AskUserRenderer
+              event={
+                {
+                  ...interaction("fallback question"),
+                  metadata: {
+                    type: "ask-user",
+                    questions: [{ header: "Pick one", question, options }],
+                  },
+                } satisfies InteractionPresented
+              }
+              resolve={() => {}}
+            />
+          ),
+          { width: 100, height: 24 },
+        )
+        const frame = yield* waitForFrame(
+          setup,
+          (f) => f.includes("esc cancel") && f.includes("scroll question"),
+          "the scroll hints",
+        )
+        const hintRows = frame.split("\n").filter((row) => row.includes("scroll"))
+        expect(hintRows).toHaveLength(1)
+        expect(hintRows[0]).toContain(
+          "enter select · pgup/pgdn scroll · shift+pgup/pgdn scroll question · esc cancel",
+        )
+        expect(frame).not.toContain("PgUp")
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("falls back to yes/no without structured metadata", () =>
     Effect.gen(function* () {
       const results: ApprovalResult[] = []

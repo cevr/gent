@@ -10,6 +10,7 @@ import {
   type ListAgentsInput,
 } from "@gent/extensions/client"
 import {
+  default as agentsExtension,
   AgentsPane,
   detailLabel,
   makeAgentsController,
@@ -19,11 +20,15 @@ import {
 import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 import { DockProvider, PickerFrame, usePickerGeometry } from "../../src/ui"
 import { renderFrame, renderScoped } from "../render-harness-boundary"
+import { useCommand } from "../../src/commands"
+import { useScopedKeyboard } from "../../src/terminal"
 import { waitForFrame, waitUntil, waitUntilAdvancing } from "../helpers-boundary"
 import {
+  makeClientExtensionRuntime,
   makeClientTestTransport,
   makePaneSlot,
   provideClientServices,
+  runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
 
 /** A session in view that no listed row is. */
@@ -575,7 +580,6 @@ describe("Agents pane navigation", () => {
           onSelect={(value) => {
             selected = Option.some(value)
           }}
-          onToggle={() => {}}
           onDelete={() => {}}
           onClose={() => setOpen(false)}
         />
@@ -612,7 +616,6 @@ describe("Agents pane navigation", () => {
             open: () => true,
           }}
           onSelect={() => {}}
-          onToggle={() => {}}
           onDelete={() => {}}
           onClose={() => setOpen(false)}
         />
@@ -664,7 +667,6 @@ describe("Agents pane navigation", () => {
             onSelect={(value) => {
               selected = Option.some(value)
             }}
-            onToggle={() => {}}
             onDelete={() => {}}
             onClose={() => {}}
           />
@@ -730,7 +732,6 @@ describe("Agents pane navigation", () => {
             open: () => true,
           }}
           onSelect={() => {}}
-          onToggle={() => {}}
           onDelete={() => {}}
           onClose={() => {}}
         />
@@ -781,7 +782,6 @@ describe("Agents pane navigation", () => {
             open: () => true,
           }}
           onSelect={() => {}}
-          onToggle={() => {}}
           onDelete={() => {}}
           onClose={() => {}}
         />
@@ -793,48 +793,31 @@ describe("Agents pane navigation", () => {
     }),
   )
 
-  it.scopedLive("toggles with Ctrl+T while the pane is hidden", () =>
+  it.scopedLive("ctrl+t is a command keybind that opens and closes the pane", () =>
     Effect.gen(function* () {
-      // The pane's other keys are gated on `open`, so the toggle has to be
-      // registered separately or it can close the pane but never reopen it.
-      const [open, setOpen] = createSignal(false)
-      let toggles = 0
-
-      const setup = yield* renderScoped(() => (
-        <AgentsPane
-          open={open()}
-          controller={{
-            rows: () => [rowPane("toggle", "Alpha", 0)],
-            current: () => ELSEWHERE,
-            error: () => Option.none(),
-            loading: () => false,
-            refresh: () => {},
-            reload: () => {},
-            detail: () => Option.none(),
-            select: () => {},
-            open,
-          }}
-          onSelect={() => {}}
-          onToggle={() => {
-            toggles++
-            setOpen((current) => !current)
-          }}
-          onDelete={() => {}}
-          onClose={() => setOpen(false)}
-        />
-      ))
-
+      const runtime = makeClientExtensionRuntime({ requestReply: { rows: [] } })
+      const contributions = yield* runClientExtensionSetup(runtime, agentsExtension)
+      const commands = contributions.commands ?? []
+      const toggle = commands.find((command) => command.keybind === "ctrl+t")
+      expect(toggle?.id).toBe("agents.toggle")
+      const pane = Option.getOrThrow(
+        Option.fromUndefinedOr(contributions.widgets?.find((w) => w.id === "agents.pane")),
+      )
+      // The session's keybind dispatch, as the session view runs it under every pane.
+      const Session = () => {
+        const command = useCommand()
+        useScopedKeyboard((event) => command.handleKeybind(event, commands, false))
+        return <pane.component />
+      }
+      const setup = yield* renderScoped(() => <Session />)
       expect(renderFrame(setup)).not.toContain("Sessions ·")
 
       setup.mockInput.pressKey("t", { ctrl: true })
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(toggles).toBe(1)
-      expect(open()).toBe(true)
-      expect(renderFrame(setup)).toContain("Sessions ·")
-
+      yield* waitForFrame(setup, (frame) => frame.includes("Sessions ·"), "the pane opened")
+      // The open pane's own keys leave ctrl+t to the dispatch, which closes it.
       setup.mockInput.pressKey("t", { ctrl: true })
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(open()).toBe(false)
+      yield* waitForFrame(setup, (frame) => !frame.includes("Sessions ·"), "the pane closed")
+      yield* Effect.promise(() => runtime.dispose())
     }),
   )
 })
@@ -858,7 +841,6 @@ describe("Agents pane delete", () => {
             open: () => true,
           }}
           onSelect={() => {}}
-          onToggle={() => {}}
           onDelete={(target) => deleted.push(target.sessionId)}
           onClose={() => {}}
         />
@@ -920,7 +902,6 @@ describe("Agents pane reopen", () => {
           open={open()}
           controller={controller}
           onSelect={() => {}}
-          onToggle={() => {}}
           onDelete={() => {}}
           onClose={() => setOpen(false)}
         />
@@ -981,7 +962,6 @@ describe("Agents pane framing", () => {
                 open: () => true,
               }}
               onSelect={() => {}}
-              onToggle={() => {}}
               onDelete={() => {}}
               onClose={() => {}}
             />
@@ -1042,7 +1022,6 @@ describe("Agents pane framing", () => {
               open: () => true,
             }}
             onSelect={() => {}}
-            onToggle={() => {}}
             onDelete={() => {}}
             onClose={() => {}}
           />
@@ -1092,7 +1071,6 @@ describe("Agents pane framing", () => {
               open: () => true,
             }}
             onSelect={() => {}}
-            onToggle={() => {}}
             onDelete={() => {}}
             onClose={() => {}}
           />
@@ -1144,7 +1122,6 @@ describe("Agents pane framing", () => {
               open: () => true,
             }}
             onSelect={() => {}}
-            onToggle={() => {}}
             onDelete={() => {}}
             onClose={() => {}}
           />
@@ -1205,7 +1182,6 @@ describe("Agents pane framing", () => {
               open: () => true,
             }}
             onSelect={() => {}}
-            onToggle={() => {}}
             onDelete={() => {}}
             onClose={() => {}}
           />
@@ -1280,7 +1256,6 @@ describe("agents pane rows", () => {
             open: () => true,
           }}
           onSelect={() => {}}
-          onToggle={() => {}}
           onDelete={() => {}}
           onClose={() => {}}
         />
@@ -1466,7 +1441,6 @@ describe("idle middle parent", () => {
             open={true}
             controller={controllerOver(() => true)}
             onSelect={() => {}}
-            onToggle={() => {}}
             onDelete={() => {}}
             onClose={() => {}}
           />

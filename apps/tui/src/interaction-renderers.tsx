@@ -192,13 +192,17 @@ export function OptionList(props: OptionListProps): JSX.Element {
   }
   // The docked panes' key vocabulary. Enter picks the focused option of a
   // single choice; a multiple choice toggles with space and sends with Enter.
-  // Esc declines the ask, so it says cancel, not close.
+  // Esc declines the ask, so it says cancel, not close. PgUp/PgDn scroll the
+  // choices when they overflow, else the question; with both too long, Shift
+  // turns them to the question.
   const footer = () => {
-    let keys = [KeyHints.move, KeyHints.select, keyHint("esc", "cancel")]
-    if (isMultiple()) {
-      keys = [KeyHints.move, keyHint("space", "toggle"), KeyHints.submit, keyHint("esc", "cancel")]
+    let keys = [KeyHints.move, KeyHints.select]
+    if (isMultiple()) keys = [KeyHints.move, keyHint("space", "toggle"), KeyHints.submit]
+    if (optionsScrollable() || documentScrollable()) keys.push(keyHint("pgup/pgdn", "scroll"))
+    if (optionsScrollable() && documentScrollable()) {
+      keys.push(keyHint("shift+pgup/pgdn", "scroll question"))
     }
-    return keyHintsLine(keys, dimensions().width - 2)
+    return keyHintsLine([...keys, KeyHints.cancel], dimensions().width - 2)
   }
 
   return (
@@ -323,14 +327,6 @@ export function OptionList(props: OptionListProps): JSX.Element {
           </box>
 
           <text style={{ fg: theme.textMuted, marginTop: sectionSpacing() }}>{footer()}</text>
-          <Show when={optionsScrollable()}>
-            <text style={{ fg: theme.textMuted }}>PgUp/PgDn scroll choices</text>
-          </Show>
-          <Show when={documentScrollable()}>
-            <text style={{ fg: theme.textMuted }}>
-              <Show when={optionsScrollable()}>Shift+</Show>PgUp/PgDn scroll question
-            </text>
-          </Show>
         </box>
       </box>
     </box>

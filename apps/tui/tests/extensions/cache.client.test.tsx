@@ -886,6 +886,32 @@ describe("cache client extension", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
+  it.scopedLive("a total under a cent is spelled as a cost, never as $0.00", () =>
+    Effect.gen(function* () {
+      const extension = yield* setupWithCatalog(Option.some(models))
+      const history = makeHistory()
+      history.input(0, "t1")
+      history.step({
+        start: SECOND,
+        end: 10 * SECOND,
+        turn: "t1",
+        usage: { inputTokens: 1_100, cacheWriteTokens: 1_100 },
+        model: SONNET,
+      })
+      history.input(14 * MINUTE, "t2")
+      history.step({
+        start: 14 * MINUTE + 10 * SECOND,
+        end: 15 * MINUTE,
+        turn: "t2",
+        usage: { inputTokens: 1_200, cacheWriteTokens: 1_200 },
+        model: SONNET,
+      })
+      extension.deliver(history.envelopes)
+      // 1.1k missed tokens re-billed at 2.3 $/M: a quarter of a cent.
+      expect(extension.label()).toEqual([{ text: "cache waste $0.003", color: "textMuted" }])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.scopedLive("a child's step is judged by the child lifetime, a root's by the root's", () =>
     Effect.gen(function* () {
       // A root keeps its prompt an hour and writes it at 4 $/M, a child

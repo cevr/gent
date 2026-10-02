@@ -32,7 +32,6 @@ import {
   TrayFrame,
   truncate,
   usePickerGeometry,
-  useScopedKeyboard,
   useSpinnerClock,
   useTerminalDimensions,
   useTheme,
@@ -516,8 +515,6 @@ export function AgentsPane(props: {
   onClose: () => void
   controller: AgentsController
   onSelect: (row: AgentRowEntry) => void
-  /** Show the pane if hidden, hide it if shown. Bound to Ctrl+T. */
-  onToggle: () => void
   /** Delete a session tree. Bound to Ctrl+X pressed twice on the same row. */
   onDelete: (row: AgentRowEntry) => void
 }) {
@@ -533,15 +530,6 @@ export function AgentsPane(props: {
   // Filtering is the server's job — it owns the same search the projection
   // tests cover — so typing refetches rather than filtering a local copy.
   const visible = () => props.controller.rows()
-
-  // The toggle binds whether or not the pane is showing, so it can open as well
-  // as close. Registered separately from the pane's own keys, which the list
-  // gates on `open` and would otherwise swallow every keystroke while docked.
-  useScopedKeyboard((event) => {
-    if (event.ctrl !== true || event.name !== "t") return false
-    props.onToggle()
-    return true
-  })
 
   // The same framing the slash-command popup uses: ruled off top and bottom
   // under the composer, so the columns come from the picker's budget rather
@@ -748,6 +736,10 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
       (key) =>
         transport.agentDetail(key).pipe(Effect.mapError((error) => ({ message: String(error) }))),
     )
+    const openPane = () => {
+      shell.pane.open(AGENTS_PANE)
+      controller.refresh("")
+    }
 
     return clientContributions(
       widgetContribution({
@@ -770,9 +762,18 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         // A bare key: the host fires it only while the composer is empty and
         // nothing else is open, so ← in a draft still moves the text cursor.
         keybind: "left",
+        onSelect: openPane,
+      }),
+      clientCommandContribution({
+        id: "agents.toggle",
+        title: "Show or hide sessions",
+        category: "Session",
+        // A ctrl key: it fires over a draft and over the open pane, so it
+        // closes the pane as well as opening it.
+        keybind: "ctrl+t",
         onSelect: () => {
-          shell.pane.open(AGENTS_PANE)
-          controller.refresh("")
+          if (controller.open()) shell.pane.close(AGENTS_PANE)
+          else openPane()
         },
       }),
       widgetContribution({
@@ -785,14 +786,6 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
             open={controller.open()}
             controller={controller}
             onClose={() => shell.pane.close(AGENTS_PANE)}
-            onToggle={() => {
-              if (controller.open()) {
-                shell.pane.close(AGENTS_PANE)
-                return
-              }
-              shell.pane.open(AGENTS_PANE)
-              controller.refresh("")
-            }}
             onDelete={(row) =>
               shell.cast(
                 transport.deleteSession(row.sessionId).pipe(
