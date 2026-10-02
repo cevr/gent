@@ -1052,6 +1052,61 @@ describe("listAuthProviders", () => {
     }),
   )
 
+  it.live("a key ready under one of a driver's sign-ins is ready", () =>
+    Effect.gen(function* () {
+      const twoWays: ModelDriverContribution = {
+        id: "two-ways",
+        name: "Two Ways",
+        resolveModel: () => Effect.succeed(stubModel),
+        auth: {
+          methods: [
+            AuthMethod.make({
+              type: "api",
+              label: "Personal",
+              prompts: [{ key: "user", label: "User ID", env: "TWO_WAYS_USER" }],
+            }),
+            AuthMethod.make({
+              type: "api",
+              label: "Business",
+              prompts: [
+                { key: "org", label: "Organization" },
+                { key: "team", label: "Team" },
+              ],
+            }),
+          ],
+        },
+      }
+      const registry = ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("test-two-ways") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { modelDrivers: [twoWays] },
+          } satisfies LoadedExtension,
+        ]),
+      )
+      const row = (metadata: Record<string, string>, env: Record<string, string> = {}) =>
+        listAuthProviders([]).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Auth.Test({ "two-ways": AuthApi.make({ type: "api", key: "k", metadata }) }),
+              registry,
+              ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
+            ),
+          ),
+          Effect.map(([listed]) => [listed?.hasKey, Option.fromNullishOr(listed?.missing)]),
+        )
+      expect(yield* row({ user: "u-1" })).toEqual([true, Option.none()])
+      expect(yield* row({ org: "o-1", team: "t-1" })).toEqual([true, Option.none()])
+      // A variable completes the personal sign-in under a half-filled business one.
+      expect(yield* row({ org: "o-1" }, { TWO_WAYS_USER: "u-1" })).toEqual([true, Option.none()])
+      // Not ready under any sign-in: the row names what the closest one lacks.
+      expect(yield* row({ org: "o-1" })).toEqual([false, Option.some(["Team"])])
+      expect(yield* row({})).toEqual([false, Option.some(["User ID"])])
+    }),
+  )
+
   it.live("every provider carries its driver's display name", () =>
     Effect.gen(function* () {
       const result = yield* list({ anthropic: apiInfo("sk-test") }, [opus])

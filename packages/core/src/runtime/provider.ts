@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   Cause,
   Config,
   Context,
@@ -7,6 +8,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Path,
   Predicate,
   Random,
@@ -39,6 +41,7 @@ import {
   AuthAuthorizationMethod,
   AuthMetadata,
   AuthMethod,
+  type AuthPrompt,
   DEFAULT_RETRY_POLICY,
   type ModelDriverContribution,
   type PersistAuth,
@@ -605,7 +608,12 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
 /**
  * The labels of the prompts `driver`'s API sign-in cannot run without that
  * `metadata` leaves unanswered and whose variable is not set: the driver
- * reads the variable when the stored key has no answer.
+ * reads the variable when the stored key has no answer. A driver's API
+ * methods are alternatives (a personal or a business sign-in), and the
+ * stored key does not name the method that wrote it: the key is ready when
+ * any one method has every needed prompt. Otherwise the labels are those of
+ * the method the stored answers fill most, then of the one that lacks the
+ * fewest, then of the first declared.
  */
 const unansweredPrompts = (
   driver: ModelDriverContribution,
@@ -615,17 +623,46 @@ const unansweredPrompts = (
     onNone: (): ReadonlyArray<AuthMethod> => [],
     onSome: (contribution) => contribution.methods,
   })
-  const needed = methods
-    .filter((method) => method.type === "api")
-    .flatMap((method) => Option.getOrElse(Option.fromUndefinedOr(method.prompts), () => []))
-    .filter((prompt) => prompt.optional !== true)
-  return Effect.filter(needed, (prompt) => {
-    const answered = Option.exists(metadata, (answers) =>
+  const hasAnswer = (prompt: AuthPrompt) =>
+    Option.exists(metadata, (answers) =>
       Option.exists(Option.fromUndefinedOr(answers[prompt.key]), (answer) => answer.length > 0),
     )
-    if (answered) return Effect.succeed(false)
-    return Effect.map(envCredentialSet(Option.fromUndefinedOr(prompt.env)), (set) => !set)
-  }).pipe(Effect.map((prompts) => [...new Set(prompts.map((prompt) => prompt.label))]))
+  const methodGaps = (method: AuthMethod) => {
+    const needed = Option.getOrElse(Option.fromUndefinedOr(method.prompts), () => []).filter(
+      (prompt) => prompt.optional !== true,
+    )
+    return Effect.filter(needed, (prompt) => {
+      if (hasAnswer(prompt)) return Effect.succeed(false)
+      return Effect.map(envCredentialSet(Option.fromUndefinedOr(prompt.env)), (set) => !set)
+    }).pipe(
+      Effect.map((unanswered) => ({
+        answered: needed.filter(hasAnswer).length,
+        missing: [...new Set(unanswered.map((prompt) => prompt.label))],
+      })),
+    )
+  }
+  const closest = Order.combine(
+    Order.mapInput(Order.Number, (gaps: MethodGaps) => -gaps.answered),
+    Order.mapInput(Order.Number, (gaps: MethodGaps) => gaps.missing.length),
+  )
+  return Effect.forEach(
+    methods.filter((method) => method.type === "api"),
+    methodGaps,
+  ).pipe(
+    Effect.map((perMethod) => {
+      if (perMethod.some((gaps) => gaps.missing.length === 0)) return []
+      return Arr.match(perMethod, {
+        onEmpty: (): ReadonlyArray<string> => [],
+        onNonEmpty: (gaps) => Arr.min(gaps, closest).missing,
+      })
+    }),
+  )
+}
+
+/** How far stored answers and env variables fill one API sign-in method. */
+interface MethodGaps {
+  readonly answered: number
+  readonly missing: ReadonlyArray<string>
 }
 
 /** A credential is ready when no prompt it needs is missing; a row that is not names them. */
