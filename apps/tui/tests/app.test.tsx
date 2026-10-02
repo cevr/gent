@@ -2354,6 +2354,123 @@ describe("App status and activity rows", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // A send whose replies were lost comes back to the draft, but the server
+  // may have queued it. Taking the queue back then gives the text once, and
+  // the next send is new: the old request id names the send the drain took.
+  it.scopedLive(
+    "a lost send the server queued comes back once when the queue is taken back",
+    () =>
+      Effect.gen(function* () {
+        const sends: Array<{ readonly content: string; readonly requestId: string }> = []
+        const drained = yield* Deferred.make<void>()
+        const view = yield* mountSessionPair({
+          message: {
+            send: (input: { readonly content: string; readonly requestId: string }) =>
+              Effect.suspend(() => {
+                sends.push({ content: input.content, requestId: input.requestId })
+                // The first send and its four retries: queued, reply lost.
+                if (sends.length <= 5) {
+                  return Effect.fail(
+                    new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
+                  )
+                }
+                return Effect.void
+              }),
+          },
+          queue: {
+            drain: () =>
+              Effect.succeed({
+                steering: [],
+                followUp: [
+                  {
+                    _tag: "FollowUp" satisfies "FollowUp",
+                    id: MessageId.make("queued-lost"),
+                    content: "resend me",
+                    createdAt: 0,
+                  },
+                ],
+              }).pipe(Effect.ensuring(Deferred.complete(drained, Effect.void))),
+          },
+        })
+        yield* Effect.promise(() => view.setup.mockInput.typeText("resend me"))
+        yield* Effect.promise(() => view.setup.renderOnce())
+        view.setup.mockInput.pressEnter()
+        yield* waitForFrame(
+          view.setup,
+          (frame) => sends.length === 5 && frame.includes("┃ resend me"),
+          "the lost send back in the draft",
+          8_000,
+        )
+        view.setup.mockInput.pressArrow("up", { meta: true })
+        yield* Deferred.await(drained)
+        yield* view.settle
+        expect(renderFrame(view.setup).split("resend me").length - 1).toBe(1)
+        view.setup.mockInput.pressEnter()
+        yield* waitForFrame(view.setup, () => sends.length === 6, "sent again")
+        expect(sends[5]?.content).toBe("resend me")
+        expect(sends[5]?.requestId).not.toBe(sends[0]?.requestId)
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
+  )
+  // Refused sends come back in send order at the draft's start. Queue text
+  // taken back between two refusals goes after them, not between them.
+  it.scopedLive("queue text taken back between two refusals goes after both", () =>
+    Effect.gen(function* () {
+      const asked = { earlier: yield* Deferred.make<void>(), later: yield* Deferred.make<void>() }
+      const answer = { earlier: yield* Deferred.make<void>(), later: yield* Deferred.make<void>() }
+      const answered = {
+        earlier: yield* Deferred.make<void>(),
+        later: yield* Deferred.make<void>(),
+      }
+      const drain = yield* gatedDrain("queued text")
+      const drained = yield* Deferred.make<void>()
+      const gate = (which: "earlier" | "later") =>
+        Deferred.complete(asked[which], Effect.void).pipe(
+          Effect.andThen(Deferred.await(answer[which])),
+          Effect.andThen(Effect.fail(refusedInA)),
+          Effect.ensuring(Deferred.complete(answered[which], Effect.void)),
+        )
+      const view = yield* mountSessionPair({
+        message: {
+          send: (input: { readonly content: string }) => {
+            if (input.content === "earlier send") return gate("earlier")
+            return gate("later")
+          },
+        },
+        queue: {
+          drain: () => drain.drain().pipe(Effect.ensuring(Deferred.complete(drained, Effect.void))),
+        },
+      })
+      const send = (text: string) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => view.setup.mockInput.typeText(text))
+          yield* Effect.promise(() => view.setup.renderOnce())
+          view.setup.mockInput.pressEnter()
+        })
+      yield* send("earlier send")
+      yield* Deferred.await(asked.earlier)
+      yield* send("later send")
+      yield* Deferred.await(asked.later)
+      view.setup.mockInput.pressArrow("up", { meta: true })
+      yield* Deferred.await(drain.asked)
+      yield* Deferred.complete(answer.earlier, Effect.void)
+      yield* Deferred.await(answered.earlier)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("earlier send"), "earlier back")
+      yield* Deferred.complete(drain.answer, Effect.void)
+      yield* Deferred.await(drained)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("queued text"), "queue back")
+      yield* Deferred.complete(answer.later, Effect.void)
+      yield* Deferred.await(answered.later)
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => next.includes("later send"),
+        "later back",
+      )
+      const at = (text: string) => frame.indexOf(text)
+      expect(at("earlier send")).toBeLessThan(at("later send"))
+      expect(at("later send")).toBeLessThan(at("queued text"))
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("a running turn's activity row shows esc cancel", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()

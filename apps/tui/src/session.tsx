@@ -544,12 +544,13 @@ interface ComposerMemory {
   readonly history: PromptHistoryStore
   /**
    * Text taken back from a branch's queue goes back to that branch's draft:
-   * in its composer when one is on screen, in its kept draft when not. It goes
-   * ahead of what the reader has typed, which stays, as a refused send does.
-   * The drain has committed by then, so the text must not depend on the view
-   * that asked.
+   * in its composer when one is on screen, in its kept draft when not. It
+   * goes after the refused texts at the draft's start and ahead of what the
+   * reader has typed since, which stays; a queued text a refused entry still
+   * holds is that entry, once (`mergeRestored`). The drain has committed by
+   * then, so the text must not depend on the view that asked.
    */
-  readonly restore: (branchId: BranchId, text: string) => void
+  readonly restore: (branchId: BranchId, queue: QueueState) => void
   /**
    * The `-p` prompt, if this is the session the startup flags named and no
    * one took it yet. A session view that mounts again gets nothing: the
@@ -597,6 +598,65 @@ interface RefusedMerge {
 
 const writeAsIs = (text: string): string => text
 
+/** The block stands whole: the draft is it, or it and then a separator. */
+const blockKept = (current: ComposerDraft, block: RefusedBlock): boolean =>
+  block.shown.length > 0 &&
+  (current.draft === block.shown || current.draft.startsWith(`${block.shown}${REFUSED_SEPARATOR}`))
+
+/** What follows a kept block: the text the reader typed since. */
+const afterBlock = (current: ComposerDraft, block: RefusedBlock): string =>
+  current.draft.slice(block.shown.length + REFUSED_SEPARATOR.length)
+
+/**
+ * Put text taken back from the queue into a draft. A queued text that an
+ * entry of the draft's refused block holds is that entry: the server had the
+ * send after all, so the entry stays where it is, once, and drops the request
+ * id of the send the drain took. Any other queued text goes after the refused
+ * block and ahead of what the reader typed since, so a later refusal still
+ * joins the block in send order. Queued text is a message: a command around
+ * it keeps its `!`.
+ */
+export const mergeRestored = (
+  current: ComposerDraft,
+  block: RefusedBlock,
+  queue: QueueState,
+): RefusedMerge => {
+  const same = (left: string, right: string) => left.trim() === right.trim()
+  const queued = [...queue.steering, ...queue.followUp]
+  const entries = block.entries.map((entry): WrittenRefusal => {
+    if (!queued.some((item) => same(item.content, entry.text))) return entry
+    return { ...entry, requestId: Option.none() }
+  })
+  const kept = blockKept(current, block)
+  const fresh = (item: QueueEntryInfo) =>
+    !kept || !block.entries.some((entry) => same(item.content, entry.text))
+  const rest = queuedDraftText({
+    steering: queue.steering.filter(fresh),
+    followUp: queue.followUp.filter(fresh),
+  })
+  if (Option.isNone(rest)) return { draft: current, block: { entries, shown: block.shown } }
+  // Without a whole block there is nothing to go after: the text goes first.
+  let shown = ""
+  let blockShown = block.shown
+  let typed = current.draft
+  if (kept) {
+    shown = entries
+      .map((entry) => {
+        if (entry.shell) return `!${entry.written}`
+        return entry.written
+      })
+      .join(REFUSED_SEPARATOR)
+    blockShown = shown
+    typed = afterBlock(current, block)
+  }
+  if (current.mode === "shell" && typed.trim().length > 0) typed = `!${typed}`
+  const parts = [shown, rest.value, typed].filter((part) => part.trim().length > 0)
+  return {
+    draft: { draft: parts.join(REFUSED_SEPARATOR), mode: "editing" },
+    block: { entries, shown: blockShown },
+  }
+}
+
 export const mergeRefused = (
   current: ComposerDraft,
   block: RefusedBlock,
@@ -612,16 +672,12 @@ export const mergeRefused = (
     return { ...entry, written: writeEntry(entry) }
   }
   const added: WrittenRefusal = { ...refused, written: writeEntry(refused) }
-  // The block stands whole: the draft is it, or it and then a separator.
-  const kept =
-    block.shown.length > 0 &&
-    (current.draft === block.shown ||
-      current.draft.startsWith(`${block.shown}${REFUSED_SEPARATOR}`))
+  const kept = blockKept(current, block)
   let entries: ReadonlyArray<WrittenRefusal> = [added]
   let typed = current.draft
   if (kept) {
     entries = [...block.entries.map(rewrite), added].toSorted((a, b) => a.order - b.order)
-    typed = current.draft.slice(block.shown.length + REFUSED_SEPARATOR.length)
+    typed = afterBlock(current, block)
   }
   const hasTyped = typed.trim().length > 0
   const allShell = entries.every((entry) => entry.shell) && (!hasTyped || current.mode === "shell")
@@ -654,6 +710,16 @@ export function ComposerMemoryProvider(props: ParentProps<ComposerMemoryProvider
   const links = new Map<BranchId, ComposerLink>()
   const blocks = new Map<BranchId, RefusedBlock>()
   const standing = new Map<BranchId, { readonly draft: string; readonly dismiss: () => void }>()
+  /** A branch's draft: its composer's when one is on screen, else the kept one. */
+  const currentDraft = (branchId: BranchId): ComposerDraft =>
+    Option.match(Option.fromUndefinedOr(links.get(branchId)), {
+      onSome: (link) => link.current(),
+      onNone: () =>
+        Option.getOrElse(drafts.get(branchId), (): ComposerDraft => ({
+          draft: "",
+          mode: "editing",
+        })),
+    })
   let sent = 0
   const refusals: ComposerRefusals = {
     nextOrder: () => sent++,
@@ -665,16 +731,8 @@ export function ComposerMemoryProvider(props: ParentProps<ComposerMemoryProvider
     },
     refuse: (branchId, refused, dismiss) => {
       const live = Option.fromUndefinedOr(links.get(branchId))
-      const current = Option.match(live, {
-        onSome: (link) => link.current(),
-        onNone: () =>
-          Option.getOrElse(drafts.get(branchId), (): ComposerDraft => ({
-            draft: "",
-            mode: "editing",
-          })),
-      })
       const merged = mergeRefused(
-        current,
+        currentDraft(branchId),
         Option.getOrElse(Option.fromUndefinedOr(blocks.get(branchId)), () => EMPTY_REFUSED_BLOCK),
         refused,
         // A kept draft is stored as text; only a composer on screen holds placeholders.
@@ -713,30 +771,25 @@ export function ComposerMemoryProvider(props: ParentProps<ComposerMemoryProvider
       return content
     })
   }
-  const restore = (branchId: BranchId, text: string): void => {
+  const restore = (branchId: BranchId, queue: QueueState): void => {
     const live = Option.fromUndefinedOr(links.get(branchId))
-    const current = Option.match(live, {
-      onSome: (link) => link.current(),
-      onNone: () =>
-        Option.getOrElse(drafts.get(branchId), (): ComposerDraft => ({
-          draft: "",
-          mode: "editing",
-        })),
+    const current = currentDraft(branchId)
+    const merged = mergeRestored(
+      current,
+      Option.getOrElse(Option.fromUndefinedOr(blocks.get(branchId)), () => EMPTY_REFUSED_BLOCK),
+      queue,
+    )
+    blocks.set(branchId, merged.block)
+    if (merged.draft === current) return
+    // A restore is not the reader's edit: a standing reason stays, read
+    // against the draft as the restore leaves it.
+    const reason = Option.fromUndefinedOr(standing.get(branchId))
+    if (Option.isSome(reason))
+      standing.set(branchId, { ...reason.value, draft: merged.draft.draft })
+    Option.match(live, {
+      onSome: (link) => link.apply(merged.draft),
+      onNone: () => drafts.set(branchId, merged.draft),
     })
-    // Queued text is a message, so the draft is one too: a typed command
-    // behind it keeps its `!`.
-    let typed = current.draft
-    if (current.mode === "shell" && typed.trim().length > 0) typed = `!${typed}`
-    let joined = text
-    if (typed.trim().length > 0) joined = `${text}${REFUSED_SEPARATOR}${typed}`
-    const draft: ComposerDraft = { draft: joined, mode: "editing" }
-    if (Option.isSome(live)) {
-      live.value.apply(draft)
-      return
-    }
-    drafts.set(branchId, draft)
-    // A composer on screen reports its own edit; a kept draft reports here.
-    refusals.changed(branchId, text)
   }
   const value: ComposerMemory = {
     drafts,
@@ -3274,9 +3327,8 @@ export function createSessionController(props: {
       client.drainQueuedMessages(origin).pipe(
         Effect.tap(({ steering, followUp }) =>
           Effect.sync(() => {
-            const text = queuedDraftText({ steering, followUp })
-            if (Option.isNone(text)) return
-            restore(origin.branchId, text.value)
+            if (Option.isNone(queuedDraftText({ steering, followUp }))) return
+            restore(origin.branchId, { steering, followUp })
             updateControllerState(clearQueue)
           }),
         ),
