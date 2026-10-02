@@ -75,6 +75,7 @@ import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import {
   bashOutputRows,
   cellOperations,
+  failureReason,
   GenericToolRenderer,
   RegisteredToolCall,
   type ToolCall,
@@ -966,7 +967,7 @@ function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
               <text>
                 <span style={{ fg: theme.error }}>
                   [x {props.toolCall.toolName}] #{formatToolCallIdentity(props.toolCall.id)}{" "}
-                  {props.toolCall.summary ?? "failed"}
+                  {Option.getOrElse(failureReason(props.toolCall), () => "failed")}
                 </span>
               </text>
             </Show>

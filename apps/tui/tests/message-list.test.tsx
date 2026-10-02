@@ -492,15 +492,44 @@ const assistantToolMessage = (id: string, toolCall: ToolCall): ListMessage => ({
   segments: [{ _tag: "tool-call", toolCall }],
 })
 
-const unknownFailureMessage = (id: string): ListMessage =>
-  assistantToolMessage("assistant-unknown-tool", {
+/**
+ * A failed call as the runner stores it: the output is `{ error }` as pretty
+ * JSON, and the summary is the compact JSON cut to 100 characters, with `...`
+ * after a cut.
+ */
+const runnerFailure = (
+  id: string,
+  toolName: string,
+  input: ToolCall["input"],
+  error: string,
+): ToolCall => {
+  const compact = encodeJson({ error })
+  let summary = compact
+  if (compact.length > 100) summary = `${compact.slice(0, 100)}...`
+  return {
     id,
-    toolName: "unknown_fx_tool",
+    toolName,
     status: "error",
-    input: absent,
-    summary: "tool failed",
-    output: absent,
-  })
+    input,
+    summary,
+    output: `{\n  "error": ${encodeJson(error)}\n}`,
+  }
+}
+
+/** An error longer than the summary keeps, so the stored summary is cut JSON. */
+const LONG_TOOL_ERROR =
+  "connection refused by the upstream server after three tries at the configured endpoint"
+
+const unknownFailureMessage = (id: string): ListMessage =>
+  assistantToolMessage(
+    "assistant-unknown-tool",
+    runnerFailure(
+      id,
+      "unknown_fx_tool",
+      absent,
+      `Tool 'unknown_fx_tool' failed: ${LONG_TOOL_ERROR}`,
+    ),
+  )
 
 const registeredFailureMessage = (id: string): ListMessage =>
   assistantToolMessage("assistant-registered-tool", {
@@ -1353,19 +1382,23 @@ describe("tool frame identity", () => {
     }),
   )
 
-  it.scopedLive("keeps unknown tool failure identity in both MessageList projections", () =>
+  it.scopedLive("a failed call with no renderer shows its identity and reason in both views", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [unknownFailureMessage("call-unknown-7")]
-      const setup = yield* renderScoped(() => (
-        <>
-          <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
-          <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
-        </>
-      ))
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+            <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
+          </>
+        ),
+        { width: 160, height: 20 },
+      )
       const frame = renderFrame(setup)
       expect(frame.match(/#call-unknown-7/g)?.length).toBe(2)
       expect(frame.match(/\[x unknown_fx_tool\]/g)?.length).toBe(2)
-      expect(frame.match(/tool failed/g)?.length).toBe(2)
+      expect(frame.match(/failed: connection refused by the upstream/g)?.length).toBe(2)
+      expect(frame).not.toContain('{"error"')
     }),
   )
 
@@ -1390,11 +1423,13 @@ describe("tool frame identity", () => {
 
   it.scopedLive("a failed builtin call shows its reason in every view, and as a cell op", () =>
     Effect.gen(function* () {
-      // The runner stores a failure as `{ error }`, and its summary is the head of that JSON.
-      const failed = (tool: string, input: Readonly<Record<string, string>>): ToolCall => {
-        const output = encodeJson({ error: `Tool '${tool}' failed: REASON-${tool}` })
-        return { id: `call-${tool}-failed`, toolName: tool, status: "error", input, output }
-      }
+      const failed = (tool: string, input: Readonly<Record<string, string>>): ToolCall =>
+        runnerFailure(
+          `call-${tool}-failed`,
+          tool,
+          input,
+          `Tool '${tool}' failed: REASON-${tool} ${LONG_TOOL_ERROR}`,
+        )
       const calls: ReadonlyArray<ToolCall> = [
         failed("bash", { command: "false" }),
         failed("read", { path: "/tmp/missing.txt" }),
@@ -1417,9 +1452,14 @@ describe("tool frame identity", () => {
         status: "completed",
         input: { code: "await tools.read({ path: 'gone.txt' })" },
         output: encodeJson({ display: "cell done" }),
-        operations: [failed("grep", { pattern: "x" }), failed("read", { path: "gone.txt" })].map(
-          (op) => ({ ...op, id: `${op.id}-op` }),
-        ),
+        operations: [
+          failed("grep", { pattern: "x" }),
+          failed("read", { path: "gone.txt" }),
+          // No TUI renderer draws these: the op keeps its one-line receipt.
+          failed("mcp_fetch", { url: "https://example.invalid" }),
+          // A reloaded op whose output did not fit the snapshot keeps the cut summary.
+          { ...failed("mcp_search", { query: "x" }), output: absent },
+        ].map((op) => ({ ...op, id: `${op.id}-op` })),
       }
       const items: SessionItem[] = [...calls, cell].map((call) =>
         assistantToolMessage(`assistant-${call.id}`, call),
@@ -1442,6 +1482,10 @@ describe("tool frame identity", () => {
       // the direct read in its three views, plus the read the cell admitted.
       expect(frame.match(/REASON-read\b/g)?.length).toBe(4)
       expect(frame.match(/REASON-grep\b/g)?.length).toBe(1)
+      expect(frame).toContain("✕ mcp_fetch Tool 'mcp_fetch' failed: REASON-mcp_fetch")
+      expect(frame).toContain("✕ mcp_search Tool 'mcp_search' failed: REASON-mcp_search")
+      // A reason reads as its sentence, never as the stored JSON.
+      expect(frame).not.toContain('{"error"')
     }),
   )
 

@@ -12,6 +12,7 @@ import {
 import {
   clientContributions,
   defineClientExtension,
+  failureReason,
   formatUsageStats,
   messageRendererContribution,
   type MessageRowProps,
@@ -64,11 +65,10 @@ const decodeHandle = Schema.decodeUnknownOption(
 /** One line: the child the call started, or why it did not start. */
 const startLine = (props: ToolRendererProps): string => {
   if (props.toolCall.status === "running") return "starting a child…"
-  const output = Option.fromNullishOr(props.toolCall.output)
   if (props.toolCall.status === "error") {
-    return Option.getOrElse(output, () => "the child did not start")
+    return Option.getOrElse(failureReason(props.toolCall), () => "the child did not start")
   }
-  return Option.flatMap(output, decodeHandle).pipe(
+  return Option.flatMap(Option.fromNullishOr(props.toolCall.output), decodeHandle).pipe(
     Option.match({
       onNone: () => "result arrives as a message",
       onSome: (handle) => `child ${shortId(handle.sessionId)} · result arrives as a message`,

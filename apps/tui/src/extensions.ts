@@ -96,6 +96,6 @@ export {
 
 // ── shipped renderers and ranking ──
 
-export { BUILTIN_TOOL_RENDERERS, type ToolRendererProps } from "./tool-renderers"
+export { BUILTIN_TOOL_RENDERERS, failureReason, type ToolRendererProps } from "./tool-renderers"
 export { HandoffRenderer, OptionList, PromptRenderer, yesNoAnswer } from "./interaction-renderers"
 export { rankAutocompleteItems, readFrecencyLookup, recordFrecencyPick } from "./autocomplete"

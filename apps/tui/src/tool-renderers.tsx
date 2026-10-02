@@ -466,15 +466,44 @@ const rowsText = (rows: ReadonlyArray<WindowedLine>): string =>
     )
     .join("\n")
 
+const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.String))
+
+/**
+ * The runner's summary of a failure is `{"error":"…"}` cut to 100 characters,
+ * with `...` after a cut, so a long error leaves JSON that does not parse.
+ * This reads the error text out of the cut head, and marks the cut with `…`.
+ */
+const cutErrorSummary = (summary: string): Option.Option<string> => {
+  const prefix = '{"error":"'
+  const marker = "..."
+  if (!summary.startsWith(prefix) || !summary.endsWith(marker)) return Option.none()
+  const escaped = summary.slice(prefix.length, summary.length - marker.length)
+  // A cut can split an escape (`\` or `\u00`); drop the broken tail, then decode.
+  const whole = escaped.replace(/\\(u[0-9a-fA-F]{0,3})?$/, "")
+  return decodeJsonText(`"${whole}"`).pipe(
+    Option.orElse(() => Option.some(whole)),
+    Option.map((text) => `${text}…`),
+  )
+}
+
 /**
  * The reason a failed call gives: the error text of its output (the runner
- * stores a failure as `{ error }`), else the summary it kept. None for a call
- * that did not fail.
+ * stores a failure as `{ error }`), else the error text of its summary, else
+ * the summary as it is. None for a call that did not fail, or that gives no
+ * reason. Every row that draws a failure reads its reason here.
  */
-const failureReason = (call: ToolCall): Option.Option<string> => {
+export const failureReason = (call: ToolCall): Option.Option<string> => {
   if (call.status !== "error") return Option.none()
   return Option.fromNullishOr(formatGenericToolText(call.output)).pipe(
-    Option.orElse(() => Option.fromNullishOr(formatGenericToolText(call.summary))),
+    Option.orElse(() =>
+      Option.fromNullishOr(call.summary).pipe(
+        Option.flatMap((summary) =>
+          cutErrorSummary(summary).pipe(
+            Option.orElse(() => Option.fromNullishOr(formatGenericToolText(summary))),
+          ),
+        ),
+      ),
+    ),
     Option.filter((text) => text.trim().length > 0),
   )
 }
@@ -804,7 +833,7 @@ function CellToolRenderer(props: ToolRendererProps) {
               fallback={OperationRow({
                 tool: call.toolName,
                 outcome: liveOutcome(call.status),
-                summary: call.summary ?? "",
+                summary: Option.getOrElse(failureReason(call), () => call.summary ?? ""),
               })}
             />
           )}
