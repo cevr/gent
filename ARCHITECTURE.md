@@ -11,7 +11,7 @@ Minimal agent harness. Effect-first. Small seams. One owner per concern.
 - `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
 - `Tool` / `Request` — independent callable leaves for model tools and typed extension RPC. Requests with a `slash:` block also surface as human slash commands.
 - `Resource` — long-lived scoped services and extension-owned state.
-- `Hook` — `systemPrompt`, `turnProjection`, and `turnAfter` handlers registered with `host.on` for prompt, policy, and turn follow-up.
+- `Hook` — `systemPrompt`, `turnProjection`, `turnAfter`, `loopOpen`, and `sessionDeleted` handlers registered with `host.on` for prompt, policy, turn follow-up, branch repair after a restart, and cleanup after a session delete.
 
 Everything else is adapter code around those nouns.
 
@@ -237,7 +237,7 @@ packages/
 └── sdk/           # direct + RPC transports over one client contract
 ```
 
-`@gent/core/protocol` contains shared client schemas, message projections, and the RPC contract. The SDK uses this entry point for client data. It does not expose server storage or runtime service tags. Core implementation files keep relative imports; they do not import through the public protocol entry point. The private alias remains while host and test consumers move to supported contracts.
+`@gent/core/protocol` contains shared client schemas, message projections, and the RPC contract. The SDK uses this entry point for client data. It does not expose server storage or runtime service tags. Core implementation files keep relative imports; they do not import through the public protocol entry point.
 
 ## System Shape
 
@@ -1566,7 +1566,7 @@ A fixed port (`gent server start --port`) changes only the attach decision. A SQ
 
 `packages/sdk/src/discovery.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
 
-The old SDK worker supervisor and worker-http transport are deleted. E2E coverage that needs process boundaries uses focused server-process fixtures; transport contract tests run through the in-process direct transport.
+E2E coverage that needs process boundaries uses focused server-process fixtures; transport contract tests run through the in-process direct transport.
 
 ## TUI
 
