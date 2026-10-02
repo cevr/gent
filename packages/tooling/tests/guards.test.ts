@@ -537,6 +537,21 @@ describe("e2e fixture import guard", () => {
       ),
     ).toHaveLength(1)
   })
+
+  test("source-looking prose cannot place an in-process test in the e2e suite", () => {
+    for (const prose of [
+      '/*\nimport { spawnServer } from "../src/server-process-fixture"\n*/',
+      'const example = `\nimport { seedAndSpawn } from "../src/pty-fixture"\n`',
+      'import type { ProcessFixture } from "../src/server-process-fixture"',
+    ]) {
+      expect(
+        findE2eFixtureImportFindings(
+          "packages/e2e/tests/notes.test.ts",
+          `${noFixtureSource}\n${prose}`,
+        ),
+      ).toHaveLength(1)
+    }
+  })
 })
 
 // ── the pre-commit hook: the guards, and staged files only ─────────────────
@@ -4364,6 +4379,44 @@ describe("a declared dependency must have a use", () => {
       ]),
     })
     expect(unusedNames(scope)).toEqual(['dependencies["ghost"]', 'dependencies["ghost-block"]'])
+  })
+
+  test("source-looking examples cannot keep an unused dependency", () => {
+    const scope = dependencyScope({
+      packageJson: { dependencies: { ghost: "1", live: "1" } },
+      files: new Map([
+        [
+          "packages/core/src/x.ts",
+          [
+            'const example = `\nimport { x } from "ghost"\nrequire("ghost")\nmock.module("ghost", () => ({}))\n/// <reference types="ghost" />\n`',
+            'const prose = "from \\\"ghost\\\""',
+            'import { y } from "live"',
+          ].join("\n"),
+        ],
+      ]),
+    })
+    expect(unusedNames(scope)).toEqual(['dependencies["ghost"]'])
+  })
+
+  test("actual module expressions keep dependencies even without named reads", () => {
+    const names = ["side-effect", "star-export", "import-type", "commonjs", "mocked", "bun"]
+    const scope = dependencyScope({
+      packageJson: { devDependencies: Object.fromEntries(names.map((name) => [name, "1"])) },
+      files: new Map([
+        [
+          "packages/core/tests/x.ts",
+          [
+            'import { mock } from "bun:test"',
+            'await import("side-effect")',
+            'export * from "star-export"',
+            'type X = import("import-type")',
+            'import commonjs = require("commonjs")',
+            'mock.module("mocked", () => ({}))',
+          ].join("\n"),
+        ],
+      ]),
+    })
+    expect(unusedNames(scope)).toEqual([])
   })
 
   test("a commented-out config entry is not a use", () => {

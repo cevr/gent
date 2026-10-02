@@ -1,6 +1,7 @@
 import { Option, Predicate, Schema } from "effect"
 import picomatch from "picomatch"
 import {
+  type CallExpression,
   type Expression,
   type ModuleExportName,
   type ParseResult,
@@ -126,6 +127,10 @@ interface ModuleSyntax {
   readonly exports: ReadonlyArray<ExportEntry>
   /** Imports, re-exports, and literal dynamic imports. */
   readonly reads: ReadonlyArray<ModuleRead>
+  /** Actual static value imports, including side-effect imports. */
+  readonly valueImports: ReadonlyArray<string>
+  /** Module paths named by syntax, even without an export/member read. */
+  readonly specifiers: ReadonlyArray<string>
   /** Lines of `export * from` and `export * as NS from`. */
   readonly starExportLines: ReadonlyArray<number>
 }
@@ -157,6 +162,23 @@ const firstQualifier = (qualifier: TSImportTypeQualifier): string => {
   return firstQualifier(qualifier.left)
 }
 
+/** The literal path of the existing require/mock.module call forms. */
+const literalModuleCallOf = (node: CallExpression): ReadonlyArray<string> => {
+  const callee = node.callee
+  const moduleCall =
+    (callee.type === "Identifier" && callee.name === "require") ||
+    (callee.type === "MemberExpression" &&
+      !callee.computed &&
+      callee.object.type === "Identifier" &&
+      callee.object.name === "mock" &&
+      callee.property.type === "Identifier" &&
+      callee.property.name === "module")
+  const modulePath = node.arguments[0]
+  if (moduleCall && modulePath?.type === "Literal" && Predicate.isString(modulePath.value))
+    return [modulePath.value]
+  return []
+}
+
 /**
  * The module syntax of one parse. Static imports and exports come from the
  * module record. A literal dynamic import, which the record lists without
@@ -167,6 +189,7 @@ const moduleSyntaxOf = (
   result: ParseResult,
   lineOf: (index: number) => number,
   dynamicReads: ReadonlyArray<ModuleRead>,
+  literalSpecifiers: ReadonlyArray<string>,
 ): ModuleSyntax => {
   const exports: Array<{ readonly at: number; readonly entry: ExportEntry }> = []
   const reads: Array<ModuleRead> = []
@@ -219,6 +242,33 @@ const moduleSyntaxOf = (
   return {
     exports: exports.sort((a, b) => a.at - b.at).map(({ entry }) => entry),
     reads: [...reads, ...dynamicReads],
+    valueImports: result.program.body.flatMap((statement) => {
+      if (statement.type !== "ImportDeclaration" || statement.importKind === "type") return []
+      if (
+        statement.specifiers.length > 0 &&
+        statement.specifiers.every(
+          (entry) => entry.type === "ImportSpecifier" && entry.importKind === "type",
+        )
+      )
+        return []
+      return [statement.source.value]
+    }),
+    specifiers: [
+      ...result.module.staticImports.map((statement) => statement.moduleRequest.value),
+      ...result.module.staticExports.flatMap((statement) =>
+        statement.entries.flatMap((entry) =>
+          Option.toArray(
+            Option.map(Option.fromNullishOr(entry.moduleRequest), (path) => path.value),
+          ),
+        ),
+      ),
+      ...literalSpecifiers,
+      ...result.comments.flatMap((comment) => {
+        if (comment.type !== "Line") return []
+        // oxc's body of a triple-slash directive begins with the third slash.
+        return matchedGroups(comment.value, TYPES_REFERENCE)
+      }),
+    ],
     starExportLines,
   }
 }
@@ -239,6 +289,7 @@ const parsedText = (file: string, text: string): ParsedText => {
     return { line: lineAt(text, comment.start - shift + 2 + lead), body: comment.value.trim() }
   })
   const dynamicReads: Array<ModuleRead> = []
+  const literalSpecifiers: Array<string> = []
   const names: Array<CommentBody> = []
   const isTestCallee = (node: Expression | Super): boolean => {
     if (node.type === "Identifier") return ["test", "it", "describe"].includes(node.name)
@@ -255,6 +306,7 @@ const parsedText = (file: string, text: string): ParsedText => {
       names.push({ line: lineOf(node.start), body: node.name })
     },
     CallExpression: (node) => {
+      literalSpecifiers.push(...literalModuleCallOf(node))
       if (!isTestCallee(node.callee)) return
       const title = node.arguments[0]
       if (
@@ -295,9 +347,17 @@ const parsedText = (file: string, text: string): ParsedText => {
       }
     },
     TSImportType: (node) => {
+      literalSpecifiers.push(node.source.value)
       for (const qualifier of Option.toArray(Option.fromNullishOr(node.qualifier))) {
         dynamicRead(node.source.value, node.start, { names: [firstQualifier(qualifier)] })
       }
+    },
+    ImportExpression: (node) => {
+      if (node.source.type === "Literal" && Predicate.isString(node.source.value))
+        literalSpecifiers.push(node.source.value)
+    },
+    TSExternalModuleReference: (node) => {
+      literalSpecifiers.push(node.expression.value)
     },
     Literal: (node) => {
       const opener = source[node.start]
@@ -326,7 +386,7 @@ const parsedText = (file: string, text: string): ParsedText => {
     spans: spans
       .map((span) => ({ ...span, start: span.start - shift, end: span.end - shift }))
       .sort((a, b) => a.start - b.start),
-    module: moduleSyntaxOf(result, lineOf, dynamicReads),
+    module: moduleSyntaxOf(result, lineOf, dynamicReads, literalSpecifiers),
     bundledSkills: bundledSkillsSyntaxOf(result.program, lineOf),
   }
 }
@@ -871,16 +931,16 @@ export const findProcessNames = (file: string, text: string): ReadonlyArray<Find
  */
 const E2E_TEST_FILE = /^packages\/e2e\/tests\/.*\.test\.ts$/
 
-/** An `import` whose module path is one of the two subprocess fixtures. */
-const FIXTURE_IMPORT =
-  /^[ \t]*import\b[^"']*["']\.\.\/src\/(?:server-process-fixture|pty-fixture)(?:\.js)?["']/m
+/** The two subprocess fixture entry paths. */
+const FIXTURE_MODULE = /^\.\.\/src\/(?:server-process-fixture|pty-fixture)(?:\.js)?$/
 
 export const findE2eFixtureImportFindings = (
   file: string,
   text: string,
 ): ReadonlyArray<Finding> => {
   if (!E2E_TEST_FILE.test(file)) return []
-  if (FIXTURE_IMPORT.test(text)) return []
+  if (sourceForms(file, text).module.valueImports.some((path) => FIXTURE_MODULE.test(path)))
+    return []
   return [
     {
       file,
@@ -3872,11 +3932,8 @@ const packageOfSpecifier = (specifier: string): Option.Option<string> => {
   return Option.some(segments.slice(0, 1).join("/"))
 }
 
-/** A module a source file loads: `import`, `export … from`, `import()`, `require()`. */
-const SOURCE_SPECIFIER =
-  /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*|\bmock\.module\s*\(\s*)["']([^"'\s]+)["']/g
-/** A triple-slash types reference: a comment by syntax, a load by meaning. */
-const TYPES_REFERENCE = /^\s*\/\/\/\s*<reference\s+types=["']([^"'\s]+)["']/gm
+/** A triple-slash types reference in a parsed line-comment body. */
+const TYPES_REFERENCE = /^\/\s*<reference\s+types=["']([^"'\s]+)["']/g
 /** A quoted string in a config file (tsconfig `types`, bunfig `preload`, a lint plugin). */
 const CONFIG_STRING = /["']([^"'\s]+)["']/g
 
@@ -3904,16 +3961,13 @@ const matchedGroups = (text: string, pattern: RegExp): ReadonlyArray<string> =>
   [...text.matchAll(pattern)].map((match) => match[1] ?? "")
 
 /**
- * The module specifiers a file loads or names, read with its comments blanked
- * so a commented-out import keeps nothing alive. A manifest names its own
+ * The module specifiers a source file loads or names, read from syntax so
+ * source-looking prose keeps nothing alive. A manifest names its own
  * dependencies as keys; only its scripts count, as commands.
  */
 const specifiersIn = (file: string, text: string): ReadonlyArray<string> => {
   if (/\.[cm]?[jt]sx?$/.test(file)) {
-    return [
-      ...matchedGroups(withoutComments(file, text), SOURCE_SPECIFIER),
-      ...matchedGroups(text, TYPES_REFERENCE),
-    ]
+    return sourceForms(file, text).module.specifiers
   }
   if (/(?:^|\/)package\.json$/.test(file)) return []
   if (/\.jsonc?$/.test(file)) return matchedGroups(withoutComments(file, text), CONFIG_STRING)
