@@ -1716,15 +1716,21 @@ const revokeThenCall = (oauth: OAuthFixtureState) =>
       "const first = await tools.mcp.secure.whoami()",
       "await tools.mcp.secure.revoke()",
       "let refused = ''; try { await tools.mcp.secure.whoami() } catch (error) { refused = error.message }",
+      "const refusedHealth = (await tools.mcp.status()).servers[0].health",
       "const second = await tools.mcp.secure.whoami()",
-      "JSON.stringify({ first, refused, second })",
+      "JSON.stringify({ first, refused, refusedHealth, second })",
     ].join("; ")
     const { result } = yield* runMcpCell(oauthServers(oauth), code)
     expect(result).toMatchObject({ name: "cell", isFailure: false })
     return yield* cellDisplay(
       result,
       Schema.fromJsonString(
-        Schema.Struct({ first: Schema.String, refused: Schema.String, second: Schema.String }),
+        Schema.Struct({
+          first: Schema.String,
+          refused: Schema.String,
+          refusedHealth: Schema.String,
+          second: Schema.String,
+        }),
       ),
     )
   })
@@ -1744,7 +1750,7 @@ describe("mcp oauth", () => {
           Effect.provide(data.layer),
         )
         expect(first.before).toContain(
-          "- secure (auto): expired, 0 tools, not connected\n  connect: the secure MCP server needs a login: run /mcp login secure",
+          "- secure (auto): logged-out, 0 tools, not connected\n  connect: the secure MCP server needs a login: run /mcp login secure",
         )
         expect(first.prompt).toContain("Open this URL to log in to the secure MCP server.")
         expect(first.landing).toBe("gent is logged in to secure. You can close this tab.")
@@ -1777,6 +1783,8 @@ describe("mcp oauth", () => {
         expect(shown.refused).toContain(
           "the secure MCP server needs a login: run /mcp login secure",
         )
+        // A stored login the server refused is expired, not logged out.
+        expect(shown.refusedHealth).toBe("expired")
         // The refused initialize was refreshed to token-2 and sent again.
         expect(shown.second).toBe("token-2")
         expect(oauth.refreshes).toBe(2)

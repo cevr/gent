@@ -736,17 +736,21 @@ const REPLAYABLE: ReadonlySet<string> = new Set([
   "GET",
 ])
 
-/** The server refused the OAuth token, and no refresh gave one it takes. */
+/**
+ * The server refused the OAuth token, and no refresh gave one it takes.
+ * `loggedIn`: a stored login sent a token; without one, no login was made.
+ */
 class LoginRequired extends Schema.TaggedError<LoginRequired>()("LoginRequired", {
   server: Schema.String,
   message: Schema.String,
+  loggedIn: Schema.Boolean,
 }) {}
 
 const loginMessage = (name: string) =>
   `the ${name} MCP server needs a login: run /mcp login ${name}`
 
-const loginRequired = (name: string) =>
-  new LoginRequired({ server: name, message: loginMessage(name) })
+const loginRequired = (name: string, loggedIn: boolean) =>
+  new LoginRequired({ server: name, message: loginMessage(name), loggedIn })
 
 type HttpServerConfig = typeof HttpServerConfig.Type
 
@@ -1230,7 +1234,7 @@ const oauthTransport = (server: McpServer, config: HttpServerConfig, store: Auth
             if (retried.status !== 401 && retried.status !== 403) return retried
           }
         }
-        return yield* loginRequired(server.name)
+        return yield* loginRequired(server.name, Option.isSome(current))
       })
     const transport: OAuthTransport = {
       authProvider,
@@ -1418,7 +1422,12 @@ class McpError extends Schema.TaggedError<McpError>()("McpError", {
   message: Schema.String,
   /** The HTTP status the server answered a connect with, when it did. */
   status: Schema.optional(Schema.Int),
+  /** The server refused the connect of an OAuth entry that has no stored login. */
+  loggedOut: Schema.optional(Schema.Boolean),
 }) {}
+
+/** The cause is a refusal of an OAuth entry that has no stored login. */
+const isLoggedOut = (cause: unknown) => Schema.is(LoginRequired)(cause) && !cause.loggedIn
 
 const failureMessage = (cause: unknown) => {
   if (cause instanceof Error) return cause.message
@@ -1526,6 +1535,7 @@ const dial = (
         new McpError({
           server: server.name,
           message: `connect: ${failureMessage(cause)}`,
+          loggedOut: isLoggedOut(cause),
           ...omitUndefined({ status: Option.getOrUndefined(statusOf(cause)) }),
         }),
     })
@@ -1661,10 +1671,18 @@ type CallResult = typeof CallResult.Type
  * it ran nothing. `dead`: the transport failed (the connection closed, the
  * call timed out, HTTP 400 or 408, a network error). `refused`: HTTP 401 or
  * 403, or an OAuth token no refresh helped (see `oauthTransport`): the server
- * no longer takes the entry's credential. `stale`: the server answered that
+ * no longer takes the entry's credential. `logged-out`: the server refused
+ * an OAuth entry that has no stored login. `stale`: the server answered that
  * it has no such tool, so the catalog is out of date.
  */
-const CallFailureKind = Schema.Literals(["answered", "expired", "dead", "refused", "stale"])
+const CallFailureKind = Schema.Literals([
+  "answered",
+  "expired",
+  "dead",
+  "refused",
+  "logged-out",
+  "stale",
+])
 type CallFailureKind = typeof CallFailureKind.Type
 
 const staleMessage = (name: string) =>
@@ -1698,6 +1716,7 @@ const INVALID_PARAMS: number = ErrorCode.InvalidParams
 
 /** `hadSession`: the request carried the transport's `Mcp-Session-Id`. */
 const failureKind = (cause: unknown, name: string, hadSession: boolean): CallFailureKind => {
+  if (isLoggedOut(cause)) return "logged-out"
   if (Schema.is(LoginRequired)(cause)) return "refused"
   if (cause instanceof ProtocolError) {
     if (CLIENT_RAISED.has(cause.code)) return "dead"
@@ -1715,7 +1734,12 @@ const failureKind = (cause: unknown, name: string, hadSession: boolean): CallFai
 }
 
 /** The failures that drop the connection: the next call dials again, with the credential as it is then. */
-const DROPPING_FAILURES: ReadonlySet<CallFailureKind> = new Set(["dead", "expired", "refused"])
+const DROPPING_FAILURES: ReadonlySet<CallFailureKind> = new Set([
+  "dead",
+  "expired",
+  "refused",
+  "logged-out",
+])
 
 /** A failed call's message, with the HTTP status the server answered, when it did. */
 const callFailureMessage = (name: string, cause: unknown) =>
@@ -1734,11 +1758,19 @@ class CallFailed extends Schema.TaggedError<CallFailed>()("CallFailed", {
 /**
  * A server's health as `mcp.status` reports it: `healthy` once a connect and
  * its list worked, `expired` when the server refused the credential (401 or
- * 403), `misconfigured` when the entry cannot run, `degraded` when the last
+ * 403), `logged-out` when it refused an OAuth entry that has no stored login,
+ * `misconfigured` when the entry cannot run, `degraded` when the last
  * connect, list or call failed or the server listed no tools, and `unknown`
  * while this process has not connected to it.
  */
-const McpHealth = Schema.Literals(["healthy", "expired", "misconfigured", "degraded", "unknown"])
+const McpHealth = Schema.Literals([
+  "healthy",
+  "expired",
+  "logged-out",
+  "misconfigured",
+  "degraded",
+  "unknown",
+])
 type McpHealth = typeof McpHealth.Type
 
 const McpServerStatus = Schema.Struct({
@@ -1804,10 +1836,14 @@ interface ServerHealth {
   readonly reason: Option.Option<string>
 }
 
-/** A refused credential is `expired`; any other failure leaves the server `degraded`. */
+/**
+ * A refused credential is `expired`, a refusal with no stored login
+ * `logged-out`; any other failure leaves the server `degraded`.
+ */
 const failureHealth = (error: McpError): ServerHealth => {
   let health: McpHealth = "degraded"
   if (error.status === 401 || error.status === 403) health = "expired"
+  if (error.loggedOut === true) health = "logged-out"
   return { health, reason: Option.some(error.message) }
 }
 
@@ -2115,6 +2151,9 @@ const mcpClientsLive = ({
               if (failed.kind === "refused") {
                 setHealth(state, "expired", Option.some(failed.message))
               }
+              if (failed.kind === "logged-out") {
+                setHealth(state, "logged-out", Option.some(failed.message))
+              }
               if (DROPPING_FAILURES.has(failed.kind)) return evict(state, connection)
               if (failed.kind === "stale") return Effect.sync(() => refresh(state, connection))
               return Effect.void
@@ -2134,7 +2173,10 @@ const mcpClientsLive = ({
         }).pipe(
           Effect.catchCause((cause) => {
             const message = failureMessage(Cause.squash(cause))
-            setHealth(state, "expired", Option.some(message))
+            // A failed login leaves a server that had no login logged out.
+            let health: McpHealth = "expired"
+            if (state.health.health === "logged-out") health = "logged-out"
+            setHealth(state, health, Option.some(message))
             return Effect.logWarning("mcp.oauth.login.failed").pipe(
               Effect.annotateLogs({ server: state.entry.server.name, error: message }),
             )

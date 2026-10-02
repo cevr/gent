@@ -1499,7 +1499,8 @@ seconds is abandoned. A call that carried an `Mcp-Session-Id` on a reused
 connection and was answered 404 (the server forgot the session, so it ran
 nothing) is sent once more on a new connection; a 404 without a session
 leaves the connection open and is not sent again. A 401 or 403 on a call
-drops the connection and marks the server `expired`.
+drops the connection and marks the server `expired`, or `logged-out` when
+the entry signs in with OAuth and has no stored login.
 The tools are listed again when a connection opens, when the server sends
 `notifications/tools/list_changed`, and when it answers a call as an unknown
 tool. One server's lists run one at a time, so an older list never lands
@@ -1512,7 +1513,8 @@ them live needs a host seam.
 The read-only `mcp.status` host tool and the `/mcp` slash command report each
 server's transport, tool count, connection, and health: `healthy` (listed or
 connected), `expired` (the server refused the credential; the reason names
-`/mcp login`), `misconfigured` (the entry cannot run: an unset variable),
+`/mcp login`), `logged-out` (the server refused an OAuth entry that has no
+stored login; the reason names `/mcp login`), `misconfigured` (the entry cannot run: an unset variable),
 `degraded` (a connect, list or call failed in the transport), or `unknown`
 (read from the cache, not yet connected). With no server configured, only
 `/mcp` is registered, and it says where to add one.
