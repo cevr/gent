@@ -192,7 +192,10 @@ describe("LanguageModelLayers.sequence", () => {
       }).pipe(
         Effect.provideService(
           ExtensionRegistry,
-          ExtensionRegistry.of({ getResolved: () => resolveExtensions([]) }),
+          ExtensionRegistry.of({
+            getResolved: () => resolveExtensions([]),
+            providerConfig: Effect.succeed({}),
+          }),
         ),
       )
 

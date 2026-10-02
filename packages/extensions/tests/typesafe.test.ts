@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Exit, Option } from "effect"
 import { ModelId, ProviderAuthError, ProviderAuthInfo } from "@gent/core/extensions/api"
+import { fixtureModelCatalog, resolveDriverModel } from "@gent/core/test-utils"
 import { makeFakeFetchState } from "./helpers/fake-http-client.js"
 import { buildTypeSafeModelDriver } from "../src/typesafe.js"
 import { decideTicket, systemOneBody, TICKET, TICKET_QUESTIONS } from "./helpers/decision-wire.js"
@@ -74,14 +75,23 @@ describe("TypeSafe catalog", () => {
     Effect.gen(function* () {
       const driver = buildTypeSafeModelDriver(Option.some(ENV_KEY))
       const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
-      const models = yield* listModels()
+      const models = yield* listModels(fixtureModelCatalog())
       expect(models.map((model) => model.id)).toEqual([
         ModelId.make("typesafe/jev-latest"),
         ModelId.make("typesafe/jev-preview"),
         ModelId.make("typesafe/jev-1.13.0"),
       ])
       expect(models.every((model) => model.kind === "classifier")).toBe(true)
-      const exit = yield* Effect.exit(driver.resolveModel("jev-latest", storedAuth))
+      const exit = yield* Effect.exit(
+        resolveDriverModel({
+          driver,
+          apiClasses: new Map(),
+          modelName: "jev-latest",
+          auth: Option.some(storedAuth),
+          hints: Option.none(),
+          catalog: fixtureModelCatalog(),
+        }),
+      )
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isSuccess(exit)) return
       expect(Cause.pretty(exit.cause)).toContain(

@@ -40,7 +40,6 @@ import { fakeFetchLayer, makeFakeFetchState } from "./helpers/fake-http-client.j
 import type { AgentEvent } from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
-import { testCatalogSource } from "./helpers/catalog-source.js"
 
 /** The name pattern both providers accept (OpenAI's 64-character bound). */
 const WIRE_NAME = /^[a-zA-Z0-9_-]{1,64}$/
@@ -126,13 +125,7 @@ const anthropicModel = Effect.gen(function* () {
       env: {},
     }),
   )
-  const driver = buildAnthropicModelDriver(
-    credentialCellRef,
-    Option.none(),
-    services,
-    testCatalogSource(),
-    "1h",
-  )
+  const driver = buildAnthropicModelDriver(credentialCellRef, Option.none(), services, "1h")
   return yield* driver.resolveModel("claude-sonnet-4-5", apiKey)
 }).pipe(Effect.provide(BunServices.layer))
 
@@ -205,7 +198,6 @@ const openaiModel = Effect.gen(function* () {
     credentialCellRef,
     new Map(),
     Option.none(),
-    testCatalogSource(),
     yield* Crypto.Crypto,
   )
   return yield* driver.resolveModel("gpt-5.4", apiKey)

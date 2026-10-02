@@ -87,10 +87,16 @@ import {
  */
 interface AuthCatalog {
   readonly providers: ReadonlyArray<AuthProviderInfo>
+  /**
+   * The models.dev providers a supported API class speaks that are not
+   * active yet: the list shows them only to a typed search.
+   */
+  readonly others: ReadonlyArray<AuthProviderInfo>
+  /** The sign-in methods of `providers` and `others` alike. */
   readonly methods: Readonly<Record<string, ReadonlyArray<AuthMethod>>>
 }
 
-const emptyCatalog: AuthCatalog = { providers: [], methods: {} }
+const emptyCatalog: AuthCatalog = { providers: [], others: [], methods: {} }
 
 /**
  * The four screens.
@@ -169,9 +175,10 @@ const catalogOf = (state: AuthState): AuthCatalog =>
   Option.getOrElse(state.catalog, () => emptyCatalog)
 
 export const AuthEvent = Schema.TaggedUnion({
-  /** The server answered `listProviders` + `listMethods`. */
+  /** The server answered `listProviders`, `listMethods` and `listCatalogProviders`. */
   Loaded: {
     providers: Schema.Array(AuthProviderInfo),
+    others: Schema.Array(AuthProviderInfo),
     methods: Schema.Record(Schema.String, Schema.Array(AuthMethod)),
   },
   /**
@@ -180,6 +187,7 @@ export const AuthEvent = Schema.TaggedUnion({
    */
   Refreshed: {
     providers: Schema.Array(AuthProviderInfo),
+    others: Schema.Array(AuthProviderInfo),
     methods: Schema.Record(Schema.String, Schema.Array(AuthMethod)),
   },
   /** A load or an action failed; the pane falls back to the list and says why. */
@@ -255,13 +263,21 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
   const apply: (event: AuthEvent) => AuthState = Match.type<AuthEvent>().pipe(
     Match.tagsExhaustive({
       Loaded: (event) => ({
-        catalog: Option.some({ providers: event.providers, methods: event.methods }),
+        catalog: Option.some({
+          providers: event.providers,
+          others: event.others,
+          methods: event.methods,
+        }),
         screen: AuthScreen.cases.List.make({}),
         error: Option.none(),
       }),
       Refreshed: (event) => ({
         ...state,
-        catalog: Option.some({ providers: event.providers, methods: event.methods }),
+        catalog: Option.some({
+          providers: event.providers,
+          others: event.others,
+          methods: event.methods,
+        }),
       }),
       Failed: (event) => list(state, Option.some(event.error)),
       OpenMethod: (event) => methods(state, event.provider),
@@ -351,9 +367,37 @@ const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<AuthM
     (): ReadonlyArray<AuthMethod> => [],
   )
 
+/** Every provider the catalog knows: the active ones, then the search's. */
+const allProviders = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> => [
+  ...catalog.providers,
+  ...catalog.others,
+]
+
 /** The provider a screen is about, looked up in the live catalog. */
 const providerFor = (catalog: AuthCatalog, provider: string): Option.Option<AuthProviderInfo> =>
-  Option.fromNullishOr(catalog.providers.find((entry) => entry.provider === provider))
+  Option.fromNullishOr(allProviders(catalog).find((entry) => entry.provider === provider))
+
+/** Whether `provider`'s label or id holds the typed query; an empty query holds every one. */
+const matchesQuery = (label: string, provider: AuthProviderInfo, query: string): boolean => {
+  const needle = query.trim().toLowerCase()
+  if (needle.length === 0) return true
+  return label.toLowerCase().includes(needle) || provider.provider.toLowerCase().includes(needle)
+}
+
+/**
+ * The list's rows for a query: the active providers it matches, then, under
+ * a typed query only, the search's providers it matches.
+ */
+export const listedProviders = (
+  catalog: AuthCatalog,
+  query: string,
+): ReadonlyArray<AuthProviderInfo> => {
+  const all = allProviders(catalog)
+  const matching = (entries: ReadonlyArray<AuthProviderInfo>) =>
+    entries.filter((entry) => matchesQuery(providerLabel(all, entry.provider), entry, query))
+  if (query.trim().length === 0) return catalog.providers
+  return [...matching(catalog.providers), ...matching(catalog.others)]
+}
 
 /**
  * What gent calls a provider, in the pane and in headless errors alike: its
@@ -430,7 +474,12 @@ export function Auth(props: AuthProps) {
   const send = (event: AuthEvent) => setState((current) => transitionAuth(current, event))
   const catalog = () => catalogOf(state())
   /** What the pane calls `provider` ({@link providerLabel}). */
-  const label = (provider: string) => providerLabel(catalog().providers, provider)
+  const label = (provider: string) => providerLabel(allProviders(catalog()), provider)
+  /** The list's typed search: it filters the active providers and finds the rest. */
+  const [query, setQuery] = createSignal("")
+  /** A provider the search found: no key, env variable or config entry yet. */
+  const isOther = (provider: AuthProviderInfo) =>
+    !catalog().providers.some((entry) => entry.provider === provider.provider)
 
   const [autoPrompted, setAutoPrompted] = createSignal(false)
   const [flashNote, setFlashNote] = createSignal(Option.none<string>())
@@ -505,14 +554,19 @@ export function Auth(props: AuthProps) {
   /**
    * A finished sign-in leaves its screen before the reload: a code typed
    * while the catalog reloads has no OAuth screen to go to, so it never
-   * asks the server for the login it already finished.
+   * asks the server for the login it already finished. The model catalog
+   * is read again whether or not the reader is still here.
    */
   const signedIn = (token: ReplyWriter, message: string) =>
-    whileCurrent(token, () => {
-      send(AuthEvent.cases.Close.make({}))
-      flashSuccess(message)
-      loadAuth(token)
-    })
+    Effect.sync(() => clientCtx.credentialsChanged()).pipe(
+      Effect.andThen(
+        whileCurrent(token, () => {
+          send(AuthEvent.cases.Close.make({}))
+          flashSuccess(message)
+          loadAuth(token)
+        }),
+      ),
+    )
 
   // ── Loading ───────────────────────────────────────────────────────
 
@@ -527,11 +581,16 @@ export function Auth(props: AuthProps) {
       Effect.all([
         clientCtx.client.auth.listProviders(request),
         clientCtx.client.auth.listMethods({ sessionId }),
+        clientCtx.client.auth.listCatalogProviders({ sessionId }),
       ]).pipe(
-        Effect.tap(([providers, methods]) =>
+        Effect.tap(([providers, methods, others]) =>
           whileCurrent(token, () => {
             clientCtx.log.info("auth:load-complete", { providers: providers.length })
-            const catalog = { providers: [...providers], methods }
+            const catalog = {
+              providers: [...providers],
+              others: [...others.providers],
+              methods: { ...others.methods, ...methods },
+            }
             if (keepScreen) send(AuthEvent.cases.Refreshed.make(catalog))
             else send(AuthEvent.cases.Loaded.make(catalog))
           }),
@@ -603,10 +662,12 @@ export function Auth(props: AuthProps) {
    * A key was stored or removed. While its action is current the pane says
    * so and goes back to the list. A reader who stepped back meanwhile
    * (`back`) stays where they are, but the catalog still changed: it is read
-   * again under the newest action and only its rows change.
+   * again under the newest action and only its rows change. The model
+   * catalog is read again either way.
    */
   const keyChanged = (token: ReplyWriter, note: Option.Option<string>) =>
     Effect.sync(() => {
+      clientCtx.credentialsChanged()
       if (!token.live()) {
         loadAuth(actions.newest(), true)
         return
@@ -742,6 +803,7 @@ export function Auth(props: AuthProps) {
             }
             // "done" means the server finished it during `authorize`.
             if (result.value.method === "done") {
+              clientCtx.credentialsChanged()
               flashSuccess(`Authenticated ${label(provider)}`)
               loadAuth(token)
               return
@@ -859,6 +921,7 @@ export function Auth(props: AuthProps) {
   // A credential that still lacks an answer its sign-in needs is not ready:
   // the row names its source and what is missing.
   const authLabel = (provider: AuthProviderInfo) => {
+    if (isOther(provider)) return "[models.dev]"
     const missing = Option.filter(
       Option.fromNullishOr(provider.missing),
       (labels) => labels.length > 0,
@@ -885,7 +948,7 @@ export function Auth(props: AuthProps) {
   }
 
   const providerRows = (): ReadonlyArray<SelectListRow<AuthProviderInfo>> =>
-    catalog().providers.map((provider) =>
+    listedProviders(catalog(), query()).map((provider) =>
       selectable(provider, (isSelected, id) => (
         <box
           id={id}
@@ -958,18 +1021,21 @@ export function Auth(props: AuthProps) {
   }
   // The row under the cursor: ctrl+x is offered only where a stored key can go.
   const [cursor, setCursor] = createSignal(Option.none<AuthProviderInfo>())
+  // Typing searches every models.dev provider gent can speak, not only the listed ones.
+  const SEARCH_HINT = keyHint("type", "to search")
   const listKeys = () => {
     if (Option.isSome(state().error)) return [keyHint("r", "retry"), listLeave()]
     if (Option.exists(cursor(), (provider) => provider.source === "stored"))
-      return [KeyHints.move, KeyHints.select, KeyHints.delete, listLeave()]
-    return [KeyHints.move, KeyHints.select, listLeave()]
+      return [SEARCH_HINT, KeyHints.move, KeyHints.select, KeyHints.delete, listLeave()]
+    return [SEARCH_HINT, KeyHints.move, KeyHints.select, listLeave()]
   }
   const dismissList = () => {
     if (enforced()) return
     Option.map(Option.fromNullishOr(props.onClose), (onClose) => onClose())
   }
-  // An empty list is still loading, unless its load failed: then it says how to retry.
-  const listLoading = () => Option.isNone(state().error)
+  // A list with no providers at all is still loading, unless its load failed: then it says
+  // how to retry. A search that matches none of the loaded providers reads `No matches`.
+  const listLoading = () => Option.isNone(state().error) && allProviders(catalog()).length === 0
   const retryRow = () =>
     Option.map(state().error, () => <text style={{ fg: theme.textMuted }}> Press r to retry.</text>)
   const keyMask = (value: string) => "*".repeat(graphemeCount(value))
@@ -1108,6 +1174,8 @@ export function Auth(props: AuthProps) {
             open={true}
             rows={providerRows}
             rowKey={(provider) => provider.provider}
+            filter={{ onQueryChange: setQuery }}
+            query={query}
             onSelect={(provider) =>
               send(AuthEvent.cases.OpenMethod.make({ provider: provider.provider }))
             }

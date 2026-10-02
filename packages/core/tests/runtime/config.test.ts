@@ -19,6 +19,7 @@ import { AgentDefinition, AgentName, DriverRef, ModelId } from "../../src/domain
 import {
   ConfigService,
   isProjectExtensionDirectoryTrusted,
+  type ProviderConfig,
   readDisabledExtensions,
   RuntimeEnvironment,
   UserConfig,
@@ -818,6 +819,44 @@ describe("user configuration", () => {
       }).pipe(
         Effect.provide(ConfigService.Test(new UserConfig({ disabledExtensions: ["@gent/todo"] }))),
       ),
+    )
+  })
+
+  describe("providers", () => {
+    it.scopedLive(
+      "project provider entries shadow user entries key by key; disabled providers add up",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const home = yield* fs.makeTempDirectoryScoped()
+          const project = yield* fs.makeTempDirectoryScoped()
+          const write = (root: string, config: ProviderConfig) =>
+            Effect.gen(function* () {
+              yield* fs.makeDirectory(path.join(root, ".gent"), { recursive: true })
+              yield* fs.writeFileString(path.join(root, ".gent", "config.json"), encodeJson(config))
+            })
+          yield* write(home, {
+            providers: { deepseek: {}, proxy: { class: "openai-chat", api: "https://a.test/v1" } },
+            disabledProviders: ["nano-gpt"],
+          })
+          yield* write(project, {
+            providers: { proxy: { api: "https://b.test/v1" } },
+            disabledProviders: ["vercel"],
+          })
+          const live = ConfigService.Live.pipe(
+            Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+            Layer.provide(BunServices.layer),
+          )
+          yield* Effect.gen(function* () {
+            const result = yield* (yield* ConfigService).get(project)
+            expect(result.providers).toEqual({
+              deepseek: {},
+              proxy: { api: "https://b.test/v1" },
+            })
+            expect(result.disabledProviders).toEqual(["nano-gpt", "vercel"])
+          }).pipe(Effect.provide(live))
+        }).pipe(Effect.provide(BunServices.layer)),
     )
   })
 

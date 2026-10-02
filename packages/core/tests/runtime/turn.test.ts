@@ -112,6 +112,7 @@ import {
   createRpcClient,
   createRpcHarness,
   hostProfileRegistry,
+  fixtureModelCatalogSource,
   recordingEventStore,
 } from "../../src/test-utils/harness"
 import {
@@ -1917,7 +1918,10 @@ describe("model driver and catalog", () => {
         }),
     }
     const layer = actorTestRoot({
-      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      resolver: ModelResolver.Live.pipe(
+        Layer.provide(Auth.Test()),
+        Layer.provide(fixtureModelCatalogSource),
+      ),
       registry: ExtensionRegistry.fromResolved(
         resolveExtensions([
           {
@@ -1999,7 +2003,10 @@ describe("model driver and catalog", () => {
     }
     const events = Ref.makeUnsafe<Array<AgentEvent>>([])
     const layer = actorTestRoot({
-      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      resolver: ModelResolver.Live.pipe(
+        Layer.provide(Auth.Test()),
+        Layer.provide(fixtureModelCatalogSource),
+      ),
       eventStore: recordingEventStore(events),
       registry: ExtensionRegistry.fromResolved(
         resolveExtensions([
@@ -2149,7 +2156,10 @@ describe("native model compaction integration", () => {
       }),
     )
     const layer = actorTestRoot({
-      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      resolver: ModelResolver.Live.pipe(
+        Layer.provide(Auth.Test()),
+        Layer.provide(fixtureModelCatalogSource),
+      ),
       registry: ExtensionRegistry.fromResolved(
         resolveExtensions([
           {
@@ -2386,7 +2396,10 @@ describe("native model context projection", () => {
       },
     ])
     const extensionRegistry = ExtensionRegistry.fromResolved(resolved)
-    const modelResolver = ModelResolver.Live.pipe(Layer.provide(Auth.Test()))
+    const modelResolver = ModelResolver.Live.pipe(
+      Layer.provide(Auth.Test()),
+      Layer.provide(fixtureModelCatalogSource),
+    )
     const layer = actorTestRoot({
       registry: extensionRegistry,
       models: [

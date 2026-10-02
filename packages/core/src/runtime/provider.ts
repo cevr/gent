@@ -6,6 +6,7 @@ import {
   Context,
   Duration,
   Effect,
+  Fiber,
   FileSystem,
   Layer,
   Option,
@@ -13,13 +14,17 @@ import {
   Path,
   Predicate,
   Random,
+  Ref,
   Schedule,
   Schema,
   Scope,
   Semaphore,
   Stream,
+  Struct,
 } from "effect"
+import { HttpClient, HttpClientRequest } from "effect/http"
 import { Database } from "bun:sqlite"
+import { ModelCatalogSnapshotStorage } from "../storage/storage.js"
 import {
   AgentName,
   byReleaseDateDesc,
@@ -30,29 +35,38 @@ import {
   ProviderId,
 } from "../domain/agent.js"
 import { SessionId, ToolCallId } from "../domain/ids.js"
-import {
-  ExtensionRegistry,
-  type ExtensionRegistryService,
-  listModelCatalog,
-  type ModelCatalogFailure,
-} from "./extension-host.js"
-import { causeMessage } from "../domain/guards.js"
+import { ExtensionRegistry, type ExtensionRegistryService } from "./extension-host.js"
+import { causeMessage, type JsonRecord, omitUndefined } from "../domain/guards.js"
 import { wireToolName } from "../domain/capability.js"
 import {
   AuthAuthorizationMethod,
   AuthMetadata,
   AuthMethod,
   type AuthPrompt,
+  CatalogLimit,
+  type ApiClassContribution,
+  apiClassFor,
+  type ApiEndpoint,
+  type CatalogModel,
+  catalogModelEntry,
+  type CatalogProvider,
   DEFAULT_RETRY_POLICY,
+  DriverError,
+  DriverFailureId,
+  type ModelCatalogView,
   type ModelDriverContribution,
+  modelFromCatalog,
+  ReasoningOption,
   type PersistAuth,
   ProviderAuthError,
   ProviderAuthInfo,
   type ProviderHints,
+  type ProviderResolution,
   type RetryPolicy,
   type StoredOAuthCredentials,
 } from "../domain/driver.js"
 import { GentPlatform, writeFileAtomic } from "./gent-platform.js"
+import type { ProviderConfig, ProviderConfigEntry } from "./config.js"
 import { DecisionModel, LanguageModel } from "effect/ai"
 import { ProviderError } from "../domain/errors.js"
 import * as AiError from "effect/ai/AiError"
@@ -173,9 +187,16 @@ interface AuthStoreAccess {
   ) => Effect.Effect<AuthInfo | undefined, AuthError | AuthEntryInvalid>
   readonly set: (provider: string, info: AuthInfo) => Effect.Effect<void, AuthError>
   readonly remove: (provider: string) => Effect.Effect<void, AuthError>
+  /** The provider ids an entry is stored under, decoded or not. */
+  readonly list: Effect.Effect<ReadonlyArray<string>, AuthError>
 }
 
 export interface AuthService {
+  /**
+   * The provider ids an entry is stored under: what tells a generic provider
+   * with a stored key from the rest without one read per provider.
+   */
+  readonly list: Effect.Effect<ReadonlyArray<string>, AuthError>
   // oxlint-disable-next-line effect/noNullish -- Auth lookup uses undefined when a provider has no stored credentials.
   readonly get: (provider: string) => Effect.Effect<AuthInfo | undefined, AuthError>
   readonly set: (provider: string, info: AuthInfo) => Effect.Effect<void, AuthError>
@@ -247,6 +268,7 @@ export const serializeAuthStore = (
       ),
     )
   return {
+    list: store.list,
     get: (provider) =>
       store
         .get(provider)
@@ -404,6 +426,17 @@ export class Auth extends Context.Service<Auth, AuthService>()(
               fs
                 .remove(fileOf(provider), { force: true })
                 .pipe(Effect.mapError(wrap("Failed to remove auth info"))),
+            // A dot file (the lock directory, a staged write) is no entry.
+            list: fs.readDirectory(directory).pipe(
+              Effect.map((names) =>
+                names.filter((name) => !name.startsWith(".")).map(decodeURIComponent),
+              ),
+              Effect.catchIf(
+                (error) => error.reason._tag === "NotFound",
+                () => Effect.succeed([]),
+              ),
+              Effect.mapError(wrap("Failed to list auth info")),
+            ),
           },
           fileProviderLock(lockDirectory, pathService, fs),
         )
@@ -417,6 +450,7 @@ export class Auth extends Context.Service<Auth, AuthService>()(
     Layer.sync(Auth)(() => {
       const map = new Map(Object.entries(initial))
       return serializeAuthStore({
+        list: Effect.sync(() => [...map.keys()]),
         get: (provider) => Effect.sync(() => map.get(provider)),
         set: (provider, info) =>
           Effect.sync(() => {
@@ -539,7 +573,8 @@ const driverEnvReady = (driver: ModelDriverContribution): Effect.Effect<boolean>
   envCredentialSet(Option.fromUndefinedOr(driver.envCredential))
 
 /**
- * Every sign-in of the registered model drivers, with its stored auth: one
+ * Every sign-in of the registered model drivers and of the active generic
+ * providers (`servedProfile`), with its stored auth: one
  * row per driver, except a driver that uses another's sign-in
  * (`credentialFrom`), whose owner's row stands for both. A row is `required`
  * when one of `requiredDriverIds` uses it: the drivers the caller's turns
@@ -551,7 +586,7 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
   requiredDriverIds: ReadonlyArray<string>,
 ) {
   const auth = yield* Auth
-  const drivers = (yield* ExtensionRegistry).getResolved().modelDrivers
+  const drivers = (yield* servedProfile(auth, requiredDriverIds)).modelDrivers
   const required = new Set(requiredDriverIds.map((id) => credentialOwner(drivers, id)))
   const providers: AuthProviderInfo[] = []
   for (const driver of drivers.values()) {
@@ -770,9 +805,9 @@ const askedMethod = (method: AuthMethod): Effect.Effect<AuthMethod> => {
   ).pipe(Effect.map((prompts) => AuthMethod.make({ ...method, prompts })))
 }
 
-/** The login methods of each driver that has one. */
+/** The login methods of each driver that has one, active generic providers included. */
 export const listAuthMethods = Effect.fn("ProviderLogin.listMethods")(function* () {
-  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  const { modelDrivers } = yield* servedProfile(yield* Auth)
   const result: Record<string, ReadonlyArray<AuthMethod>> = {}
   for (const provider of modelDrivers.values()) {
     // A driver that uses another's sign-in signs in through that one.
@@ -861,6 +896,1170 @@ export const completeProviderAuth = Effect.fn("ProviderLogin.callback")(function
     )
 })
 
+// ── model catalog source ────────────────────────────────────────────────────
+
+/*
+ * models.dev is the model catalog, and core reads it. The owner's direction
+ * (Pass 30), which replaces the rule that core fetches nothing: "models.dev is
+ * integral to discovery of models via providers so we don't really need to
+ * hardcode anything, only limiting factor is classes of api's we support",
+ * and "snapshotting will be good so we don't constantly ping … we can put that
+ * in our sqlite db".
+ *
+ * Two sources: `api.json` (the chat models) and `api.json?type=decision` (the
+ * decision models, which `api.json` leaves out). Each is stored as served in
+ * `model_catalog_snapshots`, with its ETag.
+ *
+ * - A read serves the snapshot in memory, or the stored row, at once.
+ * - A read that finds the snapshot checked more than an hour ago starts one
+ *   background revalidation: a GET with `If-None-Match`. A 304 moves
+ *   `checked_at` only; a 200 replaces the row; any failure changes nothing.
+ *   One revalidation runs at a time per process; there is no timer.
+ * - With no row, the first read fetches and waits (10 s). It is the only
+ *   blocking fetch. A source that could not be fetched is tried again in the
+ *   background a minute later, so an offline start never waits twice.
+ * - A body that does not parse is not stored.
+ *
+ * The catalog parses once per process and decodes a provider only when one is
+ * read, field by field: an odd field drops itself, never the model.
+ */
+
+const MODELS_DEV_ORIGIN = "https://models.dev"
+/**
+ * Where the catalog is fetched: models.dev, or a mirror `GENT_MODEL_CATALOG_URL`
+ * names. The test preload points it at a closed local port, so a test server
+ * that forgets the fixture client never reaches the network.
+ */
+const catalogOrigin = Config.option(Config.NonEmptyString("GENT_MODEL_CATALOG_URL")).pipe(
+  Effect.map((url) => Option.getOrElse(url, () => MODELS_DEV_ORIGIN).replace(/\/+$/, "")),
+  Effect.orElseSucceed(() => MODELS_DEV_ORIGIN),
+)
+/** The two models.dev sources, as `model_catalog_snapshots.source` names them. */
+const CATALOG_SOURCES = ["api.json", "api.json?type=decision"] as const
+type CatalogSourceName = (typeof CATALOG_SOURCES)[number]
+const CATALOG_FETCH_TIMEOUT = Duration.seconds(10)
+const CATALOG_REVALIDATE_AFTER = Duration.hours(1)
+/** How soon a source that could not be fetched at all is tried again. */
+const CATALOG_RETRY_MISSING_AFTER = Duration.minutes(1)
+/** A snapshot older than this is reported as a catalog failure. */
+const CATALOG_OFFLINE_NOTICE_AFTER = Duration.days(7)
+
+const decodeCatalogBody = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+)
+const RawCost = Schema.Struct({
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cache_read: Schema.optional(Schema.Finite),
+  cache_write: Schema.optional(Schema.Finite),
+})
+const decodeReasoningOption = Schema.decodeUnknownOption(ReasoningOption)
+const decodeRawEffortOption = Schema.decodeUnknownOption(
+  Schema.Struct({ type: Schema.Literal("effort"), values: Schema.Array(Schema.Json) }),
+)
+const JsonObject = Schema.Record(Schema.String, Schema.Unknown)
+
+/** One field of a raw entry, decoded alone; none when it is absent or odd. */
+const field = <A>(
+  raw: JsonRecord,
+  key: string,
+  schema: Schema.Codec<A, unknown, never, never>,
+): Option.Option<A> => Schema.decodeUnknownOption(schema)(raw[key])
+
+/** The object under `key`, or an empty one when it is absent or not an object. */
+const objectField = (raw: JsonRecord, key: string): JsonRecord =>
+  Option.getOrElse(field(raw, key, JsonObject), () => ({}))
+
+/** One `reasoning_options` entry; an effort list's `null` becomes `"none"`. */
+const parseReasoningOption = (value: Schema.Json): Option.Option<ReasoningOption> =>
+  Option.match(decodeRawEffortOption(value), {
+    onNone: () => decodeReasoningOption(value),
+    onSome: (effort) =>
+      Option.some(
+        ReasoningOption.cases.effort.make({
+          type: "effort",
+          values: effort.values.flatMap((each) => {
+            if (Predicate.isString(each)) return [each]
+            if (Predicate.isNull(each)) return ["none"]
+            return []
+          }),
+        }),
+      ),
+  })
+
+/**
+ * The model `id` of a raw models.dev `models` object as a `CatalogModel`;
+ * none when it is not an object. The models.dev field names
+ * (`release_date`, `cache_read`, the `provider` override, `interleaved.field`,
+ * `type`) are read here and only here.
+ */
+const parseCatalogModel = (models: JsonRecord, id: string): Option.Option<CatalogModel> =>
+  Option.map(field(models, id, JsonObject), (raw) => {
+    const override = objectField(raw, "provider")
+    const cost = Option.map(field(raw, "cost", RawCost), (each) => ({
+      input: each.input,
+      output: each.output,
+      ...omitUndefined({ cacheRead: each.cache_read, cacheWrite: each.cache_write }),
+    }))
+    const reasoningOptions = Option.map(
+      field(raw, "reasoning_options", Schema.Array(Schema.Json)),
+      (values) => values.flatMap((each) => Option.toArray(parseReasoningOption(each))),
+    )
+    const decision = field(raw, "type", Schema.String).pipe(
+      Option.filter((type) => type === "decision"),
+      Option.as(true),
+    )
+    return {
+      id,
+      name: Option.getOrElse(field(raw, "name", Schema.String), () => id),
+      ...omitUndefined({
+        cost: Option.getOrUndefined(cost),
+        limit: Option.getOrUndefined(field(raw, "limit", CatalogLimit)),
+        releaseDate: Option.getOrUndefined(field(raw, "release_date", Schema.String)),
+        toolCall: Option.getOrUndefined(field(raw, "tool_call", Schema.Boolean)),
+        reasoning: Option.getOrUndefined(field(raw, "reasoning", Schema.Boolean)),
+        temperature: Option.getOrUndefined(field(raw, "temperature", Schema.Boolean)),
+        reasoningOptions: Option.getOrUndefined(reasoningOptions),
+        reasoningField: Option.getOrUndefined(
+          field(objectField(raw, "interleaved"), "field", Schema.String),
+        ),
+        npm: Option.getOrUndefined(field(override, "npm", Schema.String)),
+        api: Option.getOrUndefined(field(override, "api", Schema.String)),
+        protocol: Option.getOrUndefined(field(override, "shape", Schema.String)),
+        decision: Option.getOrUndefined(decision),
+      }),
+    } satisfies CatalogModel
+  })
+
+/** The provider `id` of a raw models.dev body as a `CatalogProvider`; none when it is not an object. */
+const parseCatalogProvider = (body: JsonRecord, id: string): Option.Option<CatalogProvider> =>
+  Option.map(field(body, id, JsonObject), (raw) => {
+    const models = objectField(raw, "models")
+    return {
+      id,
+      name: Option.getOrElse(field(raw, "name", Schema.String), () => id),
+      env: Option.getOrElse(field(raw, "env", Schema.Array(Schema.String)), () => []),
+      ...omitUndefined({
+        npm: Option.getOrUndefined(field(raw, "npm", Schema.String)),
+        api: Option.getOrUndefined(field(raw, "api", Schema.String)),
+      }),
+      models: Object.keys(models).flatMap((modelId) =>
+        Option.toArray(parseCatalogModel(models, modelId)),
+      ),
+    } satisfies CatalogProvider
+  })
+
+/** One parsed source: the raw providers, decoded one at a time on first read. */
+interface ParsedCatalogSource {
+  readonly raw: JsonRecord
+  readonly decoded: Map<string, Option.Option<CatalogProvider>>
+}
+
+const parsedCatalogSource = (raw: JsonRecord): ParsedCatalogSource => ({
+  raw,
+  decoded: new Map(),
+})
+
+const sourceProvider = (
+  source: ParsedCatalogSource,
+  id: string,
+): Option.Option<CatalogProvider> => {
+  const cached = source.decoded.get(id)
+  if (Predicate.isNotUndefined(cached)) return cached
+  let decoded = Option.none<CatalogProvider>()
+  if (Object.hasOwn(source.raw, id)) decoded = parseCatalogProvider(source.raw, id)
+  source.decoded.set(id, decoded)
+  return decoded
+}
+
+/** What the process holds of one source: the parsed body, its ETag, when it was last confirmed. */
+interface HeldCatalogSource {
+  readonly parsed: ParsedCatalogSource
+  readonly etag: Option.Option<string>
+  readonly checkedAt: number
+}
+
+/** Each source held, or the time a fetch of a source with no row last failed. */
+interface HeldCatalog {
+  readonly sources: Readonly<Partial<Record<CatalogSourceName, HeldCatalogSource>>>
+  readonly missingSince: Readonly<Partial<Record<CatalogSourceName, number>>>
+}
+
+/**
+ * The models.dev catalog as one read sees it: each provider (its chat models,
+ * then its decision models), every provider id, and why the catalog may be
+ * missing or old.
+ */
+export interface LoadedModelCatalog extends ModelCatalogView {
+  readonly providerIds: ReadonlyArray<string>
+  /** `models.dev catalog N days old, offline`, or unavailable; none when fresh enough. */
+  readonly failure: Option.Option<string>
+}
+
+const loadedModelCatalog = (held: HeldCatalog, now: number): LoadedModelCatalog => {
+  const chat = Option.fromUndefinedOr(held.sources["api.json"])
+  const decision = Option.fromUndefinedOr(held.sources["api.json?type=decision"])
+  const provider = (id: string): Option.Option<CatalogProvider> => {
+    const fromChat = Option.flatMap(chat, (source) => sourceProvider(source.parsed, id))
+    const fromDecision = Option.flatMap(decision, (source) => sourceProvider(source.parsed, id))
+    if (Option.isNone(fromDecision)) return fromChat
+    if (Option.isNone(fromChat)) return fromDecision
+    return Option.some({
+      ...fromChat.value,
+      models: [...fromChat.value.models, ...fromDecision.value.models],
+    })
+  }
+  const providerIds = [
+    ...new Set([
+      ...Option.match(chat, {
+        onNone: () => [],
+        onSome: (source) => Object.keys(source.parsed.raw),
+      }),
+      ...Option.match(decision, {
+        onNone: () => [],
+        onSome: (source) => Object.keys(source.parsed.raw),
+      }),
+    ]),
+  ]
+  const failure = Option.match(chat, {
+    onNone: () =>
+      Option.some("models.dev catalog unavailable: no snapshot stored and models.dev unreachable"),
+    onSome: (source) => {
+      const age = now - source.checkedAt
+      if (age <= Duration.toMillis(CATALOG_OFFLINE_NOTICE_AFTER)) return Option.none<string>()
+      const days = Math.floor(age / Duration.toMillis(Duration.days(1)))
+      return Option.some(`models.dev catalog ${days} days old, offline`)
+    },
+  })
+  return { provider, providerIds, failure }
+}
+
+/**
+ * The catalog of two bodies as served, confirmed now: what a driver test hands
+ * a driver's `listModels` or `resolveModel` without a server.
+ */
+export const modelCatalogFromBodies = (bodies: {
+  readonly chat: string
+  readonly decision: string
+}): LoadedModelCatalog => {
+  const held = (body: string): Option.Option<HeldCatalogSource> =>
+    Option.map(decodeCatalogBody(body), (raw) => ({
+      parsed: parsedCatalogSource(raw),
+      etag: Option.none(),
+      checkedAt: 0,
+    }))
+  const sources: Partial<Record<CatalogSourceName, HeldCatalogSource>> = omitUndefined({
+    "api.json": Option.getOrUndefined(held(bodies.chat)),
+    "api.json?type=decision": Option.getOrUndefined(held(bodies.decision)),
+  })
+  return loadedModelCatalog({ sources, missingSince: {} }, 0)
+}
+
+/** A source to revalidate now: confirmed over an hour ago, or missing and last tried over a minute ago. */
+const sourceDue = (held: HeldCatalog, source: CatalogSourceName, now: number): boolean => {
+  const kept = held.sources[source]
+  if (Predicate.isNotUndefined(kept)) {
+    return now - kept.checkedAt > Duration.toMillis(CATALOG_REVALIDATE_AFTER)
+  }
+  const missingSince = held.missingSince[source]
+  if (Predicate.isUndefined(missingSince)) return true
+  return now - missingSince > Duration.toMillis(CATALOG_RETRY_MISSING_AFTER)
+}
+
+/** A body that arrived: the text as served and its ETag. */
+interface ArrivedCatalogBody {
+  readonly body: string
+  readonly etag: Option.Option<string>
+}
+
+interface ModelCatalogSourceService {
+  /**
+   * The catalog. Never fails: with no snapshot and no network it is empty and
+   * says why in `failure`.
+   */
+  readonly read: Effect.Effect<LoadedModelCatalog>
+}
+
+export class ModelCatalogSource extends Context.Service<
+  ModelCatalogSource,
+  ModelCatalogSourceService
+>()("@gent/core/src/runtime/provider/ModelCatalogSource") {
+  static Live: Layer.Layer<
+    ModelCatalogSource,
+    never,
+    ModelCatalogSnapshotStorage | HttpClient.HttpClient
+  > = Layer.effect(
+    ModelCatalogSource,
+    Effect.gen(function* () {
+      const storage = yield* ModelCatalogSnapshotStorage
+      const http = yield* HttpClient.HttpClient
+      const origin = yield* catalogOrigin
+      const scope = yield* Effect.scope
+      const held = yield* Ref.make(Option.none<HeldCatalog>())
+      const loadLock = yield* Semaphore.make(1)
+      const loading = yield* Ref.make(Option.none<Fiber.Fiber<HeldCatalog>>())
+      const revalidating = yield* Ref.make(false)
+
+      /** The source's body, or none on a 304; fails on any other answer or after 10 s. */
+      const fetchSource = Effect.fn("ModelCatalogSource.fetch")(function* (
+        source: CatalogSourceName,
+        etag: Option.Option<string>,
+      ) {
+        let request = HttpClientRequest.get(`${origin}/${source}`).pipe(
+          HttpClientRequest.setHeader("user-agent", "gent"),
+        )
+        if (Option.isSome(etag)) {
+          request = HttpClientRequest.setHeader(request, "if-none-match", etag.value)
+        }
+        const response = yield* http.execute(request)
+        if (response.status === 304) return Option.none<ArrivedCatalogBody>()
+        if (response.status !== 200) {
+          return yield* Effect.fail(`models.dev answered ${response.status}`)
+        }
+        const body = yield* response.text
+        return Option.some({
+          body,
+          etag: Option.fromUndefinedOr(response.headers["etag"]),
+        } satisfies ArrivedCatalogBody)
+      }, Effect.timeout(CATALOG_FETCH_TIMEOUT))
+
+      /** Store a body that parses; none when it does not. */
+      const storeArrived = Effect.fn("ModelCatalogSource.store")(function* (
+        source: CatalogSourceName,
+        arrived: ArrivedCatalogBody,
+      ) {
+        const parsed = decodeCatalogBody(arrived.body)
+        if (Option.isNone(parsed)) {
+          yield* Effect.logWarning("model-catalog.unparsable-body").pipe(
+            Effect.annotateLogs({ source }),
+          )
+          return Option.none<HeldCatalogSource>()
+        }
+        const now = yield* Clock.currentTimeMillis
+        yield* storage
+          .put({
+            source,
+            body: arrived.body,
+            etag: arrived.etag,
+            fetched_at: now,
+            checked_at: now,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("model-catalog.store-failed").pipe(
+                Effect.annotateLogs({ source, error: error.message }),
+              ),
+            ),
+          )
+        return Option.some({
+          parsed: parsedCatalogSource(parsed.value),
+          etag: arrived.etag,
+          checkedAt: now,
+        } satisfies HeldCatalogSource)
+      })
+
+      /** The stored row of a source, parsed; none when absent, unreadable or unparsable. */
+      const storedSource = Effect.fn("ModelCatalogSource.stored")(function* (
+        source: CatalogSourceName,
+      ) {
+        const row = yield* storage
+          .get(source)
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("model-catalog.read-failed").pipe(
+                Effect.annotateLogs({ source, error: error.message }),
+                Effect.as(Option.none()),
+              ),
+            ),
+          )
+        return Option.flatMap(row, (stored) =>
+          Option.map(decodeCatalogBody(stored.body), (parsed) => ({
+            parsed: parsedCatalogSource(parsed),
+            etag: stored.etag,
+            checkedAt: stored.checked_at,
+          })),
+        )
+      })
+
+      /**
+       * One source brought up to date: a 304 confirms what is held, a 200 that
+       * parses replaces it, and a failure keeps it (or, with nothing held,
+       * records when it failed).
+       */
+      const refreshSource = Effect.fn("ModelCatalogSource.refresh")(function* (
+        source: CatalogSourceName,
+        kept: Option.Option<HeldCatalogSource>,
+      ) {
+        const etag = Option.flatMap(kept, (each) => each.etag)
+        const answer = yield* fetchSource(source, etag).pipe(
+          Effect.asSome,
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+            return Effect.logWarning("model-catalog.fetch-failed").pipe(
+              Effect.annotateLogs({ source, error: causeMessage(Cause.squash(cause)) }),
+              Effect.as(Option.none<Option.Option<ArrivedCatalogBody>>()),
+            )
+          }),
+        )
+        if (Option.isNone(answer)) return kept
+        const arrived = answer.value
+        if (Option.isSome(arrived)) {
+          const stored = yield* storeArrived(source, arrived.value)
+          return Option.orElse(stored, () => kept)
+        }
+        if (Option.isNone(kept)) return kept
+        const now = yield* Clock.currentTimeMillis
+        yield* storage
+          .confirm(source, now)
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("model-catalog.confirm-failed").pipe(
+                Effect.annotateLogs({ source, error: error.message }),
+              ),
+            ),
+          )
+        return Option.some({ ...kept.value, checkedAt: now })
+      })
+
+      /** Fold one source's outcome into what the process holds. */
+      const holdSource = (
+        current: HeldCatalog,
+        source: CatalogSourceName,
+        outcome: Option.Option<HeldCatalogSource>,
+        now: number,
+      ): HeldCatalog =>
+        Option.match(outcome, {
+          onSome: (kept) => ({
+            sources: { ...current.sources, [source]: kept },
+            missingSince: Object.fromEntries(
+              Object.entries(current.missingSince).filter(([name]) => name !== source),
+            ),
+          }),
+          onNone: () => {
+            if (Predicate.isNotUndefined(current.sources[source])) return current
+            return { ...current, missingSince: { ...current.missingSince, [source]: now } }
+          },
+        })
+
+      const revalidate = Effect.gen(function* () {
+        const before = yield* Ref.get(held)
+        if (Option.isNone(before)) return
+        const now = yield* Clock.currentTimeMillis
+        const due = CATALOG_SOURCES.filter((source) => sourceDue(before.value, source, now))
+        const outcomes = yield* Effect.forEach(
+          due,
+          (source) =>
+            Effect.map(
+              refreshSource(source, Option.fromUndefinedOr(before.value.sources[source])),
+              (outcome) => [source, outcome] as const,
+            ),
+          { concurrency: CATALOG_SOURCES.length },
+        )
+        const after = yield* Clock.currentTimeMillis
+        yield* Ref.update(held, (current) =>
+          Option.map(current, (value) =>
+            outcomes.reduce(
+              (next, [source, outcome]) => holdSource(next, source, outcome, after),
+              value,
+            ),
+          ),
+        )
+      }).pipe(Effect.ensuring(Ref.set(revalidating, false)))
+
+      /** Start one background revalidation unless one is running. */
+      const startRevalidation = Effect.gen(function* () {
+        const start = yield* Ref.modify(revalidating, (running) => [!running, true] as const)
+        if (start) yield* Effect.forkIn(revalidate, scope)
+      })
+
+      /** Load the stored rows; a source with no row is fetched and waited for. */
+      const loadOnce = Effect.gen(function* () {
+        const outcomes = yield* Effect.forEach(
+          CATALOG_SOURCES,
+          (source) =>
+            Effect.gen(function* () {
+              const stored = yield* storedSource(source)
+              if (Option.isSome(stored)) return [source, stored] as const
+              return [source, yield* refreshSource(source, Option.none())] as const
+            }),
+          { concurrency: CATALOG_SOURCES.length },
+        )
+        const now = yield* Clock.currentTimeMillis
+        const empty: HeldCatalog = { sources: {}, missingSince: {} }
+        const loaded = outcomes.reduce(
+          (next, [source, outcome]) => holdSource(next, source, outcome, now),
+          empty,
+        )
+        yield* Ref.set(held, Option.some(loaded))
+        return loaded
+      })
+
+      /**
+       * The one load, started at most once as a fiber of the layer's scope.
+       * A reader that is stopped (an Esc during the first fetch) stops only
+       * its wait: the load goes on, and the next reader joins it.
+       */
+      const loadFiber = Effect.gen(function* () {
+        const running = yield* Ref.get(loading)
+        if (Option.isSome(running)) return running.value
+        const fiber = yield* Effect.forkIn(loadOnce, scope)
+        yield* Ref.set(loading, Option.some(fiber))
+        return fiber
+      }).pipe(loadLock.withPermits(1))
+      const load = Effect.flatMap(loadFiber, Fiber.join)
+
+      const read = Effect.fn("ModelCatalogSource.read")(function* () {
+        const current = yield* Ref.get(held)
+        const loaded = yield* Option.match(current, {
+          onSome: Effect.succeed,
+          onNone: () => load,
+        })
+        const now = yield* Clock.currentTimeMillis
+        if (CATALOG_SOURCES.some((source) => sourceDue(loaded, source, now))) {
+          yield* startRevalidation
+        }
+        return loadedModelCatalog(loaded, now)
+      })
+
+      return ModelCatalogSource.of({ read: read() })
+    }),
+  )
+
+  /** A catalog that never changes and fetches nothing: a host that brings its own snapshot. */
+  static fixed = (catalog: LoadedModelCatalog): Layer.Layer<ModelCatalogSource> =>
+    Layer.succeed(ModelCatalogSource, ModelCatalogSource.of({ read: Effect.succeed(catalog) }))
+}
+
+// ── driver composition ──────────────────────────────────────────────────────
+//
+// A model driver is the adapter of one models.dev provider. Core composes the
+// catalog entry, the API class that speaks it and the adapter's endpoint into
+// a model, and lists the provider's models a class speaks, unless the driver
+// resolves or lists them itself.
+
+/** The drivers and the API classes of one profile. */
+interface DriverProfile {
+  readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
+  readonly apiClasses: ReadonlyMap<string, ApiClassContribution>
+}
+
+/** The models.dev provider `driver` serves. */
+const catalogProviderOf = (driver: ModelDriverContribution): string =>
+  driver.catalogProvider ?? driver.id
+
+/** The catalog as `driver` reads it: its catalog provider's entries with its overrides applied. */
+const driverCatalogView = (
+  catalog: ModelCatalogView,
+  driver: ModelDriverContribution,
+): ModelCatalogView => {
+  const overrides = driver.overrides ?? []
+  if (overrides.length === 0) return catalog
+  const own = catalogProviderOf(driver)
+  return {
+    provider: (id) =>
+      Option.map(catalog.provider(id), (provider) => {
+        if (id !== own) return provider
+        return {
+          ...provider,
+          models: provider.models.map((entry) =>
+            overrides.reduce((patched, override) => {
+              if (!override.match.test(patched.id)) return patched
+              return override.patch(patched)
+            }, entry),
+          ),
+        }
+      }),
+  }
+}
+
+/**
+ * The models core lists for a driver with an endpoint: its catalog
+ * provider's entries the agent loop can drive (tool calling, not a decision
+ * model) that some class speaks, each with the class's cache lifetime, then
+ * the provider's decision models when the driver resolves classifiers.
+ */
+const catalogDriverModels = (
+  apiClasses: ReadonlyMap<string, ApiClassContribution>,
+  driver: ModelDriverContribution,
+  catalog: ModelCatalogView,
+): ReadonlyArray<Model> => {
+  const providerId = catalogProviderOf(driver)
+  const entries = Option.match(catalog.provider(providerId), {
+    onNone: (): ReadonlyArray<CatalogModel> => [],
+    onSome: (provider) => provider.models,
+  })
+  const chat = entries.flatMap((raw) => {
+    if (raw.toolCall === false || raw.decision === true) return []
+    const entry = catalogModelEntry(catalog, providerId, raw.id)
+    const apiClass = Option.flatMap(entry, (value) => apiClassFor(apiClasses.values(), value))
+    return Option.toArray(
+      Option.map(apiClass, (speaker) => {
+        const model = modelFromCatalog(driver.id, raw)
+        return Option.match(speaker.promptCacheTtl, {
+          onNone: () => model,
+          onSome: (ttl) => Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(ttl) }),
+        })
+      }),
+    )
+  })
+  if (Predicate.isUndefined(driver.resolveDecisionModel)) return chat
+  const classifiers = entries
+    .filter((entry) => entry.decision === true)
+    .map((entry) => modelFromCatalog(driver.id, entry))
+  return [...chat, ...classifiers]
+}
+
+/** The driver's models: its own list over its catalog view, else core's. */
+const driverModels = (
+  apiClasses: ReadonlyMap<string, ApiClassContribution>,
+  driver: ModelDriverContribution,
+  catalog: ModelCatalogView,
+  auth: Option.Option<ProviderAuthInfo>,
+): Effect.Effect<ReadonlyArray<Model>, DriverError | ProviderAuthError> => {
+  const view = driverCatalogView(catalog, driver)
+  const listModels = driver.listModels
+  if (Predicate.isNotUndefined(listModels)) {
+    return Effect.suspend(() => listModels(view, Option.getOrUndefined(auth)))
+  }
+  return Effect.sync(() => catalogDriverModels(apiClasses, driver, view))
+}
+
+/** Whether a driver lists models: its own list, or core's for a driver with an endpoint. */
+const listsModels = (driver: ModelDriverContribution): boolean =>
+  Predicate.isNotUndefined(driver.listModels) || Predicate.isNotUndefined(driver.endpoint)
+
+const driverFailure = (driver: ModelDriverContribution, reason: string): DriverError =>
+  new DriverError({ driver: DriverFailureId.make(driver.id), reason })
+
+/** One model a driver resolves: the request core or a test hands `resolveDriverModel`. */
+interface DriverModelRequest {
+  readonly driver: ModelDriverContribution
+  readonly apiClasses: ReadonlyMap<string, ApiClassContribution>
+  readonly modelName: string
+  readonly auth: Option.Option<ProviderAuthInfo>
+  readonly hints: Option.Option<ProviderHints>
+  readonly catalog: ModelCatalogView
+}
+
+/**
+ * Resolve one model of a driver: the driver's own `resolveModel` over its
+ * catalog view, else core's composition: the catalog entry, the class that
+ * speaks it and the driver's endpoint. A model with no entry, a decision
+ * model, and a model no registered class speaks fail with `DriverError`.
+ */
+export const resolveDriverModel = (
+  request: DriverModelRequest,
+): Effect.Effect<ProviderResolution, ProviderAuthError | DriverError> =>
+  Effect.gen(function* () {
+    const { driver, modelName } = request
+    const view = driverCatalogView(request.catalog, driver)
+    const own = driver.resolveModel
+    if (Predicate.isNotUndefined(own)) {
+      return yield* own(
+        modelName,
+        Option.getOrUndefined(request.auth),
+        Option.getOrUndefined(request.hints),
+        view,
+      )
+    }
+    const endpointFor = driver.endpoint
+    if (Predicate.isUndefined(endpointFor)) {
+      return yield* driverFailure(driver, `${driver.name} names no endpoint and no resolveModel`)
+    }
+    const entry = catalogModelEntry(view, catalogProviderOf(driver), modelName)
+    if (Option.isNone(entry)) {
+      return yield* driverFailure(
+        driver,
+        `${driver.name} model "${modelName}" has no entry in the models.dev catalog`,
+      )
+    }
+    if (entry.value.decision === true) {
+      return yield* driverFailure(
+        driver,
+        `${driver.id}/${modelName} is a classifier model: it runs no turn; a cell asks it with models.decide`,
+      )
+    }
+    const apiClass = apiClassFor(request.apiClasses.values(), entry.value)
+    if (Option.isNone(apiClass)) {
+      const npm = Option.getOrElse(Option.fromUndefinedOr(entry.value.npm), () => "no AI SDK")
+      return yield* driverFailure(
+        driver,
+        `${driver.name} model "${modelName}" speaks the ${npm} wire format, which gent does not support`,
+      )
+    }
+    const endpoint = yield* endpointFor(
+      modelName,
+      Option.getOrUndefined(request.auth),
+      Option.getOrUndefined(request.hints),
+    )
+    return yield* apiClass.value.resolveModel({
+      providerId: driver.id,
+      model: entry.value,
+      hints: request.hints,
+      apiKey: endpoint.apiKey,
+      baseUrl: Option.orElse(endpoint.baseUrl, () => Option.fromUndefinedOr(entry.value.api)),
+      transformClient: endpoint.transformClient,
+    })
+  })
+
+/** A model driver whose catalog could not be read; its models are left out. */
+export interface ModelCatalogFailure {
+  readonly driverId: string
+  readonly error: string
+}
+
+const decodeModelList = Schema.decodeUnknownOption(Schema.Array(Model))
+const isDriverError = Schema.is(DriverError)
+
+/**
+ * Every model driver's list, built from the catalog core read. A driver whose
+ * list fails (an error, a defect, or a list that does not decode) is skipped
+ * and reported, so one driver never hides the models of the others. An auth
+ * store that cannot be read is not one driver's failure: it fails the whole
+ * list as a `ProviderAuthError`. A catalog that is missing or old is reported
+ * under each driver that lists models.
+ */
+export const listModelCatalog = Effect.fn("ModelCatalog.list")(function* (
+  profile: DriverProfile,
+  catalog: LoadedModelCatalog,
+  resolveAuth?: (
+    driverId: string,
+  ) => Effect.Effect<Option.Option<ProviderAuthInfo>, ProviderAuthError>,
+) {
+  const models: Array<Model> = []
+  const failures: Array<ModelCatalogFailure> = []
+  for (const driver of profile.modelDrivers.values()) {
+    if (!listsModels(driver)) continue
+    if (Option.isSome(catalog.failure)) {
+      failures.push({ driverId: driver.id, error: catalog.failure.value })
+    }
+    let auth = Option.none<ProviderAuthInfo>()
+    if (Predicate.isNotUndefined(resolveAuth)) auth = yield* resolveAuth(driver.id)
+    const listed = yield* Effect.suspend(() =>
+      driverModels(profile.apiClasses, driver, catalog, auth),
+    ).pipe(
+      Effect.flatMap((list) =>
+        Effect.fromOption(decodeModelList(list)).pipe(
+          Effect.mapError(
+            () =>
+              new DriverError({
+                driver: DriverFailureId.make(driver.id),
+                reason: `Model driver "${driver.id}" returned an invalid model catalog`,
+              }),
+          ),
+        ),
+      ),
+      Effect.asSome,
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+        const squashed = Cause.squash(cause)
+        let error = causeMessage(squashed)
+        if (isDriverError(squashed)) error = squashed.reason
+        failures.push({ driverId: driver.id, error })
+        return Effect.logWarning("Model driver catalog failed; its models are skipped").pipe(
+          Effect.annotateLogs({ driver: driver.id, error }),
+          Effect.as(Option.none<ReadonlyArray<Model>>()),
+        )
+      }),
+    )
+    if (Option.isSome(listed)) models.push(...listed.value)
+  }
+  return { models, failures }
+})
+
+// ── generic providers ───────────────────────────────────────────────────────
+//
+// Any models.dev provider whose models a registered API class speaks works
+// with a key and no code: core builds its driver from the catalog entry. The
+// owner's rule: "models.dev is integral to discovery of models via providers
+// so we don't really need to hardcode anything, only limiting factor is
+// classes of api's we support".
+//
+// - A provider an adapter serves (a registered driver's id or catalog
+//   provider), a provider no class speaks, and a `disabledProviders` id get
+//   no generic driver.
+// - A generic provider is active, and lists its models and its `/auth` row,
+//   when it has a `providers` config entry, a stored key under its id, or a
+//   key variable of its `env` set. The rest are found by the `/auth` search.
+// - The key comes from the store, then the first key variable set. Each
+//   `${VAR}` in the base URL is a prompt of the sign-in (`key` and `env` the
+//   variable's name), filled from the stored answer, then the variable.
+
+const URL_VARIABLE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
+
+/** Each `${VAR}` a base URL names, in order, once each. */
+const urlVariables = (api: string): ReadonlyArray<string> => [
+  ...new Set(
+    [...api.matchAll(URL_VARIABLE)].flatMap((match) =>
+      Option.toArray(Option.fromUndefinedOr(match[1])),
+    ),
+  ),
+]
+
+/** The variables a provider's base URL names; none when it names no URL. */
+const providerUrlVariables = (provider: CatalogProvider): ReadonlyArray<string> =>
+  urlVariables(provider.api ?? "")
+
+/** The variables of a provider's `env` that hold its key: those its base URL does not name. */
+const keyVariables = (provider: CatalogProvider): ReadonlyArray<string> => {
+  const inUrl = providerUrlVariables(provider)
+  return provider.env.filter((name) => !inUrl.includes(name))
+}
+
+/** The non-empty value of an env variable. */
+const envValue = (name: string): Effect.Effect<Option.Option<string>> =>
+  Config.option(Config.NonEmptyString(name)).pipe(Effect.orElseSucceed(() => Option.none<string>()))
+
+/** The first of `names` whose variable is set, with its value. */
+const firstEnvValue = (
+  names: ReadonlyArray<string>,
+): Effect.Effect<Option.Option<readonly [string, string]>> =>
+  Effect.reduce(
+    names,
+    () => Option.none<readonly [string, string]>(),
+    (found, name) => {
+      if (Option.isSome(found)) return Effect.succeed(found)
+      return Effect.map(
+        envValue(name),
+        Option.map((value) => [name, value] as const),
+      )
+    },
+  )
+
+/**
+ * `model` as `apiClass` speaks it: its first protocol (a protocol wins over
+ * a package), else its first package with the model's own protocol dropped.
+ */
+const spokenBy =
+  (apiClass: ApiClassContribution) =>
+  (model: CatalogModel): CatalogModel => {
+    const protocol = Option.fromUndefinedOr(apiClass.protocols[0])
+    if (Option.isSome(protocol)) return { ...model, protocol: protocol.value }
+    return { ...Struct.omit(model, ["protocol"]), ...omitUndefined({ npm: apiClass.npm[0] }) }
+  }
+
+/**
+ * The catalog provider `id` with its `providers` config entry applied: the
+ * entry's `name`, `api` and `env` replace the catalog's, each of its
+ * `models` patches the catalog model of that id field by field (or adds
+ * one), and its `class` makes that API class speak every model. With no
+ * catalog provider the entry is a new provider.
+ */
+const configuredProvider = (
+  base: Option.Option<CatalogProvider>,
+  id: string,
+  entry: ProviderConfigEntry,
+  apiClasses: ReadonlyMap<string, ApiClassContribution>,
+): CatalogProvider => {
+  const current = Option.getOrElse(base, (): CatalogProvider => ({
+    id,
+    name: id,
+    env: [],
+    models: [],
+  }))
+  const patches = entry.models ?? {}
+  const patched = current.models.map((model) =>
+    Option.match(parseCatalogModel(patches, model.id), {
+      onNone: () => model,
+      onSome: (patch) => {
+        let name = model.name
+        if (Object.hasOwn(patches[model.id] ?? {}, "name")) name = patch.name
+        return { ...model, ...patch, name }
+      },
+    }),
+  )
+  const added = Object.keys(patches)
+    .filter((modelId) => !current.models.some((model) => model.id === modelId))
+    .flatMap((modelId) => Option.toArray(parseCatalogModel(patches, modelId)))
+  const speak = Option.match(
+    Option.flatMap(Option.fromUndefinedOr(entry.class), (classId) =>
+      Option.fromUndefinedOr(apiClasses.get(classId)),
+    ),
+    { onNone: () => (model: CatalogModel) => model, onSome: spokenBy },
+  )
+  return {
+    ...current,
+    ...omitUndefined({ name: entry.name, api: entry.api, env: entry.env }),
+    models: [...patched, ...added].map(speak),
+  }
+}
+
+/** The catalog with the config's `providers` entries applied (`configuredProvider`). */
+const configuredCatalog = (
+  catalog: LoadedModelCatalog,
+  config: ProviderConfig,
+  apiClasses: ReadonlyMap<string, ApiClassContribution>,
+): LoadedModelCatalog => {
+  const entries = config.providers ?? {}
+  const configured = Object.keys(entries)
+  if (configured.length === 0) return catalog
+  const provider = (id: string): Option.Option<CatalogProvider> => {
+    const entry = Option.liftPredicate(entries[id], Predicate.isNotUndefined)
+    if (!Object.hasOwn(entries, id) || Option.isNone(entry)) return catalog.provider(id)
+    return Option.some(configuredProvider(catalog.provider(id), id, entry.value, apiClasses))
+  }
+  return {
+    ...catalog,
+    provider,
+    providerIds: [...new Set([...catalog.providerIds, ...configured])],
+  }
+}
+
+/** Whether some registered class speaks a model of `provider` the agent loop can drive. */
+const providerServable = (
+  apiClasses: ReadonlyMap<string, ApiClassContribution>,
+  catalog: ModelCatalogView,
+  provider: CatalogProvider,
+): boolean =>
+  provider.models.some((model) => {
+    if (model.toolCall === false || model.decision === true) return false
+    return Option.isSome(
+      Option.flatMap(catalogModelEntry(catalog, provider.id, model.id), (entry) =>
+        apiClassFor(apiClasses.values(), entry),
+      ),
+    )
+  })
+
+/** The answer stored with an API sign-in for `key`, when it is not empty. */
+const storedPromptAnswer = (authInfo: Option.Option<ProviderAuthInfo>, key: string) =>
+  authInfo.pipe(
+    Option.flatMap((auth) => {
+      if (auth._tag !== "Api") return Option.none()
+      return Option.fromUndefinedOr(auth.metadata?.[key])
+    }),
+    Option.filter((answer) => answer.trim() !== ""),
+  )
+
+/** `api` with each `${VAR}` filled from the stored answer, then the variable. */
+const filledBaseUrl = (
+  provider: CatalogProvider,
+  api: string,
+  authInfo: Option.Option<ProviderAuthInfo>,
+): Effect.Effect<string, ProviderAuthError> =>
+  Effect.reduce(
+    urlVariables(api),
+    () => api,
+    (url, name) =>
+      Option.match(storedPromptAnswer(authInfo, name), {
+        onSome: (answer) => Effect.succeed(answer),
+        onNone: () =>
+          Effect.flatMap(envValue(name), (value) =>
+            Effect.fromOption(value).pipe(
+              Effect.mapError(
+                () =>
+                  new ProviderAuthError({
+                    message: `${provider.name} needs ${name}: none stored with the sign-in and no ${name} env var; sign in again with /auth`,
+                  }),
+              ),
+            ),
+          ),
+      }).pipe(Effect.map((value) => url.replaceAll(`\${${name}}`, encodeURIComponent(value)))),
+  )
+
+/** Sends the config's `headers` with every request. */
+const withHeaders =
+  (headers: Readonly<Record<string, string>>) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+    HttpClient.mapRequest(client, HttpClientRequest.setHeaders(headers))
+
+/**
+ * The driver core builds for a catalog provider: an API key from the store,
+ * then the first key variable set (`envCredential` names it, else the first
+ * key variable); one sign-in method that asks each `${VAR}` of the base URL.
+ */
+const genericDriver = Effect.fn("GenericProvider.driver")(function* (
+  provider: CatalogProvider,
+  headers: Option.Option<Readonly<Record<string, string>>>,
+) {
+  const keys = keyVariables(provider)
+  const setKey = yield* firstEnvValue(keys)
+  const envCredential = Option.orElse(
+    Option.map(setKey, ([name]) => name),
+    () => Option.fromUndefinedOr(keys[0]),
+  )
+  const prompts = providerUrlVariables(provider).map((name) => ({
+    key: name,
+    label: name,
+    env: name,
+  }))
+  let keyHint = "no stored API key"
+  if (keys.length > 0) keyHint = `no stored API key and no ${keys.join(" or ")} env var`
+  return {
+    id: provider.id,
+    name: provider.name,
+    ...omitUndefined({ envCredential: Option.getOrUndefined(envCredential) }),
+    endpoint: (modelName, authInfo) =>
+      Effect.gen(function* () {
+        const auth = Option.fromUndefinedOr(authInfo)
+        const stored = Option.flatMap(auth, (each) => {
+          if (each._tag !== "Api") return Option.none<string>()
+          return Option.some(each.key)
+        })
+        const fromEnv = yield* Option.match(stored, {
+          onSome: () => Effect.succeed(Option.none<string>()),
+          onNone: () =>
+            Effect.map(
+              firstEnvValue(keys),
+              Option.map(([, value]) => value),
+            ),
+        })
+        const apiKey = yield* Effect.fromOption(Option.orElse(stored, () => fromEnv)).pipe(
+          Effect.mapError(
+            () =>
+              new ProviderAuthError({
+                message: `${provider.name} credentials unavailable: ${keyHint}; sign in with /auth`,
+              }),
+          ),
+        )
+        // The model's own base URL, else the provider's; one with a variable is filled here.
+        const api = Option.fromUndefinedOr(
+          provider.models.find((model) => model.id === modelName)?.api ?? provider.api,
+        ).pipe(Option.filter((url) => urlVariables(url).length > 0))
+        const baseUrl = yield* Effect.transposeOption(
+          Option.map(api, (url) => filledBaseUrl(provider, url, auth)),
+        )
+        return {
+          apiKey: Option.some(apiKey),
+          baseUrl,
+          transformClient: Option.map(headers, withHeaders),
+        } satisfies ApiEndpoint
+      }),
+    auth: {
+      methods: [
+        AuthMethod.make({
+          type: "api",
+          label: `${provider.name} API key`,
+          ...omitUndefined({
+            prompts: Option.getOrUndefined(
+              Option.liftPredicate(prompts, (each) => each.length > 0),
+            ),
+          }),
+        }),
+      ],
+    },
+  } satisfies ModelDriverContribution
+})
+
+/** The catalog providers no registered driver serves and the config does not disable. */
+const genericCandidates = (
+  resolved: ResolvedProfile,
+  config: ProviderConfig,
+  catalog: LoadedModelCatalog,
+): ReadonlyArray<string> => {
+  const adapted = new Set(
+    [...resolved.modelDrivers.values()].flatMap((driver) => [driver.id, catalogProviderOf(driver)]),
+  )
+  const disabled = new Set(config.disabledProviders ?? [])
+  return catalog.providerIds.filter((id) => !adapted.has(id) && !disabled.has(id))
+}
+
+/** A generic provider's driver: the catalog provider, servable, built with the config's headers. */
+const genericProviderDriver = (
+  resolved: ResolvedProfile,
+  config: ProviderConfig,
+  catalog: LoadedModelCatalog,
+  id: string,
+): Effect.Effect<Option.Option<ModelDriverContribution>> =>
+  Option.match(
+    Option.filter(catalog.provider(id), (provider) =>
+      providerServable(resolved.apiClasses, catalog, provider),
+    ),
+    {
+      onNone: () => Effect.succeedNone,
+      onSome: (provider) =>
+        Effect.asSome(
+          genericDriver(provider, Option.fromUndefinedOr(config.providers?.[id]?.headers)),
+        ),
+    },
+  )
+
+/** Whether a generic provider is active: a config entry, a stored key, or a key variable set. */
+const genericActive = (
+  config: ProviderConfig,
+  stored: ReadonlySet<string>,
+  catalog: LoadedModelCatalog,
+  id: string,
+): Effect.Effect<boolean> => {
+  if (Object.hasOwn(config.providers ?? {}, id) || stored.has(id)) return Effect.succeed(true)
+  return Option.match(catalog.provider(id), {
+    onNone: () => Effect.succeed(false),
+    onSome: (provider) => Effect.map(firstEnvValue(keyVariables(provider)), Option.isSome),
+  })
+}
+
+/**
+ * What one profile serves: its registered drivers plus a driver for each
+ * active generic provider, its API classes, and the catalog with its config
+ * applied. `alsoActive` names providers to serve as active whatever their
+ * key: those a turn of the caller routes through, so `/auth` lists them as
+ * required. An auth store that cannot be listed counts as no stored key.
+ */
+interface ServedProfile extends DriverProfile {
+  readonly catalog: LoadedModelCatalog
+}
+
+const servedProfile = Effect.fn("GenericProvider.servedProfile")(function* (
+  auth: AuthService,
+  alsoActive: ReadonlyArray<string> = [],
+) {
+  const registry = yield* ExtensionRegistry
+  const resolved = registry.getResolved()
+  const config = yield* registry.providerConfig
+  const source = yield* (yield* ModelCatalogSource).read
+  const catalog = configuredCatalog(source, config, resolved.apiClasses)
+  const stored = new Set(
+    yield* auth.list.pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("generic-provider.auth-list-failed").pipe(
+          Effect.annotateLogs({ error: error.message }),
+          Effect.as<ReadonlyArray<string>>([]),
+        ),
+      ),
+    ),
+  )
+  const active = yield* Effect.filter(genericCandidates(resolved, config, catalog), (id) => {
+    if (alsoActive.includes(id)) return Effect.succeed(true)
+    return genericActive(config, stored, catalog, id)
+  })
+  const generic = yield* Effect.forEach(active, (id) =>
+    genericProviderDriver(resolved, config, catalog, id),
+  )
+  const modelDrivers = new Map(resolved.modelDrivers)
+  for (const driver of generic.flatMap(Option.toArray)) modelDrivers.set(driver.id, driver)
+  return {
+    modelDrivers,
+    apiClasses: resolved.apiClasses,
+    catalog,
+  } satisfies ServedProfile
+})
+
+/**
+ * The generic providers the `/auth` search offers: each servable one that is
+ * not active, with its sign-in methods.
+ */
+export const listCatalogProviders = Effect.fn("GenericProvider.listCatalogProviders")(function* () {
+  const auth = yield* Auth
+  const served = yield* servedProfile(auth)
+  const registry = yield* ExtensionRegistry
+  const resolved = registry.getResolved()
+  const config = yield* registry.providerConfig
+  const providers: AuthProviderInfo[] = []
+  const methods: Record<string, ReadonlyArray<AuthMethod>> = {}
+  for (const id of genericCandidates(resolved, config, served.catalog)) {
+    if (served.modelDrivers.has(id)) continue
+    const driver = yield* genericProviderDriver(resolved, config, served.catalog, id)
+    if (Option.isNone(driver)) continue
+    providers.push({
+      provider: ProviderId.make(id),
+      name: driver.value.name,
+      hasKey: false,
+      required: false,
+    })
+    methods[id] = yield* Effect.forEach(driver.value.auth?.methods ?? [], askedMethod)
+  }
+  return { providers, methods }
+})
+
 // ── model-resolver ──────────────────────────────────────────────────────────
 
 export interface ResolveModelRequest {
@@ -914,19 +2113,32 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   const authStore = yield* Auth
   // The registry of the running turn's profile: its cwd-scoped drivers resolve here.
   const extensionRegistry = yield* ExtensionRegistry
-  const extensionProvider = extensionRegistry.getResolved().modelDrivers.get(providerName)
-  if (Predicate.isUndefined(extensionProvider)) {
+  const resolved = extensionRegistry.getResolved()
+  const source = yield* (yield* ModelCatalogSource).read
+  // A registered driver, else the generic driver of a servable catalog
+  // provider, active or not: one with no key fails and names /auth.
+  const config = yield* extensionRegistry.providerConfig
+  const catalog = configuredCatalog(source, config, resolved.apiClasses)
+  const extensionProvider = yield* Option.match(
+    Option.fromUndefinedOr(resolved.modelDrivers.get(providerName)),
+    {
+      onSome: (driver) => Effect.succeedSome(driver),
+      onNone: () => {
+        if (!genericCandidates(resolved, config, catalog).includes(providerName)) {
+          return Effect.succeedNone
+        }
+        return genericProviderDriver(resolved, config, catalog, providerName)
+      },
+    },
+  )
+  if (Option.isNone(extensionProvider)) {
     return yield* new ProviderError({
       message: `Unknown provider: ${providerName}`,
       model: request.modelId,
     })
   }
 
-  const authParam = yield* driverAuthInfo(
-    authStore,
-    extensionRegistry.getResolved().modelDrivers,
-    providerName,
-  ).pipe(
+  const authParam = yield* driverAuthInfo(authStore, resolved.modelDrivers, providerName).pipe(
     Effect.mapError(
       (e) =>
         new ProviderError({
@@ -938,7 +2150,14 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   )
 
   return yield* Effect.suspend(() =>
-    extensionProvider.resolveModel(modelName, Option.getOrUndefined(authParam), request.hints),
+    resolveDriverModel({
+      driver: extensionProvider.value,
+      apiClasses: resolved.apiClasses,
+      modelName,
+      auth: authParam,
+      hints: Option.fromUndefinedOr(request.hints),
+      catalog,
+    }),
   ).pipe(
     Effect.catchTag("DriverError", (error) =>
       Effect.fail(
@@ -969,10 +2188,11 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
       }),
     ).pipe(Layer.provide(layer))
 
-  static Live: Layer.Layer<ModelResolver, never, Auth> = Layer.effect(
+  static Live: Layer.Layer<ModelResolver, never, Auth | ModelCatalogSource> = Layer.effect(
     ModelResolver,
     Effect.gen(function* () {
       const auth = yield* Auth
+      const catalogSource = yield* ModelCatalogSource
       return ModelResolver.of({
         resolve: (request) =>
           Effect.gen(function* () {
@@ -980,7 +2200,10 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
             const scope = yield* Effect.scope
             const built = yield* Layer.buildWithScope(resolved, scope)
             return Context.get(built, LanguageModel.LanguageModel)
-          }).pipe(Effect.provideService(Auth, auth)),
+          }).pipe(
+            Effect.provideService(Auth, auth),
+            Effect.provideService(ModelCatalogSource, catalogSource),
+          ),
       })
     }),
   )
@@ -1061,12 +2284,15 @@ const classifierDrivers = (allDrivers: ModelDrivers): ModelDrivers =>
  */
 const classifierCatalog = Effect.fn("DecisionModelResolver.catalog")(function* (
   auth: AuthService,
+  catalogSource: ModelCatalogSourceService,
   allDrivers: ModelDrivers,
 ) {
   const drivers = classifierDrivers(allDrivers)
-  const catalog = yield* listModelCatalog(drivers, (driverId) =>
+  const source = yield* catalogSource.read
+  // A classifier needs no API class: with none, core lists only the decision models.
+  const profile: DriverProfile = { modelDrivers: drivers, apiClasses: new Map() }
+  const catalog = yield* listModelCatalog(profile, source, (driverId) =>
     classifierAuth(auth, allDrivers, driverId).pipe(
-      Effect.map(Option.getOrUndefined),
       Effect.mapError((error) => new ProviderAuthError({ message: error.message })),
     ),
   ).pipe(
@@ -1084,8 +2310,8 @@ const classifierCatalog = Effect.fn("DecisionModelResolver.catalog")(function* (
 
 /**
  * Whether some driver that serves classifiers has a stored or env
- * credential. A driver declares `resolveDecisionModel` only when it lists a
- * classifier, so no catalog is read. A failed read counts as none.
+ * credential. A driver declares `resolveDecisionModel` only when it can
+ * serve a classifier, so no catalog is read. A failed read counts as none.
  */
 const classifierAvailable = Effect.fn("DecisionModelResolver.hasCredential")(
   function* (auth: AuthService, allDrivers: ModelDrivers) {
@@ -1105,12 +2331,17 @@ const classifierAvailable = Effect.fn("DecisionModelResolver.hasCredential")(
 
 const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function* (
   auth: AuthService,
+  catalogSource: ModelCatalogSourceService,
   allDrivers: ModelDrivers,
   requested: Option.Option<string>,
 ) {
   const storedAuth = (driverId: string) => classifierAuth(auth, allDrivers, driverId)
   // A call that cannot resolve a classifier names each catalog that failed.
-  const { drivers, classifiers, failures } = yield* classifierCatalog(auth, allDrivers)
+  const { drivers, classifiers, failures } = yield* classifierCatalog(
+    auth,
+    catalogSource,
+    allDrivers,
+  )
   let failed = ""
   if (failures.length > 0)
     failed = `. Classifier catalogs that failed: ${failures.map((failure) => `${failure.driverId} (${failure.error})`).join(", ")}`
@@ -1197,15 +2428,16 @@ export class DecisionModelResolver extends Context.Service<
   DecisionModelResolver,
   DecisionModelResolverService
 >()("@gent/core/src/runtime/provider/DecisionModelResolver") {
-  static Live: Layer.Layer<DecisionModelResolver, never, Auth> = Layer.effect(
+  static Live: Layer.Layer<DecisionModelResolver, never, Auth | ModelCatalogSource> = Layer.effect(
     DecisionModelResolver,
     Effect.gen(function* () {
       const auth = yield* Auth
+      const catalogSource = yield* ModelCatalogSource
       return DecisionModelResolver.of({
         profile: Effect.map(ExtensionRegistry, (registry) => {
           const drivers = registry.getResolved().modelDrivers
           return {
-            resolve: (modelId) => resolveDecisionModel(auth, drivers, modelId),
+            resolve: (modelId) => resolveDecisionModel(auth, catalogSource, drivers, modelId),
             hasCredential: classifierAvailable(auth, drivers),
           }
         }),
@@ -1257,19 +2489,20 @@ export class ModelCatalogRecord extends Context.Service<
 
 /**
  * Every model the caller's profile can run, newest release first: each model
- * driver's own catalog, read with the auth stored for that driver. Core
- * fetches nothing. The drivers come from the `ExtensionRegistry` in scope, so
- * a turn reads its own profile's and a server read the requesting session's;
- * a catalog captured once at launch missed every project-scoped driver and
- * ignored `disabledExtensions`.
+ * driver's list over the models.dev catalog core holds, read with the auth
+ * stored for that driver, and each active generic provider's. The drivers
+ * come from the `ExtensionRegistry` in
+ * scope, so a turn reads its own profile's and a server read the requesting
+ * session's; a catalog captured once at launch missed every project-scoped
+ * driver and ignored `disabledExtensions`.
  */
 export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* () {
   const authStore = yield* Auth
   const catalogRecord = yield* ModelCatalogRecord
   const profile = (yield* ExtensionRegistry).getResolved()
-  const catalog = yield* listModelCatalog(profile.modelDrivers, (providerId) =>
-    driverAuthInfo(authStore, profile.modelDrivers, providerId).pipe(
-      Effect.map(Option.getOrUndefined),
+  const served = yield* servedProfile(authStore)
+  const catalog = yield* listModelCatalog(served, served.catalog, (providerId) =>
+    driverAuthInfo(authStore, served.modelDrivers, providerId).pipe(
       Effect.mapError(
         (e) =>
           new ProviderAuthError({
@@ -1293,23 +2526,26 @@ interface ModelRegistryService {
 export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryService>()(
   "@gent/core/src/runtime/provider/ModelRegistry",
 ) {
-  static Live: Layer.Layer<ModelRegistry, never, Auth | ModelCatalogRecord> = Layer.effect(
-    ModelRegistry,
-    Effect.gen(function* () {
-      const authStore = yield* Auth
-      const catalogRecord = yield* ModelCatalogRecord
-      return ModelRegistry.of({
-        get: (modelId) =>
-          modelCatalog().pipe(
-            Effect.provideService(Auth, authStore),
-            Effect.provideService(ModelCatalogRecord, catalogRecord),
-            Effect.map((catalog) =>
-              Option.fromUndefinedOr(catalog.models.find((model) => model.id === modelId)),
+  static Live: Layer.Layer<ModelRegistry, never, Auth | ModelCatalogRecord | ModelCatalogSource> =
+    Layer.effect(
+      ModelRegistry,
+      Effect.gen(function* () {
+        const authStore = yield* Auth
+        const catalogRecord = yield* ModelCatalogRecord
+        const catalogSource = yield* ModelCatalogSource
+        return ModelRegistry.of({
+          get: (modelId) =>
+            modelCatalog().pipe(
+              Effect.provideService(Auth, authStore),
+              Effect.provideService(ModelCatalogRecord, catalogRecord),
+              Effect.provideService(ModelCatalogSource, catalogSource),
+              Effect.map((catalog) =>
+                Option.fromUndefinedOr(catalog.models.find((model) => model.id === modelId)),
+              ),
             ),
-          ),
-      })
-    }),
-  )
+        })
+      }),
+    )
 
   /**
    * A registry of `models`, or, with none, one that knows every id. `pricing`

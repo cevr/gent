@@ -229,7 +229,9 @@ describe("session admission", () => {
           yield* sql`INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
             VALUES (${history}, ${branch(history)}, ${laterTurn}, 1, 0, '[]', ${newJson}, 2)`
           yield* sql`UPDATE sessions SET admission_json = NULL`
-          yield* sql`DELETE FROM gent_storage_migrations WHERE name = 'session_admission'`
+          // The migrator runs only what follows the last applied migration, so
+          // the database forgets every migration from `session_admission` on.
+          yield* sql`DELETE FROM gent_storage_migrations WHERE name IN ('session_admission', 'model_catalog_snapshots')`
         }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(storage))
 
         yield* Effect.gen(function* () {

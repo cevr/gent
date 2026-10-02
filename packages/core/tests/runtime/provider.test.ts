@@ -12,15 +12,20 @@ import {
   Layer,
   Option,
   Predicate,
+  Ref,
   Schema,
   Stream,
 } from "effect"
 import { TestClock } from "effect/testing"
 import * as AiError from "effect/ai/AiError"
 import {
+  type ApiClassContribution,
+  type ApiClassRequest,
   AuthMethod,
+  catalogModelEntry,
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
+  type ModelCatalogView,
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthInfo,
@@ -41,11 +46,17 @@ import {
   DecisionModelResolver,
   removeSignIn,
   listAuthMethods,
+  listCatalogProviders,
   retryProviderCall,
+  listModelCatalog,
+  type LoadedModelCatalog,
+  modelCatalogFromBodies,
   ModelCatalogRecord,
+  ModelCatalogSource,
   ModelRegistry,
   modelCatalog,
   finishPart,
+  resolveDriverModel,
   toolCallPart,
 } from "../../src/runtime/provider"
 import { BunServices } from "@effect/platform-bun"
@@ -56,8 +67,19 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ModelId, ProviderId, Model, type ReasoningEffort } from "../../src/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
+import type { ProviderConfig } from "../../src/runtime/config"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import {
+  fixtureModelCatalog,
+  fixtureModelCatalogSource,
+  MODEL_CATALOG_FIXTURE,
+  modelCatalogFixture,
+  type ModelCatalogFixtureRequest,
+  testSqliteStorage,
+} from "../../src/test-utils/harness"
+import { ModelCatalogSnapshotStorage } from "../../src/storage/storage"
+import { HttpClient, HttpClientResponse } from "effect/http"
 import { convertTools } from "../../src/runtime/tools"
 import { toPrompt } from "../../src/runtime/model-context"
 import { dateFromMillis, Message } from "../../src/domain/message"
@@ -66,7 +88,7 @@ import * as AiTool from "effect/ai/Tool"
 import type * as AiToolkit from "effect/ai/Toolkit"
 import type { ToolkitInput } from "effect/ai/LanguageModel"
 import * as Prompt from "effect/ai/Prompt"
-import type * as Response from "effect/ai/Response"
+import type * as AiResponse from "effect/ai/Response"
 
 // ── provider retry ──────────────────────────────────────────────────────────
 
@@ -300,10 +322,16 @@ const unusedResolution = (): Effect.Effect<ProviderResolution> =>
 // oxlint-disable-next-line effect/noNullish -- The auth store answers undefined for a provider with no key.
 const noStoredAuth: AuthInfo | undefined = undefined
 
+/** A catalog with no provider: the drivers under test are the whole profile. */
+const emptyCatalogLayer = ModelCatalogSource.fixed(
+  modelCatalogFromBodies({ chat: "{}", decision: "{}" }),
+)
+
 const authLayer = Layer.succeed(
   Auth,
   Auth.of(
     serializeAuthStore({
+      list: Effect.succeed([]),
       get: () => Effect.succeed(noStoredAuth),
       set: () => Effect.void,
       remove: () => Effect.void,
@@ -315,6 +343,7 @@ const failingReadAuthLayer = Layer.succeed(
   Auth,
   Auth.of(
     serializeAuthStore({
+      list: Effect.fail(new AuthError({ message: "read failed" })),
       get: () => Effect.fail(new AuthError({ message: "read failed" })),
       set: () => Effect.void,
       remove: () => Effect.void,
@@ -352,6 +381,7 @@ const makeRegistryLayerWithDrivers = (
         ),
         overrideAuthLayer,
         ModelCatalogRecord.Live,
+        fixtureModelCatalogSource,
       ),
     ),
   )
@@ -368,10 +398,12 @@ const loadRegistryWithDrivers = (
     const drivers = Context.get(context, ExtensionRegistry)
     const auth = Context.get(context, Auth)
     const catalogRecord = Context.get(context, ModelCatalogRecord)
+    const catalogSource = Context.get(context, ModelCatalogSource)
     const catalog = modelCatalog().pipe(
       Effect.provideService(ExtensionRegistry, drivers),
       Effect.provideService(Auth, auth),
       Effect.provideService(ModelCatalogRecord, catalogRecord),
+      Effect.provideService(ModelCatalogSource, catalogSource),
     )
     return {
       raw,
@@ -413,6 +445,7 @@ describe("model catalog resolution", () => {
               },
             },
           ]),
+        providerConfig: Effect.succeed({}),
       })
       const inProject = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         Effect.provideService(effect, ExtensionRegistry, projectProfile)
@@ -459,6 +492,7 @@ describe("model catalog resolution", () => {
         Auth,
         Auth.of(
           serializeAuthStore({
+            list: Effect.succeed(["openai"]),
             get: (providerId) => {
               if (providerId !== "openai") {
                 return Effect.succeed(noStoredAuth)
@@ -477,7 +511,7 @@ describe("model catalog resolution", () => {
             id: "openai",
             name: "OpenAI",
             resolveModel: unusedResolution,
-            listModels: (auth) =>
+            listModels: (_catalog, auth) =>
               Effect.sync(() => {
                 if (auth?._tag === "Api") seen.push(`openai:${auth.key}`)
                 return [catalogModel("openai/gpt-5.4")]
@@ -487,7 +521,7 @@ describe("model catalog resolution", () => {
             id: "anthropic",
             name: "Anthropic",
             resolveModel: unusedResolution,
-            listModels: (auth) =>
+            listModels: (_catalog, auth) =>
               Effect.sync(() => {
                 if (Predicate.isUndefined(auth)) seen.push("anthropic:none")
                 return [catalogModel("anthropic/claude-opus-5")]
@@ -972,7 +1006,7 @@ describe("listAuthProviders", () => {
   const apiInfo = (key: string): AuthInfo => AuthApi.make({ type: "api", key })
   const list = (seed: Record<string, AuthInfo>, driverIds: ReadonlyArray<string>) =>
     listAuthProviders(driverIds).pipe(
-      Effect.provide(Layer.merge(Auth.Test(seed), testRegistryLayer)),
+      Effect.provide(Layer.mergeAll(Auth.Test(seed), testRegistryLayer, emptyCatalogLayer)),
     )
   const opus = "anthropic"
 
@@ -1040,9 +1074,10 @@ describe("listAuthProviders", () => {
       const row = (metadata: Record<string, string>) =>
         listAuthProviders([]).pipe(
           Effect.provide(
-            Layer.merge(
+            Layer.mergeAll(
               Auth.Test({ prompted: AuthApi.make({ type: "api", key: "k", metadata }) }),
               registry,
+              emptyCatalogLayer,
             ),
           ),
           Effect.map(([listed]) => [listed?.hasKey, Option.fromNullishOr(listed?.missing)]),
@@ -1093,6 +1128,7 @@ describe("listAuthProviders", () => {
             Layer.mergeAll(
               Auth.Test({ "two-ways": AuthApi.make({ type: "api", key: "k", metadata }) }),
               registry,
+              emptyCatalogLayer,
               ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
             ),
           ),
@@ -1186,6 +1222,7 @@ const failingAuthStoreLayer = Layer.succeed(
   Auth,
   Auth.of(
     serializeAuthStore({
+      list: Effect.succeed([]),
       get: () => Effect.succeed(noStoredAuth),
       set: () => Effect.fail(new AuthError({ message: "write failed" })),
       remove: () => Effect.void,
@@ -1224,7 +1261,7 @@ describe("provider login", () => {
   it.live("listMethods returns methods from extension providers", () =>
     Effect.gen(function* () {
       const authLayer = Auth.Test()
-      const layer = Layer.mergeAll(authLayer, testRegistry, GentPlatform.Test())
+      const layer = Layer.mergeAll(authLayer, testRegistry, GentPlatform.Test(), emptyCatalogLayer)
       const methods = yield* listAuthMethods().pipe(Effect.provide(layer))
       expect(Object.keys(methods)).toContain("openai")
       expect(Object.keys(methods)).toContain("anthropic")
@@ -1274,6 +1311,7 @@ describe("provider login", () => {
 // oxlint-disable-next-line effect/noNullish -- AuthService uses undefined to represent missing credentials.
 const missingAuthInfo: AuthInfo | undefined = undefined
 const testAuthStorage: AuthService = serializeAuthStore({
+  list: Effect.succeed([]),
   get: () => Effect.succeed(missingAuthInfo),
   set: () => Effect.void,
   remove: () => Effect.void,
@@ -1358,7 +1396,10 @@ const buildProviderLayer = (
   const resolved = resolveExtensions(extensions)
   const registryLayer = ExtensionRegistry.fromResolved(resolved)
   const authLayer = Layer.succeed(Auth, authStore)
-  return Layer.provideMerge(ModelResolver.Live, Layer.mergeAll(authLayer, registryLayer))
+  return Layer.provideMerge(
+    ModelResolver.Live,
+    Layer.mergeAll(authLayer, registryLayer, fixtureModelCatalogSource),
+  )
 }
 const resolveModel = (request: ModelRequest) =>
   Effect.gen(function* () {
@@ -1895,7 +1936,7 @@ const sharedSignInDrivers = (seen: Array<string>): ReadonlyArray<ModelDriverCont
         seen.push(`${id} model ${keyOf(auth)}`)
         return fakeResolution()
       }),
-    listModels: (auth?: ProviderAuthInfo) =>
+    listModels: (_catalog: ModelCatalogView, auth?: ProviderAuthInfo) =>
       Effect.sync(() => {
         seen.push(`${id} list ${keyOf(auth)}`)
         return [Model.make({ ...catalogModel(`${id}/judge`), kind: "classifier" })]
@@ -1921,8 +1962,11 @@ const sharedSignInDrivers = (seen: Array<string>): ReadonlyArray<ModelDriverCont
 }
 
 const sharedSignInRegistry = (seen: Array<string>) =>
-  ExtensionRegistry.fromResolved(
-    resolveExtensions([makeExt("shared-sign-in", [...sharedSignInDrivers(seen)])]),
+  Layer.merge(
+    ExtensionRegistry.fromResolved(
+      resolveExtensions([makeExt("shared-sign-in", [...sharedSignInDrivers(seen)])]),
+    ),
+    emptyCatalogLayer,
   )
 
 /** Every read a turn, a catalog and both classifiers make, from a store holding `stored`. */
@@ -1936,7 +1980,11 @@ const readsWithStored = (stored: Record<string, string>) =>
       ModelResolver.Live,
       DecisionModelResolver.Live,
       ModelCatalogRecord.Live,
-    ).pipe(Layer.provideMerge(Layer.merge(Auth.Test(seed), sharedSignInRegistry(seen))))
+    ).pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(Auth.Test(seed), sharedSignInRegistry(seen), fixtureModelCatalogSource),
+      ),
+    )
     yield* Effect.gen(function* () {
       const resolver = yield* ModelResolver
       yield* resolver.resolve({ modelId: "gateway/m" })
@@ -1965,7 +2013,9 @@ describe("shared sign-in", () => {
         ["gateway", "none", true],
         ["solo", "none", false],
       ])
-      const methods = yield* listAuthMethods().pipe(Effect.provide(sharedSignInRegistry([])))
+      const methods = yield* listAuthMethods().pipe(
+        Effect.provide(Layer.merge(Auth.Test({}), sharedSignInRegistry([]))),
+      )
       expect(Object.keys(methods)).toEqual(["gateway"])
     }),
   )
@@ -2026,7 +2076,7 @@ describe("shared sign-in", () => {
         ]),
       )
       const inRegistry = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        effect.pipe(Effect.provide(Layer.merge(Auth.Test({}), registry)))
+        effect.pipe(Effect.provide(Layer.mergeAll(Auth.Test({}), registry, emptyCatalogLayer)))
       const listed = yield* inRegistry(listAuthProviders(["a"]))
       expect(listed.map((row) => [String(row.provider), row.required])).toEqual([
         ["a", true],
@@ -2100,7 +2150,7 @@ describe("classifier availability", () => {
     id,
     name: id,
     resolveModel: () => Effect.succeed(fakeResolution()),
-    listModels: (authInfo) =>
+    listModels: (_catalog, authInfo) =>
       Effect.sync(() => {
         listed.push(id)
         if (Predicate.isUndefined(authInfo)) return []
@@ -2131,7 +2181,9 @@ describe("classifier availability", () => {
         return answers
       }).pipe(
         Effect.provide(
-          DecisionModelResolver.Live.pipe(Layer.provideMerge(Layer.merge(Auth.Test({}), registry))),
+          DecisionModelResolver.Live.pipe(
+            Layer.provideMerge(Layer.mergeAll(Auth.Test({}), registry, fixtureModelCatalogSource)),
+          ),
         ),
       )
     })
@@ -2168,7 +2220,7 @@ describe("Scripted debug model tool scenario", () => {
   /** A toolkit advertising `names`, as a turn's request does; the test resolves no call. */
   const advertisedTool = (name: string) => AiTool.dynamic(name, { parameters: Schema.Unknown })
   type Advertised = Record<string, ReturnType<typeof advertisedTool>>
-  type Part = Response.StreamPart<Advertised>
+  type Part = AiResponse.StreamPart<Advertised>
   const advertising = (names: ReadonlyArray<string>): AiToolkit.WithHandler<Advertised> => ({
     tools: Object.fromEntries(names.map((name) => [name, advertisedTool(name)])),
     handle: (name) =>
@@ -2272,5 +2324,839 @@ describe("Scripted debug model tool scenario", () => {
       expect(first?.inputTokens.cacheWrite).toBeGreaterThan(0)
       expect(later?.inputTokens.cacheRead).toBeGreaterThan(0)
     }).pipe(Effect.timeout("4 seconds")),
+  )
+})
+
+// ── models.dev catalog source ───────────────────────────────────────────────
+
+/**
+ * The models.dev snapshot core keeps in SQLite: one blocking fetch with no
+ * row, then reads from memory, revalidated in the background by ETag once an
+ * hour. Every request goes to the fixture client, which counts them; the
+ * virtual clock moves the hours.
+ */
+
+const CHAT = "api.json"
+const DECISION = "api.json?type=decision"
+
+/** A storage context that two catalog sources can share, as two processes share one database. */
+const catalogStorage = Layer.build(testSqliteStorage(Layer.empty, {}))
+
+/** A catalog source over `storage`, fetching through `http`. */
+const catalogSourceOver = (
+  storage: Context.Context<ModelCatalogSnapshotStorage>,
+  http: Layer.Layer<HttpClient.HttpClient>,
+) =>
+  Layer.build(
+    ModelCatalogSource.Live.pipe(Layer.provide(http), Layer.provide(Layer.succeedContext(storage))),
+  ).pipe(Effect.map((context) => Context.get(context, ModelCatalogSource)))
+
+/** A catalog source over fresh storage and the counting fixture client. */
+const catalogRoot = Effect.gen(function* () {
+  const fixture = yield* modelCatalogFixture
+  const storage = yield* catalogStorage
+  const source = yield* catalogSourceOver(storage, fixture.layer)
+  return { fixture, storage, source }
+})
+
+/**
+ * Let the background revalidation finish: the fixture client and SQLite
+ * answer at once, so the forked fiber completes within a few yields.
+ */
+const settle = <A, E>(effect: Effect.Effect<A, E>, done: (value: A) => boolean) => {
+  const loop = (left: number): Effect.Effect<A, E> =>
+    effect.pipe(
+      Effect.filterOrElse(
+        (value) => done(value) || left === 0,
+        () => Effect.yieldNow.pipe(Effect.andThen(loop(left - 1))),
+      ),
+    )
+  return loop(1_000)
+}
+
+const providerModelIds = (catalog: LoadedModelCatalog, providerId: string) =>
+  Option.match(catalog.provider(providerId), {
+    onNone: () => [],
+    onSome: (provider) => provider.models.map((model) => model.id),
+  })
+
+const sourcesOf = (requests: ReadonlyArray<ModelCatalogFixtureRequest>) =>
+  requests.map((request) => request.source).toSorted()
+
+const encodeCatalogJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+// oxlint-disable-next-line effect/noNullish -- models.dev writes the "no reasoning" effort as null
+const CATALOG_NULL = null
+
+/** A body models.dev might serve next: one Anthropic model the fixture does not hold. */
+const NEXT_CHAT_BODY = encodeCatalogJson({
+  anthropic: {
+    id: "anthropic",
+    name: "Anthropic",
+    env: ["ANTHROPIC_API_KEY"],
+    models: { "claude-next": { name: "Claude Next", tool_call: true } },
+  },
+})
+
+describe("models.dev catalog source", () => {
+  it.scoped("the first read fetches each source once, and a read within the hour asks nobody", () =>
+    Effect.gen(function* () {
+      const { fixture, storage, source } = yield* catalogRoot
+
+      const first = yield* source.read
+      expect(providerModelIds(first, "anthropic")).toContain("claude-haiku-4-5")
+      expect(Option.isNone(first.failure)).toBe(true)
+      expect(sourcesOf(yield* fixture.requests)).toEqual([CHAT, DECISION])
+      expect((yield* fixture.requests).every((request) => Option.isNone(request.ifNoneMatch))).toBe(
+        true,
+      )
+
+      yield* TestClock.adjust("59 minutes")
+      yield* source.read
+      expect(yield* fixture.requests).toHaveLength(2)
+
+      const row = yield* Context.get(storage, ModelCatalogSnapshotStorage).get(CHAT)
+      expect(Option.map(row, (stored) => stored.etag)).toEqual(
+        Option.some(Option.some('"fixture-chat-1"')),
+      )
+    }),
+  )
+
+  it.scoped(
+    "a read after the hour serves the snapshot and revalidates it with its ETag; a 304 moves only the check time",
+    () =>
+      Effect.gen(function* () {
+        const { fixture, storage, source } = yield* catalogRoot
+        yield* source.read
+        yield* TestClock.adjust("2 hours")
+
+        const stale = yield* source.read
+        expect(providerModelIds(stale, "anthropic")).toContain("claude-haiku-4-5")
+        const requests = yield* settle(fixture.requests, (list) => list.length === 4)
+        expect(
+          requests.slice(2).map((request) => [request.source, request.ifNoneMatch] as const),
+        ).toEqual(
+          expect.arrayContaining([
+            [CHAT, Option.some('"fixture-chat-1"')],
+            [DECISION, Option.some('"fixture-decision-1"')],
+          ]),
+        )
+        const rows = Context.get(storage, ModelCatalogSnapshotStorage)
+        const row = yield* settle(rows.get(CHAT), (stored) =>
+          Option.exists(stored, (value) => value.checked_at > 0),
+        )
+        expect(Option.map(row, (stored) => [stored.fetched_at, stored.checked_at])).toEqual(
+          Option.some([0, Duration.toMillis(Duration.hours(2))]),
+        )
+      }),
+  )
+
+  it.scoped("a 200 replaces the snapshot, and a body that does not parse is not stored", () =>
+    Effect.gen(function* () {
+      const { fixture, storage, source } = yield* catalogRoot
+      yield* source.read
+      const rows = Context.get(storage, ModelCatalogSnapshotStorage)
+      const etag = rows.get(CHAT).pipe(Effect.map(Option.flatMap((stored) => stored.etag)))
+
+      yield* fixture.serve(CHAT, NEXT_CHAT_BODY, '"next"')
+      yield* TestClock.adjust("2 hours")
+      yield* source.read
+      yield* settle(etag, (value) => Option.contains(value, '"next"'))
+      expect(providerModelIds(yield* source.read, "anthropic")).toEqual(["claude-next"])
+
+      yield* fixture.serve(CHAT, "<html>maintenance</html>", '"broken"')
+      yield* TestClock.adjust("2 hours")
+      yield* source.read
+      yield* settle(fixture.requests, (list) => list.length === 6)
+      yield* settle(source.read, (catalog) => catalog.providerIds.length > 0)
+      expect(yield* etag).toEqual(Option.some('"next"'))
+      expect(providerModelIds(yield* source.read, "anthropic")).toEqual(["claude-next"])
+    }),
+  )
+
+  it.scoped("a new process reads the stored snapshot and fetches nothing", () =>
+    Effect.gen(function* () {
+      const { fixture, storage, source } = yield* catalogRoot
+      yield* source.read
+      const restarted = yield* catalogSourceOver(storage, fixture.layer)
+
+      const catalog = yield* restarted.read
+
+      expect(providerModelIds(catalog, "anthropic")).toContain("claude-haiku-4-5")
+      expect(yield* fixture.requests).toHaveLength(2)
+    }),
+  )
+
+  it.scoped(
+    "with no snapshot and models.dev offline, the catalog is unavailable, and a minute later it is fetched again",
+    () =>
+      Effect.gen(function* () {
+        const { fixture, source } = yield* catalogRoot
+        yield* fixture.offline(true)
+
+        const offline = yield* source.read
+        expect(offline.failure).toEqual(
+          Option.some(
+            "models.dev catalog unavailable: no snapshot stored and models.dev unreachable",
+          ),
+        )
+        expect(offline.providerIds).toEqual([])
+
+        // Inside the minute the failed source is not asked again.
+        yield* fixture.offline(false)
+        yield* source.read
+        expect(yield* fixture.requests).toHaveLength(2)
+
+        yield* TestClock.adjust("2 minutes")
+        yield* source.read
+        const online = yield* settle(source.read, (catalog) => Option.isNone(catalog.failure))
+        expect(Option.isNone(online.failure)).toBe(true)
+        expect(providerModelIds(online, "anthropic")).toContain("claude-haiku-4-5")
+      }),
+  )
+
+  it.scoped("a snapshot no fetch has confirmed for a week reports its age", () =>
+    Effect.gen(function* () {
+      const { fixture, source } = yield* catalogRoot
+      yield* source.read
+      yield* fixture.offline(true)
+      yield* TestClock.adjust("8 days")
+
+      yield* source.read
+      yield* settle(fixture.requests, (list) => list.length === 4)
+      const old = yield* source.read
+
+      expect(old.failure).toEqual(Option.some("models.dev catalog 8 days old, offline"))
+      expect(providerModelIds(old, "anthropic")).toContain("claude-haiku-4-5")
+    }),
+  )
+
+  it.scoped(
+    "a read stopped during the first fetch stops only its wait; the next read gets that fetch's catalog",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        const reached = yield* Deferred.make<void>()
+        const answer = yield* Deferred.make<void>()
+        // models.dev answers only once the test lets it: the first read is still
+        // waiting when its caller stops, as an Esc during the first turn does.
+        const http = Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.gen(function* () {
+              yield* Ref.update(calls, (n) => n + 1)
+              yield* Deferred.succeed(reached, void 0)
+              yield* Deferred.await(answer)
+              // The decision source is the one URL with a query.
+              let source: keyof typeof MODEL_CATALOG_FIXTURE = CHAT
+              if (new URL(request.url).search !== "") source = DECISION
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response(MODEL_CATALOG_FIXTURE[source].body, { status: 200 }),
+              )
+            }),
+          ),
+        )
+        const source = yield* catalogSourceOver(yield* catalogStorage, http)
+
+        const first = yield* Effect.forkChild(source.read)
+        yield* Deferred.await(reached)
+        yield* Fiber.interrupt(first)
+        const next = yield* Effect.forkChild(source.read)
+        yield* Deferred.succeed(answer, void 0)
+        const catalog = yield* Fiber.join(next)
+
+        expect(providerModelIds(catalog, "anthropic")).toContain("claude-haiku-4-5")
+        // The stopped read's fetch went on and served the next read.
+        expect(yield* Ref.get(calls)).toBe(2)
+      }),
+  )
+
+  it.effect("each catalog model carries the fields models.dev gives it, each decoded alone", () =>
+    Effect.sync(() => {
+      const catalog = modelCatalogFromBodies({
+        chat: encodeCatalogJson({
+          openai: {
+            name: "OpenAI",
+            env: ["OPENAI_API_KEY"],
+            npm: "@ai-sdk/openai",
+            models: {
+              "gpt-6.1-sol": {
+                name: "GPT-6.1 Sol",
+                cost: { input: 1.25, output: 10, cache_read: 0.125 },
+                limit: { context: 400_000, input: 272_000, output: 128_000 },
+                release_date: "2026-07-24",
+                tool_call: true,
+                reasoning: true,
+                temperature: false,
+                reasoning_options: [
+                  { type: "effort", values: [CATALOG_NULL, "low", "high"] },
+                  { type: "budget_tokens", min: 1024 },
+                  { type: "unknown-kind" },
+                ],
+                interleaved: { field: "reasoning_content" },
+                // models.dev names the wire protocol `shape`.
+                provider: { npm: "@ai-sdk/openai-compatible", ["shape"]: "completions" },
+              },
+              // An odd field drops itself, never the model.
+              odd: { name: 42, limit: "big", tool_call: "yes" },
+              "not-an-object": 7,
+            },
+          },
+        }),
+        decision: encodeCatalogJson({
+          openai: { name: "OpenAI", models: { judge: { name: "Judge", type: "decision" } } },
+        }),
+      })
+      const models = Option.getOrThrow(catalog.provider("openai")).models
+
+      expect(models).toEqual([
+        {
+          id: "gpt-6.1-sol",
+          name: "GPT-6.1 Sol",
+          cost: { input: 1.25, output: 10, cacheRead: 0.125 },
+          limit: { context: 400_000, input: 272_000, output: 128_000 },
+          releaseDate: "2026-07-24",
+          toolCall: true,
+          reasoning: true,
+          temperature: false,
+          reasoningOptions: [
+            { type: "effort", values: ["none", "low", "high"] },
+            { type: "budget_tokens", min: 1024 },
+          ],
+          reasoningField: "reasoning_content",
+          npm: "@ai-sdk/openai-compatible",
+          protocol: "completions",
+        },
+        { id: "odd", name: "odd" },
+        // The decision source's models follow the chat models of the same provider.
+        { id: "judge", name: "Judge", decision: true },
+      ])
+      expect(catalog.providerIds).toEqual(["openai"])
+      expect(Option.isNone(catalog.provider("absent"))).toBe(true)
+    }),
+  )
+
+  it.effect(
+    "a catalog that is missing or old is reported under each driver that lists models",
+    () =>
+      Effect.gen(function* () {
+        const lists = (id: string): ModelDriverContribution => ({
+          id,
+          name: id,
+          resolveModel: unusedResolution,
+          listModels: () => Effect.succeed([]),
+        })
+        const resolvesOnly: ModelDriverContribution = {
+          id: "plain",
+          name: "plain",
+          resolveModel: unusedResolution,
+        }
+        const offline = {
+          ...fixtureModelCatalog(),
+          failure: Option.some("models.dev catalog 9 days old, offline"),
+        }
+
+        const listed = yield* listModelCatalog(
+          {
+            modelDrivers: new Map([
+              ["openai", lists("openai")],
+              ["anthropic", lists("anthropic")],
+              ["plain", resolvesOnly],
+            ]),
+            apiClasses: new Map(),
+          },
+          offline,
+        )
+
+        expect(listed.failures).toEqual([
+          { driverId: "openai", error: "models.dev catalog 9 days old, offline" },
+          { driverId: "anthropic", error: "models.dev catalog 9 days old, offline" },
+        ])
+      }),
+  )
+})
+
+// ── driver composition ──────────────────────────────────────────────────────
+
+/**
+ * Core composes a model of a driver that names an endpoint: the catalog
+ * entry, the API class that speaks it, and the driver's endpoint. A class
+ * here records each request it gets instead of building a model.
+ */
+describe("driver composition", () => {
+  /** A gateway's catalog, as models.dev writes it: one package for the provider, others per model. */
+  const gatewayCatalog = modelCatalogFromBodies({
+    chat: encodeCatalogJson({
+      gateway: {
+        id: "gateway",
+        name: "Gateway",
+        env: ["GATEWAY_API_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://gateway.test/v1",
+        models: {
+          chat: { name: "Chat", tool_call: true },
+          responses: { name: "Responses", tool_call: true, provider: { npm: "@ai-sdk/openai" } },
+          routed: {
+            name: "Routed",
+            tool_call: true,
+            provider: { npm: "@ai-sdk/openai", ["shape"]: "completions" },
+          },
+          google: { name: "Google", tool_call: true, provider: { npm: "@ai-sdk/google" } },
+          wide: { name: "Wide", tool_call: true, limit: { context: 1_000_000, output: 64_000 } },
+        },
+      },
+    }),
+    decision: encodeCatalogJson({
+      gateway: {
+        id: "gateway",
+        npm: "@ai-sdk/openai-compatible",
+        models: { judge: { name: "Judge", type: "decision", tool_call: false } },
+      },
+    }),
+  })
+
+  const recordingClass = (
+    id: string,
+    npm: ReadonlyArray<string>,
+    protocols: ReadonlyArray<string>,
+    seen: Array<ApiClassRequest>,
+  ): ApiClassContribution => ({
+    id,
+    npm,
+    protocols,
+    promptCacheTtl: Option.none(),
+    resolveModel: (request) =>
+      Effect.sync(() => {
+        seen.push(request)
+        return AiModel.make(id, request.model.id, LanguageModelLayers.failing)
+      }),
+  })
+
+  const gatewayDriver: ModelDriverContribution = {
+    id: "gateway",
+    name: "Gateway",
+    endpoint: () =>
+      Effect.succeed({
+        apiKey: Option.some("gateway-key"),
+        baseUrl: Option.none(),
+        transformClient: Option.none(),
+      }),
+    resolveDecisionModel: () => Effect.die("no decision in these tests"),
+    overrides: [
+      {
+        match: /^wide$/,
+        patch: (entry) => ({ ...entry, limit: { ...entry.limit, context: 200_000 } }),
+        receipt: "the gateway's docs name a 200k window",
+      },
+    ],
+  }
+
+  const classesSeeing = (seen: Array<ApiClassRequest>) =>
+    new Map(
+      [
+        recordingClass("chat", ["@ai-sdk/openai-compatible"], ["completions"], seen),
+        recordingClass("responses", ["@ai-sdk/openai"], ["responses"], seen),
+      ].map((each) => [each.id, each] as const),
+    )
+
+  const resolve = (modelName: string, seen: Array<ApiClassRequest>) =>
+    resolveDriverModel({
+      driver: gatewayDriver,
+      apiClasses: classesSeeing(seen),
+      modelName,
+      auth: Option.none(),
+      hints: Option.none(),
+      catalog: gatewayCatalog,
+    })
+
+  it.effect("an entry that names no package of its own takes its provider's package and URL", () =>
+    Effect.sync(() => {
+      const entry = (key: string) => catalogModelEntry(gatewayCatalog, "gateway", key)
+      expect(Option.map(entry("chat"), (each) => [each.npm, each.api])).toEqual(
+        Option.some(["@ai-sdk/openai-compatible", "https://gateway.test/v1"]),
+      )
+      expect(Option.map(entry("responses"), (each) => each.npm)).toEqual(
+        Option.some("@ai-sdk/openai"),
+      )
+      expect(Option.isNone(entry("absent"))).toBe(true)
+    }),
+  )
+
+  it.effect(
+    "the class that speaks the entry's protocol wins over its package, and the package picks otherwise",
+    () =>
+      Effect.gen(function* () {
+        const seen: Array<ApiClassRequest> = []
+        const providers = yield* Effect.forEach(["chat", "responses", "routed"], (modelName) =>
+          Effect.map(resolve(modelName, seen), (resolution) => resolution.provider),
+        )
+        expect(providers).toEqual(["chat", "responses", "chat"])
+        // The endpoint's key, and the catalog's URL where the endpoint names none.
+        expect(
+          seen.map((request) => [
+            request.providerId,
+            Option.getOrNull(request.apiKey),
+            Option.getOrNull(request.baseUrl),
+          ]),
+        ).toEqual([
+          ["gateway", "gateway-key", "https://gateway.test/v1"],
+          ["gateway", "gateway-key", "https://gateway.test/v1"],
+          ["gateway", "gateway-key", "https://gateway.test/v1"],
+        ])
+      }),
+  )
+
+  it.effect(
+    "a model no class speaks, a model the catalog does not list and a decision model fail as driver errors",
+    () =>
+      Effect.gen(function* () {
+        const reason = (modelName: string) =>
+          resolve(modelName, []).pipe(
+            Effect.flip,
+            Effect.map((error) => {
+              if (error._tag !== "DriverError") return error.message
+              return error.reason
+            }),
+          )
+        expect(yield* reason("google")).toBe(
+          'Gateway model "google" speaks the @ai-sdk/google wire format, which gent does not support',
+        )
+        expect(yield* reason("absent")).toBe(
+          'Gateway model "absent" has no entry in the models.dev catalog',
+        )
+        expect(yield* reason("judge")).toContain("gateway/judge is a classifier model")
+      }),
+  )
+
+  it.effect("an override patches the entry the class sees and the window core lists", () =>
+    Effect.gen(function* () {
+      const seen: Array<ApiClassRequest> = []
+      yield* resolve("wide", seen)
+      expect(seen.map((request) => request.model.limit?.context)).toEqual([200_000])
+
+      const listed = yield* listModelCatalog(
+        { modelDrivers: new Map([["gateway", gatewayDriver]]), apiClasses: classesSeeing([]) },
+        gatewayCatalog,
+      )
+      expect(
+        listed.models.map((model) => [model.id, model.kind ?? "chat", model.contextLength ?? 0]),
+      ).toEqual([
+        [ModelId.make("gateway/chat"), "chat", 0],
+        [ModelId.make("gateway/responses"), "chat", 0],
+        [ModelId.make("gateway/routed"), "chat", 0],
+        [ModelId.make("gateway/wide"), "chat", 200_000],
+        [ModelId.make("gateway/judge"), "classifier", 0],
+      ])
+    }),
+  )
+})
+
+describe("generic providers", () => {
+  /** Four catalog providers: two a class speaks, one it does not, one an adapter serves. */
+  const genericCatalog = modelCatalogFromBodies({
+    chat: encodeCatalogJson({
+      open: {
+        id: "open",
+        name: "Open",
+        env: ["OPEN_API_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://open.test/v1",
+        models: {
+          big: { name: "Big", tool_call: true, limit: { context: 100_000, output: 8_000 } },
+          google: { name: "Google", tool_call: true, provider: { npm: "@ai-sdk/google" } },
+        },
+      },
+      regional: {
+        id: "regional",
+        name: "Regional",
+        env: ["REGION_ID", "REGIONAL_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://${REGION_ID}.regional.test/v1",
+        models: { small: { name: "Small", tool_call: true } },
+      },
+      unspoken: {
+        id: "unspoken",
+        name: "Unspoken",
+        env: ["UNSPOKEN_KEY"],
+        npm: "@ai-sdk/google",
+        models: { g: { name: "G", tool_call: true } },
+      },
+      adapted: {
+        id: "adapted",
+        name: "Adapted",
+        env: ["ADAPTED_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        models: { a: { name: "A", tool_call: true } },
+      },
+    }),
+    decision: "{}",
+  })
+
+  const chatClass = (seen: Array<ApiClassRequest>): ApiClassContribution => ({
+    id: "chat",
+    npm: ["@ai-sdk/openai-compatible"],
+    protocols: [],
+    promptCacheTtl: Option.none(),
+    resolveModel: (request) =>
+      Effect.sync(() => {
+        seen.push(request)
+        return AiModel.make("chat", request.model.id, LanguageModelLayers.failing)
+      }),
+  })
+
+  const adaptedDriver: ModelDriverContribution = {
+    id: "adapted",
+    name: "Adapted",
+    envCredential: "ADAPTED_KEY",
+    endpoint: () =>
+      Effect.succeed({
+        apiKey: Option.some("adapter-key"),
+        baseUrl: Option.none(),
+        transformClient: Option.none(),
+      }),
+  }
+
+  interface Setup {
+    readonly stored?: Record<string, AuthInfo>
+    readonly env?: Record<string, string>
+    readonly config?: ProviderConfig
+    readonly seen?: Array<ApiClassRequest>
+  }
+
+  const inProfile =
+    (setup: Setup) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>) => {
+      const registry = ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("generic-test") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: {
+              modelDrivers: [adaptedDriver],
+              apiClasses: [chatClass(setup.seen ?? [])],
+            },
+          },
+        ]),
+        Effect.succeed(setup.config ?? {}),
+      )
+      const services = Layer.mergeAll(ModelResolver.Live, ModelCatalogRecord.Live).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            Auth.Test(setup.stored ?? {}),
+            registry,
+            ModelCatalogSource.fixed(genericCatalog),
+          ),
+        ),
+        Layer.merge(ConfigProvider.layer(ConfigProvider.fromEnv({ env: setup.env ?? {} }))),
+      )
+      return Effect.provide(effect, services)
+    }
+
+  const rows = (setup: Setup) =>
+    listAuthProviders([]).pipe(
+      Effect.map((listed) => listed.map((row) => [String(row.provider), row.source ?? "none"])),
+      inProfile(setup),
+    )
+
+  const searched = (setup: Setup) =>
+    listCatalogProviders().pipe(
+      Effect.map((found) => found.providers.map((row) => String(row.provider))),
+      inProfile(setup),
+    )
+
+  const resolved = (modelId: string, setup: Setup) =>
+    Effect.gen(function* () {
+      const resolver = yield* ModelResolver
+      return yield* resolver.resolve({ modelId })
+    }).pipe(Effect.scoped, inProfile(setup))
+
+  const resolveFailure = (modelId: string, setup: Setup) =>
+    resolved(modelId, setup).pipe(
+      Effect.flip,
+      Effect.map((error) => error.message),
+    )
+
+  it.live(
+    "a provider is active with a key variable set, a stored key or a config entry; the search finds the rest a class speaks",
+    () =>
+      Effect.gen(function* () {
+        const key = AuthApi.make({ type: "api", key: "sk-stored" })
+        expect(yield* rows({})).toEqual([["adapted", "none"]])
+        expect(yield* searched({})).toEqual(["open", "regional"])
+        expect(yield* rows({ env: { OPEN_API_KEY: "sk-env" } })).toEqual([
+          ["adapted", "none"],
+          ["open", "env"],
+        ])
+        expect(yield* searched({ env: { OPEN_API_KEY: "sk-env" } })).toEqual(["regional"])
+        // The variable of a base URL holds no key: it activates nothing.
+        expect(yield* rows({ env: { REGION_ID: "eu" } })).toEqual([["adapted", "none"]])
+        expect(yield* rows({ stored: { regional: key } })).toEqual([
+          ["adapted", "none"],
+          ["regional", "stored"],
+        ])
+        expect(yield* rows({ config: { providers: { regional: {} } } })).toEqual([
+          ["adapted", "none"],
+          ["regional", "none"],
+        ])
+        // A provider a turn routes through is listed, and required, with no key.
+        const required = yield* listAuthProviders(["open"]).pipe(
+          Effect.map((listed) => listed.map((row) => [String(row.provider), row.required])),
+          inProfile({}),
+        )
+        expect(required).toEqual([
+          ["adapted", false],
+          ["open", true],
+        ])
+      }),
+  )
+
+  it.live("each ${VAR} of a base URL is a prompt of the sign-in", () =>
+    Effect.gen(function* () {
+      const found = yield* listCatalogProviders().pipe(inProfile({}))
+      expect(
+        found.methods["open"]?.map((method) => [
+          method.label,
+          Option.fromUndefinedOr(method.prompts),
+        ]),
+      ).toEqual([["Open API key", Option.none()]])
+      expect(found.methods["regional"]?.map((method) => method.prompts)).toEqual([
+        [{ key: "REGION_ID", label: "REGION_ID", env: "REGION_ID" }],
+      ])
+      // A set variable is not asked, as for an adapter's prompt.
+      const withRegion = yield* listAuthMethods().pipe(
+        inProfile({ env: { REGION_ID: "eu" }, config: { providers: { regional: {} } } }),
+      )
+      expect(withRegion["regional"]?.map((method) => method.prompts)).toEqual([[]])
+    }),
+  )
+
+  it.live(
+    "an active provider lists the models a class speaks and resolves with the stored key, then the variable",
+    () =>
+      Effect.gen(function* () {
+        const listed = yield* modelCatalog().pipe(inProfile({ env: { OPEN_API_KEY: "sk-env" } }))
+        // The registered drivers' models come first, then each generic provider's.
+        expect(listed.models.map((model) => [model.id, model.contextLength ?? 0])).toEqual([
+          [ModelId.make("adapted/a"), 0],
+          [ModelId.make("open/big"), 100_000],
+        ])
+        const seen: Array<ApiClassRequest> = []
+        yield* resolved("open/big", { env: { OPEN_API_KEY: "sk-env" }, seen })
+        yield* resolved("open/big", {
+          env: { OPEN_API_KEY: "sk-env" },
+          stored: { open: AuthApi.make({ type: "api", key: "sk-stored" }) },
+          seen,
+        })
+        expect(
+          seen.map((request) => [
+            request.providerId,
+            Option.getOrNull(request.apiKey),
+            Option.getOrNull(request.baseUrl),
+          ]),
+        ).toEqual([
+          ["open", "sk-env", "https://open.test/v1"],
+          ["open", "sk-stored", "https://open.test/v1"],
+        ])
+        expect(yield* resolveFailure("open/google", { env: { OPEN_API_KEY: "sk-env" } })).toContain(
+          "speaks the @ai-sdk/google wire format, which gent does not support",
+        )
+        expect(yield* resolveFailure("open/big", {})).toBe(
+          "Open credentials unavailable: no stored API key and no OPEN_API_KEY env var; sign in with /auth",
+        )
+      }),
+  )
+
+  it.live("a base URL variable is filled from the stored answer, then the variable", () =>
+    Effect.gen(function* () {
+      const seen: Array<ApiClassRequest> = []
+      const answered = AuthApi.make({ type: "api", key: "sk", metadata: { REGION_ID: "eu" } })
+      const bare = AuthApi.make({ type: "api", key: "sk" })
+      yield* resolved("regional/small", { stored: { regional: answered }, seen })
+      yield* resolved("regional/small", {
+        stored: { regional: bare },
+        env: { REGION_ID: "us" },
+        seen,
+      })
+      expect(seen.map((request) => Option.getOrNull(request.baseUrl))).toEqual([
+        "https://eu.regional.test/v1",
+        "https://us.regional.test/v1",
+      ])
+      expect(yield* resolveFailure("regional/small", { stored: { regional: bare } })).toBe(
+        "Regional needs REGION_ID: none stored with the sign-in and no REGION_ID env var; sign in again with /auth",
+      )
+    }),
+  )
+
+  it.live(
+    "a providers config entry adds a provider and patches a model's limits; disabledProviders hides one",
+    () =>
+      Effect.gen(function* () {
+        const config: ProviderConfig = {
+          providers: {
+            open: { models: { big: { limit: { context: 200_000, output: 16_000 } } } },
+            proxy: {
+              name: "My proxy",
+              class: "chat",
+              api: "https://proxy.test/v1",
+              env: ["PROXY_KEY"],
+              headers: { "x-team": "core" },
+              models: { m: { name: "M", tool_call: true } },
+            },
+          },
+          disabledProviders: ["regional"],
+        }
+        const listed = yield* modelCatalog().pipe(inProfile({ config }))
+        expect(
+          listed.models.map((model) => [model.id, model.name, model.contextLength ?? 0]),
+        ).toEqual([
+          [ModelId.make("adapted/a"), "A", 0],
+          [ModelId.make("open/big"), "Big", 200_000],
+          [ModelId.make("proxy/m"), "M", 0],
+        ])
+        expect(yield* rows({ config })).toEqual([
+          ["adapted", "none"],
+          ["open", "none"],
+          ["proxy", "none"],
+        ])
+        expect(yield* searched({ config })).toEqual([])
+
+        const seen: Array<ApiClassRequest> = []
+        yield* resolved("proxy/m", { config, env: { PROXY_KEY: "sk-proxy" }, seen })
+        const request = seen[0]
+        expect(request?.providerId).toBe("proxy")
+        expect(Option.getOrNull(request?.apiKey ?? Option.none())).toBe("sk-proxy")
+        expect(Option.getOrNull(request?.baseUrl ?? Option.none())).toBe("https://proxy.test/v1")
+        // The config's headers go with every request.
+        const sent = yield* Ref.make<Record<string, string>>({})
+        const client = HttpClient.make((outgoing) =>
+          Effect.as(
+            Ref.set(sent, outgoing.headers),
+            HttpClientResponse.fromWeb(outgoing, new Response("", { status: 200 })),
+          ),
+        )
+        const transform = Option.flatMap(
+          Option.fromUndefinedOr(request),
+          (each) => each.transformClient,
+        )
+        expect(Option.isSome(transform)).toBe(true)
+        if (Option.isSome(transform)) yield* transform.value(client).get("https://proxy.test/v1")
+        expect((yield* Ref.get(sent))["x-team"]).toBe("core")
+
+        expect(yield* resolveFailure("regional/small", { config })).toBe(
+          "Unknown provider: regional",
+        )
+      }),
+  )
+
+  it.live(
+    "an adapter's catalog provider resolves through the adapter, never a generic driver",
+    () =>
+      Effect.gen(function* () {
+        const seen: Array<ApiClassRequest> = []
+        yield* resolved("adapted/a", { env: { ADAPTED_KEY: "sk-env" }, seen })
+        expect(seen.map((request) => Option.getOrNull(request.apiKey))).toEqual(["adapter-key"])
+        expect(yield* searched({ env: { ADAPTED_KEY: "sk-env" } })).toEqual(["open", "regional"])
+      }),
   )
 })

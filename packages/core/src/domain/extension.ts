@@ -32,7 +32,7 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "./capability.js"
-import type { ModelDriverContribution } from "./driver.js"
+import type { ApiClassContribution, ModelDriverContribution } from "./driver.js"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import {
@@ -217,6 +217,8 @@ export interface ExtensionContributions {
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly hooks?: ReadonlyArray<AnyExtensionHook>
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
+  /** Wire protocols the model drivers' catalog entries speak, by class id. */
+  readonly apiClasses?: ReadonlyArray<ApiClassContribution>
 }
 
 // ── extension ───────────────────────────────────────────────────────────────
@@ -596,6 +598,7 @@ interface RegistrationDomainMap {
   readonly agent: "agents"
   readonly resource: "resources"
   readonly modelDriver: "modelDrivers"
+  readonly apiClass: "apiClasses"
 }
 
 const registrationDomains: RegistrationDomainMap = {
@@ -604,6 +607,7 @@ const registrationDomains: RegistrationDomainMap = {
   agent: "agents",
   resource: "resources",
   modelDriver: "modelDrivers",
+  apiClass: "apiClasses",
 }
 
 type RegistrationDomain = keyof typeof registrationDomains
@@ -1173,6 +1177,15 @@ const validateDriverIds = (contribs: ExtensionContributions): Option.Option<stri
     }
     allDriverIds.set(d.id, `modelDrivers[${i}]`)
   }
+  const classIds = new Map<string, number>()
+  for (const [i, apiClass] of (contribs.apiClasses ?? []).entries()) {
+    if (classIds.has(apiClass.id)) {
+      return Option.some(
+        `apiClasses[${i}] (${apiClass.id}): class id already used by apiClasses[${classIds.get(apiClass.id)}]`,
+      )
+    }
+    classIds.set(apiClass.id, i)
+  }
   return Option.none()
 }
 
@@ -1183,6 +1196,7 @@ const allowedContributionBuckets = new Set([
   "agents",
   "hooks",
   "modelDrivers",
+  "apiClasses",
 ])
 
 const unknownBucketMessage = (key: string) =>

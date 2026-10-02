@@ -1,4 +1,9 @@
-import { makeTempDirectoryScoped, seedAuthKeys, waitFor } from "@gent/core/test-utils"
+import {
+  makeTempDirectoryScoped,
+  seedAuthKeys,
+  serveModelCatalogFixture,
+  waitFor,
+} from "@gent/core/test-utils"
 import { Terminal } from "@xterm/headless"
 import {
   Array as Arr,
@@ -138,26 +143,32 @@ const openPty = (
 
 // ── TUI under test ──
 
-/** Start the TUI from this checkout, isolated in `tempDir`. */
+/**
+ * Start the TUI from this checkout, isolated in `tempDir`. The child reads the
+ * fixture catalog from a loopback listener of the same scope, never models.dev.
+ */
 const spawnWithDir = (
   tempDir: string,
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
   size: PtySize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
 ): Effect.Effect<TestContext, never, Scope.Scope> =>
-  openPty({
-    command: "bun",
-    args: [`${tuiDirectory}/src/main.tsx`, "--isolate", ...extraArgs],
-    cwd: tuiDirectory,
-    env: {
-      // oxlint-disable-next-line effect/noGlobals -- the fixture hands the test's environment to the real TUI process
-      ...Bun.env,
-      GENT_DATA_DIR: tempDir,
-      GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
-      ...extraEnv,
-    },
-    size,
-  })
+  Effect.flatMap(serveModelCatalogFixture, (catalogOrigin) =>
+    openPty({
+      command: "bun",
+      args: [`${tuiDirectory}/src/main.tsx`, "--isolate", ...extraArgs],
+      cwd: tuiDirectory,
+      env: {
+        // oxlint-disable-next-line effect/noGlobals -- the fixture hands the test's environment to the real TUI process
+        ...Bun.env,
+        GENT_DATA_DIR: tempDir,
+        GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
+        GENT_MODEL_CATALOG_URL: catalogOrigin,
+        ...extraEnv,
+      },
+      size,
+    }),
+  )
 
 export const seedAndSpawn = (extraArgs: string[] = [], size?: PtySize) =>
   Effect.gen(function* () {

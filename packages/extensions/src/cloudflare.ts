@@ -1,40 +1,23 @@
-import { Effect, Layer, Option, Predicate, Redacted, Schema } from "effect"
+import { Effect, Option, Predicate, Schema } from "effect"
 import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http"
-import { Model as AiModel } from "effect/ai"
-import type { OpenAiLanguageModel as OpenAiChatLanguageModel } from "@effect/ai-openai-compat"
-import type * as ChatSdkModule from "@effect/ai-openai-compat"
 import {
   AuthMethod,
   defineExtension,
-  DriverError,
-  DriverFailureId,
   ExtensionHost,
-  Model,
-  ModelId,
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthInfo,
-  type ProviderHints,
-  ProviderId,
 } from "@gent/core/extensions/api"
-import {
-  apiKeyFrom,
-  type CatalogSource,
-  catalogSource,
-  driverListModels,
-  ModelHttpClient,
-  readOptionalEnv,
-} from "./providers.js"
-import { type ClassifierEntry, classifierModel, typeSafeDecisionModel } from "./typesafe.js"
+import { apiKeyFrom, readOptionalEnv } from "./providers.js"
+import { typeSafeDecisionModel } from "./typesafe.js"
 
 // Test seam: only tests read buildCloudflareModelDriver, which lets a test
 // run the driver against a fake fetch and a fixture catalog.
 
 /**
- * Cloudflare's REST API for AI on `api.cloudflare.com`: Workers AI models
- * (`@cf/...`) and the third-party models AI Gateway serves (`author/model`),
- * both over OpenAI Chat Completions at `/accounts/{account}/ai/v1`. One
- * Cloudflare API token signs every request (`Authorization: Bearer`); the
+ * Cloudflare's REST API for AI on `api.cloudflare.com`: the Workers AI models
+ * (`@cf/...`) over OpenAI Chat Completions at `/accounts/{account}/ai/v1`.
+ * One Cloudflare API token signs every request (`Authorization: Bearer`); the
  * sign-in also asks the account id, and an AI Gateway id that routes the
  * requests through that gateway (`cf-aig-gateway-id`).
  *
@@ -118,8 +101,7 @@ const accountRoot = (account: Account): string =>
 /**
  * With a gateway id, every request names the gateway: AI Gateway then logs,
  * caches and bills it. Workers AI (`@cf/`) models need the header to go
- * through a gateway at all; third-party models default to the account's
- * default gateway without it.
+ * through a gateway at all.
  */
 const gatewayHeader =
   (gatewayId: Option.Option<string>) =>
@@ -132,105 +114,40 @@ const gatewayHeader =
         ),
     })
 
-// ── chat completions ────────────────────────────────────────────────────────
-
-type ChatSdk = typeof ChatSdkModule
-type ChatConfig = NonNullable<Parameters<typeof OpenAiChatLanguageModel.layer>[0]["config"]>
-
-// oxlint-disable-next-line effect/noDynamicImports -- the SDK loads at the first model build, not at launch
-const loadChatSdk = Effect.promise((): Promise<ChatSdk> => import("@effect/ai-openai-compat"))
-
-/**
- * The Chat Completions request: tools without strict schemas, which the
- * Workers AI models do not all take, the output cap, and a `temperature` only
- * for a model the catalog says does not reason. The catalog lists no
- * reasoning controls for a Workers AI model, so the request names no effort.
- */
-const chatConfig = (hints: Option.Option<ProviderHints>): ChatConfig => {
-  let config: ChatConfig = { strictJsonSchema: false }
-  const maxTokens = Option.flatMap(hints, (value) => Option.fromNullishOr(value.maxTokens))
-  if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
-  const temperature = hints.pipe(
-    Option.filter((value) => value.supportsReasoning === false),
-    Option.flatMap((value) => Option.fromNullishOr(value.temperature)),
-  )
-  if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-  return config
-}
-
-const chatModel = (
-  { OpenAiClient, OpenAiLanguageModel }: ChatSdk,
-  modelName: string,
-  account: Account,
-  hints: Option.Option<ProviderHints>,
-) => {
-  const client = OpenAiClient.layer({
-    apiKey: Redacted.make(account.token),
-    apiUrl: `${accountRoot(account)}/v1`,
-    transformClient: gatewayHeader(account.gatewayId),
-  }).pipe(Layer.provide(ModelHttpClient))
-  return OpenAiLanguageModel.layer({ model: modelName, config: chatConfig(hints) }).pipe(
-    Layer.provide(client),
-  )
-}
-
 // ── catalog ─────────────────────────────────────────────────────────────────
 
 /**
  * models.dev lists the Workers AI models under this provider, with the
- * account's `/ai/v1` as their API. Its `cloudflare-ai-gateway` list names the
- * `ai-gateway-provider` package, which speaks the gateway's provider-native
- * routes, not this one, so the picker shows the Workers AI models only; a
- * third-party `author/model` id still resolves when an agent names it.
+ * account's `/ai/v1` as their API: core lists them under this driver's id,
+ * the chat models over Chat Completions, then the classifier models of
+ * models.dev's decision list (Clef and Clef Flash). Its
+ * `cloudflare-ai-gateway` list names the `ai-gateway-provider` package, which
+ * speaks the gateway's provider-native routes, not this one: its third-party
+ * `author/model` ids are neither listed nor resolved.
  */
 const CATALOG_PROVIDER = "cloudflare-workers-ai"
-
-/**
- * The Workers AI models under this driver's id. They speak Chat Completions,
- * whose upstreams cache implicitly with no write price, so none has a cache
- * lifetime.
- */
-const listWorkersAiModels = (catalog: CatalogSource) =>
-  driverListModels(catalog, CATALOG_PROVIDER, Option.none())().pipe(
-    Effect.map((models) =>
-      models.map((model) =>
-        Model.make({
-          ...model,
-          id: ModelId.make(`${DRIVER_ID}/${model.id.slice(CATALOG_PROVIDER.length + 1)}`),
-          provider: ProviderId.make(DRIVER_ID),
-        }),
-      ),
-    ),
-  )
 
 // ── clef decisions ──────────────────────────────────────────────────────────
 
 /**
  * Cloudflare's classifier models, Clef (27B) and Clef Flash (9B): the cell's
- * `models.decide`, priced per million input tokens as the Workers AI model
- * pages list them. The pages name no output price; 0 here. models.dev lists
- * neither model.
- */
-const CLASSIFIERS: ReadonlyArray<ClassifierEntry> = [
-  { name: "clef", label: "Clef", pricing: { input: 0.24, output: 0 } },
-  { name: "clef-flash", label: "Clef Flash", pricing: { input: 0.09, output: 0 } },
-]
-
-/**
- * Clef takes TypeSafe's System One body unchanged, its `model` field
- * `clef` or `clef-flash`, at the model's own Workers AI path. The TypeSafe
- * client posts to `{apiUrl}/systemone`; the request goes to
- * `/run/@cf/cloudflare/{model}` under the account instead.
+ * `models.decide`. models.dev's decision list names them with their Workers
+ * AI ids (`@cf/cloudflare/clef`) and prices.
+ *
+ * Clef takes TypeSafe's System One body unchanged, its `model` field the
+ * last segment of the id (`clef` or `clef-flash`), at the model's own Workers
+ * AI path. The TypeSafe client posts to `{apiUrl}/systemone`; the request
+ * goes to `/run/{id}` under the account instead.
  */
 const clefRunPath =
   (modelName: string) =>
   (client: HttpClient.HttpClient): HttpClient.HttpClient =>
     HttpClient.mapRequest(client, (request) =>
-      HttpClientRequest.setUrl(
-        request,
-        request.url.replace(/\/systemone$/, `/run/@cf/cloudflare/${modelName}`),
-      ),
+      HttpClientRequest.setUrl(request, request.url.replace(/\/systemone$/, `/run/${modelName}`)),
     )
+
+/** The `model` field of a Clef request body: the id's last segment. */
+const clefBodyModel = (modelName: string): string => modelName.slice(modelName.lastIndexOf("/") + 1)
 
 /**
  * The Workers AI REST envelope, `{ result, success, errors, messages }`. The
@@ -346,49 +263,29 @@ const unwrapEnvelope = (client: HttpClient.HttpClient): HttpClient.HttpClient =>
     ),
   )
 
-const isClassifier = (modelName: string): boolean =>
-  CLASSIFIERS.some((entry) => entry.name === modelName)
-
 // ── driver ──────────────────────────────────────────────────────────────────
 
 /** The Cloudflare driver. `env` holds the variables setup read; a stored token or answer wins. */
-export const buildCloudflareModelDriver = (
-  env: CloudflareEnv,
-  catalog: CatalogSource,
-): ModelDriverContribution => ({
+export const buildCloudflareModelDriver = (env: CloudflareEnv): ModelDriverContribution => ({
   id: DRIVER_ID,
   name: "Cloudflare",
+  catalogProvider: CATALOG_PROVIDER,
   envCredential: TOKEN_ENV,
-  resolveModel: (modelName, authInfo, hints) =>
-    Effect.gen(function* () {
-      if (isClassifier(modelName)) {
-        return yield* new DriverError({
-          driver: DriverFailureId.make(DRIVER_ID),
-          reason: `${DRIVER_ID}/${modelName} is a classifier model: it runs no turn; a cell asks it with models.decide`,
-        })
-      }
-      const account = yield* accountFrom(Option.fromNullishOr(authInfo), env)
-      const sdk = yield* loadChatSdk
-      return AiModel.make(
-        DRIVER_ID,
-        modelName,
-        chatModel(sdk, modelName, account, Option.fromNullishOr(hints)),
-      )
-    }),
+  endpoint: (_modelName, authInfo) =>
+    Effect.map(accountFrom(Option.fromNullishOr(authInfo), env), (account) => ({
+      apiKey: Option.some(account.token),
+      baseUrl: Option.some(`${accountRoot(account)}/v1`),
+      transformClient: Option.some(gatewayHeader(account.gatewayId)),
+    })),
   resolveDecisionModel: (modelName, authInfo) =>
     Effect.map(accountFrom(Option.fromNullishOr(authInfo), env), (account) =>
-      typeSafeDecisionModel(modelName, {
+      typeSafeDecisionModel(clefBodyModel(modelName), {
         apiKey: account.token,
         apiUrl: accountRoot(account),
         transformClient: (client) =>
           client.pipe(clefRunPath(modelName), gatewayHeader(account.gatewayId), unwrapEnvelope),
       }),
     ),
-  listModels: () =>
-    Effect.map(listWorkersAiModels(catalog), (models) => [
-      ...models,
-      ...CLASSIFIERS.map((entry) => classifierModel(DRIVER_ID, entry)),
-    ]),
   auth: {
     methods: [
       AuthMethod.make({
@@ -423,7 +320,6 @@ export const CloudflareExtension = defineExtension({
       accountId: yield* readOptionalEnv(ACCOUNT_ENV),
       gatewayId: yield* readOptionalEnv(GATEWAY_ENV),
     }
-    const catalog = yield* catalogSource(host.home)
-    yield* host.register("modelDriver", buildCloudflareModelDriver(env, catalog))
+    yield* host.register("modelDriver", buildCloudflareModelDriver(env))
   }),
 })

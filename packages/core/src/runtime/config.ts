@@ -108,6 +108,25 @@ export const readDisabledExtensions = (params: { home: string; cwd: string }) =>
 
 // User config schema - stored at ~/.gent/config.json
 
+/**
+ * One `providers` entry. Every field is optional and patches the models.dev
+ * provider of the same id: `name`, `api` (a base URL; each `${VAR}` in it is
+ * asked at sign-in), `env` (the key's variables), `class` (the id of the API
+ * class that speaks every model, as `openai-chat`), `headers` (sent with
+ * every request) and `models` (by model id, in the models.dev model shape).
+ */
+const ProviderConfigEntry = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  class: Schema.optional(Schema.String),
+  api: Schema.optional(Schema.String),
+  env: Schema.optional(Schema.Array(Schema.String)),
+  headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  models: Schema.optional(
+    Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Unknown)),
+  ),
+})
+export type ProviderConfigEntry = typeof ProviderConfigEntry.Type
+
 export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   disabledExtensions: Schema.optional(Schema.Array(Schema.String)),
   trustedProjects: Schema.optional(Schema.Array(Schema.String)),
@@ -128,13 +147,25 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    * run's own `RunSpec.overrides` shadows both.
    */
   agents: Schema.optional(Schema.Record(AgentName, AgentRunOverridesSchema)),
+  /**
+   * models.dev providers to enable, patch or add, by provider id. A key that
+   * names a catalog provider enables it and patches its entry; a new key adds
+   * a provider and needs `class`. Project config shadows user config
+   * key-by-key. Read by the generic providers of runtime/provider.ts.
+   */
+  providers: Schema.optional(Schema.Record(Schema.String, ProviderConfigEntry)),
+  /** Provider ids that get no generic driver, whatever their key or config. */
+  disabledProviders: Schema.optional(Schema.Array(Schema.String)),
 }) {}
+
+/** The provider settings of a config: what the generic providers read. */
+export type ProviderConfig = Pick<UserConfig, "providers" | "disabledProviders">
 
 /** An empty list or record is stored as an absent field. */
 const nonEmpty = <A>(items: ReadonlyArray<A>) =>
   Option.getOrUndefined(Option.liftPredicate(items, (list) => list.length > 0))
 
-const nonEmptyRecord = <A>(record: Readonly<Record<AgentName, A>>) =>
+const nonEmptyRecord = <K extends string, A>(record: Readonly<Record<K, A>>) =>
   Option.getOrUndefined(Option.liftPredicate(record, (r) => Object.keys(r).length > 0))
 
 /** Pure user-config transitions shared by the live and in-memory services. */
@@ -157,7 +188,8 @@ const configUpdates = {
 /**
  * Merge user + project configs. Per-field semantics:
  *   - disabledExtensions: concatenated (user first — historical order).
- *   - driverOverrides, agents: object spread; project entries shadow user
+ *   - disabledProviders: concatenated, user first.
+ *   - driverOverrides, agents, providers: object spread; project entries shadow user
  *     entries key-by-key. Idempotent set/clear is the load-bearing property —
  *     `Record<agent, DriverRef>` (vs `Array`) means `driver.set` / `clear`
  *     map directly to `record[name] = ref` / `delete record[name]`.
@@ -170,6 +202,11 @@ const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
     ]),
     driverOverrides: nonEmptyRecord({ ...user.driverOverrides, ...project.driverOverrides }),
     agents: nonEmptyRecord({ ...user.agents, ...project.agents }),
+    providers: nonEmptyRecord({ ...user.providers, ...project.providers }),
+    disabledProviders: nonEmpty([
+      ...(user.disabledProviders ?? []),
+      ...(project.disabledProviders ?? []),
+    ]),
   })
 
 /** A config file as JSON, with every key, known to `UserConfig` or not. */

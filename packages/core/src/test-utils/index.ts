@@ -14,6 +14,10 @@ export {
   type E2ELayerConfig,
   emptyQueueSnapshot,
   ensureStorageParents,
+  fixtureModelCatalog,
+  MODEL_CATALOG_FIXTURE,
+  modelCatalogFixture,
+  serveModelCatalogFixture,
   plantInFlightTurn,
   plantToolCallBinding,
   provideToolDispatch,
@@ -46,7 +50,10 @@ export {
 } from "./language-model.js"
 export {
   finishPart,
+  listModelCatalog,
+  modelCatalogFromBodies,
   multiToolCallStep,
+  resolveDriverModel,
   textDeltaPart,
   textStep,
   toolCallPart,

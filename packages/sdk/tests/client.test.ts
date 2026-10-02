@@ -1,10 +1,15 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Crypto, Effect, FileSystem, Option, Schema } from "effect"
+import { ConfigProvider, Crypto, Effect, FileSystem, Option, Schema } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/http"
 import { BunServices } from "@effect/platform-bun"
 import { defineExtension, ExtensionHost, request } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
-import { freePort, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
+import {
+  freePort,
+  makeTempDirectoryScoped,
+  serveModelCatalogFixture,
+  waitFor,
+} from "@gent/core/test-utils"
 import { SessionStorage } from "@gent/core/host"
 import { Gent } from "../src/client"
 import { Session, SessionId, dateFromMillis, messagePartsText } from "@gent/core/protocol"
@@ -249,12 +254,21 @@ describe("Gent.provider.mock tool scenario", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* makeTempDirectoryScoped("gent-debug-tools-")
+          // A turn reads its model's catalog entry: the server reads the
+          // fixture catalog from a loopback listener, never models.dev.
+          const catalogOrigin = yield* serveModelCatalogFixture
           const server = yield* Gent.server({
             cwd,
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
             extensions: BuiltinExtensions,
-          })
+          }).pipe(
+            Effect.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({ env: { GENT_MODEL_CATALOG_URL: catalogOrigin } }),
+              ),
+            ),
+          )
           const { client } = yield* Gent.client(server, { cwd })
           const { sessionId, branchId } = yield* client.session.create({ cwd })
           yield* client.message.send({ sessionId, branchId, content: "debug tools please" })

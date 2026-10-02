@@ -596,13 +596,22 @@ interface ClientAgentValue {
   sessionMetrics: () => SessionMetrics
   /** None until the model registry loads the model in use. */
   modelInfo: () => Option.Option<Model>
-  /** The chat models a registered driver can run, in registry order; empty until both load. */
+  /**
+   * The chat models the session's profile serves, in catalog order: a
+   * registered driver's, and an active models.dev provider's. Empty until
+   * the catalog loads.
+   */
   models: () => readonly Model[]
   /**
    * `models`, or `None` until the session in view's first catalog load
    * settles; a failed load settles empty. Each session reads its own catalog.
    */
   modelCatalog: () => Option.Option<ReadonlyArray<Model>>
+  /**
+   * A stored credential changed. The catalog is read again: a key can add a
+   * models.dev provider's models, and its removal takes them away.
+   */
+  credentialsChanged: () => void
 
   /** Show a local error. It leaves the turn as it is; the next turn start clears it. */
   setError: (error: string) => void
@@ -877,8 +886,6 @@ export function ClientProvider(props: ClientProviderProps) {
     owner: SessionId
     modelsById: Record<string, Model>
     agentsByName: Record<string, AgentDefinition>
-    /** Ids of the registered model drivers; a model needs one to run. */
-    driverIds: readonly string[]
     /** The owner's first catalog load has answered, with the catalog or with a failure. */
     settled: boolean
   }
@@ -886,7 +893,6 @@ export function ClientProvider(props: ClientProviderProps) {
     owner,
     modelsById: {},
     agentsByName: {},
-    driverIds: [],
     settled: false,
   })
   const [modelStore, setModelStore] = createStore<ModelCatalog>(
@@ -988,10 +994,17 @@ export function ClientProvider(props: ClientProviderProps) {
 
   // The catalog is the active session's profile: a project model driver
   // appears once that session is active, a disabled one disappears. A load
-  // that failed in a dropped connection is read again on the reconnect.
+  // that failed in a dropped connection is read again on the reconnect. A
+  // changed credential reads it again too: the models.dev providers it
+  // serves follow the stored keys.
   const catalogReplies = repliesInView(activeSessionId)
+  const [credentialChanges, setCredentialChanges] = createSignal(0)
+  const catalogKey = (): readonly [Option.Option<number>, SessionId, number] => [
+    ...connectionAndSession(),
+    credentialChanges(),
+  ]
   createEffect(
-    on(connectionAndSession, ([epoch, sessionId]) => {
+    on(catalogKey, ([epoch, sessionId]) => {
       const reply = catalogReplies.take()
       if (Option.isNone(epoch)) return
       const request = { sessionId }
@@ -1007,12 +1020,10 @@ export function ClientProvider(props: ClientProviderProps) {
                 for (const model of models) modelsById[model.id] = model
                 const agentsByName: Record<string, AgentDefinition> = {}
                 for (const agent of drivers.agents) agentsByName[agent.name] = agent
-                const driverIds = drivers.drivers.map((driver) => driver.id)
                 setModelStore({
                   owner: sessionId,
                   modelsById,
                   agentsByName,
-                  driverIds,
                   settled: true,
                 })
               }),
@@ -1426,13 +1437,10 @@ export function ClientProvider(props: ClientProviderProps) {
 
     switchBranch: (branchId) => cast(requestBranchSwitch(sessionIdentity(), branchId)),
   }
-  // A classifier model answers the cell's `models.decide` and never runs a turn.
-  const runnableModels = (): readonly Model[] => {
-    const { modelsById, driverIds } = catalog()
-    return Object.values(modelsById).filter(
-      (model) => driverIds.includes(model.provider) && model.kind !== "classifier",
-    )
-  }
+  // The server lists only the models its profile serves. A classifier model
+  // answers the cell's `models.decide` and never runs a turn.
+  const runnableModels = (): readonly Model[] =>
+    Object.values(catalog().modelsById).filter((model) => model.kind !== "classifier")
   // The agent's name, held as a memo. Every session snapshot writes a new
   // `Option` for the agent (a reconnect refetches one), and a write of the
   // same name is not a new agent: the effects keyed on it (the auth gate, the
@@ -1475,6 +1483,7 @@ export function ClientProvider(props: ClientProviderProps) {
       if (!catalog().settled) return Option.none()
       return Option.some(runnableModels())
     },
+    credentialsChanged: () => setCredentialChanges((count) => count + 1),
     setErrorIn: (target, error) => {
       // The session in view shows it now. Either way it is held, so the
       // session's next snapshot shows it again over the status it writes.

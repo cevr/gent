@@ -37,6 +37,8 @@ import {
   testToolContext,
   ensureStorageParents,
   fixedSessionProfiles,
+  fixtureModelCatalog,
+  fixtureModelCatalogSource,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
@@ -62,7 +64,6 @@ import {
   CurrentExtensionHostContext,
   type DiscoveredExtension,
   ExtensionRegistry,
-  listModelCatalog,
   makeExtensionHostContextProvider,
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
@@ -125,6 +126,7 @@ import { Model as AiModel, type LanguageModel } from "effect/ai"
 import {
   Auth,
   DecisionModelResolver,
+  listModelCatalog,
   ModelRegistry,
   textStep,
   toolCallStep,
@@ -1512,7 +1514,10 @@ describe("resolveTurnProfile", () => {
           }),
         )
         // A built profile's services hold its registry, as `Layer.build` makes them.
-        const profileRegistry = ExtensionRegistry.of({ getResolved: () => profileResolved })
+        const profileRegistry = ExtensionRegistry.of({
+          getResolved: () => profileResolved,
+          providerConfig: Effect.succeed({}),
+        })
         const fakeProfile: SessionProfile = {
           cwd: "/nonexistent/profile-driver-scope",
           resolved: profileResolved,
@@ -1703,7 +1708,7 @@ describe("driver resolution", () => {
       const resolved = resolveExtensions([
         makeExt("ext", "builtin", { modelDrivers: [first, second] }),
       ])
-      const result = yield* listModelCatalog(resolved.modelDrivers)
+      const result = yield* listModelCatalog(resolved, fixtureModelCatalog())
       expect(result.models.map((model) => model.id)).toEqual([
         ModelId.make("first/one"),
         ModelId.make("second/one"),
@@ -1726,7 +1731,7 @@ describe("driver resolution", () => {
       const resolved = resolveExtensions([
         makeExt("ext", "builtin", { modelDrivers: [listing, silent] }),
       ])
-      const result = yield* listModelCatalog(resolved.modelDrivers)
+      const result = yield* listModelCatalog(resolved, fixtureModelCatalog())
       expect(result.models.map((model) => model.id)).toEqual([ModelId.make("listing/one")])
     }),
   )
@@ -1740,7 +1745,7 @@ describe("driver resolution", () => {
         id: "auth-a",
         name: "AuthA",
         resolveModel: stubResolution,
-        listModels: (auth) =>
+        listModels: (_catalog, auth) =>
           Effect.sync(() => {
             seenAuth.push({ driverId: "auth-a", auth: Option.fromUndefinedOr(auth) })
             return [makeCatalogModel("auth-a/one")]
@@ -1750,7 +1755,7 @@ describe("driver resolution", () => {
         id: "auth-b",
         name: "AuthB",
         resolveModel: stubResolution,
-        listModels: (auth) =>
+        listModels: (_catalog, auth) =>
           Effect.sync(() => {
             seenAuth.push({ driverId: "auth-b", auth: Option.fromUndefinedOr(auth) })
             return [makeCatalogModel("auth-b/one")]
@@ -1759,13 +1764,11 @@ describe("driver resolution", () => {
       const resolved = resolveExtensions([
         makeExt("auth-ext", "builtin", { modelDrivers: [driverA, driverB] }),
       ])
-      yield* listModelCatalog(resolved.modelDrivers, (driverId) => {
+      yield* listModelCatalog(resolved, fixtureModelCatalog(), (driverId) => {
         if (driverId === "auth-a") {
-          return Effect.succeed(ProviderAuthInfo.cases.Api.make({ key: "secret-a" }))
+          return Effect.succeedSome(ProviderAuthInfo.cases.Api.make({ key: "secret-a" }))
         }
-        // oxlint-disable-next-line effect/noNullish -- The auth store answers undefined for a provider with no key.
-        const noKey: ProviderAuthInfo | undefined = undefined
-        return Effect.succeed(noKey)
+        return Effect.succeedNone
       })
       // Each driver's listModels should have been called with the auth from resolveAuth(its id)
       const authAEntry = Option.fromUndefinedOr(seenAuth.find((s) => s.driverId === "auth-a"))
@@ -1808,7 +1811,7 @@ describe("driver resolution", () => {
       const resolved = resolveExtensions([
         makeExt("drivers-ext", "builtin", { modelDrivers: [broken, offline, working] }),
       ])
-      const result = yield* listModelCatalog(resolved.modelDrivers)
+      const result = yield* listModelCatalog(resolved, fixtureModelCatalog())
       expect(result.models.map((model) => model.id)).toEqual([ModelId.make("working/one")])
       expect(result.failures.map((failure) => failure.driverId)).toEqual(["broken", "offline"])
       expect(result.failures[0]?.error).toContain("invalid model catalog")
@@ -4395,7 +4398,10 @@ const makeMutationsLayer = (
   const cwd = "/nonexistent/gent-test-cwd"
   // The launch profile is the cache's profile of the host cwd, as in a server
   // root: a session with no stored cwd runs under it.
-  const launchRegistry = ExtensionRegistry.of({ getResolved: () => resolvedExtensions })
+  const launchRegistry = ExtensionRegistry.of({
+    getResolved: () => resolvedExtensions,
+    providerConfig: Effect.succeed({}),
+  })
   const launchProfile: SessionProfile = {
     cwd,
     resolved: resolvedExtensions,
@@ -4422,7 +4428,10 @@ const makeMutationsLayer = (
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
-    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+    DecisionModelResolver.Live.pipe(
+      Layer.provide(Auth.Test()),
+      Layer.provide(fixtureModelCatalogSource),
+    ),
     GentPlatform.Test(),
     fixedSessionProfiles(new Map([[cwd, launchProfile]])),
     AgentLoopSessionGovernance.Live,

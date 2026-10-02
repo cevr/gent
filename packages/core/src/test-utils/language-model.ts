@@ -28,6 +28,7 @@ import type { ProviderOptions } from "effect/ai/LanguageModel"
 import type * as AiError from "effect/ai/AiError"
 import * as Prompt from "effect/ai/Prompt"
 import {
+  type ApiClassContribution,
   type ModelDriverContribution,
   ProviderStopReason,
   reportProviderStopReason,
@@ -40,6 +41,8 @@ import {
   aiError,
   Auth,
   AuthApi,
+  type LoadedModelCatalog,
+  ModelCatalogSource,
   ModelResolver,
   type ResolveModelRequest,
   finishPart,
@@ -57,19 +60,22 @@ import {
  * resolver, from `modelDrivers` and an auth store holding the API keys in
  * `stored` (store key → key). A driver test sends one request through it over
  * a fake fetch to see which credential a sign-in sends; a failed resolution
- * is a defect.
+ * is a defect. The resolver reads `catalog` (usually `fixtureModelCatalog()`)
+ * and composes a driver's endpoint with `apiClasses`.
  */
 export const storedCredentialModel = (input: {
   readonly modelDrivers: ReadonlyArray<ModelDriverContribution>
+  readonly apiClasses?: ReadonlyArray<ApiClassContribution>
   readonly stored: Readonly<Record<string, string>>
   readonly modelId: string
+  readonly catalog: LoadedModelCatalog
 }): Layer.Layer<LanguageModel.LanguageModel> => {
   const resolved = resolveExtensions([
     {
       manifest: { id: ExtensionId.make("@gent/test/stored-credential") },
       scope: "builtin",
       sourcePath: "test",
-      contributions: { modelDrivers: input.modelDrivers },
+      contributions: { modelDrivers: input.modelDrivers, apiClasses: input.apiClasses ?? [] },
     },
   ])
   const seed = Record.map(input.stored, (key) => AuthApi.make({ type: "api", key }))
@@ -81,11 +87,15 @@ export const storedCredentialModel = (input: {
     }).pipe(
       Effect.provideService(
         ExtensionRegistry,
-        ExtensionRegistry.of({ getResolved: () => resolved }),
+        ExtensionRegistry.of({ getResolved: () => resolved, providerConfig: Effect.succeed({}) }),
       ),
       Effect.orDie,
     ),
-  ).pipe(Layer.provide(ModelResolver.Live), Layer.provide(Auth.Test(seed)))
+  ).pipe(
+    Layer.provide(ModelResolver.Live),
+    Layer.provide(Auth.Test(seed)),
+    Layer.provide(ModelCatalogSource.fixed(input.catalog)),
+  )
 }
 
 /**

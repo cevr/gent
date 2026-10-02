@@ -6,31 +6,30 @@ import {
   Duration,
   Effect,
   Exit,
-  FileSystem,
-  Hash,
   Layer,
   Option,
-  Path,
   Predicate,
+  Redacted,
   Schema,
-  Scope,
   Stream,
   SynchronizedRef,
 } from "effect"
 import {
-  isRecord,
+  type ApiClassContribution,
+  type ApiClassRequest,
+  type CatalogModel,
+  catalogModelEntry,
   isRecordArray,
   type JsonRecord,
   Model,
-  ModelId,
-  type ModelPricing,
-  omitUndefined,
+  type ModelCatalogView,
+  modelFromCatalog,
   credentialFailureMetadata,
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderHints,
-  ProviderId,
-  writeFileAtomic,
+  ReasoningEffort,
+  type ReasoningOption,
 } from "@gent/core/extensions/api"
 import {
   FetchHttpClient,
@@ -40,11 +39,9 @@ import {
   HttpClientResponse,
 } from "effect/http"
 import { EncodeError, HttpClientError, TransportError } from "effect/http/HttpClientError"
-import { AiError } from "effect/ai"
-import { makeStartedMemo } from "./started-memo.js"
-
-// Test seam: only a test reads modelsDevCatalog, the catalog loader, which it
-// runs against a scratch home.
+import { AiError, Model as AiModel } from "effect/ai"
+import type { OpenAiLanguageModel as OpenAiChatLanguageModel } from "@effect/ai-openai-compat"
+import type * as ChatSdkModule from "@effect/ai-openai-compat"
 
 // ── credentials ─────────────────────────────────────────────────────────────
 
@@ -692,16 +689,6 @@ export const takesLowVerbosity = (modelName: string): boolean => {
  */
 const ENCRYPTED_REASONING = "reasoning.encrypted_content"
 
-/** Whether the resolved model reasons: the catalog's word (`supportsReasoning`), else `fallback`. */
-export const modelReasons = (
-  hints: Option.Option<ProviderHints>,
-  fallback: () => boolean,
-): boolean =>
-  Option.getOrElse(
-    Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.supportsReasoning)),
-    fallback,
-  )
-
 export const withEncryptedReasoning =
   (reasons: boolean) =>
   (body: Schema.JsonObject): Schema.JsonObject => {
@@ -764,7 +751,15 @@ export const postOAuthForm = (
     ),
   )
 
-// ── reasoning effort ────────────────────────────────────────────────────────
+// ── reasoning plan ──────────────────────────────────────────────────────────
+//
+// Every API class plans a request's reasoning from the catalog entry: the
+// effort list, the on/off toggle and the thinking budget models.dev lists
+// under `reasoning_options`, and `temperature: false` for a model that
+// refuses a sampling temperature. No class keeps a table of model families.
+
+/** Every effort level, lowest first; the catalog's `null` effort reads as `"none"`. */
+const EFFORT_ORDER = ReasoningEffort.literals
 
 /**
  * The effort a request names for a hint: the lowest level the model accepts
@@ -772,7 +767,7 @@ export const postOAuthForm = (
  * lowest first; `accepts` is the model's own list, in the same order. A model
  * that accepts nothing gets none.
  */
-export const effortAtOrAbove = <Level extends string>(
+const effortAtOrAbove = <Level extends string>(
   order: ReadonlyArray<Level>,
   accepts: ReadonlyArray<Level>,
   level: Level,
@@ -783,498 +778,260 @@ export const effortAtOrAbove = <Level extends string>(
   )
 }
 
+/** The model's reasoning controls; none when the catalog lists none. */
+const reasoningOptions = (entry: CatalogModel): ReadonlyArray<ReasoningOption> =>
+  entry.reasoningOptions ?? []
+
+/** The efforts the model accepts, lowest first; empty when the catalog lists no effort list. */
+const acceptedEfforts = (entry: CatalogModel): ReadonlyArray<ReasoningEffort> =>
+  Option.match(
+    Option.fromUndefinedOr(reasoningOptions(entry).find((option) => option.type === "effort")),
+    {
+      onNone: () => [],
+      onSome: (option) => EFFORT_ORDER.filter((level) => option.values.includes(level)),
+    },
+  )
+
+/** The effort a request names for `level`: the lowest the model accepts at or above it, else its highest. */
+export const effortFor = (
+  entry: CatalogModel,
+  level: ReasoningEffort,
+): Option.Option<ReasoningEffort> => effortAtOrAbove(EFFORT_ORDER, acceptedEfforts(entry), level)
+
+/** The lowest effort the model accepts; none without an effort list. */
+export const lowestEffort = (entry: CatalogModel): Option.Option<ReasoningEffort> =>
+  Option.fromUndefinedOr(acceptedEfforts(entry)[0])
+
+/** Whether the model lists an on/off thinking toggle. */
+export const hasToggle = (entry: CatalogModel): boolean =>
+  reasoningOptions(entry).some((option) => option.type === "toggle")
+
+/**
+ * Whether the model reasons: the hint's word (`supportsReasoning`, from the
+ * catalog), else the entry's flag, else whether it lists reasoning controls.
+ */
+export const modelReasons = (entry: CatalogModel, hints: Option.Option<ProviderHints>): boolean =>
+  Option.getOrElse(
+    Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.supportsReasoning)),
+    () => entry.reasoning ?? reasoningOptions(entry).length > 0,
+  )
+
+/** The hint's level, when the model reasons and the request names one. */
+export const reasoningHint = (
+  entry: CatalogModel,
+  hints: Option.Option<ProviderHints>,
+): Option.Option<ReasoningEffort> =>
+  hints.pipe(
+    Option.filter(() => modelReasons(entry, hints)),
+    Option.flatMap((value) => Option.fromUndefinedOr(value.reasoning)),
+  )
+
+/** The request's output cap; none when the hints name none. */
+export const maxTokensOf = (hints: Option.Option<ProviderHints>): Option.Option<number> =>
+  Option.flatMap(hints, (value) => Option.fromNullishOr(value.maxTokens))
+
+/**
+ * A `temperature` for a request that may carry one: Responses and Chat
+ * Completions send it only to a model that does not reason and takes one.
+ */
+export const sampledTemperature = (
+  entry: CatalogModel,
+  hints: Option.Option<ProviderHints>,
+): Option.Option<number> =>
+  hints.pipe(
+    Option.filter(() => !modelReasons(entry, hints) && entry.temperature !== false),
+    Option.flatMap((value) => Option.fromNullishOr(value.temperature)),
+  )
+
+/** OpenCode's own cap on a thinking budget (`OUTPUT_TOKEN_MAX - 1` in `provider/transform.ts`). */
+const BUDGET_CEILING = 31_999
+
+/**
+ * The thinking budget for a hint, as OpenCode sets it (`budgetVariants`): the
+ * most the model and the output cap allow for `xhigh` and `max`, half of that
+ * (at least the model's minimum) for any other level. The output cap is the
+ * request's, else the model's. None when the model lists no budget, or the
+ * cap leaves less than the model's minimum.
+ */
+export const thinkingBudget = (
+  entry: CatalogModel,
+  level: ReasoningEffort,
+  hints: Option.Option<ProviderHints>,
+): Option.Option<number> =>
+  Option.fromUndefinedOr(
+    reasoningOptions(entry).find((option) => option.type === "budget_tokens"),
+  ).pipe(
+    Option.flatMap((option) => {
+      const cap = Option.orElse(maxTokensOf(hints), () =>
+        Option.fromUndefinedOr(entry.limit?.output),
+      )
+      const minimum = Option.getOrElse(Option.fromUndefinedOr(option.min), () => 1)
+      const maximum = Math.min(
+        Option.getOrElse(Option.fromUndefinedOr(option.max), () => BUDGET_CEILING),
+        Option.getOrElse(
+          Option.map(cap, (value) => value - 1),
+          () => BUDGET_CEILING,
+        ),
+        BUDGET_CEILING,
+      )
+      const high = Math.min(Math.max(minimum, Math.floor((maximum + 1) / 2)), maximum)
+      let budget = high
+      if (level === "xhigh" || level === "max") budget = maximum
+      return Option.liftPredicate(budget, (value) => value >= minimum)
+    }),
+  )
+
 // ── models.dev catalog ──────────────────────────────────────────────────────
 
 /**
- * The models.dev catalog, owned by the drivers that list its models.
- *
- * Core resolves a model through the driver seam and concatenates every
- * driver's `listModels`. Where a driver's list comes from is the driver's
- * concern, so the fetch, the parse, and the disk cache live here — shared by
- * the anthropic and openai drivers.
- *
- * One load per home directory. `makeStartedMemo` memoizes it, so several drivers
- * listing at once share one read and at most one fetch. There is no background
- * refresh: a cache older than a day, or written in another format, refetches
- * on the next load, and a failed fetch serves whatever the disk still holds. A load that finds neither a
- * cache nor a reachable host returns nothing and forgets its memo, so the next
- * call tries again instead of serving an empty catalog for the whole process.
+ * Core owns the catalog (`ModelCatalogSource`: a SQLite snapshot of
+ * models.dev, revalidated by ETag), lists a driver's models and composes its
+ * requests, unless the driver lists or resolves them itself. These helpers
+ * are for such a driver: one provider's entries as `Model`s, and one model's
+ * entry.
  */
-
-const MODELS_URL = "https://models.dev"
-const CACHE_RELATIVE = ".gent/models.json"
-const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000
-const FETCH_TIMEOUT_MS = 10_000
-const EMPTY_MODELS = [] satisfies ReadonlyArray<Model>
-
-const ModelsDevCost = Schema.Struct({
-  input: Schema.Finite,
-  output: Schema.Finite,
-  cache_read: Schema.optional(Schema.Finite),
-  cache_write: Schema.optional(Schema.Finite),
-})
-const ModelsDevLimit = Schema.Struct({
-  context: Schema.Finite,
-  /** The input cap, where it is below the window (the GPT-5 family: 272k of 400k). */
-  input: Schema.optional(Schema.Finite),
-  /** The most output one reply may carry. */
-  output: Schema.optional(Schema.Finite),
-})
-const ModelsDevModel = Schema.Struct({
-  name: Schema.optional(Schema.String),
-  cost: Schema.optional(ModelsDevCost),
-  limit: Schema.optional(ModelsDevLimit),
-  release_date: Schema.optional(Schema.String),
-  /** False for embedding, image and other models the agent loop cannot drive. */
-  tool_call: Schema.optional(Schema.Boolean),
-  reasoning: Schema.optional(Schema.Boolean),
-})
-type ModelsDevModel = typeof ModelsDevModel.Type
-const decodeModelsDevModel = Schema.decodeUnknownOption(ModelsDevModel)
 
 /**
- * One reasoning control a model accepts, as models.dev lists it under
- * `reasoning_options`: a list of effort values, an on/off toggle, or a
- * thinking budget in tokens. models.dev writes the "no reasoning" effort as
- * `null`; the catalog keeps it as `"none"`.
+ * The catalog entries of one provider the agent loop can drive, as models.
+ * A model without tool calling is dropped: every gent turn sends tools. Each
+ * model carries `promptCacheTtl`, how long the provider keeps a request's
+ * prompt cached; models.dev does not say.
  */
-export const ReasoningOption = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("effort"), values: Schema.Array(Schema.String) }),
-  Schema.Struct({ type: Schema.Literal("toggle") }),
-  Schema.Struct({
-    type: Schema.Literal("budget_tokens"),
-    min: Schema.optional(Schema.Finite),
-    max: Schema.optional(Schema.Finite),
-  }),
-]).pipe(Schema.toTaggedUnion("type"))
-export type ReasoningOption = typeof ReasoningOption.Type
-
-/**
- * How a driver talks to a model, from its models.dev entry. A gateway that
- * serves several wire formats names each model's format here, so the driver
- * reads it instead of keeping its own list.
- */
-export const ModelWire = Schema.Struct({
-  /**
-   * The AI SDK package models.dev names for the model's API: the model's own
-   * `provider.npm`, else its provider's `npm`. The package names the wire
-   * format (`@ai-sdk/openai` Responses, `@ai-sdk/anthropic` Messages,
-   * `@ai-sdk/openai-compatible` Chat Completions).
-   */
-  npm: Schema.optional(Schema.String),
-  /** The reasoning controls the model accepts; empty when it has none to set. */
-  reasoningOptions: Schema.optional(Schema.Array(ReasoningOption)),
-  /**
-   * The assistant-message field that carries the model's reasoning back to it
-   * (`interleaved.field`, such as `reasoning_content`).
-   */
-  reasoningField: Schema.optional(Schema.String),
-})
-export type ModelWire = typeof ModelWire.Type
-
-/** The wire fields of a models.dev entry, each decoded alone so one odd field drops only itself. */
-const ModelsDevWireFields = Schema.Struct({
-  provider: Schema.optional(Schema.Json),
-  reasoning_options: Schema.optional(Schema.Json),
-  interleaved: Schema.optional(Schema.Json),
-})
-type ModelsDevWireFields = typeof ModelsDevWireFields.Type
-const decodeModelsDevWireFields = Schema.decodeUnknownOption(ModelsDevWireFields)
-const decodeNpm = Schema.decodeUnknownOption(Schema.Struct({ npm: Schema.String }))
-const decodeRawReasoningOptions = Schema.decodeUnknownOption(Schema.Array(Schema.Json))
-const decodeReasoningOption = Schema.decodeUnknownOption(ReasoningOption)
-const RawEffortOption = Schema.Struct({
-  type: Schema.Literal("effort"),
-  values: Schema.Array(Schema.Json),
-})
-const decodeRawEffortOption = Schema.decodeUnknownOption(RawEffortOption)
-const decodeReasoningField = Schema.decodeUnknownOption(Schema.Struct({ field: Schema.String }))
-
-/** One `reasoning_options` entry; an effort list's `null` becomes `"none"`. */
-const parseReasoningOption = (value: Schema.Json): Option.Option<ReasoningOption> =>
-  Option.match(decodeRawEffortOption(value), {
-    onNone: () => decodeReasoningOption(value),
-    onSome: (effort) =>
-      Option.some(
-        ReasoningOption.cases.effort.make({
-          type: "effort",
-          values: effort.values.flatMap((each) => {
-            if (Predicate.isString(each)) return [each]
-            if (Predicate.isNull(each)) return ["none"]
-            return []
+export const catalogModels = (
+  catalog: ModelCatalogView,
+  providerId: string,
+  promptCacheTtl: Duration.Duration,
+): ReadonlyArray<Model> =>
+  Option.match(catalog.provider(providerId), {
+    onNone: () => [],
+    onSome: (provider) =>
+      provider.models
+        .filter((entry) => entry.toolCall !== false && entry.decision !== true)
+        .map((entry) =>
+          Model.make({
+            ...modelFromCatalog(providerId, entry),
+            promptCacheTtlMs: Duration.toMillis(promptCacheTtl),
           }),
-        }),
-      ),
+        ),
   })
 
 /**
- * The wire facts of one models.dev entry; none when it names nothing a driver
- * reads. Each field is decoded alone, so an odd one drops only itself, never
- * the model.
+ * The catalog entry a driver that resolves its own models plans a request
+ * from. A direct caller that passes no catalog, or a model the catalog does
+ * not list, gets a bare entry: the request names no reasoning controls.
  */
-const parseModelWire = (
-  fields: ModelsDevWireFields,
-  providerNpm: Option.Option<string>,
-): Option.Option<ModelWire> => {
-  const npm = decodeNpm(fields.provider).pipe(
-    Option.map((value) => value.npm),
-    Option.orElse(() => providerNpm),
+export const adapterEntry = (
+  catalog: Option.Option<ModelCatalogView>,
+  providerId: string,
+  modelName: string,
+): CatalogModel =>
+  Option.getOrElse(
+    Option.flatMap(catalog, (view) => catalogModelEntry(view, providerId, modelName)),
+    () => ({ id: modelName, name: modelName }),
   )
-  const reasoningOptions = decodeRawReasoningOptions(fields.reasoning_options).pipe(
-    Option.map((values) => values.flatMap((each) => Option.toArray(parseReasoningOption(each)))),
-  )
-  const reasoningField = Option.map(
-    decodeReasoningField(fields.interleaved),
-    (value) => value.field,
-  )
-  if (Option.isNone(npm) && Option.isNone(reasoningOptions) && Option.isNone(reasoningField)) {
-    return Option.none()
-  }
-  return Option.some(
-    ModelWire.make(
-      omitUndefined({
-        npm: Option.getOrUndefined(npm),
-        reasoningOptions: Option.getOrUndefined(reasoningOptions),
-        reasoningField: Option.getOrUndefined(reasoningField),
-      }),
-    ),
-  )
+
+// ── api classes ─────────────────────────────────────────────────────────────
+
+/** The SDK option for an endpoint's key: none when the endpoint signs in `transformClient`. */
+export const sdkApiKey = (apiKey: Option.Option<string>) =>
+  Option.getOrUndefined(Option.map(apiKey, Redacted.make))
+
+/**
+ * The client a class's SDK sends through: the class's own body rewrite next
+ * to the SDK, then the endpoint's transform (its headers, its signing).
+ */
+export const endpointClient =
+  (endpoint: ApiClassRequest, rewrite: (client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+    Option.match(endpoint.transformClient, {
+      onNone: () => rewrite(client),
+      onSome: (transform) => transform(rewrite(client)),
+    })
+
+// ── chat completions ────────────────────────────────────────────────────────
+
+type ChatSdk = typeof ChatSdkModule
+type ChatConfig = NonNullable<Parameters<typeof OpenAiChatLanguageModel.layer>[0]["config"]>
+
+// oxlint-disable-next-line effect/noDynamicImports -- the SDK loads at the first model build, not at launch
+const loadChatSdk = Effect.promise((): Promise<ChatSdk> => import("@effect/ai-openai-compat"))
+
+const isJsonString = Schema.is(Schema.String)
+
+/**
+ * The Chat Completions request: `reasoning_effort` from the catalog's effort
+ * list (OpenCode sends nothing for a toggle or a budget on this format), and
+ * tools without strict schemas, which the OpenAI-compatible upstreams do not
+ * all take. `replayReasoning` is the patched SDK's opt-in: the model's
+ * reasoning goes back on its own assistant message (see `patches/README.md`).
+ */
+const chatConfig = (entry: CatalogModel, hints: Option.Option<ProviderHints>): ChatConfig => {
+  let config: ChatConfig = { strictJsonSchema: false, replayReasoning: true }
+  const maxTokens = maxTokensOf(hints)
+  if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
+  const temperature = sampledTemperature(entry, hints)
+  if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
+  const effort = Option.flatMap(reasoningHint(entry, hints), (level) => effortFor(entry, level))
+  if (Option.isSome(effort)) config = { ...config, reasoning_effort: effort.value }
+  return config
 }
 
 /**
- * The format of the disk cache, derived from the shapes that decide what a
- * cached catalog holds: the models.dev entry the parser reads, and the
- * `Model` and `ModelWire` it writes. A build that parses a new field, or adds
- * one to either, gets a new format, so a cache an older build wrote refetches
- * at once instead of serving models without that field for up to a day.
+ * The reasoning a model wrote goes back to it on its assistant message, in the
+ * field its catalog entry names (`interleaved.field`). DeepSeek needs the field
+ * on every assistant message, empty when it wrote none (OpenCode's
+ * `normalizeMessages`). The patched SDK writes the text as `reasoning_content`;
+ * a model without the field gets none.
  */
-const CACHE_FORMAT = (
-  Hash.string(
-    Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))([
-      Schema.toJsonSchemaDocument(ModelsDevModel),
-      Schema.toJsonSchemaDocument(Model),
-      Schema.toJsonSchemaDocument(ModelWire),
-    ]),
-  ) >>> 0
-).toString(16)
-
-/** The wire facts of the catalog's models, by model id; a model that names none has no entry. */
-const CatalogWire = Schema.Record(Schema.String, ModelWire)
-type CatalogWire = typeof CatalogWire.Type
-
-/** One parsed catalog: the models, and how a driver talks to each. */
-interface Catalog {
-  readonly models: ReadonlyArray<Model>
-  readonly wire: CatalogWire
-}
-const EMPTY_CATALOG: Catalog = { models: EMPTY_MODELS, wire: {} }
-
-/**
- * The cache file: the catalog and the format that wrote it. A file without
- * the stamp reads as absent, so the next load fetches and rewrites it.
- */
-const CachedCatalog = Schema.Struct({
-  format: Schema.String,
-  models: Schema.Array(Model),
-  wire: Schema.optional(CatalogWire),
-})
-const CachedCatalogJson = Schema.fromJsonString(CachedCatalog)
-const decodeCachedCatalog = Schema.decodeUnknownOption(CachedCatalogJson)
-const encodeCachedCatalog = Schema.encodeSync(CachedCatalogJson)
-
-interface DiskCatalog {
-  readonly catalog: Catalog
-  /** True when this build's format wrote the file. */
-  readonly current: boolean
-}
-const NO_DISK_CATALOG: DiskCatalog = { catalog: EMPTY_CATALOG, current: false }
-
-const parsePricing = (value: ModelsDevModel["cost"]): Option.Option<ModelPricing> =>
-  Option.fromUndefinedOr(value).pipe(
-    Option.map((cost) => ({
-      input: cost.input,
-      output: cost.output,
-      ...omitUndefined({ cacheRead: cost.cache_read, cacheWrite: cost.cache_write }),
-    })),
-  )
-
-const parseContextLength = (value: ModelsDevModel["limit"]): Option.Option<number> =>
-  Option.fromUndefinedOr(value).pipe(Option.map(({ context }) => context))
-
-const parseInputLimit = (value: ModelsDevModel["limit"]): Option.Option<number> =>
-  Option.fromUndefinedOr(value).pipe(Option.flatMap(({ input }) => Option.fromUndefinedOr(input)))
-
-const parseOutputLimit = (value: ModelsDevModel["limit"]): Option.Option<number> =>
-  Option.fromUndefinedOr(value).pipe(Option.flatMap(({ output }) => Option.fromUndefinedOr(output)))
-
-/**
- * The models.dev payload as gent's canonical `Model[]`, with each model's wire
- * facts. A malformed entry is dropped, and so is a model without tool calling:
- * every gent turn sends tools.
- */
-const parseModelsDev = (data: Schema.Json): Catalog => {
-  if (!isRecord(data)) return EMPTY_CATALOG
-
-  const models: Model[] = []
-  const wire: Record<string, ModelWire> = {}
-  for (const [providerId, providerValue] of Object.entries(data)) {
-    if (!isRecord(providerValue)) continue
-    const modelsValue = providerValue["models"]
-    if (!isRecord(modelsValue)) continue
-    const providerNpm = Option.map(decodeNpm(providerValue), (value) => value.npm)
-
-    for (const [modelKey, rawModelValue] of Object.entries(modelsValue)) {
-      const decoded = decodeModelsDevModel(rawModelValue)
-      if (decoded._tag === "None") continue
-      const modelValue = decoded.value
-      if (modelValue.tool_call === false) continue
-      const name = Option.getOrElse(Option.fromUndefinedOr(modelValue.name), () => modelKey)
-      const pricing = parsePricing(modelValue.cost)
-      const contextLength = parseContextLength(modelValue.limit)
-      const releaseDate = Option.fromUndefinedOr(modelValue.release_date)
-      const id = ModelId.make(`${providerId}/${modelKey}`)
-
-      models.push(
-        Model.make({
-          id,
-          name,
-          provider: ProviderId.make(providerId),
-          ...omitUndefined({
-            contextLength: Option.getOrUndefined(contextLength),
-            inputLimit: Option.getOrUndefined(parseInputLimit(modelValue.limit)),
-            outputLimit: Option.getOrUndefined(parseOutputLimit(modelValue.limit)),
-            pricing: Option.getOrUndefined(pricing),
-            releaseDate: Option.getOrUndefined(releaseDate),
-            reasoning: modelValue.reasoning,
-          }),
+const reasoningInField =
+  (reasoningField: Option.Option<string>) =>
+  (body: Schema.JsonObject): Schema.JsonObject =>
+    Option.match(Option.filter(Option.fromUndefinedOr(body["messages"]), isArray), {
+      onNone: () => body,
+      onSome: (messages) => ({
+        ...body,
+        messages: messages.map((message): Schema.Json => {
+          if (!isJsonObject(message) || message["role"] !== "assistant") return message
+          const { reasoning_content: written, ...rest } = message
+          if (Option.isNone(reasoningField)) return rest
+          const text = Option.getOrElse(
+            Option.filter(Option.fromUndefinedOr(written), isJsonString),
+            () => "",
+          )
+          return { ...rest, [reasoningField.value]: text }
         }),
-      )
-      const modelWire = Option.flatMap(decodeModelsDevWireFields(rawModelValue), (fields) =>
-        parseModelWire(fields, providerNpm),
-      )
-      if (Option.isSome(modelWire)) wire[id] = modelWire.value
-    }
-  }
-
-  return { models, wire }
-}
-
-/** The catalog on disk, or nothing when the file is absent, empty, or malformed. */
-const readCachedModels = Effect.fn("ModelsDev.readCache")(
-  function* (cachePath: string) {
-    const fs = yield* FileSystem.FileSystem
-    const exists = yield* fs.exists(cachePath)
-    if (!exists) return NO_DISK_CATALOG
-    const content = yield* fs
-      .readFileString(cachePath)
-      .pipe(Effect.catchEager(() => Effect.succeed("")))
-    if (content.trim().length === 0) return NO_DISK_CATALOG
-    return Option.match(decodeCachedCatalog(content), {
-      onNone: () => NO_DISK_CATALOG,
-      onSome: (cached): DiskCatalog => ({
-        catalog: {
-          models: cached.models,
-          wire: Option.getOrElse(Option.fromUndefinedOr(cached.wire), () => ({})),
-        },
-        current: cached.format === CACHE_FORMAT,
       }),
     })
-  },
-  Effect.catchEager(() => Effect.succeed(NO_DISK_CATALOG)),
-)
-
-const writeCachedModels = Effect.fn("ModelsDev.writeCache")(
-  function* (cachePath: string, catalog: Catalog) {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const text = yield* Effect.try({
-      try: () =>
-        encodeCachedCatalog({ format: CACHE_FORMAT, models: catalog.models, wire: catalog.wire }),
-      catch: () => "",
-    })
-    if (text.length === 0) return
-
-    yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true })
-    // Another gent process may read the cache while this one writes it.
-    yield* writeFileAtomic(cachePath, text)
-  },
-  Effect.catchEager((e) =>
-    Effect.logWarning("failed to write model cache").pipe(
-      Effect.annotateLogs({ error: String(e) }),
-    ),
-  ),
-)
-
-/** True when no cache file exists or its mtime is older than a day. */
-const isCacheStale = Effect.fn("ModelsDev.isCacheStale")(
-  function* (cachePath: string) {
-    const fs = yield* FileSystem.FileSystem
-    const info = yield* fs.stat(cachePath)
-    const mtime = info.mtime
-    if (Option.isNone(mtime)) return true
-    const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
-    return now - mtime.value.getTime() > CACHE_MAX_AGE_MS
-  },
-  Effect.catchEager(() => Effect.succeed(true)),
-)
-
-/** The remote catalog, or nothing when the request fails, times out, or is unparsable. */
-const fetchRemoteModels = Effect.fn("ModelsDev.fetchRemote")(
-  function* () {
-    const http = yield* HttpClient.HttpClient
-    const response = yield* http.get(`${MODELS_URL}/api.json`, {
-      headers: { "User-Agent": "gent" },
-    })
-    if (response.status >= 400) return EMPTY_CATALOG
-    const text = yield* response.text
-    if (text.length === 0) return EMPTY_CATALOG
-    const decoded = decodeJson(text)
-    if (decoded._tag === "None") return EMPTY_CATALOG
-    return parseModelsDev(decoded.value)
-  },
-  Effect.timeout(FETCH_TIMEOUT_MS),
-  Effect.catchEager(() => Effect.succeed(EMPTY_CATALOG)),
-)
-
-const loadCatalog = Effect.fn("ModelsDev.load")(function* (home: string) {
-  const path = yield* Path.Path
-  const cachePath = path.join(home, CACHE_RELATIVE)
-  const disk = yield* readCachedModels(cachePath)
-  const stale = yield* isCacheStale(cachePath)
-  if (disk.catalog.models.length > 0 && disk.current && !stale) return disk.catalog
-
-  const remote = yield* fetchRemoteModels()
-  // A failed or empty fetch keeps whatever the disk still holds: stale, or
-  // in an older format, is better than no catalog.
-  if (remote.models.length === 0) return disk.catalog
-  yield* writeCachedModels(cachePath, remote)
-  return remote
-})
-
-type CatalogServices = FileSystem.FileSystem | Path.Path | HttpClient.HttpClient
-type CatalogEffect = Effect.Effect<ReadonlyArray<Model>, never, CatalogServices>
 
 /**
- * One memoized load per home directory. The drivers each call `driverCatalog`
- * during their own `listModels`, and the memo is what makes that one read and
- * at most one fetch rather than one per driver.
- *
- * A memo that resolved to a catalog holds for `CATALOG_MEMO_TTL`, then the next
- * `listModels` loads again. `loadCatalog` degrades rather than fails, so an
- * offline start serves the stale disk cache (or nothing); the reload re-reads
- * the disk and fetches only when the cache is still stale, so a long-lived
- * process picks up the fresh catalog once the host is reachable. A memo that
- * resolved to nothing drops its own entry at once, and the next `listModels`
- * loads again.
- *
- * The memo starts the load as its own fiber (`makeStartedMemo`). A caller
- * that is stopped (an Esc during the day's first fetch) only stops waiting:
- * the load goes on, with a timeout on its fetch, and the next caller joins
- * it instead of getting the interruption back.
+ * OpenAI Chat Completions, as OpenAI-compatible upstreams speak it. Its
+ * upstreams cache implicitly with no write price, so a model on it has no
+ * cache lifetime and never goes cold: a cold handoff there would cost more
+ * than the warm resend it replaces, and lose detail.
  */
-const CATALOG_MEMO_TTL = Duration.minutes(5)
-
-/** A catalog holds for `CATALOG_MEMO_TTL`; an empty one (no cache, no reachable host) is not kept. */
-const catalogMemoTtl = (catalog: Catalog) => {
-  if (catalog.models.length > 0) return CATALOG_MEMO_TTL
-  return Duration.zero
+export const CHAT_COMPLETIONS_CLASS: ApiClassContribution = {
+  id: "openai-chat",
+  npm: ["@ai-sdk/openai-compatible"],
+  protocols: ["completions"],
+  promptCacheTtl: Option.none(),
+  resolveModel: (request) =>
+    Effect.map(loadChatSdk, ({ OpenAiClient, OpenAiLanguageModel }) => {
+      const reasoningField = Option.fromUndefinedOr(request.model.reasoningField)
+      const client = OpenAiClient.layer({
+        apiKey: sdkApiKey(request.apiKey),
+        apiUrl: Option.getOrUndefined(request.baseUrl),
+        transformClient: endpointClient(request, rewriteJsonBody(reasoningInField(reasoningField))),
+      }).pipe(Layer.provide(ModelHttpClient))
+      return AiModel.make(
+        request.providerId,
+        request.model.id,
+        OpenAiLanguageModel.layer({
+          model: request.model.id,
+          config: chatConfig(request.model, request.hints),
+        }).pipe(Layer.provide(client)),
+      )
+    }),
 }
-
-// The memo lives as long as the process, so its loads run in a scope that
-// never closes. Building it only allocates — no IO, no failure — so running
-// it here is allocation, not work. The services come from each `get`.
-const catalogsByHome = Effect.runSync(
-  makeStartedMemo({ load: loadCatalog, keep: catalogMemoTtl }).pipe(
-    Effect.provideService(Scope.Scope, Scope.makeUnsafe()),
-  ),
-)
-
-/**
- * The parsed catalog for `home`, loaded at most once per `CATALOG_MEMO_TTL`
- * while the load produces models. Every driver that lists models for the same
- * home shares one read and at most one fetch.
- */
-const catalogFor = (home: string): Effect.Effect<Catalog, never, CatalogServices> =>
-  catalogsByHome.get(home)
-
-/** The models.dev catalog for `home`: every provider's models. */
-export const modelsDevCatalog = (home: string): CatalogEffect =>
-  catalogFor(home).pipe(Effect.map((catalog) => catalog.models))
-
-/** The models.dev catalog narrowed to one provider — a driver's own list. */
-export const driverCatalog = (home: string, providerId: string): CatalogEffect =>
-  modelsDevCatalog(home).pipe(
-    Effect.map((models) => models.filter((model) => model.provider === providerId)),
-  )
-
-/**
- * What a driver needs to serve its own catalog: the home directory that holds
- * the cache, and the platform services its setup captured. Both are plain
- * values a driver factory takes; neither is yielded inside a driver leaf.
- */
-export interface CatalogSource {
-  readonly home: string
-  readonly platform: Context.Context<FileSystem.FileSystem | Path.Path>
-}
-
-/** Capture the home and platform services a driver's catalog needs. */
-export const catalogSource = Effect.fn("ModelsDev.catalogSource")(function* (home: string) {
-  const platform = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
-  return { home, platform } satisfies CatalogSource
-})
-
-/**
- * A driver's `listModels`: its own models.dev entries, with the platform
- * services and the HTTP client provided from what setup captured. Each entry
- * carries `promptCacheTtl`, how long the driver's provider keeps a request's
- * prompt cached; models.dev does not say. A driver whose models differ passes
- * none and stamps each model with `withPromptCacheTtl`.
- */
-export const driverListModels =
-  (source: CatalogSource, providerId: string, promptCacheTtl: Option.Option<Duration.Duration>) =>
-  (): Effect.Effect<ReadonlyArray<Model>> =>
-    readCatalog(
-      source,
-      driverCatalog(source.home, providerId).pipe(
-        Effect.map((models) => models.map((model) => withPromptCacheTtl(model, promptCacheTtl))),
-      ),
-    )
-
-/** The model with `promptCacheTtl` as its cache lifetime; a model with none never goes cold. */
-export const withPromptCacheTtl = (
-  model: Model,
-  promptCacheTtl: Option.Option<Duration.Duration>,
-): Model =>
-  Option.match(promptCacheTtl, {
-    onNone: () => model,
-    onSome: (ttl) => Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(ttl) }),
-  })
-
-/**
- * The wire facts of one model of the catalog, for a driver's `resolveModel`:
- * none when the catalog has no entry for it or the entry names nothing.
- */
-export const driverModelWire = (
-  source: CatalogSource,
-  modelId: string,
-): Effect.Effect<Option.Option<ModelWire>> =>
-  readCatalog(
-    source,
-    catalogFor(source.home).pipe(
-      Effect.map((catalog) => Option.fromUndefinedOr(catalog.wire[modelId])),
-    ),
-  )
-
-/** A catalog read, run on the platform setup captured with an HTTP client of its own. */
-const readCatalog = <A>(
-  source: CatalogSource,
-  read: Effect.Effect<A, never, CatalogServices>,
-): Effect.Effect<A> =>
-  read.pipe(
-    // @effect-diagnostics-next-line strictEffectProvide:off -- The catalog owns its own HTTP client at the driver boundary; it outlives no scope.
-    Effect.provide(FetchHttpClient.layer),
-    Effect.provideContext(source.platform),
-  )
 
 // ── host context update ─────────────────────────────────────────────────────
 

@@ -11,7 +11,7 @@ import {
   TurnCompleted,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Exit, Fiber, Option, Predicate, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Predicate, Ref, Schema } from "effect"
 import {
   AgentEvent,
   AgentName,
@@ -1118,6 +1118,38 @@ describe("ClientProvider session lifecycle", () => {
       })
       yield* waitUntil(() => Option.isSome(client.modelCatalog()), "the catalog load")
       expect(client.models().map((model) => model.id)).toEqual([chat.id])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A models.dev provider has no registered driver. The server lists its
+  // models only while a key serves it, so a changed credential reads the
+  // catalog again.
+  it.scopedLive("a models.dev provider's models are offered once a key serves them", () =>
+    Effect.gen(function* () {
+      const chat = Model.make({
+        id: ModelId.make("anthropic/sonnet"),
+        name: "Sonnet",
+        provider: ProviderId.make("anthropic"),
+      })
+      const generic = Model.make({
+        id: ModelId.make("deepseek/deepseek-chat"),
+        name: "DeepSeek Chat",
+        provider: ProviderId.make("deepseek"),
+      })
+      const served = yield* Ref.make<ReadonlyArray<Model>>([chat])
+      const mockClient = createMockClient({
+        model: { list: () => Ref.get(served) },
+        driver: {
+          list: () =>
+            Effect.succeed({ drivers: [{ id: "anthropic" }], overrides: {}, agents: [testAgent] }),
+        },
+      })
+      const { client } = yield* mountClient({ client: mockClient })
+      yield* waitUntil(() => Option.isSome(client.modelCatalog()), "the catalog load")
+      expect(client.models().map((model) => model.id)).toEqual([chat.id])
+      yield* Ref.set(served, [chat, generic])
+      client.credentialsChanged()
+      yield* waitUntil(() => client.models().length === 2, "the catalog read again")
+      expect(client.models().map((model) => model.id)).toEqual([chat.id, generic.id])
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(

@@ -89,15 +89,9 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "../domain/capability.js"
-import { type AgentDefinition, Model } from "../domain/agent.js"
+import type { AgentDefinition } from "../domain/agent.js"
 import { causeChainMessage, causeMessage, omitUndefined } from "../domain/guards.js"
-import {
-  DriverError,
-  DriverFailureId,
-  type ModelDriverContribution,
-  type ProviderAuthError,
-  type ProviderAuthInfo,
-} from "../domain/driver.js"
+import type { ApiClassContribution, ModelDriverContribution } from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import { GentPlatform, type RuntimeModuleSource } from "./gent-platform.js"
 import {
@@ -108,6 +102,7 @@ import {
   GENT_CONFIG_DIRECTORY,
   hasProjectScope,
   isProjectExtensionDirectoryTrusted,
+  type ProviderConfig,
   RuntimeEnvironment,
   type UserConfig,
 } from "./config.js"
@@ -612,6 +607,7 @@ interface ResolvedExtensions {
   readonly rpcRegistry: CompiledRpcRegistry
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
+  readonly apiClasses: ReadonlyMap<string, ApiClassContribution>
   readonly slashCommands: ReadonlyArray<SlashCommand>
   readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -886,6 +882,11 @@ export const resolveExtensions = (
     (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.modelDrivers), () => []),
     (d) => d.id,
   )
+  const apiClasses = compileBucket(
+    sorted,
+    (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.apiClasses), () => []),
+    (apiClass) => apiClass.id,
+  )
 
   const slashCommands = compileSlashCommands(capabilityWinners)
 
@@ -900,6 +901,7 @@ export const resolveExtensions = (
     rpcRegistry,
     agents,
     modelDrivers,
+    apiClasses,
     slashCommands,
     extensionHooks,
     extensions: sorted,
@@ -917,92 +919,35 @@ export const resolveExtensions = (
  */
 export interface ExtensionRegistryService {
   readonly getResolved: () => ResolvedExtensions
+  /**
+   * The `providers` and `disabledProviders` of the profile's config, read
+   * from the files on each call: a provider edit needs no new profile.
+   */
+  readonly providerConfig: Effect.Effect<ProviderConfig>
 }
+
+/** A registry whose config names no provider. */
+const NO_PROVIDER_CONFIG: Effect.Effect<ProviderConfig> = Effect.succeed({})
 
 export class ExtensionRegistry extends Context.Service<
   ExtensionRegistry,
   ExtensionRegistryService
 >()("@gent/core/src/runtime/extension-host/ExtensionRegistry") {
-  static fromResolved = (resolved: ResolvedExtensions): Layer.Layer<ExtensionRegistry> =>
+  static fromResolved = (
+    resolved: ResolvedExtensions,
+    providerConfig: Effect.Effect<ProviderConfig> = NO_PROVIDER_CONFIG,
+  ): Layer.Layer<ExtensionRegistry> =>
     Layer.succeed(
       ExtensionRegistry,
       ExtensionRegistry.of({
         getResolved: () => resolved,
+        providerConfig,
       }),
     )
 
   static Test = (): Layer.Layer<ExtensionRegistry> =>
     ExtensionRegistry.fromResolved(resolveExtensions([]))
 }
-
-// ── model-catalog ───────────────────────────────────────────────────────────
-
-const decodeModelCatalog = Schema.decodeUnknownOption(Schema.Array(Model))
-const isDriverError = Schema.is(DriverError)
-
-/** A model driver whose catalog could not be read; its models are left out. */
-export interface ModelCatalogFailure {
-  readonly driverId: string
-  readonly error: string
-}
-
-/** Every model the drivers listed, and every driver that could not list. */
-interface ModelCatalog {
-  readonly models: ReadonlyArray<Model>
-  readonly failures: ReadonlyArray<ModelCatalogFailure>
-}
-
-/**
- * Concatenate every model driver's own catalog. Core fetches nothing itself.
- * A driver whose catalog fails (an error, a defect, or a list that does not
- * decode) is skipped and reported, so one unreachable driver never hides the
- * models of the others. An auth store that cannot be read is not one driver's
- * failure: it fails the whole catalog as a `ProviderAuthError`.
- */
-export const listModelCatalog = Effect.fn("ExtensionRegistry.listModelCatalog")(function* (
-  modelDrivers: ReadonlyMap<string, ModelDriverContribution>,
-  resolveAuth?: (
-    driverId: string,
-    // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
-  ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
-) {
-  const models: Array<Model> = []
-  const failures: Array<ModelCatalogFailure> = []
-  for (const driver of modelDrivers.values()) {
-    const listModels = driver.listModels
-    if (Predicate.isUndefined(listModels)) continue
-    let auth = Option.none<ProviderAuthInfo>()
-    if (!Predicate.isUndefined(resolveAuth)) {
-      auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
-    }
-    const driverCatalog = yield* Effect.gen(function* () {
-      const listed = yield* listModels(Option.getOrUndefined(auth))
-      const decoded = decodeModelCatalog(listed)
-      if (Option.isNone(decoded)) {
-        return yield* new DriverError({
-          driver: DriverFailureId.make(driver.id),
-          reason: `Model driver "${driver.id}" returned an invalid model catalog`,
-        })
-      }
-      return decoded.value
-    }).pipe(
-      Effect.asSome,
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-        const squashed = Cause.squash(cause)
-        let error = causeMessage(squashed)
-        if (isDriverError(squashed)) error = squashed.reason
-        failures.push({ driverId: driver.id, error })
-        return Effect.logWarning("Model driver catalog failed; its models are skipped").pipe(
-          Effect.annotateLogs({ driver: driver.id, error }),
-          Effect.as(Option.none<ReadonlyArray<Model>>()),
-        )
-      }),
-    )
-    if (Option.isSome(driverCatalog)) models.push(...driverCatalog.value)
-  }
-  return { models, failures } satisfies ModelCatalog
-})
 
 // ── resource-layer ──────────────────────────────────────────────────────────
 
@@ -1798,6 +1743,11 @@ const collectValidationFailures = (
     (driver) => Option.some(driver.id),
     "model driver",
   )
+  collectScopedCollisions(
+    (cs) => cs.apiClasses ?? [],
+    (apiClass) => Option.some(apiClass.id),
+    "API class",
+  )
 
   return failures
 }
@@ -1955,6 +1905,7 @@ const buildSessionProfile = (params: {
   readonly coreSections: ReadonlyArray<PromptSection>
   readonly resourceContext: Context.Context<unknown>
   readonly generationId: ProcessGenerationId
+  readonly providerConfig: Effect.Effect<ProviderConfig>
 }) =>
   Effect.gen(function* () {
     // Every resource is already built. Supplying that immutable context here is
@@ -1964,7 +1915,10 @@ const buildSessionProfile = (params: {
       params.resourceContext,
     )
     const layerContext = yield* Layer.build(
-      Layer.provideMerge(resourceLayer, ExtensionRegistry.fromResolved(params.resolved)),
+      Layer.provideMerge(
+        resourceLayer,
+        ExtensionRegistry.fromResolved(params.resolved, params.providerConfig),
+      ),
     )
     return {
       cwd: params.cwd,
@@ -2297,6 +2251,10 @@ export class SessionProfileCache extends Context.Service<
                   coreSections: declarations.coreSections,
                   resourceContext: started.context,
                   generationId,
+                  providerConfig: Effect.map(configService.get(cwd), (current) => ({
+                    providers: current.providers,
+                    disabledProviders: current.disabledProviders,
+                  })),
                 }),
               )
             }).pipe(

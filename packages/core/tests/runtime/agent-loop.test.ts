@@ -59,6 +59,7 @@ import {
   emptyQueueSnapshot,
   ensureStorageParents,
   fixedSessionProfiles,
+  fixtureModelCatalogSource,
   recordingEventStore,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
@@ -1241,7 +1242,10 @@ describe("model resolution failure", () => {
             contextLength: 128_000,
           }),
         ],
-        resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+        resolver: ModelResolver.Live.pipe(
+          Layer.provide(Auth.Test()),
+          Layer.provide(fixtureModelCatalogSource),
+        ),
       })
       yield* Effect.gen(function* () {
         yield* runAgentLoop(
@@ -1322,7 +1326,10 @@ const refusesClassifier = (params: {
           kind: "classifier",
         }),
       ],
-      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      resolver: ModelResolver.Live.pipe(
+        Layer.provide(Auth.Test()),
+        Layer.provide(fixtureModelCatalogSource),
+      ),
     })
     yield* Effect.gen(function* () {
       yield* runAgentLoop(
@@ -3348,7 +3355,10 @@ const makeRuntimeLayer = (
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
-    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+    DecisionModelResolver.Live.pipe(
+      Layer.provide(Auth.Test()),
+      Layer.provide(fixtureModelCatalogSource),
+    ),
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )

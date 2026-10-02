@@ -1,8 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
-import { ConfigProvider, Effect, Layer, Option, Path, Predicate, Schema, Stream } from "effect"
+import { ConfigProvider, Effect, Layer, Option, Predicate, Schema, Stream } from "effect"
 import { LanguageModel } from "effect/ai"
-import { BunFileSystem } from "@effect/platform-bun"
 import {
+  type ModelDriverContribution,
   ModelId,
   ProviderAuthError,
   ProviderAuthInfo,
@@ -13,7 +13,9 @@ import {
   createE2ELayer,
   createRpcClient,
   LanguageModelLayers,
-  makeTempDirectoryScoped,
+  listModelCatalog,
+  modelCatalogFixture,
+  modelCatalogFromBodies,
   textStep,
 } from "@gent/core/test-utils"
 import {
@@ -21,8 +23,7 @@ import {
   type CloudflareEnv,
   CloudflareExtension,
 } from "../src/cloudflare.js"
-import { catalogSource } from "../src/providers.js"
-import { seedCatalog } from "./helpers/catalog-source.js"
+import { ApiClassesExtension, resolveShipped, SHIPPED_API_CLASSES } from "./helpers/api-classes.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import {
   decideTicket,
@@ -46,8 +47,6 @@ import {
  * names and through its gateway when it names one. Every request goes to a
  * captured fake `fetch`; no test reaches Cloudflare.
  */
-
-const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 
 const TOKEN = "cf-test-token"
 const NO_ENV: CloudflareEnv = {
@@ -97,19 +96,69 @@ const remotePayload = {
   },
 }
 
-/** A home whose catalog holds the fixture; a driver pointed at it reads the fixture. */
-const fixtureHome = Effect.gen(function* () {
-  const home = yield* makeTempDirectoryScoped("cloudflare-catalog-")
-  yield* seedCatalog(home, remotePayload)
-  return home
+/** The decision list's Workers AI entries, as models.dev writes them (2026-10-02). */
+const decisionPayload = {
+  "cloudflare-workers-ai": {
+    id: "cloudflare-workers-ai",
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+    models: {
+      "@cf/cloudflare/clef-flash": {
+        name: "Clef Flash",
+        type: "decision",
+        tool_call: false,
+        limit: { context: 65536, output: 65536 },
+        cost: { input: 0.09, output: 0 },
+      },
+      "@cf/cloudflare/clef": {
+        name: "Clef",
+        type: "decision",
+        tool_call: false,
+        limit: { context: 65536, output: 65536 },
+        cost: { input: 0.24, output: 0 },
+      },
+    },
+  },
+}
+
+const CLEF = "@cf/cloudflare/clef"
+const CLEF_FLASH = "@cf/cloudflare/clef-flash"
+
+/** The catalog core would hand the driver: this file's chat and decision entries. */
+const fixtureCatalog = modelCatalogFromBodies({
+  chat: encodeExternalJson(remotePayload),
+  decision: encodeExternalJson(decisionPayload),
+})
+
+/** A models.dev client for an RPC root: it answers with this file's entries. */
+const catalogHttpLayer = Effect.gen(function* () {
+  const fixture = yield* modelCatalogFixture
+  yield* fixture.serve("api.json", encodeExternalJson(remotePayload), '"cloudflare-test"')
+  yield* fixture.serve(
+    "api.json?type=decision",
+    encodeExternalJson(decisionPayload),
+    '"cloudflare-test-decision"',
+  )
+  return fixture.layer
 })
 
 const fixtureDriver = (env: CloudflareEnv = NO_ENV) =>
-  Effect.gen(function* () {
-    const home = yield* fixtureHome
-    const source = yield* catalogSource(home).pipe(Effect.provide(platformLayer))
-    return buildCloudflareModelDriver(env, source)
-  })
+  Effect.succeed(buildCloudflareModelDriver(env))
+
+/** One Workers AI model, resolved by core over `fixtureCatalog` and the shipped classes. */
+const resolveOn = (
+  driver: ModelDriverContribution,
+  modelName: string,
+  authInfo?: ProviderAuthInfo,
+  hints?: ProviderHints,
+) =>
+  resolveShipped(
+    driver,
+    fixtureCatalog,
+    modelName,
+    Option.fromUndefinedOr(authInfo),
+    Option.fromUndefinedOr(hints),
+  )
 
 // ── wire fixtures ───────────────────────────────────────────────────────────
 
@@ -138,9 +187,9 @@ const generate = (
   authInfo?: ProviderAuthInfo,
   hints: ProviderHints = {},
 ) =>
-  driver
-    .resolveModel(modelName, authInfo, hints)
-    .pipe(Effect.flatMap((model) => oneGenerate(model, state, chatReply)))
+  resolveOn(driver, modelName, authInfo, hints).pipe(
+    Effect.flatMap((model) => oneGenerate(model, state, chatReply)),
+  )
 
 const RequestBody = Schema.fromJsonString(Schema.JsonObject)
 
@@ -182,22 +231,32 @@ describe("Cloudflare chat", () => {
       }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
-  it.live("with a gateway id every request names the gateway; a third-party id goes as given", () =>
+  it.live("with a gateway id the request names the gateway", () =>
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
       const state = makeFakeFetchState()
-      const auth = signedIn({ accountId: "acct-1", gatewayId: "gw-main" })
-      yield* generate(driver, LLAMA, state, auth)
-      yield* generate(driver, "openai/gpt-5-mini", state, auth)
-      expect(state.captured.map((request) => request.url)).toEqual([CHAT_URL, CHAT_URL])
-      for (const request of state.captured) {
-        expect(request.headers["cf-aig-gateway-id"]).toBe("gw-main")
-        expect(request.headers["authorization"]).toBe(`Bearer ${TOKEN}`)
-      }
-      const models = yield* Effect.forEach(state.captured, (request) =>
-        Effect.map(bodyOf(request), (body) => body["model"]),
+      yield* generate(driver, LLAMA, state, signedIn({ accountId: "acct-1", gatewayId: "gw-main" }))
+      const request = onlyRequest(state)
+      expect(request.url).toBe(CHAT_URL)
+      expect(request.headers["cf-aig-gateway-id"]).toBe("gw-main")
+      expect(request.headers["authorization"]).toBe(`Bearer ${TOKEN}`)
+      expect((yield* bodyOf(request))["model"]).toBe(LLAMA)
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  // models.dev names the Workers AI models; an id it does not list names no
+  // wire format, so no API class can speak it.
+  it.live("a model the Workers AI catalog does not list fails and names the catalog", () =>
+    Effect.gen(function* () {
+      const driver = yield* fixtureDriver()
+      const error = yield* Effect.flip(
+        resolveOn(driver, "openai/gpt-5-mini", signedIn({ accountId: "acct-1" })),
       )
-      expect(models).toEqual([LLAMA, "openai/gpt-5-mini"])
+      expect(error).toMatchObject({
+        _tag: "DriverError",
+        driver: "cloudflare",
+        reason: 'Cloudflare model "openai/gpt-5-mini" has no entry in the models.dev catalog',
+      })
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
@@ -235,16 +294,13 @@ describe("Cloudflare chat", () => {
       const driver = yield* fixtureDriver({ ...NO_ENV, token: Option.some("cf-env-token") })
       // A key stored before the sign-in asked for the account has no answer.
       const unanswered = ProviderAuthInfo.cases.Api.make({ key: TOKEN })
-      for (const resolving of [
-        driver.resolveModel(LLAMA),
-        driver.resolveModel(LLAMA, unanswered),
-      ]) {
+      for (const resolving of [resolveOn(driver, LLAMA), resolveOn(driver, LLAMA, unanswered)]) {
         const error = yield* Effect.flip(resolving)
         expect(error).toBeInstanceOf(ProviderAuthError)
         expect(error.message).toContain("CLOUDFLARE_ACCOUNT_ID")
         expect(error.message).toContain("/auth")
       }
-      const noToken = yield* Effect.flip((yield* fixtureDriver()).resolveModel(LLAMA))
+      const noToken = yield* Effect.flip(resolveOn(yield* fixtureDriver(), LLAMA))
       expect(noToken.message).toContain("CLOUDFLARE_API_TOKEN")
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
@@ -252,7 +308,7 @@ describe("Cloudflare chat", () => {
   it.live("a stream whose connection drops mid-reply fails as a retryable lost connection", () =>
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
-      const model = yield* driver.resolveModel(LLAMA, signedIn({ accountId: "acct-1" }))
+      const model = yield* resolveOn(driver, LLAMA, signedIn({ accountId: "acct-1" }))
       const firstChunk = `data: ${encodeExternalJson({
         id: "chatcmpl-1",
         object: "chat.completion.chunk",
@@ -297,7 +353,10 @@ describe("Cloudflare catalog", () => {
     () =>
       Effect.gen(function* () {
         const driver = yield* fixtureDriver()
-        const models = yield* Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))()
+        const { models } = yield* listModelCatalog(
+          { modelDrivers: new Map([[driver.id, driver]]), apiClasses: SHIPPED_API_CLASSES },
+          fixtureCatalog,
+        )
         expect(
           models.map((model) => ({
             id: model.id,
@@ -312,17 +371,18 @@ describe("Cloudflare catalog", () => {
             kind: Option.none(),
             pricing: { input: 0.293, output: 2.253 },
           },
+          // The decision list's models keep their Workers AI ids and prices.
           {
-            id: ModelId.make("cloudflare/clef"),
-            provider: ProviderId.make("cloudflare"),
-            kind: Option.some("classifier"),
-            pricing: { input: 0.24, output: 0 },
-          },
-          {
-            id: ModelId.make("cloudflare/clef-flash"),
+            id: ModelId.make(`cloudflare/${CLEF_FLASH}`),
             provider: ProviderId.make("cloudflare"),
             kind: Option.some("classifier"),
             pricing: { input: 0.09, output: 0 },
+          },
+          {
+            id: ModelId.make(`cloudflare/${CLEF}`),
+            provider: ProviderId.make("cloudflare"),
+            kind: Option.some("classifier"),
+            pricing: { input: 0.24, output: 0 },
           },
         ])
         // Chat Completions caches implicitly: no model goes cold.
@@ -354,8 +414,8 @@ describe("Cloudflare Clef decisions", () => {
         const driver = yield* fixtureDriver()
         const state = makeFakeFetchState()
         const auth = signedIn({ accountId: "acct-1" })
-        const response = yield* decideTicket(yield* resolveDecision(driver, "clef", auth), state)
-        yield* decideTicket(yield* resolveDecision(driver, "clef-flash", auth), state)
+        const response = yield* decideTicket(yield* resolveDecision(driver, CLEF, auth), state)
+        yield* decideTicket(yield* resolveDecision(driver, CLEF_FLASH, auth), state)
         expect(state.captured.map((request) => request.url)).toEqual([
           `${RUN_URL}/clef`,
           `${RUN_URL}/clef-flash`,
@@ -379,7 +439,7 @@ describe("Cloudflare Clef decisions", () => {
       const driver = yield* fixtureDriver()
       const state = makeFakeFetchState()
       const auth = signedIn({ accountId: "acct-1", gatewayId: "gw-main" })
-      yield* decideTicket(yield* resolveDecision(driver, "clef-flash", auth), state)
+      yield* decideTicket(yield* resolveDecision(driver, CLEF_FLASH, auth), state)
       expect(onlyRequest(state).headers["cf-aig-gateway-id"]).toBe("gw-main")
       expect(onlyRequest(state).url).toBe(`${RUN_URL}/clef-flash`)
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
@@ -390,11 +450,11 @@ describe("Cloudflare Clef decisions", () => {
       const driver = yield* fixtureDriver()
       const auth = signedIn({ accountId: "acct-1" })
       const bare = yield* decideTicket(
-        yield* resolveDecision(driver, "clef", auth),
+        yield* resolveDecision(driver, CLEF, auth),
         makeFakeFetchState(),
       )
       const wrapped = yield* decideTicket(
-        yield* resolveDecision(driver, "clef", auth),
+        yield* resolveDecision(driver, CLEF, auth),
         makeFakeFetchState(),
         () => jsonReply(envelope(TICKET_ANSWER)),
       )
@@ -418,7 +478,7 @@ describe("Cloudflare Clef decisions", () => {
       ]
       const messages = yield* Effect.forEach(replies, (reply) =>
         Effect.gen(function* () {
-          const model = yield* resolveDecision(driver, "clef", auth)
+          const model = yield* resolveDecision(driver, CLEF, auth)
           const error = yield* Effect.flip(decideTicket(model, makeFakeFetchState(), reply))
           return error.message
         }),
@@ -432,7 +492,7 @@ describe("Cloudflare Clef decisions", () => {
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
       const error = yield* Effect.flip(
-        resolveDecision(driver, "clef", ProviderAuthInfo.cases.Api.make({ key: TOKEN })),
+        resolveDecision(driver, CLEF, ProviderAuthInfo.cases.Api.make({ key: TOKEN })),
       )
       expect(error).toBeInstanceOf(ProviderAuthError)
       expect(error.message).toContain("CLOUDFLARE_ACCOUNT_ID")
@@ -442,8 +502,8 @@ describe("Cloudflare Clef decisions", () => {
   it.live("a Clef model is not a chat model: resolving it for chat fails and names it", () =>
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
-      const error = yield* Effect.flip(driver.resolveModel("clef", signedIn({ accountId: "a" })))
-      expect(error).toMatchObject({ _tag: "DriverError", reason: expect.stringContaining("clef") })
+      const error = yield* Effect.flip(resolveOn(driver, CLEF, signedIn({ accountId: "a" })))
+      expect(error).toMatchObject({ _tag: "DriverError", reason: expect.stringContaining(CLEF) })
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 })
@@ -453,13 +513,12 @@ describe("Cloudflare Clef decisions", () => {
 /** An RPC client whose profile registers the shipped extension, with `env` as the process env. */
 const signInClient = (env: Record<string, string>) =>
   Effect.gen(function* () {
-    const home = yield* fixtureHome
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
     const { client } = yield* createRpcClient(
       createE2ELayer({
         agents: [],
-        home,
-        extensionInputs: [CloudflareExtension],
+        modelCatalogHttpLayer: yield* catalogHttpLayer,
+        extensionInputs: [ApiClassesExtension, CloudflareExtension],
         providerLayer,
       }).pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })))),
     )

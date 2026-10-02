@@ -1864,11 +1864,15 @@ const makeAgentLoopBehavior = (
         const narrowed = Option.getOrElse(
           Option.fromUndefinedOr(suspendedContexts.get(context)),
           () => {
-            const resolved = suspendExtensions(turnRegistry(profile).getResolved(), suspended)
+            const registry = turnRegistry(profile)
+            const resolved = suspendExtensions(registry.getResolved(), suspended)
             return Context.add(
               context,
               ExtensionRegistry,
-              ExtensionRegistry.of({ getResolved: () => resolved }),
+              ExtensionRegistry.of({
+                getResolved: () => resolved,
+                providerConfig: registry.providerConfig,
+              }),
             )
           },
         )
