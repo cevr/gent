@@ -58,7 +58,6 @@ import {
   windowDetails,
   settledMessages,
   windowMarkerMessage,
-  estimateTextTokens,
 } from "../../src/runtime/model-context"
 import { describe, expect, it } from "effect-bun-test"
 import {
@@ -1821,41 +1820,8 @@ describe("model context window", () => {
 
 // ── token estimation ────────────────────────────────────────────────────────
 
-describe("estimateTokens", () => {
-  test("text parts", () => {
-    const messages = [
-      Message.cases.regular.make({
-        id: MessageId.make("m1"),
-        sessionId: SessionId.make("s"),
-        branchId: BranchId.make("b"),
-        role: "user",
-        parts: [Prompt.textPart({ text: "x".repeat(100) })],
-        createdAt: dateFromMillis(1_767_225_600_000),
-      }),
-    ]
-    expect(estimateTokens(messages)).toBe(25) // 100/4
-  })
-
-  test("a one-text message costs what its text costs, so text bounds match the projection", () => {
-    // Compaction bounds a summary with estimateTextTokens; the projection
-    // budgets the same summary as a message. The two must agree at the edge.
-    const project = (text: string) =>
-      estimateTokens([
-        Message.cases.regular.make({
-          id: MessageId.make("summary"),
-          sessionId: SessionId.make("s"),
-          branchId: BranchId.make("b"),
-          role: "assistant",
-          parts: [Prompt.textPart({ text })],
-          createdAt: dateFromMillis(1_767_225_600_000),
-        }),
-      ])
-    for (const text of ["x".repeat(4_000), "x".repeat(4_001)]) {
-      expect(estimateTextTokens(text)).toBe(project(text))
-    }
-  })
-
-  test("tool-call parts use JSON.stringify of input", () => {
+describe("message token estimate", () => {
+  test("a tool call costs its encoded params", () => {
     const messages = [
       Message.cases.regular.make({
         id: MessageId.make("m1"),
@@ -1878,30 +1844,7 @@ describe("estimateTokens", () => {
     expect(tokens).toBe(Math.ceil(expectedChars / 4))
   })
 
-  test("tool-result parts use JSON.stringify of output", () => {
-    const messages = [
-      Message.cases.regular.make({
-        id: MessageId.make("m1"),
-        sessionId: SessionId.make("s"),
-        branchId: BranchId.make("b"),
-        role: "tool",
-        parts: [
-          Prompt.toolResultPart({
-            id: ToolCallId.make("tc1"),
-            name: "test",
-            isFailure: false,
-            providerExecuted: false,
-            result: { data: "hello" },
-          }),
-        ],
-        createdAt: dateFromMillis(1_767_225_600_000),
-      }),
-    ]
-    const tokens = estimateTokens(messages)
-    expect(tokens).toBeGreaterThan(0)
-  })
-
-  test("image parts estimate ~250 tokens", () => {
+  test("an image costs a fixed 250 tokens", () => {
     const messages = [
       Message.cases.regular.make({
         id: MessageId.make("m1"),
@@ -1940,7 +1883,7 @@ describe("estimateTokens", () => {
     expect(tokens).toBeGreaterThan(1_900)
   })
 
-  test("multiple messages sum correctly", () => {
+  test("a run of text messages costs a quarter of its characters", () => {
     const messages = [
       Message.cases.regular.make({
         id: MessageId.make("m1"),

@@ -4,6 +4,7 @@ import {
   Effect,
   Layer,
   Option,
+  Order,
   Predicate,
   Record,
   Ref,
@@ -571,9 +572,11 @@ export const outputReserveTokens = (params: {
 }
 
 /** ~4 chars per token, the estimate every budget in the projection shares. */
-export const estimateTextTokens = (text: string): number => Math.ceil(text.length / 4)
+const tokensForChars = (chars: number): number => Math.ceil(chars / 4)
 
-/** Estimate the tokens occupied by a run of messages: ~4 chars per token. */
+export const estimateTextTokens = (text: string): number => tokensForChars(text.length)
+
+/** Estimate the tokens occupied by a run of messages, at `tokensForChars`. */
 export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
   let chars = 0
   for (const msg of messages) {
@@ -598,7 +601,7 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
       }
     }
   }
-  return Math.ceil(chars / 4)
+  return tokensForChars(chars)
 }
 
 /**
@@ -814,13 +817,8 @@ export interface ModelContextProjection {
   readonly omittedMessageIds: ReadonlyArray<MessageId>
 }
 
-interface ToolCallRecord {
-  readonly id: ToolCallId
-  readonly name: string
-  readonly messageIndex: number
-}
-
-interface ToolResultRecord {
+/** A tool-call or tool-result part: its id, its tool, and the message that holds it. */
+interface ToolPartRecord {
   readonly id: ToolCallId
   readonly name: string
   readonly messageIndex: number
@@ -839,26 +837,15 @@ interface ProjectionUnit {
 }
 
 interface ToolRecords {
-  readonly calls: ReadonlyMap<ToolCallId, ToolCallRecord>
-  readonly results: ReadonlyMap<ToolCallId, ToolResultRecord>
-}
-
-const compareIds = (left: string, right: string): number => {
-  if (left < right) return -1
-  if (left > right) return 1
-  return 0
+  readonly calls: ReadonlyMap<ToolCallId, ToolPartRecord>
+  readonly results: ReadonlyMap<ToolCallId, ToolPartRecord>
 }
 
 const sortedIds = (ids: ReadonlyArray<ToolCallId>): ReadonlyArray<ToolCallId> =>
-  [...ids].sort(compareIds)
-
-const visibleSnapshot = (messages: ReadonlyArray<Message>): ReadonlyArray<Message> => {
-  const snapshot = [...messages]
-  return snapshot.filter((message) => message.metadata?.hidden !== true)
-}
+  ids.toSorted(Order.String)
 
 const addToolCall = (
-  calls: Map<ToolCallId, ToolCallRecord>,
+  calls: Map<ToolCallId, ToolPartRecord>,
   message: Message,
   messageIndex: number,
   id: ToolCallId,
@@ -882,7 +869,7 @@ const addToolCall = (
 }
 
 const addToolResult = (
-  results: Map<ToolCallId, ToolResultRecord>,
+  results: Map<ToolCallId, ToolPartRecord>,
   message: Message,
   messageIndex: number,
   id: ToolCallId,
@@ -909,8 +896,8 @@ const addToolResult = (
 const collectMessageToolRecords = (
   message: Message,
   messageIndex: number,
-  calls: Map<ToolCallId, ToolCallRecord>,
-  results: Map<ToolCallId, ToolResultRecord>,
+  calls: Map<ToolCallId, ToolPartRecord>,
+  results: Map<ToolCallId, ToolPartRecord>,
 ): Result.Result<void, ModelContextError> => {
   for (const part of message.parts) {
     if (part.type === "tool-call") {
@@ -933,8 +920,8 @@ const collectMessageToolRecords = (
 }
 
 const validateToolRecords = (
-  calls: ReadonlyMap<ToolCallId, ToolCallRecord>,
-  results: ReadonlyMap<ToolCallId, ToolResultRecord>,
+  calls: ReadonlyMap<ToolCallId, ToolPartRecord>,
+  results: ReadonlyMap<ToolCallId, ToolPartRecord>,
 ): Result.Result<void, ModelContextError> => {
   for (const result of results.values()) {
     const call = Option.fromNullishOr(calls.get(result.id))
@@ -977,8 +964,8 @@ const validateToolRecords = (
 const collectToolRecords = (
   messages: ReadonlyArray<Message>,
 ): Result.Result<ToolRecords, ModelContextError> => {
-  const calls = new Map<ToolCallId, ToolCallRecord>()
-  const results = new Map<ToolCallId, ToolResultRecord>()
+  const calls = new Map<ToolCallId, ToolPartRecord>()
+  const results = new Map<ToolCallId, ToolPartRecord>()
 
   for (const [messageIndex, message] of messages.entries()) {
     const collected = collectMessageToolRecords(message, messageIndex, calls, results)
@@ -991,8 +978,8 @@ const collectToolRecords = (
 }
 
 const addCallToGroupMap = (
-  callsByMessage: Map<number, Array<ToolCallRecord>>,
-  call: ToolCallRecord,
+  callsByMessage: Map<number, Array<ToolPartRecord>>,
+  call: ToolPartRecord,
 ): void => {
   const calls = Option.fromNullishOr(callsByMessage.get(call.messageIndex))
   if (Option.isSome(calls)) {
@@ -1003,8 +990,8 @@ const addCallToGroupMap = (
 }
 
 const resultIndexesForCalls = (
-  calls: ReadonlyArray<ToolCallRecord>,
-  results: ReadonlyMap<ToolCallId, ToolResultRecord>,
+  calls: ReadonlyArray<ToolPartRecord>,
+  results: ReadonlyMap<ToolCallId, ToolPartRecord>,
 ): ReadonlyArray<number> => {
   const indexes: Array<number> = []
   for (const call of calls) {
@@ -1032,7 +1019,7 @@ const groupToolCalls = (
   messages: ReadonlyArray<Message>,
   records: ToolRecords,
 ): Result.Result<ReadonlyArray<ToolGroup>, ModelContextError> => {
-  const callsByMessage = new Map<number, Array<ToolCallRecord>>()
+  const callsByMessage = new Map<number, Array<ToolPartRecord>>()
   for (const call of records.calls.values()) addCallToGroupMap(callsByMessage, call)
 
   const callMessageIndexes = [...callsByMessage.keys()].sort((left, right) => left - right)
@@ -1314,7 +1301,7 @@ const measuredUnits = (
   messages: ReadonlyArray<Message>,
   measure: Option.Option<StepMeasure>,
 ): Result.Result<ReadonlyArray<ProjectionUnit>, ModelContextError> => {
-  const visible = visibleSnapshot(messages)
+  const visible = messages.filter(isAiVisibleMessage)
   const records = collectToolRecords(visible)
   if (Result.isFailure(records)) return Result.fail(records.failure)
   const groups = groupToolCalls(visible, records.success)
