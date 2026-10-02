@@ -206,20 +206,10 @@ describe("core feature independence guard", () => {
     expect(findings).toEqual([])
   })
 
-  test("flags core naming a catalog host a driver owns", () => {
+  test("lets core name models.dev, the model catalog core stores", () => {
     const findings = findCoreFeatureIndependenceFindings(
       "packages/core/src/runtime/provider.ts",
-      'const MODELS_URL = "https://models.dev"',
-    )
-    expect(findings).toHaveLength(1)
-    expect(findings[0]!.message).toContain("models.dev")
-    expect(findings[0]!.message).toContain("listModels")
-  })
-
-  test("lets an extension name the catalog host it owns", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/extensions/src/providers.ts",
-      'const MODELS_URL = "https://models.dev"',
+      'const MODELS_DEV_ORIGIN = "https://models.dev"',
     )
     expect(findings).toEqual([])
   })

@@ -53,7 +53,14 @@ import {
   type ModelPricing,
   parseModelId,
 } from "../domain/agent.js"
-import { Auth, ModelRegistry } from "../runtime/provider.js"
+import {
+  Auth,
+  type LoadedModelCatalog,
+  modelCatalogFromBodies,
+  ModelCatalogSource,
+  ModelRegistry,
+} from "../runtime/provider.js"
+import { HttpClient, HttpClientResponse } from "effect/http"
 import {
   getToolMetadata,
   type ToolCapability,
@@ -631,6 +638,732 @@ export const storedEvents = Effect.fn("test.storedEvents")(function* (run: Harne
   return yield* (yield* EventStorage).listEvents(run)
 })
 
+// ── model catalog fixture ───────────────────────────────────────────────────
+
+/*
+ * The one models.dev snapshot tests read: a trim of `api.json` and
+ * `api.json?type=decision` as fetched on 2026-10-02, with only the fields the
+ * catalog reads. Its providers: `anthropic`, `openai`, `opencode` (a model
+ * per AI SDK package), `opencode-go`, `cloudflare-workers-ai` (with
+ * `${CLOUDFLARE_ACCOUNT_ID}` in its URL), `deepseek` (no adapter), `google`
+ * (a package gent does not speak), and the decision models. No test reaches
+ * models.dev: every test root fetches through `modelCatalogFixture`.
+ */
+
+// oxlint-disable-next-line effect/noNullish -- models.dev writes some values as null (the "no reasoning" effort), and the fixture carries them as served
+const MODELS_DEV_NULL = null
+const encodeFixtureJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+const MODEL_CATALOG_FIXTURE_CHAT = {
+  anthropic: {
+    id: "anthropic",
+    name: "Anthropic",
+    env: ["ANTHROPIC_API_KEY"],
+    npm: "@ai-sdk/anthropic",
+    models: {
+      "claude-haiku-4-5": {
+        name: "Claude Haiku 4.5 (latest)",
+        cost: { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
+        limit: { context: 200000, output: 64000 },
+        release_date: "2025-10-15",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "budget_tokens", min: 1024 }],
+      },
+      "claude-opus-4-5": {
+        name: "Claude Opus 4.5 (latest)",
+        cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+        limit: { context: 200000, output: 64000 },
+        release_date: "2025-11-24",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [
+          { type: "effort", values: ["low", "medium", "high"] },
+          { type: "budget_tokens", min: 1024 },
+        ],
+      },
+      "claude-sonnet-4-5": {
+        name: "Claude Sonnet 4.5 (latest)",
+        cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
+        limit: { context: 1000000, output: 64000 },
+        release_date: "2025-09-29",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "budget_tokens", min: 1024 }],
+      },
+      "claude-opus-5": {
+        name: "Claude Opus 5",
+        cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+        limit: { context: 1000000, output: 128000 },
+        release_date: "2026-07-24",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+      },
+      "claude-fable-5": {
+        name: "Claude Fable 5",
+        cost: { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
+        limit: { context: 1000000, output: 128000 },
+        release_date: "2026-06-07",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+      },
+      "claude-sonnet-5": {
+        name: "Claude Sonnet 5",
+        cost: { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+        limit: { context: 1000000, output: 128000 },
+        release_date: "2026-06-29",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [
+          { type: "toggle" },
+          { type: "effort", values: ["low", "medium", "high", "xhigh", "max"] },
+        ],
+      },
+      "claude-opus-4-6": {
+        name: "Claude Opus 4.6",
+        cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+        limit: { context: 1000000, output: 128000 },
+        release_date: "2026-02-04",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [
+          { type: "effort", values: ["low", "medium", "high", "max"] },
+          { type: "budget_tokens", min: 1024 },
+        ],
+      },
+      "claude-haiku-4-5-20251001": {
+        name: "Claude Haiku 4.5",
+        cost: { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
+        limit: { context: 200000, output: 64000 },
+        release_date: "2025-10-15",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "budget_tokens", min: 1024 }],
+      },
+      "claude-sonnet-4-6": {
+        name: "Claude Sonnet 4.6",
+        cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
+        limit: { context: 1000000, output: 128000 },
+        release_date: "2026-02-17",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [
+          { type: "effort", values: ["low", "medium", "high", "max"] },
+          { type: "budget_tokens", min: 1024 },
+        ],
+      },
+      "claude-opus-4-7": {
+        name: "Claude Opus 4.7",
+        cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+        limit: { context: 1000000, output: 128000 },
+        release_date: "2026-04-14",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+      },
+    },
+  },
+  openai: {
+    id: "openai",
+    name: "OpenAI",
+    env: ["OPENAI_API_KEY"],
+    npm: "@ai-sdk/openai",
+    models: {
+      "gpt-5.4": {
+        name: "GPT-5.4",
+        cost: { input: 2.5, output: 15, cache_read: 0.25 },
+        limit: { context: 1050000, input: 922000, output: 128000 },
+        release_date: "2026-03-05",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [
+          { type: "effort", values: [MODELS_DEV_NULL, "low", "medium", "high", "xhigh"] },
+        ],
+      },
+      "gpt-5.5-pro": {
+        name: "GPT-5.5 Pro",
+        cost: { input: 30, output: 180 },
+        limit: { context: 1050000, input: 922000, output: 128000 },
+        release_date: "2026-04-23",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["medium", "high", "xhigh"] }],
+      },
+      "text-embedding-3-small": {
+        name: "text-embedding-3-small",
+        cost: { input: 0.02, output: 0 },
+        limit: { context: 8191, output: 1536 },
+        release_date: "2024-01-25",
+        tool_call: false,
+        reasoning: false,
+        temperature: false,
+      },
+      "gpt-5.2-chat-latest": {
+        name: "GPT-5.2 Chat",
+        cost: { input: 1.75, output: 14, cache_read: 0.175 },
+        limit: { context: 128000, output: 16384 },
+        release_date: "2025-12-11",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["medium"] }],
+      },
+      "gpt-6.1-sol": {
+        name: "GPT-6.1 Sol",
+        cost: { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
+        limit: { context: 1050000, input: 922000, output: 128000 },
+        release_date: "2026-09-29",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+      },
+      "gpt-5.1": {
+        name: "GPT-5.1",
+        cost: { input: 1.25, output: 10, cache_read: 0.125 },
+        limit: { context: 400000, input: 272000, output: 128000 },
+        release_date: "2025-11-13",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "effort", values: [MODELS_DEV_NULL, "low", "medium", "high"] }],
+      },
+      "gpt-5.6-luna": {
+        name: "GPT-5.6 Luna",
+        cost: { input: 0.2, output: 1.2, cache_read: 0.02, cache_write: 0.25 },
+        limit: { context: 1050000, input: 922000, output: 128000 },
+        release_date: "2026-07-09",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [
+          { type: "effort", values: [MODELS_DEV_NULL, "low", "medium", "high", "xhigh", "max"] },
+        ],
+      },
+      "gpt-4.1": {
+        name: "GPT-4.1",
+        cost: { input: 2, output: 8, cache_read: 0.5 },
+        limit: { context: 1047576, output: 32768 },
+        release_date: "2025-04-14",
+        tool_call: true,
+        reasoning: false,
+        temperature: true,
+      },
+      o3: {
+        name: "o3",
+        cost: { input: 2, output: 8, cache_read: 0.5 },
+        limit: { context: 200000, output: 100000 },
+        release_date: "2025-04-16",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+      },
+      "gpt-5": {
+        name: "GPT-5",
+        cost: { input: 1.25, output: 10, cache_read: 0.125 },
+        limit: { context: 400000, input: 272000, output: 128000 },
+        release_date: "2025-08-07",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["minimal", "low", "medium", "high"] }],
+      },
+      "gpt-5.6-sol": {
+        name: "GPT-5.6 Sol",
+        cost: { input: 4, output: 20, cache_read: 0.4, cache_write: 5 },
+        limit: { context: 1050000, input: 922000, output: 128000 },
+        release_date: "2026-07-09",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [
+          { type: "effort", values: [MODELS_DEV_NULL, "low", "medium", "high", "xhigh", "max"] },
+        ],
+      },
+      "gpt-6-sol": {
+        name: "GPT-6 Sol",
+        cost: { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+        limit: { context: 1050000, input: 922000, output: 128000 },
+        release_date: "2026-09-22",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [
+          { type: "effort", values: [MODELS_DEV_NULL, "low", "medium", "high", "xhigh", "max"] },
+        ],
+      },
+    },
+  },
+  opencode: {
+    id: "opencode",
+    name: "OpenCode Zen",
+    env: ["OPENCODE_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://opencode.ai/zen/v1",
+    models: {
+      "gpt-5.4": {
+        name: "GPT-5.4",
+        cost: { input: 2.5, output: 15, cache_read: 0.25 },
+        limit: { context: 1050000, input: 922000, output: 128000 },
+        release_date: "2026-03-05",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [
+          { type: "effort", values: [MODELS_DEV_NULL, "low", "medium", "high", "xhigh"] },
+        ],
+        provider: { npm: "@ai-sdk/openai" },
+      },
+      "claude-opus-4-5": {
+        name: "Claude Opus 4.5",
+        cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+        limit: { context: 200000, output: 64000 },
+        release_date: "2025-11-24",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [
+          { type: "effort", values: ["low", "medium", "high"] },
+          { type: "budget_tokens", min: 1024 },
+        ],
+        provider: { npm: "@ai-sdk/anthropic" },
+      },
+      "kimi-k2.6": {
+        name: "Kimi K2.6",
+        cost: { input: 0.95, output: 4, cache_read: 0.16 },
+        limit: { context: 262144, output: 65536 },
+        release_date: "2026-04-21",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "toggle" }],
+        interleaved: { field: "reasoning_content" },
+      },
+      "gemini-3.6-flash": {
+        name: "Gemini 3.6 Flash",
+        cost: { input: 1.5, output: 7.5, cache_read: 0.15 },
+        limit: { context: 1048576, output: 65536 },
+        release_date: "2026-07-21",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "effort", values: ["minimal", "low", "medium", "high"] }],
+        provider: { npm: "@ai-sdk/google" },
+      },
+      "gpt-6.1-sol": {
+        name: "GPT-6.1 Sol",
+        cost: { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
+        limit: { context: 1050000, input: 922000, output: 128000 },
+        release_date: "2026-09-29",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+        provider: { npm: "@ai-sdk/openai" },
+      },
+      "claude-opus-5": {
+        name: "Claude Opus 5",
+        cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+        limit: { context: 1000000, output: 128000 },
+        release_date: "2026-07-24",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+        provider: { npm: "@ai-sdk/anthropic" },
+      },
+      "claude-sonnet-5": {
+        name: "Claude Sonnet 5",
+        cost: { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+        limit: { context: 1000000, output: 128000 },
+        release_date: "2026-06-30",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+        provider: { npm: "@ai-sdk/anthropic" },
+      },
+      "claude-opus-4-6": {
+        name: "Claude Opus 4.6",
+        cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+        limit: { context: 1000000, output: 128000 },
+        release_date: "2026-02-05",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [
+          { type: "effort", values: ["low", "medium", "high", "max"] },
+          { type: "budget_tokens", min: 1024 },
+        ],
+        provider: { npm: "@ai-sdk/anthropic" },
+      },
+      "qwen3.6-plus": {
+        name: "Qwen3.6 Plus",
+        cost: { input: 0.5, output: 3, cache_read: 0.05, cache_write: 0.625 },
+        limit: { context: 262144, output: 65536 },
+        release_date: "2026-04-02",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "toggle" }, { type: "budget_tokens", max: 81920 }],
+        provider: { npm: "@ai-sdk/anthropic" },
+      },
+      "glm-5.3": {
+        name: "GLM-5.3",
+        cost: { input: 1.4, output: 4.4, cache_read: 0.26 },
+        limit: { context: 1000000, output: 131072 },
+        release_date: "2026-08-14",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+        interleaved: { field: "reasoning_content" },
+      },
+    },
+  },
+  "opencode-go": {
+    id: "opencode-go",
+    name: "OpenCode Go",
+    env: ["OPENCODE_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://opencode.ai/zen/go/v1",
+    models: {
+      "kimi-k2.6": {
+        name: "Kimi K2.6",
+        cost: { input: 0.95, output: 4, cache_read: 0.16 },
+        limit: { context: 262144, output: 65536 },
+        release_date: "2026-04-21",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [],
+        interleaved: { field: "reasoning_content" },
+      },
+      "minimax-m3": {
+        name: "MiniMax-M3",
+        cost: { input: 0.3, output: 1.2, cache_read: 0.06 },
+        limit: { context: 1000000, output: 131072 },
+        release_date: "2026-05-31",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "toggle" }],
+        provider: { npm: "@ai-sdk/anthropic" },
+      },
+      "gpt-5.6-luna": {
+        name: "GPT-5.6 Luna",
+        cost: { input: 0.2, output: 1.2, cache_read: 0.02, cache_write: 0.25 },
+        limit: { context: 1050000, input: 922000, output: 128000 },
+        release_date: "2026-07-09",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [
+          { type: "effort", values: [MODELS_DEV_NULL, "low", "medium", "high", "xhigh", "max"] },
+        ],
+        provider: { npm: "@ai-sdk/openai" },
+      },
+      "glm-5.3": {
+        name: "GLM-5.3",
+        cost: { input: 1.4, output: 4.4, cache_read: 0.26 },
+        limit: { context: 1000000, output: 131072 },
+        release_date: "2026-08-14",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+        interleaved: { field: "reasoning_content" },
+      },
+    },
+  },
+  "cloudflare-workers-ai": {
+    id: "cloudflare-workers-ai",
+    name: "Cloudflare Workers AI",
+    env: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+    models: {
+      "@cf/meta/llama-guard-3-8b": {
+        name: "Llama Guard 3 8B",
+        cost: { input: 0.484, output: 0.03 },
+        limit: { context: 131072, output: 131072 },
+        release_date: "2024-07-23",
+        tool_call: false,
+        reasoning: false,
+        temperature: true,
+      },
+      "@cf/moonshotai/kimi-k2.6": {
+        name: "Kimi K2.6",
+        cost: { input: 0.95, output: 4, cache_read: 0.16 },
+        limit: { context: 262144, output: 256000 },
+        release_date: "2026-04-21",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "effort", values: [MODELS_DEV_NULL, "high"] }],
+        interleaved: { field: "reasoning_content" },
+      },
+      "@cf/zai-org/glm-5.3": {
+        name: "Glm 5.3",
+        cost: { input: 1.4, output: 4.4, cache_read: 0.26 },
+        limit: { context: 1048576, output: 1048576 },
+        release_date: "2026-08-14",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+      },
+    },
+  },
+  deepseek: {
+    id: "deepseek",
+    name: "DeepSeek",
+    env: ["DEEPSEEK_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://api.deepseek.com",
+    models: {
+      "deepseek-v4-pro": {
+        name: "DeepSeek V4 Pro",
+        cost: { input: 0.66, output: 1.98, cache_read: 0.022 },
+        limit: { context: 1000000, output: 393216 },
+        release_date: "2026-08-12",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["low", "high", "max"] }],
+        interleaved: { field: "reasoning_content" },
+      },
+      "deepseek-v4-flash": {
+        name: "DeepSeek V4 Flash",
+        cost: { input: 0.15, output: 0.6, cache_read: 0.003 },
+        limit: { context: 1000000, output: 393216 },
+        release_date: "2026-09-10",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["low", "high", "max"] }],
+        interleaved: { field: "reasoning_content" },
+      },
+    },
+  },
+  google: {
+    id: "google",
+    name: "Google",
+    env: ["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"],
+    npm: "@ai-sdk/google",
+    models: {
+      "gemini-3.6-flash": {
+        name: "Gemini 3.6 Flash",
+        cost: { input: 0.75, output: 3.75, cache_read: 0.075 },
+        limit: { context: 1048576, output: 65536 },
+        release_date: "2026-07-21",
+        tool_call: true,
+        reasoning: true,
+        temperature: true,
+        reasoning_options: [{ type: "effort", values: ["minimal", "low", "medium", "high"] }],
+      },
+    },
+  },
+}
+
+const MODEL_CATALOG_FIXTURE_DECISION = {
+  "cloudflare-workers-ai": {
+    id: "cloudflare-workers-ai",
+    name: "Cloudflare Workers AI",
+    env: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+    models: {
+      "@cf/cloudflare/clef-flash": {
+        name: "Clef Flash",
+        cost: { input: 0.09, output: 0 },
+        limit: { context: 65536, output: 65536 },
+        release_date: "2026-09-29",
+        tool_call: false,
+        reasoning: false,
+        temperature: true,
+        type: "decision",
+      },
+      "@cf/cloudflare/clef": {
+        name: "Clef",
+        cost: { input: 0.24, output: 0 },
+        limit: { context: 65536, output: 65536 },
+        release_date: "2026-09-29",
+        tool_call: false,
+        reasoning: false,
+        temperature: true,
+        type: "decision",
+      },
+    },
+  },
+  "nano-gpt": {
+    id: "nano-gpt",
+    name: "NanoGPT",
+    env: ["NANO_GPT_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://nano-gpt.com/api/v1",
+    models: {
+      "liquid/d1": {
+        name: "Liquid D1",
+        cost: { input: 0.04, output: 0, cache_read: 0.04 },
+        limit: { context: 65536, input: 65536, output: 0 },
+        release_date: "2026-09-29",
+        tool_call: false,
+        reasoning: false,
+        temperature: MODELS_DEV_NULL,
+        type: "decision",
+      },
+    },
+  },
+  vercel: {
+    id: "vercel",
+    name: "Vercel AI Gateway",
+    env: ["AI_GATEWAY_API_KEY"],
+    npm: "@ai-sdk/gateway",
+    models: {
+      "typesafe-ai/jev": {
+        name: "Jev",
+        cost: { input: 0.042, output: 0 },
+        limit: { context: 32000, output: 0 },
+        release_date: "2026-09-15",
+        tool_call: false,
+        reasoning: false,
+        temperature: false,
+        type: "decision",
+      },
+    },
+  },
+  opencode: {
+    id: "opencode",
+    name: "OpenCode Zen",
+    env: ["OPENCODE_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://opencode.ai/zen/v1",
+    models: {
+      "jev-1.13": {
+        name: "Jev 1.13",
+        cost: { input: 0.042, output: 0 },
+        limit: { context: 64000, output: 0 },
+        release_date: "2026-09-15",
+        tool_call: false,
+        reasoning: false,
+        temperature: false,
+        type: "decision",
+      },
+      "jev-1.13-free": {
+        name: "Jev 1.13 Free",
+        cost: { input: 0, output: 0 },
+        limit: { context: 64000, output: 0 },
+        release_date: "2026-09-15",
+        tool_call: false,
+        reasoning: false,
+        temperature: false,
+        type: "decision",
+      },
+    },
+  },
+}
+
+/** The fixture's two bodies as served, and the strong ETag each carries. */
+export const MODEL_CATALOG_FIXTURE: Readonly<
+  Record<"api.json" | "api.json?type=decision", { readonly body: string; readonly etag: string }>
+> = {
+  "api.json": { body: encodeFixtureJson(MODEL_CATALOG_FIXTURE_CHAT), etag: '"fixture-chat-1"' },
+  "api.json?type=decision": {
+    body: encodeFixtureJson(MODEL_CATALOG_FIXTURE_DECISION),
+    etag: '"fixture-decision-1"',
+  },
+}
+
+/** The fixture as the catalog a driver reads, for a driver test with no server. */
+export const fixtureModelCatalog = (): LoadedModelCatalog =>
+  modelCatalogFromBodies({
+    chat: MODEL_CATALOG_FIXTURE["api.json"].body,
+    decision: MODEL_CATALOG_FIXTURE["api.json?type=decision"].body,
+  })
+
+/** The fixture as a catalog source that fetches nothing, for a test that builds the resolvers alone. */
+export const fixtureModelCatalogSource: Layer.Layer<ModelCatalogSource> = Layer.unwrap(
+  Effect.sync(() => ModelCatalogSource.fixed(fixtureModelCatalog())),
+)
+
+/** One catalog request the fixture client answered: its source and the ETag it sent. */
+export interface ModelCatalogFixtureRequest {
+  readonly source: string
+  readonly ifNoneMatch: Option.Option<string>
+}
+
+/** What a body request gets: the stored fixture, a body a test set, or a 503 (offline). */
+interface ModelCatalogFixtureServed {
+  readonly offline: boolean
+  readonly bodies: Readonly<Record<string, { readonly body: string; readonly etag: string }>>
+}
+
+/**
+ * A counting HTTP client that serves the fixture for both models.dev
+ * sources, under any origin. A request that sends the current ETag gets a
+ * 304 with no body. `serve` changes what a source answers next; `offline`
+ * answers every request with a 503.
+ */
+export const modelCatalogFixture = Effect.gen(function* () {
+  const requests = yield* Ref.make<ReadonlyArray<ModelCatalogFixtureRequest>>([])
+  const served = yield* Ref.make<ModelCatalogFixtureServed>({
+    offline: false,
+    bodies: MODEL_CATALOG_FIXTURE,
+  })
+  const client = HttpClient.make((request) =>
+    Effect.gen(function* () {
+      const url = new URL(request.url)
+      const source = `${url.pathname.replace(/^\/+/, "")}${url.search}`
+      const ifNoneMatch = Option.fromUndefinedOr(request.headers["if-none-match"])
+      yield* Ref.update(requests, (list) => [...list, { source, ifNoneMatch }])
+      const current = yield* Ref.get(served)
+      const answer = Option.fromUndefinedOr(current.bodies[source])
+      if (current.offline || Option.isNone(answer)) {
+        return HttpClientResponse.fromWeb(request, new Response("unavailable", { status: 503 }))
+      }
+      if (Option.contains(ifNoneMatch, answer.value.etag)) {
+        // oxlint-disable-next-line effect/noNullish -- a 304 carries no body, and `Response` takes null for none
+        return HttpClientResponse.fromWeb(request, new Response(null, { status: 304 }))
+      }
+      return HttpClientResponse.fromWeb(
+        request,
+        new Response(answer.value.body, { status: 200, headers: { etag: answer.value.etag } }),
+      )
+    }),
+  )
+  return {
+    layer: Layer.succeed(HttpClient.HttpClient, client),
+    requests: Ref.get(requests),
+    serve: (source: string, body: string, etag: string) =>
+      Ref.update(served, (current) => ({
+        ...current,
+        bodies: { ...current.bodies, [source]: { body, etag } },
+      })),
+    offline: (offline: boolean) => Ref.update(served, (current) => ({ ...current, offline })),
+  }
+})
+
+/** The fixture client alone, for a test root that does not count its requests. */
+const modelCatalogFixtureLayer: Layer.Layer<HttpClient.HttpClient> = Layer.unwrap(
+  Effect.map(modelCatalogFixture, (fixture) => fixture.layer),
+)
+
 // ── e2e layer ───────────────────────────────────────────────────────────────
 
 /**
@@ -733,6 +1466,12 @@ interface E2ELayerOptions {
   readonly modelPricing?: ModelPricing
   /** Auth override. Use for public RPC auth failure-path tests. */
   readonly authLayer?: Layer.Layer<Auth>
+  /**
+   * The HTTP client the models.dev catalog fetches through. Default: the
+   * fixture client (`modelCatalogFixtureLayer`); a test that counts requests
+   * passes its own `modelCatalogFixture`.
+   */
+  readonly modelCatalogHttpLayer?: Layer.Layer<HttpClient.HttpClient>
   /**
    * ConfigService override. Default is `ConfigService.Test()`.
    * Provide `ConfigService.Live` (or a custom layer) to exercise per-cwd
@@ -864,6 +1603,7 @@ const e2eDependencies = <A>(
       ),
       modelResolverLayer: LanguageModelLayers.resolver(config.providerLayer),
       authLayer: config.authLayer ?? Auth.Test(),
+      modelCatalogHttpLayer: config.modelCatalogHttpLayer ?? modelCatalogFixtureLayer,
       approvalLayer: config.approvalLayer ?? ApprovalService.Test(),
       configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
       sessionProfileCacheLayer: config.sessionProfileCacheLayer,

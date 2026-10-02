@@ -25,6 +25,8 @@
  *   `~/.gent`. A test that needs a specific data directory still sets its
  *   own: a home it passes, or `GENT_DATA_DIR` through its config provider or
  *   a child process's environment.
+ * - `GENT_MODEL_CATALOG_URL` names a closed local port: no test reaches
+ *   models.dev, whatever root it builds.
  */
 import { afterAll, mock, setDefaultTimeout } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -49,6 +51,11 @@ const testHome = mkdtempSync(join(tmpdir(), "gent-test-home-"))
 Bun.env["HOME"] = testHome
 // oxlint-disable-next-line effect/noGlobals -- the preload sets the test process's environment before any Effect runtime
 Reflect.deleteProperty(Bun.env, "GENT_DATA_DIR")
+// A server a test starts without the fixture client (an SDK `Gent.server`, a
+// child process) fetches the models.dev catalog from a closed local port: its
+// first read fails at once, and the catalog reports itself unavailable.
+// oxlint-disable-next-line effect/noGlobals -- the preload sets the test process's environment before any Effect runtime
+Bun.env["GENT_MODEL_CATALOG_URL"] = "http://127.0.0.1:9"
 const osWithTestHome = { ...os, homedir: () => testHome }
 for (const specifier of ["node:os", "os"]) {
   void mock.module(specifier, () => ({ ...osWithTestHome, default: osWithTestHome }))

@@ -1,7 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { ConfigProvider, Effect, Layer, Option, Path, Predicate, Schema } from "effect"
-import { HttpClient, HttpClientResponse } from "effect/http"
-import { BunFileSystem } from "@effect/platform-bun"
+import { ConfigProvider, Effect, Layer, Option, Predicate, Schema } from "effect"
 import {
   ModelId,
   ProviderAuthError,
@@ -13,7 +11,8 @@ import {
   createE2ELayer,
   createRpcClient,
   LanguageModelLayers,
-  makeTempDirectoryScoped,
+  modelCatalogFixture,
+  modelCatalogFromBodies,
   textStep,
 } from "@gent/core/test-utils"
 import {
@@ -21,7 +20,6 @@ import {
   type CloudflareEnv,
   CloudflareExtension,
 } from "../src/cloudflare.js"
-import { catalogSource, modelsDevCatalog } from "../src/providers.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import {
   decideTicket,
@@ -44,8 +42,6 @@ import {
  * names and through its gateway when it names one. Every request goes to a
  * captured fake `fetch`; no test reaches Cloudflare.
  */
-
-const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 
 const TOKEN = "cf-test-token"
 const NO_ENV: CloudflareEnv = {
@@ -95,35 +91,21 @@ const remotePayload = {
   },
 }
 
-/** An HTTP client that answers the models.dev fetch with the fixture. */
-const catalogHttpLayer = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.succeed(
-      HttpClientResponse.fromWeb(
-        request,
-        new Response(encodeExternalJson(remotePayload), { status: 200 }),
-      ),
-    ),
-  ),
-)
+/** The catalog core would hand the driver: this file's entries, and no decision models. */
+const fixtureCatalog = modelCatalogFromBodies({
+  chat: encodeExternalJson(remotePayload),
+  decision: "{}",
+})
 
-/** A home whose catalog holds the fixture; a driver pointed at it reads the fixture. */
-const fixtureHome = Effect.gen(function* () {
-  const home = yield* makeTempDirectoryScoped("cloudflare-catalog-")
-  const models = yield* modelsDevCatalog(home).pipe(
-    Effect.provide(Layer.merge(catalogHttpLayer, platformLayer)),
-  )
-  expect(models.length).toBeGreaterThan(0)
-  return home
+/** A models.dev client for an RPC root: it answers with this file's entries. */
+const catalogHttpLayer = Effect.gen(function* () {
+  const fixture = yield* modelCatalogFixture
+  yield* fixture.serve("api.json", encodeExternalJson(remotePayload), '"cloudflare-test"')
+  return fixture.layer
 })
 
 const fixtureDriver = (env: CloudflareEnv = NO_ENV) =>
-  Effect.gen(function* () {
-    const home = yield* fixtureHome
-    const source = yield* catalogSource(home).pipe(Effect.provide(platformLayer))
-    return buildCloudflareModelDriver(env, source)
-  })
+  Effect.succeed(buildCloudflareModelDriver(env))
 
 // ── wire fixtures ───────────────────────────────────────────────────────────
 
@@ -272,7 +254,9 @@ describe("Cloudflare catalog", () => {
     () =>
       Effect.gen(function* () {
         const driver = yield* fixtureDriver()
-        const models = yield* Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))()
+        const models = yield* Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))(
+          fixtureCatalog,
+        )
         expect(
           models.map((model) => ({
             id: model.id,
@@ -428,12 +412,11 @@ describe("Cloudflare Clef decisions", () => {
 /** An RPC client whose profile registers the shipped extension, with `env` as the process env. */
 const signInClient = (env: Record<string, string>) =>
   Effect.gen(function* () {
-    const home = yield* fixtureHome
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
     const { client } = yield* createRpcClient(
       createE2ELayer({
         agents: [],
-        home,
+        modelCatalogHttpLayer: yield* catalogHttpLayer,
         extensionInputs: [CloudflareExtension],
         providerLayer,
       }).pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })))),

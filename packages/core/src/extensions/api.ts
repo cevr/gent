@@ -72,10 +72,15 @@ export {
   DriverFailureId,
   ProviderAuthError,
   ProviderAuthInfo,
+  ReasoningOption,
   reportProviderStopReason,
+  modelFromCatalog,
 } from "../domain/driver.js"
 export { InteractionPendingError } from "../domain/interaction.js"
 export type {
+  CatalogModel,
+  CatalogProvider,
+  ModelCatalogView,
   ModelDriverContribution,
   ProviderAuthorizationResult,
   ProviderHints,

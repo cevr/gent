@@ -17,19 +17,14 @@ import {
   ExtensionHost,
   Model,
   ModelId,
+  type ModelCatalogView,
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderHints,
   ProviderId,
 } from "@gent/core/extensions/api"
-import {
-  apiKeyFrom,
-  type CatalogSource,
-  catalogSource,
-  driverListModels,
-  readOptionalEnv,
-} from "./providers.js"
+import { apiKeyFrom, catalogModels, readOptionalEnv } from "./providers.js"
 import { type ClassifierEntry, classifierModel, typeSafeDecisionModel } from "./typesafe.js"
 
 // Test seam: only tests read buildCloudflareModelDriver, which lets a test
@@ -195,17 +190,13 @@ const CATALOG_PROVIDER = "cloudflare-workers-ai"
  * whose upstreams cache implicitly with no write price, so none has a cache
  * lifetime.
  */
-const listWorkersAiModels = (catalog: CatalogSource) =>
-  driverListModels(catalog, CATALOG_PROVIDER, Option.none())().pipe(
-    Effect.map((models) =>
-      models.map((model) =>
-        Model.make({
-          ...model,
-          id: ModelId.make(`${DRIVER_ID}/${model.id.slice(CATALOG_PROVIDER.length + 1)}`),
-          provider: ProviderId.make(DRIVER_ID),
-        }),
-      ),
-    ),
+const listWorkersAiModels = (catalog: ModelCatalogView): ReadonlyArray<Model> =>
+  catalogModels(catalog, CATALOG_PROVIDER, Option.none()).map((model) =>
+    Model.make({
+      ...model,
+      id: ModelId.make(`${DRIVER_ID}/${model.id.slice(CATALOG_PROVIDER.length + 1)}`),
+      provider: ProviderId.make(DRIVER_ID),
+    }),
   )
 
 // ── clef decisions ──────────────────────────────────────────────────────────
@@ -357,10 +348,7 @@ const isClassifier = (modelName: string): boolean =>
 // ── driver ──────────────────────────────────────────────────────────────────
 
 /** The Cloudflare driver. `env` holds the variables setup read; a stored token or answer wins. */
-export const buildCloudflareModelDriver = (
-  env: CloudflareEnv,
-  catalog: CatalogSource,
-): ModelDriverContribution => ({
+export const buildCloudflareModelDriver = (env: CloudflareEnv): ModelDriverContribution => ({
   id: DRIVER_ID,
   name: "Cloudflare",
   envCredential: TOKEN_ENV,
@@ -389,9 +377,9 @@ export const buildCloudflareModelDriver = (
           client.pipe(clefRunPath(modelName), gatewayHeader(account.gatewayId), unwrapEnvelope),
       }),
     ),
-  listModels: () =>
-    Effect.map(listWorkersAiModels(catalog), (models) => [
-      ...models,
+  listModels: (catalog) =>
+    Effect.succeed([
+      ...listWorkersAiModels(catalog),
       ...CLASSIFIERS.map((entry) => classifierModel(DRIVER_ID, entry)),
     ]),
   auth: {
@@ -427,7 +415,6 @@ export const CloudflareExtension = defineExtension({
       accountId: yield* readOptionalEnv(ACCOUNT_ENV),
       gatewayId: yield* readOptionalEnv(GATEWAY_ENV),
     }
-    const catalog = yield* catalogSource(host.home)
-    yield* host.register("modelDriver", buildCloudflareModelDriver(env, catalog))
+    yield* host.register("modelDriver", buildCloudflareModelDriver(env))
   }),
 })

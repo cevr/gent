@@ -12,6 +12,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Ref,
   Schema,
   Stream,
 } from "effect"
@@ -21,6 +22,7 @@ import {
   AuthMethod,
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
+  type ModelCatalogView,
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthInfo,
@@ -42,7 +44,11 @@ import {
   removeSignIn,
   listAuthMethods,
   retryProviderCall,
+  listModelCatalog,
+  type LoadedModelCatalog,
+  modelCatalogFromBodies,
   ModelCatalogRecord,
+  ModelCatalogSource,
   ModelRegistry,
   modelCatalog,
   finishPart,
@@ -58,6 +64,16 @@ import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../s
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import {
+  fixtureModelCatalog,
+  fixtureModelCatalogSource,
+  MODEL_CATALOG_FIXTURE,
+  modelCatalogFixture,
+  type ModelCatalogFixtureRequest,
+  testSqliteStorage,
+} from "../../src/test-utils/harness"
+import { ModelCatalogSnapshotStorage } from "../../src/storage/storage"
+import { HttpClient, HttpClientResponse } from "effect/http"
 import { convertTools } from "../../src/runtime/tools"
 import { toPrompt } from "../../src/runtime/model-context"
 import { dateFromMillis, Message } from "../../src/domain/message"
@@ -351,6 +367,7 @@ const makeRegistryLayerWithDrivers = (
         ),
         overrideAuthLayer,
         ModelCatalogRecord.Live,
+        fixtureModelCatalogSource,
       ),
     ),
   )
@@ -367,10 +384,12 @@ const loadRegistryWithDrivers = (
     const drivers = Context.get(context, ExtensionRegistry)
     const auth = Context.get(context, Auth)
     const catalogRecord = Context.get(context, ModelCatalogRecord)
+    const catalogSource = Context.get(context, ModelCatalogSource)
     const catalog = modelCatalog().pipe(
       Effect.provideService(ExtensionRegistry, drivers),
       Effect.provideService(Auth, auth),
       Effect.provideService(ModelCatalogRecord, catalogRecord),
+      Effect.provideService(ModelCatalogSource, catalogSource),
     )
     return {
       raw,
@@ -476,7 +495,7 @@ describe("model catalog resolution", () => {
             id: "openai",
             name: "OpenAI",
             resolveModel: unusedResolution,
-            listModels: (auth) =>
+            listModels: (_catalog, auth) =>
               Effect.sync(() => {
                 if (auth?._tag === "Api") seen.push(`openai:${auth.key}`)
                 return [catalogModel("openai/gpt-5.4")]
@@ -486,7 +505,7 @@ describe("model catalog resolution", () => {
             id: "anthropic",
             name: "Anthropic",
             resolveModel: unusedResolution,
-            listModels: (auth) =>
+            listModels: (_catalog, auth) =>
               Effect.sync(() => {
                 if (Predicate.isUndefined(auth)) seen.push("anthropic:none")
                 return [catalogModel("anthropic/claude-opus-5")]
@@ -1257,7 +1276,10 @@ const buildProviderLayer = (
   const resolved = resolveExtensions(extensions)
   const registryLayer = ExtensionRegistry.fromResolved(resolved)
   const authLayer = Layer.succeed(Auth, authStore)
-  return Layer.provideMerge(ModelResolver.Live, Layer.mergeAll(authLayer, registryLayer))
+  return Layer.provideMerge(
+    ModelResolver.Live,
+    Layer.mergeAll(authLayer, registryLayer, fixtureModelCatalogSource),
+  )
 }
 const resolveModel = (request: ModelRequest) =>
   Effect.gen(function* () {
@@ -1794,7 +1816,7 @@ const sharedSignInDrivers = (seen: Array<string>): ReadonlyArray<ModelDriverCont
         seen.push(`${id} model ${keyOf(auth)}`)
         return fakeResolution()
       }),
-    listModels: (auth?: ProviderAuthInfo) =>
+    listModels: (_catalog: ModelCatalogView, auth?: ProviderAuthInfo) =>
       Effect.sync(() => {
         seen.push(`${id} list ${keyOf(auth)}`)
         return [Model.make({ ...catalogModel(`${id}/judge`), kind: "classifier" })]
@@ -1835,7 +1857,11 @@ const readsWithStored = (stored: Record<string, string>) =>
       ModelResolver.Live,
       DecisionModelResolver.Live,
       ModelCatalogRecord.Live,
-    ).pipe(Layer.provideMerge(Layer.merge(Auth.Test(seed), sharedSignInRegistry(seen))))
+    ).pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(Auth.Test(seed), sharedSignInRegistry(seen), fixtureModelCatalogSource),
+      ),
+    )
     yield* Effect.gen(function* () {
       const resolver = yield* ModelResolver
       yield* resolver.resolve({ modelId: "gateway/m" })
@@ -1999,7 +2025,7 @@ describe("classifier availability", () => {
     id,
     name: id,
     resolveModel: () => Effect.succeed(fakeResolution()),
-    listModels: (authInfo) =>
+    listModels: (_catalog, authInfo) =>
       Effect.sync(() => {
         listed.push(id)
         if (Predicate.isUndefined(authInfo)) return []
@@ -2030,7 +2056,9 @@ describe("classifier availability", () => {
         return answers
       }).pipe(
         Effect.provide(
-          DecisionModelResolver.Live.pipe(Layer.provideMerge(Layer.merge(Auth.Test({}), registry))),
+          DecisionModelResolver.Live.pipe(
+            Layer.provideMerge(Layer.mergeAll(Auth.Test({}), registry, fixtureModelCatalogSource)),
+          ),
         ),
       )
     })
@@ -2058,5 +2086,351 @@ describe("classifier availability", () => {
       expect(yield* available([judge], [{ judge: "sk-judge" }, {}, {}])).toEqual([true, true, true])
       expect(listed).toEqual([])
     }).pipe(Effect.timeout("4 seconds")),
+  )
+})
+
+// ── models.dev catalog source ───────────────────────────────────────────────
+
+/**
+ * The models.dev snapshot core keeps in SQLite: one blocking fetch with no
+ * row, then reads from memory, revalidated in the background by ETag once an
+ * hour. Every request goes to the fixture client, which counts them; the
+ * virtual clock moves the hours.
+ */
+
+const CHAT = "api.json"
+const DECISION = "api.json?type=decision"
+
+/** A storage context that two catalog sources can share, as two processes share one database. */
+const catalogStorage = Layer.build(testSqliteStorage(Layer.empty, {}))
+
+/** A catalog source over `storage`, fetching through `http`. */
+const catalogSourceOver = (
+  storage: Context.Context<ModelCatalogSnapshotStorage>,
+  http: Layer.Layer<HttpClient.HttpClient>,
+) =>
+  Layer.build(
+    ModelCatalogSource.Live.pipe(Layer.provide(http), Layer.provide(Layer.succeedContext(storage))),
+  ).pipe(Effect.map((context) => Context.get(context, ModelCatalogSource)))
+
+/** A catalog source over fresh storage and the counting fixture client. */
+const catalogRoot = Effect.gen(function* () {
+  const fixture = yield* modelCatalogFixture
+  const storage = yield* catalogStorage
+  const source = yield* catalogSourceOver(storage, fixture.layer)
+  return { fixture, storage, source }
+})
+
+/**
+ * Let the background revalidation finish: the fixture client and SQLite
+ * answer at once, so the forked fiber completes within a few yields.
+ */
+const settle = <A, E>(effect: Effect.Effect<A, E>, done: (value: A) => boolean) => {
+  const loop = (left: number): Effect.Effect<A, E> =>
+    effect.pipe(
+      Effect.filterOrElse(
+        (value) => done(value) || left === 0,
+        () => Effect.yieldNow.pipe(Effect.andThen(loop(left - 1))),
+      ),
+    )
+  return loop(1_000)
+}
+
+const providerModelIds = (catalog: LoadedModelCatalog, providerId: string) =>
+  Option.match(catalog.provider(providerId), {
+    onNone: () => [],
+    onSome: (provider) => provider.models.map((model) => model.id),
+  })
+
+const sourcesOf = (requests: ReadonlyArray<ModelCatalogFixtureRequest>) =>
+  requests.map((request) => request.source).toSorted()
+
+const encodeCatalogJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+// oxlint-disable-next-line effect/noNullish -- models.dev writes the "no reasoning" effort as null
+const CATALOG_NULL = null
+
+/** A body models.dev might serve next: one Anthropic model the fixture does not hold. */
+const NEXT_CHAT_BODY = encodeCatalogJson({
+  anthropic: {
+    id: "anthropic",
+    name: "Anthropic",
+    env: ["ANTHROPIC_API_KEY"],
+    models: { "claude-next": { name: "Claude Next", tool_call: true } },
+  },
+})
+
+describe("models.dev catalog source", () => {
+  it.scoped("the first read fetches each source once, and a read within the hour asks nobody", () =>
+    Effect.gen(function* () {
+      const { fixture, storage, source } = yield* catalogRoot
+
+      const first = yield* source.read
+      expect(providerModelIds(first, "anthropic")).toContain("claude-haiku-4-5")
+      expect(Option.isNone(first.failure)).toBe(true)
+      expect(sourcesOf(yield* fixture.requests)).toEqual([CHAT, DECISION])
+      expect((yield* fixture.requests).every((request) => Option.isNone(request.ifNoneMatch))).toBe(
+        true,
+      )
+
+      yield* TestClock.adjust("59 minutes")
+      yield* source.read
+      expect(yield* fixture.requests).toHaveLength(2)
+
+      const row = yield* Context.get(storage, ModelCatalogSnapshotStorage).get(CHAT)
+      expect(Option.map(row, (stored) => stored.etag)).toEqual(
+        Option.some(Option.some('"fixture-chat-1"')),
+      )
+    }),
+  )
+
+  it.scoped(
+    "a read after the hour serves the snapshot and revalidates it with its ETag; a 304 moves only the check time",
+    () =>
+      Effect.gen(function* () {
+        const { fixture, storage, source } = yield* catalogRoot
+        yield* source.read
+        yield* TestClock.adjust("2 hours")
+
+        const stale = yield* source.read
+        expect(providerModelIds(stale, "anthropic")).toContain("claude-haiku-4-5")
+        const requests = yield* settle(fixture.requests, (list) => list.length === 4)
+        expect(
+          requests.slice(2).map((request) => [request.source, request.ifNoneMatch] as const),
+        ).toEqual(
+          expect.arrayContaining([
+            [CHAT, Option.some('"fixture-chat-1"')],
+            [DECISION, Option.some('"fixture-decision-1"')],
+          ]),
+        )
+        const rows = Context.get(storage, ModelCatalogSnapshotStorage)
+        const row = yield* settle(rows.get(CHAT), (stored) =>
+          Option.exists(stored, (value) => value.checked_at > 0),
+        )
+        expect(Option.map(row, (stored) => [stored.fetched_at, stored.checked_at])).toEqual(
+          Option.some([0, Duration.toMillis(Duration.hours(2))]),
+        )
+      }),
+  )
+
+  it.scoped("a 200 replaces the snapshot, and a body that does not parse is not stored", () =>
+    Effect.gen(function* () {
+      const { fixture, storage, source } = yield* catalogRoot
+      yield* source.read
+      const rows = Context.get(storage, ModelCatalogSnapshotStorage)
+      const etag = rows.get(CHAT).pipe(Effect.map(Option.flatMap((stored) => stored.etag)))
+
+      yield* fixture.serve(CHAT, NEXT_CHAT_BODY, '"next"')
+      yield* TestClock.adjust("2 hours")
+      yield* source.read
+      yield* settle(etag, (value) => Option.contains(value, '"next"'))
+      expect(providerModelIds(yield* source.read, "anthropic")).toEqual(["claude-next"])
+
+      yield* fixture.serve(CHAT, "<html>maintenance</html>", '"broken"')
+      yield* TestClock.adjust("2 hours")
+      yield* source.read
+      yield* settle(fixture.requests, (list) => list.length === 6)
+      yield* settle(source.read, (catalog) => catalog.providerIds.length > 0)
+      expect(yield* etag).toEqual(Option.some('"next"'))
+      expect(providerModelIds(yield* source.read, "anthropic")).toEqual(["claude-next"])
+    }),
+  )
+
+  it.scoped("a new process reads the stored snapshot and fetches nothing", () =>
+    Effect.gen(function* () {
+      const { fixture, storage, source } = yield* catalogRoot
+      yield* source.read
+      const restarted = yield* catalogSourceOver(storage, fixture.layer)
+
+      const catalog = yield* restarted.read
+
+      expect(providerModelIds(catalog, "anthropic")).toContain("claude-haiku-4-5")
+      expect(yield* fixture.requests).toHaveLength(2)
+    }),
+  )
+
+  it.scoped(
+    "with no snapshot and models.dev offline, the catalog is unavailable, and a minute later it is fetched again",
+    () =>
+      Effect.gen(function* () {
+        const { fixture, source } = yield* catalogRoot
+        yield* fixture.offline(true)
+
+        const offline = yield* source.read
+        expect(offline.failure).toEqual(
+          Option.some(
+            "models.dev catalog unavailable: no snapshot stored and models.dev unreachable",
+          ),
+        )
+        expect(offline.providerIds).toEqual([])
+
+        // Inside the minute the failed source is not asked again.
+        yield* fixture.offline(false)
+        yield* source.read
+        expect(yield* fixture.requests).toHaveLength(2)
+
+        yield* TestClock.adjust("2 minutes")
+        yield* source.read
+        const online = yield* settle(source.read, (catalog) => Option.isNone(catalog.failure))
+        expect(Option.isNone(online.failure)).toBe(true)
+        expect(providerModelIds(online, "anthropic")).toContain("claude-haiku-4-5")
+      }),
+  )
+
+  it.scoped("a snapshot no fetch has confirmed for a week reports its age", () =>
+    Effect.gen(function* () {
+      const { fixture, source } = yield* catalogRoot
+      yield* source.read
+      yield* fixture.offline(true)
+      yield* TestClock.adjust("8 days")
+
+      yield* source.read
+      yield* settle(fixture.requests, (list) => list.length === 4)
+      const old = yield* source.read
+
+      expect(old.failure).toEqual(Option.some("models.dev catalog 8 days old, offline"))
+      expect(providerModelIds(old, "anthropic")).toContain("claude-haiku-4-5")
+    }),
+  )
+
+  it.scoped(
+    "a read stopped during the first fetch stops only its wait; the next read gets that fetch's catalog",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        const reached = yield* Deferred.make<void>()
+        const answer = yield* Deferred.make<void>()
+        // models.dev answers only once the test lets it: the first read is still
+        // waiting when its caller stops, as an Esc during the first turn does.
+        const http = Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.gen(function* () {
+              yield* Ref.update(calls, (n) => n + 1)
+              yield* Deferred.succeed(reached, void 0)
+              yield* Deferred.await(answer)
+              // The decision source is the one URL with a query.
+              let source: keyof typeof MODEL_CATALOG_FIXTURE = CHAT
+              if (new URL(request.url).search !== "") source = DECISION
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response(MODEL_CATALOG_FIXTURE[source].body, { status: 200 }),
+              )
+            }),
+          ),
+        )
+        const source = yield* catalogSourceOver(yield* catalogStorage, http)
+
+        const first = yield* Effect.forkChild(source.read)
+        yield* Deferred.await(reached)
+        yield* Fiber.interrupt(first)
+        const next = yield* Effect.forkChild(source.read)
+        yield* Deferred.succeed(answer, void 0)
+        const catalog = yield* Fiber.join(next)
+
+        expect(providerModelIds(catalog, "anthropic")).toContain("claude-haiku-4-5")
+        // The stopped read's fetch went on and served the next read.
+        expect(yield* Ref.get(calls)).toBe(2)
+      }),
+  )
+
+  it.effect("each catalog model carries the fields models.dev gives it, each decoded alone", () =>
+    Effect.sync(() => {
+      const catalog = modelCatalogFromBodies({
+        chat: encodeCatalogJson({
+          openai: {
+            name: "OpenAI",
+            env: ["OPENAI_API_KEY"],
+            npm: "@ai-sdk/openai",
+            models: {
+              "gpt-6.1-sol": {
+                name: "GPT-6.1 Sol",
+                cost: { input: 1.25, output: 10, cache_read: 0.125 },
+                limit: { context: 400_000, input: 272_000, output: 128_000 },
+                release_date: "2026-07-24",
+                tool_call: true,
+                reasoning: true,
+                temperature: false,
+                reasoning_options: [
+                  { type: "effort", values: [CATALOG_NULL, "low", "high"] },
+                  { type: "budget_tokens", min: 1024 },
+                  { type: "unknown-kind" },
+                ],
+                interleaved: { field: "reasoning_content" },
+                // models.dev names the wire protocol `shape`.
+                provider: { npm: "@ai-sdk/openai-compatible", ["shape"]: "completions" },
+              },
+              // An odd field drops itself, never the model.
+              odd: { name: 42, limit: "big", tool_call: "yes" },
+              "not-an-object": 7,
+            },
+          },
+        }),
+        decision: encodeCatalogJson({
+          openai: { name: "OpenAI", models: { judge: { name: "Judge", type: "decision" } } },
+        }),
+      })
+      const models = Option.getOrThrow(catalog.provider("openai")).models
+
+      expect(models).toEqual([
+        {
+          id: "gpt-6.1-sol",
+          name: "GPT-6.1 Sol",
+          cost: { input: 1.25, output: 10, cacheRead: 0.125 },
+          limit: { context: 400_000, input: 272_000, output: 128_000 },
+          releaseDate: "2026-07-24",
+          toolCall: true,
+          reasoning: true,
+          temperature: false,
+          reasoningOptions: [
+            { type: "effort", values: ["none", "low", "high"] },
+            { type: "budget_tokens", min: 1024 },
+          ],
+          reasoningField: "reasoning_content",
+          npm: "@ai-sdk/openai-compatible",
+          protocol: "completions",
+        },
+        { id: "odd", name: "odd" },
+        // The decision source's models follow the chat models of the same provider.
+        { id: "judge", name: "Judge", decision: true },
+      ])
+      expect(catalog.providerIds).toEqual(["openai"])
+      expect(Option.isNone(catalog.provider("absent"))).toBe(true)
+    }),
+  )
+
+  it.effect(
+    "a catalog that is missing or old is reported under each driver that lists models",
+    () =>
+      Effect.gen(function* () {
+        const lists = (id: string): ModelDriverContribution => ({
+          id,
+          name: id,
+          resolveModel: unusedResolution,
+          listModels: () => Effect.succeed([]),
+        })
+        const resolvesOnly: ModelDriverContribution = {
+          id: "plain",
+          name: "plain",
+          resolveModel: unusedResolution,
+        }
+        const offline = {
+          ...fixtureModelCatalog(),
+          failure: Option.some("models.dev catalog 9 days old, offline"),
+        }
+
+        const listed = yield* listModelCatalog(
+          new Map([
+            ["openai", lists("openai")],
+            ["anthropic", lists("anthropic")],
+            ["plain", resolvesOnly],
+          ]),
+          offline,
+        )
+
+        expect(listed.failures).toEqual([
+          { driverId: "openai", error: "models.dev catalog 9 days old, offline" },
+          { driverId: "anthropic", error: "models.dev catalog 9 days old, offline" },
+        ])
+      }),
   )
 })

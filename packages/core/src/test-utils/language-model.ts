@@ -40,6 +40,8 @@ import {
   aiError,
   Auth,
   AuthApi,
+  type LoadedModelCatalog,
+  ModelCatalogSource,
   ModelResolver,
   type ResolveModelRequest,
   finishPart,
@@ -57,12 +59,13 @@ import {
  * resolver, from `modelDrivers` and an auth store holding the API keys in
  * `stored` (store key → key). A driver test sends one request through it over
  * a fake fetch to see which credential a sign-in sends; a failed resolution
- * is a defect.
+ * is a defect. The resolver reads `catalog` (usually `fixtureModelCatalog()`).
  */
 export const storedCredentialModel = (input: {
   readonly modelDrivers: ReadonlyArray<ModelDriverContribution>
   readonly stored: Readonly<Record<string, string>>
   readonly modelId: string
+  readonly catalog: LoadedModelCatalog
 }): Layer.Layer<LanguageModel.LanguageModel> => {
   const resolved = resolveExtensions([
     {
@@ -85,7 +88,11 @@ export const storedCredentialModel = (input: {
       ),
       Effect.orDie,
     ),
-  ).pipe(Layer.provide(ModelResolver.Live), Layer.provide(Auth.Test(seed)))
+  ).pipe(
+    Layer.provide(ModelResolver.Live),
+    Layer.provide(Auth.Test(seed)),
+    Layer.provide(ModelCatalogSource.fixed(input.catalog)),
+  )
 }
 
 /**

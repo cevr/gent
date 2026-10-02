@@ -41,6 +41,7 @@ import { BranchStorage, SessionStorage } from "../../src/storage/storage"
 import {
   ensureStorageParents,
   fixedSessionProfiles,
+  fixtureModelCatalogSource,
   recordingEventStore,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
@@ -295,7 +296,10 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(params.models),
-    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+    DecisionModelResolver.Live.pipe(
+      Layer.provide(Auth.Test()),
+      Layer.provide(fixtureModelCatalogSource),
+    ),
     GentPlatform.Test(),
     params.overrides ?? Layer.empty,
   )

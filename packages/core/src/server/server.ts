@@ -131,7 +131,9 @@ import {
   listAuthProviders,
   removeSignIn,
   storeSignIn,
+  type ModelCatalogFailure,
   ModelCatalogRecord,
+  ModelCatalogSource,
   ModelRegistry,
   ModelResolver,
   modelCatalog,
@@ -145,7 +147,6 @@ import {
   type ExtensionRegistryService,
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
-  type ModelCatalogFailure,
   resolveExistingSessionBranch,
   resolveTurnProfile,
   RunOpener,
@@ -164,12 +165,18 @@ import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 
 import { omitUndefined } from "../domain/guards.js"
 import { SingleRunner } from "effect/cluster"
-import { FetchHttpClient, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
+import {
+  FetchHttpClient,
+  type Headers,
+  type HttpClient,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/http"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/process"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
 import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
 import { RpcSerialization, RpcServer, RpcTest } from "effect/rpc"
-import type { Headers } from "effect/http"
 
 // ── client origin ───────────────────────────────────────────────────────────
 
@@ -1281,6 +1288,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const sessionRuntime = yield* SessionRuntime
     const authStore = yield* Auth
     const catalogRecord = yield* ModelCatalogRecord
+    const catalogSource = yield* ModelCatalogSource
     const platform = yield* GentPlatform
     const profileCache = yield* SessionProfileCache
     const sessionStorage = yield* SessionStorage
@@ -1600,6 +1608,7 @@ const RpcHandlers = GentRpcs.toLayer(
           sessionId,
           modelCatalog().pipe(
             Effect.provideService(ModelCatalogRecord, catalogRecord),
+            Effect.provideService(ModelCatalogSource, catalogSource),
             Effect.map((catalog) => catalog.models),
           ),
         ),
@@ -1717,6 +1726,7 @@ const RpcHandlers = GentRpcs.toLayer(
                 profile,
                 modelCatalog().pipe(
                   Effect.provideService(ModelCatalogRecord, catalogRecord),
+                  Effect.provideService(ModelCatalogSource, catalogSource),
                   Effect.map((catalog) => catalog.failures),
                 ),
               ),
@@ -1797,6 +1807,8 @@ interface DependencyOverrides {
   >
   readonly configServiceLayer?: Layer.Layer<ConfigService>
   readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
+  /** The HTTP client the models.dev catalog fetches through; tests pass the fixture client. */
+  readonly modelCatalogHttpLayer?: Layer.Layer<HttpClient.HttpClient>
   /** Replaces the auth-backed live resolver (a scripted or fixed model). */
   readonly modelResolverLayer?: Layer.Layer<ModelResolver>
   readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
@@ -2004,6 +2016,10 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
       authLive,
       configServiceLive,
       ModelCatalogRecord.Live,
+      // One snapshot per process: every profile reads the same catalog.
+      ModelCatalogSource.Live.pipe(
+        Layer.provide(config.overrides?.modelCatalogHttpLayer ?? FetchHttpClient.layer),
+      ),
     ),
     stored,
   )

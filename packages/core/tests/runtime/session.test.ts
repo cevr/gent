@@ -63,6 +63,7 @@ import {
   createRpcClient,
   createRpcHarness,
   fixedSessionProfiles,
+  fixtureModelCatalogSource,
   hostProfileRegistry,
   runtimeHostContext,
   testSqliteStorage,
@@ -168,7 +169,10 @@ const makeRuntimeLayer = (
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
-    DecisionModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+    DecisionModelResolver.Live.pipe(
+      Layer.provide(Auth.Test()),
+      Layer.provide(fixtureModelCatalogSource),
+    ),
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )

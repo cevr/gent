@@ -568,9 +568,8 @@ export const findBannedEslintDisableBlocks = (
  * module side is a `RETIRED_SURFACES` path row: no file or directory under
  * `packages/core/src/` names the cell.
  *
- * This guard holds the rule for a feature's data: a feature's tables and a
- * catalog host belong to the extension that owns them, so core must not name
- * one.
+ * This guard holds the rule for a feature's data: a feature's tables belong to
+ * the extension that owns them, so core must not name one.
  *
  * @module
  */
@@ -585,22 +584,22 @@ export const findBannedEslintDisableBlocks = (
  */
 const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
 
-/**
- * Network hosts owned by a catalog feature, not by the kernel.
- *
- * Core resolves a model through the driver seam. The catalog behind a driver
- * -- where its model list comes from, how it is cached, when it refreshes --
- * belongs to the driver's extension. A core source file that names one of
- * these hosts is core fetching a feature's data itself.
+/*
+ * No network host is a feature's. The guard once kept models.dev out of core;
+ * the owner's direction (Pass 30) moved the model catalog into core: "models.dev
+ * is integral to discovery of models via providers so we don't really need to
+ * hardcode anything, only limiting factor is classes of api's we support", and
+ * "snapshotting will be good so we don't constantly ping … we can put that in
+ * our sqlite db". Core stores the snapshot (`ModelCatalogSource`) and hands each
+ * driver a read-only view, so the host list and its check are gone.
  */
-const FEATURE_HOSTS: ReadonlyArray<string> = ["models.dev"]
 
 const CORE_SRC_PREFIX = "packages/core/src/"
 
 /** A feature-owned table named as a SQL identifier, not merely as a substring. */
 const TABLE_PATTERN = (prefix: string) => new RegExp(`\\b${prefix}[a-z_]+\\b`)
 
-/** Find every line in a core file that names a feature's table or catalog host. */
+/** Find every line in a core file that names a feature's table. */
 export const findCoreFeatureIndependenceFindings = (
   file: string,
   text: string,
@@ -617,16 +616,6 @@ export const findCoreFeatureIndependenceFindings = (
       file,
       line: index + 1,
       message: `core must not name a "${table.value}" table; the feature that owns it contributes its own migrations through the storage assembler's feature-migrations seam`,
-    })
-  }
-
-  for (const [index, line] of text.split("\n").entries()) {
-    const host = Option.fromNullishOr(FEATURE_HOSTS.find((candidate) => line.includes(candidate)))
-    if (Option.isNone(host)) continue
-    findings.push({
-      file,
-      line: index + 1,
-      message: `core must not name the catalog host "${host.value}"; the driver that owns that catalog fetches and caches it in its own extension, and core only concatenates every driver's listModels`,
     })
   }
   return findings
@@ -3007,10 +2996,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
     file: "packages/extensions/src/anthropic.ts",
     text: "strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.",
-  },
-  {
-    file: "packages/extensions/src/providers.ts",
-    text: "strictEffectProvide:off -- The catalog owns its own HTTP client at the driver boundary; it outlives no scope.",
   },
 ]
 

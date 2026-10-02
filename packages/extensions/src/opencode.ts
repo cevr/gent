@@ -9,30 +9,29 @@ import type * as ResponsesSdkModule from "@effect/ai-openai"
 import type * as ChatSdkModule from "@effect/ai-openai-compat"
 import {
   AuthMethod,
+  type CatalogModel,
   DEFAULT_RETRY_POLICY,
   defineExtension,
   DriverError,
   DriverFailureId,
   ExtensionHost,
+  type ModelCatalogView,
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderHints,
   ReasoningEffort,
+  type ReasoningOption,
 } from "@gent/core/extensions/api"
 import { type ClassifierEntry, classifierModel, typeSafeDecisionModel } from "./typesafe.js"
 import {
   apiKeyFrom,
-  type CatalogSource,
-  catalogSource,
-  driverListModels,
-  driverModelWire,
+  catalogEntry,
+  catalogModels,
   isCacheableBlock,
   isHostContextUpdate,
   isJsonObject,
   effortAtOrAbove,
-  type ModelWire,
-  type ReasoningOption,
   readOptionalEnv,
   rewriteJsonBody,
   RESPONSES_PROMPT_CACHE_TTL,
@@ -159,7 +158,7 @@ const WIRE_FORMATS: ReadonlyMap<string, WireFormat> = new Map([
   ["@ai-sdk/openai-compatible", "chat-completions"],
 ])
 
-const wireFormatOf = (wire: Option.Option<ModelWire>): Option.Option<WireFormat> =>
+const wireFormatOf = (wire: Option.Option<CatalogModel>): Option.Option<WireFormat> =>
   wire.pipe(
     Option.flatMap((value) => Option.fromUndefinedOr(value.npm)),
     Option.flatMap((npm) => Option.fromUndefinedOr(WIRE_FORMATS.get(npm))),
@@ -169,7 +168,7 @@ const wireFormatOf = (wire: Option.Option<ModelWire>): Option.Option<WireFormat>
 const unsupportedWireFormat = (
   gateway: Gateway,
   modelName: string,
-  wire: Option.Option<ModelWire>,
+  wire: Option.Option<CatalogModel>,
 ): DriverError => {
   const npm = Option.flatMap(wire, (value) => Option.fromUndefinedOr(value.npm))
   return new DriverError({
@@ -195,7 +194,7 @@ const reasoningHint = (hints: Option.Option<ProviderHints>): Option.Option<Reaso
   )
 
 /** The model's reasoning controls; none when the catalog lists none. */
-const reasoningOptions = (wire: Option.Option<ModelWire>): ReadonlyArray<ReasoningOption> =>
+const reasoningOptions = (wire: Option.Option<CatalogModel>): ReadonlyArray<ReasoningOption> =>
   Option.getOrElse(
     Option.flatMap(wire, (value) => Option.fromUndefinedOr(value.reasoningOptions)),
     () => [],
@@ -278,7 +277,7 @@ type ResponsesConfig = Required<Parameters<typeof OpenAiResponsesLanguageModel.l
 const responsesConfig = (
   modelName: string,
   hints: Option.Option<ProviderHints>,
-  wire: Option.Option<ModelWire>,
+  wire: Option.Option<CatalogModel>,
   sessionId: string,
 ): ResponsesConfig => {
   let config: ResponsesConfig = { store: false, prompt_cache_key: sessionId }
@@ -316,7 +315,7 @@ type ChatConfig = NonNullable<Parameters<typeof OpenAiChatLanguageModel.layer>[0
  */
 const chatConfig = (
   hints: Option.Option<ProviderHints>,
-  wire: Option.Option<ModelWire>,
+  wire: Option.Option<CatalogModel>,
 ): ChatConfig => {
   let config: ChatConfig = { strictJsonSchema: false, replayReasoning: true }
   const maxTokens = Option.flatMap(hints, (value) => Option.fromNullishOr(value.maxTokens))
@@ -429,7 +428,7 @@ const effortThinking = (
 const messagesPlan = (
   modelName: string,
   hints: Option.Option<ProviderHints>,
-  wire: Option.Option<ModelWire>,
+  wire: Option.Option<CatalogModel>,
 ): MessagesPlan => {
   const hint = reasoningHint(hints)
   if (Option.isNone(hint)) return NO_PLAN
@@ -560,7 +559,7 @@ interface Resolution {
   readonly apiKey: string
   readonly sessionId: string
   readonly hints: Option.Option<ProviderHints>
-  readonly wire: Option.Option<ModelWire>
+  readonly wire: Option.Option<CatalogModel>
 }
 
 /** Whether a Responses model reasons: the catalog's flag, else whether it lists reasoning controls. */
@@ -682,27 +681,17 @@ const PROMPT_CACHE_TTL: Record<WireFormat, Option.Option<Duration.Duration>> = {
  * The models the driver lists: the gateway's catalog entries in a wire format
  * it speaks, each with its format's cache lifetime, then its classifier models.
  */
-const listGatewayModels = (gateway: Gateway, catalog: CatalogSource) =>
-  driverListModels(catalog, gateway.id, Option.none())().pipe(
-    Effect.flatMap((models) =>
-      Effect.forEach(models, (model) =>
-        driverModelWire(catalog, model.id).pipe(
-          Effect.map((wire) =>
-            Option.toArray(
-              Option.map(wireFormatOf(wire), (format) =>
-                withPromptCacheTtl(model, PROMPT_CACHE_TTL[format]),
-              ),
-            ),
-          ),
-        ),
+const listGatewayModels = (gateway: Gateway, catalog: ModelCatalogView) => [
+  ...catalogModels(catalog, gateway.id, Option.none()).flatMap((model) =>
+    Option.toArray(
+      Option.map(
+        wireFormatOf(catalogEntry(catalog, gateway.id, model.id.slice(gateway.id.length + 1))),
+        (format) => withPromptCacheTtl(model, PROMPT_CACHE_TTL[format]),
       ),
     ),
-    Effect.map((listed) => listed.flat()),
-    Effect.map((models) => [
-      ...models,
-      ...gateway.classifiers.map((entry) => classifierModel(gateway.id, entry)),
-    ]),
-  )
+  ),
+  ...gateway.classifiers.map((entry) => classifierModel(gateway.id, entry)),
+]
 
 /** The gateway's API key: a stored key first, then `OPENCODE_API_KEY`. */
 const gatewayApiKey = (
@@ -729,7 +718,6 @@ const gatewayApiKey = (
 export const buildOpenCodeModelDriver = (
   gateway: Gateway,
   envApiKey: Option.Option<string>,
-  catalog: CatalogSource,
   crypto: Crypto.Crypto,
 ): ModelDriverContribution => {
   const driver: ModelDriverContribution = {
@@ -749,10 +737,12 @@ export const buildOpenCodeModelDriver = (
         ResponsesTransientStreamEvent,
       ]),
     },
-    resolveModel: (modelName, authInfo, hintsInput) =>
+    resolveModel: (modelName, authInfo, hintsInput, catalog) =>
       Effect.gen(function* () {
         const apiKey = yield* gatewayApiKey(gateway, Option.fromNullishOr(authInfo), envApiKey)
-        const wire = yield* driverModelWire(catalog, `${gateway.id}/${modelName}`)
+        const wire = Option.flatMap(Option.fromUndefinedOr(catalog), (view) =>
+          catalogEntry(view, gateway.id, modelName),
+        )
         const format = wireFormatOf(wire)
         if (Option.isNone(format)) return yield* unsupportedWireFormat(gateway, modelName, wire)
         const hints = Option.fromNullishOr(hintsInput)
@@ -773,7 +763,7 @@ export const buildOpenCodeModelDriver = (
         }
         return AiModel.make(gateway.id, modelName, yield* modelLayer(format.value, resolution))
       }),
-    listModels: () => listGatewayModels(gateway, catalog),
+    listModels: (catalog) => Effect.succeed(listGatewayModels(gateway, catalog)),
     auth: {
       methods: [AuthMethod.make({ type: "api", label: gateway.authLabel })],
     },
@@ -801,14 +791,13 @@ export const OpenCodeExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     const envApiKey = yield* readOptionalEnv(ENV_CREDENTIAL)
-    const catalog = yield* catalogSource(host.home)
     // The host's Crypto, not one of the driver's own: a shipped provider is
     // never more privileged than a user extension.
     const crypto = yield* Crypto.Crypto
     yield* host.register(
       "modelDriver",
-      buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, envApiKey, catalog, crypto),
-      buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, envApiKey, catalog, crypto),
+      buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, envApiKey, crypto),
+      buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, envApiKey, crypto),
     )
   }),
 })

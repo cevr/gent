@@ -44,7 +44,6 @@ import {
 import { EncodeError, HttpClientError } from "effect/http/HttpClientError"
 import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { encodeExternalJson } from "./helpers/external-wire.js"
-import { testCatalogSource } from "./helpers/catalog-source.js"
 import { e2ePreset } from "./helpers/test-preset.js"
 import {
   type FakeClientState,
@@ -187,7 +186,6 @@ const makeDriver = (
       cellRef,
       options.pending ?? new Map(),
       Option.none(),
-      testCatalogSource(),
       yield* hostCrypto,
     )
     return { driver, cellRef }

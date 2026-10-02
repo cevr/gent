@@ -845,6 +845,26 @@ const sessionThreadMigration = Effect.gen(function* () {
   )
 })
 
+/**
+ * The models.dev catalog as served: one row per source (`api.json`, and
+ * `api.json?type=decision`), with the raw body and its ETag, so a parser
+ * change re-reads the row with no refetch and a revalidation sends
+ * `If-None-Match`. `fetched_at` is when the body arrived (a 200),
+ * `checked_at` the last 200 or 304. Additive: no other table changes.
+ */
+const modelCatalogSnapshotsMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS model_catalog_snapshots (
+      source TEXT PRIMARY KEY,
+      body TEXT NOT NULL,
+      etag TEXT,
+      fetched_at INTEGER NOT NULL,
+      checked_at INTEGER NOT NULL
+    )
+  `)
+})
+
 const StoragePragmaLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
     configureSqliteConnection().pipe(
@@ -893,6 +913,7 @@ const makeStorageMigratorLive = (
       "021_interaction_owner": interactionOwnerMigration,
       "022_turn_record_admission": turnRecordAdmissionMigration,
       "023_session_admission": sessionAdmissionMigration,
+      "024_model_catalog_snapshots": modelCatalogSnapshotsMigration,
       ...featureMigrations,
     }),
     table: "gent_storage_migrations",

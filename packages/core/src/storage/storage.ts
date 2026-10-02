@@ -1963,6 +1963,85 @@ export class TurnRecordStorage extends Context.Service<
   )
 }
 
+// ── model-catalog-snapshot-storage ──────────────────────────────────────────
+
+/**
+ * One models.dev source as last served (`model_catalog_snapshots`): the raw
+ * body, its ETag, when the body arrived and when it was last confirmed. The
+ * catalog is the process's, not a workspace's, so the row has no workspace.
+ */
+const ModelCatalogSnapshot = Schema.Struct({
+  source: Schema.String,
+  body: Schema.String,
+  etag: Schema.OptionFromNullOr(Schema.String),
+  fetched_at: Schema.Finite,
+  checked_at: Schema.Finite,
+})
+type ModelCatalogSnapshot = typeof ModelCatalogSnapshot.Type
+const decodeModelCatalogSnapshot = Schema.decodeUnknownEffect(ModelCatalogSnapshot)
+
+interface ModelCatalogSnapshotStorageService {
+  /** The stored snapshot of `source`; none before its first fetch. */
+  readonly get: (source: string) => Effect.Effect<Option.Option<ModelCatalogSnapshot>, StorageError>
+  /** Store a body that arrived (a 200): the body, its ETag and both times. */
+  readonly put: (snapshot: ModelCatalogSnapshot) => Effect.Effect<void, StorageError>
+  /** A 304 confirmed the stored body: move `checked_at` only. */
+  readonly confirm: (source: string, checkedAt: number) => Effect.Effect<void, StorageError>
+}
+
+export class ModelCatalogSnapshotStorage extends Context.Service<
+  ModelCatalogSnapshotStorage,
+  ModelCatalogSnapshotStorageService
+>()("@gent/core/src/storage/storage/ModelCatalogSnapshotStorage") {
+  static Live: Layer.Layer<ModelCatalogSnapshotStorage, never, SqlClient.SqlClient> = Layer.effect(
+    ModelCatalogSnapshotStorage,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+
+      const get = Effect.fn("ModelCatalogSnapshotStorage.get")(
+        function* (source: string) {
+          const rows = yield* sql`
+              SELECT source, body, etag, fetched_at, checked_at
+              FROM model_catalog_snapshots
+              WHERE source = ${source}
+              LIMIT 1
+            `
+          if (Predicate.isUndefined(rows[0])) return Option.none<ModelCatalogSnapshot>()
+          return Option.some(yield* decodeModelCatalogSnapshot(rows[0]))
+        },
+        Effect.mapError(storageError("Failed to read the model catalog snapshot")),
+      )
+
+      const put = Effect.fn("ModelCatalogSnapshotStorage.put")(
+        function* (snapshot: ModelCatalogSnapshot) {
+          const etag = Option.getOrNull(snapshot.etag)
+          yield* sql`
+              INSERT INTO model_catalog_snapshots (source, body, etag, fetched_at, checked_at)
+              VALUES (${snapshot.source}, ${snapshot.body}, ${etag}, ${snapshot.fetched_at}, ${snapshot.checked_at})
+              ON CONFLICT (source) DO UPDATE SET
+                body = excluded.body,
+                etag = excluded.etag,
+                fetched_at = excluded.fetched_at,
+                checked_at = excluded.checked_at
+            `
+        },
+        Effect.mapError(storageError("Failed to store the model catalog snapshot")),
+      )
+
+      const confirm = Effect.fn("ModelCatalogSnapshotStorage.confirm")(
+        function* (source: string, checkedAt: number) {
+          yield* sql`
+              UPDATE model_catalog_snapshots SET checked_at = ${checkedAt} WHERE source = ${source}
+            `
+        },
+        Effect.mapError(storageError("Failed to confirm the model catalog snapshot")),
+      )
+
+      return ModelCatalogSnapshotStorage.of({ get, put, confirm })
+    }),
+  )
+}
+
 // ── sqlite-storage ──────────────────────────────────────────────────────────
 
 export type StorageTransaction = <A, E, R>(
@@ -2001,6 +2080,7 @@ type FocusedStorage =
   | SessionOperationStorage
   | ToolCallBindingStorage
   | TurnRecordStorage
+  | ModelCatalogSnapshotStorage
   | ClusterMessageStorage.MessageStorage
 
 /**
@@ -2038,6 +2118,7 @@ const provideFocusedRepositories = <A, E, R>(
         SessionOperationStorage.Live,
         ToolCallBindingStorage.Live,
         TurnRecordStorage.Live,
+        ModelCatalogSnapshotStorage.Live,
         encoreSqlMessageStorage(),
         InteractionStorage.Live,
       ),

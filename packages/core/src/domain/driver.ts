@@ -22,7 +22,14 @@ import {
   type Model as AiModel,
   type Response,
 } from "effect/ai"
-import type { CacheWriteByLifetime, Model, ReasoningEffort } from "./agent.js"
+import {
+  type CacheWriteByLifetime,
+  Model,
+  ModelId,
+  ProviderId,
+  type ReasoningEffort,
+} from "./agent.js"
+import { omitUndefined } from "./guards.js"
 import type { SessionId } from "./ids.js"
 
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
@@ -344,6 +351,123 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   contextOverflow: isContextOverflow,
 }
 
+// ── model catalog ──
+
+/**
+ * One reasoning control a model accepts, as models.dev lists it under
+ * `reasoning_options`: a list of effort values, an on/off toggle, or a
+ * thinking budget in tokens. models.dev writes the "no reasoning" effort as
+ * `null`; the catalog keeps it as `"none"`.
+ */
+export const ReasoningOption = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("effort"), values: Schema.Array(Schema.String) }),
+  Schema.Struct({ type: Schema.Literal("toggle") }),
+  Schema.Struct({
+    type: Schema.Literal("budget_tokens"),
+    min: Schema.optional(Schema.Finite),
+    max: Schema.optional(Schema.Finite),
+  }),
+]).pipe(Schema.toTaggedUnion("type"))
+export type ReasoningOption = typeof ReasoningOption.Type
+
+/** A catalog model's price per million tokens, as models.dev lists it. */
+const CatalogCost = Schema.Struct({
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cacheRead: Schema.optional(Schema.Finite),
+  cacheWrite: Schema.optional(Schema.Finite),
+})
+
+/** A catalog model's token limits, as models.dev lists them. */
+export const CatalogLimit = Schema.Struct({
+  context: Schema.Finite,
+  /** The input cap, where it is below the window (the GPT-5 family: 272k of 400k). */
+  input: Schema.optional(Schema.Finite),
+  /** The most output one reply may carry. */
+  output: Schema.optional(Schema.Finite),
+})
+
+/**
+ * One models.dev model, decoded field by field: an odd field drops itself,
+ * never the model. `id` is the model's key under its provider.
+ */
+export const CatalogModel = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  cost: Schema.optional(CatalogCost),
+  limit: Schema.optional(CatalogLimit),
+  releaseDate: Schema.optional(Schema.String),
+  /** False for embedding, image and other models the agent loop cannot drive. */
+  toolCall: Schema.optional(Schema.Boolean),
+  reasoning: Schema.optional(Schema.Boolean),
+  /** False for a model that refuses a sampling temperature. */
+  temperature: Schema.optional(Schema.Boolean),
+  /** The reasoning controls the model accepts; absent when the catalog lists none. */
+  reasoningOptions: Schema.optional(Schema.Array(ReasoningOption)),
+  /**
+   * The assistant-message field that carries the model's reasoning back to it
+   * (`interleaved.field`, such as `reasoning_content`).
+   */
+  reasoningField: Schema.optional(Schema.String),
+  /** The model's own AI SDK package (`provider.npm`), over its provider's. */
+  npm: Schema.optional(Schema.String),
+  /** The model's own base URL (`provider.api`), over its provider's. */
+  api: Schema.optional(Schema.String),
+  /** The model's request protocol (models.dev `provider.shape`: `responses` or `completions`). */
+  protocol: Schema.optional(Schema.String),
+  /** True for a decision model (`type: "decision"`): it answers typed decisions, never a turn. */
+  decision: Schema.optional(Schema.Boolean),
+})
+export type CatalogModel = typeof CatalogModel.Type
+
+/**
+ * One models.dev provider: its env variables, its AI SDK package and base URL,
+ * and its models in catalog order. A provider served by both sources holds
+ * its decision models after its chat models.
+ */
+export const CatalogProvider = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  env: Schema.Array(Schema.String),
+  npm: Schema.optional(Schema.String),
+  api: Schema.optional(Schema.String),
+  models: Schema.Array(CatalogModel),
+})
+export type CatalogProvider = typeof CatalogProvider.Type
+
+/** The models.dev catalog a driver reads, by models.dev provider id. */
+export interface ModelCatalogView {
+  readonly provider: (id: string) => Option.Option<CatalogProvider>
+}
+
+/**
+ * A catalog model as gent's `Model`, under `providerId` (a driver id, which
+ * may differ from the catalog provider's). A decision model is a classifier.
+ */
+export const modelFromCatalog = (providerId: string, entry: CatalogModel): Model => {
+  const model = Model.make({
+    id: ModelId.make(`${providerId}/${entry.id}`),
+    name: entry.name,
+    provider: ProviderId.make(providerId),
+    ...omitUndefined({
+      contextLength: entry.limit?.context,
+      inputLimit: entry.limit?.input,
+      outputLimit: entry.limit?.output,
+      pricing: Option.getOrUndefined(
+        Option.map(Option.fromUndefinedOr(entry.cost), (cost) => ({
+          input: cost.input,
+          output: cost.output,
+          ...omitUndefined({ cacheRead: cost.cacheRead, cacheWrite: cost.cacheWrite }),
+        })),
+      ),
+      releaseDate: entry.releaseDate,
+      reasoning: entry.reasoning,
+    }),
+  })
+  if (entry.decision !== true) return model
+  return Model.make({ ...model, kind: "classifier" })
+}
+
 // ── ModelDriverContribution — provider-shaped driver ──
 
 /**
@@ -362,11 +486,14 @@ export interface ModelDriverContribution {
    * Resolve a model name to an Effect AI model. A missing credential fails
    * with `ProviderAuthError`; a model the driver cannot serve, such as one
    * whose catalog entry is missing, fails with `DriverError`. A defect is a bug.
+   * Core passes the models.dev catalog it holds; a direct caller that passes
+   * none resolves without catalog facts.
    */
   readonly resolveModel: (
     modelName: string,
     authInfo?: ProviderAuthInfo,
     hints?: ProviderHints,
+    catalog?: ModelCatalogView,
   ) => Effect.Effect<ProviderResolution, ProviderAuthError | DriverError>
   /**
    * Resolve a classifier model name to an Effect AI `DecisionModel` with its
@@ -380,8 +507,14 @@ export interface ModelDriverContribution {
     modelName: string,
     authInfo?: ProviderAuthInfo,
   ) => Effect.Effect<Layer.Layer<DecisionModel.DecisionModel>, ProviderAuthError>
-  /** The driver's own model catalog. Core concatenates every driver's list; it fetches nothing. */
+  /**
+   * The driver's own models. Core reads the models.dev catalog and hands it
+   * in; the driver picks its provider's entries (`modelFromCatalog`) and
+   * stamps what models.dev does not carry. `authInfo` is the driver's stored
+   * credential, when there is one. Core concatenates every list.
+   */
   readonly listModels?: (
+    catalog: ModelCatalogView,
     authInfo?: ProviderAuthInfo,
   ) => Effect.Effect<ReadonlyArray<Model>, DriverError | ProviderAuthError>
   /** Auth configuration — OAuth + API key methods + handlers. */

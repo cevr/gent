@@ -860,7 +860,7 @@ describe("auth sign-in prompts", () => {
                   id: "prompted",
                   name: "Prompted",
                   resolveModel: () => Effect.succeed(stubModel),
-                  listModels: (authInfo) => {
+                  listModels: (_catalog, authInfo) => {
                     if (Predicate.isUndefined(authInfo) || authInfo._tag !== "Api") {
                       return Effect.succeed([])
                     }

@@ -101,7 +101,6 @@ import { BashTool } from "../src/exec-tools.js"
 import { BuiltinExtensions } from "../src/index.js"
 import { OpenCodeExtension } from "../src/opencode.js"
 import { buildCloudflareModelDriver, CloudflareExtension } from "../src/cloudflare.js"
-import { catalogSource } from "../src/providers.js"
 import { TypeSafeExtension } from "../src/typesafe.js"
 import { EditTool, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { GoalTool } from "../src/goal.js"
@@ -617,10 +616,11 @@ const capturedCloudflare = (state: FakeFetchState) =>
     id: "@test/cloudflare-captured",
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
-      const driver = buildCloudflareModelDriver(
-        { token: Option.none(), accountId: Option.none(), gatewayId: Option.none() },
-        yield* catalogSource(host.home),
-      )
+      const driver = buildCloudflareModelDriver({
+        token: Option.none(),
+        accountId: Option.none(),
+        gatewayId: Option.none(),
+      })
       const resolve = Option.getOrThrow(Option.fromUndefinedOr(driver.resolveDecisionModel))
       yield* host.register("modelDriver", {
         ...driver,

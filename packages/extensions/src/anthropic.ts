@@ -36,15 +36,13 @@ import {
   writeFileAtomic,
 } from "@gent/core/extensions/api"
 import {
-  type CatalogSource,
-  catalogSource,
+  catalogModels,
   type CredentialCache,
   CredentialCacheCell,
   type CredentialCacheCellRef,
   type CredentialFailure,
   checkCredentials,
   CredentialRefreshUnavailable,
-  driverListModels,
   effortAtOrAbove,
   EMPTY_CREDENTIAL_CELL,
   explainCredentialFailure,
@@ -2516,19 +2514,16 @@ export const buildAnthropicModelDriver = (
   credentialCellRef: CredentialCacheCellRef<ClaudeCredentials>,
   envApiKey: Option.Option<string>,
   services: AnthropicDriverServices,
-  catalog: CatalogSource,
   promptCacheTtl: PromptCacheTtl,
 ): ModelDriverContribution => ({
   id: "anthropic",
   name: "Anthropic",
   envCredential: "ANTHROPIC_API_KEY",
   // The lifetimes the markers ask for, a root's and a child's, and the write price; see `PromptCacheTtl`.
-  listModels: () =>
-    driverListModels(
-      catalog,
-      "anthropic",
-      Option.some(PROMPT_CACHE_LIFETIME[promptCacheTtl]),
-    )().pipe(
+  listModels: (catalog) =>
+    Effect.succeed(
+      catalogModels(catalog, "anthropic", Option.some(PROMPT_CACHE_LIFETIME[promptCacheTtl])),
+    ).pipe(
       Effect.map(withDocumentedWindows),
       Effect.map(withChildPromptCacheLifetime(promptCacheTtl)),
       Effect.map(withPromptCacheWritePrice(promptCacheTtl)),
@@ -2679,17 +2674,9 @@ export const AnthropicExtension = defineExtension({
     const credentialCellRef =
       yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
 
-    const catalog = yield* catalogSource(ctx.home)
-
     yield* ctx.register(
       "modelDriver",
-      buildAnthropicModelDriver(
-        credentialCellRef,
-        envApiKey,
-        services,
-        catalog,
-        yield* readPromptCacheTtl,
-      ),
+      buildAnthropicModelDriver(credentialCellRef, envApiKey, services, yield* readPromptCacheTtl),
     )
   }),
 })

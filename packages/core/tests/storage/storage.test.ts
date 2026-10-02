@@ -25,6 +25,7 @@ import {
   EventStorage,
   InteractionStorage,
   MessageStorage,
+  ModelCatalogSnapshotStorage,
   RelationshipStorage,
   SESSION_ANCESTORS_SQL,
   SessionOperationStorage,
@@ -302,6 +303,7 @@ describe("Sessions", () => {
           "interaction_owner",
           "turn_record_admission",
           "session_admission",
+          "model_catalog_snapshots",
         ])
       }).pipe(Effect.provide(layer))
 
@@ -335,6 +337,7 @@ describe("Sessions", () => {
           "interaction_owner",
           "turn_record_admission",
           "session_admission",
+          "model_catalog_snapshots",
         ])
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.provide(BunServices.layer)),
@@ -2387,6 +2390,44 @@ describe("ToolCallBindingStorage", () => {
       if (Exit.isFailure(malformed)) {
         expect(Schema.is(StorageError)(Cause.squash(malformed.cause))).toBe(true)
       }
+    }).pipe(Effect.provide(testSqliteStorage(Layer.empty, {}))),
+  )
+})
+
+// ── model catalog snapshot storage ──────────────────────────────────────────
+
+describe("model catalog snapshots", () => {
+  it.live("a stored body loads back with its ETag; a confirm moves only the check time", () =>
+    Effect.gen(function* () {
+      const snapshots = yield* ModelCatalogSnapshotStorage
+      expect(yield* snapshots.get("api.json")).toEqual(Option.none())
+
+      yield* snapshots.put({
+        source: "api.json",
+        body: '{"openai":{}}',
+        etag: Option.some('"v1"'),
+        fetched_at: 10,
+        checked_at: 10,
+      })
+      yield* snapshots.confirm("api.json", 20)
+      const confirmed = yield* snapshots.get("api.json")
+      expect(
+        Option.map(confirmed, (row) => [row.body, row.etag, row.fetched_at, row.checked_at]),
+      ).toEqual(Option.some(['{"openai":{}}', Option.some('"v1"'), 10, 20]))
+
+      // A new body replaces the row; one served without an ETag stores none.
+      yield* snapshots.put({
+        source: "api.json",
+        body: "{}",
+        etag: Option.none(),
+        fetched_at: 30,
+        checked_at: 30,
+      })
+      const replaced = yield* snapshots.get("api.json")
+      expect(Option.map(replaced, (row) => [row.body, row.etag, row.fetched_at])).toEqual(
+        Option.some(["{}", Option.none(), 30]),
+      )
+      expect(yield* snapshots.get("api.json?type=decision")).toEqual(Option.none())
     }).pipe(Effect.provide(testSqliteStorage(Layer.empty, {}))),
   )
 })

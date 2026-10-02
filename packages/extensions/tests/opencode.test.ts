@@ -1,26 +1,16 @@
 import { describe, expect, it } from "effect-bun-test"
-import {
-  Crypto,
-  Effect,
-  Layer,
-  Option,
-  Order,
-  Path,
-  Predicate,
-  Redacted,
-  Schema,
-  Stream,
-} from "effect"
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
+import { Crypto, Effect, Layer, Option, Order, Predicate, Redacted, Schema, Stream } from "effect"
+import { FetchHttpClient } from "effect/http"
 import {
   OpenAiClient as OpenAiChatClient,
   OpenAiLanguageModel as OpenAiChatLanguageModel,
 } from "@effect/ai-openai-compat"
 import { LanguageModel, Prompt } from "effect/ai"
-import { BunCrypto, BunFileSystem } from "@effect/platform-bun"
+import { BunCrypto } from "@effect/platform-bun"
 import {
   defineExtension,
   ExtensionHost,
+  type ModelDriverContribution,
   ModelId,
   ProviderAuthError,
   ProviderAuthInfo,
@@ -29,7 +19,9 @@ import {
 import {
   createRpcHarness,
   LanguageModelLayers,
-  makeTempDirectoryScoped,
+  MODEL_CATALOG_FIXTURE,
+  modelCatalogFixture,
+  modelCatalogFromBodies,
   storedCredentialModel,
   textStep,
 } from "@gent/core/test-utils"
@@ -41,7 +33,6 @@ import {
   oneGenerate,
 } from "./helpers/fake-http-client.js"
 import { buildOpenCodeModelDriver, OPENCODE_GATEWAYS, OpenCodeExtension } from "../src/opencode.js"
-import { catalogSource, modelsDevCatalog } from "../src/providers.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { decideTicket, systemOneBody, TICKET, TICKET_QUESTIONS } from "./helpers/decision-wire.js"
 import { BuiltinExtensions } from "../src/index.js"
@@ -52,8 +43,6 @@ import { BuiltinExtensions } from "../src/index.js"
  * and the reasoning and cache fields each format carries. Every request goes
  * to a captured fake `fetch`; no test reaches the gateway.
  */
-
-const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 
 /** The Crypto a host provides; the driver captures it at setup. */
 const hostCrypto = Effect.service(Crypto.Crypto).pipe(Effect.provide(BunCrypto.layer))
@@ -181,41 +170,36 @@ const remotePayload = {
   },
 }
 
-/** An HTTP client that answers the models.dev fetch with the fixture. */
-const catalogHttpLayer = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.succeed(
-      HttpClientResponse.fromWeb(
-        request,
-        new Response(encodeExternalJson(remotePayload), { status: 200 }),
-      ),
-    ),
+/** The catalog core would hand the drivers: this file's entries, and the shared decision models. */
+const fixtureCatalog = modelCatalogFromBodies({
+  chat: encodeExternalJson(remotePayload),
+  decision: Option.fromUndefinedOr(MODEL_CATALOG_FIXTURE["api.json?type=decision"]).pipe(
+    Option.map((source) => source.body),
+    Option.getOrElse(() => "{}"),
   ),
-)
+})
 
-/**
- * A home whose catalog holds the fixture. The catalog keeps one load per
- * home, so a driver pointed at this home reads the fixture from then on.
- */
-const fixtureHome = Effect.gen(function* () {
-  const home = yield* makeTempDirectoryScoped("opencode-catalog-")
-  const models = yield* modelsDevCatalog(home).pipe(
-    Effect.provide(Layer.merge(catalogHttpLayer, platformLayer)),
-  )
-  expect(models.length).toBeGreaterThan(0)
-  return home
+/** A models.dev client for an RPC harness: it answers with this file's entries. */
+const catalogHttpLayer = Effect.gen(function* () {
+  const fixture = yield* modelCatalogFixture
+  yield* fixture.serve("api.json", encodeExternalJson(remotePayload), '"opencode-test"')
+  return fixture.layer
+})
+
+/** The driver, its `resolveModel` reading `fixtureCatalog` as core hands it. */
+const onFixtureCatalog = (driver: ModelDriverContribution): ModelDriverContribution => ({
+  ...driver,
+  resolveModel: (modelName, authInfo, hints) =>
+    driver.resolveModel(modelName, authInfo, hints, fixtureCatalog),
 })
 
 /** Both gateways' drivers; `envApiKey` stands for `OPENCODE_API_KEY`, which setup reads. */
 const driversWithEnv = (envApiKey: Option.Option<string>) =>
   Effect.gen(function* () {
-    const home = yield* fixtureHome
-    const source = yield* catalogSource(home).pipe(Effect.provide(platformLayer))
     const crypto = yield* hostCrypto
     return {
-      zen: buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, envApiKey, source, crypto),
-      go: buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, envApiKey, source, crypto),
+      zen: onFixtureCatalog(buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, envApiKey, crypto)),
+      go: onFixtureCatalog(buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, envApiKey, crypto)),
     }
   })
 
@@ -927,13 +911,17 @@ describe("OpenCode Zen classifiers", () => {
   it.live("Zen lists its Jev models as classifiers; Go serves none", () =>
     Effect.gen(function* () {
       const { zen, go } = yield* fixtureDrivers
-      const zenModels = yield* Option.getOrThrow(Option.fromUndefinedOr(zen.listModels))()
+      const zenModels = yield* Option.getOrThrow(Option.fromUndefinedOr(zen.listModels))(
+        fixtureCatalog,
+      )
       const classifiers = zenModels.filter((model) => model.kind === "classifier")
       expect(classifiers.map((model) => model.id)).toEqual([
         ModelId.make("opencode/jev-1.13"),
         ModelId.make("opencode/jev-1.13-free"),
       ])
-      const goModels = yield* Option.getOrThrow(Option.fromUndefinedOr(go.listModels))()
+      const goModels = yield* Option.getOrThrow(Option.fromUndefinedOr(go.listModels))(
+        fixtureCatalog,
+      )
       expect(goModels.some((model) => model.kind === "classifier")).toBe(false)
       expect(go.resolveDecisionModel).toBeUndefined()
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
@@ -953,11 +941,10 @@ describe("OpenCode Zen classifiers", () => {
 
   it.live("the shipped extensions list every route's classifier models over RPC", () =>
     Effect.gen(function* () {
-      const home = yield* fixtureHome
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
       const { client, sessionId } = yield* createRpcHarness({
         agents: [],
-        home,
+        modelCatalogHttpLayer: yield* catalogHttpLayer,
         extensionInputs: BuiltinExtensions,
         providerLayer,
       })
@@ -988,7 +975,7 @@ describe("OpenCode catalog", () => {
       Effect.gen(function* () {
         const { go } = yield* fixtureDrivers
         const listModels = Option.getOrThrow(Option.fromUndefinedOr(go.listModels))
-        const models = yield* listModels()
+        const models = yield* listModels(fixtureCatalog)
         expect(
           models
             .map((model) => [model.id, Option.fromUndefinedOr(model.promptCacheTtlMs)] as const)
@@ -1006,7 +993,7 @@ describe("OpenCode catalog", () => {
     Effect.gen(function* () {
       const { zen } = yield* fixtureDrivers
       const listModels = Option.getOrThrow(Option.fromUndefinedOr(zen.listModels))
-      const ids = (yield* listModels()).map((model) => model.id)
+      const ids = (yield* listModels(fixtureCatalog)).map((model) => model.id)
       expect(ids).toContain(ModelId.make("opencode/claude-opus-5"))
       expect(ids).not.toContain(ModelId.make("opencode/gemini-3.6-flash"))
       // An expected failure: a typed driver error, not a defect.
@@ -1022,11 +1009,10 @@ describe("OpenCode catalog", () => {
 
   it.live("the shipped extension lists both gateways' models over RPC", () =>
     Effect.gen(function* () {
-      const home = yield* fixtureHome
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
       const { client, sessionId } = yield* createRpcHarness({
         agents: [],
-        home,
+        modelCatalogHttpLayer: yield* catalogHttpLayer,
         extensionInputs: [OpenCodeExtension],
         providerLayer,
       })
@@ -1055,7 +1041,12 @@ const requestsWithStored = (
     const { zen, go } = yield* driversWithEnv(envApiKey)
     const state = makeFakeFetchState()
     for (const modelId of ["opencode/qwen3.8-max", "opencode-go/glm-5.3"]) {
-      const model = storedCredentialModel({ modelDrivers: [zen, go], stored, modelId })
+      const model = storedCredentialModel({
+        modelDrivers: [zen, go],
+        stored,
+        modelId,
+        catalog: fixtureCatalog,
+      })
       yield* oneGenerate(model, state, gatewayReply)
     }
     return state.captured.map((request) => [request.url, request.headers["authorization"]])
@@ -1064,11 +1055,10 @@ const requestsWithStored = (
 /** An RPC harness whose profile registers `extension`; the `/auth` rows and methods it lists. */
 const signInHarness = (extension: Parameters<typeof createRpcHarness>[0]["extensionInputs"]) =>
   Effect.gen(function* () {
-    const home = yield* fixtureHome
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
     const { client, sessionId } = yield* createRpcHarness({
       agents: [],
-      home,
+      modelCatalogHttpLayer: yield* catalogHttpLayer,
       extensionInputs: extension ?? [],
       providerLayer,
     })
@@ -1159,6 +1149,7 @@ describe("OpenCode sign-in", () => {
         modelDrivers: [go],
         stored: { "opencode-go": "oc-go-key" },
         modelId: "opencode-go/glm-5.3",
+        catalog: fixtureCatalog,
       })
       yield* oneGenerate(model, state, gatewayReply)
       expect(lastRequest(state).headers["authorization"]).toBe("Bearer oc-go-key")

@@ -14,6 +14,9 @@ export {
   type E2ELayerConfig,
   emptyQueueSnapshot,
   ensureStorageParents,
+  fixtureModelCatalog,
+  MODEL_CATALOG_FIXTURE,
+  modelCatalogFixture,
   plantInFlightTurn,
   plantToolCallBinding,
   provideToolDispatch,
@@ -47,7 +50,12 @@ export {
   turnRequestText,
   waitFor,
 } from "./language-model.js"
-export { finishPart, textDeltaPart, toolCallPart } from "../runtime/provider.js"
+export {
+  finishPart,
+  modelCatalogFromBodies,
+  textDeltaPart,
+  toolCallPart,
+} from "../runtime/provider.js"
 export { turnNoticesText } from "../runtime/model-context.js"
 export { type LoadedExtension } from "../domain/extension.js"
 export { ApprovalService } from "../runtime/extension-host.js"

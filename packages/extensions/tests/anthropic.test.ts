@@ -60,7 +60,6 @@ import {
   ProviderAuthInfo,
 } from "@gent/core/extensions/api"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
-import { testCatalogSource } from "./helpers/catalog-source.js"
 import {
   type FakeClientState,
   fakeFetchLayer,
@@ -1384,17 +1383,11 @@ type DriverArgs = Parameters<typeof buildAnthropicModelDriverLive>
 const buildAnthropicModelDriver = (
   credentialCellRef: DriverArgs[0],
   envApiKey: DriverArgs[1],
-  promptCacheTtl: DriverArgs[4] = "1h",
+  promptCacheTtl: DriverArgs[3] = "1h",
 ) =>
   driverServices(testPlatform).pipe(
     Effect.map((services) =>
-      buildAnthropicModelDriverLive(
-        credentialCellRef,
-        envApiKey,
-        services,
-        testCatalogSource(),
-        promptCacheTtl,
-      ),
+      buildAnthropicModelDriverLive(credentialCellRef, envApiKey, services, promptCacheTtl),
     ),
     Effect.provide(BunServices.layer),
   )
@@ -1968,7 +1961,6 @@ describe("buildAnthropicModelDriver — the host's platform", () => {
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
         Option.none(),
         services,
-        testCatalogSource(),
         "1h",
       )
       const fetchState = makeFakeFetchState()
@@ -2012,7 +2004,6 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
         credentialCellRef,
         Option.none(),
         yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
-        testCatalogSource(),
         "1h",
       )
       const fetchState = makeFakeFetchState()
@@ -2119,7 +2110,6 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
               FileSystem.FileSystem,
               hostFs,
             ),
-            testCatalogSource(),
             "1h",
           )
           const fetchState = makeFakeFetchState()
@@ -2177,7 +2167,6 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         credentialCellRef,
         Option.none(),
         yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
-        testCatalogSource(),
         "1h",
       )
       const fetchState = makeFakeFetchState()
@@ -2237,7 +2226,6 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
           credentialCellRef,
           Option.none(),
           yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
-          testCatalogSource(),
           "1h",
         )
         const fetchState = makeFakeFetchState()
@@ -2292,7 +2280,6 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         credentialCellRef,
         Option.none(),
         yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
-        testCatalogSource(),
         "1h",
       )
       const rotated = yield* Deferred.make<void>()
@@ -2371,7 +2358,6 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
           credentialCellRef,
           Option.none(),
           services,
-          testCatalogSource(),
           "1h",
         )
         const rotated = yield* Deferred.make<void>()
@@ -2451,7 +2437,6 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         credentialCellRef,
         Option.none(),
         yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
-        testCatalogSource(),
         "1h",
       )
       const newerSignIn = encodeExternalJson({
@@ -2513,7 +2498,6 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         credentialCellRef,
         Option.none(),
         yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
-        testCatalogSource(),
         "1h",
       )
       const fetchState = makeFakeFetchState()
@@ -2574,7 +2558,6 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
           credentialCellRef,
           Option.none(),
           yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
-          testCatalogSource(),
           "1h",
         )
         const fetchState = makeFakeFetchState()
