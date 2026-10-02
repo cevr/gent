@@ -37,6 +37,7 @@ import {
   transitionSessionUi,
   writeEntries,
   mergeRefused,
+  mergeRestored,
   noticeRowItems,
   runWithReconnect,
   slashAutocompleteItems,
@@ -121,6 +122,29 @@ describe("refused submissions", () => {
   const empty = { entries: [], shown: "" }
   const editing = (draft: string) =>
     ({ draft, mode: "editing" }) satisfies Parameters<typeof mergeRefused>[0]
+
+  test("queue text after a refused command makes a message of it, and an edited block takes it first", () => {
+    const command = mergeRefused(editing(""), empty, {
+      order: 0,
+      text: "ls",
+      shell: true,
+      requestId: Option.none(),
+    })
+    expect(command.draft).toEqual({ draft: "ls", mode: "shell" })
+    const queue = { steering: [], followUp: [queueEntry("FollowUp", "q", "queued")] }
+    const restored = mergeRestored(command.draft, command.block, queue)
+    expect(restored.draft).toEqual(editing("!ls\n\nqueued"))
+    const later = mergeRefused(restored.draft, restored.block, {
+      order: 1,
+      text: "later",
+      shell: false,
+      requestId: Option.none(),
+    })
+    expect(later.draft).toEqual(editing("!ls\n\nlater\n\nqueued"))
+    expect(mergeRestored(editing("l, edited"), command.block, queue).draft).toEqual(
+      editing("queued\n\nl, edited"),
+    )
+  })
 
   test("a refusal that lands after an earlier one's text was edited goes ahead of the whole draft", () => {
     const first = mergeRefused(editing(""), empty, {
