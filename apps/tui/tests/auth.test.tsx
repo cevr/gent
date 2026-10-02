@@ -495,6 +495,46 @@ describe("Auth route", () => {
       expect(saved).toEqual([{ provider: "anthropic", sessionId: activeSessionId }])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  it.scopedLive("a key held with super or hyper types nothing into the key field", () =>
+    Effect.gen(function* () {
+      const keys: Array<string> = []
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("anthropic"),
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ anthropic: [apiMethodRoute] }),
+          setKey: (input: { provider: string; key: string; sessionId?: string }) =>
+            Effect.sync(() => {
+              keys.push(input.key)
+            }),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        kittyKeyboard: true,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · API key"))
+      setup.mockInput.pressKey("a", { super: true })
+      setup.mockInput.pressKey("b", { hyper: true })
+      setup.mockInput.pressKey("x")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key saved for anthropic"))
+      expect(keys).toEqual(["x"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("reads the sign-in methods of the session's own drivers", () =>
     Effect.gen(function* () {
       const methodCalls: Array<{ sessionId?: string } | void> = []

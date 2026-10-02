@@ -297,22 +297,18 @@ const isControl = (char: string): boolean => {
 const isFinalByte = (char: string): boolean => char >= "@" && char <= "~"
 
 /**
- * Text a key types into a one-line field: printable, never a control
- * sequence. A key that sends a control byte (Tab, Esc, a C1 control) types
- * nothing.
- */
-export const typedText = (sequence: Option.Option<string>): Option.Option<string> =>
-  Option.filter(sequence, (text) => text.length > 0 && ![...text].some(isControl))
-
-/**
  * The text a key types into a field a pane reads through `useScopedKeyboard`:
  * printable text, Unicode included, from a key held with no shortcut modifier
- * (ctrl, meta, option, super or hyper). A shortcut types nothing and goes on
- * to the scopes under the pane. Every such field reads its keys here.
+ * (ctrl, meta, option, super or hyper). A shortcut, or a key that sends a
+ * control byte (Tab, Esc, a C1 control), types nothing and goes on to the
+ * scopes under the pane. Every such field reads its keys here.
  */
 export const typedKey = (event: ScopedKeyboardEvent): Option.Option<string> => {
   if (event.ctrl || event.meta || event.option || event.super || event.hyper) return Option.none()
-  return typedText(Option.fromNullishOr(event.sequence))
+  return Option.filter(
+    Option.fromNullishOr(event.sequence),
+    (text) => text.length > 0 && ![...text].some(isControl),
+  )
 }
 
 /** The index after a string sequence's end: BEL, ESC then backslash, or 8-bit ST. */

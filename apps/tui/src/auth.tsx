@@ -36,7 +36,7 @@ import { formatError, plural, repliesInView, type ReplyWriter, type UiError } fr
 import {
   pastedLine,
   type ScopedKeyboardEvent,
-  typedText,
+  typedKey,
   useClipboard,
   useScopedKeyboard,
   useTerminalDimensions,
@@ -1104,8 +1104,7 @@ function AuthTextLine(props: {
         props.onEvent(AuthEvent.cases.Backspace.make({}))
         return true
       }
-      if (event.ctrl === true || event.meta === true) return false
-      return Option.match(typedText(Option.fromNullishOr(event.sequence)), {
+      return Option.match(typedKey(event), {
         onNone: () => false,
         onSome: (text) => {
           props.onEvent(AuthEvent.cases.Type.make({ text }))
