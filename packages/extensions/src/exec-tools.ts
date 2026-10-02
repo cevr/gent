@@ -974,16 +974,32 @@ const processStartIdentity = (pid: number) =>
     ),
   )
 
-/** Send `signal` to process group `pid`; true when the group took it. */
-const signalProcessGroup = (pid: number, signal: "TERM" | "KILL" | "0") =>
-  runProcess("kill", [`-${signal}`, "--", `-${pid}`], { timeout: PROCESS_CHECK_TIMEOUT }).pipe(
-    Effect.map((result) => result.exitCode === 0),
+/**
+ * Send `signal` to process group `pid`: `taken` when the group took it,
+ * `gone` when no such group exists (ESRCH), `unknown` for any other refusal,
+ * such as a group of another user (EPERM). `kill` exits 1 for both errors, so
+ * the C-locale `strerror` text tells them apart. A pid of 1 or less names
+ * every process (`-1`) or none, never one job's group.
+ */
+const signalProcessGroup = (pid: number, signal: "TERM" | "KILL" | "0") => {
+  if (pid <= 1) return Effect.succeed("unknown" as const)
+  return runProcess("kill", [`-${signal}`, "--", `-${pid}`], {
+    env: { LC_ALL: "C" },
+    extendEnv: true,
+    timeout: PROCESS_CHECK_TIMEOUT,
+  }).pipe(
+    Effect.map((result): "taken" | "gone" | "unknown" => {
+      if (result.exitCode === 0) return "taken"
+      if (result.stderr.includes("No such process")) return "gone"
+      return "unknown"
+    }),
   )
+}
 
 /**
  * Stop the process group an earlier server left running: SIGTERM, then
- * SIGKILL after `SIGKILL_DELAY_MS`. True when no process of the job runs
- * afterwards.
+ * SIGKILL after `SIGKILL_DELAY_MS`. True only when the job's group is
+ * shown gone; a refused signal leaves the job one that may still run.
  *
  * The system does not reuse a pid while a process group with that id lives
  * (POSIX "Process ID Reuse"; Linux keeps the pid allocated while a task holds
@@ -996,14 +1012,16 @@ const stopStaleProcess = (job: JobProcess) =>
   Effect.gen(function* () {
     const identity = yield* processStartIdentity(job.pid)
     if (Option.isSome(identity) && identity.value !== job.startIdentity) return true
-    if (!(yield* signalProcessGroup(job.pid, "TERM"))) return true
+    const termed = yield* signalProcessGroup(job.pid, "TERM")
+    if (termed !== "taken") return termed === "gone"
     const deadline = (yield* Clock.currentTimeMillis) + SIGKILL_DELAY_MS
     while ((yield* Clock.currentTimeMillis) < deadline) {
-      if (!(yield* signalProcessGroup(job.pid, "0"))) return true
+      const probe = yield* signalProcessGroup(job.pid, "0")
+      if (probe !== "taken") return probe === "gone"
       yield* Effect.sleep(Duration.millis(100))
     }
     yield* signalProcessGroup(job.pid, "KILL")
-    return !(yield* signalProcessGroup(job.pid, "0"))
+    return (yield* signalProcessGroup(job.pid, "0")) === "gone"
   }).pipe(
     Effect.catchTag("ProcessError", (error) =>
       Effect.logWarning("exec-tools.stale-process.stop.failed").pipe(

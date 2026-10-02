@@ -17,6 +17,7 @@ import {
   References,
   Schema,
   Scope,
+  Sink,
   Stream,
 } from "effect"
 import {
@@ -64,7 +65,7 @@ import { BunPlatformLive, GentPlatform } from "@gent/core/host"
 import { ExtensionServiceError, maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/sql"
 import type * as Prompt from "effect/ai/Prompt"
-import { ChildProcess } from "effect/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import * as AiError from "effect/ai/AiError"
 
 /** SQLite storage in the file at `path`, so a later layer reads what an earlier one wrote. */
@@ -2538,6 +2539,78 @@ describe("a background job the server stopped", () => {
         expect(unread).toMatchObject([
           { toolCallId: ToolCallId.make("reused"), mayStillRun: false },
         ])
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a restart that may not signal a stale job's group says the job may still run",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* makeTempDirectoryScoped("gent-bg-denied-")
+        const startedAt = "Thu Jan  1 00:00:00 1970"
+        const signals: Array<string> = []
+        // The job's leader still holds its pid, but the group belongs to
+        // another user: `ps` names the job's own start time and every `kill`
+        // is refused, as procps prints it.
+        const bytes = (text: string) => Stream.make(new TextEncoder().encode(text))
+        const answer = (exitCode: number, stdout: string, stderr: string) =>
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(4242),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(exitCode)),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.void,
+            stdin: Sink.drain,
+            stdout: bytes(stdout),
+            stderr: bytes(stderr),
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+            unref: Effect.succeed(Effect.void),
+          })
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.sync(() => {
+            if (command._tag !== "StandardCommand" || command.command !== "kill") {
+              return answer(0, `${startedAt}\n`, "")
+            }
+            signals.push(command.args.join(" "))
+            return answer(1, "", `kill: (${command.args.at(-1) ?? ""}): Operation not permitted\n`)
+          }),
+        )
+        const storageLayer = fileStorage(`${directory}/gent.db`)
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`
+            INSERT INTO background_bash_jobs
+              (session_id, branch_id, tool_call_id, command, status, started_at, owner_generation, pid, process_start_id)
+            VALUES ('s', 'b', 'denied', 'sleep 30', 'running', 0, 'earlier-process', 4242, ${startedAt})
+          `
+        }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provideMerge(storageLayer))))
+
+        const unread = yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          return yield* storage.interruptedJobs({
+            sessionId: SessionId.make("s"),
+            branchId: BranchId.make("b"),
+          })
+        }).pipe(
+          Effect.provide(
+            BackgroundBashLayer.pipe(
+              Layer.provideMerge(
+                Layer.mergeAll(
+                  storageLayer,
+                  BunCrypto.layer,
+                  BunFileSystem.layer,
+                  Path.layer,
+                  Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+                ),
+              ),
+            ),
+          ),
+        )
+
+        expect(signals[0]).toBe("-TERM -- -4242")
+        expect(unread).toMatchObject([{ toolCallId: ToolCallId.make("denied"), mayStillRun: true }])
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
