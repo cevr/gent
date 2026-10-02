@@ -1577,7 +1577,9 @@ describe("monitor command", () => {
             command: "printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx!xxy'",
             until: "(x+x+)+y",
             everySeconds: 1,
-            timeoutSeconds: 2,
+            // JavaScriptCore gives up on this search after about 1.2 s on an idle
+            // host; leave five times that for the parallel gate's load.
+            timeoutSeconds: 6,
             note: "report uncertainty",
           },
           contextWith(home, queued, Option.some(fired)),
@@ -1589,9 +1591,9 @@ describe("monitor command", () => {
         expect(message).not.toContain("matched after")
       }).pipe(
         Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer)),
-        Effect.timeout("5 seconds"),
+        Effect.timeout("9 seconds"),
       ),
-    8_000,
+    12_000,
   )
 
   it.scopedLive(
