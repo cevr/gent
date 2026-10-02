@@ -811,7 +811,7 @@ const awaitDeviceGrant = (
  * code plus its verifier; `exchange` trades them.
  *
  * The HTTP client is taken from the environment so tests can stub the
- * three endpoints; `allocateOpenAIDeviceAuthorization` binds fetch.
+ * three endpoints; `authorizeOpenAIDeviceWithFetch` binds fetch.
  */
 export const authorizeOpenAIDevice: Effect.Effect<
   OpenAIAuthorizationFlow,
@@ -838,51 +838,11 @@ export const authorizeOpenAIDevice: Effect.Effect<
   } satisfies OpenAIAuthorizationFlow
 })
 
-/**
- * Device-code counterpart of `allocateOpenAIAuthorization`. Nothing to
- * tear down, so `close` is a no-op; the shape matches so
- * `buildOpenAIModelDriver` keeps one pending-callback table for both
- * OAuth methods.
- */
-const allocateOpenAIDeviceAuthorization: Effect.Effect<
-  {
-    readonly flow: OpenAIAuthorizationFlow
-    readonly close: Effect.Effect<void>
-  },
-  OAuthError
-> = authorizeOpenAIDevice.pipe(
-  Effect.map((flow) => ({ flow, close: Effect.void })),
+/** Device endpoints bind fetch at the extension boundary. */
+const authorizeOpenAIDeviceWithFetch = authorizeOpenAIDevice.pipe(
   // @effect-diagnostics-next-line strictEffectProvide:off -- device endpoints at extension boundary
   Effect.provide(FetchHttpClient.layer),
 )
-
-/**
- * Allocate a detached scope and run `authorizeOpenAI` inside it,
- * returning the flow handle plus a `close` Effect that tears the scope
- * down. Used by `buildOpenAIModelDriver` to bridge between the
- * `authorize` / `callback` calls — the scope must outlive the first call so the
- * redirect server stays up until the user completes (or the timeout
- * fires).
- *
- * The caller MUST eventually run `close` (whether on success, failure,
- * or timeout) or the redirect listener will leak.
- */
-const allocateOpenAIAuthorization: Effect.Effect<
-  {
-    readonly flow: OpenAIAuthorizationFlow
-    readonly close: Effect.Effect<void>
-  },
-  OAuthError,
-  Crypto.Crypto
-> = Effect.gen(function* () {
-  const scope = yield* Scope.make()
-  const flow = yield* authorizeOpenAI.pipe(
-    Scope.provide(scope),
-    Effect.tapError(() => Scope.close(scope, Exit.void)),
-  )
-  const close = Scope.close(scope, Exit.void).pipe(Effect.asVoid)
-  return { flow, close }
-})
 
 // ── credential service ──────────────────────────────────────────────────────
 
@@ -1290,9 +1250,9 @@ const settledLogin = (
 }
 
 /** Index-aligned with the `oauth` entries of `auth.methods` below. */
-const OAUTH_ALLOCATORS: ReadonlyArray<typeof allocateOpenAIAuthorization> = [
-  allocateOpenAIAuthorization,
-  allocateOpenAIDeviceAuthorization,
+const OAUTH_FLOWS: ReadonlyArray<typeof authorizeOpenAI> = [
+  authorizeOpenAI,
+  authorizeOpenAIDeviceWithFetch,
 ]
 
 type OpenAiResponsesConfig = Required<
@@ -1917,29 +1877,53 @@ export const buildOpenAIModelDriver = (
       authorize: (
         ctx,
       ): Effect.Effect<Option.Option<ProviderAuthorizationResult>, ProviderAuthError> =>
-        Effect.gen(function* () {
-          const allocate = Option.fromNullishOr(OAUTH_ALLOCATORS[ctx.methodIndex])
-          if (Option.isNone(allocate)) return Option.none()
-          const { flow, close } = yield* allocate.value.pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
-            Effect.mapError(
-              (e) =>
-                new ProviderAuthError({
-                  message: `OpenAI OAuth authorization failed: ${e.message}`,
-                  cause: e,
-                }),
-            ),
-          )
-          const entry = new PendingCallbackEntry(
-            flow,
-            close,
-            yield* Deferred.make<void, ProviderAuthError>(),
-            yield* Semaphore.make(1),
-          )
-          pendingCallbacks.set(ctx.authorizationId, entry)
-          yield* armTimer(ctx.authorizationId, entry)
-          return Option.some(flow.authorization)
-        }),
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const selected = Option.fromNullishOr(OAUTH_FLOWS[ctx.methodIndex])
+            if (Option.isNone(selected)) return Option.none()
+            // The request owns this detached scope until entry and timer own it.
+            // External allocation remains interruptible; every failed transfer closes it.
+            const scope = yield* Scope.make()
+            const close = Scope.close(scope, Exit.void).pipe(Effect.asVoid)
+            return yield* Effect.gen(function* () {
+              const flow = yield* restore(
+                selected.value.pipe(
+                  Scope.provide(scope),
+                  Effect.provideService(Crypto.Crypto, crypto),
+                  Effect.mapError(
+                    (e) =>
+                      new ProviderAuthError({
+                        message: `OpenAI OAuth authorization failed: ${e.message}`,
+                        cause: e,
+                      }),
+                  ),
+                ),
+              )
+              const entry = new PendingCallbackEntry(
+                flow,
+                close,
+                yield* Deferred.make<void, ProviderAuthError>(),
+                yield* Semaphore.make(1),
+              )
+              pendingCallbacks.set(ctx.authorizationId, entry)
+              yield* armTimer(ctx.authorizationId, entry)
+              return Option.some(flow.authorization)
+            }).pipe(
+              Effect.onExit((exit) => {
+                if (Exit.isSuccess(exit)) return Effect.void
+                return Effect.gen(function* () {
+                  const entry = Option.fromUndefinedOr(pendingCallbacks.get(ctx.authorizationId))
+                  if (Option.isSome(entry) && entry.value.close === close) {
+                    pendingCallbacks.delete(ctx.authorizationId)
+                    if (Option.isSome(entry.value.timer))
+                      yield* Fiber.interrupt(entry.value.timer.value)
+                  }
+                  yield* close
+                })
+              }),
+            )
+          }),
+        ),
       callback: (ctx) =>
         Effect.gen(function* () {
           const pendingEntry = Option.fromNullishOr(pendingCallbacks.get(ctx.authorizationId))

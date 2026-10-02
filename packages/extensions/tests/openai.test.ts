@@ -2309,6 +2309,61 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     }),
   )
 
+  it.scopedLive(
+    "interrupted browser-login publication retains cleanup until expiry and frees its port",
+    () =>
+      Effect.gen(function* () {
+        const port = yield* freePort
+        const pending: PendingCallbacks = new Map()
+        const authorizationId = "interrupted-publication"
+        const { authorize } = yield* makeDriver(pending)
+        yield* Effect.addFinalizer(() => dropLogin(pending, authorizationId))
+        yield* runWithTestClock(
+          Effect.gen(function* () {
+            const request = yield* Effect.withFiber((fiber) =>
+              Effect.sync(() => {
+                const set = pending.set.bind(pending)
+                pending.set = (id, entry) => {
+                  const result = set(id, entry)
+                  pending.set = set
+                  fiber.interruptUnsafe()
+                  return result
+                }
+              }).pipe(Effect.andThen(authorize(authContext(0, authorizationId)))),
+            ).pipe(Effect.provideService(OAuthRedirectPort, port), Effect.forkChild)
+            const exit = yield* Fiber.await(request)
+            expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+            // The real detached listener has started; a foreign state leaves it waiting.
+            const status = yield* waitFor(
+              HttpClient.get(`http://localhost:${port}/auth/callback?state=foreign`).pipe(
+                Effect.map((response) => response.status),
+                Effect.provide(FetchHttpClient.layer),
+              ),
+              () => true,
+              2000,
+              "interrupted login listener",
+            ).pipe(TestClock.withLive)
+            expect(status).toBe(400)
+            const entry = Option.getOrThrow(Option.fromUndefinedOr(pending.get(authorizationId)))
+            expect(Option.isSome(entry.timer)).toBe(true)
+            const timer = Option.getOrThrow(entry.timer)
+            yield* TestClock.adjust("5 minutes")
+            yield* Fiber.join(timer)
+            expect(pending.has(authorizationId)).toBe(false)
+            const rebound = yield* Effect.acquireRelease(
+              Effect.sync(() =>
+                // oxlint-disable-next-line effect/noGlobals -- Real isolated port ownership proves the redirect listener closed.
+                Bun.serve({ port, fetch: () => new Response("rebound") }),
+              ),
+              (server) => Effect.promise(() => server.stop(true)),
+            )
+            expect(rebound.port).toBe(port)
+          }),
+        )
+      }).pipe(Effect.timeout("5 seconds")),
+    10000,
+  )
+
   it.scopedLive("a redirect server that cannot bind fails the waiting callback", () =>
     Effect.gen(function* () {
       // Hold the redirect port so the login's own server cannot bind it.
