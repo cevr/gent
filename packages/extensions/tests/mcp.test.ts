@@ -1530,6 +1530,13 @@ const mcpResult = (
   return { content: [{ type: "text", text: token }] }
 }
 
+/** 401 with the resource metadata a client reads to start its login. */
+const refuseLogin = (state: OAuthFixtureState) =>
+  HttpServerResponse.text("unauthorized", {
+    status: 401,
+    headers: { "www-authenticate": `Bearer resource_metadata="${resourceMetadataUrl(state)}"` },
+  })
+
 /** `/mcp`: 401 with the resource metadata for a token it does not accept, else the result. */
 const answerMcp = (state: OAuthFixtureState, request: OAuthRequest) =>
   Effect.gen(function* () {
@@ -1538,12 +1545,7 @@ const answerMcp = (state: OAuthFixtureState, request: OAuthRequest) =>
     if (!state.valid.has(token)) {
       if (message.method === "tools/call") state.refusedCalls += 1
       if (message.method === "initialize") state.refusedInitializes += 1
-      return HttpServerResponse.text("unauthorized", {
-        status: 401,
-        headers: {
-          "www-authenticate": `Bearer resource_metadata="${resourceMetadataUrl(state)}"`,
-        },
-      })
+      return refuseLogin(state)
     }
     const name = Option.flatMap(Option.fromUndefinedOr(message.params), (params) =>
       Option.fromUndefinedOr(params["name"]),
@@ -1579,6 +1581,10 @@ const oauthFixtureApp = (state: OAuthFixtureState) =>
     if (url.pathname === `${prefix}/authorize`) return authorize(url)
     if (url.pathname === `${prefix}/token`) return yield* exchangeToken(state, request)
     if (url.pathname !== "/mcp") return HttpServerResponse.empty({ status: 404 })
+    // An SSE client opens its stream with GET. The fixture serves no stream:
+    // a GET without a token it accepts learns that the server wants a login.
+    const token = (request.headers["authorization"] ?? "").replace(/^Bearer /, "")
+    if (request.method === "GET" && !state.valid.has(token)) return refuseLogin(state)
     if (request.method !== "POST") return HttpServerResponse.empty({ status: 405 })
     return yield* answerMcp(state, request)
   }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
@@ -1625,16 +1631,16 @@ const makeDataDir = Effect.gen(function* () {
   }
 })
 
-const oauthServers = (oauth: OAuthFixtureState) =>
-  McpServers("@test/mcp-oauth", { secure: { url: `${oauth.origin}/mcp` } })
+const oauthServers = (oauth: OAuthFixtureState, type: "auto" | "sse" = "auto") =>
+  McpServers("@test/mcp-oauth", { secure: { url: `${oauth.origin}/mcp`, type } })
 
 /** A session with no model turns: `request` runs `/mcp <input>`, `shown` waits for a message. */
-const commandSession = (oauth: OAuthFixtureState) =>
+const commandSession = (oauth: OAuthFixtureState, type: "auto" | "sse" = "auto") =>
   Effect.gen(function* () {
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
     const harness = yield* createRpcHarness({
       ...shippedPreset,
-      extensionInputs: [...shippedWithoutMcp, oauthServers(oauth)],
+      extensionInputs: [...shippedWithoutMcp, oauthServers(oauth, type)],
       providerLayer,
     })
     const request = (input: string) =>
@@ -1736,6 +1742,22 @@ const revokeThenCall = (oauth: OAuthFixtureState) =>
   })
 
 describe("mcp oauth", () => {
+  it.scopedLive(
+    "an SSE server that wants a login reports logged-out, as streamable HTTP does",
+    () =>
+      Effect.gen(function* () {
+        const oauth = yield* serveOAuthFixture
+        const data = yield* makeDataDir
+        const listed = yield* Effect.gen(function* () {
+          const { request, shown } = yield* commandSession(oauth, "sse")
+          yield* request("")
+          return yield* shown("- secure")
+        }).pipe(Effect.provide(data.layer))
+        expect(listed).toContain("- secure (sse): logged-out, 0 tools, not connected")
+        expect(listed).toContain("run /mcp login secure")
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
+    20_000,
+  )
   it.scopedLive(
     "/mcp login signs in through the loopback redirect, stores the token 0600, and the next session calls with it",
     () =>

@@ -1175,10 +1175,16 @@ const requestMethod = (init: Option.Option<RequestInit>) => {
   )
 }
 
-/** What a transport takes to send a server's OAuth token. */
+/**
+ * What a transport takes to send a server's OAuth token, and the last
+ * `LoginRequired` its fetch raised: the SSE stream reports a failed open as
+ * an `SseError` that keeps only the message, so a failed connect reads the
+ * refusal here.
+ */
 interface OAuthTransport {
   readonly authProvider: OAuthClientProvider
   readonly fetch: SdkFetch
+  readonly refusal: () => Option.Option<LoginRequired>
 }
 
 /**
@@ -1193,6 +1199,7 @@ const oauthTransport = (server: McpServer, config: HttpServerConfig, store: Auth
   Effect.gen(function* () {
     if (!usesOAuth(config)) return Option.none<OAuthTransport>()
     let current = yield* loginBeforeDial(server, config, store)
+    let refused = Option.none<LoginRequired>()
     const tokens = () => Option.getOrUndefined(Option.map(current, (login) => login.tokens))
     const authProvider: OAuthClientProvider = {
       ...flowProvider(server.name, "", emptyFlow(Option.none()), current, Option.none()),
@@ -1234,11 +1241,14 @@ const oauthTransport = (server: McpServer, config: HttpServerConfig, store: Auth
             if (retried.status !== 401 && retried.status !== 403) return retried
           }
         }
-        return yield* loginRequired(server.name, Option.isSome(current))
+        const refusal = loginRequired(server.name, Option.isSome(current))
+        refused = Option.some(refusal)
+        return yield* refusal
       })
     const transport: OAuthTransport = {
       authProvider,
       fetch: sdkFetch(store.services, answer),
+      refusal: () => refused,
     }
     return Option.some(transport)
   })
@@ -1429,6 +1439,19 @@ class McpError extends Schema.TaggedError<McpError>()("McpError", {
 /** The cause is a refusal of an OAuth entry that has no stored login. */
 const isLoggedOut = (cause: unknown) => Schema.is(LoginRequired)(cause) && !cause.loggedIn
 
+/**
+ * The `LoginRequired` behind a failed connect: the cause itself, or, when the
+ * SSE stream wrapped it in an `SseError`, the refusal the OAuth fetch recorded.
+ */
+const loginRefusal = (
+  cause: unknown,
+  oauth: Option.Option<OAuthTransport>,
+): Option.Option<LoginRequired> => {
+  if (Schema.is(LoginRequired)(cause)) return Option.some(cause)
+  if (!(cause instanceof SseError)) return Option.none()
+  return Option.flatMap(oauth, (transport) => transport.refusal())
+}
+
 const failureMessage = (cause: unknown) => {
   if (cause instanceof Error) return cause.message
   return String(cause)
@@ -1484,7 +1507,10 @@ const transportFor = (
   }
   const options = {
     requestInit: { headers: { ...config.headers } },
-    ...Option.getOrElse(oauth, () => ({})),
+    ...Option.getOrElse(
+      Option.map(oauth, ({ authProvider, fetch }) => ({ authProvider, fetch })),
+      () => ({}),
+    ),
   }
   if (kind === "sse") return new SSEClientTransport(new URL(config.url), options)
   return new StreamableHTTPClientTransport(new URL(config.url), options)
@@ -1531,13 +1557,19 @@ const dial = (
     )
     yield* Effect.tryPromise({
       try: () => client.connect(transportFor(server, kind, environment, oauth)),
-      catch: (cause) =>
-        new McpError({
+      catch: (cause) => {
+        const refusal = loginRefusal(cause, oauth)
+        return new McpError({
           server: server.name,
-          message: `connect: ${failureMessage(cause)}`,
-          loggedOut: isLoggedOut(cause),
-          ...omitUndefined({ status: Option.getOrUndefined(statusOf(cause)) }),
-        }),
+          message: `connect: ${failureMessage(Option.getOrElse(refusal, () => cause))}`,
+          loggedOut: Option.exists(refusal, (refused) => !refused.loggedIn),
+          ...omitUndefined({
+            status: Option.getOrUndefined(
+              Option.orElse(Option.as(refusal, 401), () => statusOf(cause)),
+            ),
+          }),
+        })
+      },
     })
     return {
       client,
