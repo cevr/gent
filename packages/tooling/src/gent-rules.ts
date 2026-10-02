@@ -10,6 +10,7 @@
  * - no-identity-encode: a whole-object JSON encode decides no identity.
  * - no-tracked-session-record: a TUI reactive scope tracks the session identity, not the record.
  * - no-code-unit-padding: terminal columns use display width, with ASCII-only exemptions.
+ * - no-code-unit-text-edit: TUI text is edited, cut and counted by grapheme.
  */
 
 import { existsSync, readFileSync } from "node:fs"
@@ -627,6 +628,159 @@ const plugin: Plugin = {
               node,
               message: `${name} counts UTF-16 code units, not terminal columns; pad by display width. Only proven ASCII text with printable ASCII padding is safe.`,
             })
+          },
+        }
+      },
+    },
+    /**
+     * TUI text is edited, cut and counted by grapheme, the character a reader
+     * sees, never by UTF-16 code unit or code point: either splits a toned
+     * emoji, a flag or a ZWJ family, and Backspace leaves half of one behind.
+     * The owners are `apps/tui/src/utils.ts` (`dropLastGrapheme`,
+     * `headGraphemes`, `truncateStart`, `graphemeCount`) and `textWidth`
+     * (`apps/tui/src/bun-adapter.ts`).
+     *
+     * What is reported, in `apps/tui/src/`, three shapes that are text by
+     * syntax alone (the plugin has no types):
+     *
+     * - a code-point cut: `.slice` of `[...text]` or `Array.from(text)` with
+     *   one element, directly or through a `const`, joined back with
+     *   `.join("")`. A spread of `graphemes.segment(...)` holds graphemes, and
+     *   a cut that is not joined to text may be any list; neither is reported.
+     * - a code-unit backspace: `p.slice(0, -1)`, or `p.slice` / `p.substring`
+     *   to `p.length - 1`, where `p` is a parameter of the function around it
+     *   (an edit such as `(current) => current.slice(0, -1)`). A parameter
+     *   annotated with a type other than `string` is not reported; a local
+     *   array, a member and a call result are not either, since nothing here
+     *   tells them from a string.
+     * - a glyph per code unit: `"*".repeat(text.length)`, a string literal
+     *   repeated exactly `<x>.length` times.
+     *
+     * Not reported: a fixed-count cut such as `value.slice(0, 500) + "…"`.
+     * Its shape is the same for an ASCII id (`formatToolCallIdentity`) as for
+     * typed text, so the owner helpers and the tests hold it.
+     */
+    "no-code-unit-text-edit": {
+      meta: { type: "problem", schema: [] },
+      create(context) {
+        const subject = ruleSubject(context)
+        if (!subject.startsWith("apps/tui/src/")) return {}
+        const isGlobal = (node: AstNode | undefined, name: string): boolean =>
+          node?.type === "Identifier" &&
+          getStringField(node, "name") === name &&
+          (lexicalBinding(context, node)?.defs.length ?? 0) === 0
+        const segments = (node: AstNode | undefined): boolean =>
+          node?.type === "CallExpression" && methodName(getNodeField(node, "callee")) === "segment"
+        /** `[...text]` or `Array.from(text)`: the code points of one value. */
+        const codePoints = (node: AstNode | undefined): boolean => {
+          if (node?.type === "ArrayExpression") {
+            const elements = getNodeArrayField(node, "elements") ?? []
+            const [only] = elements
+            return (
+              elements.length === 1 &&
+              only?.type === "SpreadElement" &&
+              !segments(getNodeField(only, "argument"))
+            )
+          }
+          if (node?.type !== "CallExpression") return false
+          const callee = getNodeField(node, "callee")
+          const args = callExpressionArgs(node)
+          return (
+            callee?.type === "MemberExpression" &&
+            isGlobal(getNodeField(callee, "object"), "Array") &&
+            staticPropertyName(callee) === "from" &&
+            args.length === 1 &&
+            !segments(args[0])
+          )
+        }
+        /** The value a `const` name was built from, or the node itself. */
+        const constInit = (node: AstNode | undefined): AstNode | undefined => {
+          const definition = lexicalBinding(context, node)?.defs.find(
+            (def) =>
+              def.type === "Variable" &&
+              def.parent !== null &&
+              getStringField(def.parent, "kind") === "const",
+          )
+          return definition === undefined ? node : getNodeField(definition.node, "init")
+        }
+        /** A parameter of the function around it, typed `string` or not typed. */
+        const textParameter = (node: AstNode | undefined): boolean => {
+          if (node?.type !== "Identifier") return false
+          return (
+            lexicalBinding(context, node)?.defs.some((def) => {
+              if (def.type !== "Parameter") return false
+              const annotation = getNodeField(def.name, "typeAnnotation")
+              const type =
+                annotation === undefined ? undefined : getNodeField(annotation, "typeAnnotation")
+              return type === undefined || type.type === "TSStringKeyword"
+            }) === true
+          )
+        }
+        const isNumber = (node: AstNode | undefined, value: number): boolean => {
+          if (node?.type === "Literal") return fieldOf(node, "value") === value
+          return (
+            node?.type === "UnaryExpression" &&
+            getStringField(node, "operator") === "-" &&
+            isNumber(getNodeField(node, "argument"), -value)
+          )
+        }
+        /** `0, -1`, or `0, p.length - 1` for the receiver `p`. */
+        const dropsLast = (receiver: AstNode, args: ReadonlyArray<AstNode>): boolean => {
+          const [start, end] = args
+          if (args.length !== 2 || !isNumber(start, 0)) return false
+          if (isNumber(end, -1)) return true
+          const length = end === undefined ? undefined : getNodeField(end, "left")
+          return (
+            end?.type === "BinaryExpression" &&
+            getStringField(end, "operator") === "-" &&
+            isNumber(getNodeField(end, "right"), 1) &&
+            length?.type === "MemberExpression" &&
+            staticPropertyName(length) === "length" &&
+            dottedName(getNodeField(length, "object")) === dottedName(receiver)
+          )
+        }
+        /** The cut is joined back to text: `cut.join("")`. */
+        const joinedToText = (call: AstNode): boolean => {
+          const member = getNodeField(call, "parent")
+          const join = member === undefined ? undefined : getNodeField(member, "parent")
+          if (member?.type !== "MemberExpression" || join?.type !== "CallExpression") return false
+          const [separator] = callExpressionArgs(join)
+          return (
+            staticPropertyName(member) === "join" &&
+            getNodeField(join, "callee") === member &&
+            separator?.type === "Literal" &&
+            fieldOf(separator, "value") === ""
+          )
+        }
+        /** `"*".repeat(text.length)`: a literal glyph once per code unit. */
+        const glyphPerUnit = (receiver: AstNode, count: AstNode | undefined): boolean =>
+          (receiver.type === "Literal" || receiver.type === "TemplateLiteral") &&
+          count?.type === "MemberExpression" &&
+          fieldOf(count, "computed") !== true &&
+          staticPropertyName(count) === "length"
+        const misreads = (call: AstNode, receiver: AstNode, method: string | undefined) => {
+          const args = callExpressionArgs(call)
+          if (method === "repeat" && glyphPerUnit(receiver, args[0]))
+            return "repeats a glyph once per UTF-16 code unit; count the characters a reader sees with `graphemeCount` or the columns with `textWidth`"
+          if (method === "slice" && codePoints(constInit(receiver)) && joinedToText(call))
+            return "cuts text by code point, which splits a toned emoji, a flag or a ZWJ family; use `dropLastGrapheme`, `headGraphemes` or `truncateStart`"
+          if (
+            (method === "slice" || method === "substring") &&
+            textParameter(receiver) &&
+            dropsLast(receiver, args)
+          )
+            return "drops the last UTF-16 code unit, which leaves half a character behind; use `dropLastGrapheme` (or `eraseText`)"
+          return undefined
+        }
+        return {
+          CallExpression(node) {
+            if (!isAstNode(node)) return
+            const callee = getNodeField(node, "callee")
+            if (callee?.type !== "MemberExpression" || fieldOf(callee, "computed") === true) return
+            const receiver = getNodeField(callee, "object")
+            if (receiver === undefined) return
+            const message = misreads(node, receiver, staticPropertyName(callee))
+            if (message !== undefined) context.report({ node, message })
           },
         }
       },

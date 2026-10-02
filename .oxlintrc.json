@@ -36,6 +36,8 @@
     "gent/no-identity-encode": "error",
     // Custom — a TUI reactive scope tracks the session identity, not the record (owner rule)
     "gent/no-tracked-session-record": "error",
+    // Custom — TUI text is edited, cut and counted by grapheme (apps/tui/src)
+    "gent/no-code-unit-text-edit": "error",
 
     // Effect opt-in rules: house policy the preset leaves off.
     "effect/noPositionalLogArguments": "error",

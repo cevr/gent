@@ -13,6 +13,7 @@
     "gent/child-session-writer-admits": "error",
     "gent/no-identity-encode": "error",
     "gent/no-tracked-session-record": "error",
-    "gent/no-code-unit-padding": "error"
+    "gent/no-code-unit-padding": "error",
+    "gent/no-code-unit-text-edit": "error"
   }
 }

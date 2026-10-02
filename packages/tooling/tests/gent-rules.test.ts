@@ -179,6 +179,16 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 15,
   },
   {
+    // TUI text is edited, cut and counted by grapheme.
+    rule: "gent/no-code-unit-text-edit",
+    invalid: "apps/tui/src/no-code-unit-text-edit.invalid.ts",
+    valid: ["apps/tui/src/no-code-unit-text-edit.valid.ts"],
+    // the pre-fix auth backspace, key mask and field cut, the btw and list
+    // filter backspaces, an `Array.from` cut, a typed `substring` and a
+    // `length - 1` slice, and a template literal glyph
+    expectedCount: 9,
+  },
+  {
     // A shipped extension reads only the two authoring entries.
     rule: "gent/core-entry-boundary",
     invalid: "packages/extensions/src/core-entry-boundary.invalid.ts",
