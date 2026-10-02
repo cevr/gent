@@ -1419,7 +1419,10 @@ step. Before `auth()`, the login sends one request with no token and keeps the
 there, so a server whose metadata is off the well-known path is found. A
 process fiber waits up to five minutes for the redirect,
 exchanges the code, and lists the tools into the cache, so no turn waits on a
-browser. The login lives in `<data dir>/mcp-auth.json` (mode 0600, written
+browser. A browser on another machine cannot reach the loopback listener, so
+`/mcp login <server> <address>` hands the pending login the redirect address
+the browser shows; it goes through the listener's checks (path, the login's
+state, the server's refusal). The login lives in `<data dir>/mcp-auth.json` (mode 0600, written
 with `writeFileAtomic`), keyed by server name and URL, with that metadata URL.
 A token that expires within 60 seconds is refreshed before the dial. The
 transport's `fetch` answers each 401 or 403 before the SDK sees it: a 401 on

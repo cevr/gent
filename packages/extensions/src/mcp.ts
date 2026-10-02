@@ -1239,10 +1239,15 @@ const oauthTransport = (server: McpServer, config: HttpServerConfig, store: Auth
     return Option.some(transport)
   })
 
-/** The login a `/mcp login` started: its URL, and the effect that waits for the redirect and finishes it. */
+/**
+ * The login a `/mcp login` started: its URL, the effect that waits for the
+ * redirect and finishes it, and `paste`, which hands it a redirect address
+ * the user copied from a browser that cannot reach the loopback listener.
+ */
 interface LoginStart {
   readonly url: string
   readonly finish: Effect.Effect<StoredLogin, McpError>
+  readonly paste: (address: string) => Effect.Effect<LoginRedirect>
 }
 
 /**
@@ -1310,7 +1315,15 @@ const startLogin = (
         return fail(`login: ${error.message}`)
       }),
     )
-    const started: LoginStart = { url: flow.authorizationUrl.value.href, finish }
+    const paste = (address: string) =>
+      Effect.suspend(() => {
+        if (!URL.canParse(address)) {
+          return Effect.succeed(LoginRedirect.cases.NotCallback.make({}))
+        }
+        const redirect = readRedirect(new URL(address), state)
+        return deliverRedirect(server, code, redirect).pipe(Effect.as(redirect))
+      })
+    const started: LoginStart = { url: flow.authorizationUrl.value.href, finish, paste }
     return started
   })
 
@@ -1318,6 +1331,49 @@ const startLogin = (
 const closeOnFailure = (scope: Scope.Closeable, exit: Exit.Exit<unknown, unknown>) => {
   if (Exit.isSuccess(exit)) return Effect.void
   return Scope.close(scope, exit)
+}
+
+/**
+ * What a redirect to a login's callback brings. The loopback listener and a
+ * pasted address (`/mcp login <server> <address>`) read it with the same
+ * checks. A redirect without the login's state belongs to another login, and
+ * the wait goes on.
+ */
+const LoginRedirect = Schema.TaggedUnion({
+  /** Not an address of the login's callback path. */
+  NotCallback: {},
+  OtherLogin: {},
+  /** The authorization server refused the login; the login ends. */
+  Refused: { message: Schema.String },
+  NoCode: {},
+  Code: { code: Schema.String },
+})
+type LoginRedirect = typeof LoginRedirect.Type
+
+const readRedirect = (url: URL, state: string): LoginRedirect => {
+  const param = (name: string) => Option.fromNullishOr(url.searchParams.get(name))
+  if (url.pathname !== "/callback") return LoginRedirect.cases.NotCallback.make({})
+  if (!Option.contains(param("state"), state)) return LoginRedirect.cases.OtherLogin.make({})
+  const refused = param("error")
+  if (Option.isSome(refused)) {
+    const message = Option.getOrElse(param("error_description"), () => refused.value)
+    return LoginRedirect.cases.Refused.make({ message })
+  }
+  const received = param("code").pipe(Option.filter((value) => value !== ""))
+  if (Option.isNone(received)) return LoginRedirect.cases.NoCode.make({})
+  return LoginRedirect.cases.Code.make({ code: received.value })
+}
+
+/** Hands a redirect of this login to its wait: the code, or the refusal that ends it. */
+const deliverRedirect = (
+  server: McpServer,
+  code: Deferred.Deferred<string, McpError>,
+  redirect: LoginRedirect,
+) => {
+  if (redirect._tag === "Code") return Deferred.succeed(code, redirect.code).pipe(Effect.asVoid)
+  if (redirect._tag !== "Refused") return Effect.void
+  const refusal = new McpError({ server: server.name, message: `login: ${redirect.message}` })
+  return Deferred.fail(code, refusal).pipe(Effect.asVoid)
 }
 
 /** The loopback listener for a login's redirect, on a free port; its port. */
@@ -1329,28 +1385,18 @@ const serveRedirect = (
   Effect.gen(function* () {
     const app = Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest
-      const url = new URL(request.url, "http://127.0.0.1")
-      const param = (name: string) => Option.fromNullishOr(url.searchParams.get(name))
-      if (url.pathname !== "/callback") return HttpServerResponse.text("not found", { status: 404 })
-      // A request without this login's state is not its redirect; the wait goes on.
-      if (!Option.contains(param("state"), state)) {
-        return HttpServerResponse.text("this is not the login gent started", { status: 400 })
-      }
-      const refused = param("error")
-      if (Option.isSome(refused)) {
-        const message = Option.getOrElse(param("error_description"), () => refused.value)
-        yield* Deferred.fail(
-          code,
-          new McpError({ server: server.name, message: `login: ${message}` }),
-        )
-        return HttpServerResponse.text(`gent: the login failed: ${message}`, { status: 400 })
-      }
-      const received = param("code").pipe(Option.filter((value) => value !== ""))
-      if (Option.isNone(received)) {
-        return HttpServerResponse.text("the redirect carries no code", { status: 400 })
-      }
-      yield* Deferred.succeed(code, received.value)
-      return HttpServerResponse.text(`gent is logged in to ${server.name}. You can close this tab.`)
+      const redirect = readRedirect(new URL(request.url, "http://127.0.0.1"), state)
+      yield* deliverRedirect(server, code, redirect)
+      return LoginRedirect.match(redirect, {
+        NotCallback: () => HttpServerResponse.text("not found", { status: 404 }),
+        OtherLogin: () =>
+          HttpServerResponse.text("this is not the login gent started", { status: 400 }),
+        Refused: ({ message }) =>
+          HttpServerResponse.text(`gent: the login failed: ${message}`, { status: 400 }),
+        NoCode: () => HttpServerResponse.text("the redirect carries no code", { status: 400 }),
+        Code: () =>
+          HttpServerResponse.text(`gent is logged in to ${server.name}. You can close this tab.`),
+      })
     })
     const context = yield* Layer.build(
       HttpServer.serve(app).pipe(
@@ -1731,6 +1777,8 @@ interface McpClientsService {
   readonly status: Effect.Effect<McpStatus>
   /** Starts an OAuth login to the named server; the URL to open (see `login` in `mcpClientsLive`). */
   readonly login: (name: string) => Effect.Effect<string, McpError>
+  /** Hands the named server's pending login a pasted redirect address (see `pasteRedirect` in `mcpClientsLive`). */
+  readonly pasteRedirect: (name: string, address: string) => Effect.Effect<LoginRedirect, McpError>
   /** Writes a result's binary blocks to files (see `makeBlobStore`); each block's file by index. */
   readonly saveBlobs: (
     content: ReadonlyArray<Schema.Json>,
@@ -1795,8 +1843,14 @@ interface ServerState {
   /** The last accepted listing, which a new list is compared with. */
   catalog: CatalogServer
   health: ServerHealth
-  /** The login it waits for, so a second `/mcp login` replaces the first. */
-  pendingLogin: Option.Option<Fiber.Fiber<void>>
+  /** The login it waits for, so a second `/mcp login` replaces the first and a pasted redirect finds it. */
+  pendingLogin: Option.Option<PendingLogin>
+}
+
+/** A started login's finishing fiber, and its `LoginStart.paste`. */
+interface PendingLogin {
+  readonly fiber: Fiber.Fiber<void>
+  readonly paste: LoginStart["paste"]
 }
 
 /**
@@ -2092,13 +2146,8 @@ const mcpClientsLive = ({
             }),
           ),
         )
-      /**
-       * Starts a login to the server named `name` and returns its URL at
-       * once. A process fiber waits for the redirect, stores the tokens, and
-       * connects with them, which lists the tools into the cache; `/mcp`
-       * shows how it went. No turn and no request waits for the browser.
-       */
-      const login = (name: string) =>
+      /** The state and OAuth config of the server named `name`; fails naming the servers that sign in with OAuth. */
+      const oauthServer = (name: string) =>
         Effect.gen(function* () {
           const found = Option.fromUndefinedOr(
             [...states.values()].find((candidate) => candidate.entry.server.name === name),
@@ -2117,8 +2166,20 @@ const mcpClientsLive = ({
               message: `no MCP server named ${name} signs in with OAuth; these do: ${names.join(", ") || "none"}`,
             })
           }
-          const state = found.value
-          if (Option.isSome(state.pendingLogin)) yield* Fiber.interrupt(state.pendingLogin.value)
+          return { state: found.value, config: config.value }
+        })
+      /**
+       * Starts a login to the server named `name` and returns its URL at
+       * once. A process fiber waits for the redirect, stores the tokens, and
+       * connects with them, which lists the tools into the cache; `/mcp`
+       * shows how it went. No turn and no request waits for the browser.
+       */
+      const login = (name: string) =>
+        Effect.gen(function* () {
+          const { state, config } = yield* oauthServer(name)
+          if (Option.isSome(state.pendingLogin)) {
+            yield* Fiber.interrupt(state.pendingLogin.value.fiber)
+          }
           // The listener's scope is a child of the layer's from its creation. A
           // start that fails or is interrupted closes it; a start that
           // succeeds hands it to the finishing fiber in the same
@@ -2127,7 +2188,7 @@ const mcpClientsLive = ({
             Effect.gen(function* () {
               const scope = yield* Scope.fork(layerScope)
               const started = yield* restore(
-                startLogin(state.entry.server, config.value, auth, scope).pipe(
+                startLogin(state.entry.server, config, auth, scope).pipe(
                   Effect.provideService(Crypto.Crypto, crypto),
                   Effect.mapError((error) => {
                     if (error._tag === "McpError") return error
@@ -2135,13 +2196,32 @@ const mcpClientsLive = ({
                   }),
                 ),
               ).pipe(Effect.onExit((exit) => closeOnFailure(scope, exit)))
-              state.pendingLogin = Option.some(runFork(finishLogin(state, started, scope)))
+              const fiber = runFork(finishLogin(state, started, scope))
+              state.pendingLogin = Option.some({ fiber, paste: started.paste })
               return started.url
             }),
           )
         })
+      /**
+       * Hands the pending login of the server named `name` the redirect
+       * address the user pasted, for a browser that cannot reach the
+       * loopback listener. The checks are the listener's (see
+       * `readRedirect`); the finishing fiber does the rest.
+       */
+      const pasteRedirect = (name: string, address: string) =>
+        Effect.gen(function* () {
+          const { state } = yield* oauthServer(name)
+          if (Option.isNone(state.pendingLogin)) {
+            return yield* new McpError({
+              server: name,
+              message: `There is no login to the ${name} MCP server waiting; run /mcp login ${name} first.`,
+            })
+          }
+          return yield* state.pendingLogin.value.paste(address)
+        })
       return McpClients.of({
         login,
+        pasteRedirect,
         call: (server, name, input) =>
           Effect.gen(function* () {
             const state = yield* stateOf(server)
@@ -2546,12 +2626,27 @@ const statusLine = (server: McpServerStatus) => {
 
 const firstLine = (text: string) => text.trim().split("\n")[0] ?? ""
 
+/** What `/mcp login <server> <address>` tells the user about the address they pasted. */
+const pastedRedirectText = (name: string, redirect: LoginRedirect) =>
+  LoginRedirect.match(redirect, {
+    Code: () =>
+      `gent got the redirect for the ${name} MCP server: it finishes the login and lists the server's tools; run /mcp to see the result.`,
+    Refused: ({ message }) => `The ${name} login failed: ${message}`,
+    OtherLogin: () =>
+      `This is not the redirect of the ${name} login gent started; the login still waits.`,
+    NoCode: () => `The redirect carries no code; the ${name} login still waits.`,
+    NotCallback: () =>
+      `This is not the redirect address of the ${name} login; copy the whole address the browser shows after the login. The login still waits.`,
+  })
+
 /**
  * `/mcp` shows `mcp.status` to the user. `/mcp login <server>` starts that
  * server's OAuth login and shows the URL to open; the login finishes in the
  * background, and `/mcp` shows the result. The URL is shown, not opened: the
- * gent server may run on another machine than the browser. With no server
- * configured there is no pool, and `/mcp` says where to add one.
+ * gent server may run on another machine than the browser. Such a browser
+ * cannot reach the loopback redirect, so `/mcp login <server> <address>`
+ * takes the redirect address it shows. With no server configured there is no
+ * pool, and `/mcp` says where to add one.
  */
 const NO_SERVERS =
   "No MCP servers are configured. Add one to ~/.gent/mcp.json, or to .gent/mcp.json in a trusted project."
@@ -2562,7 +2657,7 @@ const McpCommand = request({
   slash: {
     trigger: "mcp",
     name: "MCP",
-    description: "/mcp · status of each MCP server · login <server>",
+    description: "/mcp · status of each MCP server · login <server> [redirect address]",
     category: "Tools",
   },
   input: Schema.String,
@@ -2578,11 +2673,22 @@ const McpCommand = request({
       const words = input.trim().split(/\s+/)
       if (words[0] === "login") {
         const name = words[1] ?? ""
-        const content = yield* clients.login(name).pipe(
-          Effect.map(
-            (url) =>
-              `Open this URL to log in to the ${name} MCP server. gent waits 5 minutes for the redirect, then lists the server's tools; run /mcp to see the result.\n\n${url}`,
-          ),
+        const shown = Option.match(Option.fromUndefinedOr(words[2]), {
+          onNone: () =>
+            clients
+              .login(name)
+              .pipe(
+                Effect.map(
+                  (url) =>
+                    `Open this URL to log in to the ${name} MCP server. gent waits 5 minutes for the redirect, then lists the server's tools; run /mcp to see the result. A browser on another machine cannot reach the redirect to 127.0.0.1: copy the address it shows, and run /mcp login ${name} <address>.\n\n${url}`,
+                ),
+              ),
+          onSome: (address) =>
+            clients
+              .pasteRedirect(name, address)
+              .pipe(Effect.map((redirect) => pastedRedirectText(name, redirect))),
+        })
+        const content = yield* shown.pipe(
           Effect.catchTag("McpError", (error) => Effect.succeed(error.message)),
         )
         return yield* ctx.Interaction.present({ title: "MCP login", content })

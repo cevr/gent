@@ -1788,6 +1788,92 @@ describe("mcp oauth", () => {
   )
 
   it.scopedLive(
+    "a browser on another machine finishes /mcp login with the pasted redirect; a redirect of another login is refused",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixture
+        const data = yield* makeDataDir
+        const catalogFile = path.join(data.directory, "mcp-catalog.json")
+        yield* Effect.gen(function* () {
+          const { request, shown } = yield* commandSession(oauth)
+          yield* request("login secure")
+          const prompt = yield* shown("/authorize?")
+          expect(prompt).toContain("/mcp login secure <address>")
+          const loginUrl = new URL(
+            /http:\/\/127\.0\.0\.1:\d+\/\S*authorize\?\S+/.exec(prompt)?.[0] ?? "",
+          )
+          // The browser's part, on a machine where 127.0.0.1 is not gent's: the
+          // authorization server redirects, and the address bar shows the redirect.
+          const redirect = (state: string) => {
+            const url = new URL(loginUrl.searchParams.get("redirect_uri") ?? "")
+            url.searchParams.set("code", "code-1")
+            url.searchParams.set("state", state)
+            return url.href
+          }
+          yield* request(`login secure ${redirect("another-login")}`)
+          expect(yield* shown("not the redirect of")).toContain(
+            "This is not the redirect of the secure login gent started; the login still waits.",
+          )
+          yield* request(`login secure ${redirect(loginUrl.searchParams.get("state") ?? "")}`)
+          yield* shown("gent got the redirect")
+          yield* waitFor(
+            fs.readFileString(catalogFile).pipe(Effect.orElseSucceed(() => "")),
+            (text) => text.includes("whoami"),
+            10_000,
+            "the pasted login lists the tools into the cache",
+          )
+          yield* request("")
+          expect(yield* shown("healthy")).toContain(
+            "- secure (streamable-http): healthy, 2 tools, connected",
+          )
+          // With no login waiting, a pasted redirect has nothing to finish.
+          yield* request(`login secure ${redirect(loginUrl.searchParams.get("state") ?? "")}`)
+          expect(yield* shown("no login to")).toContain(
+            "There is no login to the secure MCP server waiting; run /mcp login secure first.",
+          )
+        }).pipe(Effect.provide(data.layer))
+        expect(yield* fs.readFileString(path.join(data.directory, "mcp-auth.json"))).toContain(
+          '"access_token":"token-1"',
+        )
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive("a pasted redirect that carries the server's refusal ends the login", () =>
+    Effect.gen(function* () {
+      const oauth = yield* serveOAuthFixture
+      const data = yield* makeDataDir
+      yield* Effect.gen(function* () {
+        const { request, shown } = yield* commandSession(oauth)
+        yield* request("login secure")
+        const prompt = yield* shown("/authorize?")
+        const loginUrl = new URL(
+          /http:\/\/127\.0\.0\.1:\d+\/\S*authorize\?\S+/.exec(prompt)?.[0] ?? "",
+        )
+        const refused = new URL(loginUrl.searchParams.get("redirect_uri") ?? "")
+        refused.searchParams.set("error", "access_denied")
+        refused.searchParams.set("error_description", "the user denied access")
+        refused.searchParams.set("state", loginUrl.searchParams.get("state") ?? "")
+        yield* request(`login secure ${refused.href}`)
+        expect(yield* shown("login failed")).toContain(
+          "The secure login failed: the user denied access",
+        )
+        yield* waitFor(
+          Effect.gen(function* () {
+            yield* request("")
+            return yield* shown("- secure")
+          }),
+          (text) => text.includes("login: the user denied access"),
+          10_000,
+          "/mcp shows the refused login",
+        )
+      }).pipe(Effect.provide(data.layer))
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive(
     "two setups that find the same token near expiry redeem its refresh token once",
     () =>
       Effect.gen(function* () {
