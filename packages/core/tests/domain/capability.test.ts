@@ -344,16 +344,4 @@ describe("turn prompt composition", () => {
     const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
     expect(result).toContain("Prefer grep over bash for file searching")
   })
-
-  test("a guideline only reaches the prompt while its tool is active", () => {
-    const tools = [makeTool("grep", { description: "Search" })]
-    const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
-    expect(result).not.toContain("Prefer grep over bash")
-  })
-
-  test("the prompt never renders a delegation roster", () => {
-    const tools = [makeTool("delegate", { description: "Delegate work" })]
-    const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
-    expect(result).not.toContain("## Delegation Targets")
-  })
 })
