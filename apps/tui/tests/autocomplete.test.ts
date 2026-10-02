@@ -46,13 +46,14 @@ const writeBehind = (home: string, store: FrecencyStoreValue) =>
   })
 
 describe("autocomplete frecency store", () => {
-  storeTest("picks round-trip under the supplied home", () =>
+  storeTest("a pick is written to the file the readers read, under the given home", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
 
       yield* recordFrecencyPick(home, "$", "test", NOW)
 
+      // The path is named: a writer that writes elsewhere must not pass.
       expect(yield* fs.exists(storeFile(home))).toBe(true)
       const loaded = yield* readFrecencyStore(home)
       expect(frecencyLookup(orEmpty(loaded), NOW)("$", "test")).toBeCloseTo(1, 10)
@@ -300,21 +301,14 @@ describe("ranking with pick history", () => {
 /**
  * A pick from one surface must survive a pick from another.
  *
- * Two surfaces record picks into one file — the `/` commands registry and the
- * `$` skills extension — and they used to disagree about how. `$` re-read the
- * file on every pick. `/` wrote from a snapshot the module loaded once and
- * never refreshed, so a `$` pick that landed after that load was invisible to
- * it, and the next `/` pick serialized the stale snapshot back over the file.
- * Picks from each surface survived their own kind and were erased by the
- * other's, which is the case a reader hits constantly, because a reader uses
- * both.
+ * Two surfaces record picks into one file: the `/` commands registry and the
+ * `$` skills extension. Each pick re-reads the file and folds into what it
+ * finds, so a writer that serialized an old snapshot would erase the other
+ * surface's picks. A reader uses both surfaces, so this is the common case.
  *
- * These drive the shipped record path rather than a re-creation of it, and
- * assert on the file at the path the writers actually use — the store is the
- * subject here, not a vehicle. A previous pass on this code shipped a seam
- * test that passed trivially because its harness wrote somewhere the test
- * never looked; every assertion below reads back through `readFrecencyStore`
- * on the same `home` it wrote with, and the round-trip test names the file.
+ * These drive the shipped record path, not a re-creation of it. Every
+ * assertion reads back through `readFrecencyStore` on the same `home` it wrote
+ * with, and the store test above names the file.
  */
 
 const crossWriterTest = it.scopedLive.layer(BunServices.layer)
@@ -329,9 +323,8 @@ describe("a pick from one surface survives a pick from another", () => {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
 
-      // The reproduction, in the reader's order: /tree, $triage, /thread.
-      // Before the fix the last write dropped `$triage`, because the `/`
-      // writer folded into a snapshot taken before `$triage` existed.
+      // A `/` pick after a `$` pick folds into the file as it is now, so
+      // `$triage` stays though the first `/` pick came before it.
       yield* recordFrecencyPick(home, "/", "tree", NOW)
       yield* recordFrecencyPick(home, "$", "triage", NOW)
       yield* recordFrecencyPick(home, "/", "thread", NOW)
@@ -345,7 +338,7 @@ describe("a pick from one surface survives a pick from another", () => {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
 
-      // The other order, which lost the `/` pick the same way.
+      // The other order: a `$` pick keeps the `/` pick before it.
       yield* recordFrecencyPick(home, "$", "triage", NOW)
       yield* recordFrecencyPick(home, "/", "tree", NOW)
       yield* recordFrecencyPick(home, "$", "test", NOW)
@@ -376,22 +369,6 @@ describe("a pick from one surface survives a pick from another", () => {
     }),
   )
 
-  crossWriterTest("writes to the file the readers read, under the given home", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
-
-      yield* recordFrecencyPick(home, "$", "triage", NOW)
-
-      // Name the path. A harness that writes elsewhere must not pass.
-      const file = `${home}/.cache/gent/autocomplete-frecency.json`
-      expect(yield* fs.exists(file)).toBe(true)
-
-      const loaded = yield* readFrecencyStore(home)
-      expect(frecencyLookup(orEmpty(loaded), NOW)("$", "triage")).toBeCloseTo(1, 10)
-    }),
-  )
-
   crossWriterTest("ranking reads a pick the moment it is recorded, from any writer", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -413,23 +390,15 @@ describe("a pick from one surface survives a pick from another", () => {
 // ── autocomplete frecency durability ────────────────────────────────────────
 
 /**
- * A pick must survive a writer that is not this process, and a filter too
- * short to mean anything must not be steered by history at all.
+ * A pick must survive a writer that is not this process. The store writes a
+ * temp file and renames it over the store, and each write folds into the file
+ * as it is on disk, so a second `gent` neither interleaves with a write nor
+ * loses its own picks.
  *
- * Both were gaps in the shipped feature rather than regressions. The write
- * replaced the file in place, so a second `gent` could interleave with it;
- * and ranking applied pick history at any filter length, which entrenched a
- * favourite at one and two characters where the matcher separates rows by
- * hundredths of a point.
- *
- * **Not tested here: that a reader never sees a half-written file.** It was
- * attempted and the test could not fail — 20,000 concurrent reads against 200
- * overwrites of a megabyte store produced zero torn reads, because Bun's
- * `write` is not observably partial to a same-process reader. A test that
- * passes with the fix reverted proves nothing, so it was deleted rather than
- * kept for the look of coverage. The rename is justified by the syscall
- * instead: `rename(2)` is atomic against readers in *other* processes, which
- * is the case the in-process semaphore cannot reach.
+ * **Not tested here: that a reader never sees a half-written file.** A
+ * same-process reader cannot see Bun's `write` part done, so such a test
+ * cannot fail. The rename is the guarantee: `rename(2)` is atomic against
+ * readers in other processes, the case the in-process semaphore cannot reach.
  */
 
 const durabilityTest = it.scopedLive.layer(BunServices.layer)
@@ -512,10 +481,15 @@ describe("forgetting every pick", () => {
  * ranks. Invented names would pin nothing.
  */
 
-/** The live slash corpus: core registry commands plus extension contributions. */
+/**
+ * The slash corpus as `slashAutocompleteItems` builds it: one item for each
+ * command's name and each of its aliases, with the command's description.
+ * `/agents` and `/tree` are aliases of `/sessions`.
+ */
+const SESSIONS_DESCRIPTION = "Browse and switch sessions: every agent loop, live and stored"
 const commandsRanking: ReadonlyArray<AutocompleteItem> = [
   { id: "new", label: "/new", description: "New Session" },
-  { id: "sessions", label: "/sessions", description: "Open Sessions" },
+  { id: "sessions", label: "/sessions", description: SESSIONS_DESCRIPTION },
   { id: "branch", label: "/branch", description: "Create Branch" },
   { id: "fork", label: "/fork", description: "Fork from Message" },
   { id: "think", label: "/think", description: "Pick the reasoning level for this session" },
@@ -524,7 +498,8 @@ const commandsRanking: ReadonlyArray<AutocompleteItem> = [
   { id: "btw", label: "/btw", description: "Fork here" },
   { id: "driver", label: "/driver", description: "Driver override" },
   { id: "thread", label: "/thread", description: "Thread over sessions" },
-  { id: "agents", label: "/agents", description: "Agents" },
+  { id: "agents", label: "/agents", description: SESSIONS_DESCRIPTION },
+  { id: "tree", label: "/tree", description: SESSIONS_DESCRIPTION },
 ]
 
 /** Real skill names, which is where near-miss prefixes actually bite. */
@@ -550,18 +525,12 @@ const skillsRanking: ReadonlyArray<AutocompleteItem> = [
 ].map((name) => ({ id: name, label: name, description: `The ${name} skill` }))
 
 describe("rankAutocompleteItems", () => {
-  test("puts the named command first even when titles match the filter", () => {
-    // The regression this exists for. "Fork from Message" and "Manage API Keys"
-    // both contain "ag", and both register before /agents, so the unranked list
-    // led with /fork — which is the command Tab completed and Enter ran.
-    expect(ids(rankAutocompleteItems(commandsRanking, "ag"))[0]).toBe("agents")
-  })
-
-  test("drops a command matched only through its description", () => {
-    // "Fork from Message" and "Manage API Keys" both contain "ag", and both
-    // used to be listed for `/ag`. The description penalty is wide enough that
-    // neither survives: a command is offered for the letters in its name, and
-    // a description match alone is not evidence the reader meant it.
+  test("puts the named command first and drops one matched only through its description", () => {
+    // "Fork from Message" and "Manage API Keys" both contain "ag" and register
+    // before /agents. The first row is what Tab completes and Enter runs, so
+    // it is the named command. The description penalty is wide enough that
+    // neither of the others is listed: a description match alone is not
+    // evidence the reader meant it.
     const ranked = ids(rankAutocompleteItems(commandsRanking, "ag"))
     expect(ranked[0]).toBe("agents")
     expect(ranked).not.toContain("fork")
