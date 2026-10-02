@@ -1607,12 +1607,14 @@ const connect = (
     return yield* streamable.pipe(
       Effect.catchTag("McpError", (error) => {
         if (!SSE_FALLBACK_STATUSES.has(error.status ?? 0)) return Effect.fail(error)
+        // The SSE attempt decides the health: its refusal keeps `status` and `loggedOut`.
         return dial(server, "sse", {}, oauth, onToolsChanged).pipe(
           Effect.mapError(
             (sse) =>
               new McpError({
                 server: server.name,
                 message: `streamable HTTP ${error.message}; SSE ${sse.message}`,
+                ...omitUndefined({ status: sse.status, loggedOut: sse.loggedOut }),
               }),
           ),
         )
