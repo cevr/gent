@@ -1879,6 +1879,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const commits = repliesInView(() => "commit")
   /** Rows commits moved into history since the region was last sized. */
   let releasedRows = 0
+  /** Rows commits queued that no frame has written yet: the region does not grow over them. */
+  let unflushedRows = 0
   /**
    * The top rows of the first live item that history already holds. The live
    * view cuts them off, so no row shows twice.
@@ -2193,6 +2195,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         onSome: (to) => to - range.from,
       })
       releasedRows += rows
+      unflushedRows += rows
       pendingRows = Math.max(0, pendingRows - liveRowsGiven)
       batch(() => {
         if (completes) {
@@ -2210,6 +2213,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       // The write did not happen: the rows and the region come back.
       return () => {
         releasedRows = Math.max(0, releasedRows - rows)
+        unflushedRows = Math.max(0, unflushedRows - rows)
         batch(() => {
           if (completes) {
             setCommitted((values) => values.filter((value) => value !== fingerprintValue))
@@ -2269,7 +2273,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * lose some of its rows and keep others, so the shell's lines above gent go
    * too. Only the first transcript keeps them: nothing of gent is above it.
    */
-  const resetHistory = () => renderer.resetSplitFooterForReplay({ clearSavedLines: true })
+  const resetHistory = () => {
+    // The reset drops the queued rows with the rest of history.
+    unflushedRows = 0
+    renderer.resetSplitFooterForReplay({ clearSavedLines: true })
+  }
 
   /**
    * Draws the split region on the terminal's own screen again. A return from
@@ -2330,6 +2338,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     // A later one writes its own history, which may share rows with the last.
     if (later) resetHistory()
     else renderer.resetSplitFooterForReplay()
+    renderer.on("frame", afterCommitFrame)
     setReady(true)
   })
 
@@ -2338,6 +2347,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     if (exitFlushes.get(renderer) === flushForExit) exitFlushes.delete(renderer)
     Queue.endUnsafe(nativeTasks)
     renderer.off("frame", finishNativeReturn)
+    renderer.off("frame", afterCommitFrame)
     if (renderer.isDestroyed) return
     renderer.externalOutputMode = "passthrough"
     renderer.screenMode = "alternate-screen"
@@ -2643,7 +2653,24 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     const place = regionPlace(renderer)
     if (replaying || place.top + place.rows < renderer.terminalHeight) held = wanted
     releasedRows = 0
-    renderer.footerHeight = Math.max(wanted, held)
+    const rows = Math.max(wanted, held)
+    // Rows a commit queued are written by the next frame, into the rows the
+    // region gave up for them. Until that frame the region only shrinks: rows
+    // it took back would put the commit over the history rows above it.
+    // `afterCommitFrame` grows it then.
+    if (!replaying && unflushedRows > 0) {
+      renderer.footerHeight = Math.min(rows, renderer.footerHeight)
+      return
+    }
+    renderer.footerHeight = rows
+  }
+
+  /** The frame wrote the queued rows: the region may take the rows it wants again. */
+  const afterCommitFrame = () => {
+    if (unflushedRows <= 0) return
+    unflushedRows = 0
+    if (renderer.screenMode !== "split-footer" || props.expanded || props.overlayOpen) return
+    untrack(() => sizeRegion(false))
   }
 
   // A footer that takes the whole split region (a docked pane, its blank rows

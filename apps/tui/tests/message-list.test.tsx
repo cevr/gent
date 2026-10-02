@@ -3956,6 +3956,67 @@ describe("native transcript region at the terminal's bottom", () => {
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
   )
+
+  // A commit shrinks the region, and the next frame writes its rows into the
+  // rows the region gave up. A region that grows again before that frame (the
+  // footer grows back as a late runtime state marks the turn running) takes
+  // those rows back, and the rows land over the history rows above them.
+  it.scopedLive(
+    "a region grows only after the frame that writes the rows it gave up",
+    () =>
+      Effect.gen(function* () {
+        const [streaming, setStreaming] = createSignal(true)
+        const [footer, setFooter] = createSignal(5)
+        let screen = Option.none<CliRenderer>()
+        const sizes: Array<{ readonly shrunk: number; readonly after: number }> = []
+        let grows = 0
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items: () => [...longSession(), assistant("tall", longBody("TALL"))],
+              streaming,
+              footer,
+              paneOpen: () => false,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", () => {
+                  if (grows === 0) return
+                  grows--
+                  const shrunk = renderer.footerHeight
+                  setFooter(5)
+                  sizes.push({ shrunk, after: renderer.footerHeight })
+                })
+              },
+            }),
+          { width: 60, height },
+        )
+        const renderer = Option.getOrThrow(screen)
+        yield* waitForFrame(
+          setup,
+          () => rowsUnderRegion(renderer) === 0 && renderer.footerHeight === regionRows,
+          "the session at the terminal's bottom",
+          6_000,
+        )
+        yield* waitForStableFrame(setup)
+        // The turn ends: history takes the tall answer's top rows, and the
+        // footer shrinks while those commits are queued.
+        grows = 1
+        setStreaming(false)
+        setFooter(3)
+        yield* waitUntil(() => sizes.length > 0, "a commit after the turn's end", 6_000)
+        const [size] = sizes
+        expect(size?.after).toBe(size?.shrunk)
+        // The frame wrote the rows; the region then takes the rows it wants.
+        yield* waitForFrame(
+          setup,
+          () => renderer.footerHeight === regionRows && rowsUnderRegion(renderer) === 0,
+          "the region back at its rows",
+          6_000,
+        )
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
 })
 
 // ── native transcript exit ──────────────────────────────────────────────────
