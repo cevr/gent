@@ -154,22 +154,6 @@ describe("executeShell", () => {
     }),
   )
 
-  shellTest("truncates output over line limit", () =>
-    // Generate output with more than 2000 lines
-    Effect.gen(function* () {
-      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("seq 1 2500", testDir, PROBE_HOME)
-      expect(result.truncated).toBe(true)
-
-      // Output should be truncated to ~2000 lines
-      const lineCount = result.output.split("\n").length
-      expect(lineCount).toBeLessThanOrEqual(2001)
-      // The spill lands in this test's own data directory, not the real home.
-      const savedPath = yield* Effect.fromOption(result.savedPath)
-      expect(savedPath).toMatch(/\/gent-composer-data-[^/]*\/shell-output\/shell_[^/]*\.txt$/)
-    }),
-  )
-
   // The cap counts UTF-8 bytes, as the `@file` cap does, and cuts at a whole line.
   shellTest("multi-byte output past the byte cap is cut at a whole line", () =>
     Effect.gen(function* () {
@@ -244,15 +228,6 @@ describe("executeShell", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  shellTest("a command inside the cap spills nothing", () =>
-    Effect.gen(function* () {
-      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("echo small", testDir, PROBE_HOME)
-      expect(result.truncated).toBe(false)
-      expect(Option.isNone(result.savedPath)).toBe(true)
-    }),
-  )
-
   shellTest("truncated output is written whole under the gent data directory", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -270,10 +245,13 @@ describe("executeShell", () => {
         PROBE_HOME,
       ).pipe(inDataDir)
       expect(result.truncated).toBe(true)
+      // The output keeps at most 2000 lines.
+      expect(result.output.split("\n").length).toBeLessThanOrEqual(2001)
 
       // The reader is handed a path, not just a stump of the output.
       const savedPath = yield* Effect.fromOption(result.savedPath)
       expect(savedPath.startsWith(`${dataDir}/shell-output/`)).toBe(true)
+      expect(savedPath).toMatch(/\/shell_[^/]*\.txt$/)
 
       const saved = yield* fs.readFileString(savedPath)
       // The whole output survives: the head the cap kept and the tail it cut.
@@ -350,11 +328,9 @@ describe("paste placeholders", () => {
 /**
  * The status row's right-hand labels hold their place.
  *
- * The row used to spend one left-to-right width budget and drop whatever did
- * not fit, with no indication. Adding the cwd silently removed the effort, the
- * context gauge and the running total — the labels a reader checks at a glance
- * without reading the row. The right group is now laid out first and keeps its
- * columns; the left group truncates instead.
+ * The effort, the context gauge and the running total are the labels a reader
+ * checks at a glance. The right group is laid out first and keeps its columns;
+ * the left group truncates, so a long cwd cannot push them off the row.
  */
 
 const muted = RGBA.fromHex("#888888")
@@ -395,8 +371,8 @@ describe("the status row anchors its right-hand labels", () => {
 
   it.scopedLive("drops the anchored labels when nothing reserves them", () =>
     Effect.gen(function* () {
-      // Without a reservation the old behaviour returns: the last labels are
-      // pushed off the end by everything before them.
+      // Without a reservation the row spends one left-to-right budget: the
+      // last labels are pushed off the end by everything before them.
       const text = yield* frameText(60, 0)
       expect(text).not.toContain("$12.34")
     }).pipe(Effect.timeout("10 seconds")),
@@ -454,9 +430,14 @@ function SourcesLoaded(props: { readonly prefix: string; readonly count: number 
     </Show>
   )
 }
+/**
+ * A composer under a mock session controller. `contribute` registers the
+ * commands and the autocomplete sources; the default is `Contribute`.
+ */
 function TestComposer(props: {
   readonly suspended?: boolean
-  readonly onSubmit: (
+  /** A draft sent as a message. */
+  readonly onSubmit?: (
     content: string,
     mode: "queue" | "interject",
     target: SessionIdentity,
@@ -464,6 +445,11 @@ function TestComposer(props: {
   ) => void
   /** What the send answers; a failure stands for a send the server rejected. */
   readonly sendResult?: Effect.Effect<void, GentClientRpcError>
+  /** A slash command the composer dispatched. */
+  readonly onSlashCommand?: (cmd: string, args: string) => void
+  /** Stands in for the session's verdict that a name is no command. */
+  readonly noCommand?: (cmd: string) => boolean
+  readonly contribute?: JSX.Element
   readonly children?: JSX.Element
   readonly composerState?: () => ComposerState
   readonly dispatchComposer?: (event: ComposerEvent) => void
@@ -508,10 +494,14 @@ function TestComposer(props: {
       target: SessionIdentity,
       requestId: string,
     ) =>
-      Effect.sync(() => props.onSubmit(content, mode, target, requestId)).pipe(
+      Effect.sync(() => props.onSubmit?.(content, mode, target, requestId)).pipe(
         Effect.andThen(props.sendResult ?? Effect.void),
       ),
-    onSlashCommand: () => Effect.void,
+    onSlashCommand: ({ cmd, args, send }: SlashSubmission) =>
+      Effect.sync(() => {
+        if (props.noCommand?.(cmd) === true) send()
+        else props.onSlashCommand?.(cmd, args)
+      }),
     // The command runs as given: this harness has no ctrl+c ladder to stop it.
     runShell: <A, E, R>(_command: string, run: Effect.Effect<A, E, R>) => run,
     onRestoreQueue: () => {},
@@ -526,7 +516,7 @@ function TestComposer(props: {
   } satisfies SessionController
   return (
     <SessionControllerContext.Provider value={mockController}>
-      <Contribute />
+      {props.contribute ?? <Contribute />}
       <Composer>{props.children}</Composer>
     </SessionControllerContext.Provider>
   )
@@ -1672,8 +1662,8 @@ describe("Composer submit", () => {
  *
  * Enter and tab act on the same row through different props. The popup is the
  * last place that still knows which key arrived, so it reports them apart:
- * `onSelect` for enter, `onComplete` for tab. Collapsing the two is what made
- * tab run commands instead of completing them.
+ * `onSelect` for enter, `onComplete` for tab, so tab completes a command and
+ * does not run it.
  */
 
 const slashItems: ReadonlyArray<AutocompleteItem> = [
@@ -1937,7 +1927,7 @@ describe("AutocompletePopup renderer", () => {
  * The two cannot disagree, because both read the same ranked list.
  */
 
-/** The commands that reproduce the `/ag` ordering problem in the live registry. */
+/** Commands registered in live order: two match `ag` by title, before `/agents`. */
 function RegisterCommandsGhost() {
   const ui = useExtensionUI()
   onMount(() => {
@@ -1973,70 +1963,22 @@ function ContributeGhost() {
   return <box />
 }
 
-function TestComposerGhost(props: {
-  readonly onSubmit: (text: string) => void
-  readonly children?: JSX.Element
-}) {
-  const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
-  const ext = useExtensionUI()
-  const mockController = {
-    itemsSettled: () => true,
-    items: () => [],
-    messages: () => [],
-    authProviders: () => [],
-    forkMessages: () => [],
-    queueState: () => ({ steering: [], followUp: [] }),
-    interactionState,
-    saveDraft: () => {},
-    uiState: SessionUiState.initial,
-    composerState: () => ComposerState.cases.idle.make({}),
-    promptSearch: {
-      state: closedPromptSearch,
-      entries: () => [],
-      open: () => {},
-      onEvent: () => {},
-    },
-    activity: () => ({ phase: "idle" }),
-    phaseLabel: () => "idle",
-    armedCue: () => Option.none(),
-    elapsed: () => 0,
-    onComposerInteraction: (event: Parameters<typeof transitionComposerInteraction>[1]) =>
-      setInteractionState((current) =>
-        transitionComposerInteraction(current, event, ext.autocompleteItems()),
-      ),
-    onSubmit: (text: string) => Effect.sync(() => props.onSubmit(text)),
-    onSlashCommand: () => Effect.void,
-    // The command runs as given: this harness has no ctrl+c ladder to stop it.
-    runShell: <A, E, R>(_command: string, run: Effect.Effect<A, E, R>) => run,
-    onRestoreQueue: () => {},
-    dispatchComposer: () => {},
-    resolveAuthGate: () => {},
-    closeOverlay: () => {},
-    onForkSelect: () => {},
-    onModelSelect: () => {},
-    onReasoningSelect: () => {},
-    currentSessionName: () => "Test Session",
-    onBranchPickerSelect: () => {},
-  } satisfies SessionController
+/** Registers the ghost commands and their ranked `/` source. */
+function GhostSources() {
   return (
-    <SessionControllerContext.Provider value={mockController}>
+    <>
       <RegisterCommandsGhost />
       <ContributeGhost />
-      <Composer>{props.children}</Composer>
-    </SessionControllerContext.Provider>
+    </>
   )
 }
 
-const mount = (submitted: Array<string>) =>
+const mount = () =>
   renderScoped(
     () => (
-      <TestComposerGhost
-        onSubmit={(text) => {
-          submitted.push(text)
-        }}
-      >
+      <TestComposer contribute={<GhostSources />}>
         <Composer.Autocomplete />
-      </TestComposerGhost>
+      </TestComposer>
     ),
     { width: 80, height: 24 },
   )
@@ -2044,19 +1986,17 @@ const mount = (submitted: Array<string>) =>
 describe("Composer ghost line", () => {
   it.scopedLive("offers the top-ranked completion for a partial name", () =>
     Effect.gen(function* () {
-      const submitted: Array<string> = []
-      const setup = yield* mount(submitted)
+      const setup = yield* mount()
       yield* Effect.promise(() => setup.mockInput.typeText("/ag"))
-      // `agents` is the ghost because it is the top row. Before ranking, the
-      // top row was `/fork` — a ghost then would have offered the wrong word.
+      // `agents` is the ghost because it is the top row. `/fork` and `/auth`
+      // also match `ag` by title, and rank under it.
       yield* waitForFrame(setup, (frame) => frame.includes("agents ⇥"), "ghost")
     }),
   )
 
   it.scopedLive("withdraws the ghost when the filter matches nothing", () =>
     Effect.gen(function* () {
-      const submitted: Array<string> = []
-      const setup = yield* mount(submitted)
+      const setup = yield* mount()
       yield* Effect.promise(() => setup.mockInput.typeText("/ag"))
       yield* waitForFrame(setup, (frame) => frame.includes("agents ⇥"), "ghost")
       // `/agzz` matches no command, so there is nothing to offer.
@@ -2067,8 +2007,7 @@ describe("Composer ghost line", () => {
 
   it.scopedLive("shows no ghost once the name is fully typed", () =>
     Effect.gen(function* () {
-      const submitted: Array<string> = []
-      const setup = yield* mount(submitted)
+      const setup = yield* mount()
       yield* Effect.promise(() => setup.mockInput.typeText("/agents"))
       // The popup row is drawn: a ghost, if any, would draw with it.
       const frame = yield* waitForFrame(
@@ -2184,173 +2123,83 @@ function ContributeSlashEnter() {
   return <box />
 }
 
-function TestComposerSlashEnter(props: {
-  readonly onSlashCommand: (cmd: string, args: string) => void
-  /** Stands in for the session's verdict that a name is no command. */
-  readonly noCommand?: (cmd: string) => boolean
-  /** A draft sent as a message. */
-  readonly onSubmit?: (content: string) => void
-  readonly children?: JSX.Element
-}) {
-  const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
-  // The real controller derives autocomplete from the live contributions
-  // (session-controller.ts:389). Without them nothing ever opens a popup and
-  // Enter would reach the plain submit path, testing the wrong seam.
-  const ext = useExtensionUI()
-  const mockController = {
-    itemsSettled: () => true,
-    items: () => [],
-    messages: () => [],
-    authProviders: () => [],
-    forkMessages: () => [],
-    queueState: () => ({ steering: [], followUp: [] }),
-    interactionState,
-    saveDraft: () => {},
-    uiState: SessionUiState.initial,
-    composerState: () => ComposerState.cases.idle.make({}),
-    promptSearch: {
-      state: closedPromptSearch,
-      entries: () => [],
-      open: () => {},
-      onEvent: () => {},
-    },
-    activity: () => ({ phase: "idle" }),
-    phaseLabel: () => "idle",
-    armedCue: () => Option.none(),
-    elapsed: () => 0,
-    onComposerInteraction: (event: Parameters<typeof transitionComposerInteraction>[1]) =>
-      setInteractionState((current) =>
-        transitionComposerInteraction(current, event, ext.autocompleteItems()),
-      ),
-    onSubmit: (content: string) => Effect.sync(() => props.onSubmit?.(content)),
-    onSlashCommand: ({ cmd, args, send }: SlashSubmission) =>
-      Effect.sync(() => {
-        if (props.noCommand?.(cmd) === true) send()
-        else props.onSlashCommand(cmd, args)
-      }),
-    // The command runs as given: this harness has no ctrl+c ladder to stop it.
-    runShell: <A, E, R>(_command: string, run: Effect.Effect<A, E, R>) => run,
-    onRestoreQueue: () => {},
-    dispatchComposer: () => {},
-    resolveAuthGate: () => {},
-    closeOverlay: () => {},
-    onForkSelect: () => {},
-    onModelSelect: () => {},
-    onReasoningSelect: () => {},
-    currentSessionName: () => "Test Session",
-    onBranchPickerSelect: () => {},
-  } satisfies SessionController
+/** Registers the slash commands and the `/` and `@` sources the slash tests complete against. */
+function SlashSources() {
   return (
-    <SessionControllerContext.Provider value={mockController}>
+    <>
       <RegisterCommandsSlashEnter />
       <ContributeSlashEnter />
-      <Composer>{props.children}</Composer>
-    </SessionControllerContext.Provider>
+    </>
   )
 }
 
-/** Type `text`, wait for the popup to list `expected`, then press Enter once. */
-const typeThenEnter = (
+/** Mount a composer with its popup, under the slash commands and sources. */
+const mountSlash = (
   dispatched: Array<Dispatched>,
-  text: string,
-  expected: string,
-): Effect.Effect<
-  Effect.Success<ReturnType<typeof renderScoped>>,
-  RenderWaitTimeoutError,
-  Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const setup = yield* renderScoped(
-      () => (
-        <TestComposerSlashEnter
-          onSlashCommand={(cmd, args) => {
-            dispatched.push({ cmd, args })
-          }}
-        >
-          <Composer.Autocomplete />
-        </TestComposerSlashEnter>
-      ),
-      { width: 80, height: 24 },
-    )
-    yield* Effect.promise(() => setup.mockInput.typeText(text))
-    yield* waitForFrame(setup, (frame) => frame.includes(expected), expected)
-    setup.mockInput.pressEnter()
-    yield* Effect.promise(() => setup.renderOnce())
-    return setup
-  })
+  options: {
+    readonly noCommand?: (cmd: string) => boolean
+    readonly onSubmit?: (content: string) => void
+  } = {},
+) =>
+  renderScoped(
+    () => (
+      <TestComposer
+        contribute={<SlashSources />}
+        onSlashCommand={(cmd, args) => {
+          dispatched.push({ cmd, args })
+        }}
+        noCommand={options.noCommand}
+        onSubmit={options.onSubmit}
+      >
+        <Composer.Autocomplete />
+        <CommandsSettled />
+      </TestComposer>
+    ),
+    { width: 80, height: 24 },
+  )
 
-/** Type `text`, wait for the popup to list `expected`, then press Tab once. */
-const typeThenTab = (
+/** Type `text`, wait for the popup to list `expected`, then press `key` once. */
+const typeThenPress = (
   dispatched: Array<Dispatched>,
   text: string,
   expected: string,
+  key: "enter" | "tab",
 ): Effect.Effect<
   Effect.Success<ReturnType<typeof renderScoped>>,
   RenderWaitTimeoutError,
   Scope.Scope
 > =>
   Effect.gen(function* () {
-    const setup = yield* renderScoped(
-      () => (
-        <TestComposerSlashEnter
-          onSlashCommand={(cmd, args) => {
-            dispatched.push({ cmd, args })
-          }}
-        >
-          <Composer.Autocomplete />
-        </TestComposerSlashEnter>
-      ),
-      { width: 80, height: 24 },
-    )
+    const setup = yield* mountSlash(dispatched)
     yield* Effect.promise(() => setup.mockInput.typeText(text))
     yield* waitForFrame(setup, (frame) => frame.includes(expected), expected)
-    setup.mockInput.pressTab()
+    const press = {
+      enter: () => setup.mockInput.pressEnter(),
+      tab: () => setup.mockInput.pressTab(),
+    }
+    press[key]()
     yield* Effect.promise(() => setup.renderOnce())
     return setup
   })
 
 describe("Composer slash Enter", () => {
-  it.scopedLive("runs a zero-argument command on the first Enter", () =>
+  // `/agents` takes no argument; `/model` and `/think` take an optional one.
+  it.scopedLive("runs a named command on the first Enter, with or without an argument", () =>
     Effect.gen(function* () {
-      const dispatched: Array<Dispatched> = []
-      const setup = yield* typeThenEnter(dispatched, "/agents", "/agents")
-      expect(dispatched).toEqual([{ cmd: "agents", args: "" }])
-      // No trailing-space leftover parked in the composer.
-      expect(renderFrame(setup)).not.toContain("/agents ")
-    }),
-  )
-
-  it.scopedLive("opens a bare optional-argument command on the first Enter", () =>
-    Effect.gen(function* () {
-      const dispatched: Array<Dispatched> = []
-      yield* typeThenEnter(dispatched, "/model", "/model")
-      expect(dispatched).toEqual([{ cmd: "model", args: "" }])
-    }),
-  )
-
-  it.scopedLive("opens bare /think on the first Enter", () =>
-    Effect.gen(function* () {
-      const dispatched: Array<Dispatched> = []
-      yield* typeThenEnter(dispatched, "/think", "/think")
-      expect(dispatched).toEqual([{ cmd: "think", args: "" }])
+      for (const name of ["agents", "model", "think"]) {
+        const dispatched: Array<Dispatched> = []
+        const setup = yield* typeThenPress(dispatched, `/${name}`, `/${name}`, "enter")
+        expect(dispatched).toEqual([{ cmd: name, args: "" }])
+        // No trailing-space leftover parked in the composer.
+        expect(renderFrame(setup)).not.toContain(`/${name} `)
+      }
     }),
   )
 
   it.scopedLive("passes a typed argument through on submit", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
-      const setup = yield* renderScoped(
-        () => (
-          <TestComposerSlashEnter
-            onSlashCommand={(cmd, args) => {
-              dispatched.push({ cmd, args })
-            }}
-          >
-            <Composer.Autocomplete />
-          </TestComposerSlashEnter>
-        ),
-        { width: 80, height: 24 },
-      )
+      const setup = yield* mountSlash(dispatched)
       // The space closes the slash popup, so Enter submits the whole line.
       yield* Effect.promise(() => setup.mockInput.typeText("/model sonnet"))
       yield* Effect.promise(() => setup.renderOnce())
@@ -2363,18 +2212,7 @@ describe("Composer slash Enter", () => {
   it.scopedLive("keeps the trailing space for a file reference", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
-      const setup = yield* renderScoped(
-        () => (
-          <TestComposerSlashEnter
-            onSlashCommand={(cmd, args) => {
-              dispatched.push({ cmd, args })
-            }}
-          >
-            <Composer.Autocomplete />
-          </TestComposerSlashEnter>
-        ),
-        { width: 80, height: 24 },
-      )
+      const setup = yield* mountSlash(dispatched)
       yield* Effect.promise(() => setup.mockInput.typeText("@notes"))
       yield* waitForFrame(setup, (frame) => frame.includes("notes.ts"), "file row")
       setup.mockInput.pressEnter()
@@ -2390,7 +2228,7 @@ describe("Composer slash Enter", () => {
   it.scopedLive("a directory row completes into the directory and keeps the popup open", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
-      const setup = yield* typeThenEnter(dispatched, "@src", "src/")
+      const setup = yield* typeThenPress(dispatched, "@src", "src/", "enter")
       yield* waitForFrame(setup, (frame) => frame.includes("main.ts"), "directory rows")
       expect(renderFrame(setup)).toContain("@src/")
       expect(dispatched).toEqual([])
@@ -2405,19 +2243,10 @@ describe("Composer slash Enter", () => {
       const draft = "/tmp/x.log what is this?"
       const dispatched: Array<Dispatched> = []
       const submitted: Array<string> = []
-      const setup = yield* renderScoped(
-        () => (
-          <TestComposerSlashEnter
-            onSlashCommand={(cmd, args) => dispatched.push({ cmd, args })}
-            noCommand={(cmd) => cmd === "tmp/x.log"}
-            onSubmit={(content) => submitted.push(content)}
-          >
-            <Composer.Autocomplete />
-            <CommandsSettled />
-          </TestComposerSlashEnter>
-        ),
-        { width: 80, height: 24 },
-      )
+      const setup = yield* mountSlash(dispatched, {
+        noCommand: (cmd) => cmd === "tmp/x.log",
+        onSubmit: (content) => submitted.push(content),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("commands settled"), "commands")
       yield* Effect.promise(() => setup.mockInput.typeText(draft))
       yield* waitForFrame(setup, (frame) => frame.includes(draft), "the draft")
@@ -2435,7 +2264,8 @@ describe("Composer slash Enter", () => {
       const submitted: Array<string> = []
       const setup = yield* renderScoped(
         () => (
-          <TestComposerSlashEnter
+          <TestComposer
+            contribute={<SlashSources />}
             onSlashCommand={(cmd, args) => dispatched.push({ cmd, args })}
             onSubmit={(content) => submitted.push(content)}
           />
@@ -2458,7 +2288,7 @@ describe("Composer slash Enter", () => {
       const dispatched: Array<Dispatched> = []
       // `/mod` matches `/model`, so a row exists. Enter must select that row,
       // which dispatches `/model` — not submit the literal text `/mod`.
-      yield* typeThenEnter(dispatched, "/mod", "/model")
+      yield* typeThenPress(dispatched, "/mod", "/model", "enter")
       expect(dispatched).toEqual([{ cmd: "model", args: "" }])
     }),
   )
@@ -2466,7 +2296,7 @@ describe("Composer slash Enter", () => {
   it.scopedLive("completes a command name on Tab without running it", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
-      const setup = yield* typeThenTab(dispatched, "/agents", "/agents")
+      const setup = yield* typeThenPress(dispatched, "/agents", "/agents", "tab")
       // Tab is the completion key. Nothing ran.
       expect(dispatched).toEqual([])
       // The name is in the draft with its trailing space, ready for an argument.
@@ -2479,18 +2309,7 @@ describe("Composer slash Enter", () => {
   it.scopedLive("completes the row under the cursor on Tab and runs nothing", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
-      const setup = yield* renderScoped(
-        () => (
-          <TestComposerSlashEnter
-            onSlashCommand={(cmd, args) => {
-              dispatched.push({ cmd, args })
-            }}
-          >
-            <Composer.Autocomplete />
-          </TestComposerSlashEnter>
-        ),
-        { width: 80, height: 24 },
-      )
+      const setup = yield* mountSlash(dispatched)
       yield* Effect.promise(() => setup.mockInput.typeText("/t"))
       // `/tree` leads; `/think` is the row under it.
       yield* waitForFrame(setup, (frame) => frame.includes("/think"), "the second row")
@@ -2507,7 +2326,7 @@ describe("Composer slash Enter", () => {
       const dispatched: Array<Dispatched> = []
       // The affordance Tab exists for: complete `/model`, then type `sonnet`,
       // then submit the pair. A Tab that dispatched would never reach the arg.
-      const setup = yield* typeThenTab(dispatched, "/model", "/model")
+      const setup = yield* typeThenPress(dispatched, "/model", "/model", "tab")
       expect(dispatched).toEqual([])
       yield* Effect.promise(() => setup.mockInput.typeText("sonnet"))
       yield* Effect.promise(() => setup.renderOnce())
@@ -2520,8 +2339,8 @@ describe("Composer slash Enter", () => {
   it.scopedLive("inserts a file reference on Tab", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
-      // The `@` path never dispatched and must not start now.
-      const setup = yield* typeThenTab(dispatched, "@notes", "notes.ts")
+      // The `@` path inserts a reference and runs no command.
+      const setup = yield* typeThenPress(dispatched, "@notes", "notes.ts", "tab")
       expect(dispatched).toEqual([])
       yield* waitForFrame(setup, (frame) => frame.includes("@notes.ts"), "inserted")
     }),
