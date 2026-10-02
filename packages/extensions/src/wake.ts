@@ -438,7 +438,7 @@ const matches = Effect.fn("Wake.monitorMatches")(function* (
     Effect.mapError((cause) => new WakeError({ message: cause.message })),
   )
   const reply = yield* matcher
-    .search(result.stdoutPieces, 0)
+    .searchPieces(result.stdoutPieces)
     .pipe(Effect.mapError((cause) => new WakeError({ message: cause.message })))
   if (reply.hits.length > 0) return true
   if (reply.undecided > 0)

@@ -14,6 +14,12 @@ const MatcherReply = Schema.Struct({
 })
 type MatcherReply = typeof MatcherReply.Type
 
+const MatcherInput = Schema.TaggedUnion({
+  Lines: { text: Schema.String },
+  Pieces: { inputs: Schema.Array(Schema.String) },
+})
+type MatcherInput = typeof MatcherInput.Type
+
 /**
  * JavaScriptCore can exhaust its backtracking limit and report a miss even
  * when a later match exists. A slow miss is undecided, as in grep's existing
@@ -27,8 +33,9 @@ const UNDECIDED_INPUT_MS = 50
 const MATCHER_SOURCE = [
   "let regex",
   "onmessage = (event) => {",
-  "  const { id, source, flags, inputs, limit } = event.data",
+  "  const { id, source, flags, input, limit } = event.data",
   "  regex ??= new RegExp(source, flags)",
+  "  const inputs = input._tag === 'Lines' ? input.text.split('\\n') : input.inputs",
   "  const hits = []",
   "  let undecided = 0",
   "  for (let index = 0; index < inputs.length && hits.length <= limit; index++) {",
@@ -42,10 +49,14 @@ const MATCHER_SOURCE = [
 ].join("\n")
 
 export interface RegexMatcher {
-  /** Inputs are searched apart: grep's lines, or a monitor's retained head and tail. */
-  readonly search: (
-    inputs: ReadonlyArray<string>,
+  /** Split in the worker; grep's caller keeps no line array while it waits. */
+  readonly searchLines: (
+    text: string,
     limit: number,
+  ) => Effect.Effect<MatcherReply, RegexMatcherError>
+  /** Search retained head and tail apart, returning the first definite hit. */
+  readonly searchPieces: (
+    inputs: ReadonlyArray<string>,
   ) => Effect.Effect<MatcherReply, RegexMatcherError>
 }
 
@@ -89,16 +100,18 @@ export const makeRegexMatcher = Effect.fn("RegexMatcher.make")(function* (
   }
   thread.onerror = (event: ErrorEvent) => failAll(`Regex matcher failed: ${event.message}`)
   let nextId = 0
-  return {
-    search: Effect.fn("RegexMatcher.search")(function* (inputs, limit) {
-      return yield* Effect.callback<MatcherReply, RegexMatcherError>((resume) => {
-        const id = nextId++
-        pending.set(id, resume)
-        thread.postMessage({ id, source: regex.source, flags: regex.flags, inputs, limit })
-        return Effect.sync(() => {
-          pending.delete(id)
-        })
+  const search = Effect.fn("RegexMatcher.search")(function* (input: MatcherInput, limit: number) {
+    return yield* Effect.callback<MatcherReply, RegexMatcherError>((resume) => {
+      const id = nextId++
+      pending.set(id, resume)
+      thread.postMessage({ id, source: regex.source, flags: regex.flags, input, limit })
+      return Effect.sync(() => {
+        pending.delete(id)
       })
-    }),
+    })
+  })
+  return {
+    searchLines: (text, limit) => search(MatcherInput.cases.Lines.make({ text }), limit),
+    searchPieces: (inputs) => search(MatcherInput.cases.Pieces.make({ inputs }), 0),
   }
 })

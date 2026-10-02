@@ -1666,10 +1666,10 @@ const searchFile = (
     if (Option.isNone(decoded)) return none
 
     const text = decoded.value.text
-    const lines = text.split("\n")
     const reply = yield* search.matcher
-      .search(lines, search.limit)
+      .searchLines(text, search.limit)
       .pipe(Effect.mapError(grepMatcherError))
+    const lines = text.split("\n")
     const contextOf = (from: number, to: number) =>
       lines.slice(from, to).map((line) => clipLine(line, 0))
     const matches = reply.hits.map(([index, at]): GrepMatch => {
