@@ -21,6 +21,7 @@ import { ChildProcessSpawner } from "effect/process"
 import { BunServices } from "@effect/platform-bun"
 import {
   finishPart,
+  interruptAtEachStep,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   textDeltaPart,
@@ -1333,16 +1334,25 @@ const contextWith = (
     },
   })
 
-const interruptAfterLock = (
-  lock: ExtensionContextService["FileLock"],
-): ExtensionContextService["FileLock"] => ({
-  withLock: (path, effect) =>
-    Effect.withFiber((fiber) =>
-      lock
-        .withLock(path, effect)
-        .pipe(Effect.tap(() => Effect.sync(() => fiber.interruptUnsafe()))),
-    ),
-})
+/**
+ * The lock, and whether a locked write has ended yet: each step after the
+ * first durable write counts, the window where the file and the timers can
+ * disagree.
+ */
+const afterFirstWrite = (lock: ExtensionContextService["FileLock"]) => {
+  let written = false
+  const FileLock: ExtensionContextService["FileLock"] = {
+    withLock: (path, effect) =>
+      lock.withLock(path, effect).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            written = true
+          }),
+        ),
+      ),
+  }
+  return { FileLock, written: () => written }
+}
 
 /**
  * `WakeAlarms.schedule` drops the id from `pending` only after the fired entry's
@@ -1436,33 +1446,55 @@ const wakeFileExists = (home: string) =>
   }).pipe(Effect.provide(BunServices.layer))
 
 describe("wake tool claims", () => {
+  /** The ids the branch file holds; a branch with nothing pending keeps no file. */
+  const storedIds = (home: string) =>
+    Effect.gen(function* () {
+      if (!(yield* wakeFileExists(home))) return []
+      const entries = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
+        yield* readFile(home),
+      )
+      return entries.map((entry) => entry.wakeId)
+    })
+
+  // An interruption at any step after the first durable write leaves the branch
+  // file and the timers in agreement: a stored wake has its timer, and a wake
+  // the file dropped has none left to fire.
   it.scopedLive(
-    "interruption after durable publication leaves a branch-owned timer",
+    "an interrupted publication leaves each stored wake a branch-owned timer",
     () =>
       Effect.gen(function* () {
-        const home = yield* makeTempDirectoryScoped("wake-publication-interrupt-")
-        const queued = yield* Ref.make<ReadonlyArray<string>>([])
-        const ctx = contextWith(home, queued)
-        const setting = yield* runToolWithCtx(
-          WakeTool,
-          { afterSeconds: 60, note: "retained timer" },
-          { ...ctx, FileLock: interruptAfterLock(ctx.FileLock) },
-        ).pipe(Effect.forkScoped)
-        const exit = yield* Fiber.await(setting)
-        expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
-        const entries = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
-          yield* readFile(home),
-        )
-        expect(entries).toHaveLength(1)
-        const wakeId = entries[0]?.wakeId ?? ""
         const alarms = yield* WakeAlarms
-        expect(yield* alarms.pending).toEqual([wakeId])
-        const cancelled = yield* runToolWithCtx(CancelTool, { wakeId }, ctx)
-        expect(cancelled.cancelled).toEqual([wakeId])
-        expect(yield* alarms.pending).toEqual([])
-        expect(yield* wakeFileExists(home)).toBe(false)
-        yield* TestClock.adjust("61 seconds")
-        expect(yield* Ref.get(queued)).toEqual([])
+        yield* interruptAtEachStep(
+          Effect.gen(function* () {
+            const home = yield* makeTempDirectoryScoped("wake-publication-interrupt-")
+            const queued = yield* Ref.make<ReadonlyArray<string>>([])
+            const ctx = contextWith(home, queued)
+            const lock = afterFirstWrite(ctx.FileLock)
+            const before = yield* alarms.pending
+            return {
+              program: runToolWithCtx(
+                WakeTool,
+                { afterSeconds: 60, note: "retained timer" },
+                { ...ctx, FileLock: lock.FileLock },
+              ),
+              at: lock.written,
+              invariant: () =>
+                Effect.gen(function* () {
+                  const stored = yield* storedIds(home)
+                  const armed = (yield* alarms.pending).filter((id) => !before.includes(id))
+                  expect(armed).toEqual(stored)
+                  // A retained timer is the branch's: the cancel tool stops it.
+                  for (const wakeId of stored) {
+                    const cancelled = yield* runToolWithCtx(CancelTool, { wakeId }, ctx)
+                    expect(cancelled.cancelled).toEqual([wakeId])
+                  }
+                  expect(yield* wakeFileExists(home)).toBe(false)
+                  yield* TestClock.adjust("61 seconds")
+                  expect(yield* Ref.get(queued)).toEqual([])
+                }),
+            }
+          }),
+        )
       }).pipe(
         Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
         Effect.timeout("8 seconds"),
@@ -1471,32 +1503,36 @@ describe("wake tool claims", () => {
   )
 
   it.scopedLive(
-    "interruption after durable cancellation leaves no timer to fire",
+    "an interrupted cancellation leaves the wake whole or leaves no timer to fire",
     () =>
       Effect.gen(function* () {
-        const home = yield* makeTempDirectoryScoped("wake-cancellation-interrupt-")
-        const queued = yield* Ref.make<ReadonlyArray<string>>([])
-        const ctx = contextWith(home, queued)
-        const { wakeId } = yield* runToolWithCtx(
-          WakeTool,
-          { afterSeconds: 60, note: "cancelled" },
-          ctx,
-        )
-        const cancelling = yield* runToolWithCtx(
-          CancelTool,
-          { wakeId },
-          {
-            ...ctx,
-            FileLock: interruptAfterLock(ctx.FileLock),
-          },
-        ).pipe(Effect.forkScoped)
-        const exit = yield* Fiber.await(cancelling)
-        expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
-        expect(yield* wakeFileExists(home)).toBe(false)
         const alarms = yield* WakeAlarms
-        expect(yield* alarms.pending).toEqual([])
-        yield* TestClock.adjust("61 seconds")
-        expect(yield* Ref.get(queued)).toEqual([])
+        yield* interruptAtEachStep(
+          Effect.gen(function* () {
+            const home = yield* makeTempDirectoryScoped("wake-cancellation-interrupt-")
+            const queued = yield* Ref.make<ReadonlyArray<string>>([])
+            const ctx = contextWith(home, queued)
+            const { wakeId } = yield* runToolWithCtx(
+              WakeTool,
+              { afterSeconds: 60, note: "cancelled" },
+              ctx,
+            )
+            const lock = afterFirstWrite(ctx.FileLock)
+            return {
+              program: runToolWithCtx(CancelTool, { wakeId }, { ...ctx, FileLock: lock.FileLock }),
+              at: lock.written,
+              invariant: () =>
+                Effect.gen(function* () {
+                  const stored = yield* storedIds(home)
+                  const armed = (yield* alarms.pending).filter((id) => id === wakeId)
+                  expect(armed).toEqual(stored)
+                  yield* TestClock.adjust("61 seconds")
+                  yield* settled(alarms.pending, Option.some(wakeId))
+                  expect((yield* Ref.get(queued)).length).toBe(stored.length)
+                }),
+            }
+          }),
+        )
       }).pipe(
         Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
         Effect.timeout("8 seconds"),

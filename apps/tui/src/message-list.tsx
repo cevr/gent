@@ -12,6 +12,8 @@ import {
   toolArgSummary,
   parseBashOutput,
   plural,
+  repliesInView,
+  type ReplyWriter,
   previewOutput,
   truncate,
   workingIconFrame,
@@ -1568,10 +1570,12 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    */
   const [retryVersion, setRetryVersion] = createSignal(0)
   /**
-   * Bumped when rows come back to the live view, replay, or are cleared, so
-   * commits drawn before that point never land.
+   * A commit writes history only while it is the newest: rows coming back to
+   * the live view, a replay or a clear take a newer one, so commits drawn
+   * before that point never land. The key is constant: only those overtake a
+   * commit.
    */
-  let commitEpoch = 0
+  const commits = repliesInView(() => "commit")
   /** Rows commits moved into history since the region was last sized. */
   let releasedRows = 0
   /**
@@ -1647,7 +1651,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     settlingNative = false
     // A commit still settling was drawn for the screen the replay clears:
     // it comes back, and the replay offers its item again.
-    commitEpoch += 1
+    commits.take()
     footerFloor = Option.none()
     batch(() => {
       setNativeOutputReady(false)
@@ -1783,17 +1787,17 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const commitItems = (
     items: SessionItem[],
     rows: RowRange,
-    epoch: number,
+    commit: ReplyWriter,
     lastTry: boolean,
     handOver: (rows: number) => () => void,
     stillOffered: () => boolean,
   ): Effect.Effect<CommitOutcome> =>
     Effect.suspend(() => {
       // An item queued behind one that came back waits for the next pass.
-      if (commitEpoch !== epoch) return Effect.succeed("stale")
+      if (!commit.live()) return Effect.succeed("stale")
       // The item may also have changed while it settled (its text replaced, a
       // call's result in): rows drawn from the old item never land.
-      const stillCurrent = () => commitEpoch === epoch && canCommitNatively() && stillOffered()
+      const stillCurrent = () => commit.live() && canCommitNatively() && stillOffered()
       if (!stillCurrent()) return Effect.succeed("refused")
       // Settling is asynchronous. The screen may have changed hands and the
       // reader may have cleared the display while it ran, so both are
@@ -1858,7 +1862,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * it. A later pass offers them again.
    */
   const rewind = () => {
-    commitEpoch += 1
+    commits.take()
     queued = untrack(committedCount)
     queuedRows = untrack(partialRows)
     // Every offer still in flight is behind the one that came back: none lands.
@@ -1874,7 +1878,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    */
   const write = (item: SessionItem, fingerprintValue: string, range: RowRange) => {
     const tries = unsettledTries.get(fingerprintValue) ?? 0
-    const epoch = commitEpoch
+    const commit = commits.newest()
     const completes = Option.isNone(range.to)
     // The live tail gives up the rows in the same update that drops them, so
     // the region shrinks before the rows are queued, not a layout later.
@@ -1915,7 +1919,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       commitItems(
         [item],
         range,
-        epoch,
+        commit,
         tries + 1 >= SETTLE_TRIES,
         handOver,
         // Commits land in transcript order, so this item is the next after history.
@@ -2097,7 +2101,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         // Bumped before the queue sees the reset: a commit already settling now
         // finds a stale stamp and drops its rows rather than writing history the
         // reader just dismissed.
-        commitEpoch += 1
+        commits.take()
         // The boundary moves at once, so no later pass can offer a pre-clear
         // item again while the queue is still draining.
         batch(() => {

@@ -1,6 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
-  Cause,
   ConfigProvider,
   Context,
   Deferred,
@@ -40,6 +39,7 @@ import {
 } from "@gent/core/protocol"
 import {
   finishPart,
+  interruptAtEachStep,
   LanguageModelLayers,
   textDeltaPart,
   textStep,
@@ -2302,64 +2302,78 @@ describe("a background job the server stopped", () => {
   }
 
   it.scopedLive.layer(BunServices.layer)(
-    "interruption after a durable start claim leaves a scope-owned job",
+    "an interruption at any step after a durable start claim leaves a scope-owned job",
     () =>
-      Effect.gen(function* () {
-        const directory = yield* makeTempDirectoryScoped("gent-background-claim-")
-        const ctx = {
-          ...stubCtx,
-          home: directory,
-          toolCallId: ToolCallId.make("claim-interrupted"),
-        }
-        const key = { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId: ctx.toolCallId }
-        const storageLayer = fileStorage(`${directory}/storage.db`)
-        // Interrupt at the existing storage boundary after the real transaction commits.
-        const interruptedStorage = Layer.effect(
-          BackgroundBashStorage,
-          Effect.gen(function* () {
-            const storage = yield* BackgroundBashStorage
-            return BackgroundBashStorage.of({
-              ...storage,
-              claimStart: (input) =>
-                Effect.withFiber((fiber) =>
+      interruptAtEachStep(
+        Effect.gen(function* () {
+          const directory = yield* makeTempDirectoryScoped("gent-background-claim-")
+          const ctx = {
+            ...stubCtx,
+            home: directory,
+            toolCallId: ToolCallId.make("claim-interrupted"),
+          }
+          const key = {
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            toolCallId: ctx.toolCallId,
+          }
+          const storageLayer = fileStorage(`${directory}/storage.db`)
+          // The steps that count start once the real start transaction commits.
+          let claimed = false
+          const claimingStorage = Layer.effect(
+            BackgroundBashStorage,
+            Effect.gen(function* () {
+              const storage = yield* BackgroundBashStorage
+              return BackgroundBashStorage.of({
+                ...storage,
+                claimStart: (input) =>
                   storage.claimStart(input).pipe(
                     Effect.tap((claim) =>
                       Effect.sync(() => {
-                        if (claim._tag === "Started") fiber.interruptUnsafe()
+                        claimed ||= claim._tag === "Started"
                       }),
                     ),
                   ),
-                ),
-            })
-          }),
-        ).pipe(Layer.provideMerge(BackgroundBashStorage.Live))
-        const processLayer = BackgroundBashSupervisorLive.pipe(
-          Layer.provideMerge(interruptedStorage),
-          Layer.provideMerge(Layer.merge(storageLayer, BunServices.layer)),
-        )
-        const scope = yield* Scope.make()
-        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-        const profile = yield* Layer.buildWithScope(processLayer, scope)
-        const start = yield* runToolWithCtx(
-          BashTool,
-          { command: "sleep 30", run_in_background: true },
-          ctx,
-        ).pipe(Effect.provideContext(profile), Effect.forkChild)
-        const outcome = yield* Fiber.await(start)
-        expect(Exit.isFailure(outcome)).toBe(true)
-        if (Exit.isFailure(outcome)) expect(Cause.hasInterruptsOnly(outcome.cause)).toBe(true)
-        // No new process generation can reconcile this claim. Its resource must own cleanup.
-        yield* Scope.close(scope, Exit.void)
-        const claim = yield* BackgroundBashStorage.pipe(
-          Effect.flatMap((storage) =>
-            storage.claimStart({ ...key, command: "sleep 30", cwd: Option.some(directory) }),
-          ),
-          Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))),
-        )
-        expect(claim._tag).toBe("Terminal")
-        if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
-      }).pipe(withProcessTimeout),
-    processTestTimeout,
+              })
+            }),
+          ).pipe(Layer.provideMerge(BackgroundBashStorage.Live))
+          const processLayer = BackgroundBashSupervisorLive.pipe(
+            Layer.provideMerge(claimingStorage),
+            Layer.provideMerge(Layer.merge(storageLayer, BunServices.layer)),
+          )
+          const scope = yield* Scope.make()
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+          const profile = yield* Layer.buildWithScope(processLayer, scope)
+          return {
+            program: runToolWithCtx(
+              BashTool,
+              { command: "sleep 30", run_in_background: true },
+              ctx,
+            ).pipe(Effect.provideContext(profile)),
+            at: () => claimed,
+            // Interrupted or started, no new process generation can reconcile
+            // this claim: its resource owns cleanup when the scope closes.
+            invariant: () =>
+              Effect.gen(function* () {
+                yield* Scope.close(scope, Exit.void)
+                const claim = yield* BackgroundBashStorage.pipe(
+                  Effect.flatMap((storage) =>
+                    storage.claimStart({
+                      ...key,
+                      command: "sleep 30",
+                      cwd: Option.some(directory),
+                    }),
+                  ),
+                  Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))),
+                )
+                expect(claim._tag).toBe("Terminal")
+                if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
+              }),
+          }
+        }),
+      ).pipe(Effect.timeout("20 seconds")),
+    // One run per step after the claim, each with a real process: about 16 runs.
+    25_000,
   )
 
   it.scopedLive(

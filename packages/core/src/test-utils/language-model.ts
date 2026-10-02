@@ -4,13 +4,17 @@ import {
   Context,
   Deferred,
   Effect,
+  type Exit,
+  Fiber,
   Layer,
   Option,
   Predicate,
   Queue,
   Record,
   Ref,
+  Scheduler,
   Schema,
+  type Scope,
   Stream,
 } from "effect"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
@@ -326,6 +330,69 @@ export const waitFor = <A, R = never>(
       return yield* loop
     })
     return yield* loop
+  })
+
+/** One run of `interruptAtEachStep`: what it interrupts and what must hold after. */
+export interface InterruptionTrial<A, E, R, E2, R2> {
+  readonly program: Effect.Effect<A, E, R>
+  /** The steps that count: the boundaries where this holds. Every boundary counts by default. */
+  readonly at?: () => boolean
+  /** Checked after the run, interrupted or not. */
+  readonly invariant: (exit: Exit.Exit<A, E>, interrupted: boolean) => Effect.Effect<void, E2, R2>
+}
+
+/**
+ * Interrupt a program at each step in turn and check what must hold after:
+ * run k sets up a fresh trial, interrupts its program at the k-th scheduler
+ * boundary where `at` holds (the runtime asks the scheduler whether to yield
+ * before each operation), and runs the invariant. The walk ends with the first
+ * run the program completes before its interruption point, so a test does not
+ * depend on how many steps the implementation takes. Each run is its own
+ * scope. A program still running after `limit` interruption points is a
+ * defect. Returns the number of runs.
+ */
+export const interruptAtEachStep = <A, E, R, E2, R2, ES, RS>(
+  trial: Effect.Effect<InterruptionTrial<A, E, R, E2, R2>, ES, RS>,
+  limit = 64,
+): Effect.Effect<number, E2 | ES, Exclude<R | R2 | RS, Scope.Scope>> =>
+  Effect.gen(function* () {
+    for (let step = 1; step <= limit; step++) {
+      const completed = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { program, at = () => true, invariant } = yield* trial
+          const scheduler = new Scheduler.MixedScheduler()
+          let root = Option.none<Fiber.Fiber<unknown, unknown>>()
+          let seen = 0
+          let interrupted = false
+          const interrupting: Scheduler.Scheduler = {
+            executionMode: scheduler.executionMode,
+            makeDispatcher: () => scheduler.makeDispatcher(),
+            shouldYield: (fiber) => {
+              // The program's own fiber: a fiber it forks (a timer, a worker)
+              // inherits the scheduler, and stopping one alone is not an
+              // interruption of the program.
+              const own = Option.isSome(root) && root.value === fiber
+              if (!interrupted && own && at() && ++seen === step) {
+                interrupted = true
+                // The runtime exposes this hook to synchronous schedulers.
+                fiber.interruptUnsafe()
+              }
+              return scheduler.shouldYield(fiber)
+            },
+          }
+          const run = yield* Effect.withFiber((fiber) => {
+            root = Option.some(fiber)
+            return program
+          }).pipe(Effect.provideService(Scheduler.Scheduler, interrupting), Effect.forkChild)
+          yield* invariant(yield* Fiber.await(run), interrupted)
+          return !interrupted
+        }),
+      )
+      if (completed) return step
+    }
+    return yield* Effect.die(
+      new Error(`the program was still running after ${limit} interruption points`),
+    )
   })
 
 // ── request shape ───────────────────────────────────────────────────────────

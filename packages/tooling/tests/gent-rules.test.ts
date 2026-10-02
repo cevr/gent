@@ -20,8 +20,9 @@
 
 import { describe, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
+import { Effect, FileSystem, Option, Path, Predicate, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/process"
+import { parseSync, Visitor } from "oxc-parser"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import gentRules, {
   isTest,
@@ -177,6 +178,25 @@ const CASES: ReadonlyArray<RuleCase> = [
     invalid: "apps/tui/src/no-code-unit-padding.invalid.ts",
     valid: ["apps/tui/src/no-code-unit-padding.valid.ts"],
     expectedCount: 15,
+  },
+  {
+    // TUI text is edited, cut and counted by grapheme.
+    rule: "gent/no-code-unit-text-edit",
+    invalid: "apps/tui/src/no-code-unit-text-edit.invalid.ts",
+    valid: ["apps/tui/src/no-code-unit-text-edit.valid.ts"],
+    // the pre-fix auth backspace, key mask and field cut, the btw and list
+    // filter backspaces, an `Array.from` cut, a typed `substring` and a
+    // `length - 1` slice, and a template literal glyph
+    expectedCount: 9,
+  },
+  {
+    // A late TUI reply writes through `repliesInView`; its owner keeps the counter.
+    rule: "gent/one-reply-writer",
+    invalid: "apps/tui/src/one-reply-writer.invalid.ts",
+    valid: ["apps/tui/src/one-reply-writer.valid.ts", "apps/tui/src/utils.ts"],
+    // the navigation counter (`++`), the listing generation (`+=`) and the
+    // commit epoch (`x = x + 1`)
+    expectedCount: 3,
   },
   {
     // A shipped extension reads only the two authoring entries.
@@ -526,7 +546,107 @@ effectDescribe("custom lint rules", () => {
       .filter((rule) => !covered.has(rule))
     expect(uncovered).toEqual([])
   })
+
+  /**
+   * A rule that names an imported symbol is held to its binding, not its
+   * spelling: its invalid fixture imports the symbol under another name, and
+   * every case pins its count, so a rule that stops resolving the alias loses
+   * a report and fails the fixture run.
+   */
+  it.live(
+    "every rule that resolves an import has an aliased import in a pinned invalid fixture",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const rulesFile = yield* path.fromFileUrl(new URL("../src/gent-rules.ts", import.meta.url))
+        const { dir } = yield* fixturesBeside(new URL(import.meta.url))
+        const resolving = rulesResolvingImports(yield* fs.readFileString(rulesFile))
+        // The resolver itself is found: an empty set would pass every rule.
+        expect(resolving).toContain("gent/no-identity-encode")
+        const rows = yield* Effect.forEach(resolving, (rule) =>
+          Effect.gen(function* () {
+            const cases = CASES.filter((c) => c.rule === rule)
+            const texts = yield* Effect.forEach(cases, (c) =>
+              fs.readFileString(path.join(dir, c.invalid)),
+            )
+            return {
+              rule,
+              aliased: texts.some((text) => ALIASED_IMPORT.test(text)),
+              pinned: cases.every((c) => Option.isSome(Option.fromNullishOr(c.expectedCount))),
+            }
+          }),
+        )
+        expect(rows).toEqual(rows.map((row) => ({ ...row, aliased: true, pinned: true })))
+      }).pipe(Effect.provide(BunServices.layer)),
+  )
 })
+
+// ── which rules resolve an import ───────────────────────────────────────────
+
+/** `import { a as b }` or `import * as n`: a symbol under a name of the importer's. */
+const ALIASED_IMPORT = /import\s+(?:type\s+)?(?:\{[^}]*\bas\s+[\w$]+[^}]*\}|\*\s+as\s+[\w$]+)/
+
+/**
+ * The rules whose body reaches `importedSymbol`, the helper that resolves a
+ * name through its import, directly or through a file-level helper that does.
+ * Read from the plugin source, so a new rule that resolves an import is held
+ * without a flag its author could leave out.
+ */
+const rulesResolvingImports = (source: string): ReadonlyArray<string> => {
+  interface Span {
+    readonly name: string
+    readonly start: number
+    readonly end: number
+  }
+  const ruleNames = new Set(Object.keys(gentRules.rules))
+  const identifiers: Array<Span> = []
+  const declared: Array<Span> = []
+  const rules: Array<Span> = []
+  new Visitor({
+    Identifier: (node) => {
+      identifiers.push({ name: node.name, start: node.start, end: node.end })
+    },
+    VariableDeclarator: (node) => {
+      if (node.id.type !== "Identifier" || Predicate.isNull(node.init)) return
+      declared.push({ name: node.id.name, start: node.init.start, end: node.init.end })
+    },
+    FunctionDeclaration: (node) => {
+      if (Predicate.isNull(node.id)) return
+      declared.push({ name: node.id.name, start: node.start, end: node.end })
+    },
+    Property: (node) => {
+      if (node.key.type !== "Literal") return
+      const name = String(node.key.value)
+      if (ruleNames.has(name)) rules.push({ name, start: node.start, end: node.end })
+    },
+  }).visit(parseSync("gent-rules.ts", source).program)
+  // File-level helpers only, the ones no other declaration holds: a rule's
+  // own locals sit inside its span already, and a local name says nothing
+  // about another rule that uses the same spelling.
+  const helpers = declared.filter(
+    (inner) =>
+      !declared.some(
+        (outer) => outer !== inner && outer.start <= inner.start && inner.end <= outer.end,
+      ),
+  )
+  const resolving = new Set(["importedSymbol"])
+  /** Whether a span names a function that resolves an import. */
+  const reaches = (span: Span) =>
+    identifiers.some(
+      (id) => id.start >= span.start && id.start < span.end && resolving.has(id.name),
+    )
+  let grew = true
+  while (grew) {
+    const added = helpers.filter((helper) => !resolving.has(helper.name) && reaches(helper))
+    for (const helper of added) resolving.add(helper.name)
+    grew = added.length > 0
+  }
+  return rules.flatMap((rule) => {
+    if (!reaches(rule)) return []
+    return [`gent/${rule.name}`]
+  })
+}
 
 // ── what is a test ──────────────────────────────────────────────────────────
 
