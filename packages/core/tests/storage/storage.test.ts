@@ -4,6 +4,7 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import {
   Cause,
+  Clock,
   Effect,
   Exit,
   FileSystem,
@@ -22,6 +23,7 @@ import {
   emptyTurnRecord,
   EventDecodeError,
   EventStorage,
+  InteractionStorage,
   MessageStorage,
   RelationshipStorage,
   SESSION_ANCESTORS_SQL,
@@ -38,6 +40,7 @@ import {
   WorkspaceId,
   BranchId,
   ExtensionId,
+  InteractionRequestId,
   MessageId,
   RequestId,
   SessionId,
@@ -60,7 +63,8 @@ import {
   ToolSourceRevision,
 } from "../../src/domain/capability"
 import { StorageError } from "../../src/domain/errors"
-import { testSqliteStorage } from "../../src/test-utils/harness"
+import { ensureStorageParents, testSqliteStorage } from "../../src/test-utils/harness"
+import type { InteractionRequestRecord } from "../../src/domain/interaction"
 
 // ── session storage ─────────────────────────────────────────────────────────
 
@@ -2783,5 +2787,158 @@ describe("turn_records migration", () => {
         .map((column) => column.name)
       expect(key).toEqual(["session_id", "branch_id", "message_id"])
     }).pipe(Effect.provide(storageLayer)),
+  )
+})
+
+// ── interaction storage ─────────────────────────────────────────────────────
+
+describe("InteractionStorage", () => {
+  const interactionStorageLive = Layer.mergeAll(
+    testSqliteStorage(Layer.empty, {}),
+    GentPlatform.Test(),
+  )
+  it.live("a request resolved in storage leaves the open list", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const record: InteractionRequestRecord = {
+        requestId: InteractionRequestId.make("req-manual-1"),
+        sessionId: SessionId.make("s2"),
+        branchId: BranchId.make("b2"),
+        paramsJson: "{}",
+        status: "pending",
+        createdAt: yield* Clock.currentTimeMillis,
+      } satisfies Parameters<typeof is.persist>[0]
+      yield* ensureStorageParents({ sessionId: record.sessionId, branchId: record.branchId })
+      yield* is.persist(record)
+      const before = yield* is.listOpen()
+      expect(before.some((r) => r.requestId === InteractionRequestId.make("req-manual-1"))).toBe(
+        true,
+      )
+      yield* is.resolve(InteractionRequestId.make("req-manual-1"))
+      const after = yield* is.listOpen()
+      expect(after.some((r) => r.requestId === InteractionRequestId.make("req-manual-1"))).toBe(
+        false,
+      )
+    }).pipe(Effect.provide(interactionStorageLive)),
+  )
+  it.live("pending requests are scoped to the current workspace", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const first = {
+        requestId: InteractionRequestId.make("req-workspace-a"),
+        sessionId: SessionId.make("s-workspace-a"),
+        branchId: BranchId.make("b-workspace-a"),
+        paramsJson: "{}",
+        status: "pending",
+        createdAt: yield* Clock.currentTimeMillis,
+      } satisfies Parameters<typeof is.persist>[0]
+      const second = {
+        requestId: InteractionRequestId.make("req-workspace-b"),
+        sessionId: SessionId.make("s-workspace-b"),
+        branchId: BranchId.make("b-workspace-b"),
+        paramsJson: "{}",
+        status: "pending",
+        createdAt: first.createdAt + 1,
+      } satisfies Parameters<typeof is.persist>[0]
+
+      yield* ensureStorageParents({
+        sessionId: first.sessionId,
+        branchId: first.branchId,
+      }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+      yield* is.persist(first).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+      yield* ensureStorageParents({
+        sessionId: second.sessionId,
+        branchId: second.branchId,
+      }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B))
+      yield* is.persist(second).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B))
+
+      const pendingA = yield* is
+        .listOpen()
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+      const pendingB = yield* is
+        .listOpen()
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B))
+
+      expect(pendingA.map((record) => record.requestId)).toEqual([first.requestId])
+      expect(pendingB.map((record) => record.requestId)).toEqual([second.requestId])
+
+      yield* is
+        .resolve(second.requestId)
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+      const stillPendingB = yield* is
+        .listOpen()
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B))
+      expect(stillPendingB.map((record) => record.requestId)).toEqual([second.requestId])
+
+      yield* is
+        .resolve(second.requestId)
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B))
+      const resolvedB = yield* is
+        .listOpen()
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B))
+      expect(resolvedB).toEqual([])
+    }).pipe(Effect.provide(interactionStorageLive)),
+  )
+  it.live("pending requests are unique per session branch", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const sessionId = SessionId.make("s-singleton")
+      const branchId = BranchId.make("b-singleton")
+      yield* ensureStorageParents({ sessionId, branchId })
+      yield* is.persist({
+        requestId: InteractionRequestId.make("req-singleton-1"),
+        sessionId,
+        branchId,
+        paramsJson: "{}",
+        status: "pending",
+        createdAt: 1,
+      })
+      const duplicate = yield* Effect.exit(
+        is.persist({
+          requestId: InteractionRequestId.make("req-singleton-2"),
+          sessionId,
+          branchId,
+          paramsJson: "{}",
+          status: "pending",
+          createdAt: 2,
+        }),
+      )
+      expect(duplicate._tag).toBe("Failure")
+      const pending = yield* is.listOpen({ sessionId, branchId })
+      expect(pending.map((record) => record.requestId)).toEqual([
+        InteractionRequestId.make("req-singleton-1"),
+      ])
+    }).pipe(Effect.provide(interactionStorageLive)),
+  )
+  it.live("a stored owner loads back, and a row stored without one still loads", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const sessionId = SessionId.make("s-owner")
+      const owned = { sessionId, branchId: BranchId.make("b-owned") }
+      const legacy = { sessionId, branchId: BranchId.make("b-legacy") }
+      yield* ensureStorageParents(owned)
+      yield* ensureStorageParents(legacy)
+      const owner = { toolCallId: ToolCallId.make("call-1"), occurrence: 2 }
+      yield* is.persist({
+        requestId: InteractionRequestId.make("req-owned"),
+        ...owned,
+        paramsJson: "{}",
+        status: "pending",
+        createdAt: 1,
+        owner,
+      })
+      yield* is.persist({
+        requestId: InteractionRequestId.make("req-legacy"),
+        ...legacy,
+        paramsJson: "{}",
+        status: "pending",
+        createdAt: 2,
+      })
+      const [ownedRow] = yield* is.listOpen(owned)
+      const [legacyRow] = yield* is.listOpen(legacy)
+      expect(ownedRow?.owner).toEqual(owner)
+      expect(legacyRow?.requestId).toBe(InteractionRequestId.make("req-legacy"))
+      expect(legacyRow?.owner).toBeUndefined()
+    }).pipe(Effect.provide(interactionStorageLive)),
   )
 })
