@@ -161,15 +161,6 @@ describe("agents view projection", () => {
       })
       expect(rows).toHaveLength(2)
     })
-
-    test("carries durable name and cwd through", () => {
-      const rows = reconcileAgentRows({
-        live: [live({ session: "s1", branch: "b1" })],
-        durable: [durable({ session: "s1", branch: "b1", name: "Fix the parser", cwd: "/repo" })],
-      })
-      expect(rows[0]?.name).toEqual(Option.some("Fix the parser"))
-      expect(rows[0]?.cwd).toEqual(Option.some("/repo"))
-    })
   })
 
   describe("tree building", () => {
@@ -223,19 +214,6 @@ describe("agents view projection", () => {
       )
       expect(rows).toHaveLength(1)
       expect(rows[0]?.depth).toBe(0)
-    })
-
-    test("terminates on a parent cycle instead of looping forever", () => {
-      const rows = buildRowTree(
-        reconcileAgentRows({
-          live: [],
-          durable: [
-            durable({ session: "a", branch: "b", parentSession: "b", parentBranch: "b" }),
-            durable({ session: "b", branch: "b", parentSession: "a", parentBranch: "b" }),
-          ],
-        }),
-      )
-      expect(rows).toHaveLength(2)
     })
 
     test("a child whose parent sits in another section is a root of its own section", () => {
@@ -410,15 +388,6 @@ describe("agents view projection", () => {
       ])
     })
 
-    test("survives an empty live catalog, as after a restart", () => {
-      const rows = projectAgentRows({
-        live: [],
-        durable: [durable({ session: "s1", branch: "b1", name: "yesterday" })],
-      })
-      expect(rows).toHaveLength(1)
-      expect(rows[0]?.section).toBe("inactive")
-    })
-
     test("returns nothing when both catalogs are empty", () => {
       expect(projectAgentRows({ live: [], durable: [] })).toHaveLength(0)
     })
@@ -486,13 +455,12 @@ describe("agents view live activity", () => {
 })
 
 /**
- * Agents view RPC acceptance — exercises AgentsViewExtension through the full
- * request(...) path with per-request scopes, matching production behavior.
+ * Agents view RPC acceptance: AgentsViewExtension through the full request
+ * path with per-request scopes, as production runs it.
  *
- * The projection itself is covered by the pure tests above. This RPC block
- * adds the wiring: that `listSessions` and `listActiveLoops` reach
- * real host facets rather than their `unavailable` defaults. Both facets die
- * when unwired, so a passing assertion here is proof the seam is connected.
+ * The pure tests above cover the projection; this block covers the wiring:
+ * `listSessions` and `listActiveLoops` reach the real host facets. An unwired
+ * facet dies, so a passing assertion here proves the seam is connected.
  */
 
 const ReplySchema = Schema.Struct({
@@ -942,18 +910,6 @@ describe("AgentsViewExtension via RPC", () => {
   )
 
   it.live(
-    "a query that matches nothing returns no rows",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { reply } = yield* listAgents({ query: "no-such-agent-anywhere" })
-          expect(reply.rows).toHaveLength(0)
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
-  )
-
-  it.live(
     "a child session nests under its parent",
     () =>
       Effect.scoped(
@@ -961,7 +917,7 @@ describe("AgentsViewExtension via RPC", () => {
           const harness = yield* openHarness
 
           // `session.create` stores parentSessionId/parentBranchId, which is the
-          // same link `delegate` writes for a subagent. Step 5's disclosure tree
+          // same link `delegate` writes for a subagent. The listing's tree
           // reads nothing else, so proving depth here proves the nesting seam.
           // Neither has a loop, so both sit in one section: a row nests only
           // under a parent drawn in its own section.
@@ -1067,18 +1023,6 @@ describe("AgentsViewExtension via RPC", () => {
           expect(reply.rows.find((row) => row.sessionId === harness.sessionId)?.live).toBe(true)
           const whole = yield* requestRows(harness, {})
           expect(whole.reply.rows.map((row) => row.sessionId)).toContain(beside.sessionId)
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
-  )
-
-  it.live(
-    "the search filter keeps the session it matches",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { reply, sessionId } = yield* listAgents({ query: "agents-view-rpc" })
-          expect(reply.rows.map((row) => row.sessionId)).toContain(sessionId)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

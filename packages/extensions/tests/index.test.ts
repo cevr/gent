@@ -2,7 +2,6 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Option, Path } from "effect"
 import { getToolId, runProcess } from "@gent/core/extensions/api"
 import { BuiltinExtensionModules } from "../src/index.js"
-import { homedir } from "node:os"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
@@ -11,6 +10,7 @@ import {
   collectTestContributions,
   createRpcHarness,
   LanguageModelLayers,
+  makeTempDirectoryScoped,
   textStep,
 } from "@gent/core/test-utils"
 
@@ -126,17 +126,15 @@ const freshProcessLayer = Layer.mergeAll(
 // ── tool schemas ────────────────────────────────────────────────────────────
 
 describe("builtin tool schemas", () => {
-  it.live("are compatible with Anthropic tool structured output", () => {
-    const home = homedir()
-
-    return Effect.gen(function* () {
+  // A temp home and cwd, so the user's own `~/.gent` cannot change the set.
+  it.scopedLive("are compatible with Anthropic tool structured output", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("gent-schemas-home-")
+      const cwd = yield* makeTempDirectoryScoped("gent-schemas-cwd-")
       const failures: string[] = []
 
       for (const extension of shippedPreset.extensionInputs) {
-        const contributions = yield* collectTestContributions(extension.setup, {
-          cwd: process.cwd(),
-          home,
-        })
+        const contributions = yield* collectTestContributions(extension.setup, { cwd, home })
 
         for (const tool of contributions.tools ?? []) {
           const failure = yield* Effect.try({
@@ -170,8 +168,8 @@ describe("builtin tool schemas", () => {
           GentPlatform.Test(),
         ),
       ),
-    )
-  })
+    ),
+  )
 })
 
 // ── session deletion ────────────────────────────────────────────────────────

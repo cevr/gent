@@ -218,32 +218,40 @@ describe("wake", () => {
       expect(yield* dueAtOf({ at: "1970-01-01T00:16:40Z" }, midSecond)).toBe(midSecond)
       const lastSecond = yield* Effect.exit(dueAtOf({ at: "1970-01-01T00:16:39Z" }, midSecond))
       expect(Exit.isFailure(lastSecond)).toBe(true)
-      expect(wakeMessage({ _tag: "alarm", wakeId: "w1", dueAt: 1_200_000, note: "check CI" })).toBe(
-        "Alarm w1 fired at 1970-01-01T00:20:00.000Z. check CI",
-      )
-      const monitor = WakeEntry.cases.monitor.make({
-        wakeId: "m1",
-        command: "true",
-        everySeconds: 1,
-        deadline: 0,
-        note: "merge it",
-      })
-      expect(monitorMessage(monitor, "matched", 3, "ok\n")).toBe(
-        "Monitor m1 matched after 3 checks of `true`. merge it\n\nLast output:\nok",
-      )
-      expect(monitorMessage(monitor, "timed-out", 9, "")).toBe(
-        "Monitor m1 timed out after 9 checks of `true` without matching. merge it",
-      )
-      // The 2,000-character tail starts inside the emoji: the cut leaves its low half out.
-      const longOutput = `😀${"b".repeat(1_999)}`
-      expect(monitorMessage(monitor, "matched", 1, longOutput)).toBe(
-        `Monitor m1 matched after 1 checks of \`true\`. merge it\n\nLast output:\n…${"b".repeat(1_999)}`,
-      )
-      // The next tick is the first one still ahead; missed ticks fold into the fire that happened.
-      expect(nextDueAt(1_000, 10, 1_000)).toBe(11_000)
-      expect(nextDueAt(1_000, 10, 35_000)).toBe(41_000)
     }),
   )
+
+  test("an alarm's message names its id, its due time and its note", () => {
+    expect(wakeMessage({ _tag: "alarm", wakeId: "w1", dueAt: 1_200_000, note: "check CI" })).toBe(
+      "Alarm w1 fired at 1970-01-01T00:20:00.000Z. check CI",
+    )
+  })
+
+  test("a monitor's message names its outcome, its checks and the tail of its output", () => {
+    const monitor = WakeEntry.cases.monitor.make({
+      wakeId: "m1",
+      command: "true",
+      everySeconds: 1,
+      deadline: 0,
+      note: "merge it",
+    })
+    expect(monitorMessage(monitor, "matched", 3, "ok\n")).toBe(
+      "Monitor m1 matched after 3 checks of `true`. merge it\n\nLast output:\nok",
+    )
+    expect(monitorMessage(monitor, "timed-out", 9, "")).toBe(
+      "Monitor m1 timed out after 9 checks of `true` without matching. merge it",
+    )
+    // The 2,000-character tail starts inside the emoji: the cut leaves its low half out.
+    const longOutput = `😀${"b".repeat(1_999)}`
+    expect(monitorMessage(monitor, "matched", 1, longOutput)).toBe(
+      `Monitor m1 matched after 1 checks of \`true\`. merge it\n\nLast output:\n…${"b".repeat(1_999)}`,
+    )
+  })
+
+  test("a repeat's next tick is the first one still ahead; missed ticks fold into the fire", () => {
+    expect(nextDueAt(1_000, 10, 1_000)).toBe(11_000)
+    expect(nextDueAt(1_000, 10, 35_000)).toBe(41_000)
+  })
 
   it.live(
     "an alarm set mid-turn is listed before the turn ends",
@@ -380,7 +388,8 @@ describe("wake", () => {
             "the next turn ran",
           )
           // The notice reached the model after the conversation and left the list.
-          expect(hasWake(idle.messages)).toBe(false)
+          const after = yield* client.session.getSnapshot({ sessionId, branchId })
+          expect(hasWake(after.messages)).toBe(false)
           expect(requests.at(-1)?.notices).toContain("# Notices")
           expect(requests.at(-1)?.notices).toContain("stand up")
           expect(requests.at(-1)?.systemPrompt).toBe(requests[0]?.systemPrompt)
@@ -947,12 +956,11 @@ const wakeTurnHooks = (home: string) =>
         pending: Effect.succeed([]),
       }),
     )
-    const turnLayer = failedAlarms
     const ctx = testLeafContext({
       ...contextWith(home, yield* Ref.make<ReadonlyArray<string>>([])),
       cwd: home,
     })
-    const services = yield* Layer.build(turnLayer)
+    const services = yield* Layer.build(failedAlarms)
     const decode = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))
     return {
       write: (entries: ReadonlyArray<WakeEntry>) => fs.writeFileString(file, encodeAlarms(entries)),
@@ -1341,8 +1349,8 @@ const interruptAfterLock = (
  * finalizer rewrote the branch file, so an empty `pending` means the fire fully
  * settled. The finalizer does real file I/O, so the wait is bounded by real
  * time, not by a turn count: two thousand scheduler turns pass in a few
- * milliseconds, and under gate load a write can take longer than that, which
- * is how this wait once reported "still pending" on a fire that was landing.
+ * milliseconds, and under gate load a write can take longer than that, so a
+ * turn count would report "still pending" on a fire that is landing.
  * Each turn advances the virtual clock (releases anything sleeping) and then
  * sleeps on the wall clock (lets the I/O land). Exhaustion fails loudly; a
  * silent give-up would let a later assertion read a half-finished fire.
@@ -1506,6 +1514,18 @@ describe("wake tool claims", () => {
   })
 })
 
+/** A pattern JavaScriptCore backtracks on for most of a second over `monitorOutput`. */
+const backtrackingUntil = "(x+x+)+y"
+const monitorOutput = "xxxxxxxxxxxxxxxxxxxxxxxxxxxx!\n".repeat(8)
+
+/** The wall time of the whole search of `text`, run to its end on this thread. */
+const uncutSearchMillis = (pattern: string, text: string) =>
+  Effect.gen(function* () {
+    const started = yield* Clock.currentTimeMillis
+    new RegExp(pattern).exec(text)
+    return (yield* Clock.currentTimeMillis) - started
+  })
+
 describe("monitor command", () => {
   for (const cancel of [false, true]) {
     let outcome = "times out"
@@ -1527,14 +1547,13 @@ describe("monitor command", () => {
               ),
           )
           const ctx = contextWith(home, queued, Option.some(fired))
-          const started = yield* Clock.currentTimeMillis
           let timeoutSeconds = 0.1
           if (cancel) timeoutSeconds = 60
           const handle = yield* runToolWithCtx(
             MonitorTool,
             {
               command: "printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxx!\\n%.0s' {1..8}",
-              until: "(x+x+)+y",
+              until: backtrackingUntil,
               timeoutSeconds,
               everySeconds: 1,
               note: "backtracking check",
@@ -1542,6 +1561,8 @@ describe("monitor command", () => {
             ctx,
           ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observed))
           yield* Deferred.await(shellClosed)
+          // The search starts once the shell's output is in.
+          const searchStarted = yield* Clock.currentTimeMillis
           if (cancel) {
             const removed = yield* runToolWithCtx(CancelTool, { wakeId: handle.wakeId }, ctx)
             expect(removed.cancelled).toEqual([handle.wakeId])
@@ -1553,9 +1574,12 @@ describe("monitor command", () => {
             expect(message).toContain("timed out after 1 checks")
             expect(message).not.toContain("matched after")
           }
-          // The measured synchronous search takes about 800 ms on this host;
-          // leave five times the check deadline for process/I/O and worker startup.
-          expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(500)
+          // The deadline or the cancel ended the search: the monitor settled in
+          // under half the time the whole search takes on this host under the
+          // same load. A search run to its end settles in about all of it.
+          const settledMillis = (yield* Clock.currentTimeMillis) - searchStarted
+          const searchMillis = yield* uncutSearchMillis(backtrackingUntil, monitorOutput)
+          expect(settledMillis).toBeLessThan(searchMillis / 2)
         }).pipe(
           Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer)),
           Effect.timeout("8 seconds"),

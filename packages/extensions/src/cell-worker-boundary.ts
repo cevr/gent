@@ -1369,12 +1369,20 @@ const DescriptorTransport = Layer.effect(
  * macOS has no parent-death signal, and a cell in a synchronous loop never
  * yields to the event loop, so neither a transport read nor a signal handler
  * can notice that the host died. A separate thread can: it sees the kernel
- * reparent this process and kills it. The thread never keeps the worker alive.
+ * reparent this process and sends SIGKILL to the worker's process group, so a
+ * process a cell started ends with it. The host starts the worker as the
+ * leader of its own group; a worker that does not lead one stops alone. The
+ * thread never keeps the worker alive.
  */
 const watchParent = () => {
   const source = `const host = ${process.ppid}
 setInterval(() => {
-  if (process.ppid !== host) process.kill(process.pid, "SIGKILL")
+  if (process.ppid === host) return
+  try {
+    process.kill(-process.pid, "SIGKILL")
+  } catch {
+    process.kill(process.pid, "SIGKILL")
+  }
 }, 250)`
   // oxlint-disable-next-line effect/noGlobals -- the watchdog must be an OS thread that runs while a cell blocks the main thread; an Effect Worker runs on the blocked loop.
   return new Worker(URL.createObjectURL(new Blob([source])), { ref: false })

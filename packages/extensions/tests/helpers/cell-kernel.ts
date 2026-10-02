@@ -1,8 +1,9 @@
 import { expect } from "effect-bun-test"
-import { Effect, Fiber, FileSystem, Layer, Path } from "effect"
+import { Context, Effect, Fiber, FileSystem, Layer, Path, Predicate, Stream } from "effect"
 import { ChildProcess } from "effect/process"
 import { GentPlatform, BranchStorage, MessageStorage, SessionStorage } from "@gent/core/host"
 import {
+  type createRpcHarness,
   testToolContext,
   testLeafContext,
   BunGentPlatformLive,
@@ -23,7 +24,7 @@ import {
 } from "@gent/core/protocol"
 import { ExtensionContext, type ExtensionContextService } from "@gent/core/extensions/api"
 import type { CellOperationHost } from "../../src/cell.js"
-import { CellBranchTools, CellStorage, CellWorker } from "../../src/cell.js"
+import { CellBranchTools, CellExecution, CellStorage, CellWorker } from "../../src/cell.js"
 import type { CellResponse } from "../../src/cell-protocol.js"
 import type { OwnedToolCallAddress } from "@gent/core/extensions/branch-tools"
 
@@ -176,6 +177,52 @@ export const setupCalls = Effect.fn("test.setupCells")(function* (
     recordCellCall({ branch: branchId, key: `${index}`, code, reset: resetAt.includes(index) }),
   )
 })
+
+/**
+ * A cell owner for one branch of the test session; a new owner stands in for
+ * a restart. `storage` replaces the cell storage the owner reads and writes.
+ */
+export const openCellOwner = (
+  worker: Parameters<typeof CellExecution.Live>[0]["worker"],
+  options: Partial<
+    Omit<Parameters<typeof CellExecution.Live>[0], "worker" | "cwd" | "sessionId">
+  > & { readonly storage?: typeof CellStorage.Service } = {},
+) =>
+  Effect.gen(function* () {
+    const { storage, ...input } = options
+    const live = CellExecution.Live({
+      branchId,
+      ...input,
+      worker,
+      cwd: yield* packageDirectory,
+      sessionId,
+    })
+    if (Predicate.isUndefined(storage)) {
+      return Context.get(yield* Layer.build(live), CellExecution)
+    }
+    const replaced = live.pipe(Layer.provide(Layer.succeed(CellStorage, storage)))
+    return Context.get(yield* Layer.build(replaced), CellExecution)
+  })
+
+/** The `cell` tool results on a harness branch once its next turn completed. */
+export const cellResultsAfterTurn = (
+  harness: Pick<
+    Effect.Success<ReturnType<typeof createRpcHarness>>,
+    "client" | "sessionId" | "branchId"
+  >,
+) =>
+  Effect.gen(function* () {
+    const { client, sessionId, branchId } = harness
+    yield* client.session.events({ sessionId, branchId }).pipe(
+      Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+      Stream.take(1),
+      Stream.runDrain,
+    )
+    return (yield* client.message.list({ branchId }))
+      .flatMap((message) => message.parts)
+      .filter((part) => part.type === "tool-result")
+      .filter((part) => part.name === "cell")
+  })
 
 /** One recorded `cell` call on a branch of the test session. */
 export const recordCellCall = Effect.fn("test.recordCellCall")(function* (cell: {

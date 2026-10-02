@@ -1,16 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import {
-  Context,
-  Deferred,
-  Effect,
-  Fiber,
-  Layer,
-  Option,
-  Predicate,
-  Ref,
-  Schema,
-  Stream,
-} from "effect"
+import { Deferred, Effect, Fiber, Option, Predicate, Ref, Schema, Stream } from "effect"
 import { BranchStorage, SessionStorage } from "@gent/core/host"
 import {
   createRpcHarness,
@@ -46,7 +35,7 @@ import {
 } from "@gent/core/extensions/api"
 import {
   CellBranchTools,
-  CellExecution,
+  type CellExecution,
   CellOperationHost,
   CellStorage,
   CellTool,
@@ -54,8 +43,8 @@ import {
 import { DelegateExtension } from "../src/delegate.js"
 import { CompactionExtension } from "../src/compaction.js"
 import {
-  packageDirectory,
   buildCellWorker,
+  openCellOwner,
   platform,
   sessionId,
   branchId,
@@ -76,19 +65,6 @@ const saveForPredecessor = (notes: ReadonlyArray<string>) =>
       omitted: [],
     }),
   )
-
-/** A cell owner for one branch of the test session; a new owner stands in for a restart. */
-const openCellOwner = (
-  worker: Parameters<typeof CellExecution.Live>[0]["worker"],
-  branch: BranchId = branchId,
-) =>
-  Effect.gen(function* () {
-    const cwd = yield* packageDirectory
-    const context = yield* Layer.build(
-      CellExecution.Live({ worker, cwd, sessionId, branchId: branch }),
-    )
-    return Context.get(context, CellExecution)
-  })
 
 /** Run a recorded cell with a host that selects no tools. */
 const runCell = (
@@ -131,12 +107,7 @@ describe("cell namespace restore and handoff", () => {
           catalog: hostCatalog("wait"),
           call: () => Deferred.succeed(started, true).pipe(Effect.andThen(Effect.never)),
         })
-        const open = Effect.gen(function* () {
-          const context = yield* Layer.build(
-            CellExecution.Live({ worker, cwd: yield* packageDirectory, sessionId, branchId }),
-          )
-          return Context.get(context, CellExecution)
-        })
+        const open = openCellOwner(worker)
         const cells = yield* open
         const run = (owner: typeof cells, call: Parameters<typeof cells.run>[0]) =>
           owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
@@ -252,7 +223,7 @@ describe("cell namespace restore and handoff", () => {
         )
         for (const branch of [created, forked]) {
           const call = yield* recordCellCall({ branch, key: branch, code: "typeof notes" })
-          const result = yield* runCell(yield* openCellOwner(worker, branch), call)
+          const result = yield* runCell(yield* openCellOwner(worker, { branchId: branch }), call)
           expect(result.result).toMatchObject({ display: "undefined" })
           expect(result.result).not.toHaveProperty("restored")
         }
@@ -698,9 +669,6 @@ describe("model context directives from a cell", () => {
             hasReply("after interrupt"),
           )
           expect(windowMarkers(messages)).toHaveLength(0)
-          expect(
-            messages.filter((message) => message.metadata?.customType === "context-window"),
-          ).toHaveLength(0)
           expect(yield* controls.callCount).toBe(3)
           yield* controls.assertDone
         }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),

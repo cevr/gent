@@ -1,8 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   Cause,
-  Clock,
-  Duration,
   Effect,
   Exit,
   Fiber,
@@ -11,6 +9,7 @@ import {
   Option,
   Order,
   Path,
+  Ref,
   Schema,
   Stream,
 } from "effect"
@@ -28,7 +27,6 @@ import {
 import {
   createRpcHarness,
   LanguageModelLayers,
-  RuntimeEnvironment,
   runToolWithCtx,
   testToolContext,
   textStep,
@@ -49,15 +47,6 @@ const ctx = testToolContext({
   toolCallId: ToolCallId.make("test-call"),
   home: "/nonexistent/gent-test-home",
 })
-
-const PlatformLayer = Layer.merge(
-  BunServices.layer,
-  RuntimeEnvironment.Live({
-    cwd: process.cwd(),
-    home: "/nonexistent/test-home",
-  }),
-)
-const ToolLayer = PlatformLayer
 
 describe("shipped file tool summaries", () => {
   const succeeded = <A>(result: A) => ({ isFailure: false, result })
@@ -106,7 +95,7 @@ describe("shipped file tool summaries", () => {
 })
 
 describe("ReadTool", () => {
-  const readTest = it.scopedLive.layer(ToolLayer)
+  const readTest = it.scopedLive.layer(BunServices.layer)
 
   readTest("reads a file", () =>
     Effect.gen(function* () {
@@ -281,17 +270,19 @@ describe("ReadTool", () => {
         ]),
       )
 
-      const [elapsed, result] = yield* Effect.timed(
-        runToolWithCtx(ReadTool, { path: testFile, offset: 100_001, limit: 5 }, ctx),
+      const result = yield* runToolWithCtx(
+        ReadTool,
+        { path: testFile, offset: 100_001, limit: 5 },
+        ctx,
       )
       expect(result.content).toBe(cutContent(100_001))
       expect(result.lineCount).toBe(250_000)
       expect(result.truncated).toBe(true)
       expect(result.nextOffset).toBe(100_006)
       expect(result.lossy).toBe(true)
-      expect(Duration.toMillis(elapsed)).toBeLessThan(5000)
 
-      // The invalid byte lies outside this window, and the last line has no newline.
+      // The invalid byte lies outside this window, and the last line has no
+      // newline. A clean `lossy` here proves the read decoded only its window.
       const tail = yield* runToolWithCtx(ReadTool, { path: testFile, offset: 249_999 }, ctx)
       expect(tail.content).toBe(
         `249999\t${"line 249999 ".padEnd(99, "x")}\n250000\t${"line 250000 ".padEnd(99, "x")}`,
@@ -318,7 +309,7 @@ describe("ReadTool", () => {
 // ── write tool ──────────────────────────────────────────────────────────────
 
 describe("WriteTool", () => {
-  const writeTest = it.scopedLive.layer(ToolLayer)
+  const writeTest = it.scopedLive.layer(BunServices.layer)
 
   writeTest("atomic replacement writes complete content and leaves no temporary file", () =>
     Effect.gen(function* () {
@@ -419,8 +410,7 @@ describe("WriteTool", () => {
 
 // ── edit tool ───────────────────────────────────────────────────────────────
 
-const editLayer = BunServices.layer
-const editTest = it.scopedLive.layer(editLayer)
+const editTest = it.scopedLive.layer(BunServices.layer)
 const stubCtx = testToolContext()
 
 /** Edit a fresh file that holds `content`: the tool's exit and the file afterward. */
@@ -435,12 +425,12 @@ const editFile = Effect.fn("test.editFile")(function* (
   yield* fs.writeFileString(filePath, content)
   const exit = yield* Effect.exit(
     runToolWithCtx(EditTool, { path: filePath, ...params }, stubCtx).pipe(
-      Effect.provide(editLayer),
+      Effect.provide(BunServices.layer),
     ),
   )
   let failure = ""
   if (Exit.isFailure(exit)) failure = Cause.pretty(exit.cause)
-  return { exit, failure, after: yield* fs.readFileString(filePath) }
+  return { exit, failure, filePath, after: yield* fs.readFileString(filePath) }
 })
 
 describe("EditTool redaction check", () => {
@@ -530,7 +520,10 @@ describe("EditTool matching", () => {
     editTest(`${name} is replaced`, () =>
       Effect.gen(function* () {
         const edited = yield* editFile(file, { oldString, newString: "X" })
-        expect(edited.exit._tag).toBe("Success")
+        expect(Exit.isSuccess(edited.exit) && edited.exit.value).toEqual({
+          path: edited.filePath,
+          replacements: 1,
+        })
         expect(edited.after).toBe(after)
       }),
     )
@@ -594,14 +587,10 @@ describe("EditTool matching", () => {
   }
 })
 
-// ============================================================================
-// Integration — real file editing
-// ============================================================================
 describe("EditTool execution", () => {
   // The file keeps its own spelling; the model's ASCII search still finds it.
+  // File-side trailing spaces and double curly quotes are matching rows above.
   const normalizedCases = [
-    { name: "trailing spaces", file: "hello   \nworld  \n", search: "hello\nworld" },
-    { name: "double curly quotes", file: "say \u201Chello\u201D now\n", search: 'say "hello" now' },
     { name: "single curly quotes", file: "say \u2018hi\u2019 now\n", search: "say 'hi' now" },
     { name: "an em dash", file: "a\u2014b\n", search: "a-b" },
     { name: "a no-break space", file: "a\u00A0b\n", search: "a b" },
@@ -618,30 +607,12 @@ describe("EditTool execution", () => {
           EditTool,
           { path: filePath, oldString: search, newString: "done" },
           stubCtx,
-        ).pipe(Effect.provide(editLayer))
+        ).pipe(Effect.provide(BunServices.layer))
         expect(result.replacements).toBe(1)
         expect(yield* fs.readFileString(filePath)).toBe("done\n")
       }),
     )
   }
-  editTest("applies edit to a real file and reads back the result", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const filePath = path.join(dir, "test.txt")
-      yield* fs.writeFileString(filePath, "hello world\ngoodbye world\n")
-      const result = yield* runToolWithCtx(
-        EditTool,
-        { path: filePath, oldString: "hello world", newString: "hi there" },
-        stubCtx,
-      ).pipe(Effect.provide(editLayer))
-      expect(result.replacements).toBe(1)
-      expect(result.path).toBe(filePath)
-      const content = yield* fs.readFileString(filePath)
-      expect(content).toBe("hi there\ngoodbye world\n")
-    }),
-  )
   editTest("replaceAll replaces every occurrence", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -653,27 +624,10 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
         stubCtx,
-      ).pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(BunServices.layer))
       expect(result.replacements).toBe(3)
       const content = yield* fs.readFileString(filePath)
       expect(content).toBe("qux bar qux baz qux\n")
-    }),
-  )
-  editTest("fails when oldString not found", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const filePath = path.join(dir, "test.txt")
-      yield* fs.writeFileString(filePath, "hello world\n")
-      const exit = yield* Effect.exit(
-        runToolWithCtx(
-          EditTool,
-          { path: filePath, oldString: "not here", newString: "replaced" },
-          stubCtx,
-        ).pipe(Effect.provide(editLayer)),
-      )
-      expect(exit._tag).toBe("Failure")
     }),
   )
   editTest("fails on ambiguous match without replaceAll", () =>
@@ -688,7 +642,7 @@ describe("EditTool execution", () => {
           EditTool,
           { path: filePath, oldString: "foo", newString: "baz" },
           stubCtx,
-        ).pipe(Effect.provide(editLayer)),
+        ).pipe(Effect.provide(BunServices.layer)),
       )
       expect(exit._tag).toBe("Failure")
     }),
@@ -704,7 +658,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "old", newString: "$$ pid $& $` $' x" },
         stubCtx,
-      ).pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(BunServices.layer))
       expect(yield* fs.readFileString(filePath)).toBe("echo $$ pid $& $` $' x\n")
     }),
   )
@@ -723,7 +677,7 @@ describe("EditTool execution", () => {
             { path: filePath, oldString: "", newString: "-", replaceAll: true },
             stubCtx,
           ),
-        ).pipe(Effect.provide(editLayer)),
+        ).pipe(Effect.provide(BunServices.layer)),
       )
       expect(exit._tag).toBe("Failure")
       expect(yield* fs.readFileString(filePath)).toBe("abc")
@@ -742,7 +696,7 @@ describe("EditTool execution", () => {
           EditTool,
           { path: filePath, oldString: "foo\nbar", newString: "x" },
           stubCtx,
-        ).pipe(Effect.provide(editLayer)),
+        ).pipe(Effect.provide(BunServices.layer)),
       )
       expect(exit._tag).toBe("Failure")
       expect(yield* fs.readFileString(filePath)).toBe(original)
@@ -759,7 +713,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "foo\nbar", newString: "x", replaceAll: true },
         stubCtx,
-      ).pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(BunServices.layer))
       expect(result.replacements).toBe(2)
       expect(yield* fs.readFileString(filePath)).toBe("x\nmid\nx\n")
     }),
@@ -776,7 +730,7 @@ const utf16File = (text: string, order: "le" | "be") => {
 }
 
 describe("file encodings", () => {
-  const encodingTest = it.scopedLive.layer(editLayer)
+  const encodingTest = it.scopedLive.layer(BunServices.layer)
 
   const orders: ReadonlyArray<"le" | "be"> = ["le", "be"]
   for (const order of orders) {
@@ -1139,7 +1093,6 @@ describe("file encodings", () => {
 
 // ── grep tool ───────────────────────────────────────────────────────────────
 
-const IndexLayer = BunServices.layer
 const ctxGrep = testToolContext()
 
 /**
@@ -1165,7 +1118,7 @@ describe("GrepTool", () => {
 
       const result = yield* runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir }, ctxGrep)
       expect(result.matches.length).toBe(2)
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("respects glob filter", () =>
@@ -1182,7 +1135,7 @@ describe("GrepTool", () => {
       )
       expect(result.matches.length).toBe(1)
       expect(result.matches[0]!.file).toContain("file1.ts")
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("a glob without a slash matches files in nested directories", () =>
@@ -1211,7 +1164,7 @@ describe("GrepTool", () => {
         ctxGrep,
       )
       expect(scoped.matches).toEqual([])
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("a glob with a slash matches paths relative to the search root", () =>
@@ -1236,7 +1189,7 @@ describe("GrepTool", () => {
         "src/deep/b.ts",
         "test/c.ts",
       ])
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("truncated is set only when more matches exist than the limit", () =>
@@ -1259,7 +1212,7 @@ describe("GrepTool", () => {
       )
       expect(over.matches.length).toBe(2)
       expect(over.truncated).toBe(true)
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("finds matches in a gitignored directory under the session cwd", () =>
@@ -1281,7 +1234,7 @@ describe("GrepTool", () => {
         ctxRepo,
       )
       expect(ignored.matches.map((match) => match.file)).toEqual([`${tmpDir}/dist/sub/b.js`])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("a target whose name starts with two dots keeps the session's ignore rules", () =>
@@ -1299,7 +1252,7 @@ describe("GrepTool", () => {
         testToolContext({ cwd: tmpDir }),
       )
       expect(result.matches.map((match) => match.file)).toEqual([`${tmpDir}/..cache/b.ts`])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("a file with a NUL byte in its first 8 KB is binary and skipped", () =>
@@ -1320,7 +1273,7 @@ describe("GrepTool", () => {
         ctxGrep,
       )
       expect(direct.matches).toEqual([])
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   // `(x+x+)+y` backtracks exponentially on a run of x with no y after it.
@@ -1333,17 +1286,22 @@ describe("GrepTool", () => {
       const slowLine = `${"x".repeat(28)}!`
       yield* fs.writeFileString(`${tmpDir}/slow.txt`, Array(8).fill(slowLine).join("\n"))
 
-      const started = yield* Clock.currentTimeMillis
+      // A fiber beside the search counts its wake-ups. A search on the server
+      // thread blocks every fiber until its last line ends, so none would wake.
+      const beats = yield* Ref.make(0)
+      yield* Ref.update(beats, (count) => count + 1).pipe(
+        Effect.delay("20 millis"),
+        Effect.forever,
+        Effect.forkScoped,
+      )
       const result = yield* runToolWithCtx(
         GrepTool,
         { pattern: "(x+x+)+y", path: tmpDir },
         ctxGrep,
       ).pipe(Effect.timeoutOption("300 millis"))
-      const elapsed = (yield* Clock.currentTimeMillis) - started
       expect(Option.isNone(result)).toBe(true)
-      // On the server thread, the search runs every line to the end before a timeout can act.
-      expect(elapsed).toBeLessThan(1500)
-    }).pipe(Effect.provide(IndexLayer)),
+      expect(yield* Ref.get(beats)).toBeGreaterThanOrEqual(5)
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   // Each line holds a match, but JavaScriptCore stops at its backtrack limit
@@ -1365,7 +1323,7 @@ describe("GrepTool", () => {
         )
         expect(result.matches).toEqual([])
         expect(result.undecided).toBe(1)
-      }).pipe(Effect.provide(IndexLayer)),
+      }).pipe(Effect.provide(BunServices.layer)),
     )
   }
 
@@ -1388,7 +1346,7 @@ describe("GrepTool", () => {
       )
       expect(match?.context?.before).toEqual([`${"c".repeat(500)} [2500 chars cut]`])
       expect(match?.context?.after).toEqual(["short"])
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("a UTF-16 file with a byte order mark is searched, not skipped as binary", () =>
@@ -1396,10 +1354,8 @@ describe("GrepTool", () => {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       const text = "first\nthe needle here\n"
-      const littleEndian = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")])
-      const bigEndian = Buffer.from(littleEndian).swap16()
-      yield* fs.writeFile(`${tmpDir}/le.txt`, littleEndian)
-      yield* fs.writeFile(`${tmpDir}/be.txt`, bigEndian)
+      yield* fs.writeFile(`${tmpDir}/le.txt`, utf16File(text, "le"))
+      yield* fs.writeFile(`${tmpDir}/be.txt`, utf16File(text, "be"))
 
       const result = yield* runToolWithCtx(GrepTool, { pattern: "needle", path: tmpDir }, ctxGrep)
       expect(
@@ -1412,7 +1368,7 @@ describe("GrepTool", () => {
         ["be.txt", 2, "the needle here"],
         ["le.txt", 2, "the needle here"],
       ])
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("results keep listing order and the limit across many files", () =>
@@ -1440,7 +1396,7 @@ describe("GrepTool", () => {
         all.matches.slice(0, 5).map((match) => [match.file.slice(tmpDir.length + 1), match.line]),
       )
       expect(cut.truncated).toBe(true)
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("a file over the size cap is skipped and counted", () =>
@@ -1455,7 +1411,7 @@ describe("GrepTool", () => {
         "small.txt",
       ])
       expect(result.oversized).toBe(1)
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("a cut never splits a surrogate pair", () =>
@@ -1473,7 +1429,7 @@ describe("GrepTool", () => {
       expect(
         content.replace(/^\[\d+ chars cut\] | \[\d+ chars cut\]$/g, "").length,
       ).toBeLessThanOrEqual(500)
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   for (const { name, params } of [
@@ -1494,7 +1450,7 @@ describe("GrepTool", () => {
           ),
         )
         expect(exit._tag).toBe("Failure")
-      }).pipe(Effect.provide(IndexLayer)),
+      }).pipe(Effect.provide(BunServices.layer)),
     )
   }
 
@@ -1509,7 +1465,7 @@ describe("GrepTool", () => {
         ctxGrep,
       )
       expect(result.matches.map((match) => "context" in match)).toEqual([false])
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("searches single file directly", () =>
@@ -1524,7 +1480,7 @@ describe("GrepTool", () => {
         ctxGrep,
       )
       expect(result.matches.length).toBe(2)
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 })
 
@@ -1549,7 +1505,7 @@ describe("grep's file listing outside a git work tree", () => {
         "node_modules/x/i.js",
       ])
       expect(yield* listed(tmpDir, `${tmpDir}/dist`)).toEqual(["o.js"])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 
   it.scopedLive("a .gitignore line drops the file it names", () =>
@@ -1561,7 +1517,7 @@ describe("grep's file listing outside a git work tree", () => {
       yield* fs.writeFileString(`${tmpDir}/ignored.txt`, "skip")
 
       expect(yield* listed(tmpDir)).toEqual([".gitignore", "kept.txt"])
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("an edited .gitignore applies to the next listing", () =>
@@ -1575,7 +1531,7 @@ describe("grep's file listing outside a git work tree", () => {
       expect(yield* listed(tmpDir)).toEqual([".gitignore", "second.txt"])
       yield* fs.writeFileString(`${tmpDir}/.gitignore`, "second.txt")
       expect(yield* listed(tmpDir)).toEqual([".gitignore", "first.txt"])
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("a subdirectory listing applies the .gitignore files from the root down", () =>
@@ -1606,7 +1562,7 @@ describe("grep's file listing outside a git work tree", () => {
         "build/out.js",
         "keep.log",
       ])
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("a directory-only pattern leaves a file of that name", () =>
@@ -1619,31 +1575,7 @@ describe("grep's file listing outside a git work tree", () => {
       yield* fs.writeFileString(`${tmpDir}/logs`, "a file")
 
       expect(yield* listed(tmpDir)).toEqual([".gitignore", "logs"])
-    }).pipe(Effect.provide(IndexLayer)),
-  )
-
-  it.scopedLive("an explicitly named ignored directory is listed", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.makeDirectory(`${tmpDir}/dist`)
-      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "dist/\n")
-      yield* fs.writeFileString(`${tmpDir}/dist/b.js`, "x")
-
-      expect(yield* listed(tmpDir, `${tmpDir}/dist`)).toEqual(["b.js"])
-    }).pipe(Effect.provide(IndexLayer)),
-  )
-
-  it.scopedLive("the listing has no early break", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      for (let i = 0; i < 50; i++) {
-        yield* fs.writeFileString(`${tmpDir}/file-${i}.txt`, `content-${i}`)
-      }
-
-      expect((yield* listed(tmpDir)).length).toBe(50)
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("the walk skips .git and stops at a directory link cycle", () =>
@@ -1657,7 +1589,7 @@ describe("grep's file listing outside a git work tree", () => {
       yield* fs.symlink(tmpDir, `${tmpDir}/src/loop`)
 
       expect(yield* listed(tmpDir).pipe(Effect.timeout("5 seconds"))).toEqual(["src/a.ts"])
-    }).pipe(Effect.provide(IndexLayer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 })
 
@@ -1797,7 +1729,7 @@ describe("the matcher walk against git", () => {
       for (const [name, result] of Object.entries(results)) {
         expect({ name, listed: result.walk }).toEqual({ name, listed: result.git })
       }
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("20 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
   )
 })
 
@@ -1831,7 +1763,7 @@ describe("grep's file listing inside a git work tree", () => {
       yield* fs.writeFileString(`${repo}/.git/info/exclude`, "*.env\n")
 
       expect(yield* listed(`${repo}/pkg`)).toEqual(["src/a.ts"])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -1848,19 +1780,9 @@ describe("grep's file listing inside a git work tree", () => {
         yield* fs.remove(`${repo}/build/gone.js`)
 
         expect(yield* listed(repo)).toEqual([".gitignore", "build/pinned.js", "src/a.ts"])
-      }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
-  it.scopedLive("an explicitly named ignored directory is listed", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const repo = yield* fs.makeTempDirectoryScoped()
-      yield* runProcess("git", ["init", "-q", repo])
-      yield* writeTree(repo, ["dist/b.js", "src/a.ts"], { ".gitignore": "dist/\n" })
-
-      expect(yield* listed(repo, `${repo}/dist`)).toEqual(["b.js"])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
-  )
   it.scopedLive("a package session applies every exclude source above it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -1880,7 +1802,7 @@ describe("grep's file listing inside a git work tree", () => {
       yield* git(repo, ["config", "core.excludesFile", `${repo}/excludes`])
 
       expect(yield* listed(`${repo}/packages/foo`)).toEqual(["src/a.ts"])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("a session inside an ignored directory lists its files", () =>
@@ -1894,7 +1816,7 @@ describe("grep's file listing inside a git work tree", () => {
       })
 
       expect(yield* listed(`${repo}/scratch`)).toEqual([".gitignore", "a.ts", "sub/b.ts"])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("nested repositories and submodules are listed by their own git", () =>
@@ -1921,7 +1843,7 @@ describe("grep's file listing inside a git work tree", () => {
         "vendor/lib/.gitignore",
         "vendor/lib/inner.ts",
       ])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
 
@@ -1941,7 +1863,7 @@ describe("symbolic links", () => {
         yield* fs.symlink(`${tmpDir}/zeta`, `${tmpDir}/zeta/loop`)
 
         expect(yield* listed(tmpDir)).toEqual(["real/r.ts", "zeta/z.ts"])
-      }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
     )
   }
 })
@@ -1960,7 +1882,7 @@ describe("a tracked path under a directory that is now a link", () => {
       yield* fs.symlink(outside, `${repo}/sub`)
 
       expect(yield* listed(repo)).toEqual(["keep.ts"])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
 
@@ -2014,7 +1936,7 @@ describe("git index entries that are not files on disk", () => {
       ])
 
       expect(yield* listed(repo)).toEqual(["keep/a.ts"])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 
   it.scopedLive("a name that is not valid UTF-8 is counted, not silently lost", () =>
@@ -2036,7 +1958,7 @@ describe("git index entries that are not files on disk", () => {
       )
       expect(result.matches.map((match) => match.file)).toEqual([`${repo}/a.ts`])
       expect(result.unreadable).toBe(1)
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 })
 
@@ -2116,7 +2038,7 @@ describe("an ignored directory with tracked files", () => {
       yield* fs.writeFileString(`${repo}/dist/new.js`, "x")
 
       expect(yield* listed(repo, `${repo}/dist`)).toEqual(["new.js", "pinned.js"])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
 

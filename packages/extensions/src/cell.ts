@@ -1684,11 +1684,21 @@ interface ReadPage {
   readonly done: boolean
 }
 
-/** A page of characters; every byte of a stored result is reachable by continuing from `nextOffset`. */
+/**
+ * A page of characters; every byte of a stored result is reachable by
+ * continuing from `nextOffset`. A page does not end inside a surrogate pair: it
+ * ends before the pair, or takes the pair whole when the pair is its only
+ * character.
+ */
 export const pageText = (text: string, offset: number, limit: number): ReadPage => {
   const start = Math.min(offset, text.length)
   const boundedLimit = Math.max(1, Math.min(limit, MAXIMUM_READ_CHARS))
-  const end = Math.min(text.length, start + boundedLimit)
+  let end = Math.min(text.length, start + boundedLimit)
+  const last = text.charCodeAt(end - 1)
+  if (end < text.length && end > start && last >= 0xd800 && last <= 0xdbff) {
+    end -= 1
+    if (end === start) end += 2
+  }
   return {
     text: text.slice(start, end),
     totalChars: text.length,

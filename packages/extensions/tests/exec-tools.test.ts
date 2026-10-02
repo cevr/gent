@@ -1,7 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   Cause,
-  Clock,
   ConfigProvider,
   Context,
   Deferred,
@@ -61,32 +60,37 @@ import {
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { BunPlatformLive } from "@gent/core/host"
+import { BunPlatformLive, GentPlatform } from "@gent/core/host"
 import { ExtensionServiceError, maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/sql"
-import { isToolResultFor } from "./helpers/tool-event.js"
 import type * as Prompt from "effect/ai/Prompt"
+import { ChildProcess } from "effect/process"
 import * as AiError from "effect/ai/AiError"
 
-const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
-  const base = Layer.mergeAll(
-    storageLayer,
-    BunCrypto.layer,
-    BunFileSystem.layer,
-    Path.layer,
-    BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+/** SQLite storage in the file at `path`, so a later layer reads what an earlier one wrote. */
+const fileStorage = (path: string) =>
+  SqliteStorage.LiveWithSql(path, Layer.empty, {}).pipe(
+    Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
   )
-  return BackgroundBashLayer.pipe(Layer.provideMerge(base))
-}
 
-const makeProcessLayerWithFailingMarkFailed = <A, E>(storageLayer: Layer.Layer<A, E>) => {
-  const base = Layer.mergeAll(
+/** The storage and the platform services a background supervisor needs. */
+const processBase = <A, E>(storageLayer: Layer.Layer<A, E>) =>
+  Layer.mergeAll(
     storageLayer,
     BunCrypto.layer,
     BunFileSystem.layer,
     Path.layer,
     BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
+
+const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) =>
+  BackgroundBashLayer.pipe(Layer.provideMerge(processBase(storageLayer)))
+
+/** A supervisor whose `markFailed` fails; `attempted` completes when a job calls it. */
+const makeProcessLayerWithFailingMarkFailed = <A, E>(
+  storageLayer: Layer.Layer<A, E>,
+  attempted: Deferred.Deferred<void>,
+) => {
   const failingStorage = Layer.effect(
     BackgroundBashStorage,
     Effect.gen(function* () {
@@ -94,15 +98,23 @@ const makeProcessLayerWithFailingMarkFailed = <A, E>(storageLayer: Layer.Layer<A
       return BackgroundBashStorage.of({
         ...storage,
         markFailed: () =>
-          Effect.fail(new BackgroundBashStorageError({ message: "failure state did not commit" })),
+          Effect.fail(
+            new BackgroundBashStorageError({ message: "failure state did not commit" }),
+          ).pipe(Effect.ensuring(Deferred.succeed(attempted, void 0))),
       })
     }),
   ).pipe(Layer.provideMerge(BackgroundBashStorage.Live))
   return BackgroundBashSupervisorLive.pipe(
     Layer.provideMerge(failingStorage),
-    Layer.provideMerge(base),
+    Layer.provideMerge(processBase(storageLayer)),
   )
 }
+
+/** Live heap bytes after a full collection; Bun counts array buffers in it. */
+const liveBytes = Effect.sync(() => {
+  Bun.gc(true)
+  return process.memoryUsage().heapUsed
+})
 
 const makePlatformLayer = () =>
   makeProcessLayer(
@@ -348,7 +360,7 @@ const stubCtx = testToolContext({
   sessionId: SessionId.make("test-session"),
   branchId: BranchId.make("test-branch"),
   toolCallId: ToolCallId.make("tc-1"),
-  cwd: process.cwd(),
+  cwd: "/nonexistent/gent-exec-tools-cwd",
   home: "/nonexistent/gent-test-home",
   Session: {
     getSession: dieStub("getSession"),
@@ -391,6 +403,41 @@ const onQueue =
     return record({ sourceId: params.sourceId, content: params.content }).pipe(Effect.asVoid)
   }
 const now = dateFromMillis(0)
+/**
+ * The stub context with a live session and branch whose `send` records each
+ * background notice through `record`. `fields` names the tool call and home.
+ */
+const liveSession = (
+  record: Parameters<typeof onQueue>[0],
+  fields: { readonly toolCallId?: string; readonly home?: string } = {},
+): TestToolContext =>
+  withSession(
+    {
+      ...stubCtx,
+      toolCallId: ToolCallId.make(fields.toolCallId ?? "tc-1"),
+      home: fields.home ?? stubCtx.home,
+    },
+    {
+      ...stubCtx.Session,
+      getSession: () =>
+        Effect.succeed(
+          new Session({
+            id: stubCtx.sessionId,
+            activeBranchId: stubCtx.branchId,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        ),
+      listBranches: Effect.succeed([
+        new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
+      ]),
+      send: onQueue(record),
+    },
+  )
+type Notice = { sourceId: string; content: string }
+/** `ctx` in a fresh working directory that the test's scope removes. */
+const inTempCwd = (ctx: TestToolContext) =>
+  Effect.map(makeTempDirectoryScoped("gent-exec-cwd-"), (cwd) => ({ ...ctx, cwd }))
 
 describe("Bash command semantics", () => {
   const cases = [
@@ -538,7 +585,7 @@ describe("Bash command semantics", () => {
   }
 })
 
-/** The jobs table as it was before interrupted jobs had a read mark. */
+/** A jobs table with no read-mark column for interrupted jobs. */
 const oldBackgroundBashTable = `
   CREATE TABLE background_bash_jobs (
     session_id TEXT NOT NULL,
@@ -586,33 +633,41 @@ describe("BashTool summary", () => {
 describe("BashTool execution", () => {
   // `trap '' TERM` leaves SIGTERM ignored for the whole group, so only the
   // SIGKILL three seconds later ends it. The call must not wait for that.
-  it.live(
+  it.scopedLive.layer(BunPlatformLive)(
     "a command that ignores SIGTERM returns at its timeout, not after the kill",
     () =>
       Effect.gen(function* () {
-        const started = yield* Clock.currentTimeMillis
+        const fs = yield* FileSystem.FileSystem
+        const platform = yield* GentPlatform
+        const directory = yield* makeTempDirectoryScoped("gent-bash-term-")
+        const pidFile = `${directory}/job.pid`
         const exit = yield* Effect.exit(
           provideBun(
-            runToolWithCtx(BashTool, { command: "trap '' TERM; sleep 30", timeout: 500 }, stubCtx),
+            runToolWithCtx(
+              BashTool,
+              { command: `trap '' TERM; echo $$ > ${pidFile}; sleep 30`, timeout: 500 },
+              { ...stubCtx, cwd: directory },
+            ),
           ),
         )
-        const elapsed = (yield* Clock.currentTimeMillis) - started
         expect(Exit.isFailure(exit)).toBe(true)
-        expect(elapsed).toBeLessThan(1_500)
+        const pid = Number(yield* fs.readFileString(pidFile))
+        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+        // A red run must not leave the group behind.
+        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-pid, "SIGKILL")))
+        // The group still runs: the call returned before the SIGKILL that ends it.
+        expect(Exit.isSuccess(yield* Effect.exit(platform.signal(-pid, 0)))).toBe(true)
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "a multibyte character split across output chunks decodes whole",
     () =>
       Effect.gen(function* () {
+        const ctx = yield* inTempCwd(stubCtx)
         const result = yield* provideBun(
-          runToolWithCtx(
-            BashTool,
-            { command: "printf '\\xc3'; sleep 0.2; printf '\\xa9'" },
-            stubCtx,
-          ),
+          runToolWithCtx(BashTool, { command: "printf '\\xc3'; sleep 0.2; printf '\\xa9'" }, ctx),
         )
 
         expect(result.stdout).toBe("é")
@@ -620,13 +675,12 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "runs a command and returns stdout",
     () =>
       Effect.gen(function* () {
-        const result = yield* provideBun(
-          runToolWithCtx(BashTool, { command: "echo hello" }, stubCtx),
-        )
+        const ctx = yield* inTempCwd(stubCtx)
+        const result = yield* provideBun(runToolWithCtx(BashTool, { command: "echo hello" }, ctx))
 
         expect(result.stdout.trim()).toBe("hello")
         expect(result.exitCode).toBe(0)
@@ -636,15 +690,16 @@ describe("BashTool execution", () => {
 
   // The stub context's `approve` dies, so an ask would fail the test. The
   // command runs and fails at once: its directory does not exist.
-  it.live(
+  it.scopedLive(
     "a command runs as given, with no ask",
     () =>
       Effect.gen(function* () {
+        const ctx = yield* inTempCwd(stubCtx)
         const result = yield* provideBun(
           runToolWithCtx(
             BashTool,
             { command: "git -C /nonexistent/gent-probe-x push --force" },
-            stubCtx,
+            ctx,
           ),
         )
         expect(result.status).toBeUndefined()
@@ -654,14 +709,15 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "keeps a result past the model bound but within the kept ends whole, with no file",
     () =>
       Effect.gen(function* () {
+        const ctx = yield* inTempCwd(stubCtx)
         // One line per iteration, far past the model-facing bound.
         const lineCount = 4000
         const result = yield* provideBun(
-          runToolWithCtx(BashTool, { command: `seq 1 ${lineCount} | sed 's/^/line /'` }, stubCtx),
+          runToolWithCtx(BashTool, { command: `seq 1 ${lineCount} | sed 's/^/line /'` }, ctx),
         )
 
         // The tool returns the complete output: no head/tail marker, no
@@ -678,11 +734,12 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "captures nonzero exit code",
     () =>
       Effect.gen(function* () {
-        const result = yield* provideBun(runToolWithCtx(BashTool, { command: "exit 2" }, stubCtx))
+        const ctx = yield* inTempCwd(stubCtx)
+        const result = yield* provideBun(runToolWithCtx(BashTool, { command: "exit 2" }, ctx))
 
         expect(result.exitCode).toBe(2)
       }).pipe(withProcessTimeout),
@@ -733,12 +790,13 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "Bash executes a directory change in the command",
     () =>
       Effect.gen(function* () {
+        const ctx = yield* inTempCwd(stubCtx)
         const result = yield* provideBun(
-          runToolWithCtx(BashTool, { command: "cd /tmp && pwd" }, stubCtx),
+          runToolWithCtx(BashTool, { command: "cd /tmp && pwd" }, ctx),
         )
 
         expect(result.stdout.trim()).toMatch(/\/tmp$/)
@@ -747,31 +805,12 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "background mode queues a follow-up on completion",
     () =>
       Effect.gen(function* () {
-        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-        const ctx = withSession(stubCtx, {
-          ...stubCtx.Session,
-          getSession: () =>
-            Effect.succeed(
-              new Session({
-                id: stubCtx.sessionId,
-                activeBranchId: stubCtx.branchId,
-                createdAt: now,
-                updatedAt: now,
-              }),
-            ),
-          listBranches: Effect.succeed([
-            new Branch({
-              id: stubCtx.branchId,
-              sessionId: stubCtx.sessionId,
-              createdAt: now,
-            }),
-          ]),
-          send: onQueue((notice) => Deferred.succeed(sent, notice)),
-        })
+        const sent = yield* Deferred.make<Notice>()
+        const ctx = yield* inTempCwd(liveSession((notice) => Deferred.succeed(sent, notice)))
         const result = yield* runToolWithCtx(
           BashTool,
           { command: "printf background-finished", run_in_background: true },
@@ -807,72 +846,96 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
-    "background process is cancelled with the supervisor scope",
+  it.scopedLive.layer(BunPlatformLive)(
+    "closing the supervisor scope stops the job's process group, and no notice is sent",
     () =>
       Effect.gen(function* () {
-        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-        const ctx = withSession(stubCtx, {
-          ...stubCtx.Session,
-          getSession: () =>
-            Effect.succeed(
-              new Session({
-                id: stubCtx.sessionId,
-                activeBranchId: stubCtx.branchId,
-                createdAt: now,
-                updatedAt: now,
-              }),
-            ),
-          listBranches: Effect.succeed([
-            new Branch({
-              id: stubCtx.branchId,
-              sessionId: stubCtx.sessionId,
-              createdAt: now,
-            }),
-          ]),
-          send: onQueue((notice) => Deferred.succeed(sent, notice)),
-        })
+        const fs = yield* FileSystem.FileSystem
+        const platform = yield* GentPlatform
+        const directory = yield* makeTempDirectoryScoped("gent-bg-scope-close-")
+        const pidFile = `${directory}/job.pid`
+        const sent = yield* Deferred.make<Notice>()
+        const ctx = { ...liveSession((notice) => Deferred.succeed(sent, notice)), cwd: directory }
         const scope = yield* Scope.make()
+        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
         const context = yield* Layer.buildWithScope(makePlatformLayer(), scope)
         const result = yield* runToolWithCtx(
           BashTool,
-          { command: "sleep 2; printf should-not-arrive", run_in_background: true },
+          {
+            command: `echo $$ > ${pidFile}; sleep 30; touch ${directory}/late`,
+            run_in_background: true,
+          },
           ctx,
         ).pipe(Effect.provideContext(context))
-
         expect(result.exitCode).toBe(0)
+        const pid = Number(
+          yield* waitFor(
+            fs.readFileString(pidFile).pipe(Effect.orElseSucceed(() => "")),
+            (text) => text.trim() !== "",
+            2_000,
+            "the job's pid",
+          ),
+        )
+        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+        // A red run must not leave the job's group behind.
+        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-pid, "SIGKILL")))
+
         yield* Scope.close(scope, Exit.void)
 
-        const followUp = yield* Effect.exit(Deferred.await(sent).pipe(Effect.timeout("250 millis")))
-        expect(followUp._tag).toBe("Failure")
-      }).pipe(withProcessTimeout),
-    processTestTimeout,
+        // Every process of the job's group is gone before its sleep ends.
+        yield* waitFor(
+          platform.signal(-pid, 0).pipe(Effect.exit),
+          Exit.isFailure,
+          5_000,
+          "the job's process group stopped",
+        )
+        expect(yield* fs.exists(`${directory}/late`)).toBe(false)
+        expect(yield* Deferred.isDone(sent)).toBe(false)
+      }).pipe(Effect.timeout("8 seconds")),
+    10_000,
   )
 
-  it.live(
+  it.scopedLive(
     "background completion is dropped when the session disappeared",
     () =>
       Effect.gen(function* () {
-        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const sent = yield* Deferred.make<Notice>()
         // ExtensionSessionService.getSession answers undefined for an absent session.
         // oxlint-disable-next-line effect/noNullish -- the facade's absent-session answer.
         const absentSession: Session | undefined = undefined
-        const ctx = withSession(stubCtx, {
-          ...stubCtx.Session,
-          getSession: () => Effect.succeed(absentSession),
-          listBranches: Effect.succeed([]),
-          send: onQueue((notice) => Deferred.succeed(sent, notice)),
-        })
+        const ctx = yield* inTempCwd(
+          withSession(stubCtx, {
+            ...stubCtx.Session,
+            getSession: () => Effect.succeed(absentSession),
+            listBranches: Effect.succeed([]),
+            send: onQueue((notice) => Deferred.succeed(sent, notice)),
+          }),
+        )
 
-        const result = yield* runToolWithCtx(
-          BashTool,
-          { command: "printf stale-session", run_in_background: true },
-          ctx,
-        ).pipe(provideBun)
+        yield* Effect.gen(function* () {
+          const result = yield* runToolWithCtx(
+            BashTool,
+            { command: "printf stale-session", run_in_background: true },
+            ctx,
+          )
+          expect(result.exitCode).toBe(0)
+          // The delivery step clears the pending mark only after it decided
+          // the job's message: here, that the absent session is owed none.
+          yield* waitFor(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql<{ readonly settled: number }>`
+                SELECT COUNT(*) AS settled FROM background_bash_jobs
+                WHERE tool_call_id = 'tc-1' AND status = 'completed' AND undelivered_at IS NULL
+              `
+            }),
+            (rows) => rows.some((row) => row.settled > 0),
+            2_000,
+            "the job's delivery settled",
+          )
+        }).pipe(provideBun)
 
-        expect(result.exitCode).toBe(0)
-        const followUp = yield* Effect.exit(Deferred.await(sent).pipe(Effect.timeout("250 millis")))
-        expect(followUp._tag).toBe("Failure")
+        expect(yield* Deferred.isDone(sent)).toBe(false)
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )
@@ -881,37 +944,11 @@ describe("BashTool execution", () => {
     "terminal background job retries replay durable completion instead of spawning work",
     () =>
       Effect.gen(function* () {
-        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const sent = yield* Deferred.make<Notice>()
         const toolCallId = ToolCallId.make("tc-terminal-retry")
-        const ctx = withSession(
-          { ...stubCtx, toolCallId },
-          {
-            ...stubCtx.Session,
-            getSession: () =>
-              Effect.succeed(
-                new Session({
-                  id: stubCtx.sessionId,
-                  activeBranchId: stubCtx.branchId,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              ),
-            listBranches: Effect.succeed([
-              new Branch({
-                id: stubCtx.branchId,
-                sessionId: stubCtx.sessionId,
-                createdAt: now,
-              }),
-            ]),
-            send: onQueue((notice) => Deferred.succeed(sent, notice)),
-          },
-        )
+        const ctx = liveSession((notice) => Deferred.succeed(sent, notice), { toolCallId })
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
-        const storageLayer = SqliteStorage.LiveWithSql(
-          `${directory}/storage.db`,
-          Layer.empty,
-          {},
-        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const storageLayer = fileStorage(`${directory}/storage.db`)
 
         yield* Effect.gen(function* () {
           const storage = yield* BackgroundBashStorage
@@ -952,38 +989,18 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  // A build before the output file stored the whole output on the row. A
-  // replay cuts that message to its head and tail and writes no file for it.
+  // A row can hold a whole long output with no job file beside it. A replay
+  // cuts that message to its head and tail and writes no file for it.
   it.scopedLive(
     "a replayed row that holds a whole long output is cut, with no file written",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-old-row-" })
-        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const sent = yield* Deferred.make<Notice>()
         const toolCallId = ToolCallId.make("tc-old-row-replay")
-        const ctx = withSession(
-          { ...stubCtx, toolCallId, home },
-          {
-            ...stubCtx.Session,
-            getSession: () =>
-              Effect.succeed(
-                new Session({
-                  id: stubCtx.sessionId,
-                  activeBranchId: stubCtx.branchId,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              ),
-            listBranches: Effect.succeed([
-              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
-            ]),
-            send: onQueue((notice) => Deferred.succeed(sent, notice)),
-          },
-        )
-        const storageLayer = SqliteStorage.LiveWithSql(`${home}/gent.db`, Layer.empty, {}).pipe(
-          Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
-        )
+        const ctx = liveSession((notice) => Deferred.succeed(sent, notice), { toolCallId, home })
+        const storageLayer = fileStorage(`${home}/gent.db`)
         const output = Array.from({ length: 3000 }, (_, index) => `old line ${index + 1}\n`).join(
           "",
         )
@@ -1025,38 +1042,18 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  // A build that streamed output to the job's file also kept a follow-up's
-  // worth on the row. A replay names that file, unchanged.
+  // A row can keep a follow-up's worth of output while the job's file at the
+  // sanitized path holds all of it. A replay names that file, unchanged.
   it.scopedLive(
     "a replayed row longer than its bound names the job's file when it exists",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-row-file-" })
-        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const sent = yield* Deferred.make<Notice>()
         const toolCallId = ToolCallId.make("tc/row-file-replay")
-        const ctx = withSession(
-          { ...stubCtx, toolCallId, home },
-          {
-            ...stubCtx.Session,
-            getSession: () =>
-              Effect.succeed(
-                new Session({
-                  id: stubCtx.sessionId,
-                  activeBranchId: stubCtx.branchId,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              ),
-            listBranches: Effect.succeed([
-              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
-            ]),
-            send: onQueue((notice) => Deferred.succeed(sent, notice)),
-          },
-        )
-        const storageLayer = SqliteStorage.LiveWithSql(`${home}/gent.db`, Layer.empty, {}).pipe(
-          Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
-        )
+        const ctx = liveSession((notice) => Deferred.succeed(sent, notice), { toolCallId, home })
+        const storageLayer = fileStorage(`${home}/gent.db`)
         const output = Array.from({ length: 3000 }, (_, index) => `row line ${index + 1}\n`).join(
           "",
         )
@@ -1106,37 +1103,19 @@ describe("BashTool execution", () => {
     "failed background job does not notify before failure state is durable",
     () =>
       Effect.gen(function* () {
-        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-        const toolCallId = ToolCallId.make("tc-failed-terminal-durability")
-        const ctx = withSession(
-          { ...stubCtx, toolCallId },
-          {
-            ...stubCtx.Session,
-            getSession: () =>
-              Effect.succeed(
-                new Session({
-                  id: stubCtx.sessionId,
-                  activeBranchId: stubCtx.branchId,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              ),
-            listBranches: Effect.succeed([
-              new Branch({
-                id: stubCtx.branchId,
-                sessionId: stubCtx.sessionId,
-                createdAt: now,
-              }),
-            ]),
-            send: onQueue((notice) => Deferred.succeed(sent, notice)),
-          },
-        )
+        const sent = yield* Deferred.make<Notice>()
+        const attempted = yield* Deferred.make<void>()
+        const ctx = liveSession((notice) => Deferred.succeed(sent, notice), {
+          toolCallId: "tc-failed-terminal-durability",
+        })
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
-        const storageLayer = SqliteStorage.LiveWithSql(
-          `${directory}/storage.db`,
-          Layer.empty,
-          {},
-        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const storageLayer = fileStorage(`${directory}/storage.db`)
+        const scope = yield* Scope.make()
+        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+        const profile = yield* Layer.buildWithScope(
+          makeProcessLayerWithFailingMarkFailed(storageLayer, attempted),
+          scope,
+        )
 
         const result = yield* runToolWithCtx(
           BashTool,
@@ -1146,11 +1125,14 @@ describe("BashTool execution", () => {
             run_in_background: true,
           },
           ctx,
-        ).pipe(Effect.provide(makeProcessLayerWithFailingMarkFailed(storageLayer)))
+        ).pipe(Effect.provideContext(profile))
         expect(result.exitCode).toBe(0)
 
-        const followUp = yield* Effect.exit(Deferred.await(sent).pipe(Effect.timeout("250 millis")))
-        expect(followUp._tag).toBe("Failure")
+        // The job failed and its failure state did not commit. The scope
+        // close waits for the job's fiber, so any message it sends is in.
+        yield* Deferred.await(attempted)
+        yield* Scope.close(scope, Exit.void)
+        expect(yield* Deferred.isDone(sent)).toBe(false)
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )
@@ -1159,37 +1141,13 @@ describe("BashTool execution", () => {
     "a repeated start of a job a restart interrupted sends no message and leaves the job unread",
     () =>
       Effect.gen(function* () {
-        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-        const ctx = withSession(
-          { ...stubCtx, toolCallId: ToolCallId.make("tc-restart") },
-          {
-            ...stubCtx.Session,
-            getSession: () =>
-              Effect.succeed(
-                new Session({
-                  id: stubCtx.sessionId,
-                  activeBranchId: stubCtx.branchId,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              ),
-            listBranches: Effect.succeed([
-              new Branch({
-                id: stubCtx.branchId,
-                sessionId: stubCtx.sessionId,
-                createdAt: now,
-              }),
-            ]),
-            send: onQueue((notice) => Deferred.succeed(sent, notice)),
-          },
+        const sent = yield* Deferred.make<Notice>()
+        const ctx = yield* inTempCwd(
+          liveSession((notice) => Deferred.succeed(sent, notice), { toolCallId: "tc-restart" }),
         )
         const scope = yield* Scope.make()
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
-        const storageLayer = SqliteStorage.LiveWithSql(
-          `${directory}/storage.db`,
-          Layer.empty,
-          {},
-        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const storageLayer = fileStorage(`${directory}/storage.db`)
         const processLayer = makeProcessLayer(storageLayer)
         const firstContext = yield* Layer.buildWithScope(processLayer, scope)
         const started = yield* runToolWithCtx(
@@ -1198,6 +1156,18 @@ describe("BashTool execution", () => {
           ctx,
         ).pipe(Effect.provideContext(firstContext))
         expect(started.exitCode).toBe(0)
+        // The row names the job's process before the server stops.
+        yield* waitFor(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            return yield* sql<{
+              readonly recorded: number
+            }>`SELECT COUNT(*) AS recorded FROM background_bash_jobs WHERE tool_call_id = 'tc-restart' AND pid IS NOT NULL`
+          }).pipe(Effect.provide(storageLayer)),
+          (rows) => rows.some((row) => row.recorded > 0),
+          5_000,
+          "the job's recorded process",
+        )
         yield* Scope.close(scope, Exit.void)
         // The server restarts: the job belongs to the process that is gone.
         yield* Effect.gen(function* () {
@@ -1230,6 +1200,7 @@ describe("BashTool execution", () => {
             toolCallId: ToolCallId.make("tc-restart"),
             command: "sleep 2; printf should-not-arrive",
             outputFile: startedOutputFile(started.stdout),
+            mayStillRun: false,
           },
         ])
       }).pipe(withProcessTimeout),
@@ -1242,11 +1213,7 @@ describe("BashTool execution", () => {
       Effect.gen(function* () {
         const ctx = { ...stubCtx, toolCallId: ToolCallId.make("tc-two-profiles") }
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
-        const storageLayer = SqliteStorage.LiveWithSql(
-          `${directory}/storage.db`,
-          Layer.empty,
-          {},
-        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const storageLayer = fileStorage(`${directory}/storage.db`)
         const firstProfile = yield* Layer.build(makeProcessLayer(storageLayer))
         const started = yield* runToolWithCtx(
           BashTool,
@@ -1295,7 +1262,7 @@ describe("BashTool execution", () => {
       `
       const claim = yield* Effect.gen(function* () {
         const storage = yield* BackgroundBashStorage
-        yield* storage.reconcileInterrupted
+        yield* storage.reconcileInterrupted([])
         return yield* storage.claimStart({
           sessionId: SessionId.make("s"),
           branchId: BranchId.make("b"),
@@ -1341,9 +1308,8 @@ describe("BashTool execution", () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient
         yield* sql.unsafe(oldBackgroundBashTable)
-        // The earlier code may or may not have told the branch of `earlier`:
-        // it did only when the branch's loop opened. `running` belongs to a
-        // server that is gone.
+        // A row of this table does not tell whether the branch was shown
+        // `earlier`. `running` belongs to a server that is gone.
         yield* sql`
         INSERT INTO background_bash_jobs (session_id, branch_id, tool_call_id, command, status, started_at, completed_at)
         VALUES ('s', 'b', 'earlier', 'sleep 8', 'interrupted', 0, 5),
@@ -1352,7 +1318,7 @@ describe("BashTool execution", () => {
         const branch = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
         const unread = yield* Effect.gen(function* () {
           const storage = yield* BackgroundBashStorage
-          yield* storage.reconcileInterrupted
+          yield* storage.reconcileInterrupted([])
           const before = yield* storage.interruptedJobs(branch)
           yield* storage.markNoticesRead(branch, [
             ToolCallId.make("earlier"),
@@ -1360,9 +1326,10 @@ describe("BashTool execution", () => {
           ])
           return { before, after: yield* storage.interruptedJobs(branch) }
         }).pipe(Effect.provide(BackgroundBashStorage.Live))
+        // `running` recorded no process, so nothing tells whether it still runs.
         expect(unread.before).toEqual([
-          { toolCallId: ToolCallId.make("earlier"), command: "sleep 8" },
-          { toolCallId: ToolCallId.make("running"), command: "sleep 9" },
+          { toolCallId: ToolCallId.make("earlier"), command: "sleep 8", mayStillRun: false },
+          { toolCallId: ToolCallId.make("running"), command: "sleep 9", mayStillRun: true },
         ])
         expect(unread.after).toEqual([])
       }).pipe(
@@ -1372,32 +1339,18 @@ describe("BashTool execution", () => {
       ),
   )
 
-  it.live(
+  it.scopedLive(
     "starting a finished background job again notifies the parent only once",
     () =>
       Effect.gen(function* () {
         // The durable row survives the job, so a repeated start would find a
         // Terminal claim and replay its notice. The supervisor remembers which
         // keys it already notified about and stays silent for the second call.
-        const notices = yield* Ref.make<Array<{ sourceId: string; content: string }>>([])
-        const ctx = withSession(
-          { ...stubCtx, toolCallId: ToolCallId.make("tc-replay") },
-          {
-            ...stubCtx.Session,
-            getSession: () =>
-              Effect.succeed(
-                new Session({
-                  id: stubCtx.sessionId,
-                  activeBranchId: stubCtx.branchId,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              ),
-            listBranches: Effect.succeed([
-              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
-            ]),
-            send: onQueue((notice) => Ref.update(notices, (all) => [...all, notice])),
-          },
+        const notices = yield* Ref.make<Array<Notice>>([])
+        const ctx = yield* inTempCwd(
+          liveSession((notice) => Ref.update(notices, (all) => [...all, notice]), {
+            toolCallId: "tc-replay",
+          }),
         )
 
         yield* Effect.gen(function* () {
@@ -1436,23 +1389,9 @@ describe("BashTool execution", () => {
         const delivered = yield* Ref.make<ReadonlyArray<string>>([])
         const refusing = yield* Ref.make(true)
         const refused = yield* Deferred.make<void>()
-        const ctx = withSession(
-          { ...stubCtx, toolCallId },
-          {
-            ...stubCtx.Session,
-            getSession: () =>
-              Effect.succeed(
-                new Session({
-                  id: stubCtx.sessionId,
-                  activeBranchId: stubCtx.branchId,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              ),
-            listBranches: Effect.succeed([
-              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
-            ]),
-            send: onQueue((notice) =>
+        const ctx = yield* inTempCwd(
+          liveSession(
+            (notice) =>
               Effect.gen(function* () {
                 if (yield* Ref.get(refusing)) {
                   return yield* Effect.fail(
@@ -1465,15 +1404,11 @@ describe("BashTool execution", () => {
                 }
                 yield* Ref.update(delivered, (all) => [...all, notice.sourceId])
               }),
-            ),
-          },
+            { toolCallId },
+          ),
         )
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
-        const storageLayer = SqliteStorage.LiveWithSql(
-          `${directory}/storage.db`,
-          Layer.empty,
-          {},
-        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const storageLayer = fileStorage(`${directory}/storage.db`)
         const undelivered = BackgroundBashStorage.pipe(
           Effect.flatMap((storage) => storage.undeliveredJobs(branch)),
         )
@@ -1504,56 +1439,6 @@ describe("BashTool execution", () => {
 })
 
 // ── exec tools rpc ──────────────────────────────────────────────────────────
-
-/**
- * Exec-tools RPC acceptance test — exercises the `bash` tool through a real
- * agent turn (LLM emits the tool call, runtime dispatches it inside the
- * per-request scope, BunChildProcessSpawner from BunServices spawns a real
- * process). The tool tests above call the executor directly through
- * `runToolWithCtx`, which bypasses the scope boundary production uses.
- */
-
-describe("ExecToolsExtension (bash) via model turn", () => {
-  it.live(
-    "bash tool call routes through per-request scope and returns stdout",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("bash", { command: "echo rpc-harness-bash-marker" }),
-            textStep("ran"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-          })
-
-          const toolEventFiber = yield* client.session
-            .events({ sessionId, branchId })
-            .pipe(
-              Stream.filter(isToolResultFor("bash")),
-              Stream.take(1),
-              Stream.runCollect,
-              Effect.forkScoped,
-            )
-
-          yield* client.message.send({
-            sessionId,
-            branchId,
-            content: "run an echo",
-          })
-
-          const events = Array.from(yield* Fiber.join(toolEventFiber))
-          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
-          expect(succeeded).toBeDefined()
-          if (succeeded?.event._tag === "ToolCallSucceeded") {
-            expect(succeeded.event.output).toContain("rpc-harness-bash-marker")
-          }
-        }).pipe(Effect.timeout("12 seconds")),
-      ),
-    15_000,
-  )
-})
 
 describe("background job output", () => {
   for (const recover of [false, true]) {
@@ -1609,9 +1494,7 @@ describe("background job output", () => {
               return fs.open(file, options)
             },
           }
-          const storageLayer = SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
-            Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
-          )
+          const storageLayer = fileStorage(storagePath)
           const scope = yield* Scope.make()
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
           const profile = Context.add(
@@ -1769,12 +1652,6 @@ describe("background job output", () => {
     }
   }
 
-  /** Live heap bytes after a full collection; Bun counts array buffers in it. */
-  const liveBytes = Effect.sync(() => {
-    Bun.gc(true)
-    return process.memoryUsage().heapUsed
-  })
-
   it.scopedLive.layer(BunFileSystem.layer)(
     "a running job's output is in its file, not in server memory",
     () =>
@@ -1874,12 +1751,6 @@ describe("background job output", () => {
 })
 
 describe("foreground command output", () => {
-  /** Live heap bytes after a full collection; Bun counts array buffers in it. */
-  const liveBytes = Effect.sync(() => {
-    Bun.gc(true)
-    return process.memoryUsage().heapUsed
-  })
-
   it.scopedLive.layer(BunServices.layer)(
     "a cut that lands inside an emoji leaves the whole emoji out",
     () =>
@@ -2237,13 +2108,7 @@ describe("a background completion the full follow-up queue refused", () => {
             5_000,
             "the refused completion is recorded",
           )
-        }).pipe(
-          Effect.provide(
-            SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
-              Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
-            ),
-          ),
-        )
+        }).pipe(Effect.provide(fileStorage(storagePath)))
         yield* Deferred.succeed(releaseHold, void 0)
         yield* idle("the queued turns ran")
         const heading = "# Background commands finished"
@@ -2274,9 +2139,8 @@ describe("a background completion the full follow-up queue refused", () => {
     30_000,
   )
 
-  // A build before the 2,000-character row bound stored up to a follow-up's
-  // worth of output on the row, and streamed all of it to the job's file. The
-  // notice once cut that row to its bound and named no file.
+  // A row can hold more output than the notice bound while the job's file
+  // holds all of it. The notice names that file, not only the row's cut ends.
   it.scopedLive.layer(BunFileSystem.layer)(
     "a stored row longer than the notice bound names the job's file; a missing file is named as not saved",
     () =>
@@ -2313,9 +2177,7 @@ describe("a background completion the full follow-up queue refused", () => {
           recursive: true,
         })
         yield* fs.writeFileString(file, printed)
-        const storageLayer = SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
-          Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
-        )
+        const storageLayer = fileStorage(storagePath)
         yield* Effect.gen(function* () {
           const storage = yield* BackgroundBashStorage
           const job = (toolCallId: ToolCallId) => ({ sessionId, branchId, toolCallId })
@@ -2373,30 +2235,11 @@ describe("a background job the server stopped", () => {
           const directory = yield* makeTempDirectoryScoped("gent-background-delivery-")
           const terminal = yield* Deferred.make<void>()
           const notices = yield* Ref.make<ReadonlyArray<string>>([])
-          const ctx = withSession(
-            { ...stubCtx, home: directory, toolCallId: ToolCallId.make(`delivery-${entry.name}`) },
-            {
-              ...stubCtx.Session,
-              getSession: () =>
-                Effect.succeed(
-                  new Session({
-                    id: stubCtx.sessionId,
-                    activeBranchId: stubCtx.branchId,
-                    createdAt: now,
-                    updatedAt: now,
-                  }),
-                ),
-              listBranches: Effect.succeed([
-                new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
-              ]),
-              send: onQueue((notice) => Ref.update(notices, (all) => [...all, notice.sourceId])),
-            },
+          const ctx = liveSession(
+            (notice) => Ref.update(notices, (all) => [...all, notice.sourceId]),
+            { toolCallId: `delivery-${entry.name}`, home: directory },
           )
-          const storageLayer = SqliteStorage.LiveWithSql(
-            `${directory}/storage.db`,
-            Layer.empty,
-            {},
-          ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+          const storageLayer = fileStorage(`${directory}/storage.db`)
           const interruptAfterCommit = (commit: Effect.Effect<void, BackgroundBashStorageError>) =>
             Effect.withFiber((fiber) =>
               commit.pipe(
@@ -2468,11 +2311,7 @@ describe("a background job the server stopped", () => {
           toolCallId: ToolCallId.make("claim-interrupted"),
         }
         const key = { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId: ctx.toolCallId }
-        const storageLayer = SqliteStorage.LiveWithSql(
-          `${directory}/storage.db`,
-          Layer.empty,
-          {},
-        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const storageLayer = fileStorage(`${directory}/storage.db`)
         // Interrupt at the existing storage boundary after the real transaction commits.
         const interruptedStorage = Layer.effect(
           BackgroundBashStorage,
@@ -2528,11 +2367,7 @@ describe("a background job the server stopped", () => {
       Effect.gen(function* () {
         const ctx = { ...stubCtx, toolCallId: ToolCallId.make("tc-stopped-fiber") }
         const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
-        const storageLayer = SqliteStorage.LiveWithSql(
-          `${directory}/storage.db`,
-          Layer.empty,
-          {},
-        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const storageLayer = fileStorage(`${directory}/storage.db`)
         const scope = yield* Scope.make()
         const firstProfile = yield* Layer.buildWithScope(makeProcessLayer(storageLayer), scope)
         const started = yield* runToolWithCtx(
@@ -2559,6 +2394,125 @@ describe("a background job the server stopped", () => {
         if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
       }).pipe(withProcessTimeout),
     processTestTimeout,
+  )
+
+  it.scopedLive.layer(BunPlatformLive)(
+    "a quiet job that outlived a crashed server stops when the next server starts",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const platform = yield* GentPlatform
+        const directory = yield* fs.realPath(yield* makeTempDirectoryScoped("gent-bg-crash-"))
+        const storagePath = `${directory}/gent.db`
+        const pidFile = `${directory}/job.pid`
+        // Quiet: the job writes nothing to the pipe the dead server held, so
+        // no write ends it.
+        const command = `echo $$ > ${pidFile}; sleep 30; touch ${directory}/late`
+        const hostEntry = yield* path.fromFileUrl(
+          new URL("./helpers/background-bash-host.ts", import.meta.url),
+        )
+        const host = yield* ChildProcess.make(yield* platform.execPath, [hostEntry], {
+          cwd: directory,
+          forceKillAfter: "2 seconds",
+          env: { BG_STORAGE_PATH: storagePath, BG_HOME: directory, BG_COMMAND: command },
+          extendEnv: true,
+          stdout: "ignore",
+          stderr: "inherit",
+        })
+        const pid = Number(
+          yield* waitFor(
+            fs.readFileString(pidFile).pipe(Effect.orElseSucceed(() => "")),
+            (text) => text.trim() !== "",
+            10_000,
+            "the job's pid",
+          ),
+        )
+        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+        // A red run must not leave the job's group behind.
+        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-pid, "SIGKILL")))
+        const storageLayer = SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
+          Layer.provide(BunPlatformLive),
+        )
+        // The host names the job's process in the row before it crashes.
+        yield* waitFor(
+          Effect.gen(function* () {
+            return yield* (yield* BackgroundBashStorage).staleProcesses
+          }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)))),
+          (processes) => processes.some((job) => job.pid === pid),
+          10_000,
+          "the job's recorded process",
+        )
+        yield* host.kill({ killSignal: "SIGKILL" })
+        yield* host.exitCode.pipe(Effect.ignore)
+        // The server died without a finalizer: the job runs on.
+        yield* platform.signal(pid, 0)
+
+        // The next server's background resource builds over the same store.
+        const unread = yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          return yield* storage.interruptedJobs({
+            sessionId: stubCtx.sessionId,
+            branchId: BranchId.make("test-branch"),
+          })
+        }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+
+        // Every process of the job's group is gone, and the notice says it stopped.
+        yield* waitFor(
+          platform.signal(-pid, 0).pipe(Effect.exit),
+          Exit.isFailure,
+          5_000,
+          "the job's process group stopped",
+        )
+        expect(yield* fs.exists(`${directory}/late`)).toBe(false)
+        expect(unread).toMatchObject([
+          { toolCallId: ToolCallId.make("crashed-host-job"), command, mayStillRun: false },
+        ])
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive.layer(BunPlatformLive)(
+    "a restart leaves alone a process that took a stale job's pid",
+    () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const directory = yield* makeTempDirectoryScoped("gent-bg-reused-pid-")
+        // A live process the job does not own: same pid, another start time.
+        const other = yield* ChildProcess.make("sleep", ["30"], {
+          forceKillAfter: "2 seconds",
+          stdout: "ignore",
+          stderr: "ignore",
+        })
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `${directory}/gent.db`,
+          Layer.empty,
+          {},
+        ).pipe(Layer.provide(BunPlatformLive))
+        yield* Effect.gen(function* () {
+          yield* BackgroundBashStorage
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`
+            INSERT INTO background_bash_jobs
+              (session_id, branch_id, tool_call_id, command, status, started_at, owner_generation, pid, process_start_id)
+            VALUES ('s', 'b', 'reused', 'sleep 30', 'running', 0, 'earlier-process', ${other.pid}, 'Thu Jan  1 00:00:00 1970')
+          `
+        }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provideMerge(storageLayer))))
+
+        const unread = yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          return yield* storage.interruptedJobs({
+            sessionId: SessionId.make("s"),
+            branchId: BranchId.make("b"),
+          })
+        }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+
+        yield* platform.signal(other.pid, 0)
+        expect(unread).toMatchObject([
+          { toolCallId: ToolCallId.make("reused"), mayStillRun: false },
+        ])
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 
   it.scopedLive.layer(BunFileSystem.layer)(

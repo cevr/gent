@@ -20,6 +20,7 @@ import {
   createRpcHarness,
   finishPart,
   LanguageModelLayers,
+  makeTempDirectoryScoped,
   textDeltaPart,
   textStep,
   toolCallPart,
@@ -315,9 +316,10 @@ describe("btw forks", () => {
               },
             },
           ])
-          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const cwd = yield* makeTempDirectoryScoped("gent-btw-")
+          const harness = yield* createRpcHarness({ ...e2ePreset, cwd, providerLayer })
           const session = yield* harness.client.session.create({
-            cwd: process.cwd(),
+            cwd,
             admission: { agent: AgentName.make("delegate") },
           })
           yield* harness.client.session.updateSettings({
@@ -638,19 +640,34 @@ describe("btw forks", () => {
   it.live("forks requested at once leave one open fork, and it follows its session", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("sure")])
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("sure"),
+        ])
         const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
         const pane = btw(harness)
         const opened = yield* Effect.forEach(["", "", "", ""], pane.fork, {
           concurrency: "unbounded",
         })
+        // Each request makes its own fork session; exactly one of them is open.
+        expect(new Set(opened.map((fork) => fork.sessionId)).size).toBe(4)
         const shown = yield* pane.progress
-        expect(opened.some((fork) => fork.sessionId === shown.fork?.sessionId)).toBe(true)
+        const [open, ...closed] = [
+          ...opened.filter((fork) => fork.sessionId === shown.fork?.sessionId),
+          ...opened.filter((fork) => fork.sessionId !== shown.fork?.sessionId),
+        ]
+        expect(closed).toHaveLength(3)
+        expect(open?.sessionId).toBe(shown.fork?.sessionId)
         yield* pane.ask("Still there?")
         const replied = yield* pane.replied(1)
         expect(Option.map(replied, (view) => view.turns)).toEqual(
           Option.some([{ question: "Still there?", answer: "sure" }]),
         )
+        // The question reached the open fork alone: one model call, and the
+        // closed forks hold no message.
+        expect(yield* controls.callCount).toBe(1)
+        for (const fork of closed) {
+          expect((yield* harness.client.session.getSnapshot(fork)).messages).toEqual([])
+        }
       }).pipe(Effect.timeout("6 seconds")),
     ),
   )

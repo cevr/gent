@@ -1,5 +1,16 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Deferred, Effect, Fiber, Option, Queue, Ref, type Schema, Stream } from "effect"
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Fiber,
+  Option,
+  Predicate,
+  Queue,
+  Ref,
+  type Schema,
+  Stream,
+} from "effect"
 import {
   CellHost,
   CellWorkerEnvironment,
@@ -30,41 +41,77 @@ const strayError = (cause: unknown) => ({
   repair: { restored: [], unrestored: [] },
 })
 
-/** A worker fed from queues; `uncaught` stands in for the process's uncaught handlers. */
-const makeHarnessWith = (uncaught: (typeof CellWorkerEnvironment.Service)["uncaught"]) =>
-  Effect.gen(function* () {
-    const requests = yield* Queue.make<CellRequest>({ capacity: 64 })
-    const responses = yield* Queue.make<CellResponse>({ capacity: 64 })
-    const fiber = yield* runCellWorker.pipe(
-      Effect.provideService(CellWorkerTransport, {
-        requests: Stream.fromQueue(requests),
-        send: (response) => Queue.offer(responses, response).pipe(Effect.asVoid),
-        endCellOutput: () => Effect.void,
+/**
+ * A worker fed from queues. `raise` stands in for the process's uncaught
+ * handlers. `evaluate` sends one cell and returns its response; a cell with no
+ * id is numbered in order.
+ */
+const makeHarness = Effect.gen(function* () {
+  const requests = yield* Queue.make<CellRequest>({ capacity: 64 })
+  const responses = yield* Queue.make<CellResponse>({ capacity: 64 })
+  const uncaught =
+    yield* Queue.unbounded<Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>>()
+  const fiber = yield* runCellWorker.pipe(
+    Effect.provideService(CellWorkerTransport, {
+      requests: Stream.fromQueue(requests),
+      send: (response) => Queue.offer(responses, response).pipe(Effect.asVoid),
+      endCellOutput: () => Effect.void,
+    }),
+    Effect.provideService(CellWorkerEnvironment, {
+      workingDirectory: process.cwd(),
+      uncaught: Stream.fromQueue(uncaught),
+    }),
+    Effect.forkScoped,
+  )
+  expect((yield* Queue.take(responses))._tag).toBe("Ready")
+  const send = (request: CellRequest) => Queue.offer(requests, request)
+  const next = Queue.take(responses)
+  let cells = 0
+  const evaluate = (source: string, cellId?: string) =>
+    Effect.gen(function* () {
+      cells += 1
+      let id = `cell-${cells}`
+      if (Predicate.isNotUndefined(cellId)) id = cellId
+      yield* send(
+        CellRequest.cases.Evaluate.make({ cellId: id, outputToken: `${id}-token`, source }),
+      )
+      return yield* next
+    })
+  return {
+    send,
+    next,
+    fiber,
+    raise: (error: Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>) =>
+      Queue.offer(uncaught, error),
+    evaluate,
+    /** The result of a cell that must evaluate. */
+    evaluated: (source: string, cellId?: string) =>
+      Effect.gen(function* () {
+        const result = yield* evaluate(source, cellId)
+        if (result._tag !== "Evaluated")
+          return yield* new CellProtocolError({ message: `Expected result, got ${result._tag}` })
+        return result.result
       }),
-      Effect.provideService(CellWorkerEnvironment, {
-        workingDirectory: process.cwd(),
-        uncaught,
+    /** The error message of a cell that must fail. */
+    failed: (source: string, cellId?: string) =>
+      Effect.gen(function* () {
+        const result = yield* evaluate(source, cellId)
+        if (result._tag !== "Failed")
+          return yield* new CellProtocolError({ message: `Expected failure, got ${result._tag}` })
+        return result.error.message
       }),
-      Effect.forkScoped,
-    )
-    expect((yield* Queue.take(responses))._tag).toBe("Ready")
-    return {
-      send: (request: CellRequest) => Queue.offer(requests, request),
-      next: Queue.take(responses),
-      fiber,
-    }
-  })
+  }
+})
 
-const makeHarness = makeHarnessWith(Stream.empty)
+/** The display of a cell that must evaluate. */
+const displayOf = (result: { readonly display: string }) => result.display
 
 describe("cell worker", () => {
   it.scopedLive("a fault of unknown origin before any cell ran ends the worker", () =>
     Effect.gen(function* () {
-      const uncaught =
-        yield* Queue.unbounded<Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>>()
-      const worker = yield* makeHarnessWith(Stream.fromQueue(uncaught))
+      const worker = yield* makeHarness
       // No cell code exists in this worker yet: the fault is the worker's own.
-      yield* Queue.offer(uncaught, strayError("worker bug"))
+      yield* worker.raise(strayError("worker bug"))
       const ended = yield* Effect.exit(Fiber.join(worker.fiber))
       expect(ended._tag).toBe("Failure")
       if (ended._tag === "Failure")
@@ -74,29 +121,17 @@ describe("cell worker", () => {
 
   it.scopedLive("after a cell ran, a fault of unknown origin waits for the next cell", () =>
     Effect.gen(function* () {
-      const uncaught =
-        yield* Queue.unbounded<Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>>()
-      const worker = yield* makeHarnessWith(Stream.fromQueue(uncaught))
-      let cells = 0
-      const evaluate = (source: string) =>
-        Effect.gen(function* () {
-          cells += 1
-          const cellId = `cell-${cells}`
-          yield* worker.send(
-            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
-          )
-          const result = yield* worker.next
-          if (result._tag !== "Evaluated")
-            return yield* new CellProtocolError({ message: `Expected result, got ${result._tag}` })
-          return result.result.display
-        })
-      expect(yield* evaluate("1")).toBe("1")
+      const worker = yield* makeHarness
+      expect((yield* worker.evaluated("1")).display).toBe("1")
       // A timer or promise of that cell may raise it: it is not the worker's own.
-      yield* Queue.offer(uncaught, strayError("late rejection"))
+      yield* worker.raise(strayError("late rejection"))
       // The report runs on its own fiber; each cell gives it a turn.
-      const display = yield* evaluate("2").pipe(
-        Effect.repeat({ until: (text) => text.includes("late rejection"), times: 20 }),
-      )
+      const display = yield* worker
+        .evaluated("2")
+        .pipe(
+          Effect.map(displayOf),
+          Effect.repeat({ until: (text) => text.includes("late rejection"), times: 20 }),
+        )
       expect(display).toContain("Uncaught (origin unknown")
       expect(display).toContain("late rejection")
     }).pipe(Effect.timeout("3 seconds")),
@@ -107,29 +142,23 @@ describe("cell worker", () => {
   // put back by the report itself, and named with the error.
   it.scopedLive("an uncaught error's report puts back the built-ins before its text", () =>
     Effect.gen(function* () {
-      const uncaught =
-        yield* Queue.unbounded<Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>>()
-      const worker = yield* makeHarnessWith(Stream.fromQueue(uncaught))
-      let cells = 0
-      const evaluate = (source: string) =>
-        Effect.gen(function* () {
-          cells += 1
-          const cellId = `cell-${cells}`
-          yield* worker.send(
-            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
-          )
-          const result = yield* worker.next
-          if (result._tag !== "Evaluated")
-            return yield* new CellProtocolError({ message: `Expected result, got ${result._tag}` })
-          return result.result.display
-        })
-      expect(yield* evaluate("1")).toBe("1")
+      const worker = yield* makeHarness
+      expect((yield* worker.evaluated("1")).display).toBe("1")
       // Stands in for a timer that adds a built-in property after the handler ran.
-      Reflect.defineProperty(Array.prototype, "probeAdded", { value: 1, configurable: true })
-      yield* Queue.offer(uncaught, strayError("late rejection"))
-      const display = yield* evaluate("2").pipe(
-        Effect.repeat({ until: (text) => text.includes("late rejection"), times: 20 }),
+      // The report removes it; the release removes it too if the report never runs.
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Reflect.defineProperty(Array.prototype, "probeAdded", { value: 1, configurable: true }),
+        ),
+        () => Effect.sync(() => Reflect.deleteProperty(Array.prototype, "probeAdded")),
       )
+      yield* worker.raise(strayError("late rejection"))
+      const display = yield* worker
+        .evaluated("2")
+        .pipe(
+          Effect.map(displayOf),
+          Effect.repeat({ until: (text) => text.includes("late rejection"), times: 20 }),
+        )
       expect(display).toContain(
         "Put back built-ins changed before an uncaught error: Array.prototype.probeAdded",
       )
@@ -190,23 +219,12 @@ describe("cell worker", () => {
     }).pipe(Effect.timeout("3 seconds")),
   )
 
-  // The snapshot reads every binding after a cell. A read that throws once
-  // ended the worker: the next cell failed and the restart lost the namespace.
+  // The snapshot reads every binding after a cell. A read that throws names
+  // that binding as not saved, and the worker keeps its namespace.
   it.scopedLive("a binding that throws when read is named as not saved; the worker lives", () =>
     Effect.gen(function* () {
       const worker = yield* makeHarness
-      const evaluate = (cellId: string, source: string) =>
-        Effect.gen(function* () {
-          yield* worker.send(
-            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
-          )
-          const result = yield* worker.next
-          if (result._tag !== "Evaluated")
-            return yield* new CellProtocolError({ message: `Expected result, got ${result._tag}` })
-          return result.result
-        })
-      const defined = yield* evaluate(
-        "define",
+      const defined = yield* worker.evaluated(
         [
           "const kept = [1]",
           "const getter = { get bad() { throw new Error('getter') } }",
@@ -228,7 +246,7 @@ describe("cell worker", () => {
         // An accessor is saved as its getter, never called.
         { name: "accessor", reason: "function" },
       ])
-      expect((yield* evaluate("after", "kept.length")).display).toBe("1")
+      expect((yield* worker.evaluated("kept.length")).display).toBe("1")
       yield* worker.send(CellRequest.cases.Reset.make({ requestId: "reset" }))
       expect((yield* worker.next)._tag).toBe("Reset")
     }).pipe(Effect.timeout("3 seconds")),
@@ -420,109 +438,54 @@ describe("cell worker", () => {
   it.scopedLive("an error's cause reads one level deep, even in a loop or a long chain", () =>
     Effect.gen(function* () {
       const worker = yield* makeHarness
-      const evaluate = (cellId: string, source: string) =>
-        Effect.gen(function* () {
-          yield* worker.send(
-            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
-          )
-          return yield* worker.next
-        })
-      const failed = (cellId: string, source: string) =>
-        Effect.gen(function* () {
-          const result = yield* evaluate(cellId, source)
-          if (result._tag !== "Failed")
-            return yield* new CellProtocolError({ message: `Expected failure, got ${result._tag}` })
-          return result.error.message
-        })
-      expect(yield* failed("loop", "const e = new Error('a'); e.cause = e; throw e")).toBe(
+      expect(yield* worker.failed("const e = new Error('a'); e.cause = e; throw e")).toBe(
         "Error: a\ncaused by Error: a",
       )
-      const logged = yield* evaluate(
-        "logged",
-        "const f = new Error('b'); f.cause = f; console.log(f); 1",
-      )
-      expect(logged._tag).toBe("Evaluated")
+      yield* worker.evaluated("const f = new Error('b'); f.cause = f; console.log(f); 1")
       expect(
-        yield* failed(
-          "chain",
+        yield* worker.failed(
           "throw new Error('l1', { cause: new Error('l2', { cause: new Error('l3', { cause: new Error('l4') }) }) })",
         ),
       ).toBe("Error: l1\ncaused by Error: l2")
       // The worker is intact for the next cell.
-      const next = yield* evaluate("after", "42")
-      if (next._tag !== "Evaluated")
-        return yield* new CellProtocolError({ message: "Expected result" })
-      expect(next.result.display).toBe("42")
+      expect((yield* worker.evaluated("42")).display).toBe("42")
     }).pipe(Effect.timeout("3 seconds")),
   )
 
-  // Rendering a thrown value once ran its getters and traps outside any
-  // catch: a throw there ended the worker, and the restart lost the bindings.
+  // Rendering a thrown value runs no getter or trap outside a catch, so a
+  // throw there neither ends the worker nor loses the bindings.
   it.scopedLive("a thrown value that cannot be read fails its cell; the worker lives", () =>
     Effect.gen(function* () {
       const worker = yield* makeHarness
-      const evaluate = (cellId: string, source: string) =>
-        Effect.gen(function* () {
-          yield* worker.send(
-            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
-          )
-          return yield* worker.next
-        })
-      const failed = (cellId: string, source: string) =>
-        Effect.gen(function* () {
-          const result = yield* evaluate(cellId, source)
-          if (result._tag !== "Failed")
-            return yield* new CellProtocolError({ message: `Expected failure, got ${result._tag}` })
-          return result.error.message
-        })
-      const kept = (cellId: string) =>
-        Effect.gen(function* () {
-          const result = yield* evaluate(cellId, "kept")
-          if (result._tag !== "Evaluated")
-            return yield* new CellProtocolError({ message: `Expected result, got ${result._tag}` })
-          return result.result.display
-        })
-      expect((yield* evaluate("define", "let kept = 7"))._tag).toBe("Evaluated")
+      const kept = worker.evaluated("kept").pipe(Effect.map(displayOf))
+      yield* worker.evaluated("let kept = 7")
       const throwing = (key: string) =>
         `const e = new Error('x'); Object.defineProperty(e, '${key}', { get() { throw new Error('${key}') } }); throw e`
       // A getter the cell defined never runs: the error shows what its data holds.
-      expect(yield* failed("message", throwing("message"))).toBe("Error")
-      expect(yield* kept("after-message")).toBe("7")
-      expect(yield* failed("cause", throwing("cause"))).toBe("Error: x")
-      expect(yield* kept("after-cause")).toBe("7")
-      expect(yield* failed("code", throwing("code"))).toBe("Error: x")
-      expect(yield* kept("after-code")).toBe("7")
+      expect(yield* worker.failed(throwing("message"))).toBe("Error")
+      expect(yield* kept).toBe("7")
+      expect(yield* worker.failed(throwing("cause"))).toBe("Error: x")
+      expect(yield* kept).toBe("7")
+      expect(yield* worker.failed(throwing("code"))).toBe("Error: x")
+      expect(yield* kept).toBe("7")
       // A trap that throws on any read leaves one fixed text.
       expect(
-        yield* failed(
-          "proxy",
+        yield* worker.failed(
           "const trap = () => { throw new Error('trap') }; throw new Proxy(new Error('x'), { getPrototypeOf: trap, get: trap, getOwnPropertyDescriptor: trap, ownKeys: trap, has: trap })",
         ),
       ).toBe("A thrown value that cannot be read")
-      expect(yield* kept("after-proxy")).toBe("7")
-      expect(
-        (yield* evaluate(
-          "primitive",
-          "throw { [Symbol.toPrimitive]() { throw new Error('p') }, toString() { throw new Error('s') } }",
-        ))._tag,
-      ).toBe("Failed")
-      expect(yield* kept("after-primitive")).toBe("7")
+      expect(yield* kept).toBe("7")
+      yield* worker.failed(
+        "throw { [Symbol.toPrimitive]() { throw new Error('p') }, toString() { throw new Error('s') } }",
+      )
+      expect(yield* kept).toBe("7")
     }).pipe(Effect.timeout("3 seconds")),
   )
 
   it.scopedLive("an error shows every part that can be read, each in its place", () =>
     Effect.gen(function* () {
       const worker = yield* makeHarness
-      const failed = (cellId: string, source: string) =>
-        Effect.gen(function* () {
-          yield* worker.send(
-            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
-          )
-          const result = yield* worker.next
-          if (result._tag !== "Failed")
-            return yield* new CellProtocolError({ message: `Expected failure, got ${result._tag}` })
-          return result.error.message
-        })
+      const failed = (cellId: string, source: string) => worker.failed(source, cellId)
       // A DOMException keeps its name and message behind host getters on its prototype.
       expect(
         yield* failed("dom", "throw new DOMException('The operation timed out.', 'TimeoutError')"),
@@ -558,26 +521,8 @@ describe("cell worker", () => {
     "an uncaught value that cannot be read reaches the next cell; the worker lives",
     () =>
       Effect.gen(function* () {
-        const uncaught =
-          yield* Queue.unbounded<
-            Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>
-          >()
-        const worker = yield* makeHarnessWith(Stream.fromQueue(uncaught))
-        let cells = 0
-        const evaluate = (source: string) =>
-          Effect.gen(function* () {
-            cells += 1
-            const cellId = `cell-${cells}`
-            yield* worker.send(
-              CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
-            )
-            const result = yield* worker.next
-            if (result._tag !== "Evaluated")
-              return yield* new CellProtocolError({
-                message: `Expected result, got ${result._tag}`,
-              })
-            return result.result.display
-          })
+        const worker = yield* makeHarness
+        const evaluate = (source: string) => worker.evaluated(source).pipe(Effect.map(displayOf))
         expect(yield* evaluate("let kept = 7; kept")).toBe("7")
         // oxlint-disable-next-line effect/noNewError -- the value under test is a thrown Error whose message getter throws
         const unreadable = new Error("x")
@@ -587,7 +532,7 @@ describe("cell worker", () => {
             throw new Error("m")
           },
         })
-        yield* Queue.offer(uncaught, strayError(unreadable))
+        yield* worker.raise(strayError(unreadable))
         // The report runs on its own fiber; each cell gives it a turn.
         const display = yield* evaluate("kept").pipe(
           Effect.repeat({ until: (text) => text.includes("Uncaught"), times: 20 }),
@@ -603,7 +548,7 @@ describe("cell worker", () => {
           getPrototypeOf: trap,
           getOwnPropertyDescriptor: trap,
         })
-        yield* Queue.offer(uncaught, strayError(trapped))
+        yield* worker.raise(strayError(trapped))
         const trappedDisplay = yield* evaluate("kept").pipe(
           Effect.repeat({ until: (text) => text.includes("Uncaught"), times: 20 }),
         )
@@ -1101,7 +1046,6 @@ describe("Bun cell evaluation", () => {
         "context:newWindow",
       ])
       expect(read.bindings).toEqual(["page"])
-      expect(read.bindings).not.toContain("context")
     }),
   )
 })

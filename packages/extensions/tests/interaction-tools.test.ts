@@ -16,6 +16,7 @@ import {
   makeTempDirectoryScoped,
   textStep,
   toolCallStep,
+  waitFor,
   ApprovalService,
   type ApprovalDecision,
 } from "@gent/core/test-utils"
@@ -28,25 +29,14 @@ import { isToolResultFor } from "./helpers/tool-event.js"
 
 const makeCtx = (
   decision: Effect.Effect<{ readonly approved: boolean; readonly notes?: string }>,
-) => {
-  const interaction = {
-    approve: () => decision,
-    present: () => Effect.die("not wired"),
-  }
-  return {
-    ctx: testToolContext({
-      sessionId: SessionId.make("test-session"),
-      branchId: BranchId.make("test-branch"),
-      toolCallId: ToolCallId.make("test-call"),
-      home: "/nonexistent/gent-test-home",
-      Interaction: interaction,
-    }),
-    interaction,
-  } satisfies {
-    readonly ctx: ReturnType<typeof testToolContext>
-    readonly interaction: typeof interaction
-  }
-}
+) =>
+  testToolContext({
+    sessionId: SessionId.make("test-session"),
+    branchId: BranchId.make("test-branch"),
+    toolCallId: ToolCallId.make("test-call"),
+    home: "/nonexistent/gent-test-home",
+    Interaction: { approve: () => decision, present: () => Effect.die("not wired") },
+  })
 
 describe("ask-user wire", () => {
   // The metadata JSON as an interaction stored it before the call limits: a
@@ -70,7 +60,7 @@ describe("ask-user wire", () => {
 
 describe("AskUser Tool", () => {
   it.live("decodes structured JSON answers from notes", () => {
-    const { ctx } = makeCtx(
+    const ctx = makeCtx(
       Effect.succeed({ approved: true, notes: '[["Option A","Option B"],["Option C"]]' }),
     )
 
@@ -92,7 +82,7 @@ describe("AskUser Tool", () => {
   })
 
   it.live("falls back to wrapping raw notes when JSON is malformed", () => {
-    const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "not-json {{{" }))
+    const ctx = makeCtx(Effect.succeed({ approved: true, notes: "not-json {{{" }))
 
     return runToolWithCtx(AskUserTool, { questions: [{ question: "Free-form?" }] }, ctx).pipe(
       Effect.map((result) => {
@@ -102,7 +92,7 @@ describe("AskUser Tool", () => {
   })
 
   it.live("an approval without notes answers each question with an empty list", () => {
-    const { ctx } = makeCtx(Effect.succeed({ approved: true }))
+    const ctx = makeCtx(Effect.succeed({ approved: true }))
 
     return runToolWithCtx(
       AskUserTool,
@@ -120,7 +110,7 @@ describe("AskUser Tool", () => {
       runToolWithCtx(
         AskUserTool,
         { questions: [{ question: "One?" }, { question: "Two?" }] },
-        makeCtx(Effect.succeed({ approved: true, notes })).ctx,
+        makeCtx(Effect.succeed({ approved: true, notes })),
       )
     return Effect.gen(function* () {
       // A short list is padded with empty answers.
@@ -131,7 +121,7 @@ describe("AskUser Tool", () => {
   })
 
   it.live("free-text notes answer the first question and leave the rest empty", () => {
-    const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "free text" }))
+    const ctx = makeCtx(Effect.succeed({ approved: true, notes: "free text" }))
 
     return runToolWithCtx(
       AskUserTool,
@@ -146,7 +136,7 @@ describe("AskUser Tool", () => {
   })
 
   it.live("cancel returns cancelled flag with empty answers", () => {
-    const { ctx } = makeCtx(Effect.succeed({ approved: false }))
+    const ctx = makeCtx(Effect.succeed({ approved: false }))
 
     return runToolWithCtx(
       AskUserTool,
@@ -429,7 +419,7 @@ describe("InteractionToolsExtension via model turn", () => {
   )
 
   it.live(
-    "prompt tool (confirm mode) routes through per-request scope and auto-approves via Test ApprovalService",
+    "a confirm prompt in a model turn answers yes when the approval says yes",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -536,7 +526,7 @@ describe("Handoff tool via model turn", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
             toolCallStep("handoff", {
               context: largeContext,
               reason: "context window filling up",
@@ -573,6 +563,24 @@ describe("Handoff tool via model turn", () => {
             )
             expect(succeeded.event.output).toContain('"reason": "context window filling up"')
           }
+          // The turn's two steps are the only model calls: once the branch
+          // settles with nothing queued, no call followed the approval.
+          yield* waitFor(
+            Effect.all([
+              client.session.getSnapshot({ sessionId, branchId }),
+              client.queue.get({ sessionId, branchId }),
+            ]),
+            ([snapshot, queue]) =>
+              snapshot.runtime._tag === "Idle" &&
+              queue.followUp.length === 0 &&
+              snapshot.messages.some((message) =>
+                message.parts.some((part) => part.type === "text" && part.text === "handed-off"),
+              ),
+            5_000,
+            "the handoff turn settles",
+          )
+          expect(yield* controls.callCount).toBe(2)
+          yield* controls.assertDone
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15_000,

@@ -16,11 +16,11 @@ When you catch yourself writing the same instruction a second time:
 **Feedback Loop:**
 
 - **Capture every correction:** When the human intervenes or tests fail, decide if it's a one-off or a pattern
-- **Route to the right layer:** One-off -> brain note. Recurring fix -> skill or lint rule. Systemic issue -> principle
+- **Route to the right layer:** One-off -> a note in the project's docs. Recurring fix -> skill or lint rule. Systemic issue -> principle
 - **Close the loop:** Don't only record — apply now or create a concrete todo
 
 **Anti-Patterns:**
 
 - Acknowledging without recording ("I'll keep that in mind" does not persist)
-- Recording without routing (brain note about a lint rule that should exist is wasted unless the lint rule gets implemented)
+- Recording without routing (a note about a lint rule that should exist is wasted unless the lint rule gets implemented)
 - Fixing without generalizing (fixing one instance while leaving the recurring pattern intact)

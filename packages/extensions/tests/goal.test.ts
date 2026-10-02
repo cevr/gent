@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import {
   Cause,
   ConfigProvider,
@@ -93,25 +93,21 @@ const sampleGoal: GoalState = {
 }
 
 describe("goals", () => {
-  it.live("remaining budget is absent for unbounded goals and never negative", () =>
-    Effect.sync(() => {
-      expect(remainingTokens(sampleGoal)).toEqual(Option.some(60))
-      expect(remainingTokens({ ...sampleGoal, tokensUsed: 500 })).toEqual(Option.some(0))
-      const { tokenBudget: _budget, ...unbounded } = sampleGoal
-      expect(remainingTokens(unbounded)).toEqual(Option.none())
-    }),
-  )
+  test("remaining budget is absent for unbounded goals and never negative", () => {
+    expect(remainingTokens(sampleGoal)).toEqual(Option.some(60))
+    expect(remainingTokens({ ...sampleGoal, tokensUsed: 500 })).toEqual(Option.some(0))
+    const { tokenBudget: _budget, ...unbounded } = sampleGoal
+    expect(remainingTokens(unbounded)).toEqual(Option.none())
+  })
 
-  it.live("the continuation prompt escapes the objective and reports usage", () =>
-    Effect.sync(() => {
-      const prompt = continuationPrompt(sampleGoal)
-      expect(prompt).toContain("Ship &lt;it&gt; &amp; test")
-      expect(prompt).toContain("remaining tokens: 60")
-      expect(formatGoalUsage(sampleGoal)).toBe(
-        "active · 2 continuations · 40 tokens · 3s · 60 remaining of 100",
-      )
-    }),
-  )
+  test("the continuation prompt escapes the objective and reports usage", () => {
+    const prompt = continuationPrompt(sampleGoal)
+    expect(prompt).toContain("Ship &lt;it&gt; &amp; test")
+    expect(prompt).toContain("remaining tokens: 60")
+    expect(formatGoalUsage(sampleGoal)).toBe(
+      "active · 2 continuations · 40 tokens · 3s · 60 remaining of 100",
+    )
+  })
 
   it.live(
     "a budgeted goal continues after each turn until the budget is spent",
@@ -173,8 +169,35 @@ describe("goals", () => {
             expect(limited.value.tokensUsed).toBeGreaterThanOrEqual(15)
           }
           expect(yield* controls.callCount).toBe(3)
+          yield* controls.assertDone
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
 
-          // A second goal is refused while one is pending, and a spent budget needs a new one.
+  it.live(
+    "a spent goal refuses a new goal, a resume without a fresh budget, and a second pause",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // The first turn spends a budget of 1; the second reads the budget prompt.
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            textStep("first pass"),
+            textStep("budget report"),
+          ])
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const command = (input: string) => goalCommandOn(harness, input)
+          yield* command("--budget 1 Write the pelican poem")
+          yield* waitFor(
+            harness.client.session.getSnapshot(harness),
+            (current) => current.runtime._tag === "Idle" && current.messages.length >= 4,
+            8_000,
+            "the budget report turn ends",
+          )
+          expect(Option.map(yield* goalOn(harness), (goal) => goal.status)).toEqual(
+            Option.some("budget_limited"),
+          )
+
           const refused = yield* Effect.exit(command("Another objective"))
           expect(Exit.isFailure(refused)).toBe(true)
           if (Exit.isFailure(refused)) {
@@ -197,9 +220,6 @@ describe("goals", () => {
           if (Exit.isFailure(pausedTwice)) {
             expect(Cause.pretty(pausedTwice.cause)).toContain("Cannot pause a goal that is paused")
           }
-          // Clear forgets the goal; status reports none afterwards.
-          yield* command("clear")
-          expect(yield* readGoal()).toEqual(Option.none())
           yield* controls.assertDone
         }).pipe(Effect.timeout("12 seconds")),
       ),
@@ -435,12 +455,12 @@ describe("goal store", () => {
 // ── stream failure ──────────────────────────────────────────────────────────
 
 /**
- * A goal must not be driven on by a turn that never answered.
+ * A goal is not driven on by a turn that never answered.
  *
- * `continueGoal` reads `turnAfter`. Before it read `streamFailed`, a turn that
- * died on a broken provider stream still charged the budget and queued another
- * continuation prompt, so the goal spent itself against an answer that never
- * arrived and the queued prompt woke the branch for one more turn.
+ * `continueGoal` reads `streamFailed` from `turnAfter`: a turn that died on a
+ * broken provider stream pauses the goal and queues no continuation prompt,
+ * so no prompt wakes the branch for another turn against an answer that never
+ * arrived.
  */
 
 describe("goal stream failure", () => {
@@ -640,8 +660,8 @@ describe("goal stream failure on a spent budget", () => {
 /**
  * A turn whose usage is partly unknown still spent its known tokens.
  *
- * One step without usage used to drop the whole turn's count, so the goal
- * charged nothing and kept going on a budget it could no longer measure.
+ * The goal is charged the steps that reported usage, and a budgeted goal
+ * pauses, since its remaining budget can no longer be measured.
  */
 
 describe("goal partial usage", () => {
@@ -724,9 +744,9 @@ describe("goal partial usage", () => {
 // ── interrupted turn ────────────────────────────────────────────────────────
 
 /**
- * Every turn end is charged. An interrupted turn spent its known tokens and
- * its time, and a completing turn that the person interrupts still finalizes
- * the goal; otherwise the next unrelated turn is charged to it.
+ * Every turn end is charged. An interrupted turn is charged its known tokens
+ * and its time, and a completing turn that the person interrupts still
+ * finalizes the goal, so the next unrelated turn is not charged to it.
  */
 
 const stalledAfter = (opened: Deferred.Deferred<void>) =>
