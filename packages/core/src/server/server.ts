@@ -366,7 +366,6 @@ const makeSessionMutationsService: Effect.Effect<
   | SessionRuntime
   | AgentLoopSessionGovernance
   | GentPlatform
-  | ExtensionRegistry
   | SessionProfileCache
   | RuntimeEnvironment
 > = Effect.gen(function* () {
@@ -639,7 +638,6 @@ const makeSessionMutationsService: Effect.Effect<
     }
   })
 
-  const launchRegistry = yield* ExtensionRegistry
   const profileCache = yield* SessionProfileCache
 
   /**
@@ -673,8 +671,8 @@ const makeSessionMutationsService: Effect.Effect<
     const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(input.cwd)).pipe(
       // The agent roster is resolved data; the lease ends with the read.
       Effect.scoped,
-      Effect.provideService(ExtensionRegistry, launchRegistry),
       Effect.provideService(SessionProfileCache, profileCache),
+      Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
     )
     if (registry.getResolved().agents.has(agent)) return
     return yield* new NotFoundError({ message: `Unknown agent: ${agent}` })
@@ -1019,14 +1017,17 @@ export const SessionMutationsLive = Layer.effect(SessionMutations, makeSessionMu
 // ── rpc handlers ────────────────────────────────────────────────────────────
 
 /**
- * The registry serving a cwd: its profile's, or for no cwd the launch registry
- * (the host cwd's profile). The caller's scope holds the profile's lease.
+ * The registry serving a cwd: its profile's, or for no cwd the host cwd's
+ * profile as it is now, the profile a turn of that session resolves. The
+ * caller's scope holds the profile's lease.
  */
 const resolveRegistryForCwd = Effect.fn("SessionQueries.resolveRegistryForCwd")(function* (
   cwd: Option.Option<string>,
 ) {
-  if (Option.isNone(cwd)) return yield* ExtensionRegistry
-  const profile = yield* (yield* SessionProfileCache).resolve(cwd.value)
+  const environment = yield* RuntimeEnvironment
+  const profile = yield* (yield* SessionProfileCache).resolve(
+    Option.getOrElse(cwd, () => environment.cwd),
+  )
   return profile.registryService
 })
 
@@ -1897,9 +1898,9 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
 
   const configServiceLive = config.overrides?.configServiceLayer ?? ConfigService.Live
 
-  // SessionProfileCache is the sole live profile owner. The launch registry
-  // resolves its profile through that same cache entry instead of building a
-  // startup-only resource layer beside the cache.
+  // SessionProfileCache is the sole live profile owner. Every reader, a
+  // session with no stored cwd included, resolves its profile through it when
+  // it reads; the server context holds no registry.
   const sessionProfileCacheLive =
     config.overrides?.sessionProfileCacheLayer ??
     SessionProfileCache.Live({
@@ -1911,20 +1912,19 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
       failOnExtensionFailure: config.failOnExtensionFailure,
     })
 
-  const extensionRegistryLive = Layer.unwrap(
+  // The launch cwd's profile builds at startup, so an extension that fails
+  // to load stops the start, and the first session there finds it built. The
+  // warm-up releases its lease: the cache keeps the newest profile of a place,
+  // and a later edit retires this one when its last reader ends.
+  const launchProfileWarmUp = Layer.effectDiscard(
     Effect.gen(function* () {
       const cache = yield* SessionProfileCache
       // Same derivation the client used for its `x-gent-workspace-id`
       // header; a second one here would split the workspace silently.
       const launchWorkspaceId = workspaceIdForCwd(config.cwd)
-      const profile = yield* cache
+      yield* cache
         .resolve(config.cwd)
-        .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
-      // Only the launch registry joins the server context. The profile's
-      // resource services stay in the profile: a turn, a request or a hook
-      // reads them from its session's profile, so one project's extension
-      // services never reach another project's turn.
-      return Layer.succeed(ExtensionRegistry, profile.registryService)
+        .pipe(Effect.scoped, Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
     }),
   )
 
@@ -2006,7 +2006,7 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
     stored,
   )
   const launchProfile = Layer.provideMerge(
-    extensionRegistryLive,
+    launchProfileWarmUp,
     Layer.provideMerge(sessionProfileCacheLive, kernel),
   )
   // Above the launch profile: a core service wins over an extension resource

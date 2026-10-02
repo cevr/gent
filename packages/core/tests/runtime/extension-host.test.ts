@@ -1471,79 +1471,75 @@ describe("resolveTurnProfile", () => {
       }).pipe(Effect.provide(testLayer))
     }),
   )
-  it.scopedLive(
-    "the turn runs with its profile's registry and drivers, not the launch registry's",
-    () =>
-      Effect.gen(function* () {
-        const profileResolved = resolveExtensions([
-          {
-            manifest: { id: ExtensionId.make("profile-driver-ext") },
-            scope: "project",
-            sourcePath: "/test/profile-driver-ext",
-            contributions: {
-              modelDrivers: [
-                {
-                  id: "profile-driver",
-                  name: "Profile driver",
-                  resolveModel: () => stubResolution(),
-                },
-              ],
-            },
+  it.scopedLive("the turn runs with its profile's registry and drivers, not the launch cwd's", () =>
+    Effect.gen(function* () {
+      const profileResolved = resolveExtensions([
+        {
+          manifest: { id: ExtensionId.make("profile-driver-ext") },
+          scope: "project",
+          sourcePath: "/test/profile-driver-ext",
+          contributions: {
+            modelDrivers: [
+              {
+                id: "profile-driver",
+                name: "Profile driver",
+                resolveModel: () => stubResolution(),
+              },
+            ],
           },
-        ])
-        const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
-          cwd: "/nonexistent/runtime-context-default",
-          home: "/nonexistent/runtime-context-home",
-        })
-        const testLayer = Layer.mergeAll(
-          testSqliteStorage(Layer.empty, {}),
-          emptyRegistryLayer,
-          runtimeEnvironmentLayer,
-        )
-        yield* Effect.gen(function* () {
-          const sessionStorage = yield* SessionStorage
-          const extensionRegistry = yield* ExtensionRegistry
-          const now = dateFromMillis(1_767_225_600_000)
-          yield* sessionStorage.createSession(
-            new Session({
-              id: SessionId.make("session-runtime-context-driver"),
-              cwd: "/nonexistent/profile-driver-scope",
-              createdAt: now,
-              updatedAt: now,
-            }),
-          )
-          // A built profile's services hold its registry, as `Layer.build` makes them.
-          const profileRegistry = ExtensionRegistry.of({ getResolved: () => profileResolved })
-          const fakeProfile: SessionProfile = {
+        },
+      ])
+      const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
+        cwd: "/nonexistent/runtime-context-default",
+        home: "/nonexistent/runtime-context-home",
+      })
+      const testLayer = Layer.mergeAll(
+        testSqliteStorage(Layer.empty, {}),
+        emptyRegistryLayer,
+        runtimeEnvironmentLayer,
+      )
+      yield* Effect.gen(function* () {
+        const sessionStorage = yield* SessionStorage
+        const extensionRegistry = yield* ExtensionRegistry
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* sessionStorage.createSession(
+          new Session({
+            id: SessionId.make("session-runtime-context-driver"),
             cwd: "/nonexistent/profile-driver-scope",
-            resolved: profileResolved,
-            layerContext: Context.make(ExtensionRegistry, profileRegistry),
-            registryService: profileRegistry,
-            baseSections: [],
-            generationId: ProcessGenerationId.make("test"),
-          }
-          const fakeProfileCache: SessionProfileCacheService = {
-            resolve: () => Effect.succeed(fakeProfile),
-          }
-          const hostProvider = yield* makeExtensionHostContextProvider({
-            host: testHostFacts().host,
-          })
-          const resolved = yield* resolveTurnProfile({
-            sessionId: SessionId.make("session-runtime-context-driver"),
-            branchId: BranchId.make("branch-runtime-context-driver"),
-            opener: RunOpener.cases.Turn.make({ openedByClient: true }),
-            profileCache: fakeProfileCache,
-            hostProvider,
-          })
-          const drivers = Context.get(
-            resolved.turnCapabilityContext,
-            ExtensionRegistry,
-          ).getResolved().modelDrivers
-          expect(resolved.turnHostCtx.cwd).toBe("/nonexistent/profile-driver-scope")
-          expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
-          expect(extensionRegistry.getResolved().modelDrivers.has("profile-driver")).toBe(false)
-        }).pipe(Effect.provide(testLayer))
-      }),
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        // A built profile's services hold its registry, as `Layer.build` makes them.
+        const profileRegistry = ExtensionRegistry.of({ getResolved: () => profileResolved })
+        const fakeProfile: SessionProfile = {
+          cwd: "/nonexistent/profile-driver-scope",
+          resolved: profileResolved,
+          layerContext: Context.make(ExtensionRegistry, profileRegistry),
+          registryService: profileRegistry,
+          baseSections: [],
+          generationId: ProcessGenerationId.make("test"),
+        }
+        const fakeProfileCache: SessionProfileCacheService = {
+          resolve: () => Effect.succeed(fakeProfile),
+        }
+        const hostProvider = yield* makeExtensionHostContextProvider({
+          host: testHostFacts().host,
+        })
+        const resolved = yield* resolveTurnProfile({
+          sessionId: SessionId.make("session-runtime-context-driver"),
+          branchId: BranchId.make("branch-runtime-context-driver"),
+          opener: RunOpener.cases.Turn.make({ openedByClient: true }),
+          profileCache: fakeProfileCache,
+          hostProvider,
+        })
+        const drivers = Context.get(resolved.turnCapabilityContext, ExtensionRegistry).getResolved()
+          .modelDrivers
+        expect(resolved.turnHostCtx.cwd).toBe("/nonexistent/profile-driver-scope")
+        expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
+        expect(extensionRegistry.getResolved().modelDrivers.has("profile-driver")).toBe(false)
+      }).pipe(Effect.provide(testLayer))
+    }),
   )
 })
 
@@ -4419,7 +4415,6 @@ const makeMutationsLayer = (
     providerLayer,
     LanguageModelLayers.resolver(providerLayer),
     eventStoreLayer,
-    Layer.succeed(ExtensionRegistry, launchRegistry),
     ToolRunner.Test(),
     ApprovalService.Test(),
     RuntimeEnvironment.Live({ cwd, home: "/nonexistent/gent-test-home" }),

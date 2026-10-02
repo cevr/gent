@@ -108,6 +108,7 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
+  hostProfileRegistry,
   recordingEventStore,
 } from "../../src/test-utils/harness"
 import {
@@ -3883,7 +3884,10 @@ describe("tool binding replay", () => {
             reason: scenario.reason,
           })
           expect(Option.isNone(yield* replay.getBinding(key))).toBe(true)
-        }).pipe(Effect.provide(layer))
+        }).pipe(
+          Effect.provideServiceEffect(ExtensionRegistry, hostProfileRegistry),
+          Effect.provide(layer),
+        )
       }).pipe(Effect.timeout("5 seconds")),
     )
   }
@@ -3945,7 +3949,10 @@ describe("tool binding replay", () => {
           generationId,
         }).pipe(Effect.flip)
         expect(retired).toMatchObject({ _tag: "ToolBindingReplayError", reason: "SourceMismatch" })
-      }).pipe(Effect.provide(layer))
+      }).pipe(
+        Effect.provideServiceEffect(ExtensionRegistry, hostProfileRegistry),
+        Effect.provide(layer),
+      )
     }).pipe(Effect.timeout("5 seconds")),
   )
 

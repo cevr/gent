@@ -4868,6 +4868,60 @@ describe("session threads", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
+
+  // A config edit rebuilds the host cwd's profile; the session that stored no
+  // cwd runs its turns there, so its admission and its route read it too.
+  it.live("a session with no cwd reads the host cwd's profile as it is now, not at launch", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hostCwd = "/nonexistent/gent-no-cwd-host"
+        const auditor = AgentName.make("auditor")
+        const agentsOf = (
+          id: string,
+          agents: ReadonlyArray<AgentDefinition>,
+        ): ReadonlyArray<LoadedExtension> => [
+          {
+            manifest: { id: ExtensionId.make(id) },
+            scope: "project",
+            sourcePath: "test",
+            contributions: { agents },
+          },
+        ]
+        const launch = yield* makeProfile(
+          hostCwd,
+          agentsOf("@test/launch-agents", [
+            AgentDefinition.make({ name: reviewerAgent, model: ModelId.make("test/first") }),
+          ]),
+        )
+        const edited = yield* makeProfile(
+          hostCwd,
+          agentsOf("@test/edited-agents", [
+            AgentDefinition.make({ name: reviewerAgent, model: ModelId.make("test/edited") }),
+            AgentDefinition.make({ name: auditor }),
+          ]),
+        )
+        const current = yield* Ref.make(launch)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensions: [],
+          sessionProfileCacheLayer: Layer.succeed(
+            SessionProfileCache,
+            SessionProfileCache.of({ resolve: () => Ref.get(current) }),
+          ),
+          cwd: hostCwd,
+        })
+        const reviewing = yield* client.session.create({ admission: { agent: reviewerAgent } })
+        yield* Ref.set(current, edited)
+        const view = yield* client.session.get({ sessionId: reviewing.sessionId })
+        expect(view?.resolvedModelId).toBe(ModelId.make("test/edited"))
+        const auditing = yield* client.session.create({ admission: { agent: auditor } })
+        const stored = yield* client.session.get({ sessionId: auditing.sessionId })
+        expect(stored?.admission?.agent).toBe(auditor)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
 })
 
 describe("extension resources", () => {
@@ -4932,65 +4986,67 @@ describe("extension resources", () => {
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
-  it.scoped("a branch resource is built from the session's profile, not the launch registry", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
-      const profileCwd = yield* fs.makeTempDirectoryScoped()
-      const ext: GentExtension = {
-        manifest: { id: ExtensionId.make("@test/branch-profile-token") },
-        setup: Effect.gen(function* () {
-          const host = yield* ExtensionHost
-          yield* host.register(
-            "resource",
-            defineResource({
-              id: "test/extension-commands-rpc/branch-profile-token",
-              scope: "branch",
-              layer: Layer.succeed(
-                ProfileToken,
-                ProfileToken.of({ read: Effect.succeed(`branch:${host.cwd}`) }),
-              ),
-            }),
-          )
-          yield* host.register(
-            "request",
-            request({
-              id: "read-branch-profile-token",
-              input: Schema.String,
-              output: Schema.String,
-              execute: () =>
-                Effect.gen(function* () {
-                  const token = yield* ProfileToken
-                  return yield* token.read
-                }),
-            }),
-          )
-        }),
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const sessionProfileCacheLayer = liveSessionProfiles(home, [ext])
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          // The launch registry does not load the extension: only the
-          // profile for the session's cwd knows its branch resource.
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            agents: e2ePreset.agents,
-            providerLayer,
-            extensions: [],
-            sessionProfileCacheLayer,
-            cwd: profileCwd,
-          })
-          const result = yield* client.extension.request({
-            sessionId,
-            extensionId: ExtensionId.make("@test/branch-profile-token"),
-            capabilityId: "read-branch-profile-token",
-            input: "token",
-            branchId,
-          })
-          expect(result).toBe(`branch:${profileCwd}`)
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }).pipe(Effect.provide(BunPlatformLive)),
+  it.scoped(
+    "a branch resource is built from the session's profile, not the launch cwd's profile",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped()
+        const profileCwd = yield* fs.makeTempDirectoryScoped()
+        const ext: GentExtension = {
+          manifest: { id: ExtensionId.make("@test/branch-profile-token") },
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "test/extension-commands-rpc/branch-profile-token",
+                scope: "branch",
+                layer: Layer.succeed(
+                  ProfileToken,
+                  ProfileToken.of({ read: Effect.succeed(`branch:${host.cwd}`) }),
+                ),
+              }),
+            )
+            yield* host.register(
+              "request",
+              request({
+                id: "read-branch-profile-token",
+                input: Schema.String,
+                output: Schema.String,
+                execute: () =>
+                  Effect.gen(function* () {
+                    const token = yield* ProfileToken
+                    return yield* token.read
+                  }),
+              }),
+            )
+          }),
+        }
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const sessionProfileCacheLayer = liveSessionProfiles(home, [ext])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            // The launch cwd's profile does not load the extension: only the
+            // profile for the session's cwd knows its branch resource.
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              agents: e2ePreset.agents,
+              providerLayer,
+              extensions: [],
+              sessionProfileCacheLayer,
+              cwd: profileCwd,
+            })
+            const result = yield* client.extension.request({
+              sessionId,
+              extensionId: ExtensionId.make("@test/branch-profile-token"),
+              capabilityId: "read-branch-profile-token",
+              input: "token",
+              branchId,
+            })
+            expect(result).toBe(`branch:${profileCwd}`)
+          }).pipe(Effect.timeout("4 seconds")),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
   )
 
   it.scopedLive(

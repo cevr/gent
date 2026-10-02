@@ -1778,7 +1778,7 @@ const makeAgentLoopBehavior = (
     ).pipe(Scope.provide(loopScope))
     // The branch's Resources come from the session's profile, the same one its
     // turns and requests resolve: the extensions set up for the session's cwd,
-    // over that profile's process services. The launch registry would build
+    // over that profile's process services. The host cwd's profile would build
     // another project's Resources. They are built on the first turn or
     // request, not at open, so a control-plane write (a cancel, an answer to
     // no question) never resolves a profile.

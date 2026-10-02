@@ -235,7 +235,6 @@ const sessionMutationsTestLayer = (
     LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
     testRuntimeEnvironment,
-    ExtensionRegistry.Test(),
     fixedSessionProfiles(),
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
@@ -597,7 +596,7 @@ const sessionQueriesActorFailureLayer = Layer.mergeAll(
   testSqliteStorage(Layer.empty, {}),
   GentPlatform.Test(),
   ConfigService.Test(),
-  ExtensionRegistry.Test(),
+  testRuntimeEnvironment,
   fixedSessionProfiles(),
   sessionRuntimeLayer({
     getState: () =>
@@ -2308,7 +2307,6 @@ describe("requestId idempotency", () => {
             testSqliteStorage(Layer.empty, {}),
             sessionRuntimeLayer(),
             EventStore.Memory,
-            EventStore.Memory,
             AgentLoopSessionGovernance.Live,
             LanguageModelLayers.debug(),
             ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
@@ -2329,7 +2327,6 @@ describe("requestId idempotency", () => {
                 SessionMutationsLive,
                 Layer.mergeAll(
                   Layer.succeedContext(shared),
-                  registry,
                   fixedSessionProfiles(new Map(), registry),
                 ),
               ),
@@ -2346,7 +2343,7 @@ describe("requestId idempotency", () => {
     ),
   )
 
-  it.live("a create admits an agent its cwd's profile has and the launch registry lacks", () =>
+  it.live("a create admits an agent its cwd's profile has", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const reviewer = AgentName.make("reviewer")
@@ -2375,13 +2372,11 @@ describe("requestId idempotency", () => {
           testSqliteStorage(Layer.empty, {}),
           sessionRuntimeLayer(),
           EventStore.Memory,
-          EventStore.Memory,
           AgentLoopSessionGovernance.Live,
           LanguageModelLayers.debug(),
           ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
           GentPlatform.Test(),
           testRuntimeEnvironment,
-          ExtensionRegistry.Test(),
           profiles,
         )
         // The caller holds only SessionMutations: the check reads the cache
