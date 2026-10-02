@@ -60,7 +60,14 @@ import {
 import { TestClock } from "effect/testing"
 import type { LanguageModel } from "effect/ai"
 import { getToolMetadata, toolResultSummary } from "@gent/core/extensions/branch-tools"
-import { BranchId, MessageId, SessionId, ToolCallId, SteerCommand } from "@gent/core/protocol"
+import {
+  BranchId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+  SteerCommand,
+  type GentNamespacedClient,
+} from "@gent/core/protocol"
 import {
   RequestId,
   ExtensionContext,
@@ -75,6 +82,21 @@ import {
  */
 
 const encodeAlarms = Schema.encodeSync(Schema.fromJsonString(Schema.Array(WakeEntry)))
+const decodeAlarms = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))
+
+/** The branch's pending wakes, as the `wake.pending` capability lists them. */
+const pendingOf = (
+  client: GentNamespacedClient,
+  ids: { readonly sessionId: SessionId; readonly branchId: BranchId },
+) =>
+  client.extension
+    .request({
+      ...ids,
+      extensionId: WAKE_EXTENSION_ID,
+      capabilityId: WakeRpc.Pending.id,
+      input: {},
+    })
+    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))
 
 const replyStream = (text: string) =>
   Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })])
@@ -142,6 +164,58 @@ const restartedSession = (home: string) =>
     const restart = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
       Effect.map(createRpcClient(layerFor(providerLayer)), ({ client }) => client)
     return { ...ids, restart }
+  })
+
+/**
+ * The model arms one monitor and answers `watching`; when the monitor wakes the
+ * loop, it answers `woken`. `whileWatching` runs once the first turn answered.
+ * Returns the wake message's text.
+ */
+const monitorWakeText = <E = never, R = never>(args: {
+  readonly monitor: {
+    readonly command: string
+    readonly everySeconds: number
+    readonly timeoutSeconds: number
+    readonly until?: string
+    readonly note: string
+  }
+  readonly prompt: string
+  readonly watching: string
+  readonly woken: string
+  readonly label: string
+  readonly whileWatching?: Effect.Effect<void, E, R>
+}) =>
+  Effect.gen(function* () {
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      toolCallStep("monitor", args.monitor),
+      textStep(args.watching),
+      textStep(args.woken),
+    ])
+    const { client, sessionId, branchId } = yield* createRpcHarness({
+      ...e2ePreset,
+      providerLayer,
+    })
+    yield* client.message.send({ sessionId, branchId, content: args.prompt })
+    yield* Option.match(Option.fromUndefinedOr(args.whileWatching), {
+      onNone: () => Effect.void,
+      onSome: (work) =>
+        waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) => current.runtime._tag === "Idle" && answered(current.messages, args.watching),
+          5_000,
+          "first turn answered",
+        ).pipe(Effect.andThen(work)),
+    })
+    const woken = yield* waitFor(
+      client.session.getSnapshot({ sessionId, branchId }),
+      (current) =>
+        current.runtime._tag === "Idle" &&
+        hasWake(current.messages) &&
+        answered(current.messages, args.woken),
+      8_000,
+      args.label,
+    )
+    return textOf(wakeOf(woken.messages))
   })
 
 describe("wake", () => {
@@ -290,21 +364,12 @@ describe("wake", () => {
           })
           yield* client.message.send({ sessionId, branchId, content: "remind me" })
           yield* Deferred.await(secondStepStarted)
-          const pending = yield* client.extension
-            .request({
-              sessionId,
-              branchId,
-              extensionId: WAKE_EXTENSION_ID,
-              capabilityId: WakeRpc.Pending.id,
-              input: {},
-            })
-            .pipe(
-              Effect.flatMap(Schema.decodeUnknownEffect(WakePending)),
-              Effect.timeoutOrElse({
-                duration: "2 seconds",
-                orElse: () => Effect.die(new Error("wake.pending waited for the turn")),
-              }),
-            )
+          const pending = yield* pendingOf(client, { sessionId, branchId }).pipe(
+            Effect.timeoutOrElse({
+              duration: "2 seconds",
+              orElse: () => Effect.die(new Error("wake.pending waited for the turn")),
+            }),
+          )
           expect(pending.entries).toMatchObject([{ note: "stretch" }])
           yield* Deferred.succeed(releaseTurn, void 0)
           yield* waitFor(
@@ -347,16 +412,7 @@ describe("wake", () => {
             ...e2ePreset,
             providerLayer,
           })
-          const list = () =>
-            client.extension
-              .request({
-                sessionId,
-                branchId,
-                extensionId: WAKE_EXTENSION_ID,
-                capabilityId: WakeRpc.Pending.id,
-                input: {},
-              })
-              .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))
+          const list = () => pendingOf(client, { sessionId, branchId })
           yield* client.message.send({ sessionId, branchId, content: "remind me" })
           // Keep the alarm's clock still until the setting turn has answered.
           // Otherwise that turn's next step can read and clear the notice.
@@ -504,12 +560,10 @@ describe("wake", () => {
             home,
           })
           const fs = yield* FileSystem.FileSystem
-          yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
-          yield* fs.writeFileString(
-            `${home}/.gent/wakes/${branchId}.json`,
-            encodeAlarms([
-              { _tag: "alarm", wakeId: "left-over", dueAt: 1_000, note: "check the build" },
-            ]),
+          const file = yield* writeWakeFile(
+            home,
+            [{ _tag: "alarm", wakeId: "left-over", dueAt: 1_000, note: "check the build" }],
+            branchId,
           )
           yield* client.message.send({ sessionId, branchId, content: "I'm back" })
           const woken = yield* waitFor(
@@ -522,7 +576,7 @@ describe("wake", () => {
             "the stored alarm fired and was answered",
           )
           expect(woken.messages.filter((m) => m.role === "assistant").length).toBe(2)
-          expect(yield* fs.exists(`${home}/.gent/wakes/${branchId}.json`)).toBe(false)
+          expect(yield* fs.exists(file)).toBe(false)
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
       ),
     15_000,
@@ -536,13 +590,12 @@ describe("wake", () => {
           const home = yield* makeTempDirectoryScoped("wake-open-")
           const { sessionId, branchId, restart } = yield* restartedSession(home)
           const fs = yield* FileSystem.FileSystem
-          const file = `${home}/.gent/wakes/${branchId}.json`
-          yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
           // Still ahead when the branch opens: the timer itself must come back.
           const dueAt = (yield* Clock.currentTimeMillis) + 1_500
-          yield* fs.writeFileString(
-            file,
-            encodeAlarms([{ _tag: "alarm", wakeId: "ahead", dueAt, note: "check the build" }]),
+          const file = yield* writeWakeFile(
+            home,
+            [{ _tag: "alarm", wakeId: "ahead", dueAt, note: "check the build" }],
+            branchId,
           )
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
             textStep("checked the build as the alarm asked"),
@@ -572,28 +625,16 @@ describe("wake", () => {
         Effect.gen(function* () {
           const home = yield* makeTempDirectoryScoped("wake-open-notify-")
           const { sessionId, branchId, restart } = yield* restartedSession(home)
-          const fs = yield* FileSystem.FileSystem
-          yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
-          yield* fs.writeFileString(
-            `${home}/.gent/wakes/${branchId}.json`,
-            encodeAlarms([
-              { _tag: "alarm", wakeId: "missed", dueAt: 1_000, mode: "notify", note: "stand up" },
-            ]),
+          yield* writeWakeFile(
+            home,
+            [{ _tag: "alarm", wakeId: "missed", dueAt: 1_000, mode: "notify", note: "stand up" }],
+            branchId,
           )
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([])
           const client = yield* restart(providerLayer)
           const opened = yield* client.session.getSnapshot({ sessionId, branchId })
-          const pending = client.extension
-            .request({
-              sessionId,
-              branchId,
-              extensionId: WAKE_EXTENSION_ID,
-              capabilityId: WakeRpc.Pending.id,
-              input: {},
-            })
-            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))
           const shown = yield* waitFor(
-            pending,
+            pendingOf(client, { sessionId, branchId }),
             (current) => current.entries.some((entry) => entry._tag === "notice"),
             5_000,
             "the notice is listed",
@@ -616,12 +657,10 @@ describe("wake", () => {
           const home = yield* makeTempDirectoryScoped("wake-refire-")
           const { sessionId, branchId, restart } = yield* restartedSession(home)
           const fs = yield* FileSystem.FileSystem
-          const file = `${home}/.gent/wakes/${branchId}.json`
-          const leftOver = encodeAlarms([
+          const leftOver: ReadonlyArray<WakeEntry> = [
             { _tag: "alarm", wakeId: "left-over", dueAt: 1_000, note: "check the build" },
-          ])
-          yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
-          yield* fs.writeFileString(file, leftOver)
+          ]
+          const file = yield* writeWakeFile(home, leftOver, branchId)
           const woke = yield* LanguageModelLayers.sequence([
             textStep("checked the build as the alarm asked"),
           ])
@@ -639,7 +678,7 @@ describe("wake", () => {
             }),
           )
           // A shutdown between the wake and the forget leaves the fired row on disk.
-          yield* fs.writeFileString(file, leftOver)
+          yield* writeWakeFile(home, leftOver, branchId)
           const again = yield* LanguageModelLayers.sequence([])
           const settled = yield* Effect.scoped(
             Effect.gen(function* () {
@@ -680,41 +719,20 @@ describe("wake", () => {
         Effect.gen(function* () {
           const dir = yield* makeTempDirectoryScoped("wake-monitor-")
           const flag = `${dir}/done`
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("monitor", {
+          const fs = yield* FileSystem.FileSystem
+          const text = yield* monitorWakeText({
+            monitor: {
               command: `test -f ${flag} && cat ${flag}`,
               everySeconds: 0.1,
               timeoutSeconds: 10,
               note: "read the result file",
-            }),
-            textStep("watching for the file"),
-            textStep("saw the result"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
+            },
+            prompt: "tell me when it lands",
+            watching: "watching for the file",
+            woken: "saw the result",
+            label: "the monitor matched and woke the loop",
+            whileWatching: fs.writeFileString(flag, "build 42 green"),
           })
-          yield* client.message.send({ sessionId, branchId, content: "tell me when it lands" })
-          yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              answered(current.messages, "watching for the file"),
-            5_000,
-            "first turn answered",
-          )
-          const fs = yield* FileSystem.FileSystem
-          yield* fs.writeFileString(flag, "build 42 green")
-          const woken = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              hasWake(current.messages) &&
-              answered(current.messages, "saw the result"),
-            8_000,
-            "the monitor matched and woke the loop",
-          )
-          const text = textOf(wakeOf(woken.messages))
           expect(text).toContain("matched after")
           expect(text).toContain("build 42 green")
           expect(text).toContain("read the result file")
@@ -728,33 +746,20 @@ describe("wake", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("monitor", {
+          const text = yield* monitorWakeText({
+            monitor: {
               command:
                 "head -c 300000 /dev/zero | tr '\\0' x; echo; head -c 300000 /dev/zero | tr '\\0' y; echo; echo LAST-MARK",
               everySeconds: 0.1,
               timeoutSeconds: 10,
               until: "LAST-MARK",
               note: "read the long check",
-            }),
-            textStep("watching the long check"),
-            textStep("saw the long check"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
+            },
+            prompt: "watch the long check",
+            watching: "watching the long check",
+            woken: "saw the long check",
+            label: "the monitor matched and woke the loop",
           })
-          yield* client.message.send({ sessionId, branchId, content: "watch the long check" })
-          const woken = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              hasWake(current.messages) &&
-              answered(current.messages, "saw the long check"),
-            8_000,
-            "the monitor matched and woke the loop",
-          )
-          const text = textOf(wakeOf(woken.messages))
           expect(text).toContain("matched after 1 checks")
           expect(text).toContain("yyy\nLAST-MARK")
           expect(text).not.toContain("xxx")
@@ -768,32 +773,20 @@ describe("wake", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("monitor", {
+          const text = yield* monitorWakeText({
+            monitor: {
               command: "head -c 600000 /dev/zero | tr '\\0' x",
               everySeconds: 0.1,
               timeoutSeconds: 0.5,
               until: "truncated",
               note: "read the cut check",
-            }),
-            textStep("watching the cut check"),
-            textStep("saw the cut check"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
+            },
+            prompt: "watch the cut check",
+            watching: "watching the cut check",
+            woken: "saw the cut check",
+            label: "the monitor woke the loop",
           })
-          yield* client.message.send({ sessionId, branchId, content: "watch the cut check" })
-          const woken = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              hasWake(current.messages) &&
-              answered(current.messages, "saw the cut check"),
-            8_000,
-            "the monitor woke the loop",
-          )
-          expect(textOf(wakeOf(woken.messages))).toContain("timed out after")
+          expect(text).toContain("timed out after")
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
       ),
     15_000,
@@ -804,31 +797,18 @@ describe("wake", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("monitor", {
+          const text = yield* monitorWakeText({
+            monitor: {
               command: "echo still running; false",
               everySeconds: 0.1,
               timeoutSeconds: 0.35,
               note: "give up and report",
-            }),
-            textStep("watching"),
-            textStep("gave up"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
+            },
+            prompt: "watch it",
+            watching: "watching",
+            woken: "gave up",
+            label: "the monitor timed out and woke the loop",
           })
-          yield* client.message.send({ sessionId, branchId, content: "watch it" })
-          const woken = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              hasWake(current.messages) &&
-              answered(current.messages, "gave up"),
-            8_000,
-            "the monitor timed out and woke the loop",
-          )
-          const text = textOf(wakeOf(woken.messages))
           expect(text).toContain("timed out after")
           expect(text).toContain("still running")
         }).pipe(Effect.timeout("12 seconds")),
@@ -926,9 +906,6 @@ describe("wake.list", () => {
  */
 const wakeTurnHooks = (home: string) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const file = `${home}/.gent/wakes/${branchId}.json`
-    yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
     const contributions = yield* collectTestContributions(WakeExtension.setup)
     const hooks = contributions.hooks ?? []
     const projection = Option.getOrThrow(
@@ -961,10 +938,9 @@ const wakeTurnHooks = (home: string) =>
       cwd: home,
     })
     const services = yield* Layer.build(failedAlarms)
-    const decode = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))
     return {
-      write: (entries: ReadonlyArray<WakeEntry>) => fs.writeFileString(file, encodeAlarms(entries)),
-      stored: Effect.flatMap(readStoredFile(file), decode),
+      write: (entries: ReadonlyArray<WakeEntry>) => writeWakeFile(home, entries),
+      stored: storedEntries(home),
       /** One step's projection: the notice text, and the keys the runtime hands back once read. */
       project: projection.hook.handler({ agent: builtinAgent }).pipe(
         Effect.map((projected) => {
@@ -1060,18 +1036,8 @@ describe("notices", () => {
             ...e2ePreset,
             providerLayer,
           })
-          const list = () =>
-            client.extension
-              .request({
-                sessionId,
-                branchId,
-                extensionId: WAKE_EXTENSION_ID,
-                capabilityId: WakeRpc.Pending.id,
-                input: {},
-              })
-              .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))
           const notices = () =>
-            Effect.map(list(), (pending) =>
+            Effect.map(pendingOf(client, { sessionId, branchId }), (pending) =>
               pending.entries.filter((entry) => entry._tag === "notice"),
             )
           yield* client.message.send({ sessionId, branchId, content: "remind me" })
@@ -1141,7 +1107,7 @@ describe("notices", () => {
             "the turn was answered",
           )
           const fs = yield* FileSystem.FileSystem
-          expect(yield* fs.exists(`${home}/.gent/wakes/${branchId}.json`)).toBe(false)
+          expect(yield* fs.exists(wakeFile(home, branchId))).toBe(false)
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
       ),
     15_000,
@@ -1237,11 +1203,9 @@ describe("notices", () => {
             home,
           })
           const fs = yield* FileSystem.FileSystem
-          const file = `${home}/.gent/wakes/${branchId}.json`
-          yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
-          yield* fs.writeFileString(
-            file,
-            encodeAlarms([
+          const file = yield* writeWakeFile(
+            home,
+            [
               {
                 _tag: "notice",
                 wakeId: "old-blocked",
@@ -1250,7 +1214,8 @@ describe("notices", () => {
                 content: "Monitor old-blocked was not re-armed: it was never approved. check",
                 note: "check",
               },
-            ]),
+            ],
+            branchId,
           )
           const answer = (content: string, reply: string) =>
             client.message
@@ -1425,15 +1390,49 @@ const readStoredFile = (file: string) =>
     return yield* fs.readFileString(file)
   })
 
+/** A branch's wake file under `home`. */
+const wakeFile = (home: string, branch: BranchId = branchId) => `${home}/.gent/wakes/${branch}.json`
+
+/** Plants a branch's wake file as raw text, such as rows an earlier version stored. */
+const writeWakeText = (home: string, text: string, branch: BranchId = branchId) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
+    yield* fs.writeFileString(wakeFile(home, branch), text)
+    return wakeFile(home, branch)
+  })
+
+/** Plants a branch's wake file with these entries; returns its path. */
+const writeWakeFile = (
+  home: string,
+  entries: ReadonlyArray<WakeEntry>,
+  branch: BranchId = branchId,
+) => writeWakeText(home, encodeAlarms(entries), branch)
+
 const readFile = (home: string) =>
-  readStoredFile(`${home}/.gent/wakes/${branchId}.json`).pipe(Effect.provide(BunServices.layer))
+  readStoredFile(wakeFile(home)).pipe(Effect.provide(BunServices.layer))
+
+/** The branch file's entries, decoded as the store reads them. */
+const storedEntries = (home: string) =>
+  readFile(home).pipe(Effect.flatMap(decodeAlarms), Effect.orDie)
 
 /** A branch with no pending entry keeps no file: the empty list is a missing file. */
 const wakeFileExists = (home: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    return yield* fs.exists(`${home}/.gent/wakes/${branchId}.json`)
+    return yield* fs.exists(wakeFile(home))
   }).pipe(Effect.provide(BunServices.layer))
+
+/**
+ * A store test runs on the live alarms, the Bun platform and a virtual clock,
+ * bounded inside the effect. The timers live in the alarms' resource scope,
+ * which must outlive the tool call that armed them.
+ */
+const storeTest = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+    Effect.timeout("8 seconds"),
+  )
 
 describe("wake tool claims", () => {
   it.scopedLive(
@@ -1450,9 +1449,7 @@ describe("wake tool claims", () => {
         ).pipe(Effect.forkScoped)
         const exit = yield* Fiber.await(setting)
         expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
-        const entries = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
-          yield* readFile(home),
-        )
+        const entries = yield* storedEntries(home)
         expect(entries).toHaveLength(1)
         const wakeId = entries[0]?.wakeId ?? ""
         const alarms = yield* WakeAlarms
@@ -1463,10 +1460,7 @@ describe("wake tool claims", () => {
         expect(yield* wakeFileExists(home)).toBe(false)
         yield* TestClock.adjust("61 seconds")
         expect(yield* Ref.get(queued)).toEqual([])
-      }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
     10_000,
   )
 
@@ -1497,10 +1491,7 @@ describe("wake tool claims", () => {
         expect(yield* alarms.pending).toEqual([])
         yield* TestClock.adjust("61 seconds")
         expect(yield* Ref.get(queued)).toEqual([])
-      }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
     10_000,
   )
 
@@ -1639,10 +1630,7 @@ describe("monitor command", () => {
         const [message] = yield* Ref.get(queued)
         expect(message).toContain("matched after")
         expect(message).toContain(`${home}/sub`)
-      }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
     10_000,
   )
 
@@ -1666,10 +1654,7 @@ describe("monitor command", () => {
         expect(message).toContain("timed out after 1 checks")
         expect(message).toContain("never returns")
         expect(message).toContain("check still running at deadline")
-      }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
     10_000,
   )
   it.scopedLive("a negative timeout is refused, not timed out at once", () =>
@@ -1688,10 +1673,7 @@ describe("monitor command", () => {
         expect(Cause.pretty(refused.cause)).toContain("timeoutSeconds must not be negative")
       }
       expect(yield* Ref.get(queued)).toEqual([])
-    }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
+    }).pipe(storeTest),
   )
 })
 
@@ -1703,22 +1685,18 @@ describe("monitor recovery and deadline", () => {
         const fs = yield* FileSystem.FileSystem
         const home = yield* fs.realPath(yield* makeTempDirectoryScoped("wake-rearm-cwd-"))
         yield* fs.makeDirectory(`${home}/sub`)
-        yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
         // A row an older binary stored before the cwd was resolved at arm time.
-        yield* fs.writeFileString(
-          `${home}/.gent/wakes/${branchId}.json`,
-          encodeAlarms([
-            {
-              _tag: "monitor",
-              wakeId: "old-relative",
-              command: "pwd",
-              cwd: "sub",
-              everySeconds: 1,
-              deadline: 60_000,
-              note: "where",
-            },
-          ]),
-        )
+        yield* writeWakeFile(home, [
+          {
+            _tag: "monitor",
+            wakeId: "old-relative",
+            command: "pwd",
+            cwd: "sub",
+            everySeconds: 1,
+            deadline: 60_000,
+            note: "where",
+          },
+        ])
         const queued = yield* Ref.make<ReadonlyArray<string>>([])
         const fired = yield* Deferred.make<boolean>()
         const ctx = testLeafContext(contextWith(home, queued, Option.some(fired)))
@@ -1727,10 +1705,7 @@ describe("monitor recovery and deadline", () => {
         const [message] = yield* Ref.get(queued)
         expect(message).toContain("matched after")
         expect(message).toContain(`${home}/sub`)
-      }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
     10_000,
   )
 
@@ -1758,10 +1733,7 @@ describe("monitor recovery and deadline", () => {
         const [message] = yield* Ref.get(queued)
         expect(message).toContain("timed out after")
         expect(message).not.toContain("matched after")
-      }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
     10_000,
   )
 })
@@ -1790,11 +1762,7 @@ describe("wake store", () => {
         yield* settled(alarms.pending)
         expect((yield* Ref.get(queued)).length).toBe(1)
         expect(yield* wakeFileExists(home)).toBe(false)
-      }).pipe(
-        // The timer lives in the resource scope; that scope must outlive the tool call.
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
   )
 
   it.scopedLive(
@@ -1829,10 +1797,7 @@ describe("wake store", () => {
         expect(yield* wakeFileExists(home)).toBe(false)
         yield* TestClock.adjust("4 seconds")
         expect(yield* firedCount).toBe(2)
-      }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
   )
 
   // A full follow-up queue refuses the wake line (the exec-tools test fills a
@@ -1863,18 +1828,12 @@ describe("wake store", () => {
       const alarms = yield* WakeAlarms
       yield* TestClock.adjust("1 second")
       yield* settled(alarms.pending)
-      const entries = yield* readFile(home).pipe(
-        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))),
-        Effect.orDie,
-      )
+      const entries = yield* storedEntries(home)
       expect(entries.map((entry) => entry._tag)).toEqual(["notice"])
       const [notice] = entries
       expect(notice?.wakeId).toBe(handle.wakeId)
       if (notice?._tag === "notice") expect(notice.content).toContain("check the deploy")
-    }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
+    }).pipe(storeTest),
   )
 
   it.scopedLive("a repeating notify alarm keeps one alarm row and adds one notice per tick", () =>
@@ -1888,8 +1847,6 @@ describe("wake store", () => {
         ctx,
       )
       yield* WakeAlarms
-      const decode = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))
-      const stored = readFile(home).pipe(Effect.flatMap(decode), Effect.orDie)
       yield* TestClock.adjust("1 second")
       yield* eventually(
         readFile(home).pipe(Effect.orDie),
@@ -1902,7 +1859,7 @@ describe("wake store", () => {
         (file) => file.includes(`"dueAt":5000`),
         "tick 2 stored",
       )
-      const entries = yield* stored
+      const entries = yield* storedEntries(home)
       const alarms = entries.filter((entry) => entry._tag === "alarm")
       const notices = entries.filter((entry) => entry._tag === "notice")
       expect(alarms.map((entry) => entry.wakeId)).toEqual([handle.wakeId])
@@ -1914,10 +1871,7 @@ describe("wake store", () => {
       }
       // Notify mode starts no turn.
       expect(yield* Ref.get(queued)).toEqual([])
-    }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
+    }).pipe(storeTest),
   )
 
   it.scopedLive(
@@ -1936,22 +1890,17 @@ describe("wake store", () => {
         })
         // The file a stop leaves between the two writes of an older binary:
         // the notice for due time 1_000 is in, and the row still waits at 1_000.
-        const fs = yield* FileSystem.FileSystem
-        yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
-        yield* fs.writeFileString(
-          `${home}/.gent/wakes/${branchId}.json`,
-          encodeAlarms([
-            alarm,
-            {
-              _tag: "notice",
-              wakeId: "tick",
-              outcome: "fired",
-              firedAt: 1_000,
-              content: wakeMessage(alarm),
-              note: "stretch",
-            },
-          ]),
-        )
+        yield* writeWakeFile(home, [
+          alarm,
+          {
+            _tag: "notice",
+            wakeId: "tick",
+            outcome: "fired",
+            firedAt: 1_000,
+            content: wakeMessage(alarm),
+            note: "stretch",
+          },
+        ])
         yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
         yield* TestClock.adjust("1 second")
         yield* eventually(
@@ -1959,14 +1908,10 @@ describe("wake store", () => {
           (file) => file.includes(`"dueAt":61000`),
           "the row moved to the next tick",
         )
-        const decode = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))
-        const entries = yield* readFile(home).pipe(Effect.flatMap(decode), Effect.orDie)
+        const entries = yield* storedEntries(home)
         expect(entries.filter((entry) => entry._tag === "notice")).toHaveLength(1)
         expect(entries.filter((entry) => entry._tag === "alarm")).toHaveLength(1)
-      }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
   )
 
   it.scopedLive(
@@ -2012,10 +1957,7 @@ describe("wake store", () => {
         yield* settled(alarms.pending, Option.some(once.wakeId))
         expect(yield* readFile(home)).not.toContain(once.wakeId)
         expect(yield* readFile(home)).toContain(repeat.wakeId)
-      }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
   )
 
   it.scopedLive("a stored past-due alarm fires on re-arm; a ticking one is not doubled", () =>
@@ -2026,15 +1968,10 @@ describe("wake store", () => {
       const ctx: ExtensionContextService = testLeafContext(
         contextWith(home, queued, Option.some(fired)),
       )
-      const fs = yield* FileSystem.FileSystem
-      yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
-      yield* fs.writeFileString(
-        `${home}/.gent/wakes/${branchId}.json`,
-        encodeAlarms([
-          { _tag: "alarm", wakeId: "past", dueAt: 1_000, note: "CI should be done" },
-          { _tag: "alarm", wakeId: "later", dueAt: 4_000_000_000_000, note: "tomorrow" },
-        ]),
-      )
+      yield* writeWakeFile(home, [
+        { _tag: "alarm", wakeId: "past", dueAt: 1_000, note: "CI should be done" },
+        { _tag: "alarm", wakeId: "later", dueAt: 4_000_000_000_000, note: "tomorrow" },
+      ])
       yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
       const alarms = yield* WakeAlarms
       expect([...(yield* alarms.pending)].sort()).toEqual(["later", "past"])
@@ -2047,10 +1984,7 @@ describe("wake store", () => {
       yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
       expect(yield* alarms.pending).toEqual(["later"])
       expect(yield* Ref.get(queued)).toHaveLength(1)
-    }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
+    }).pipe(storeTest),
   )
 
   it.scopedLive("a re-arm that read an alarm while it fired does not fire it a second time", () =>
@@ -2074,7 +2008,7 @@ describe("wake store", () => {
             ),
         },
       })
-      const file = `${home}/.gent/wakes/${branchId}.json`
+      const file = wakeFile(home)
       // One read of the branch file, once armed, pauses after it returns: the
       // re-arm has seen the alarm and not yet armed it.
       const gateArmed = yield* Ref.make(false)
@@ -2097,11 +2031,9 @@ describe("wake store", () => {
             ),
           ),
       })
-      yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
-      yield* fs.writeFileString(
-        file,
-        encodeAlarms([{ _tag: "alarm", wakeId: "once", dueAt: 1_000, note: "CI should be done" }]),
-      )
+      yield* writeWakeFile(home, [
+        { _tag: "alarm", wakeId: "once", dueAt: 1_000, note: "CI should be done" },
+      ])
       const alarms = yield* WakeAlarms
       const rearm = rearmPendingAlarms().pipe(
         Effect.provideService(ExtensionContext, ctx),
@@ -2130,10 +2062,7 @@ describe("wake store", () => {
       yield* settled(alarms.pending)
       expect(yield* Ref.get(queued)).toHaveLength(1)
       expect(yield* readFile(home)).not.toContain("once")
-    }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
+    }).pipe(storeTest),
   )
 
   it.scopedLive(
@@ -2169,13 +2098,11 @@ describe("wake store", () => {
           Effect.provideService(ExtensionContext, ctx),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         )
-        const fs = yield* FileSystem.FileSystem
-        yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
         // The schema no longer names `cleared`, so the rows are written as the
         // raw text an earlier version stored.
         const monitor = `"_tag":"monitor","everySeconds":1,"deadline":60000,"note":"check"`
-        yield* fs.writeFileString(
-          `${home}/.gent/wakes/${branchId}.json`,
+        yield* writeWakeText(
+          home,
           `[{${monitor},"wakeId":"old-cleared","command":"ls build","cleared":true},` +
             `{${monitor},"wakeId":"old-uncleared","command":"ls dist","cleared":false}]`,
         )
@@ -2188,14 +2115,9 @@ describe("wake store", () => {
           "the armed monitors ran their first check",
         )
         expect(yield* Ref.get(ran)).toContain("-c ls dist")
-        const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
-          yield* readFile(home),
-        )
+        const stored = yield* storedEntries(home)
         expect(stored.map((entry) => entry._tag)).toEqual(["monitor", "monitor"])
-      }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-        Effect.timeout("8 seconds"),
-      ),
+      }).pipe(storeTest),
   )
 
   it.scopedLive("cancelling stops the timer, removes the file, and nothing fires", () =>
@@ -2220,10 +2142,7 @@ describe("wake store", () => {
       expect(yield* Ref.get(queued)).toEqual([])
       const missing = yield* runToolWithCtx(CancelTool, { wakeId: "nope" }, ctx).pipe(Effect.exit)
       expect(Exit.isFailure(missing)).toBe(true)
-    }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
+    }).pipe(storeTest),
   )
 
   it.scopedLive("cancelling a repeating alarm with unread notices names it once", () =>
@@ -2231,8 +2150,6 @@ describe("wake store", () => {
       const home = yield* makeTempDirectoryScoped("wake-cancel-notices-")
       const queued = yield* Ref.make<ReadonlyArray<string>>([])
       const ctx = contextWith(home, queued)
-      const fs = yield* FileSystem.FileSystem
-      yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
       const notice = (firedAt: number): WakeEntry =>
         WakeEntry.cases.notice.make({
           wakeId: "repeating",
@@ -2241,27 +2158,21 @@ describe("wake store", () => {
           content: `stand up (${firedAt})`,
           note: "stand up",
         })
-      yield* fs.writeFileString(
-        `${home}/.gent/wakes/${branchId}.json`,
-        encodeAlarms([
-          {
-            _tag: "alarm",
-            wakeId: "repeating",
-            dueAt: 10_000_000,
-            everySeconds: 60,
-            mode: "notify",
-            note: "stand up",
-          },
-          notice(1_000),
-          notice(2_000),
-        ]),
-      )
+      yield* writeWakeFile(home, [
+        {
+          _tag: "alarm",
+          wakeId: "repeating",
+          dueAt: 10_000_000,
+          everySeconds: 60,
+          mode: "notify",
+          note: "stand up",
+        },
+        notice(1_000),
+        notice(2_000),
+      ])
       const result = yield* runToolWithCtx(CancelTool, { wakeId: "repeating" }, ctx)
       expect(result.cancelled).toEqual(["repeating"])
       expect(yield* wakeFileExists(home)).toBe(false)
-    }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
+    }).pipe(storeTest),
   )
 })
