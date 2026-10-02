@@ -29,6 +29,7 @@ import {
   dataPaths,
   Gent,
   makeJsonFileLogger,
+  serverLock,
   ServerLockEntry,
   ServerLockStatus,
 } from "@gent/sdk"
@@ -44,7 +45,6 @@ import {
   inspectStorage,
   makeDoctorReport,
   readDoctorExtensionHealth,
-  refuseResetWhileServing,
   reportFailureOnStderr,
   resetStorage,
   resolveClientBundle,
@@ -607,12 +607,18 @@ describe("local health", () => {
         paths.serverLock,
         yield* Schema.encodeEffect(Schema.fromJsonString(ServerLockEntry))(entry),
       )
+      yield* createDb(
+        paths.dbPath,
+        "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
+      )
       reported.stderr = ""
-      const refused = yield* reportFailureOnStderr(refuseResetWhileServing(home)).pipe(Effect.flip)
+      const refused = yield* reportFailureOnStderr(resetStorage(home)).pipe(Effect.flip)
       expect(refused._tag).toBe("CliStartupError")
       expect(reported.stderr).toBe(
         "CliStartupError: a server is running for this data directory; stop it with `gent server stop` first\n",
       )
+      expect(yield* fs.exists(paths.dbPath)).toBe(true)
+      expect(yield* fs.exists(paths.archiveDir)).toBe(false)
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -635,6 +641,40 @@ describe("local health", () => {
         ),
       ),
     ),
+  )
+
+  it.scopedLive("no server can own the database while storage reset moves its files", () =>
+    Effect.gen(function* () {
+      const base = yield* FileSystem.FileSystem
+      const home = yield* base.makeTempDirectoryScoped()
+      const { dataDir, dbPath } = yield* dataPaths(home)
+      yield* base.makeDirectory(dataDir, { recursive: true })
+      yield* createDb(
+        dbPath,
+        "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
+      )
+      // A server start takes this ownership; it releases it when its scope closes.
+      const serverStart = Effect.scoped(serverLock.hold(home)).pipe(
+        Effect.provideService(FileSystem.FileSystem, base),
+        Effect.orDie,
+      )
+      // Before each file moves, a server start tries to take the database.
+      const startsDuringMove: Array<boolean> = []
+      const interleaved = FileSystem.FileSystem.of({
+        ...base,
+        rename: (from, to) =>
+          serverStart.pipe(
+            Effect.tap((owned) => Effect.sync(() => startsDuringMove.push(owned))),
+            Effect.andThen(base.rename(from, to)),
+          ),
+      })
+      const result = yield* resetStorage(home).pipe(
+        Effect.provideService(FileSystem.FileSystem, interleaved),
+      )
+      expect(result.archived.length).toBeGreaterThan(0)
+      expect(startsDuringMove).toEqual(result.archived.map(() => false))
+      expect(yield* serverStart).toBe(true)
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("storage reset is idempotent when no db files exist", () =>

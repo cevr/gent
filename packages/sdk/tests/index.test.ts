@@ -21,9 +21,14 @@ describe("SDK public surface", () => {
     ])
   })
 
-  test("the server lock offers a client status, probe and stop only", () => {
-    // Reading, writing, removing and holding the lock is `Gent.server`'s own work.
-    expect(Object.keys(RuntimePublicSdk.serverLock).sort()).toEqual(["probe", "status", "stop"])
+  test("the server lock offers a client status, probe, stop, and the hold storage reset takes", () => {
+    // Reading, writing and removing the discovery entry is `Gent.server`'s own work.
+    expect(Object.keys(RuntimePublicSdk.serverLock).sort()).toEqual([
+      "hold",
+      "probe",
+      "status",
+      "stop",
+    ])
   })
 })
 

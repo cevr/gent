@@ -463,22 +463,25 @@ const stopLocked = (
   })
 
 /**
- * The lock verbs `Gent.server` runs on its own lock: the discovery entry and
- * the kernel lock. The server root and the SDK tests read it; the public
- * surface does not export it.
+ * The discovery-entry verbs `Gent.server` runs on its own lock. The server
+ * root and the SDK tests read it; the public surface does not export it.
  */
 export const serverLockFile = {
   read: readLock,
   write: writeLock,
   remove: removeLock,
-  hold: holdKernelLock,
 }
 
-/** What a client runs against the server that holds the lock: status, probe, and stop. */
+/**
+ * What runs against the database's lock: status, probe and stop for the server
+ * that holds it, and `hold`, the ownership a server start takes for its life
+ * and `storage reset` takes while it moves the database away.
+ */
 export const serverLock = {
   status: lockStatus,
   probe: (entry: ServerLockEntry) => probeServerLockEntryIdentity(entry),
   stop: stopLocked,
+  hold: holdKernelLock,
 }
 
 // ── server handle ───────────────────────────────────────────────────────────
@@ -728,7 +731,7 @@ const resolveServerInternal = (
     for (let attempt = 0; attempt < HOLDER_WAIT_ATTEMPTS; attempt++) {
       // The lock is taken in a child scope, so a start that does not own can let it go.
       const lockScope = yield* Scope.fork(scope)
-      if (yield* serverLockFile.hold(home).pipe(Scope.provide(lockScope))) {
+      if (yield* serverLock.hold(home).pipe(Scope.provide(lockScope))) {
         const root = yield* loadServerRoot
         return yield* root.startOwnedServer(
           options,

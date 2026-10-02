@@ -715,6 +715,74 @@ export default {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive(
+    "a malformed known contribution bucket fails only its extension, and the healthy ones keep their rows",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const root = yield* fs.makeTempDirectoryScoped({
+          prefix: "gent-client-malformed-bucket-",
+        })
+        const userDir = path.join(root, "home/.gent/extensions")
+        const projectDir = path.join(root, "project/.gent/extensions")
+        yield* fs.makeDirectory(userDir, { recursive: true })
+        // A bucket that is not an array.
+        yield* fs.writeFileString(
+          path.join(userDir, "object-widgets.client.ts"),
+          `
+import { Effect } from "effect";
+export default { id: "@user/object-widgets", setup: Effect.succeed({ widgets: {} }) };
+`,
+        )
+        // An array whose command has no id and no onSelect.
+        yield* fs.writeFileString(
+          path.join(userDir, "headless-command.client.ts"),
+          `
+import { Effect } from "effect";
+export default { id: "@user/headless-command", setup: Effect.succeed({ commands: [{ title: "x", slash: "x" }] }) };
+`,
+        )
+        // A renderer whose tool names are not an array.
+        yield* fs.writeFileString(
+          path.join(userDir, "string-tools.client.ts"),
+          `
+import { Effect } from "effect";
+export default {
+  id: "@user/string-tools",
+  setup: Effect.succeed({ renderers: [{ toolNames: "bash", component: () => null }] }),
+};
+`,
+        )
+        yield* fs.writeFileString(
+          path.join(userDir, "healthy.client.ts"),
+          `
+import { Effect } from "effect";
+import { autocompleteContribution } from "@gent/tui/extensions";
+export default {
+  id: "@user/healthy",
+  setup: Effect.succeed(
+    autocompleteContribution({ prefix: "%", title: "healthy", items: () => [] }),
+  ),
+};
+`,
+        )
+        const good: ExtensionClientModule = {
+          id: "@test/builtin-beside-malformed",
+          setup: Effect.succeed(
+            autocompleteContribution({ prefix: "!", title: "good", items: () => [] }),
+          ),
+        }
+        const result = yield* loadTuiExtensions({ builtins: [good], userDir, projectDir, runtime })
+        expect(result.autocompleteItems.map((c) => c.prefix)).toEqual(["!", "%"])
+        expect(result.failures).toEqual([
+          { id: "@user/headless-command", reason: 'malformed contribution "commands"' },
+          { id: "@user/object-widgets", reason: 'malformed contribution "widgets"' },
+          { id: "@user/string-tools", reason: 'malformed contribution "renderers"' },
+        ])
+      }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   // The compiled binary has no node_modules. A client extension outside the
   // repository resolves its imports, and compiles its JSX, only because the
   // loader binds them to the modules the TUI runs. A relative module the

@@ -45,7 +45,7 @@ import {
   type NoticeRow,
   type WidgetComponent,
   type WidgetSlot,
-  unknownContributionKey,
+  contributionBucketSchema,
 } from "./client-facets.js"
 import { bindModuleSource, buildClientExtension, type ClientBuildNames } from "../bun-adapter"
 import type { ToolRenderer } from "../tool-renderers"
@@ -677,15 +677,21 @@ const withinLoadTimeout =
 
 /**
  * What is wrong with a setup's result, if anything. A key outside the known
- * buckets fails by name, so a renamed bucket never drops its items silently.
+ * buckets fails by name, so a renamed bucket never drops its items silently;
+ * a known bucket of another shape fails here, inside this extension's own
+ * failure, and never reaches the resolution every extension shares.
  */
 // eslint-disable-next-line effect/noUnknownParameters -- a user setup's result is parsed at this module boundary.
 const contributionsProblem = (value: unknown): Option.Option<string> => {
   if (!Predicate.isObject(value)) return Option.some("setup must return contributions")
-  return Option.map(
-    unknownContributionKey(Object.keys(value)),
-    (key) => `unknown contribution "${key}"`,
-  )
+  for (const key of Object.keys(value)) {
+    const schema = contributionBucketSchema(key)
+    if (Option.isNone(schema)) return Option.some(`unknown contribution "${key}"`)
+    if (Predicate.hasProperty(value, key) && !Schema.is(schema.value)(value[key])) {
+      return Option.some(`malformed contribution "${key}"`)
+    }
+  }
+  return Option.none()
 }
 
 /** Run one extension's setup; any failure, defect or timeout becomes a recorded failure. */

@@ -205,7 +205,7 @@ const holdAsAnotherServer = (home: string) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make()
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-    expect(yield* serverLockFile.hold(home).pipe(Scope.provide(scope))).toBe(true)
+    expect(yield* serverLock.hold(home).pipe(Scope.provide(scope))).toBe(true)
     return { release: Scope.close(scope, Exit.void) }
   })
 
@@ -630,7 +630,7 @@ describe("Server Lock Ownership", () => {
             .status(home)
             .pipe(Effect.provideService(Scheduler.Scheduler, cancelOnLock), Effect.forkChild)
           const outcome = yield* Fiber.await(probe)
-          expect(yield* serverLockFile.hold(home)).toBe(true)
+          expect(yield* serverLock.hold(home)).toBe(true)
           if (!interrupted) {
             expect(Exit.isSuccess(outcome)).toBe(true)
             return
@@ -876,7 +876,7 @@ describe("serverLock.stop", () => {
             if (path !== lockPath || paused) return base.remove(path, options)
             paused = true
             return Effect.gen(function* () {
-              if (yield* serverLockFile.hold(home).pipe(Scope.provide(newOwnerScope))) {
+              if (yield* serverLock.hold(home).pipe(Scope.provide(newOwnerScope))) {
                 newOwnerTookLock = true
                 yield* serverLockFile.write(home, newOwner)
               }
@@ -917,9 +917,7 @@ describe("serverLock.stop", () => {
               if (raced) return base.makeDirectory(path, options)
               raced = true
               return Effect.gen(function* () {
-                expect(yield* serverLockFile.hold(home).pipe(Scope.provide(newOwnerScope))).toBe(
-                  true,
-                )
+                expect(yield* serverLock.hold(home).pipe(Scope.provide(newOwnerScope))).toBe(true)
                 yield* serverLockFile.write(home, newOwner)
               }).pipe(
                 Effect.orDie,
