@@ -521,7 +521,7 @@ describe("prompt history store", () => {
         "second prompt",
         "first prompt",
       ])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   storeTest("a second home keeps its own history", () =>
@@ -536,7 +536,7 @@ describe("prompt history store", () => {
       expect(Option.getOrElse(yield* readEntries(first), (): ReadonlyArray<string> => [])).toEqual([
         "only in first",
       ])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -556,7 +556,7 @@ describe("prompt history across writers", () => {
       expect(Option.getOrElse(yield* readEntries(home), (): ReadonlyArray<string> => [])).toEqual(
         merged,
       )
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   storeTest("concurrent adds in one process all land", () =>
@@ -572,7 +572,7 @@ describe("prompt history across writers", () => {
 
       const stored = Option.getOrElse(yield* readEntries(home), (): ReadonlyArray<string> => [])
       expect([...stored].sort()).toEqual([...prompts].sort())
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   storeTest("a repeat of the newest prompt is not stored twice", () =>
@@ -581,7 +581,7 @@ describe("prompt history across writers", () => {
       const home = yield* fs.makeTempDirectoryScoped()
       yield* recordPrompt(home, "same")
       expect(yield* recordPrompt(home, "same")).toEqual(["same"])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -1386,13 +1386,14 @@ describe("useSessionFeed", () => {
     }).pipe(Effect.timeout("5 seconds")),
   )
 
-  it.live("changes route when a branch event changes the active client identity", () =>
+  it.live("a branch event that moves the active identity switches the feed's branch", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("branch-navigation-session")
       const branchId = BranchId.make("branch-navigation-first")
       const nextBranchId = BranchId.make("branch-navigation-second")
       const switched = yield* Deferred.make<void>()
       let snapshotCount = 0
+      const switches: Array<readonly [SessionId, BranchId]> = []
       const dispose = createRoot((disposeRoot) => {
         const [active, setActive] = createSignal(makeSession(sessionId, branchId))
         const runtime = createMockRuntime()
@@ -1434,8 +1435,7 @@ describe("useSessionFeed", () => {
             onInteractionDismissed: () => {},
             onQueueSnapshot: () => {},
             onBranchSwitch: (nextSession, nextBranch) => {
-              expect(nextSession).toBe(sessionId)
-              expect(nextBranch).toBe(nextBranchId)
+              switches.push([nextSession, nextBranch])
               runtime.cast(Deferred.succeed(switched, void 0))
             },
           },
@@ -1449,6 +1449,7 @@ describe("useSessionFeed", () => {
         Effect.ensuring(Effect.sync(dispose)),
       )
       expect(snapshotCount).toBe(1)
+      expect(switches).toEqual([[sessionId, nextBranchId]])
     }),
   )
 
@@ -1758,7 +1759,7 @@ describe("useSessionFeed", () => {
         expect(retry?._tag === "retrying" && retry.outcome).toBe("retried")
         dispose()
       })
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("a notice draws a notice row, not an error row", () =>
@@ -1833,7 +1834,7 @@ describe("useSessionFeed", () => {
         )
         dispose()
       })
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("a retry row sits above the answer of the attempt it waited for, and says why", () =>
@@ -2130,7 +2131,7 @@ describe("useSessionFeed", () => {
         expectNestedCellOperation(feed.value, innerId)
         dispose()
       })
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   /** A feed over one snapshot and a live event stream. */
@@ -2223,7 +2224,7 @@ describe("useSessionFeed", () => {
         ),
         Effect.ensuring(Effect.sync(dispose)),
       )
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("a running read names its file from the cwd, as its row does", () =>
@@ -2304,7 +2305,7 @@ describe("useSessionFeed", () => {
         ),
         Effect.ensuring(Effect.sync(dispose)),
       )
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("a live result on a reloaded op drops the cuts of the output it replaces", () =>
@@ -2388,7 +2389,7 @@ describe("useSessionFeed", () => {
         ),
         Effect.ensuring(Effect.sync(dispose)),
       )
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("replays buffered event-only state before the snapshot cursor", () =>
@@ -2484,7 +2485,7 @@ describe("useSessionFeed", () => {
         expect(branchSwitches).toEqual([])
         dispose()
       })
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   for (const saved of [false, true]) {
@@ -2674,7 +2675,7 @@ describe("useSessionFeed", () => {
           ),
           Effect.ensuring(Effect.sync(dispose)),
         )
-      }),
+      }).pipe(Effect.timeout("10 seconds")),
     )
   }
 
@@ -3035,7 +3036,7 @@ describe("useSessionFeed", () => {
         ),
         Effect.ensuring(Effect.sync(dispose)),
       )
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("shows a live compaction message as soon as its event arrives", () =>
@@ -3114,7 +3115,7 @@ describe("useSessionFeed", () => {
       expect(response?.id).not.toBe(summary?.id)
       expect(response?.content).toBe("native response")
       dispose()
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("shows a live notice separately from later model output", () =>
@@ -3196,7 +3197,7 @@ describe("useSessionFeed", () => {
       expect(response?.id).not.toBe(summary?.id)
       expect(response?.content).toBe("native response")
       dispose()
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("reconstructs retry history and completion state during reload", () =>
@@ -3280,6 +3281,6 @@ describe("useSessionFeed", () => {
       expect(feed.value.items().some((item) => item._tag === "interruption")).toBe(true)
       expect(feed.value.messages()[0]?.content).toContain("stored summary")
       dispose()
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })

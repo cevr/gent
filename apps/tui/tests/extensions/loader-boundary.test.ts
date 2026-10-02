@@ -1496,8 +1496,8 @@ export default defineClientExtension("@test/override-bash", {
     )
     mkdirSync(join(fixtureUserDir, "__tests__"), { recursive: true })
     writeFileSync(
-      join(fixtureUserDir, "__tests__", "test.client.tsx"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../@gent/tui/extensions'; export default defineClientExtension('@test/spec-only', { setup: Effect.succeed(clientCommandContribution({ id: 'spec-only', title: 'Spec Only', onSelect: () => {} })) })",
+      join(fixtureUserDir, "__tests__", "client.tsx"),
+      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/spec-only', { setup: Effect.succeed(clientCommandContribution({ id: 'spec-only', title: 'Spec Only', onSelect: () => {} })) })",
     )
     writeFileSync(
       join(fixtureProjectDir, "prebuilt.client.mjs"),
@@ -1522,7 +1522,6 @@ describe("loadTuiExtensions", () => {
       expect(resolved.renderers.has("read")).toBe(true)
       expect(resolved.renderers.has("bash")).toBe(true)
       expect(resolved.interactionRenderers.has("handoff")).toBe(true)
-      expect(commandsOf(resolved).some((command) => command.id === "plan.create")).toBe(false)
       rmSync(emptyUser, { recursive: true, force: true })
       rmSync(emptyProject, { recursive: true, force: true })
     }),
@@ -1574,6 +1573,7 @@ describe("loadTuiExtensions", () => {
         expect(commandIds).not.toContain("hidden")
         expect(commandIds).not.toContain("internal")
         expect(commandIds).not.toContain("spec-only")
+        expect(resolved.failures).toEqual([])
         expect(commandIds.filter((id) => id === "alpha" || id === "zeta")).toEqual([
           "alpha",
           "zeta",
@@ -1641,7 +1641,8 @@ export default {
       expect(resolved.renderers.has("read")).toBe(false)
       expect(resolved.renderers.has("bash")).toBe(false)
       expect(resolved.interactionRenderers.has("handoff")).toBe(true)
-      expect(commandsOf(resolved).some((command) => command.id === "plan.create")).toBe(false)
+      // The bomb never ran: a setup that ran would fail it by name.
+      expect(resolved.failures).toEqual([])
       rmSync(disabledDir, { recursive: true, force: true })
     }),
   )

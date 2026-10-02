@@ -25,7 +25,7 @@ import {
   renderFrame,
   renderScoped,
 } from "./render-harness-boundary"
-import { waitForFrame } from "./helpers-boundary"
+import { waitForFrame, waitUntil } from "./helpers-boundary"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { onMount } from "solid-js"
 
@@ -1112,18 +1112,22 @@ describe("Auth route", () => {
         rejectOpen.value(new LinkOpenerError({ message: "open failed" }))
       const frame = yield* waitForFrame(
         setup,
-        (next) => next.includes("openai") && !next.includes("open failed"),
+        (next) => next.includes("openai") && !next.includes("Could not open a browser"),
       )
       expect(frame).toContain("openai")
-      expect(frame).not.toContain("open failed")
+      expect(frame).not.toContain("Could not open a browser")
       expect(authorizeCalls).toEqual([
         { provider: "anthropic", method: 0, sessionId: activeSessionId },
       ])
     }),
   )
-  it.scopedLive("ignores stale oauth opener failures after cancelling the same auth flow", () =>
+  // Flow A's browser open fails late, after the reader cancelled A and
+  // started B: the failure belongs to A, so B keeps its URL screen.
+  it.scopedLive("a cancelled oauth flow's late opener failure never lands on the next flow", () =>
     Effect.gen(function* () {
-      let rejectOpen = Option.none<(error: LinkOpenerError) => void>()
+      const rejectOpen: Array<(error: LinkOpenerError) => void> = []
+      // Opener calls that ended: the flow reads the failure right after.
+      let settled = 0
       const authorizeCalls: Array<{
         provider: string
         method: number
@@ -1159,8 +1163,8 @@ describe("Auth route", () => {
       })
       const services = yield* servicesWithLinkOpener(() =>
         Effect.callback<void, LinkOpenerError>((resume) => {
-          rejectOpen = Option.some((error) => resume(Effect.fail(error)))
-        }),
+          rejectOpen.push((error) => resume(Effect.fail(error)))
+        }).pipe(Effect.ensuring(Effect.sync(() => settled++))),
       )
       const runtime = createMockRuntime()
       const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
@@ -1172,31 +1176,39 @@ describe("Auth route", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() => setup.renderOnce())
-      yield* waitForFrame(setup, (frame) => frame.includes("Open the URL below"))
-      setup.mockInput.pressEscape()
-      yield* Effect.promise(() => setup.renderOnce())
       yield* waitForFrame(
         setup,
-        (frame) =>
-          frame.includes("anthropic") &&
-          !frame.includes("Open the URL below") &&
-          !frame.includes("open failed"),
+        (frame) => frame.includes("Open the URL below") && rejectOpen.length === 1,
+        "flow A waits on its browser",
       )
-      if (Option.isSome(rejectOpen))
-        rejectOpen.value(new LinkOpenerError({ message: "open failed" }))
-      const frame = yield* waitForFrame(
-        setup,
-        (next) => next.includes("anthropic") && !next.includes("open failed"),
-      )
-      expect(frame).toContain("anthropic")
-      expect(frame).not.toContain("open failed")
+      setup.mockInput.pressEscape()
       // "esc back" lands on the provider's methods, one step back.
-      expect(frame).toContain("· method")
-      expect(authorizeCalls).toEqual([
-        { provider: "anthropic", method: 0, sessionId: activeSessionId },
-      ])
-    }),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("· method") && !frame.includes("Open the URL below"),
+        "flow A cancelled",
+      )
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Open the URL below") && rejectOpen.length === 2,
+        "flow B waits on its browser",
+      )
+      rejectOpen[0]?.(new LinkOpenerError({ message: "open failed" }))
+      yield* waitUntil(() => settled === 1, "flow A's opener ended")
+      yield* Effect.promise(() => setup.renderOnce())
+      const frame = renderFrame(setup)
+      expect(frame).toContain("Open the URL below")
+      expect(frame).not.toContain("Could not open a browser")
+      expect(authorizeCalls).toHaveLength(2)
+      // B's own failure still shows: the test can see the note.
+      rejectOpen[1]?.(new LinkOpenerError({ message: "open failed" }))
+      yield* waitForFrame(
+        setup,
+        (next) => next.includes("Could not open a browser"),
+        "flow B's own failure",
+      )
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   // ── browser unavailable ───────────────────────────────────────────

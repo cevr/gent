@@ -85,13 +85,7 @@ const discoverDir = (
     const results: DiscoveredTuiExtension[] = []
 
     for (const entry of entries) {
-      if (
-        entry.startsWith(".") ||
-        entry.startsWith("_") ||
-        entry === "__tests__" ||
-        entry === "node_modules"
-      )
-        continue
+      if (entry.startsWith(".") || entry.startsWith("_") || entry === "node_modules") continue
 
       const filePath = path.join(dir, entry)
       const info = yield* fs.stat(filePath).pipe(Effect.option)

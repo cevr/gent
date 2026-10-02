@@ -182,7 +182,7 @@ describe("startup and headless auth", () => {
       })
       expect(bootstrap.initialSession.sessionId).toBe(sessionA.id)
       expect(reads).toEqual([])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("a headless session names the missing sign-ins of the agent it runs", () =>
     Effect.gen(function* () {
@@ -259,7 +259,7 @@ describe("startup and headless auth", () => {
       // The session id is the question: the server answers for the agent the
       // session runs.
       expect(calls).toEqual([{ sessionId: SessionId.make("session-a") }])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("a session with several branches boots into the branch picker", () =>
     Effect.gen(function* () {
@@ -290,7 +290,7 @@ describe("startup and headless auth", () => {
         Option.some(2),
       )
       expect(calls).toEqual([])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   // A session record with no branch is a typed failure, so `gent -s <id>`
@@ -310,7 +310,7 @@ describe("startup and headless auth", () => {
         }),
       )
       expect(error.reason).toBe("missing-branch")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -326,7 +326,7 @@ describe("startup state", () => {
         }),
       )
       expect(error.reason).toBe("headless-missing-prompt")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   // The composer sends nothing for a blank draft; headless holds the same line.
@@ -341,7 +341,7 @@ describe("startup state", () => {
         }),
       )
       expect(error.reason).toBe("headless-missing-prompt")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("a new headless session is created as the requested agent and run spec", () =>
@@ -380,7 +380,7 @@ describe("startup state", () => {
       expect(state).toMatchObject({ session: { id: "session-test" } })
       // The agent is fixed on the session; the prompt's turn carries none.
       expect(created.map((input) => input.admission)).toEqual([admission])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("fails with typed bootstrap error when requested session is missing", () =>
@@ -396,7 +396,7 @@ describe("startup state", () => {
       )
       expect(error.reason).toBe("session-not-found")
       expect(error.sessionId).toBe(SessionId.make("missing-session"))
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("resume opens the user's last session, not a child a delegate spawned later", () =>
     Effect.gen(function* () {
@@ -436,7 +436,7 @@ describe("startup state", () => {
         prompt: Option.none(),
       })
       expect(state).toMatchObject({ _tag: "session", session: { id: "handoff" } })
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -496,7 +496,11 @@ const countShutdowns = (setup: TestSetup) =>
  * The runtime stream says Running once and then stays quiet, as it does
  * through a long generation or a long tool call.
  */
-const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionClientModule> = []) =>
+const mountRunningTurn = (
+  height = 24,
+  extensions: ReadonlyArray<AnyExtensionClientModule> = [],
+  terminal: { readonly kittyKeyboard?: boolean } = {},
+) =>
   Effect.gen(function* () {
     const sessionId = SessionId.make("session-running")
     const branchId = BranchId.make("branch-running")
@@ -570,6 +574,7 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
         runtime: createMockRuntime(),
         builtins: [...builtinClientModules, activityProbe, ...extensions],
         height,
+        ...terminal,
         initialSession: {
           id: sessionId,
           activeBranchId: branchId,
@@ -1068,7 +1073,7 @@ describe("App sign-in pane", () => {
 
       setup.renderer.destroy()
       expect(setup.renderer.listenerCount("resize")).toBe(0)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   // A scripted model (`--debug`, `--mock-empty`) answers with no key: the
@@ -1184,7 +1189,7 @@ describe("App sign-in pane", () => {
       )
       expect(calls.length).toBeGreaterThan(0)
       expect(frame).toContain("Sign in ·")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("the startup auth check asks for the agent the session's snapshot names", () =>
     Effect.gen(function* () {
@@ -1246,7 +1251,7 @@ describe("App sign-in pane", () => {
       // first, which predates the overlay being the picker's owner.)
       expect(calls.length).toBe(2)
       expect(frame).toContain("Sign in ·")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   /**
    * The enforced sign-in on a `height`-row terminal: openai is required and
@@ -1550,7 +1555,7 @@ describe("App sign-in pane", () => {
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       expect(sentMessages.filter((message) => message.sessionId === nextSessionId)).toEqual([])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -2701,6 +2706,7 @@ describe("App cancel and quit keys during a turn", () => {
   }> = [
     { name: "/model", title: "Model ·", open: typeCommand("/model"), draft: Option.none() },
     { name: "/think", title: "Reasoning ·", open: typeCommand("/think"), draft: Option.none() },
+    { name: "/auth", title: "Sign in ·", open: typeCommand("/auth"), draft: Option.none() },
     {
       name: "prompt search",
       title: "Prompt search",
@@ -2861,21 +2867,45 @@ describe("App cancel and quit keys during a turn", () => {
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // A transcript toggle between two ctrl+c presses is another gesture: the
-  // second press collapses the transcript and never quits.
-  it.scopedLive("a transcript toggle between two ctrl+c presses disarms the quit", () =>
+  // The expanded transcript is a layer: after a ctrl+c that cancelled the
+  // turn and armed the exit, the next ctrl+c collapses the transcript, and
+  // the press after that goes on down the ladder instead of quitting.
+  it.scopedLive("ctrl+c over the expanded transcript collapses it and does not quit", () =>
     Effect.gen(function* () {
-      const view = yield* mountRunningTurnWithError
+      const view = yield* mountRunningTurn(24, [], { kittyKeyboard: true })
       view.setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
       view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the toggle must be parsed and handled before the next press
-      yield* Effect.sleep("50 millis")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("transcript ·"), "transcript")
       view.setup.mockInput.pressKey("c", { ctrl: true })
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the press must be parsed and handled before the negative assertion
-      yield* Effect.sleep("100 millis")
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => !next.includes("transcript ·"),
+        "the transcript collapsed",
+      )
+      expect(frame).not.toContain(CTRL_C_CUE)
+      expect(view.steers).toEqual(["Cancel"])
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Esc over the expanded transcript collapses it; the turn behind it runs on.
+  it.scopedLive(
+    "esc over the expanded transcript during a turn collapses it and cancels nothing",
+    () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurn(24, [], { kittyKeyboard: true })
+        view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
+        yield* waitForFrame(view.setup, (frame) => frame.includes("transcript ·"), "transcript")
+        view.setup.mockInput.pressEscape()
+        yield* waitForFrame(
+          view.setup,
+          (frame) => !frame.includes("transcript ·"),
+          "the transcript collapsed",
+        )
+        expect(view.steers).toEqual([])
+        view.setup.mockInput.pressEscape()
+        yield* waitForFrame(view.setup, () => view.steers.length === 1, "the turn cancelled")
+      }).pipe(Effect.timeout("10 seconds")),
   )
   // ctrl+o changes only how tool groups draw, so nothing nearer is left for
   // the next press to undo: the key itself has to disarm the quit.
@@ -2886,9 +2916,8 @@ describe("App cancel and quit keys during a turn", () => {
         const view = yield* mountRunningTurnWithError
         view.setup.mockInput.pressKey("c", { ctrl: true })
         yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+        // The parser takes the bytes in order: ctrl+o is handled before ctrl+c.
         view.setup.mockInput.pressKey("o", { ctrl: true })
-        // oxlint-disable-next-line effect/noFixedWaitInTests -- the key must be parsed and handled before the next press
-        yield* Effect.sleep("50 millis")
         view.setup.mockInput.pressKey("c", { ctrl: true })
         yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
         expect(view.shutdowns()).toBe(0)
@@ -4257,10 +4286,9 @@ describe("App auth gate at startup", () => {
 
       // Choosing a branch closes the picker, and only then does the gate run.
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() => setup.renderOnce())
+      yield* waitUntil(() => calls.length > 0, "the gate runs")
       expect(calls.map((call) => call.agentName)).toEqual(["primary"])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
     "cold start with prompt and missing auth defers the prompt until auth resolves",
@@ -4328,7 +4356,7 @@ describe("App auth gate at startup", () => {
         expect(authFrame).toContain("Sign in ·")
         // Prompt still not sent while auth overlay is open
         expect(sentMessages).toEqual([])
-      }),
+      }).pipe(Effect.timeout("10 seconds")),
   )
   // An enforced sign-in holds the slot: with a required key missing there is
   // no session to fall back to, so ctrl+c quits over it.
@@ -4465,12 +4493,14 @@ describe("App auth gate at startup", () => {
         },
         initialPrompt: Option.some("must not send"),
       })
-      yield* waitForFrame(setup, () => authChecks > 0, "auth check failure")
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- real-clock gap so any spurious send fiber has time to surface (negative assertion follows)
-      yield* Effect.sleep("20 millis")
-      yield* Effect.promise(() => setup.renderOnce())
+      // The failed check has settled once its retry note draws.
+      yield* waitForFrame(
+        setup,
+        (frame) => authChecks > 0 && frame.includes("Press r to retry"),
+        "auth check failure",
+      )
       expect(sentMessages).toEqual([])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("cold start with prompt recovers after a transient auth check failure", () =>
     Effect.gen(function* () {
@@ -4523,7 +4553,7 @@ describe("App auth gate at startup", () => {
         "sent message",
       )
       expect(authChecks).toBeGreaterThan(1)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("enforced auth overlay can retry failed provider loads", () =>
     Effect.gen(function* () {
@@ -4569,7 +4599,7 @@ describe("App auth gate at startup", () => {
       setup.mockInput.pressKey("r")
       yield* waitForFrame(setup, (frame) => !frame.includes("Sign in ·"), "auth retry resolved")
       expect(authChecks).toBe(3)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
     "branch resume pane gates auth, sends deferred prompt, and searches prompt history",
@@ -4771,7 +4801,7 @@ describe("App auth gate at startup", () => {
           (frame) => !frame.includes("Prompt search"),
           "prompt search closed",
         )
-      }),
+      }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("stale auth checks cannot reopen the auth gate after key save", () =>
     Effect.gen(function* () {
@@ -4905,7 +4935,7 @@ describe("App auth gate at startup", () => {
       yield* Effect.promise(() => setup.renderOnce())
       expect(renderFrame(setup)).not.toContain("Sign in ·")
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -4962,7 +4992,7 @@ describe("App startup prompt and renames", () => {
       yield* Effect.sleep("50 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a startup prompt the server refuses comes back to the draft with its reason", () =>
     Effect.gen(function* () {
@@ -5016,7 +5046,7 @@ describe("App startup prompt and renames", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, () => attempts.length === 2, "sent by the reader")
       expect(attempts[1]?.content).toBe(initialPrompt)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
     "a startup prompt whose replies were lost goes again under its request id",
@@ -5111,7 +5141,7 @@ describe("App startup prompt and renames", () => {
       yield* Effect.sleep("50 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(slashCommandCalls).toBe(before)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -5866,7 +5896,7 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("[steer 1] switch to secondary")
       expect(frame).toContain("[queued 1] line one +2 lines")
       expect(frame).toContain("alt+up restore")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget renders nothing when no connection issue", () =>
     Effect.gen(function* () {
@@ -5875,7 +5905,7 @@ describe("TUI renderer surfaces", () => {
       const setup = yield* renderScoped(() => <ConnectionWidget />)
       const frame = renderFrame(setup)
       expect(frame).not.toContain("connection")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget surfaces failed extension activation", () =>
     Effect.gen(function* () {
@@ -5910,7 +5940,7 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("failed extensions")
       // The reason, not only the id: a broken config names its parse error.
       expect(frame).toContain("@gent/memory: startup boom")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget names a model catalog that did not load", () =>
     Effect.gen(function* () {
@@ -5944,16 +5974,17 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("some models unavailable")
       expect(frame).toContain("ollama: connect ECONNREFUSED")
       expect(frame).not.toContain("failed extensions")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget surfaces failed extensions for the active session", () =>
     Effect.gen(function* () {
+      const scopes: Array<ExtensionStatusScope> = []
       const setup = yield* renderScoped(() => <ConnectionWidget />, {
         initialSession: testSession,
         client: createMockClient({
           extension: {
             listStatus: ({ scope }: { scope: ExtensionStatusScope }) => {
-              expect(scope).toEqual({ _tag: "Session", id: testSession.id })
+              scopes.push(scope)
               return Effect.succeed({
                 _tag: "Degraded",
                 healthyExtensions: [],
@@ -5981,7 +6012,9 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("connection")
       expect(frame).toContain("failed extensions")
       expect(frame).toContain("@gent/plan")
-    }),
+      expect(scopes).not.toHaveLength(0)
+      for (const scope of scopes) expect(scope).toEqual({ _tag: "Session", id: testSession.id })
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
     "ConnectionWidget refreshes extension status after reconnect generation changes",
@@ -5991,6 +6024,7 @@ describe("TUI renderer surfaces", () => {
           ConnectionState.cases.Connected.make({ generation: 0 }),
         )
         let callCount = 0
+        const scopes: Array<ExtensionStatusScope> = []
         let currentHealth: ExtensionHealthSnapshot = {
           _tag: "Degraded",
           healthyExtensions: [],
@@ -6017,7 +6051,7 @@ describe("TUI renderer surfaces", () => {
             extension: {
               listStatus: ({ scope }: { scope: ExtensionStatusScope }) => {
                 callCount += 1
-                expect(scope).toEqual({ _tag: "Session", id: testSession.id })
+                scopes.push(scope)
                 return Effect.succeed(currentHealth)
               },
             },
@@ -6033,15 +6067,16 @@ describe("TUI renderer surfaces", () => {
         yield* Effect.yieldNow
         yield* Effect.promise(() => setup.renderOnce())
         lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
-        yield* Effect.yieldNow
-        yield* Effect.promise(() => setup.renderOnce())
-        yield* Effect.yieldNow
-        yield* Effect.promise(() => setup.renderOnce())
-        const frame = renderFrame(setup)
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => !next.includes("failed extensions"),
+          "the status read again",
+        )
         expect(callCount).toBe(2)
+        for (const scope of scopes) expect(scope).toEqual({ _tag: "Session", id: testSession.id })
         expect(frame).not.toContain("failed extensions")
         expect(frame).not.toContain("@gent/plan")
-      }),
+      }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget clears stale extension status when switching sessions", () =>
     Effect.gen(function* () {
@@ -6072,14 +6107,13 @@ describe("TUI renderer surfaces", () => {
       expect(renderFrame(setup)).toContain("@gent/plan")
       if (Option.isNone(controls)) return yield* Effect.die("health controls not ready")
       controls.value.switchSession()
-      yield* Effect.yieldNow
-      yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.yieldNow
-      yield* Effect.promise(() => setup.renderOnce())
-      const frame = renderFrame(setup)
-      expect(frame).not.toContain("failed extensions")
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => !next.includes("failed extensions"),
+        "the other session's status",
+      )
       expect(frame).not.toContain("@gent/plan")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("same-session branch switches preserve session-scoped extension health", () =>
     Effect.gen(function* () {
@@ -6118,7 +6152,7 @@ describe("TUI renderer surfaces", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("failed extensions")
       expect(frame).toContain("@gent/plan")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("the status row names an unborn branch, and a detached head by its commit", () =>
     Effect.scoped(
@@ -6352,44 +6386,26 @@ describe("client extension status", () => {
             }),
         },
       })
-      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <App />
-            <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
-          </>
-        ),
-        {
-          client,
-          runtime: createMockRuntime(),
-          width: 140,
-          initialSession: {
-            id: SessionId.make("session-driver"),
-            activeBranchId: BranchId.make("branch-driver"),
-            name: "Driver",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
+      const setup = yield* renderScoped(() => <App />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 140,
+        initialSession: {
+          id: SessionId.make("session-driver"),
+          activeBranchId: BranchId.make("branch-driver"),
+          name: "Driver",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
         },
-      )
-      const driverCommand = () =>
-        ext.pipe(
-          Option.flatMap((value) =>
-            Option.fromUndefinedOr(value.commands().find((command) => command.slash === "driver")),
-          ),
-        )
-      yield* waitForFrame(setup, () => Option.isSome(driverCommand()), "driver command loaded")
-      const command = driverCommand()
-      if (Option.isNone(command)) return yield* Effect.die("driver command not loaded")
-      command.value.onSlash?.("")
-      const frame = yield* waitForFrame(
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* typeCommand("/driver")(setup)
+      yield* waitForFrame(
         setup,
         (text) => text.includes("Usage: /driver <agent> <driver-id|default>"),
         "driver usage in the footer",
       )
-      expect(frame).toContain("Usage: /driver")
       expect(sentMessages).toEqual([])
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })

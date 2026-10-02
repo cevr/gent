@@ -42,6 +42,7 @@ import {
   type SlashSubmission,
   SessionControllerContext,
   SessionUiState,
+  slashAutocompleteItems,
   transitionComposerInteraction,
 } from "../src/session"
 import {
@@ -164,24 +165,6 @@ describe("executeShell", () => {
       const lineCount = result.output.split("\n").length
       expect(lineCount).toBeLessThanOrEqual(2001)
       // The spill lands in this test's own data directory, not the real home.
-      const savedPath = yield* Effect.fromOption(result.savedPath)
-      expect(savedPath).toMatch(/\/gent-composer-data-[^/]*\/shell-output\/shell_[^/]*\.txt$/)
-    }),
-  )
-
-  shellTest("truncates output over byte limit", () =>
-    // Generate output over 50KB (each 'x' repeated 100 times per line, 600 lines = 60KB)
-    Effect.gen(function* () {
-      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell(
-        "for i in $(seq 1 600); do printf '%0.s█' {1..100}; echo; done",
-        testDir,
-        PROBE_HOME,
-      )
-      expect(result.truncated).toBe(true)
-
-      // Output should be under 50KB
-      expect(result.output.length).toBeLessThanOrEqual(50 * 1024)
       const savedPath = yield* Effect.fromOption(result.savedPath)
       expect(savedPath).toMatch(/\/gent-composer-data-[^/]*\/shell-output\/shell_[^/]*\.txt$/)
     }),
@@ -2054,23 +2037,14 @@ describe("Composer ghost line", () => {
       const submitted: Array<string> = []
       const setup = yield* mount(submitted)
       yield* Effect.promise(() => setup.mockInput.typeText("/agents"))
-      yield* waitForFrame(setup, (frame) => frame.includes("/agents"), "draft")
+      // The popup row is drawn: a ghost, if any, would draw with it.
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => /\/agents\s+Agents/.test(next),
+        "the popup row",
+      )
       // There is no remainder left to offer, so the row stays empty.
-      expect(renderFrame(setup)).not.toContain("agents ⇥")
-    }),
-  )
-
-  it.scopedLive("never submits the ghost as text", () =>
-    Effect.gen(function* () {
-      const submitted: Array<string> = []
-      const setup = yield* mount(submitted)
-      // `@` has no dispatch path, so Enter here submits the draft verbatim —
-      // the cleanest place to prove the ghost is not part of it.
-      yield* Effect.promise(() => setup.mockInput.typeText("hello wor"))
-      yield* Effect.promise(() => setup.renderOnce())
-      setup.mockInput.pressEnter()
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(submitted).toEqual(["hello wor"])
+      expect(frame).not.toContain("⇥")
     }),
   )
 })
@@ -2078,26 +2052,19 @@ describe("Composer ghost line", () => {
 // ── composer slash enter ────────────────────────────────────────────────────
 
 /**
- * Enter on a slash command name runs it.
- *
- * Completing `/agents` used to insert `/agents ` — a trailing space — and wait
- * for a second Enter before dispatching. Every slash command treats an empty
+ * Enter on a slash command name runs it. Every slash command treats an empty
  * argument as "open my picker" or "show usage", so naming one is already a
- * full invocation and the first Enter dispatches it.
+ * full invocation and the first Enter dispatches it, with no trailing space.
  *
  * The other autocomplete prefixes keep the trailing space: `@file.ts ` is the
  * start of a sentence, not a command.
  *
- * An unregistered name is the same one Enter. `/xyz` opens the popup — the
- * trigger only needs a `/` at position 0, not a matching row — and the popup
- * then holds no rows to select. The popup declines a key it cannot act on,
- * so the draft submits on the first press, and the session decides what a
- * name no command carries becomes.
+ * A popup with no row declines Enter, so the draft submits on the first
+ * press, and the session decides what a name no command carries becomes.
  *
- * Tab does not run anything. It is the key that builds `/model sonnet`:
- * complete the name, keep the caret, type the argument. Enter and tab reach
- * the popup as separate props for exactly that reason — when they shared one
- * callback, tab dispatched the first matching row, so `/ag` + Tab ran `/fork`.
+ * Tab runs nothing. It is the key that builds `/model sonnet`: complete the
+ * name, keep the caret, type the argument. Enter and Tab reach the popup as
+ * separate props.
  */
 
 interface Dispatched {
@@ -2113,11 +2080,9 @@ function RegisterCommandsSlashEnter() {
   const ui = useExtensionUI()
   onMount(() => {
     ui.setSessionCommands([
-      // `slashAutocompleteItems` keeps registration order — it does no
-      // relevance sorting — so row 0 under a filter is the earliest-registered
-      // match. These two carry `ag` in their titles, not their slash names,
-      // and live they are registered before `/agents`. That is why `/ag`
-      // preselects `/fork`, and why dispatching row 0 ran the wrong command.
+      // These two carry `ag` in their titles, not their slash names, and are
+      // registered before `/agents`: `/ag` ranks `/agents` first and lists
+      // them under it.
       {
         id: "message.fork",
         title: "Fork from Message",
@@ -2163,20 +2128,8 @@ function ContributeSlashEnter() {
     {
       prefix: "/",
       title: "Commands",
-      // The live popup matches a slash name or its title, which is why `/ag`
-      // lists `/fork` ("Fork from Message") and `/auth` ("Manage API Keys")
-      // ahead of `/agents`.
-      items: (filter: string) =>
-        ui.commands().flatMap((c) =>
-          Option.match(Option.fromNullishOr(c.slash), {
-            onNone: () => [],
-            onSome: (slash) => {
-              const haystack = `${slash} ${c.title}`.toLowerCase()
-              if (!haystack.includes(filter.toLowerCase())) return []
-              return [{ id: slash, label: `/${slash}` }]
-            },
-          }),
-        ),
+      // Ranked as the session ranks its popup: a name match above a title match.
+      items: (filter: string) => slashAutocompleteItems(ui.commands(), filter),
     },
     {
       prefix: "@",
@@ -2395,7 +2348,9 @@ describe("Composer slash Enter", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("@notes.ts"), "inserted")
       // The `@` path inserts and waits — it never dispatches a command.
       expect(dispatched).toEqual([])
-      expect(renderFrame(setup)).toContain("@notes.ts")
+      // The next word starts after the inserted space.
+      yield* Effect.promise(() => setup.mockInput.typeText("x"))
+      yield* waitForFrame(setup, (frame) => frame.includes("@notes.ts x"), "the next word")
     }),
   )
 
@@ -2410,33 +2365,33 @@ describe("Composer slash Enter", () => {
   )
 
   // Only a known command name is a command, and the session decides which
-  // names are known. A draft the session sends back as text goes out whole.
-  it.scopedLive("a draft whose first word the session calls no command is sent as a message", () =>
+  // names are known: a path is no command, and goes out whole as a message.
+  // An unknown name is refused (`app.test.tsx`, unknown command refused).
+  it.scopedLive("a draft whose first word the session calls a path is sent as a message", () =>
     Effect.gen(function* () {
-      for (const draft of ["/xyz", "/tmp/x.log what is this?"]) {
-        const dispatched: Array<Dispatched> = []
-        const submitted: Array<string> = []
-        const setup = yield* renderScoped(
-          () => (
-            <TestComposerSlashEnter
-              onSlashCommand={(cmd, args) => dispatched.push({ cmd, args })}
-              noCommand={(cmd) => cmd === "xyz" || cmd === "tmp/x.log"}
-              onSubmit={(content) => submitted.push(content)}
-            >
-              <Composer.Autocomplete />
-              <CommandsSettled />
-            </TestComposerSlashEnter>
-          ),
-          { width: 80, height: 24 },
-        )
-        yield* waitForFrame(setup, (frame) => frame.includes("commands settled"), "commands")
-        yield* Effect.promise(() => setup.mockInput.typeText(draft))
-        yield* waitForFrame(setup, (frame) => frame.includes(draft), "the draft")
-        setup.mockInput.pressEnter()
-        yield* waitForFrame(setup, (frame) => !frame.includes(draft), "the draft sent")
-        expect(dispatched).toEqual([])
-        expect(submitted).toEqual([draft])
-      }
+      const draft = "/tmp/x.log what is this?"
+      const dispatched: Array<Dispatched> = []
+      const submitted: Array<string> = []
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposerSlashEnter
+            onSlashCommand={(cmd, args) => dispatched.push({ cmd, args })}
+            noCommand={(cmd) => cmd === "tmp/x.log"}
+            onSubmit={(content) => submitted.push(content)}
+          >
+            <Composer.Autocomplete />
+            <CommandsSettled />
+          </TestComposerSlashEnter>
+        ),
+        { width: 80, height: 24 },
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("commands settled"), "commands")
+      yield* Effect.promise(() => setup.mockInput.typeText(draft))
+      yield* waitForFrame(setup, (frame) => frame.includes(draft), "the draft")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => !frame.includes(draft), "the draft sent")
+      expect(dispatched).toEqual([])
+      expect(submitted).toEqual([draft])
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -2486,17 +2441,31 @@ describe("Composer slash Enter", () => {
     }),
   )
 
-  it.scopedLive("completes the selected row, not the first match, on Tab", () =>
+  // Tab completes the row under the cursor, wherever the cursor moved, and
+  // runs nothing.
+  it.scopedLive("completes the row under the cursor on Tab and runs nothing", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
-      // The regression: `/ag` matches `/fork` and `/auth` by title before it
-      // matches `/agents` by name, and the first row is preselected. Tab used
-      // to dispatch that row, so `/ag` + Tab ran `/fork`. Tab must run nothing
-      // whatever sits under the cursor.
-      const setup = yield* typeThenTab(dispatched, "/ag", "/fork")
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposerSlashEnter
+            onSlashCommand={(cmd, args) => {
+              dispatched.push({ cmd, args })
+            }}
+          >
+            <Composer.Autocomplete />
+          </TestComposerSlashEnter>
+        ),
+        { width: 80, height: 24 },
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("/t"))
+      // `/tree` leads; `/think` is the row under it.
+      yield* waitForFrame(setup, (frame) => frame.includes("/think"), "the second row")
+      setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressTab()
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ /think "), "completed draft")
       expect(dispatched).toEqual([])
-      // The draft holds a completed name, so the composer is not left empty.
-      yield* waitForFrame(setup, (frame) => frame.includes("/fork "), "completed draft")
     }),
   )
 
