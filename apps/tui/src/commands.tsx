@@ -205,6 +205,8 @@ interface PaletteItem {
   readonly description?: string
   readonly category?: string
   readonly shortcut?: string
+  /** The command's slash name and aliases: the search finds the row by them too. */
+  readonly slashNames?: ReadonlyArray<string>
   readonly onSelect: () => void
 }
 
@@ -241,7 +243,7 @@ const closedPalette: CommandPaletteState = { levelStack: [], category: "" }
 const filterItems = (items: readonly PaletteItem[], query: string): readonly PaletteItem[] => {
   if (query.length === 0) return items
   return matchSorter(items, query, {
-    keys: ["title", "description", "category"],
+    keys: ["title", "slashNames", "description", "category"],
   })
 }
 
@@ -411,6 +413,10 @@ export function CommandPalette() {
           description: cmd.description,
           category: cmd.category ?? "General",
           shortcut: cmd.keybind,
+          slashNames: [
+            ...Option.toArray(Option.fromUndefinedOr(cmd.slash)),
+            ...(cmd.aliases ?? []),
+          ],
           onSelect: () => {
             cmd.onSelect()
             closePalette()

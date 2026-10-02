@@ -5334,6 +5334,34 @@ describe("TUI renderer surfaces", () => {
       for (const row of paletteRows) expect(row).not.toContain("...")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A command has its title and its slash names; the palette search finds it
+  // by either, as the `/` popup finds it by the slash name.
+  it.scopedLive("the palette search finds a command by its slash name and its alias", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession(createMockRuntime(), { width: 80 })
+      for (const [query, title] of [
+        ["frecency", "Reset Autocomplete Ranking"],
+        ["clear", "New Session"],
+      ] as const) {
+        view.setup.mockInput.pressKey("p", { ctrl: true })
+        yield* waitForFrame(view.setup, (frame) => frame.includes("[All]"), "the palette")
+        yield* Effect.promise(() => view.setup.mockInput.typeText(query))
+        yield* waitForFrame(
+          view.setup,
+          (frame) => frame.includes(`› ${query}`) && frame.includes(title),
+          `${title} found by ${query}`,
+        )
+        view.setup.mockInput.pressEscape()
+        yield* waitForFrame(
+          view.setup,
+          (frame) => !frame.includes(`› ${query}`),
+          "the query cleared",
+        )
+        view.setup.mockInput.pressEscape()
+        yield* waitForFrame(view.setup, (frame) => !frame.includes("[All]"), "the palette closed")
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // One dock slot: the status row stays under the input, and the slash popup,
   // the palette and the panes all dock under it.
   it.scopedLive("every docked pane, the slash popup included, docks under the status row", () =>
