@@ -398,10 +398,9 @@ describe("transformPayload — system content relocation", () => {
   it.effect("splits IDENTITY+rest blocks so the rest gets relocated", () =>
     Effect.gen(function* () {
       // OpenCode's system.transform hook produces a single block of
-      // shape `IDENTITY + "\n\n<real instructions>"`. Pre-fix, the
-      // partition treated the whole block as identity-only and silently
-      // dropped <real instructions>. The remainder must survive into
-      // the first user message via relocation.
+      // shape `IDENTITY + "\n\n<real instructions>"`. The partition keeps
+      // only the bare identity prefix in the system prompt; the remainder
+      // must survive into the first user message via relocation.
       const payload = {
         model: "claude-opus-4-6",
         max_tokens: 4096,
@@ -422,11 +421,10 @@ describe("transformPayload — system content relocation", () => {
 
   it.effect("billing hash matches the post-relocation first-user text", () =>
     Effect.gen(function* () {
-      // The prior order computed billing before relocation, so the hash
-      // on the wire didn't match what the API actually saw. Compare
-      // against a control payload with the same POST-relocation
-      // first-user text but no system to relocate — the billing hash
-      // header must be identical.
+      // Billing is computed after relocation, so the hash on the wire
+      // matches the first-user text the API sees. Compare against a
+      // control payload with the same POST-relocation first-user text but
+      // no system to relocate — the billing hash header must be identical.
       const relocatedPayload = yield* transformPayload({
         model: "claude-opus-4-6",
         max_tokens: 4096,
@@ -949,10 +947,6 @@ describe("keychainTransformClient — credential failure through the SDK", () =>
       }),
   )
 })
-// Suppress unused-warning for Layer/Ref imports kept for symmetry with
-// other test files in this directory.
-void Layer
-void Ref
 
 // ── credential cache ────────────────────────────────────────────────────────
 
@@ -1054,9 +1048,6 @@ describe("Anthropic credential cache — keychain miss falls through to refresh"
     }),
   )
 })
-// Suppress unused-warning for Layer/Ref imports (intentional helper imports)
-void Layer
-void Ref
 
 // ── oauth refresh ───────────────────────────────────────────────────────────
 
@@ -1198,9 +1189,9 @@ describe("updateCredentialBlob", () => {
 
 /**
  * Tests for the Claude Code billing-header signing helpers — the
- * algorithm Anthropic's OAuth-billing validator checks against. The
- * placeholder `cch=c5e82` we shipped before this surface tripped the
- * validator on every request, surfacing as `InvalidKey` from the SDK.
+ * algorithm Anthropic's OAuth-billing validator checks against. A header
+ * the validator rejects (such as a fixed `cch` placeholder) fails every
+ * request, surfacing as `InvalidKey` from the SDK.
  */
 
 // Each helper provides the host's crypto to the signing step it names.
@@ -1430,30 +1421,31 @@ describe("AnthropicPlatform.fromSetup", () => {
 // ── model driver ────────────────────────────────────────────────────────────
 
 /**
- * AnthropicExtension model-driver wiring — extension-level regression
- * coverage for `buildAnthropicModelDriver` / `resolveModel`.
+ * AnthropicExtension model-driver wiring — extension-level coverage for
+ * `buildAnthropicModelDriver` / `resolveModel`.
  *
- * The leaf-service suites cover services in isolation. Those passed even when two HIGH-severity
- * wiring bugs slipped in:
+ * The leaf-service suites cover services in isolation. These tests pin two
+ * wiring rules the leaf suites cannot see:
  *
- *   1. **Cache-Ref lifetime**: `resolveModel` runs once per model resolution.
- *      Allocating `Ref<CredentialCacheCell>` inside
- *      `makeOauthAnthropicLayer` gave each request a fresh empty
- *      cache — credential reuse was silently dead.
- *   2. **API-key path wrapped in buildKeychainTransformClient**: only OAuth should
- *      flow through `buildKeychainTransformClient` (which injects Claude Code OAuth
- *      billing-header system blocks + identity prefix). Extending the
- *      wrapper to the API-key branch is incorrect.
+ *   1. **Cache-Ref lifetime**: `resolveModel` runs once per model resolution,
+ *      and every resolution reads the one `Ref<CredentialCacheCell>` the
+ *      driver was built with. `makeOauthAnthropicLayer` must not allocate a
+ *      cell of its own, or each request starts with an empty cache.
+ *   2. **Only OAuth is wrapped in buildKeychainTransformClient**: it injects
+ *      the Claude Code OAuth billing-header system blocks and the identity
+ *      prefix. The API-key branch is the plain SDK.
  *
- * Seam-only probes (sibling `layerFromRef`) are coverage theater — the
- * production layer is never actually built or invoked. This file drives
- * one real `LanguageModel.generateText` call through each layer with a
- * captured fake `fetch`, then asserts on the outbound request shape.
- * That proves the resolved layer's production wiring uses the
- * test-owned cell and applies the right keychain transforms (or
- * doesn't, on the API-key branch).
+ * Each test drives one real `LanguageModel.generateText` call through the
+ * resolved layer with a captured fake `fetch`, then asserts on the outbound
+ * request shape: the production wiring uses the test-owned cell and applies
+ * the keychain transforms only on the OAuth branch.
  */
 const FUTURE_MS = 1_800_000_000_000
+/** A stored sign-in the cache holds, written at `at`. */
+const makeDurableCell = (
+  creds: ClaudeCredentials,
+  at: number,
+): CredentialCacheCell<ClaudeCredentials> => ({ _tag: "Durable", creds, at, invalidated: false })
 const testPlatform = AnthropicPlatform.of({
   platform: "darwin",
   home: "/nonexistent/gent-test-home",
@@ -1690,12 +1682,12 @@ describe("Anthropic chronological context", () => {
         for (const authInfo of [makeApiAuthInfo("test-key"), makeOAuthInfo()]) {
           const credentialCellRef = yield* SynchronizedRef.make<
             CredentialCacheCell<ClaudeCredentials>
-          >({
-            _tag: "Durable",
-            creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
-            at: yield* Clock.currentTimeMillis,
-            invalidated: false,
-          })
+          >(
+            makeDurableCell(
+              { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
+              yield* Clock.currentTimeMillis,
+            ),
+          )
           const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
           const model = yield* driver.resolveModel("claude-opus-4-6", authInfo)
           for (const mode of ContextMode.literals) {
@@ -1778,12 +1770,12 @@ describe("Anthropic prompt-cache lifetime", () => {
       for (const authInfo of [makeApiAuthInfo("test-key"), makeOAuthInfo()]) {
         const credentialCellRef = yield* SynchronizedRef.make<
           CredentialCacheCell<ClaudeCredentials>
-        >({
-          _tag: "Durable",
-          creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
-          at: yield* Clock.currentTimeMillis,
-          invalidated: false,
-        })
+        >(
+          makeDurableCell(
+            { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
+            yield* Clock.currentTimeMillis,
+          ),
+        )
         const driver = yield* buildAnthropicModelDriver(
           credentialCellRef,
           Option.none(),
@@ -1828,20 +1820,7 @@ describe("Anthropic prompt-cache lifetime", () => {
   )
 
   it.live(
-    "a rendered request asks for the 1-hour cache on every marker, on both sign-in paths",
-    () =>
-      Effect.gen(function* () {
-        for (const markers of yield* renderedMarkers("1h")) {
-          expect(markers.length).toBeGreaterThanOrEqual(2)
-          for (const marker of markers) {
-            expect(marker).toBe('"cache_control":{"type":"ephemeral","ttl":"1h"}')
-          }
-        }
-      }).pipe(Effect.timeout("5 seconds")),
-  )
-
-  it.live(
-    "a child's markers ask for 5 minutes, its shared part 1 hour; a root's ask for 1 hour",
+    "a child's markers ask for 5 minutes, its shared part 1 hour; a root's ask for 1 hour; the 5-minute switch sets every marker",
     () =>
       Effect.gen(function* () {
         const sharedPart = `# Shared\n\n${"Instructions every agent reads. ".repeat(160)}`
@@ -1866,12 +1845,16 @@ describe("Anthropic prompt-cache lifetime", () => {
           expect(markers.length).toBeGreaterThanOrEqual(2)
           for (const marker of markers) expect(marker).toBe(hour)
         }
-        // The 5-minute switch still sets every marker, a child's shared part too.
-        for (const markers of yield* renderedMarkers("5m", sharedPrompt, {
-          cacheKey: "child-session",
-          child: true,
-        })) {
-          for (const marker of markers) expect(marker).toBe(minutes)
+        // The 5-minute switch sets every marker of a root and of a child,
+        // a child's shared part too.
+        for (const hints of [
+          { cacheKey: "session-cache-key" },
+          { cacheKey: "child-session", child: true },
+        ]) {
+          for (const markers of yield* renderedMarkers("5m", sharedPrompt, hints)) {
+            expect(markers.length).toBeGreaterThanOrEqual(2)
+            for (const marker of markers) expect(marker).toBe(minutes)
+          }
         }
       }).pipe(Effect.timeout("5 seconds")),
   )
@@ -1882,17 +1865,6 @@ describe("Anthropic prompt-cache lifetime", () => {
       // to read its entry back.
       for (const markers of yield* renderedMarkers("1h", conversation, {})) {
         expect(markers).toEqual([])
-      }
-    }).pipe(Effect.timeout("5 seconds")),
-  )
-
-  it.live("the 5-minute switch renders every marker with the 5-minute lifetime", () =>
-    Effect.gen(function* () {
-      for (const markers of yield* renderedMarkers("5m")) {
-        expect(markers.length).toBeGreaterThanOrEqual(2)
-        for (const marker of markers) {
-          expect(marker).toBe('"cache_control":{"type":"ephemeral","ttl":"5m"}')
-        }
       }
     }).pipe(Effect.timeout("5 seconds")),
   )
@@ -1916,44 +1888,19 @@ type JsonRecordDriver = Schema.Schema.Type<typeof JsonRecordSchemaDriver>
 const parsePayload = (body: string): JsonRecordDriver =>
   Schema.decodeSync(JsonRecordSchemaDriver)(body)
 describe("buildAnthropicModelDriver — OAuth path uses the external credential cell", () => {
-  it.live("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", () =>
-    Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
-      // Pre-seed the cred Ref directly (test owns it). If
-      // `makeOauthAnthropicLayer` regressed to allocating its own internal
-      // Ref per call, the
-      // production credential service would NOT see this seeded creds —
-      // the IO path would try to read keychain, fail/refresh, etc. We
-      // assert the captured Authorization header reflects the seed, so
-      // any regression that ignores the external Ref breaks the test.
-      yield* SynchronizedRef.set(credentialCellRef, {
-        _tag: "Durable",
-        creds: { accessToken: "seeded-bearer-token", refreshToken: "r", expiresAt: FUTURE_MS },
-        at: yield* Clock.currentTimeMillis,
-        invalidated: false,
-      })
-      const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      expect(fetchState.captured.length).toBeGreaterThan(0)
-      const lastReq = fetchState.captured[fetchState.captured.length - 1]!
-      expect(lastReq.headers["authorization"]).toBe("Bearer seeded-bearer-token")
-    }),
-  )
   it.live(
     "OAuth resolveModel layer applies buildKeychainTransformClient transforms (system identity prefix)",
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-        yield* SynchronizedRef.set(credentialCellRef, {
-          _tag: "Durable",
-          creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
-          at: yield* Clock.currentTimeMillis,
-          invalidated: false,
-        })
+        yield* SynchronizedRef.set(
+          credentialCellRef,
+          makeDurableCell(
+            { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
+            yield* Clock.currentTimeMillis,
+          ),
+        )
         const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
         const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
@@ -1974,28 +1921,29 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
       Effect.gen(function* () {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-        yield* SynchronizedRef.set(credentialCellRef, {
-          _tag: "Durable",
-          creds: { accessToken: "first-token", refreshToken: "r", expiresAt: FUTURE_MS },
-          at: yield* Clock.currentTimeMillis,
-          invalidated: false,
-        })
+        yield* SynchronizedRef.set(
+          credentialCellRef,
+          makeDurableCell(
+            { accessToken: "first-token", refreshToken: "r", expiresAt: FUTURE_MS },
+            yield* Clock.currentTimeMillis,
+          ),
+        )
         const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
         const model1 = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState1 = makeFakeFetchState()
+        // The first request sends the sign-in the test-owned cell holds, not
+        // one read from the keychain.
         yield* runOne(model1, fetchState1)
         expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
-        // Mutate the test-owned Ref between calls. If the second
-        // `resolveModel` allocated a fresh internal Ref (the  regression),
-        // the second request would still use "first-token" — instead of
-        // observing this update through the shared Ref. Asserting the second
-        // request uses "second-token" pins the Ref-sharing semantics.
-        yield* SynchronizedRef.set(credentialCellRef, {
-          _tag: "Durable",
-          creds: { accessToken: "second-token", refreshToken: "r", expiresAt: FUTURE_MS },
-          at: yield* Clock.currentTimeMillis,
-          invalidated: false,
-        })
+        // Every `resolveModel` reads the one cell the driver was built with,
+        // so the second request sends the token the test writes between calls.
+        yield* SynchronizedRef.set(
+          credentialCellRef,
+          makeDurableCell(
+            { accessToken: "second-token", refreshToken: "r", expiresAt: FUTURE_MS },
+            yield* Clock.currentTimeMillis,
+          ),
+        )
         const model2 = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState2 = makeFakeFetchState()
         yield* runOne(model2, fetchState2)
@@ -2071,12 +2019,13 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
       )
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      yield* SynchronizedRef.set(credentialCellRef, {
-        _tag: "Durable",
-        creds: { accessToken: "held-access", refreshToken: "held-refresh", expiresAt: 0 },
-        at: 0,
-        invalidated: false,
-      })
+      yield* SynchronizedRef.set(
+        credentialCellRef,
+        makeDurableCell(
+          { accessToken: "held-access", refreshToken: "held-refresh", expiresAt: 0 },
+          0,
+        ),
+      )
       const driver = buildAnthropicModelDriverLive(
         credentialCellRef,
         Option.none(),
@@ -2174,12 +2123,12 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
                 })),
               ),
           }
-          const cellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>({
-            _tag: "Durable",
-            creds: { accessToken: "old-access", refreshToken: "old-refresh", expiresAt: 0 },
-            at: 0,
-            invalidated: false,
-          })
+          const cellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+            makeDurableCell(
+              { accessToken: "old-access", refreshToken: "old-refresh", expiresAt: 0 },
+              0,
+            ),
+          )
           const driver = buildAnthropicModelDriverLive(
             cellRef,
             Option.none(),
@@ -2577,12 +2526,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       )
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      yield* SynchronizedRef.set(credentialCellRef, {
-        _tag: "Durable",
-        creds: accountB,
-        at: 0,
-        invalidated: false,
-      })
+      yield* SynchronizedRef.set(credentialCellRef, makeDurableCell(accountB, 0))
       const driver = buildAnthropicModelDriverLive(
         credentialCellRef,
         Option.none(),
@@ -2643,12 +2587,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         const heldCreds = { accessToken: "held-access", refreshToken: "held-refresh", expiresAt: 0 }
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-        yield* SynchronizedRef.set(credentialCellRef, {
-          _tag: "Durable",
-          creds: heldCreds,
-          at: 0,
-          invalidated: false,
-        })
+        yield* SynchronizedRef.set(credentialCellRef, makeDurableCell(heldCreds, 0))
         const driver = buildAnthropicModelDriverLive(
           credentialCellRef,
           Option.none(),
@@ -2691,12 +2630,10 @@ describe("buildAnthropicModelDriver — credential order", () => {
   it.live("a stored Claude Code sign-in beats ANTHROPIC_API_KEY", () =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
-        {
-          _tag: "Durable",
-          creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
-          at: yield* Clock.currentTimeMillis,
-          invalidated: false,
-        },
+        makeDurableCell(
+          { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+          yield* Clock.currentTimeMillis,
+        ),
       )
       const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.some("sk-env-key"))
       const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
@@ -2715,7 +2652,9 @@ describe("buildAnthropicModelDriver — credential order", () => {
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-stored"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
-      expect(fetchState.captured.at(-1)!.headers["x-api-key"]).toBe("sk-stored")
+      const headers = fetchState.captured.at(-1)!.headers
+      expect(headers["x-api-key"]).toBe("sk-stored")
+      expect(headers["authorization"]).toBeUndefined()
     }),
   )
   it.live("ANTHROPIC_API_KEY applies when nothing is stored", () =>
@@ -2747,12 +2686,10 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
   ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
-        {
-          _tag: "Durable",
-          creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
-          at: yield* Clock.currentTimeMillis,
-          invalidated: false,
-        },
+        makeDurableCell(
+          { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+          yield* Clock.currentTimeMillis,
+        ),
       )
       const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel(modelName, authInfo, hints)
@@ -3029,12 +2966,10 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
   ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
-        {
-          _tag: "Durable",
-          creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
-          at: yield* Clock.currentTimeMillis,
-          invalidated: false,
-        },
+        makeDurableCell(
+          { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+          yield* Clock.currentTimeMillis,
+        ),
       )
       const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
       // A conversation turn names its session as the cache key; the driver marks only such a request.
@@ -3335,12 +3270,12 @@ describe("buildAnthropicModelDriver — thinking replay", () => {
       for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
         const credentialCellRef = yield* SynchronizedRef.make<
           CredentialCacheCell<ClaudeCredentials>
-        >({
-          _tag: "Durable",
-          creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
-          at: yield* Clock.currentTimeMillis,
-          invalidated: false,
-        })
+        >(
+          makeDurableCell(
+            { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+            yield* Clock.currentTimeMillis,
+          ),
+        )
         const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
         const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo, {
           reasoning: "high",
@@ -3397,12 +3332,12 @@ describe("buildAnthropicModelDriver — thinking replay", () => {
         Effect.gen(function* () {
           const credentialCellRef = yield* SynchronizedRef.make<
             CredentialCacheCell<ClaudeCredentials>
-          >({
-            _tag: "Durable",
-            creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
-            at: yield* Clock.currentTimeMillis,
-            invalidated: false,
-          })
+          >(
+            makeDurableCell(
+              { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+              yield* Clock.currentTimeMillis,
+            ),
+          )
           const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
           const model = yield* driver.resolveModel(modelName, authInfo, hints)
           const state = makeFakeFetchState()
@@ -3450,19 +3385,6 @@ describe("buildAnthropicModelDriver — thinking replay", () => {
   )
 })
 describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
-  it.live("API-key resolveModel layer sends x-api-key (no Bearer)", () =>
-    Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
-      const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      const headers = fetchState.captured.at(-1)!.headers
-      expect(headers["x-api-key"]).toBe("sk-test-1234")
-      expect(headers["authorization"]).toBeUndefined()
-    }),
-  )
   it.live(
     "API-key resolveModel does NOT inject buildKeychainTransformClient transforms (no SYSTEM_IDENTITY_PREFIX)",
     () =>
