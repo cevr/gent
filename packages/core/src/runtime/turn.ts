@@ -529,16 +529,15 @@ interface StreamFailureNote {
  * error. The end names the model: the step ran on it, settled or not. A
  * `note` adds to the error; one the turn recovers from makes it a notice.
  */
-const reportStreamFailure = <E>(
+const reportStreamFailure = (
   params: {
     messageId: MessageId
     step: number
     sessionId: SessionId
     branchId: BranchId
     modelId: ModelIdType
-    formatStreamError: (streamError: E) => string
   },
-  streamError: E,
+  streamError: ProviderError,
   message: string,
   note: Option.Option<StreamFailureNote> = Option.none(),
 ) =>
@@ -554,7 +553,7 @@ const reportStreamFailure = <E>(
         outcome: "Failed",
       }),
     )
-    const error = params.formatStreamError(streamError)
+    const error = streamError.message
     yield* publishEventOrDie(
       Option.match(note, {
         onNone: () =>
@@ -581,7 +580,6 @@ export const collectModelTurnResponse = (params: {
   branchId: BranchId
   modelId: ModelIdType
   activeStream: ActiveStreamHandle
-  formatStreamError: (streamError: ProviderError) => string
 }) =>
   Effect.gen(function* () {
     const responseParts: Response.AnyPart[] = []
@@ -640,7 +638,6 @@ export const collectFailedModelTurnResponse = (params: {
   branchId: BranchId
   modelId: ModelIdType
   activeStream: ActiveStreamHandle
-  formatStreamError: (streamError: ProviderError) => string
   /** The provider refused the request as too long, and the turn will hand off and retry. */
   contextOverflow: boolean
   /** The provider refused as too long a window this turn already handed off. */
@@ -1500,7 +1497,6 @@ type ModelTurnSource = {
   /** The chars/4 estimate of the system prompt, notices and tools this request carries. */
   readonly overheadTokens: number
   readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
-  readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
   ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R | EventStore>
@@ -1835,7 +1831,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
           }),
       ),
     ),
-    formatStreamError: causeMessage,
     collect: <R>(
       effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
     ) =>
@@ -1869,7 +1864,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             branchId: params.branchId,
             modelId: resolved.modelId,
             activeStream: params.activeStream,
-            formatStreamError: causeMessage,
             // One recovery per refusal: a step that already handed off, or the
             // last step of the budget, fails the turn as any failure does.
             contextOverflow:
@@ -2610,7 +2604,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           branchId: scope.branchId,
           modelId: params.resolved.modelId,
           activeStream: params.activeStream,
-          formatStreamError: source.formatStreamError,
         }),
       )
 

@@ -289,7 +289,6 @@ describe("agent turn response collectors", () => {
         branchId,
         modelId: ModelId.make("test/model"),
         activeStream,
-        formatStreamError: (error) => error.message,
       }).pipe(Effect.flip, Effect.provide(layer))
 
       expect(error._tag).toBe("ProviderError")
@@ -308,7 +307,6 @@ describe("agent turn response collectors", () => {
         sessionId,
         branchId,
         activeStream,
-        formatStreamError: (error) => error.message,
         contextOverflow: false,
       }).pipe(Effect.provide(layer))
 
@@ -333,12 +331,12 @@ describe("agent turn response collectors", () => {
         branchId,
         modelId: ModelId.make("test/model"),
         activeStream,
-        formatStreamError: (error) => error.message,
       }).pipe(Effect.provide(layer))
 
       expect(collected.streamFailed).toBe(true)
       expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["text"])
-      expect((yield* Ref.get(events)).map((event) => event._tag)).toContain("ErrorOccurred")
+      const errors = (yield* Ref.get(events)).filter(Schema.is(ErrorOccurred))
+      expect(errors.map((event) => event.error)).toEqual(["late boom"])
     }),
   )
 })
