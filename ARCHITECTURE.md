@@ -1083,7 +1083,13 @@ declines every interaction unless `--approve-all` is set (`apps/tui/AGENTS.md`).
 When policy selects `cell` for a native model turn, only `cell` is advertised.
 ResolvedTurnContext keeps separate model and host binding maps. Both derive from
 the same policy result. The full host map supplies cell callbacks and recovery;
-the outer map cannot directly dispatch unadvertised host tools. Tool discovery
+the outer map cannot directly dispatch unadvertised host tools. A model that
+calls such a tool, or any other tool its profile registers but the turn did not
+advertise (a denied one), reads a failed result (`Unknown tool: <id>`) and the
+turn goes on: the reply decodes against every registered tool, while the
+request's `toolChoice` (`oneOf`, the advertised names) keeps its declarations
+as they were (`runtime/turn.ts`). A name no extension registers still fails the
+step's stream, as Effect AI cannot decode it. Tool discovery
 returns the selected declaration's input schema and usage guidelines. External
 drivers and turns that do not select `cell` keep their existing tool surface.
 Cancellation saves a failed outer receipt without replaying source. An active
