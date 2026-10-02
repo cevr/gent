@@ -1417,7 +1417,9 @@ the loose result schema); core has no MCP concept. The one Promise edge, the
 `fetch` function an OAuth transport takes, lives in `mcp-boundary.ts`. Config
 is the `mcpServers` object Claude Code, Cursor, and opencode share, in
 `~/.gent/mcp.json` and, for a project root `trustedProjects` names, in
-`<project>/.gent/mcp.json` (a project entry wins by name). A `command` entry
+`<project>/.gent/mcp.json` (a project entry wins by name). Each entry decodes on
+its own: one that does not decode is `misconfigured` with the schema issue as
+its reason, and the file's other servers still run. A `command` entry
 runs over stdio with the process's flat environment, empty values included and
 read in one pass at the first setup, its own `env` winning (its stderr is ignored, so it never
 draws on the TUI). A `url` entry sends its
@@ -1514,7 +1516,7 @@ The read-only `mcp.status` host tool and the `/mcp` slash command report each
 server's transport, tool count, connection, and health: `healthy` (listed or
 connected), `expired` (the server refused the credential; the reason names
 `/mcp login`), `logged-out` (the server refused an OAuth entry that has no
-stored login; the reason names `/mcp login`), `misconfigured` (the entry cannot run: an unset variable),
+stored login; the reason names `/mcp login`), `misconfigured` (the entry cannot run: it does not decode, or names an unset variable),
 `degraded` (a connect, list or call failed in the transport), or `unknown`
 (read from the cache, not yet connected). With no server configured, only
 `/mcp` is registered, and it says where to add one.

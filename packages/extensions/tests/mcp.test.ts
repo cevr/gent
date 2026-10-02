@@ -442,6 +442,64 @@ describe("mcp config", () => {
   )
 
   it.scopedLive(
+    "an entry that does not decode is reported by /mcp, and the file's other servers still run",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const home = path.join(fixture.directory, "home")
+        yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(home, ".gent", "mcp.json"),
+          encodeJson({
+            mcpServers: {
+              user: fixture.stdio(),
+              switched: { enabled: false },
+              typo: { comand: "x" },
+            },
+          }),
+        )
+        const contributions = yield* collectTestContributions(McpExtension.setup, {
+          home,
+          cwd: home,
+        })
+        expect(toolIds(contributions).filter((id) => id.startsWith("mcp.user."))).toHaveLength(5)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+          home,
+          cwd: home,
+        })
+        yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@gent/mcp"),
+          capabilityId: "mcp-command",
+          input: "",
+        })
+        const shown = yield* waitFor(
+          client.message.list({ branchId }),
+          (all) => all.some((message) => messagePartsText(message.parts).includes("- user")),
+          10_000,
+          "the /mcp report",
+        )
+        const report =
+          shown
+            .map((message) => messagePartsText(message.parts))
+            .find((text) => text.includes("- user")) ?? ""
+        expect(report).toContain("- user (stdio): unknown, 5 tools, not connected")
+        for (const name of ["switched", "typo"]) {
+          expect(report).toContain(
+            `- ${name} (auto): misconfigured, 0 tools, not connected\n  config: Missing key at ["command"]; Missing key at ["url"]\n`,
+          )
+        }
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
     "a cold catalog starts the server once at setup; a cached one starts nothing",
     () =>
       Effect.gen(function* () {
