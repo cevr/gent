@@ -3,11 +3,11 @@ import { Effect, Fiber, Stream } from "effect"
 import {
   createRpcHarness,
   LanguageModelLayers,
-  systemTextOf,
   testAgent,
   testTurnExtension,
   textStep,
   toolCallStep,
+  turnRequestText,
 } from "@gent/core/test-utils"
 import SessionNotesExtension from "../extensions/session-notes.js"
 
@@ -19,17 +19,17 @@ import SessionNotesExtension from "../extensions/session-notes.js"
 
 describe("session notes reference extension", () => {
   it.scopedLive(
-    "a note the model adds reaches the slash request and the next turn's prompt",
+    "a note the model adds reaches the slash request and the next turn's notice",
     () =>
       Effect.gen(function* () {
-        const prompts: Array<string> = []
+        const prompts: Array<ReturnType<typeof turnRequestText>> = []
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           toolCallStep("session_note_add", { text: "ship the authoring loop" }),
           textStep("noted"),
           {
             ...textStep("you noted one thing"),
             assertOptions: (options) => {
-              prompts.push(systemTextOf(options.prompt))
+              prompts.push(turnRequestText(options.prompt))
             },
           },
         ])
@@ -86,8 +86,10 @@ describe("session notes reference extension", () => {
         yield* Fiber.join(second)
         yield* controls.assertDone
         expect(prompts).toHaveLength(1)
-        // The projection renders each note as a "- " line in the system text.
-        expect(prompts.at(-1)).toContain("- ship the authoring loop")
+        // Each note is a "- " line in a notice after the conversation, never in
+        // the cached system prompt.
+        expect(prompts.at(-1)?.notices).toContain("- ship the authoring loop")
+        expect(prompts.at(-1)?.systemPrompt).not.toContain("ship the authoring loop")
       }).pipe(Effect.timeout("8 seconds")),
     10_000,
   )
