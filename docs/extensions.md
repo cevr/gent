@@ -44,9 +44,9 @@ For the smallest complete product loop, see
 `examples/extensions/session-notes.ts`. It is still one file, but covers the
 real shape an author reaches for after the first tool: process-scoped state,
 a model-callable tool, a slash-presented request, and a turn projection hook.
-Its regression test loads the file through the public package path and executes
-the contributed tool and hook under the real resource layer while checking the
-slash request through the registry surface.
+Its regression test (`examples/tests/session-notes.test.ts`) loads the file and
+runs its tool, slash request and hooks over the RPC path, under the real
+resource layer.
 
 ## Named Concepts
 
@@ -337,32 +337,38 @@ a session goes in `notices`, which ride after the conversation and are never
 cached (`examples/extensions/session-notes.ts` shows its notes this way).
 
 ```ts
-import { defineExtension, ExtensionContext, ExtensionHost } from "@gent/core/extensions/api"
-import { Effect } from "effect"
+import { defineExtension, ExtensionHost } from "@gent/core/extensions/api"
+import { DateTime, Effect } from "effect"
 
 export default defineExtension({
   id: "status-ext",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.on("turnProjection", () =>
-      Effect.succeed({
-        promptSections: [{ id: "status", content: "ready", priority: 0 }],
-        toolPolicy: { include: ["status"] },
+      Effect.gen(function* () {
+        const today = DateTime.formatIsoDateUtc(yield* DateTime.now)
+        return {
+          // Standing: the same bytes at every step
+          promptSections: [{ id: "status", content: "Keep status lines short.", priority: 0 }],
+          // Changing: rides after the conversation
+          notices: [{ id: "status-date", content: `Today: ${today}`, keys: [] }],
+        }
       }),
     )
-    yield* host.on("turnAfter", () =>
-      Effect.gen(function* () {
-        const ctx = yield* ExtensionContext
-        yield* ctx.Session.send({
-          delivery: "queue",
-          sourceId: "status-ext",
-          content: "status updated",
-        })
-      }),
+    // Records the turn and starts nothing
+    yield* host.on("turnAfter", ({ durationMs, interrupted }) =>
+      Effect.logDebug("status-ext: turn ended").pipe(
+        Effect.annotateLogs({ durationMs, interrupted }),
+      ),
     )
   }),
 })
 ```
+
+A `turnAfter` hook that sends a `"queue"` message starts another model turn,
+at full price, and that turn's end runs the hook again. A fixed `sourceId`
+makes the follow-up once per session. Send from `turnAfter` only when the
+model must answer.
 
 Lifecycle extension points are typed hook kinds, not keyed middleware bags:
 `systemPrompt`, `turnProjection`, `turnAfter`, `loopOpen` (a branch's loop was
@@ -473,9 +479,10 @@ builtin).
 
 | Extension                              | Demonstrates                                  |
 | -------------------------------------- | --------------------------------------------- |
-| `packages/extensions/src/agents.ts`    | `tool` + turn projection prompt sections      |
+| `packages/extensions/src/agents.ts`    | `agent` + turn projection prompt sections     |
 | `packages/extensions/src/mcp.ts`       | tools read at setup + a lazy process resource |
 | `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook  |
+| `examples/extensions/prompt-rules.ts`  | `systemPrompt` hook                           |
 
 ## Surface Invariants
 
@@ -497,6 +504,5 @@ builtin).
   storage Tags, event stores, and process helpers are not public extension API.
 - Tagged-union variant tags are PascalCase. Extension health reports
   `"Healthy"` or `"Degraded"`, and a degraded extension carries
-  `"ActivationFailed"` issues. An extension written against the earlier
-  lowercase spellings (`"healthy"`, `"activation-failed"`) must be updated; match on the tag through
-  the exported schema rather than a string literal where possible.
+  `"ActivationFailed"` or `"ModelCatalogFailed"` issues. Match on the tag
+  through the exported schema rather than a string literal where possible.

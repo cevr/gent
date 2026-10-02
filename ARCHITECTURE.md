@@ -11,7 +11,7 @@ Minimal agent harness. Effect-first. Small seams. One owner per concern.
 - `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
 - `Tool` / `Request` — independent callable leaves for model tools and typed extension RPC. Requests with a `slash:` block also surface as human slash commands.
 - `Resource` — long-lived scoped services and extension-owned state.
-- `Hook` — `systemPrompt`, `turnProjection`, and `turnAfter` handlers registered with `host.on` for prompt, policy, and turn follow-up.
+- `Hook` — `systemPrompt`, `turnProjection`, `turnAfter`, `loopOpen`, and `sessionDeleted` handlers registered with `host.on` for prompt, policy, turn follow-up, branch repair after a restart, and cleanup after a session delete.
 
 Everything else is adapter code around those nouns.
 
@@ -237,7 +237,7 @@ packages/
 └── sdk/           # direct + RPC transports over one client contract
 ```
 
-`@gent/core/protocol` contains shared client schemas, message projections, and the RPC contract. The SDK uses this entry point for client data. It does not expose server storage or runtime service tags. Core implementation files keep relative imports; they do not import through the public protocol entry point. The private alias remains while host and test consumers move to supported contracts.
+`@gent/core/protocol` contains shared client schemas, message projections, and the RPC contract. The SDK uses this entry point for client data. It does not expose server storage or runtime service tags. Core implementation files keep relative imports; they do not import through the public protocol entry point.
 
 ## System Shape
 
@@ -1565,7 +1565,7 @@ Production rule:
 `packages/sdk/src/discovery.ts` owns shared-server discovery: the data paths, the build fingerprint, the lock, and the decision to attach or to start. The server root that composes the server stack (`packages/sdk/src/server.ts`: the shipped extensions, the dependency graph, the HTTP listener) is a separate module that `resolveServer` imports only when this process builds a server; a launch that attaches, and a command that only reads the data directory, never evaluate it (an attach launch to its composer, median of 7 interleaved runs: compiled 278 ms to 194 ms, source 704 ms to 490 ms). `packages/sdk/tests/index.test.ts` imports the SDK entry in a fresh process and fails when a module of the shipped extensions, the server root or the OpenTelemetry SDK loads. Two files sit beside `data.db` in the data directory (`GENT_DATA_DIR`, else `~/.gent`):
 
 - `server.lock.db` is the kernel lock. The owning server holds an exclusive SQLite lock on it (`BEGIN EXCLUSIVE`, `busy_timeout` 0) for the life of its scope. The OS releases it when the process exits. A server is alive exactly when this lock cannot be taken, so a crash, a reboot, or a reused pid cannot leave a live-looking lock, and two concurrent starts give one owner: the other waits for the owner's entry and attaches.
-- `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. An entry whose kernel lock is free names a server that is gone. Taking the lock (`serverLock.hold`, by a start or by `gent storage reset`) removes that entry at once, so a start that waits on the new owner never probes it. `gent server stop` sends SIGTERM only after the identity probe; `--all` removes an entry whose kernel lock is free, and holds the kernel lock through that removal so a new owner's entry is never deleted. `gent storage reset` takes the kernel lock as a server start does (`serverLock.hold`) and holds it from the first look at the database files to the last move, so no server opens them mid-move; it refuses while a server holds the lock.
+- `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. An entry whose kernel lock is free names a server that is gone. Only the holder of the kernel lock removes the entry, whatever server it names: under the lock, the entry is the holder's own or a gone server's. Taking the lock (`serverLock.hold`, by a start, by `gent storage reset`, or by `gent server stop`) removes that entry at once, so a start that waits on the new owner never probes it, and a server removes its own entry before its scope releases the lock. `gent server stop` sends SIGTERM only after the identity probe; `--all` removes an entry whose kernel lock is free by taking the lock and letting it go, and when a new owner holds the lock first, the entry is the new owner's and stays. `gent storage reset` takes the kernel lock as a server start does (`serverLock.hold`) and holds it from the first look at the database files to the last move, so no server opens them mid-move; it refuses while a server holds the lock.
 
 A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it. The build fingerprint (`buildFingerprint` in `packages/sdk/src/discovery.ts`, read once per start, so the lock entry and the identity endpoint name one build) is the binary's mtime for the compiled gent, wherever it is installed (`GentPlatform.compiled`, the one reader of the build's `__GENT_COMPILED__` define, which the cell reads too), and the checkout's git hash for a source run. A build neither names is `unknown`, and `unknown` matches no build, itself included: such a start never attaches.
 
@@ -1573,7 +1573,7 @@ A fixed port (`gent server start --port`) changes only the attach decision. A SQ
 
 `packages/sdk/src/discovery.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
 
-The old SDK worker supervisor and worker-http transport are deleted. E2E coverage that needs process boundaries uses focused server-process fixtures; transport contract tests run through the in-process direct transport.
+E2E coverage that needs process boundaries uses focused server-process fixtures; transport contract tests run through the in-process direct transport.
 
 ## TUI
 

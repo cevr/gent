@@ -238,8 +238,6 @@ describe("Server Lock", () => {
       ),
   )
 
-  // The entry's server-id guard is covered through `serverLock.stop` below
-  // ("stale-entry cleanup never removes the entry a new owner writes").
   it.scopedLive("a corrupt lock entry reads as no server", () =>
     provideFs(
       Effect.gen(function* () {
@@ -566,7 +564,7 @@ describe("Server Lock Ownership", () => {
         expect((yield* serverLock.status(home))._tag).toBe("Unnamed")
         yield* serverLockFile.write(home, makeEntry())
         expect((yield* serverLock.status(home))._tag).toBe("Alive")
-        yield* serverLockFile.remove(home, "test-server-1")
+        yield* serverLockFile.remove(home)
         yield* release
         expect((yield* serverLock.status(home))._tag).toBe("None")
         yield* serverLockFile.write(home, makeEntry({ hostname: "alien-host" }))

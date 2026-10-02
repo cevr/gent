@@ -140,7 +140,8 @@ New extension tests should include at least one RPC acceptance test via `createR
 ### Test layers
 
 ```typescript lint=test
-import { Effect } from "effect"
+import { Effect, Fiber, Schema, Stream } from "effect"
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 import {
   baseLocalLayer,
   createRpcHarness,
@@ -154,6 +155,24 @@ import {
 // Full in-process stack (real services, event store, and storage)
 export const layer = baseLocalLayer({ agents: [testAgent] })
 
+// The tool the scripted model calls: a step may call only a registered tool
+const echoExtension = defineExtension({
+  id: "echo",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "tool",
+      tool({
+        id: "echo",
+        description: "Echo the text back",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.String,
+        execute: ({ text }) => Effect.succeed(text),
+      }),
+    )
+  }),
+})
+
 export const acceptance = Effect.gen(function* () {
   // Sequence provider for deterministic LLM responses
   const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
@@ -163,12 +182,20 @@ export const acceptance = Effect.gen(function* () {
   // RPC acceptance harness (real per-request scopes)
   const { client, sessionId, branchId } = yield* createRpcHarness({
     agents: [testAgent],
-    extensionInputs: [testTurnExtension],
+    extensionInputs: [testTurnExtension, echoExtension],
     providerLayer,
   })
+  // `send` returns at admission: subscribe first, then wait for the turn to end
+  const turnCompleted = yield* client.session.events({ sessionId, branchId }).pipe(
+    Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+    Stream.take(1),
+    Stream.runDrain,
+    Effect.forkScoped,
+  )
   yield* client.message.send({ sessionId, branchId, content: "hi" })
+  yield* Fiber.join(turnCompleted)
   yield* controls.assertDone
-})
+}).pipe(Effect.scoped, Effect.timeout("8 seconds"))
 ```
 
 Core tests record the event sequence for assertions with `recordingEventStore(ref)` (the in-memory store that also keeps each appended event in a `Ref`), imported by relative path from `packages/core/src/test-utils/harness.ts`.
