@@ -1,5 +1,5 @@
 import { renderFrame, terminalText, type renderWithProviders } from "./render-harness-boundary"
-import { Effect, type ManagedRuntime, Schema } from "effect"
+import { type Duration, Effect, type ManagedRuntime, Schema } from "effect"
 
 type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
@@ -85,6 +85,14 @@ export const waitForTerminal = (
   waitForFrame(setup, () => check(terminalText(setup)), label, timeoutMs).pipe(
     Effect.map(() => terminalText(setup)),
   )
+
+/** Draws frames until the client extensions have loaded: native history waits for them. */
+export const untilExtensionsLoaded = (
+  setup: TestSetup,
+  loaded: () => boolean,
+  within: Duration.Input = "5 seconds",
+) =>
+  Effect.promise(() => setup.flush()).pipe(Effect.repeat({ until: loaded }), Effect.timeout(within))
 
 /**
  * Wait until `check` holds, running `advance` before each look: for work

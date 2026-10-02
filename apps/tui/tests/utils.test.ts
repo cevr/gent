@@ -1005,15 +1005,6 @@ describe("progressive disclosure helpers", () => {
 
 // ── truncate ────────────────────────────────────────────────────────────────
 
-/**
- * The one column-budget truncation.
- *
- * Every caller budgets terminal columns. A name whose `.length` fits the
- * budget can still be wider than it: CJK glyphs take two columns and an emoji
- * is one grapheme of several code units. The old code-unit slice let those
- * rows overflow; the receipt for that is the `.length` line in each test.
- */
-
 describe("grapheme edits", () => {
   test("dropping the last character takes a whole emoji sequence", () => {
     expect(dropLastGrapheme("ok 👍🏽")).toBe("ok ")
@@ -1030,6 +1021,14 @@ describe("grapheme edits", () => {
   })
 })
 
+/**
+ * The one column-budget truncation.
+ *
+ * Every caller budgets terminal columns. A name whose `.length` fits the
+ * budget can still be wider than it: CJK glyphs take two columns and an emoji
+ * is one grapheme of several code units. A code-unit slice lets those rows
+ * overflow; the `.length` line in each test shows the name it would pass.
+ */
 describe("truncate", () => {
   test("a CJK name whose length fits but whose width does not is cut to the column budget", () => {
     const name = "漢字漢字漢字"

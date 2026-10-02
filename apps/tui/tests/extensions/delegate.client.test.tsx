@@ -16,7 +16,7 @@ import {
 import type { Session } from "../../src/client"
 import { useExtensionUI } from "../../src/extensions/host"
 import { createMockClient, renderScoped } from "../render-harness-boundary"
-import { waitForFrame } from "../helpers-boundary"
+import { untilExtensionsLoaded, waitForFrame } from "../helpers-boundary"
 import { delegateSubtitle } from "../../src/extensions/delegate.client"
 
 /**
@@ -170,10 +170,7 @@ describe("delegate rows in native scrollback", () => {
           },
           { client: createMockClient(), initialSession: parentSession, width: 70, height: 20 },
         )
-        yield* Effect.promise(() => setup.flush()).pipe(
-          Effect.repeat({ until: () => loaded() }),
-          Effect.timeout("5 seconds"),
-        )
+        yield* untilExtensionsLoaded(setup, () => loaded())
         // The rows commit once; nothing arrives later to redraw them. The last
         // fillers stay in the live view, so an early filler marks the commit.
         yield* Effect.promise(() => setup.flush()).pipe(

@@ -74,7 +74,7 @@ const subtreeRows = (
   }
 }
 
-const TRAY_HINT = "ctrl+t agents"
+const TRAY_HINT = "ctrl+t sessions"
 const TRAY_MAX_ROWS = 3
 
 /** What a row is called: its session name, else its cwd, else its id. */

@@ -300,7 +300,7 @@ const runGent = ({
       return
     }
 
-    // Block until supervisor is ready (same as headless path)
+    // Wait for the connection to be ready, as the headless path does.
     yield* bundle.runtime.lifecycle.waitForReady
 
     // Resolve the session before rendering — eliminates the loading route
@@ -316,8 +316,8 @@ const runGent = ({
     // never runs in the synchronous Solid render path.
     const initialThemeMode = yield* detectColorScheme
 
-    // Shutdown signal — interrupt the main fiber to break out of Layer.launch's
-    // Effect.never, triggering scope finalization (supervisor.stop, WS close, etc).
+    // Shutdown interrupts the main fiber. Its scope then closes the renderer
+    // hold, the client and the in-process server this run started.
     const envWithShutdown = {
       ...env,
       shutdown: () => {

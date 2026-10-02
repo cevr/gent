@@ -56,7 +56,7 @@ Ported from opencode. Key patterns:
 ## Command Palette
 
 - `Ctrl+P` or `/help` opens palette
-- One `Command` shape (`id`, `title`, `category`, optional `keybind`, `slash`, `aliases`, `onSelect`, `onSlash`) and one resolved list, `useExtensionUI().commands()`. The palette search matches a command's title, its slash name and aliases, its description and its category, so `frecency` finds "Reset Autocomplete Ranking"
+- One `Command` shape (`id`, `title`, `category`, optional `keybind`, `slash`, `aliases`, `onSelect`, `onSlash`) and one resolved list, `useExtensionUI().commands()`. The palette search matches a command's title, its slash name and aliases, its description and its category, so `frecency` finds "Reset Autocomplete Ranking". One leading "/" in the query is dropped, so `/clear` finds "New Session" as `clear` does
 - A keybind with no ctrl or meta (a bare key such as `left`) is a key the composer also reads, so it fires only while the composer is idle: an empty draft in editing mode, no overlay or docked pane, no interaction, the transcript collapsed (`composerIdle` in `session.tsx`). Any extension can bind one to a key that types nothing (an arrow, a function key). A bare key that types a character (`j`, `?`, `shift+j`, `space`) would take the first character of every message: `resolveCommands` refuses that keybind in every scope and lists it with the failed extensions; the command keeps its slash and palette row. A bare `escape` and a `ctrl+c` (with or without shift) are refused the same way (`REFUSED_KEYBINDS` in `loader-boundary.ts`): keybinds run before the Esc and ctrl+c ladders, so either would take the pane close, the turn cancel and the exit. `←` opens the agents pane this way; in the pane `←` or Esc closes it and `→` or Enter switches to the row, as `←`/`→` move between palette levels
 - `resolveCommands` merges the session's own commands (`setSessionCommands`, builtin scope), client extension commands, and server slash commands (builtin scope). Precedence is project > user > builtin; a higher scope takes a slash or keybind from the earlier owner, and a same-scope claim is dropped and listed with the failed extensions
 
@@ -269,9 +269,10 @@ Priority: headless → session → continue → prompt → home
 A headless run has no user, so it declines every interaction its turn presents,
 with notes that name `--approve-all`. `--approve-all` approves every ask. The
 run follows only its own turn: the live events from the `MessageReceived` of
-the prompt it sent (the first
-client-sent user message with the prompt's text after the send) to the
-`TurnCompleted` that names that message. A resumed session's history and an
+the prompt it sent (the message its send's request id names, through
+`userMessageIdForRequest`) to the `TurnCompleted` that names that message.
+Another client's message with the same text is not the run's. A resumed
+session's history and an
 older turn still running on the branch are not printed and do not settle it. An
 `ErrorOccurred` alone does not end the run; the `TurnCompleted` receipt does.
 It exits 1 when the receipt says `interrupted`, `streamFailed` or `unanswered`,

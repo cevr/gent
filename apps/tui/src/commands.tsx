@@ -240,9 +240,14 @@ const closedPalette: CommandPaletteState = { levelStack: [], category: "" }
 
 // ── command palette ─────────────────────────────────────────────────────────
 
+/**
+ * The palette search. A query may spell a command as the composer does, with
+ * its "/": one leading "/" is dropped, as `slashNames` hold the names without it.
+ */
 const filterItems = (items: readonly PaletteItem[], query: string): readonly PaletteItem[] => {
-  if (query.length === 0) return items
-  return matchSorter(items, query, {
+  const search = query.replace(/^\//, "")
+  if (search.length === 0) return items
+  return matchSorter(items, search, {
     keys: ["title", "slashNames", "description", "category"],
   })
 }

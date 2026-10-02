@@ -4566,6 +4566,29 @@ describe("App auth gate at startup", () => {
 })
 
 describe("App startup prompt and renames", () => {
+  /**
+   * The server renames session-a, as it does after the first turn: a
+   * `SessionNameUpdated` event gives the client a new record for the same
+   * session. Settles once the client holds the new name.
+   */
+  const renameSessionA = (setup: TestSetup, clientContext: ClientContextValue) =>
+    Effect.gen(function* () {
+      clientContext.applySessionEvent(
+        EventEnvelope.make({
+          id: EventId.make(1_000),
+          createdAt: 0,
+          event: AgentEvent.cases.SessionNameUpdated.make({
+            sessionId: SessionId.make("session-a"),
+            name: "A better name",
+          }),
+        }),
+      )
+      yield* waitForFrame(
+        setup,
+        () => clientContext.session().name === "A better name",
+        "the session renamed",
+      )
+    })
   // The boot picker mounts the session view again on the chosen branch, so
   // the prompt outlives one mount. A session the reader opens after that is
   // a different session and starts empty.
@@ -4634,17 +4657,15 @@ describe("App startup prompt and renames", () => {
         () => sentMessages.some((message) => message.content === initialPrompt),
         "sent message",
       )
+      // The docked reasoning pane is part of the session view: a new mount
+      // would close it.
+      yield* typeCommand("/think")(setup)
+      yield* waitForFrame(setup, (frame) => frame.includes("Reasoning ·"), "the reasoning pane")
       // The server names the session after the first turn. The record is new;
       // the session is the same one.
-      clientContext.switchSession(
-        SessionId.make("session-a"),
-        BranchId.make("branch-a"),
-        "A better name",
-      )
-      yield* Effect.promise(() => setup.renderOnce())
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- real-clock gap so a second send, if one starts, lands before the assertion
-      yield* Effect.sleep("50 millis")
-      yield* Effect.promise(() => setup.renderOnce())
+      yield* renameSessionA(setup, clientContext)
+      const frame = yield* waitForFrame(setup, () => true, "the frame after the rename")
+      expect(frame).toContain("Reasoning ·")
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -4739,15 +4760,7 @@ describe("App startup prompt and renames", () => {
       yield* waitForFrame(setup, () => slashCommandCalls >= 1, "slash commands fetched")
       const before = slashCommandCalls
       // The extension-contributed rows belong to the session, not to its name.
-      clientContext.switchSession(
-        SessionId.make("session-a"),
-        BranchId.make("branch-a"),
-        "A better name",
-      )
-      yield* Effect.promise(() => setup.renderOnce())
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- real-clock gap so a refetch, if one starts, lands before the assertion
-      yield* Effect.sleep("50 millis")
-      yield* Effect.promise(() => setup.renderOnce())
+      yield* renameSessionA(setup, clientContext)
       expect(slashCommandCalls).toBe(before)
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -5389,13 +5402,15 @@ describe("TUI renderer surfaces", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   // A command has its title and its slash names; the palette search finds it
-  // by either, as the `/` popup finds it by the slash name.
+  // by either, as the `/` popup finds it by the slash name. A query spelled
+  // as the composer spells the command, with its "/", finds it too.
   it.scopedLive("the palette search finds a command by its slash name and its alias", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession(createMockRuntime(), { width: 80 })
       for (const [query, title] of [
         ["frecency", "Reset Autocomplete Ranking"],
         ["clear", "New Session"],
+        ["/clear", "New Session"],
       ] as const) {
         view.setup.mockInput.pressKey("p", { ctrl: true })
         yield* waitForFrame(view.setup, (frame) => frame.includes("[All]"), "the palette")
