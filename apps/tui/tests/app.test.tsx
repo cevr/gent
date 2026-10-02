@@ -5335,13 +5335,15 @@ describe("TUI renderer surfaces", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   // A command has its title and its slash names; the palette search finds it
-  // by either, as the `/` popup finds it by the slash name.
+  // by either, as the `/` popup finds it by the slash name. A query spelled
+  // as the composer spells the command, with its "/", finds it too.
   it.scopedLive("the palette search finds a command by its slash name and its alias", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession(createMockRuntime(), { width: 80 })
       for (const [query, title] of [
         ["frecency", "Reset Autocomplete Ranking"],
         ["clear", "New Session"],
+        ["/clear", "New Session"],
       ] as const) {
         view.setup.mockInput.pressKey("p", { ctrl: true })
         yield* waitForFrame(view.setup, (frame) => frame.includes("[All]"), "the palette")
