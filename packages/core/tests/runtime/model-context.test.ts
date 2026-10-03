@@ -31,6 +31,7 @@ import {
 } from "../../src/domain/message"
 import {
   boundToolResultForModel,
+  coldHandoffPays,
   type CompactionRequest,
   ContextDirective,
   estimateTokens,
@@ -64,6 +65,7 @@ import {
   DEFAULT_AGENT_NAME,
   Model,
   ModelId,
+  type ModelPricing,
   ProviderId,
 } from "../../src/domain/agent"
 import { omitUndefined } from "../../src/domain/guards"
@@ -1142,9 +1144,114 @@ describe("provider overflow recovery", () => {
 
 // ── cold prompt cache ───────────────────────────────────────────────────────
 
+const HOUR_MS = 60 * 60_000
+
+/** Opus prices: a one-hour cache write costs twice the input. */
+const OPUS_PRICING: ModelPricing = {
+  input: 5,
+  output: 25,
+  cacheRead: 0.5,
+  cacheWrite: 6.25,
+  cacheWriteByLifetime: [{ ttlMs: HOUR_MS, price: 10 }],
+}
+
+/** GPT-5.2 Chat prices: no cache write is priced, so a resend pays the input rate. */
+const SMALL_WINDOW_PRICING: ModelPricing = { input: 1.75, output: 14, cacheRead: 0.175 }
+
+/** The input budget of a 1M window less its 32k output reserve. */
+const WIDE_BUDGET_TOKENS = 968_000
+
+/** The input budget of a 128k window less its 16k output reserve and a little system prompt. */
+const SMALL_BUDGET_TOKENS = 110_000
+
+describe("cold handoff cost rule", () => {
+  test("a cold window hands off only above the floor and when the handoff costs at most half the resend", () => {
+    const table: ReadonlyArray<{
+      readonly name: string
+      readonly windowTokens: number
+      readonly availableInputTokens: number
+      readonly pricing: Option.Option<ModelPricing>
+      readonly handsOff: boolean
+    }> = [
+      {
+        name: "below the 150k floor, however much cheaper",
+        windowTokens: 120_000,
+        availableInputTokens: WIDE_BUDGET_TOKENS,
+        pricing: Option.some(OPUS_PRICING),
+        handsOff: false,
+      },
+      {
+        name: "above the floor and cheaper",
+        windowTokens: 200_000,
+        availableInputTokens: WIDE_BUDGET_TOKENS,
+        pricing: Option.some(OPUS_PRICING),
+        handsOff: true,
+      },
+      {
+        name: "above the floor, but the summary output costs more than half the resend",
+        windowTokens: 200_000,
+        availableInputTokens: WIDE_BUDGET_TOKENS,
+        pricing: Option.some({ input: 1, output: 1_000, cacheWrite: 1 }),
+        handsOff: false,
+      },
+      {
+        name: "unpriced, below the floor",
+        windowTokens: 149_999,
+        availableInputTokens: WIDE_BUDGET_TOKENS,
+        pricing: Option.none(),
+        handsOff: false,
+      },
+      {
+        name: "unpriced, at the floor",
+        windowTokens: 150_000,
+        availableInputTokens: WIDE_BUDGET_TOKENS,
+        pricing: Option.none(),
+        handsOff: true,
+      },
+      {
+        name: "small window, below half its budget",
+        windowTokens: 50_000,
+        availableInputTokens: SMALL_BUDGET_TOKENS,
+        pricing: Option.some(SMALL_WINDOW_PRICING),
+        handsOff: false,
+      },
+      {
+        name: "small window, above half its budget but the summary call is most of the resend",
+        windowTokens: 60_000,
+        availableInputTokens: SMALL_BUDGET_TOKENS,
+        pricing: Option.some(SMALL_WINDOW_PRICING),
+        handsOff: false,
+      },
+      {
+        name: "small window, near full and cheaper",
+        windowTokens: 100_000,
+        availableInputTokens: SMALL_BUDGET_TOKENS,
+        pricing: Option.some(SMALL_WINDOW_PRICING),
+        handsOff: true,
+      },
+    ]
+    const actual = table.map((row) => ({
+      name: row.name,
+      handsOff: coldHandoffPays({
+        windowTokens: row.windowTokens,
+        availableInputTokens: row.availableInputTokens,
+        pricing: row.pricing,
+        cacheTtlMs: HOUR_MS,
+      }),
+    }))
+    expect(actual).toEqual(table.map(({ name, handsOff }) => ({ name, handsOff })))
+  })
+})
+
+/** A cold window the cost rule sends whole: under the 150k floor. */
+const MID_WINDOW_TOKENS = 120_000
+/** A cold window the cost rule hands off: past the floor, and the summary is cheaper. */
+const LARGE_WINDOW_TOKENS = 200_000
+
 /**
- * A 1M window whose provider keeps a prompt cached for `promptCacheTtlMs`, when
- * it says, and a child session's prompt for `childPromptCacheTtlMs`.
+ * A 1M window at Opus prices whose provider keeps a prompt cached for
+ * `promptCacheTtlMs`, when it says, and a child session's prompt for
+ * `childPromptCacheTtlMs`.
  */
 const coldCacheModel = (
   promptCacheTtlMs: Option.Option<number>,
@@ -1155,6 +1262,7 @@ const coldCacheModel = (
     name: "Wide window, cached prompts",
     provider: ProviderId.make("cold-cache"),
     contextLength: 1_000_000,
+    pricing: OPUS_PRICING,
     ...omitUndefined({
       promptCacheTtlMs: Option.getOrUndefined(promptCacheTtlMs),
       childPromptCacheTtlMs: Option.getOrUndefined(childPromptCacheTtlMs),
@@ -1370,7 +1478,7 @@ describe("cold prompt cache", () => {
     Effect.gen(function* () {
       const result = yield* runColdCacheTurns({
         promptCacheTtlMs: Option.some(0),
-        firstInputTokens: 100_000,
+        firstInputTokens: LARGE_WINDOW_TOKENS,
         compactor: true,
         steps: [textStep("the summary of the first turn"), textStep("second reply")],
       })
@@ -1389,11 +1497,26 @@ describe("cold prompt cache", () => {
     }),
   )
 
+  it.live("a cold window under the 150k floor is sent whole", () =>
+    Effect.gen(function* () {
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(0),
+        firstInputTokens: MID_WINDOW_TOKENS,
+        compactor: true,
+        steps: [textStep("second reply"), textStep("spare reply")],
+      })
+
+      expect(result.calls).toBe(2)
+      expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+    }),
+  )
+
   it.live("a large window whose prompt cache is still warm is sent whole", () =>
     Effect.gen(function* () {
       const result = yield* runColdCacheTurns({
         promptCacheTtlMs: Option.some(60 * 60_000),
-        firstInputTokens: 100_000,
+        firstInputTokens: LARGE_WINDOW_TOKENS,
         compactor: true,
         steps: [textStep("second reply")],
       })
@@ -1414,7 +1537,7 @@ describe("cold prompt cache", () => {
         promptCacheTtlMs: Option.some(60 * 60_000),
         childPromptCacheTtlMs: 0,
         spawned: true,
-        firstInputTokens: 100_000,
+        firstInputTokens: LARGE_WINDOW_TOKENS,
         compactor: true,
         steps: [textStep("the summary of the first turn"), textStep("second reply")],
       })
@@ -1432,7 +1555,7 @@ describe("cold prompt cache", () => {
       const result = yield* runColdCacheTurns({
         promptCacheTtlMs: Option.some(60 * 60_000),
         childPromptCacheTtlMs: 0,
-        firstInputTokens: 100_000,
+        firstInputTokens: LARGE_WINDOW_TOKENS,
         compactor: true,
         steps: [textStep("second reply")],
       })
@@ -1451,7 +1574,7 @@ describe("cold prompt cache", () => {
         // request started 1.5s before the second turn, the lifetime is 1s.
         const result = yield* runColdCacheTurns({
           promptCacheTtlMs: Option.some(1_000),
-          firstInputTokens: 100_000,
+          firstInputTokens: LARGE_WINDOW_TOKENS,
           compactor: true,
           steps: [textStep("the summary of the first turn"), textStep("second reply")],
           firstReplyHoldMs: 1_500,
@@ -1469,7 +1592,7 @@ describe("cold prompt cache", () => {
       // reads no cache either way, and a handoff there would surprise.
       const result = yield* runColdCacheTurns({
         promptCacheTtlMs: Option.some(0),
-        firstInputTokens: 100_000,
+        firstInputTokens: LARGE_WINDOW_TOKENS,
         compactor: true,
         steps: [textStep("second reply"), textStep("spare reply")],
         switchModel: true,
@@ -1487,7 +1610,7 @@ describe("cold prompt cache", () => {
       // request that refreshed the cache, so a 1s lifetime is still warm.
       const result = yield* runColdCacheTurns({
         promptCacheTtlMs: Option.some(1_000),
-        firstInputTokens: 100_000,
+        firstInputTokens: LARGE_WINDOW_TOKENS,
         compactor: true,
         steps: [textStep("second reply"), textStep("spare reply")],
         firstCallRateLimitedMs: 1_500,
@@ -1519,7 +1642,7 @@ describe("cold prompt cache", () => {
     Effect.gen(function* () {
       const result = yield* runColdCacheTurns({
         promptCacheTtlMs: Option.none(),
-        firstInputTokens: 100_000,
+        firstInputTokens: LARGE_WINDOW_TOKENS,
         compactor: true,
         steps: [textStep("second reply")],
       })
@@ -1562,7 +1685,7 @@ describe("cold prompt cache", () => {
     Effect.gen(function* () {
       const result = yield* runColdCacheTurns({
         promptCacheTtlMs: Option.some(0),
-        firstInputTokens: 100_000,
+        firstInputTokens: LARGE_WINDOW_TOKENS,
         compactor: false,
         steps: [textStep("second reply")],
       })

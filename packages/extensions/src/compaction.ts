@@ -22,6 +22,8 @@ import {
 } from "@gent/core/extensions/api"
 import {
   type CompactionRequest,
+  COMPACTION_SUMMARY_INPUT_TOKENS,
+  COMPACTION_SUMMARY_OUTPUT_TOKENS,
   CompactionSummary,
   estimateTextTokens,
   Message,
@@ -83,8 +85,11 @@ export class RetainedBindings extends Context.Service<RetainedBindings, Retained
  * @module
  */
 
-/** Maximum estimated input tokens for one summary request. */
-const MODEL_COMPACTION_INPUT_TOKENS = 32_768
+/**
+ * Maximum estimated input tokens for one summary request, its prompt
+ * included: core's bound, by which the loop prices a cold handoff.
+ */
+const MODEL_COMPACTION_INPUT_TOKENS = COMPACTION_SUMMARY_INPUT_TOKENS
 
 /**
  * Maximum estimated output tokens for one summary request. The summary is a
@@ -98,9 +103,10 @@ export const MODEL_COMPACTION_OUTPUT_TOKENS = 512
  * The real-token cap sent to the provider. The accept bound estimates four
  * characters per token; dense prose runs past four, so the cap sits below
  * the bound (up to 5.3 characters per token fits) and a summary that fills
- * the cap is not refused as oversize.
+ * the cap is not refused as oversize. Core owns it: the loop prices a cold
+ * handoff's summary at this cap.
  */
-const MODEL_COMPACTION_REQUEST_TOKENS = 384
+const MODEL_COMPACTION_REQUEST_TOKENS = COMPACTION_SUMMARY_OUTPUT_TOKENS
 
 const SUMMARY_CUT_MARK = "\n[Summary cut at the output limit.]"
 

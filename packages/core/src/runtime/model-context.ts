@@ -24,7 +24,7 @@ import {
 } from "../domain/message.js"
 import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
-import { ModelId } from "../domain/agent.js"
+import { cacheWriteRate, ModelId, type ModelPricing } from "../domain/agent.js"
 import type { ToolCapability } from "../domain/capability.js"
 import type { TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
@@ -1586,27 +1586,100 @@ export interface PromptCache {
   readonly lastCallAtMillis: number
   /** The lifetime `promptCacheTtlMsFor` reads for the model the turn calls and its session. */
   readonly ttlMs: number
+  /** The catalog price of the model the turn calls, which also writes the summary; none when unpriced. */
+  readonly pricing: Option.Option<ModelPricing>
 }
 
-/**
- * The smallest window a cold start hands off. A cold resend of N tokens is a
- * cache write, the catalog `cacheWrite` multiple of N (2 × N for Anthropic's
- * one-hour cache); the summary call reads at most ~33k at the base price (the
- * compactor's 32k input cap and its prompt; it names no cache key, so it
- * writes no cache), and the next call resends only the summary and the new
- * prompt. That breaks even near 28k; from 64k the handoff saves at least half
- * the resend, which pays for the detail a summary loses. A window whose input budget is under 128k hands off at half
- * that budget instead, so a small-window model can hand off at all.
- */
-const COLD_HANDOFF_MAX_THRESHOLD_TOKENS = 64_000
+// ── cold handoff cost rule ──────────────────────────────────────────────────
 
 /**
- * The window size at which a turn that starts on a lapsed prompt cache hands
- * off first. The TUI's cache label reads it (`@gent/core/protocol`) to say
- * the next turn compacts.
+ * The most input one summary call carries, its prompt included. A compactor
+ * keeps its call inside this bound (`@gent/compaction` cuts the history it
+ * summarizes to fit), and the cold handoff prices the call by it.
  */
-export const coldHandoffThresholdTokens = (availableInputTokens: number): number =>
-  Math.min(COLD_HANDOFF_MAX_THRESHOLD_TOKENS, Math.floor(availableInputTokens / 2))
+export const COMPACTION_SUMMARY_INPUT_TOKENS = 32_768
+
+/**
+ * The output cap a summary call asks the provider for. The cold handoff
+ * prices the summary at this cap, not at the size of earlier summaries:
+ * at catalog prices (output at most 8× input) the output is under a tenth
+ * of the summary call's cost, so a recorded size would move the decision
+ * by under a few percent, and the TUI's label could not read it without a
+ * second fold over the session's summary receipts.
+ */
+export const COMPACTION_SUMMARY_OUTPUT_TOKENS = 384
+
+/**
+ * The handoff marker the next call sends in place of the history: the
+ * summary (at most its output cap), up to 12 of the user's messages by id
+ * with a 120-character preview each, and the fixed text that says where the
+ * history is. About 1.2k tokens; this rounds up.
+ */
+const HANDOFF_MARKER_TOKENS = 1_536
+
+/**
+ * The smallest window a cold start hands off on a model whose budget holds
+ * it. The owner (Pass 30): "for the auto-compaction, we should probably only
+ * autocompact after a certain treshold - how many tokens we would be
+ * sending to refresh the cache for example. something like if its over 150k
+ * tokens or something its better to compact, or measure against the amount
+ * of tokens the handoff would generate as well". Under it the window is sent
+ * whole: the resend costs less than the detail a summary loses and the
+ * re-reads the model then makes through `context.read`. A model whose budget
+ * is under twice the floor hands off from half its budget instead, so a
+ * small-window model still can.
+ */
+const COLD_HANDOFF_FLOOR_TOKENS = 150_000
+
+/**
+ * The share of the resend a handoff must save. A summary is a 150-word
+ * bridge: the model reads back by id what it needs, and that costs calls
+ * the rule does not count. A handoff that saves at least half the resend
+ * pays for them; one that saves less keeps the window whole.
+ */
+const COLD_HANDOFF_MARGIN = 0.5
+
+/**
+ * Whether a turn that starts on a lapsed prompt cache hands its window off
+ * first. The one cost rule: the loop's cold check and the TUI's cache label
+ * (`@gent/core/protocol`) both read it, so the label never disagrees.
+ *
+ * - The window is at least the floor: 150k, or half the budget when that is
+ *   smaller.
+ * - The resend is N tokens at the cache-write price of the lifetime the
+ *   request asks for (`cacheWriteRate`: 2× input for Anthropic's one hour,
+ *   the input price where no write is priced).
+ * - The handoff is the summary call (min(N, its input cap) at the input
+ *   price, its output cap at the output price; it names no cache key, so it
+ *   writes no cache) plus the marker written to the cache in place of the
+ *   history. The new prompt is sent either way, so neither side counts it.
+ * - It hands off when the handoff costs at most half the resend. An
+ *   unpriced model hands off on the floor alone.
+ */
+export const coldHandoffPays = (params: {
+  /** The estimated size of the window the turn would send. */
+  readonly windowTokens: number
+  /** The input budget the window is projected against. */
+  readonly availableInputTokens: number
+  readonly pricing: Option.Option<ModelPricing>
+  /** The lifetime the turn's requests ask for, which picks the write price. */
+  readonly cacheTtlMs: number
+}): boolean => {
+  const floor = Math.min(COLD_HANDOFF_FLOOR_TOKENS, Math.floor(params.availableInputTokens / 2))
+  if (params.windowTokens < floor) return false
+  return Option.match(params.pricing, {
+    onNone: () => true,
+    onSome: (pricing) => {
+      const write = cacheWriteRate(pricing, Option.some(params.cacheTtlMs))
+      const resend = params.windowTokens * write
+      const handoff =
+        Math.min(params.windowTokens, COMPACTION_SUMMARY_INPUT_TOKENS) * pricing.input +
+        COMPACTION_SUMMARY_OUTPUT_TOKENS * pricing.output +
+        HANDOFF_MARKER_TOKENS * write
+      return handoff <= (1 - COLD_HANDOFF_MARGIN) * resend
+    },
+  })
+}
 
 /**
  * The window the model sees this step. A fresh window puts the issuer's notice
@@ -1691,23 +1764,29 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   const requested = params.directive.pipe(Option.exists((value) => value._tag === "Compact"))
   const overflowing = plan.overflowing
   // A turn that starts after the provider's prompt cache lapsed resends the
-  // whole window at the uncached price. On a large window a summary call
-  // plus a small window cost less, so the window hands off first, anchored
-  // at the new prompt. Only the turn's first call hands off: a later step
-  // continues the work of the step before it, whatever its tools took. The
-  // first projection holds no directive, since the loop discards what an
-  // earlier turn left. Keeping the cache warm with idle pings is not done:
-  // each costs a cache read per lifetime with no knowledge the user
-  // returns, and a cache already cold cannot be warmed for less than one
-  // resend.
+  // whole window as a cache write. Past the floor, where a summary call plus
+  // a small window cost at most half that (`coldHandoffPays`), the window
+  // hands off first, anchored at the new prompt. Only the turn's first call
+  // hands off: a later step continues the work of the step before it,
+  // whatever its tools took. The first projection holds no directive, since
+  // the loop discards what an earlier turn left. Keeping the cache warm with
+  // idle pings is not done: each costs a cache read per lifetime with no
+  // knowledge the user returns, and a cache already cold cannot be warmed
+  // for less than one resend.
   const cold =
     params.turnStart &&
+    Result.isSuccess(fit) &&
     Option.exists(
       params.promptCache,
-      (cache) => now.getTime() - cache.lastCallAtMillis >= cache.ttlMs,
-    ) &&
-    Result.isSuccess(fit) &&
-    fit.success.estimatedTokens >= coldHandoffThresholdTokens(fit.success.availableInputTokens)
+      (cache) =>
+        now.getTime() - cache.lastCallAtMillis >= cache.ttlMs &&
+        coldHandoffPays({
+          windowTokens: fit.success.estimatedTokens,
+          availableInputTokens: fit.success.availableInputTokens,
+          pricing: cache.pricing,
+          cacheTtlMs: cache.ttlMs,
+        }),
+    )
   // A history that is only an earlier marker has nothing new to summarize: a
   // second handoff to the same anchor would reuse that marker's id, spend a
   // summary call, and report a compaction that changed nothing.

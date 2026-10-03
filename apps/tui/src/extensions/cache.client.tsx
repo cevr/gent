@@ -4,7 +4,7 @@ import { type Accessor, createMemo, createRoot, createSignal, type Setter } from
 import {
   AgentEvent,
   cacheWriteRate,
-  coldHandoffThresholdTokens,
+  coldHandoffPays,
   type EventEnvelope,
   type Model,
   promptCacheTtlMsFor,
@@ -548,11 +548,23 @@ export const cacheClockLabel = (
     Switched: (): StatusLabelItem => ({ text: "cache cold", color: "textMuted" }),
   })
 
-/** Whether a turn that starts now on this window hands it off first, as the loop decides. */
-export const handsOffCold = (window: Option.Option<CacheWindow>): boolean =>
-  Option.exists(
-    window,
-    (value) => value.estimatedTokens >= coldHandoffThresholdTokens(value.availableInputTokens),
+/**
+ * Whether a turn that starts now on this lapsed window hands it off first:
+ * the loop's own cost rule (`coldHandoffPays`), over the model's catalog
+ * price and the lifetime its requests ask for.
+ */
+export const handsOffCold = (
+  window: Option.Option<CacheWindow>,
+  pricing: Option.Option<ModelPricing>,
+  cacheTtlMs: number,
+): boolean =>
+  Option.exists(window, (value) =>
+    coldHandoffPays({
+      windowTokens: value.estimatedTokens,
+      availableInputTokens: value.availableInputTokens,
+      pricing,
+      cacheTtlMs,
+    }),
   )
 
 // ── price and text ──────────────────────────────────────────────────────────
@@ -795,19 +807,22 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
           anchor: "right",
           produce: (): ReadonlyArray<StatusLabelItem> => {
             const state = branch(branchKey(transport.currentSession())).clock()
-            const lifetime = Option.flatMap(
+            const entry = Option.flatMap(
               Option.all([state.refresh, catalogModels()]),
-              ([last, catalog]) =>
-                Option.flatMap(Option.fromUndefinedOr(catalog.get(last.catalogModel)), (entry) =>
-                  promptCacheTtlMsFor(entry, last.child),
-                ),
+              ([last, catalog]) => Option.fromUndefinedOr(catalog.get(last.catalogModel)),
             )
+            const lifetime = Option.flatMap(Option.all([state.refresh, entry]), ([last, model]) =>
+              promptCacheTtlMsFor(model, last.child),
+            )
+            const pricing = Option.flatMap(entry, (model) => Option.fromUndefinedOr(model.pricing))
             const clock = cacheClock(state.refresh, lifetime, transport.selectedModel(), now())
             return Option.toArray(
               Option.map(clock, (value) =>
                 cacheClockLabel(value, {
                   estimated: Option.exists(state.refresh, (last) => last.estimated),
-                  compactsNext: handsOffCold(state.window),
+                  compactsNext: Option.exists(lifetime, (ttlMs) =>
+                    handsOffCold(state.window, pricing, ttlMs),
+                  ),
                 }),
               ),
             )

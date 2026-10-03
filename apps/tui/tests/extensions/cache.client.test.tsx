@@ -53,6 +53,8 @@ const MINUTE = 60 * SECOND
 
 /** The cache lifetime both drivers name for their models. */
 const CACHE_LIFETIME_MS = 5 * MINUTE
+/** The input budget the loop projects for a 1M window less its 32k output reserve. */
+const WIDE_BUDGET_TOKENS = 968_000
 /** The lifetime a root step writes at; these models price every write alike. */
 const ROOT_LIFETIME = Option.some(CACHE_LIFETIME_MS)
 
@@ -266,8 +268,8 @@ const makeHistory = () => {
         sessionId,
         branchId,
         estimatedTokens,
-        availableInputTokens: 180_000,
-        contextLimitTokens: 200_000,
+        availableInputTokens: WIDE_BUDGET_TOKENS,
+        contextLimitTokens: 1_000_000,
         omittedMessages: 0,
         compacted: false,
       }),
@@ -1320,15 +1322,27 @@ describe("cache clock", () => {
     expect(labelAt(refreshAt(), five, 4 * MINUTE + 30 * SECOND)).toBe("cache <1m [warning]")
   })
 
-  test("the next turn compacts on a window at the loop's cold threshold", () => {
+  test("the next turn compacts where the loop's cold cost rule hands off", () => {
     const window = (estimatedTokens: number, availableInputTokens: number) =>
       Option.some({ estimatedTokens, availableInputTokens })
-    // A large budget hands off from 64k; a small one from half its budget.
-    expect(handsOffCold(window(64_000, 180_000))).toBe(true)
-    expect(handsOffCold(window(63_999, 180_000))).toBe(false)
-    expect(handsOffCold(window(30_000, 60_000))).toBe(true)
-    expect(handsOffCold(window(29_000, 60_000))).toBe(false)
-    expect(handsOffCold(Option.none())).toBe(false)
+    const sonnet = priceOf(SONNET)
+    // A 1M window hands off from the 150k floor, where the summary costs far
+    // less than half the resend; a smaller budget from half of it.
+    expect(handsOffCold(window(120_000, WIDE_BUDGET_TOKENS), sonnet, CACHE_LIFETIME_MS)).toBe(false)
+    expect(handsOffCold(window(149_999, WIDE_BUDGET_TOKENS), sonnet, CACHE_LIFETIME_MS)).toBe(false)
+    expect(handsOffCold(window(150_000, WIDE_BUDGET_TOKENS), sonnet, CACHE_LIFETIME_MS)).toBe(true)
+    expect(handsOffCold(window(100_000, 180_000), sonnet, CACHE_LIFETIME_MS)).toBe(true)
+    expect(handsOffCold(window(89_000, 180_000), sonnet, CACHE_LIFETIME_MS)).toBe(false)
+    // An unpriced model hands off on the floor alone.
+    expect(
+      handsOffCold(window(150_000, WIDE_BUDGET_TOKENS), Option.none(), CACHE_LIFETIME_MS),
+    ).toBe(true)
+    // An output price that makes the summary dearer than half the resend keeps the window.
+    const dearOutput = Option.some({ input: 1, output: 1_000, cacheWrite: 1 })
+    expect(handsOffCold(window(200_000, WIDE_BUDGET_TOKENS), dearOutput, CACHE_LIFETIME_MS)).toBe(
+      false,
+    )
+    expect(handsOffCold(Option.none(), sonnet, CACHE_LIFETIME_MS)).toBe(false)
   })
 
   test("the clock tags are the schema's", () => {
@@ -1496,18 +1510,24 @@ describe("cache timer label", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
-  it.scopedLive("a lapsed cache on a large window says the next turn compacts", () =>
+  it.scopedLive("a lapsed cache says the next turn compacts only past the loop's cost rule", () =>
     Effect.gen(function* () {
-      const clock = yield* TestClock.make()
-      const extension = yield* setupWithCatalog(Option.some(models), { clock })
-      const history = cachedFirstStep()
-      history.projected(11 * SECOND, 70_000)
-      extension.deliver(history.envelopes)
-      yield* clock.adjust("6 minutes")
-      yield* waitUntil(
-        () => extension.timer() === "cache cold · next turn compacts [warning]",
-        "a lapsed large window",
-      )
+      const lapsedLabel = (estimatedTokens: number, expected: string) =>
+        Effect.gen(function* () {
+          const clock = yield* TestClock.make()
+          const extension = yield* setupWithCatalog(Option.some(models), { clock })
+          const history = cachedFirstStep()
+          history.projected(11 * SECOND, estimatedTokens)
+          extension.deliver(history.envelopes)
+          yield* clock.adjust("6 minutes")
+          yield* waitUntil(
+            () => extension.timer() === expected,
+            `a lapsed ${estimatedTokens} window`,
+          )
+        })
+      // Under the 150k floor the loop resends the window, so the label only says cold.
+      yield* lapsedLabel(120_000, "cache cold [textMuted]")
+      yield* lapsedLabel(200_000, "cache cold · next turn compacts [warning]")
     }).pipe(Effect.timeout("4 seconds")),
   )
 

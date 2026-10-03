@@ -173,15 +173,39 @@ updates this list in the same commit.
     is a finished answer.
     A turn whose first call would resend a large window after the provider's
     prompt cache lapsed hands the window off first, anchored at the new
-    prompt: a summary call and a small window cost less than a cold resend.
+    prompt, when a summary call and a small window cost well under a cold
+    resend. The owner (Pass 30): "for the auto-compaction, we should probably
+    only autocompact after a certain treshold - how many tokens we would be
+    sending to refresh the cache for example. something like if its over 150k
+    tokens or something its better to compact, or measure against the amount
+    of tokens the handoff would generate as well". One cost rule decides,
+    `coldHandoffPays` (`@gent/core/protocol`, read by the loop and the TUI's
+    label): the window is at least 150k tokens (half the budget when that is
+    smaller, so a small-window model still can), and the handoff costs at
+    most half the resend. The resend is N tokens at the catalog cache-write
+    price of the lifetime the request asks for (`cacheWriteRate`; the input
+    price where no write is priced). The handoff is the summary call,
+    `min(N, 32,768)` input tokens (`COMPACTION_SUMMARY_INPUT_TOKENS`, prompt
+    included) at the input price and its 384-token output cap
+    (`COMPACTION_SUMMARY_OUTPUT_TOKENS`) at the output price, plus a
+    1,536-token marker written to the cache. The output is priced at the cap,
+    not at earlier summaries' recorded size: it is under a tenth of the
+    summary call's cost at catalog prices, and the label could not read the
+    receipts. The half the rule keeps pays for the detail a 150-word summary
+    loses and the reads the model makes back by id. An unpriced model hands
+    off on the floor alone. Both numbers are constants: no config surface
+    holds a per-session cost policy. At Opus prices (1-hour write 2× input)
+    a cold 150k window resends for $1.50 and hands off for $0.19, so the
+    floor binds; on a 128k GPT-5.2 Chat window (no write price, output 8×
+    input) a 60k window keeps its cache-less resend, since the summary call
+    is most of it.
     The model catalog names the cache lifetime (`Model.promptCacheTtlMs`, which
     each driver fills in `listModels`): Anthropic asks for the 1-hour cache on
     every marker, or 5 minutes with `ANTHROPIC_PROMPT_CACHE_TTL=5m`, and OpenAI
     says 30 minutes, as measured. The lifetime runs from the start of the
     branch's last model request (its newest stored `StreamStarted`, or a
     `ProviderRetrying` plus its `delayMs` when the request was retried), since
-    the provider refreshes its cache when a request starts, and large is at
-    least `min(64k, availableInputTokens / 2)` tokens. The cache belongs to the
+    the provider refreshes its cache when a request starts. The cache belongs to the
     model of the last request (its newest `StreamEnded.model`): a turn on
     another model never hands off for a cold cache. A model whose catalog entry
     names no lifetime never hands off either, and with no compactor installed
@@ -1830,7 +1854,7 @@ Runtime code yields `EventStore` (`domain/event.ts`) directly. `publish` appends
 - An extension draws its own transcript rows with `messageRendererContribution`, keyed by the message's `metadata.customType`. The core transcript names only the runtime's own kinds and falls back to the plain row.
 - A row that is not a message comes from `noticeRowContribution`: the extension derives it per branch from `transport.onSessionEvent`, and the session view merges it into the transcript by time. Nothing stores it and the model never reads it. The session feed opens without waiting for client extensions; the client keeps what the feed delivered on the branch and hands it to a subscriber that joins late before the live envelopes, so each one sees the branch from its first event. A reconnect repeats envelope ids, which the subscriber skips. A source answers `None` until it can say its rows, and native history commits nothing until every source answers, so a committed row never changes. History holds for a source only 5 s after the client extensions loaded, so a source that never answers cannot hold it for good; after that, history commits without the source. The source is not a failure and stays: a later answer draws its rows among those history has not yet committed.
 - `@gent/interaction-tools` (`interaction-tools.client.tsx`) draws the asks of the interaction tools by `metadata.type`: `prompt`, `ask-user` and `handoff`. The ask-user metadata and answer schemas belong to the server extension and come through `@gent/extensions/client`; they check shape only, so a question stored before a call limit still shows its choices. The host keeps the option list and the prompt renderer, its fallback for any other type.
-- `@gent/cache` (`cache.client.tsx`) folds a branch's stream, tool, interaction, message and compaction events into prompt-cache misses above a 1,024-token noise floor. Each miss gets a cause over the interval the TTL runs on, from the start of the request that refreshed the cache: a model switch, a changed prefix inside the lifetime the model catalog names (the regression alarm for a moved cache marker), or an expiry during a long response, a tool call, an approval wait, a paused turn, before a child completion, before a wake, or after idle time. The missed tokens fill the step's cache writes first, at the write rate, and the rest paid the input rate; each is priced over the cache-read rate, by the model the runtime priced the step by (`StreamEnded.pricedModel`, which follows a driver override) in `transport.modelCatalog()`. A miss is priced once, when the catalog is there; its row is born with that text. A row shows a miss of 20k tokens or $0.10; the status row shows the branch's `cache waste $X`. The row is telemetry for the reader, not context for the model. The same fold keeps the clock the loop's cold handoff reads: the start of the branch's last request (a retry's when it went out, an interrupted one's too; none after a compaction until the next request) and its model. A right-anchored status label (`anchor: "right"`, before `ctx`) counts the lifetime down: `cache 42m`, minutes rounded up, the warning color in its last fifth, `cache <1m`, then `cache cold`; a model that reports no cache writes caches implicitly, so its catalog lifetime is a measured guess and the count reads `cache ~28m`. A model other than the request's (`transport.selectedModel()`) reads cold at once. A lapsed cache on a window at or above `coldHandoffThresholdTokens` (`@gent/core/protocol`, the loop's own threshold) reads `cache cold · next turn compacts`. A slow fiber on the client runtime reads `Clock` every 5 s, so a test clock moves it; a branch that never reported cache activity, or a model whose catalog names no lifetime, shows no timer.
+- `@gent/cache` (`cache.client.tsx`) folds a branch's stream, tool, interaction, message and compaction events into prompt-cache misses above a 1,024-token noise floor. Each miss gets a cause over the interval the TTL runs on, from the start of the request that refreshed the cache: a model switch, a changed prefix inside the lifetime the model catalog names (the regression alarm for a moved cache marker), or an expiry during a long response, a tool call, an approval wait, a paused turn, before a child completion, before a wake, or after idle time. The missed tokens fill the step's cache writes first, at the write rate, and the rest paid the input rate; each is priced over the cache-read rate, by the model the runtime priced the step by (`StreamEnded.pricedModel`, which follows a driver override) in `transport.modelCatalog()`. A miss is priced once, when the catalog is there; its row is born with that text. A row shows a miss of 20k tokens or $0.10; the status row shows the branch's `cache waste $X`. The row is telemetry for the reader, not context for the model. The same fold keeps the clock the loop's cold handoff reads: the start of the branch's last request (a retry's when it went out, an interrupted one's too; none after a compaction until the next request) and its model. A right-anchored status label (`anchor: "right"`, before `ctx`) counts the lifetime down: `cache 42m`, minutes rounded up, the warning color in its last fifth, `cache <1m`, then `cache cold`; a model that reports no cache writes caches implicitly, so its catalog lifetime is a measured guess and the count reads `cache ~28m`. A model other than the request's (`transport.selectedModel()`) reads cold at once. A lapsed cache on a window the loop's own cost rule hands off (`coldHandoffPays`, `@gent/core/protocol`, over the catalog entry's price and lifetime) reads `cache cold · next turn compacts`. A slow fiber on the client runtime reads `Clock` every 5 s, so a test clock moves it; a branch that never reported cache activity, or a model whose catalog names no lifetime, shows no timer.
 
 ### Extension State
 

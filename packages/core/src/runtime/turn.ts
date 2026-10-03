@@ -1633,7 +1633,11 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       Option.filter(params.lastCallAtMillis, () => sameModel),
       promptCacheTtlMsFor(modelOption.value, resolved.child),
     ]),
-    ([lastCallAtMillis, ttlMs]): PromptCache => ({ lastCallAtMillis, ttlMs }),
+    ([lastCallAtMillis, ttlMs]): PromptCache => ({
+      lastCallAtMillis,
+      ttlMs,
+      pricing: Option.fromUndefinedOr(modelOption.value.pricing),
+    }),
   )
   // The catalog's input cap binds whatever window the agent names: a provider
   // refuses input past it however large the window is.

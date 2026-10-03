@@ -82,6 +82,8 @@ export { partToText } from "../domain/message.js"
 // Implementing the context compaction seam.
 export {
   type CompactionRequest,
+  COMPACTION_SUMMARY_INPUT_TOKENS,
+  COMPACTION_SUMMARY_OUTPUT_TOKENS,
   CompactionSummary,
   ModelCompactionError,
   ModelContextCompactor,
