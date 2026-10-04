@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  DateTime,
   Effect,
   FileSystem,
   Layer,
@@ -8,6 +9,7 @@ import {
   Path,
   Predicate,
   References,
+  Ref,
   Schema,
 } from "effect"
 import { BunPlatformLive, GentPlatform } from "@gent/core/host"
@@ -40,6 +42,9 @@ import {
 import {
   loadTuiExtensions as _loadTuiExtensions,
   type LoadedTuiExtension,
+  extensionUiLoader,
+  makeTuiExtensionLoader,
+  type TuiExtensionLoad,
   type ResolvedTuiExtensions,
   resolveCommands,
   resolveTuiExtensions,
@@ -1843,7 +1848,7 @@ describe("client extension compile", () => {
             `const first = Effect.runFork(buildClientExtension(file, names))`,
             `await Effect.runPromise(Fiber.interrupt(first))`,
             `const exit = await Effect.runPromiseExit(buildClientExtension(file, names))`,
-            `console.log(exit._tag === "Success" && exit.value.includes("widget-text") ? "built" : String(exit))`,
+            `console.log(exit._tag === "Success" && exit.value.code.includes("widget-text") ? "built" : String(exit))`,
           ],
           [["widget.tsx", `export const widget = "widget-text"`]],
         )
@@ -1881,3 +1886,428 @@ const freshProcessLayer = Layer.mergeAll(
   BunPlatformLive,
   BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
 )
+
+// ── extension reload ────────────────────────────────────────────────────────
+
+/**
+ * A client extension file that logs its setup, its cleanup and the release
+ * of what it allocated, each with its version, and contributes one command
+ * named by the version.
+ */
+const loggedModule = (log: string, version: string, opts: { readonly import?: string } = {}) => `
+import { appendFileSync } from "node:fs"
+import { Effect } from "effect"
+import { ClientContext, clientCommandContribution, defineClientExtension } from "@gent/tui/extensions"
+${opts.import ?? 'const label = "plain"'}
+
+export default defineClientExtension("@test/logged", {
+  setup: Effect.gen(function* () {
+    const { lifecycle } = yield* ClientContext
+    appendFileSync(${encode(log)}, "setup:${version}\\n")
+    lifecycle.addCleanup(() => appendFileSync(${encode(log)}, "cleanup:${version}\\n"))
+    yield* lifecycle.scoped(
+      Effect.addFinalizer(() =>
+        Effect.sync(() => appendFileSync(${encode(log)}, "released:${version}\\n")),
+      ),
+    )
+    return clientCommandContribution({
+      id: "logged-${version}-" + label,
+      title: "Logged ${version}",
+      onSelect: () => {},
+    })
+  }),
+})
+`
+
+/** A user extension directory, a log, and a loader over them on a stub client runtime. */
+const reloadFixture = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-client-reload-" })
+  const userDir = path.join(root, "home/.gent/extensions")
+  const projectDir = path.join(root, "project/.gent/extensions")
+  yield* fs.makeDirectory(path.join(userDir, "_lib"), { recursive: true })
+  const log = path.join(root, "log")
+  yield* fs.writeFileString(log, "")
+  const runtime = makeClientExtensionRuntime({ transport: makeUnreachableTransport() })
+  yield* Effect.addFinalizer(() => Effect.promise(() => runtime.dispose()))
+  const disabled = yield* Ref.make<ReadonlyArray<string>>([])
+  const loader = yield* inRuntime(
+    runtime,
+    makeTuiExtensionLoader({
+      userDir,
+      readPlace: Effect.map(Ref.get(disabled), (ids) => ({ projectDir, disabled: ids })),
+    }),
+  )
+  return {
+    file: (name: string) => path.join(userDir, name),
+    log,
+    disabled,
+    write: (name: string, text: string) => fs.writeFileString(path.join(userDir, name), text),
+    load: inRuntime(runtime, loader.load),
+    /** A load whose file reads go through `wrap`, so a save can land inside it. */
+    loadWith: (wrap: (live: FileSystem.FileSystem) => FileSystem.FileSystem) =>
+      inRuntime(runtime, loader.load.pipe(Effect.updateService(FileSystem.FileSystem, wrap))),
+    stale: inRuntime(runtime, loader.stale),
+    readLog: fs
+      .readFileString(log)
+      .pipe(Effect.map((text) => text.split("\n").filter((line) => line.length > 0))),
+    dispose: Effect.promise(() => runtime.dispose()),
+  }
+})
+
+const commandIds = (load: TuiExtensionLoad) => commandsOf(load.resolved).map((entry) => entry.id)
+
+describe("client extension reload", () => {
+  it.scopedLive("a reload keeps an unchanged extension: it sets up once and stays", () =>
+    Effect.gen(function* () {
+      const fixture = yield* reloadFixture
+      yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+      const first = yield* fixture.load
+      expect([...first.setUp]).toEqual(["@test/logged"])
+      expect(yield* fixture.stale).toBe(false)
+      const second = yield* fixture.load
+      yield* second.retire
+      expect([...second.setUp]).toEqual([])
+      expect(commandIds(second)).toEqual(["logged-v1-plain"])
+      expect(yield* fixture.readLog).toEqual(["setup:v1"])
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "an edited file sets up its new version, and the old one's cleanups run, then its allocations end, once the new one is in place",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+        yield* fixture.load
+        yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v22"))
+        expect(yield* fixture.stale).toBe(true)
+        const reload = yield* fixture.load
+        expect(commandIds(reload)).toEqual(["logged-v22-plain"])
+        expect([...reload.setUp]).toEqual(["@test/logged"])
+        expect(yield* fixture.readLog).toEqual(["setup:v1", "setup:v22"])
+        yield* reload.retire
+        expect(yield* fixture.readLog).toEqual([
+          "setup:v1",
+          "setup:v22",
+          "cleanup:v1",
+          "released:v1",
+        ])
+        yield* fixture.dispose
+        expect((yield* fixture.readLog).slice(4)).toEqual(["cleanup:v22", "released:v22"])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("a removed file and a disabled extension end their lifetimes", () =>
+    Effect.gen(function* () {
+      const fixture = yield* reloadFixture
+      const fs = yield* FileSystem.FileSystem
+      yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+      yield* fixture.write("other.client.ts", commandModule("@test/other", "other"))
+      expect(commandIds(yield* fixture.load)).toEqual(["logged-v1-plain", "other"])
+      yield* Ref.set(fixture.disabled, ["@test/logged"])
+      expect(yield* fixture.stale).toBe(true)
+      const disabled = yield* fixture.load
+      yield* disabled.retire
+      expect(commandIds(disabled)).toEqual(["other"])
+      expect(yield* fixture.readLog).toEqual(["setup:v1", "cleanup:v1", "released:v1"])
+      yield* Ref.set(fixture.disabled, [])
+      const enabled = yield* fixture.load
+      expect(commandIds(enabled)).toEqual(["logged-v1-plain", "other"])
+      yield* fs.remove(fixture.file("logged.client.ts"))
+      expect(yield* fixture.stale).toBe(true)
+      const removed = yield* fixture.load
+      yield* removed.retire
+      expect(commandIds(removed)).toEqual(["other"])
+      expect((yield* fixture.readLog).slice(3)).toEqual(["setup:v1", "cleanup:v1", "released:v1"])
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a new version that does not build or does not set up keeps the last good version and says so",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+        yield* fixture.load
+        yield* fixture.write("logged.client.ts", "export default {{ broken")
+        const broken = yield* fixture.load
+        yield* broken.retire
+        expect(commandIds(broken)).toEqual(["logged-v1-plain"])
+        expect(broken.resolved.failures).toHaveLength(1)
+        expect(broken.resolved.failures[0]?.id).toBe("@test/logged")
+        expect(broken.resolved.failures[0]?.reason).toMatch(/^import failed: .* still runs$/s)
+        yield* fixture.write(
+          "logged.client.ts",
+          `import { Effect } from "effect"
+export default { id: "@test/logged", setup: Effect.fail(new Error("setup refused")) }`,
+        )
+        const refused = yield* fixture.load
+        yield* refused.retire
+        expect(commandIds(refused)).toEqual(["logged-v1-plain"])
+        expect(refused.resolved.failures[0]?.reason).toMatch(
+          /^setup failed: Error: setup refused; version [0-9a-f]{12} still runs$/,
+        )
+        expect(yield* fixture.readLog).toEqual(["setup:v1"])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "an edit to a module the file imports makes the loader stale, and the reload builds it",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        yield* fixture.write("_lib/label.ts", `export const label = "first"\n`)
+        yield* fixture.write(
+          "logged.client.ts",
+          loggedModule(fixture.log, "v1", { import: 'import { label } from "./_lib/label"' }),
+        )
+        expect(commandIds(yield* fixture.load)).toEqual(["logged-v1-first"])
+        expect(yield* fixture.stale).toBe(false)
+        yield* fixture.write("_lib/label.ts", `export const label = "second!"\n`)
+        expect(yield* fixture.stale).toBe(true)
+        const reload = yield* fixture.load
+        expect(commandIds(reload)).toEqual(["logged-v1-second!"])
+        expect(yield* fixture.stale).toBe(false)
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("a save of the same bytes is a change to look at, and the extension stays", () =>
+    Effect.gen(function* () {
+      const fixture = yield* reloadFixture
+      const fs = yield* FileSystem.FileSystem
+      yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+      yield* fixture.load
+      const later = DateTime.toDate(DateTime.add(yield* DateTime.now, { minutes: 1 }))
+      yield* fs.utimes(fixture.file("logged.client.ts"), later, later)
+      expect(yield* fixture.stale).toBe(true)
+      const reload = yield* fixture.load
+      expect([...reload.setUp]).toEqual([])
+      expect(yield* fixture.stale).toBe(false)
+      expect(yield* fixture.readLog).toEqual(["setup:v1"])
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a fix to a broken module the file imports makes the loader stale, and the reload builds it",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        yield* fixture.write("_lib/label.ts", `export const label = "first"\n`)
+        yield* fixture.write(
+          "logged.client.ts",
+          loggedModule(fixture.log, "v1", { import: 'import { label } from "./_lib/label"' }),
+        )
+        expect(commandIds(yield* fixture.load)).toEqual(["logged-v1-first"])
+        yield* fixture.write("_lib/label.ts", `export const label = {{ broken\n`)
+        expect(yield* fixture.stale).toBe(true)
+        const broken = yield* fixture.load
+        expect(commandIds(broken)).toEqual(["logged-v1-first"])
+        expect(broken.resolved.failures[0]?.reason).toMatch(/^import failed: .* still runs$/s)
+        expect(yield* fixture.stale).toBe(false)
+        yield* fixture.write("_lib/label.ts", `export const label = "fixed"\n`)
+        expect(yield* fixture.stale).toBe(true)
+        const fixed = yield* fixture.load
+        expect(commandIds(fixed)).toEqual(["logged-v1-fixed"])
+        expect(fixed.resolved.failures).toEqual([])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  // Bun reads a module the file imports, then a save lands before the loader
+  // looks at that module: the build holds the old bytes, so it is no build
+  // of the files as they are.
+  it.scopedLive(
+    "a save to a module the first build finds, made as the build ends, reaches the load",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        const fs = yield* FileSystem.FileSystem
+        const label = fixture.file("_lib/label.ts")
+        yield* fixture.write("_lib/label.ts", `export const label = "first"\n`)
+        yield* fixture.write(
+          "logged.client.ts",
+          loggedModule(fixture.log, "v1", { import: 'import { label } from "./_lib/label"' }),
+        )
+        const saved = yield* Ref.make(false)
+        const saveOnFirstLook = (live: FileSystem.FileSystem): FileSystem.FileSystem => ({
+          ...live,
+          stat: (file) =>
+            Effect.gen(function* () {
+              if (file === label && !(yield* Ref.getAndSet(saved, true))) {
+                yield* fs.writeFileString(label, `export const label = "second!"\n`)
+              }
+              return yield* live.stat(file)
+            }),
+        })
+        yield* fixture.loadWith(saveOnFirstLook)
+        expect(yield* Ref.get(saved)).toBe(true)
+        expect(commandIds(yield* fixture.load)).toEqual(["logged-v1-second!"])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a new version that failed stays reported over reloads, until a fix, a removal or a disable",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        const fs = yield* FileSystem.FileSystem
+        const refused = `import { appendFileSync } from "node:fs"
+import { Effect } from "effect"
+export default {
+  id: "@test/logged",
+  setup: Effect.suspend(() => {
+    appendFileSync(${encode(fixture.log)}, "refused\\n")
+    return Effect.fail(new Error("setup refused"))
+  }),
+}`
+        const reasons = (load: TuiExtensionLoad) =>
+          load.resolved.failures.map((failure) => failure.reason)
+        yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+        yield* fixture.load
+        yield* fixture.write("logged.client.ts", refused)
+        const first = yield* fixture.load
+        expect(reasons(first)).toEqual([expect.stringMatching(/^setup failed: .* still runs$/)])
+        // An unchanged reload reports it again, and runs the refused setup no more.
+        const again = yield* fixture.load
+        expect(commandIds(again)).toEqual(["logged-v1-plain"])
+        expect(reasons(again)).toEqual(reasons(first))
+        expect(yield* fixture.readLog).toEqual(["setup:v1", "refused"])
+        // A disable ends it; an enable tries the file again.
+        yield* Ref.set(fixture.disabled, ["@test/logged"])
+        const disabled = yield* fixture.load
+        expect(commandIds(disabled)).toEqual([])
+        expect(reasons(disabled)).toEqual([])
+        yield* Ref.set(fixture.disabled, [])
+        const enabled = yield* fixture.load
+        expect(reasons(enabled)).toEqual(["setup failed: Error: setup refused"])
+        expect(reasons(yield* fixture.load)).toEqual(["setup failed: Error: setup refused"])
+        // A removal ends it.
+        yield* fs.remove(fixture.file("logged.client.ts"))
+        expect(reasons(yield* fixture.load)).toEqual([])
+        expect(yield* fixture.readLog).toEqual(["setup:v1", "refused", "refused"])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a disable ends the failure of an extension that never set up, and an enable tries it again",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        yield* fixture.write(
+          "refused.client.ts",
+          `import { Effect } from "effect"
+export default { id: "@test/refused", setup: Effect.fail(new Error("setup refused")) }`,
+        )
+        const reasons = (load: TuiExtensionLoad) =>
+          load.resolved.failures.map((failure) => failure.reason)
+        expect(reasons(yield* fixture.load)).toEqual(["setup failed: Error: setup refused"])
+        yield* Ref.set(fixture.disabled, ["@test/refused"])
+        expect(yield* fixture.stale).toBe(true)
+        expect(reasons(yield* fixture.load)).toEqual([])
+        expect(yield* fixture.stale).toBe(false)
+        expect(reasons(yield* fixture.load)).toEqual([])
+        yield* Ref.set(fixture.disabled, [])
+        expect(reasons(yield* fixture.load)).toEqual(["setup failed: Error: setup refused"])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a replacement that fails setup brings back no disabled extension and no claimed id",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        const renamedRefused = `import { Effect } from "effect"
+export default { id: "@test/renamed", setup: Effect.fail(new Error("setup refused")) }`
+        yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+        yield* fixture.write("other.client.ts", commandModule("@test/other", "other"))
+        expect(commandIds(yield* fixture.load)).toEqual(["logged-v1-plain", "other"])
+
+        // The file now holds another id, refused, and its old id is disabled.
+        yield* fixture.write("logged.client.ts", renamedRefused)
+        yield* Ref.set(fixture.disabled, ["@test/logged"])
+        const disabled = yield* fixture.load
+        yield* disabled.retire
+        expect(commandIds(disabled)).toEqual(["other"])
+        expect(disabled.resolved.failures).toEqual([
+          { id: "@test/renamed", reason: "setup failed: Error: setup refused" },
+        ])
+        expect(yield* fixture.readLog).toEqual(["setup:v1", "cleanup:v1", "released:v1"])
+
+        // The file runs its old id again; then it holds another id, refused,
+        // while a second file takes the old id.
+        yield* Ref.set(fixture.disabled, [])
+        yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v2"))
+        expect(commandIds(yield* fixture.load)).toEqual(["logged-v2-plain", "other"])
+        yield* fixture.write("logged.client.ts", renamedRefused)
+        yield* fixture.write("other.client.ts", commandModule("@test/logged", "claimed"))
+        const claimed = yield* fixture.load
+        yield* claimed.retire
+        expect(commandIds(claimed)).toEqual(["claimed"])
+        expect(claimed.resolved.failures).toEqual([
+          { id: "@test/renamed", reason: "setup failed: Error: setup refused" },
+        ])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  // The pane turns an extension off in the config of the session in view,
+  // and the server loads that session's project: the client loads the same
+  // project and reads the same configs, whichever directory it was launched in.
+  it.scopedLive("the client loads the project and the disabled list of the session in view", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "gent-client-place-" }),
+      )
+      const home = path.join(root, "home")
+      const launch = path.join(root, "launch")
+      const first = path.join(root, "first")
+      const second = path.join(root, "second")
+      const write = (file: string, text: string) =>
+        fs
+          .makeDirectory(path.dirname(file), { recursive: true })
+          .pipe(Effect.andThen(fs.writeFileString(file, text)))
+      yield* fs.makeDirectory(launch, { recursive: true })
+      yield* write(
+        path.join(home, ".gent/config.json"),
+        encodeTrustGrant({ trustedProjects: [launch, first, second] }),
+      )
+      yield* write(
+        path.join(home, ".gent/extensions/mine.client.ts"),
+        commandModule("@test/mine", "mine"),
+      )
+      yield* write(
+        path.join(first, ".gent/extensions/first.client.ts"),
+        commandModule("@test/first", "first"),
+      )
+      yield* write(
+        path.join(first, ".gent/config.json"),
+        encode({ disabledExtensions: ["@test/mine"] }),
+      )
+      yield* write(
+        path.join(second, ".gent/extensions/second.client.ts"),
+        commandModule("@test/second", "second"),
+      )
+      const inView = yield* Ref.make(first)
+      const runtime = makeClientExtensionRuntime({
+        transport: makeUnreachableTransport(),
+        workspace: { cwd: launch, home, sessionCwd: Ref.get(inView) },
+      })
+      yield* Effect.addFinalizer(() => Effect.promise(() => runtime.dispose()))
+      const loader = extensionUiLoader(runtime, { builtins: [], home })
+      const load = Effect.promise(() => loader.load()).pipe(
+        Effect.tap((loaded) => Effect.promise(() => loaded.retire())),
+        Effect.map((loaded) => commandsOf(loaded.resolved).map((entry) => entry.id)),
+      )
+      const stale = Effect.promise(() => loader.stale())
+
+      expect(yield* load).toEqual(["first"])
+      expect(yield* stale).toBe(false)
+      yield* Ref.set(inView, second)
+      expect(yield* stale).toBe(true)
+      expect(yield* load).toEqual(["mine", "second"])
+      expect(yield* stale).toBe(false)
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+})

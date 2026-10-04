@@ -514,6 +514,48 @@ describe("local health", () => {
     }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 
+  it.scopedLive(
+    "doctor report names the version a failed reload still runs, and the disabled extensions",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped()
+        const extensionHealth = extensionHealthFromSnapshot(
+          ExtensionHealthSnapshot.cases.Degraded.make({
+            healthyExtensions: [],
+            degradedExtensions: [
+              ExtensionHealth.cases.Degraded.make({
+                manifest: { id: "@user/notes" },
+                scope: "user",
+                sourcePath: "/home/u/.gent/extensions/notes.ts",
+                issues: [
+                  ExtensionHealthIssue.cases.ActivationFailed.make({
+                    phase: "setup",
+                    error: "setup boom",
+                    runningVersion: "0123456789abcdef0123",
+                  }),
+                ],
+              }),
+            ],
+            disabledExtensions: [
+              ExtensionHealth.cases.Disabled.make({
+                manifest: { id: "@user/off" },
+                scope: "user",
+                sourcePath: "/home/u/.gent/extensions/off.ts",
+              }),
+            ],
+          }),
+        )
+        const report = formatDoctorReport(
+          yield* makeDoctorReport(home, absentServer, extensionHealth),
+        )
+        expect(report).toContain(
+          "activation failed during setup: setup boom; version 0123456789ab still runs",
+        )
+        expect(report).toContain("  Disabled: @user/off")
+      }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+  )
+
   it.scopedLive("archives storage files on reset", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

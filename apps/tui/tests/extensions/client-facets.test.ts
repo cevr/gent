@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Exit, Fiber, Option, Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Schema, Scope } from "effect"
 import { createRoot, createSignal } from "solid-js"
-import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/protocol"
+import { AgentName, BranchId, GentRpcError, ModelId, SessionId } from "@gent/core/protocol"
 import { emptyQueueSnapshot } from "@gent/core/test-utils"
 import { type ClientContextValue, useClient } from "../../src/client"
 import { ref } from "@gent/core/extensions/api"
@@ -98,6 +98,31 @@ describe("transport", () => {
         },
       )
       yield* Deferred.await(interrupted).pipe(Effect.timeout("2 seconds"))
+    }),
+  )
+
+  // A pane draws a failed request's message: a refusal reads in the
+  // extension's own words, not the transport's.
+  it.scopedLive("an extension's refusal is the request's message", () =>
+    Effect.gen(function* () {
+      const refusal = yield* Schema.decodeEffect(GentRpcError)({
+        _tag: "ExtensionProtocolError",
+        extensionId: "@gent/wake",
+        tag: "wake.pending",
+        message: "no alarm is set",
+      })
+      const message = yield* provideClientServices(
+        Effect.gen(function* () {
+          const { transport } = yield* ClientContext
+          return yield* transport.request(ref(WakeRpc.Pending), {}).pipe(
+            Effect.flip,
+            Effect.map((failure) => failure.message),
+            Effect.orElseSucceed(() => "the request succeeded"),
+          )
+        }),
+        { requestEffect: () => Effect.fail(refusal) },
+      )
+      expect(message).toBe("no alarm is set")
     }),
   )
 })

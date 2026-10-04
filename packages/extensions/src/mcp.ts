@@ -1860,6 +1860,16 @@ interface McpClientsService {
   readonly pasteRedirect: (name: string, address: string) => Effect.Effect<LoginRedirect, McpError>
   /** Writes a binary block to a file (see `makeBlobStore`); none for a block not written. */
   readonly saveBlob: (block: Schema.Json) => Effect.Effect<Option.Option<string>>
+  /**
+   * Reload the extension in `place` (a session cwd) after each list that
+   * changes the cache, and now when a list since `registered` was read
+   * already did (see `reloadPlaces` in `mcpClientsLive`).
+   */
+  readonly watch: (
+    place: string,
+    registered: ReadonlyMap<string, CatalogServer>,
+    reload: Effect.Effect<void>,
+  ) => Effect.Effect<void>
 }
 
 /**
@@ -1939,10 +1949,10 @@ interface PendingLogin {
  * entry. The server's tools are listed again when a connection opens, when
  * the server sends `notifications/tools/list_changed`, and when it answers a
  * call as an unknown tool: a tool it no longer lists fails its call by name,
- * and a list that differs from the last one is written to the cache, so the
- * next session registers it. The current session keeps the tools it
- * registered; changing them live needs a host seam to re-register an
- * extension's tools.
+ * and a list that differs from the last one is written to the cache. Then each
+ * place a loop opened in reloads the extension (`ctx.Extensions.reload`), whose
+ * setup registers the cached list, so the next turn there offers it. Only then
+ * does the server's state (and `status`) take the new list.
  *
  * A connection is dropped when its transport closes and when a call on it
  * fails in the transport (see `failureKind`); a JSON-RPC error leaves it
@@ -2000,6 +2010,17 @@ const mcpClientsLive = ({
       const runFork = yield* FiberSet.makeRuntime<FileSystem.FileSystem | Path.Path>()
       /** The layer's scope: each login's listener lives in a child of it. */
       const layerScope = yield* Scope.Scope
+      /**
+       * Each place's reload of the extension, by the cwd of the loop that
+       * opened there (the newest one wins). A place's profile registers the
+       * tools its setup read from the cache, so a list that changes the cache
+       * reloads every place. The map holds one entry per place this process
+       * ran in, as the profile cache does.
+       */
+      const reloadPlaces = new Map<string, Effect.Effect<void>>()
+      const reloadAll = Effect.suspend(() =>
+        Effect.forEach(reloadPlaces.values(), (reload) => reload, { discard: true }),
+      )
       const setHealth = (state: ServerState, health: McpHealth, reason: Option.Option<string>) => {
         state.health = { health, reason }
       }
@@ -2029,14 +2050,15 @@ const mcpClientsLive = ({
             return namesOf(previous.tools)
           }
           const next = catalogServerOf(tools, instructions)
-          state.catalog = next
-          setHealth(state, "healthy", Option.none())
           if (!Equal.equals(next, previous)) {
             yield* Semaphore.withPermit(
               writePermit,
               writeCatalogEntries(file, [[server.key, next]]),
             )
+            yield* reloadAll
           }
+          state.catalog = next
+          setHealth(state, "healthy", Option.none())
           return namesOf(tools)
         }).pipe(
           Effect.catchCause((cause) => {
@@ -2309,6 +2331,18 @@ const mcpClientsLive = ({
       return McpClients.of({
         login,
         pasteRedirect,
+        watch: (place, registered, reload) =>
+          Effect.suspend(() => {
+            reloadPlaces.set(place, reload)
+            const stale = [...states.values()].some((state) =>
+              Option.exists(
+                Option.fromUndefinedOr(registered.get(state.entry.server.key)),
+                (read) => !Equal.equals(read, state.catalog),
+              ),
+            )
+            if (!stale) return Effect.void
+            return reload
+          }),
         call: (server, name, input) =>
           Effect.gen(function* () {
             const state = yield* stateOf(server)
@@ -2928,6 +2962,29 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
     ...registered.flatMap((entry) => toolsFor(entry.server, entry.catalog, clients)),
   )
   yield* host.register("request", McpCommand)
+  // A list after this setup read the cache changes the tools of the
+  // session's place: each loop's open hands the pool its place's reload.
+  const read = new Map(registered.map((entry) => [entry.server.key, entry.catalog] as const))
+  yield* host.on("loopOpen", () =>
+    Effect.gen(function* () {
+      const ctx = yield* ExtensionContext
+      const pool = yield* Effect.serviceOption(McpClients)
+      if (Option.isNone(pool)) return
+      const reload = ctx.Extensions.reload(extensionId).pipe(
+        Effect.asVoid,
+        Effect.catchCause((cause) =>
+          Effect.logWarning("mcp.reload.failed").pipe(
+            Effect.annotateLogs({
+              extension: extensionId,
+              cwd: ctx.cwd,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+      )
+      yield* pool.value.watch(ctx.cwd, read, reload)
+    }),
+  )
 })
 
 /**

@@ -321,6 +321,8 @@ export interface AgentLoopTurnProfile {
   readonly turnCapabilityContext: Context.Context<ExtensionRegistry>
   /** Identity of the process that built the profile; a process-local tool binding replays only inside it. */
   readonly turnGenerationId: ProcessGenerationId
+  /** The profile's revision (`SessionProfile.revision`), named on each request of the turn. */
+  readonly turnProfileRevision?: string
 }
 
 export class CurrentAgentLoopTurnProfile extends Context.Service<
@@ -3675,6 +3677,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       lastCallModel: Option.Option<ModelIdType>
       stepEfforts: ReadonlyMap<string, StepEffort>
       overflowed: boolean
+      /** The turn profile's revision, named on `StreamStarted`. */
+      profileRevision: Option.Option<string>
     }) {
       const persistAssistantPartsWithBindingsAt = (
         at: StepAddress,
@@ -3737,6 +3741,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           messageId: params.messageId,
           step: params.step,
           ...effortReceipt(source.reasoningLevel),
+          ...omitUndefined({ profileRevision: Option.getOrUndefined(params.profileRevision) }),
         }),
       )
 
@@ -4744,6 +4749,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             lastCallModel: knownSteps.lastCallModel,
             stepEfforts: knownSteps.stepEfforts,
             overflowed: params.overflowed,
+            profileRevision: Option.fromUndefinedOr(params.turnProfile.turnProfileRevision),
           })
         }).pipe(Effect.ensuring(Ref.set(scope.activeStreamRef, Option.none()))),
       )

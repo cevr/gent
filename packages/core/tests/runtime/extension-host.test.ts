@@ -24,7 +24,6 @@ import {
 import * as EffectEntry from "effect"
 import * as EffectAiEntry from "effect/ai"
 import * as EffectAiErrorEntry from "effect/ai/AiError"
-import * as EffectPromptEntry from "effect/ai/Prompt"
 import * as EffectResponseEntry from "effect/ai/Response"
 import * as EffectEncodingEntry from "effect/encoding"
 import * as EffectHttpEntry from "effect/http"
@@ -91,6 +90,7 @@ import {
   setupExtensions,
   validateLoadedExtensions,
   loadRuntimeProfileDeclarations,
+  makeModuleGraphs,
   scanRuntimeProfileExtensions,
   type RuntimeProfileInputs,
   extensionEntryModules,
@@ -141,11 +141,13 @@ import {
   Auth,
   DecisionModelResolver,
   listModelCatalog,
+  finishPart,
   ModelRegistry,
+  textDeltaPart,
   textStep,
   toolCallStep,
 } from "../../src/runtime/provider"
-import { LanguageModelLayers, waitFor } from "../../src/test-utils/language-model"
+import { LanguageModelLayers, turnRequestText, waitFor } from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
   AgentName,
@@ -155,6 +157,7 @@ import {
   ProviderId,
 } from "../../src/domain/agent"
 import * as AiTool from "effect/ai/Tool"
+import * as Prompt from "effect/ai/Prompt"
 import {
   bindRequestCapabilityExtension,
   CapabilityError,
@@ -180,7 +183,12 @@ import {
   type TurnAfterInput,
   type ExtensionHookHandler,
 } from "../../src/domain/extension"
-import { CurrentBranchToolFeature, noBranchTools, ToolRunner } from "../../src/runtime/tools"
+import {
+  attachToolBindingIdentity,
+  CurrentBranchToolFeature,
+  noBranchTools,
+  ToolRunner,
+} from "../../src/runtime/tools"
 import { SingleRunner } from "effect/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
@@ -731,6 +739,37 @@ const markerExtension = (id: string, value: string, stop: Effect.Effect<void> = 
     }),
   })
 
+/** A user extension file that registers `ids` as tools; `reply` is their body. */
+const probeSource = (
+  reply: string,
+  ids: ReadonlyArray<string>,
+  surface: { readonly output?: string; readonly guideline?: string } = {},
+) =>
+  [
+    'import { Effect, Schema } from "effect";',
+    'import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api";',
+    "const probe = (id) =>",
+    "  tool({",
+    "    id,",
+    "    description: `Probe ${id}`,",
+    "    params: Schema.Struct({ text: Schema.String }),",
+    `    output: ${Option.getOrElse(Option.fromUndefinedOr(surface.output), () => "Schema.String")},`,
+    ...Option.match(Option.fromUndefinedOr(surface.guideline), {
+      onNone: () => [],
+      onSome: (guideline) => [`    promptGuidelines: [${encodeJson(guideline)}],`],
+    }),
+    `    execute: () => Effect.succeed(${encodeJson(reply)}),`,
+    "  });",
+    "export default defineExtension({",
+    '  id: "@test/probe",',
+    "  setup: Effect.gen(function* () {",
+    "    const host = yield* ExtensionHost;",
+    ...ids.map((id) => `    yield* host.register("tool", probe(${encodeJson(id)}));`),
+    "  }),",
+    "});",
+    "",
+  ].join("\n")
+
 describe("session profile resolution", () => {
   it.scopedLive("a trust grant and a trust revoke each reach the next resolve", () =>
     Effect.gen(function* () {
@@ -824,6 +863,43 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive("a user tool's binding names its file version: an edit changes it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-binding-version-" })
+      const home = path.join(directory, "home")
+      const launch = path.join(directory, "launch")
+      const entry = path.join(home, ".gent", "extensions", "probe.ts")
+      yield* fs.makeDirectory(path.dirname(entry), { recursive: true })
+      yield* fs.makeDirectory(launch, { recursive: true })
+      const bindingOf = Effect.fn("test.bindingOf")(function* () {
+        const profile = yield* Effect.scoped((yield* SessionProfileCache).resolve(launch))
+        const tool = profile.registryService.getResolved().modelCapabilities.get("probe_one")
+        if (Predicate.isUndefined(tool)) return yield* Effect.die("probe_one is not registered")
+        const attached = yield* attachToolBindingIdentity(tool)
+        if (Predicate.isUndefined(attached.binding)) return yield* Effect.die("no binding")
+        return attached.binding
+      })
+
+      yield* Effect.gen(function* () {
+        yield* writeFileAtomic(entry, probeSource("v1", ["probe_one"]))
+        const first = yield* bindingOf()
+        expect(first.source._tag).toBe("Static")
+        expect(yield* bindingOf()).toEqual(first)
+
+        yield* writeFileAtomic(entry, probeSource("v2", ["probe_one"]))
+        const edited = yield* bindingOf()
+        expect(edited.source._tag).toBe("Static")
+        expect(edited.source.sourceRevision).not.toBe(first.source.sourceRevision)
+        expect(edited.schemaRevision).toBe(first.schemaRevision)
+      }).pipe(
+        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
+      )
+    }).pipe(Effect.provide(Layer.merge(BunPlatformLive, BunGentPlatformLive))),
   )
 
   it.scopedLive("an edited extension file builds its process resource again", () =>
@@ -2593,7 +2669,7 @@ const fsLayer = Layer.provideMerge(
  */
 const discoverProfileExtensions = (dirs: { readonly home: string; readonly cwd: string }) =>
   Effect.gen(function* () {
-    const scan = yield* scanRuntimeProfileExtensions(dirs, new Map())
+    const scan = yield* scanRuntimeProfileExtensions(dirs, makeModuleGraphs())
     const declarations = yield* loadRuntimeProfileDeclarations(
       { ...dirs, platform: "test", extensions: [] },
       scan,
@@ -3932,7 +4008,7 @@ const boundEntries = {
   effect: EffectEntry,
   "effect/ai": EffectAiEntry,
   "effect/ai/AiError": EffectAiErrorEntry,
-  "effect/ai/Prompt": EffectPromptEntry,
+  "effect/ai/Prompt": Prompt,
   "effect/ai/Response": EffectResponseEntry,
   "effect/ai/Tool": AiTool,
   "effect/encoding": EffectEncodingEntry,
@@ -6315,7 +6391,7 @@ describe("live Profile", () => {
         }
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs, new Map()),
+          yield* scanRuntimeProfileExtensions(inputs, makeModuleGraphs()),
         )
         expect(events).toEqual([])
         expect(declarations.extensionDeclarations.failed).toContainEqual(
@@ -6365,7 +6441,7 @@ describe("live Profile", () => {
 
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs, new Map()),
+          yield* scanRuntimeProfileExtensions(inputs, makeModuleGraphs()),
         )
         expect(declarations.extensionDeclarations.failed).toEqual([
           expect.objectContaining({
@@ -6390,7 +6466,7 @@ describe("live Profile", () => {
         // A disabled id silences its file.
         const quiet = yield* loadRuntimeProfileDeclarations(
           { ...inputs, disabledExtensions: ["broken", "folder-broken", "local"] },
-          yield* scanRuntimeProfileExtensions(inputs, new Map()),
+          yield* scanRuntimeProfileExtensions(inputs, makeModuleGraphs()),
         )
         expect(quiet.extensionDeclarations.failed).toEqual([])
 
@@ -6434,7 +6510,7 @@ describe("live Profile", () => {
           }),
         })
         const inputs = { cwd: home, home, platform: "darwin", extensions: [extension] }
-        const scan = yield* scanRuntimeProfileExtensions(inputs, new Map())
+        const scan = yield* scanRuntimeProfileExtensions(inputs, makeModuleGraphs())
 
         const missing = yield* loadRuntimeProfileDeclarations(inputs, scan)
         expect(missing.extensionDeclarations.failed).toEqual([
@@ -6879,5 +6955,186 @@ describe("extensions facet via RPC", () => {
         expect(yield* Ref.get(setups)).toBe(setupsBefore + 1)
       }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
     10_000,
+  )
+})
+
+describe("profile revision via RPC", () => {
+  const switchable = defineExtension({
+    id: "@test/switchable",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: "switchable_tool",
+          description: "A tool a config can turn off",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.String,
+          execute: () => Effect.succeed("on"),
+        }),
+      )
+      yield* host.register(
+        "request",
+        request({
+          id: "reload",
+          input: Schema.String,
+          output: Schema.String,
+          execute: (id) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Extensions.reload(id)
+              return id
+            }).pipe(Effect.catchEager((error) => Effect.succeed(error.message))),
+        }),
+      )
+    }),
+  })
+
+  interface Captured {
+    readonly system: string
+    readonly tools: string
+    readonly toolNames: ReadonlyArray<string>
+  }
+
+  it.live(
+    "each request names what its extensions show the model: a body edit or a reload keeps it; an added, reordered or retyped tool, a changed prompt line or a disabled extension changes it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-revision-home-" })
+        const project = yield* fs.makeTempDirectoryScoped({ prefix: "gent-revision-cwd-" })
+        const extensionsDir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(extensionsDir, { recursive: true })
+        const probeFile = path.join(extensionsDir, "probe.ts")
+        yield* fs.writeFileString(probeFile, probeSource("v1", ["probe_one"]))
+        const captured = yield* Ref.make<ReadonlyArray<Captured>>([])
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            const tools = options.tools.map((entry) => ({
+              name: entry.name,
+              description: entry.description,
+              parameters: AiTool.getJsonSchema(entry),
+            }))
+            yield* Ref.update(captured, (all) => [
+              ...all,
+              {
+                system: turnRequestText(Prompt.make(options.prompt)).systemPrompt,
+                tools: encodeJson(tools),
+                toolNames: tools.map((entry) => entry.name),
+              },
+            ])
+            return Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })])
+          }),
+        )
+        yield* Effect.gen(function* () {
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: [testAgent],
+            extensionInputs: [testTurnExtension, switchable],
+            providerLayer,
+            home,
+            cwd: project,
+            configServiceLayer: ConfigService.Live.pipe(
+              Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+              Layer.provide(BunPlatformLive),
+            ),
+          })
+          const turn = (content: string) =>
+            Effect.gen(function* () {
+              const events = yield* client.session.events({ sessionId, branchId }).pipe(
+                Stream.filter(({ event }) => event._tag !== "StreamSynchronized"),
+                Stream.dropWhile(
+                  ({ event }) =>
+                    !(
+                      event._tag === "MessageReceived" &&
+                      messagePartsDisplayText(event.message.parts) === content
+                    ),
+                ),
+                Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+                Stream.runCollect,
+                Effect.forkScoped,
+              )
+              yield* client.message.send({ sessionId, branchId, content })
+              const started = Array.from(yield* Fiber.join(events))
+                .map(({ event }) => event)
+                .filter((event) => event._tag === "StreamStarted")
+              expect(started).toHaveLength(1)
+              return started[0]?.profileRevision
+            })
+
+          const first = yield* turn("first")
+          const unchanged = yield* turn("unchanged")
+          yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId: ExtensionId.make("@test/switchable"),
+            capabilityId: "reload",
+            input: "@test/switchable",
+          })
+          const reloaded = yield* turn("reloaded")
+          yield* fs.writeFileString(probeFile, probeSource("v2", ["probe_one"]))
+          const bodyEdit = yield* turn("body edit")
+          yield* fs.writeFileString(probeFile, probeSource("v2", ["probe_one", "probe_two"]))
+          const added = yield* turn("added tool")
+          yield* fs.writeFileString(probeFile, probeSource("v2", ["probe_two", "probe_one"]))
+          const reordered = yield* turn("reordered tools")
+          yield* fs.writeFileString(
+            probeFile,
+            probeSource("v2", ["probe_two", "probe_one"], { guideline: "Probe with care." }),
+          )
+          const guided = yield* turn("prompt line")
+          yield* fs.writeFileString(
+            probeFile,
+            probeSource(`2`, ["probe_two", "probe_one"], {
+              guideline: "Probe with care.",
+              output: "Schema.Number",
+            }),
+          )
+          const retyped = yield* turn("output schema")
+          yield* fs.writeFileString(
+            path.join(home, ".gent", "config.json"),
+            encodeJson({ disabledExtensions: ["@test/switchable"] }),
+          )
+          const disabled = yield* turn("disabled")
+
+          const requests = yield* Ref.get(captured)
+          expect(requests).toHaveLength(9)
+          const [a, b, , c, d, r, , , e] = requests
+          if (
+            Predicate.isUndefined(a) ||
+            Predicate.isUndefined(b) ||
+            Predicate.isUndefined(c) ||
+            Predicate.isUndefined(d) ||
+            Predicate.isUndefined(r) ||
+            Predicate.isUndefined(e)
+          ) {
+            return expect.unreachable()
+          }
+          // No change: the same profile, the same bytes.
+          expect(first).toBeDefined()
+          expect(unchanged).toBe(first)
+          expect(b).toEqual(a)
+          // A reload sets the same code up again: the model reads the same.
+          expect(reloaded).toBe(unchanged)
+          // A tool body edit is a new version and costs nothing: the bytes
+          // stay, and the request names the same surface.
+          expect(bodyEdit).toBe(unchanged)
+          expect(c).toEqual(b)
+          // An added tool and a disabled extension change what the model reads.
+          expect(added).not.toBe(bodyEdit)
+          expect(d.toolNames).toContain("probe_two")
+          expect(d.tools).not.toBe(c.tools)
+          // The request keeps the registration order, so an order change is
+          // a change the model reads; so are a prompt line and a result type.
+          expect(r.toolNames.indexOf("probe_two")).toBeLessThan(r.toolNames.indexOf("probe_one"))
+          expect(reordered).not.toBe(added)
+          expect(guided).not.toBe(reordered)
+          expect(retyped).not.toBe(guided)
+          expect(disabled).not.toBe(retyped)
+          expect(e.toolNames).not.toContain("switchable_tool")
+          expect(e.tools).not.toBe(d.tools)
+        }).pipe(Effect.scoped, Effect.timeout("20 seconds"))
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    25_000,
   )
 })

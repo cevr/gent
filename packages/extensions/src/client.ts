@@ -21,6 +21,7 @@ export {
   QuestionsRpc,
 } from "./interaction-tools.js"
 export { SkillsRpc } from "./skills.js"
+export { EXTENSION_ADMIN_EXTENSION_ID, ExtensionAdminRpc } from "./extension-admin.js"
 export { FilesRpc } from "./fs-tools.js"
 // The TUI file popup memoizes its finder's scan with the shape the catalog and the MCP prune use.
 export { makeStartedMemo } from "./started-memo.js"

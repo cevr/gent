@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite"
 import { type Cause, Effect, Option, Schema } from "effect"
+import path from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- the Bun edge resolves the build record's paths as Bun wrote them.
 
 /*
  * The TUI's whole Bun edge: the only TUI file that reads `Bun.*` or a `bun:`
@@ -67,15 +68,30 @@ const loadSolidPlugin = Effect.tryPromise({
 })
 
 /**
+ * One client file built: the module text and the files the build read, as
+ * absolute paths.
+ */
+interface ClientBuild {
+  readonly code: string
+  readonly inputs: ReadonlyArray<string>
+}
+
+/** The sha256 of `input`, in hex: a build's version and its inputs' content hash. */
+export const sha256Hex = (input: Uint8Array | string): string =>
+  new Bun.CryptoHasher("sha256").update(input).digest("hex")
+
+/**
  * Compile a client file and the relative modules it imports as the build
  * compiles the shipped ones (Solid JSX). Each client-only import is renamed
  * and kept external; a name in `external` stays an import too. The result is
- * one ES module as text.
+ * one ES module. Bun's build record (`metafile`) names each file it read
+ * relative to the process's directory; the output names them relative to the
+ * file's own directory, so the same files build the same text.
  */
 export const buildClientExtension = (
   filePath: string,
   names: ClientBuildNames,
-): Effect.Effect<string, ClientExtensionBuildError> =>
+): Effect.Effect<ClientBuild, ClientExtensionBuildError> =>
   Effect.flatMap(loadSolidPlugin, ({ createSolidTransformPlugin }) =>
     Effect.tryPromise({
       try: () =>
@@ -83,6 +99,8 @@ export const buildClientExtension = (
           entrypoints: [filePath],
           target: "bun",
           format: "esm",
+          metafile: true,
+          root: path.dirname(filePath),
           external: [...names.external],
           plugins: [
             {
@@ -113,7 +131,14 @@ export const buildClientExtension = (
             Effect.tryPromise({
               try: () => output.text(),
               catch: (cause) => new ClientExtensionBuildError({ cause }),
-            }),
+            }).pipe(
+              Effect.map((code): ClientBuild => ({
+                code,
+                inputs: Object.keys(result.metafile?.inputs ?? {}).map((input) =>
+                  path.resolve(process.cwd(), input),
+                ),
+              })),
+            ),
         },
       ),
     ),

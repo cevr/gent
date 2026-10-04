@@ -11,6 +11,7 @@ import {
   makeClientContextLayer,
   type MessageRendererEntry,
   type PaneOwner,
+  coalescedRead,
   type QueuedMessage,
   type StatusLabelAnchor,
   type StatusLabelItem,
@@ -37,7 +38,7 @@ import type { Command } from "../commands"
 import {
   type ClientExtensionFailure,
   type CommandSource,
-  loadExtensionUi,
+  extensionUiLoader,
   resolveCommands,
   type ResolvedAutocomplete,
   type ResolvedNoticeRows,
@@ -406,6 +407,9 @@ export function ExtensionUIProvider(props: {
         close: (id) => Option.map(paneOwner(), (owner) => owner.close(id)),
         isOpen: (id) => Option.exists(paneOwner(), (owner) => owner.isOpen(id)),
       },
+      reloadExtensions: () => {
+        void reloadExtensions()
+      },
     },
     activity: () => activityProvider()(),
     lifecycle: { addCleanup },
@@ -436,21 +440,59 @@ export function ExtensionUIProvider(props: {
     void dispose()
   })
 
-  onMount(() => {
-    void loadExtensionUi(clientRuntime, {
-      builtins: props.builtins ?? builtinClientModules,
-      home: workspace.home,
-      cwd: workspace.cwd,
-    })
-      .then(setResolved)
-      .catch((error: Error) =>
-        setResolved({
-          ...EMPTY_RESOLVED,
-          failures: [{ id: "client extensions", reason: String(error) }],
-        }),
-      )
-      .finally(() => setLoaded(true))
+  // One loader for the provider: it keeps the live extensions between loads,
+  // so a reload sets up only what changed. The new set goes on screen first;
+  // the lifetimes it replaced end after, so nothing drawn reads a closed one.
+  // A load that fails as a whole keeps the set on screen and reports it.
+  const extensions = extensionUiLoader(clientRuntime, {
+    builtins: props.builtins ?? builtinClientModules,
+    home: workspace.home,
   })
+  function reloadExtensions(): Promise<void> {
+    return extensions
+      .load()
+      .then((load) => {
+        setRenderFailures((current) => current.filter((failure) => !load.setUp.has(failure.id)))
+        setResolved(load.resolved)
+        return load.retire()
+      })
+      .catch((error: Error) => {
+        setResolved((current) => ({
+          ...current,
+          failures: [...current.failures, { id: "client extensions", reason: String(error) }],
+        }))
+      })
+  }
+
+  onMount(() => {
+    void reloadExtensions().finally(() => setLoaded(true))
+  })
+
+  // A turn's end is when the server applies a changed extension file: the
+  // client looks at its own files then, and loads again when one changed. One
+  // look runs at a time, and a turn that ends during a look asks for one more.
+  const reloadWhenStale = coalescedRead(client.runtime.cast, () =>
+    Effect.promise(() => reloadExtensions()).pipe(
+      // A look that fails (the runtime is closing) loads nothing.
+      Effect.when(Effect.tryPromise(() => extensions.stale())),
+      Effect.ignore,
+    ),
+  )
+  const unsubscribeTurns = client.onSessionEvent((envelope) => {
+    if (envelope.event._tag === "TurnCompleted" && untrack(loaded)) reloadWhenStale()
+  })
+  onCleanup(unsubscribeTurns)
+  // The loader reads the place of the session in view: a move to a session
+  // in another directory is a look too, as its project and configs may differ.
+  createEffect(
+    on(
+      () => client.pathPlace().cwd,
+      () => {
+        if (untrack(loaded)) reloadWhenStale()
+      },
+      { defer: true },
+    ),
+  )
 
   // The contributed rows belong to the session, not to its name: a move to
   // another session clears them, a rename leaves the list up.
