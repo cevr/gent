@@ -2474,6 +2474,25 @@ describe("mcp images", () => {
     })
   })
 
+  test("a scaled MCP image keeps its original size in the result", () => {
+    const image = ToolImage.make({
+      sha256: "b".repeat(64),
+      mediaType: "image/png",
+      width: 2000,
+      height: 1000,
+      bytes: 900,
+      originalWidth: 4000,
+      originalHeight: 2000,
+    })
+    expect(
+      projectCallResult(
+        { content: [{ type: "image", data: DOT_PNG, mimeType: "image/png" }] },
+        [Option.none()],
+        [Option.some({ image, path: "/data/blobs/b.png" })],
+      ),
+    ).toEqual({ images: [{ ...image, path: "/data/blobs/b.png" }] })
+  })
+
   it.scopedLive(
     "an MCP image reaches the model after the call's result, through the tool image store",
     () =>

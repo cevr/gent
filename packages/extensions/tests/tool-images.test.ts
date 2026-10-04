@@ -16,6 +16,7 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect"
+import { crc32, deflateSync } from "node:zlib"
 import { BunServices } from "@effect/platform-bun"
 import { LanguageModel } from "effect/ai"
 import * as Prompt from "effect/ai/Prompt"
@@ -39,6 +40,7 @@ import {
   ToolImageError,
 } from "@gent/core/extensions/api"
 import {
+  BunGentPlatformLive,
   createRpcHarness,
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -135,6 +137,112 @@ const webpLosslessBytes = (width: number, height: number) => {
 const webpLossyBytes = (width: number, height: number) =>
   webpChunk("VP8 ", [0, 0, 0, 0x9d, 0x01, 0x2a, ...le16(width), ...le16(height)])
 
+// Real images, which a codec decodes: the header fixtures above have no pixels.
+
+/** The byte limit of the store: its base64 fits Anthropic's 5 MiB an image. */
+const TOOL_IMAGE_MAX_BYTES = (5 * 1024 * 1024 * 3) / 4
+
+const pngChunk = (type: string, data: Uint8Array) => {
+  const body = Buffer.concat([Buffer.from(type, "latin1"), data])
+  return Buffer.concat([Buffer.from(be32(data.length)), body, Buffer.from(be32(crc32(body)))])
+}
+
+/** A truecolor PNG of `width` x `height`, each pixel as `pixel` paints it. */
+const paintedPng = (
+  width: number,
+  height: number,
+  pixel: (x: number, y: number) => readonly [number, number, number],
+) => {
+  const stride = width * 3 + 1
+  const raw = Buffer.alloc(stride * height)
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const [red, green, blue] = pixel(x, y)
+      const at = y * stride + 1 + x * 3
+      raw[at] = red
+      raw[at + 1] = green
+      raw[at + 2] = blue
+    }
+  }
+  return Uint8Array.from(
+    Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      pngChunk("IHDR", Uint8Array.from([...be32(width), ...be32(height), 8, 2, 0, 0, 0])),
+      pngChunk("IDAT", deflateSync(raw)),
+      pngChunk("IEND", new Uint8Array()),
+    ]),
+  )
+}
+
+/** A gradient PNG, which compresses well. */
+const realPng = (width: number, height: number) =>
+  paintedPng(width, height, (x, y) => [x % 256, y % 256, 90])
+
+/** A PNG of noise from a fixed seed: no lossy encoder makes it small. */
+const noisePng = (width: number, height: number) => {
+  let state = 2_463_534_242
+  const next = () => {
+    state ^= state << 13
+    state ^= state >>> 17
+    state ^= state << 5
+    return (state >>> 0) & 0xff
+  }
+  return paintedPng(width, height, () => [next(), next(), next()])
+}
+
+/**
+ * A two-colour GIF of `width` x `height`. Each pixel is a clear code and the
+ * pixel's code, three bits each, so the code width never grows.
+ */
+const realGif = (width: number, height: number) => {
+  const bits: Array<number> = []
+  const put = (code: number) => {
+    for (let bit = 0; bit < 3; bit += 1) bits.push((code >> bit) & 1)
+  }
+  for (let index = 0; index < width * height; index += 1) {
+    put(4)
+    put(((index % width) >> 4) & 1)
+  }
+  put(5)
+  const data: Array<number> = []
+  for (let at = 0; at < bits.length; at += 8) {
+    let byte = 0
+    for (let bit = 0; bit < 8; bit += 1) byte |= (bits[at + bit] ?? 0) << bit
+    data.push(byte)
+  }
+  const blocks: Array<number> = []
+  for (let at = 0; at < data.length; at += 255) {
+    const block = data.slice(at, at + 255)
+    blocks.push(block.length, ...block)
+  }
+  return bytesOf(
+    "GIF89a",
+    le16(width),
+    le16(height),
+    [0x80, 0, 0, 0, 0, 0, 255, 255, 255],
+    [0x2c, 0, 0, 0, 0],
+    le16(width),
+    le16(height),
+    [0, 2],
+    blocks,
+    [0, 0x3b],
+  )
+}
+
+/** `png` encoded as `format` by Bun's codec. */
+const encodeAs = (png: Uint8Array, format: "jpeg" | "webp", quality = 80) =>
+  Effect.promise(() => {
+    const image = new Bun.Image(png)
+    if (format === "jpeg") return image.jpeg({ quality }).bytes()
+    return image.webp({ quality }).bytes()
+  })
+
+/** The size and format an image's bytes decode to. */
+const imageMetadata = (bytes: Uint8Array) =>
+  Effect.promise(() => new Bun.Image(bytes).metadata()).pipe(
+    Effect.map(({ width, height, format }) => ({ width, height, format })),
+  )
+
 // ── store ───────────────────────────────────────────────────────────────────
 
 /** A tool that saves what it is handed and returns the reference. */
@@ -161,6 +269,9 @@ const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64")
 
 const saveIn = (home: string, cwd: string, params: typeof SaveTool.parametersSchema.Type) =>
   runToolWithCtx(SaveTool, params, testToolContext({ home, cwd }))
+
+/** The platform a saved image runs on: the Bun services and gent's own, the image codec's owner. */
+const storePlatform = Layer.merge(BunServices.layer, BunGentPlatformLive)
 
 const sha256Hex = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
 
@@ -218,7 +329,7 @@ describe("tool image store", () => {
         const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.${fixture.ext}`)
         expect(Buffer.from(stored).equals(Buffer.from(fixture.bytes))).toBe(true)
       }
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(storePlatform)),
   )
 
   it.scopedLive("the same bytes saved twice keep one file, and a path saves from the cwd", () =>
@@ -237,10 +348,10 @@ describe("tool image store", () => {
       expect(yield* fs.readDirectory(path.join(home, ".gent", "blobs"))).toEqual([
         `${first.image.sha256}.png`,
       ])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(storePlatform)),
   )
 
-  it.scopedLive("bytes that are not an image, or are too large, fail and store nothing", () =>
+  it.scopedLive("bytes no codec decodes fail and store nothing", () =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("tool-image-home-")
       const fs = yield* FileSystem.FileSystem
@@ -259,23 +370,124 @@ describe("tool image store", () => {
           }),
         )
       expect(yield* failureOf({ base64: base64(bytesOf("plain text, no image")) })).toBe(
-        "ToolImageError: the bytes are not a PNG, JPEG, GIF or WebP image",
+        "ToolImageError: the bytes are not an image",
       )
+      // A header with no pixels behind it: the store must decode it to scale it, and cannot.
       const huge = new Uint8Array(4 * 1024 * 1024)
       huge.set(pngBytes(100, 100))
       expect(yield* failureOf({ base64: base64(huge) })).toBe(
-        "ToolImageError: the image is 4194304 bytes, over the 3932160-byte limit",
+        "ToolImageError: the image cannot be decoded",
       )
-      // Past 2,000 pixels a side some model APIs refuse the request: the tool must downscale.
       expect(yield* failureOf({ base64: base64(pngBytes(2001, 10)) })).toBe(
-        "ToolImageError: the image is 2001x10; each side must be 1 to 2000 pixels: downscale it before you save it",
+        "ToolImageError: the image cannot be decoded",
       )
       expect(yield* failureOf({ path: "missing.png" })).toBe(
         "ToolImageError: cannot read the image missing.png",
       )
       expect(yield* fs.exists(`${home}/.gent/blobs`)).toBe(false)
+      // Inside both limits the store keeps the bytes as they are, with no decode.
       expect(yield* failureOf({ base64: base64(pngBytes(2000, 2000)) })).toBe("stored")
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(storePlatform)),
+  )
+
+  it.scopedLive(
+    "an image past 2,000 pixels a side is scaled to fit, keeps its aspect ratio, and records its original size",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("tool-image-home-")
+        const fs = yield* FileSystem.FileSystem
+        const cases = [
+          {
+            name: "png",
+            bytes: realPng(4000, 1000),
+            mediaType: "image/png",
+            ext: "png",
+            size: [2000, 500],
+            original: [4000, 1000],
+          },
+          {
+            name: "webp",
+            bytes: yield* encodeAs(realPng(1500, 3000), "webp"),
+            mediaType: "image/webp",
+            ext: "webp",
+            size: [1000, 2000],
+            original: [1500, 3000],
+          },
+          // No platform encodes GIF: a scaled GIF is a PNG of its first frame.
+          {
+            name: "gif",
+            bytes: realGif(2100, 10),
+            mediaType: "image/png",
+            ext: "png",
+            size: [2000, 10],
+            original: [2100, 10],
+          },
+        ] as const
+        for (const fixture of cases) {
+          const { image } = yield* saveIn(home, home, {
+            base64: base64(fixture.bytes),
+            source: fixture.name,
+          })
+          const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.${fixture.ext}`)
+          expect({ name: fixture.name, image }).toEqual({
+            name: fixture.name,
+            image: {
+              _tag: "ToolImage",
+              sha256: sha256Hex(stored),
+              mediaType: fixture.mediaType,
+              width: fixture.size[0],
+              height: fixture.size[1],
+              bytes: stored.length,
+              source: fixture.name,
+              originalWidth: fixture.original[0],
+              originalHeight: fixture.original[1],
+            },
+          })
+          // The blob is the scaled image: its own header names the stored size.
+          expect(yield* imageMetadata(stored)).toEqual({
+            width: fixture.size[0],
+            height: fixture.size[1],
+            format: fixture.ext,
+          })
+        }
+      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "an image past the byte limit is encoded again under it",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("tool-image-home-")
+        const fs = yield* FileSystem.FileSystem
+        const jpeg = yield* encodeAs(noisePng(1800, 1800), "jpeg", 100)
+        expect(jpeg.length).toBeGreaterThan(TOOL_IMAGE_MAX_BYTES)
+        const { image } = yield* saveIn(home, home, { base64: base64(jpeg) })
+        const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.jpg`)
+        expect(image.mediaType).toBe("image/jpeg")
+        expect(image.bytes).toBe(stored.length)
+        expect(image.bytes).toBeLessThanOrEqual(TOOL_IMAGE_MAX_BYTES)
+        // Its sides were inside the limit, so only its bytes changed.
+        expect([image.width, image.height]).toEqual([1800, 1800])
+        expect(image.originalWidth).toBeUndefined()
+        expect(yield* imageMetadata(stored)).toEqual({ width: 1800, height: 1800, format: "jpeg" })
+      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.live("a ToolImage stored before scaling, with no original size, still decodes", () =>
+    Effect.gen(function* () {
+      const stored = {
+        _tag: "ToolImage",
+        sha256: "a".repeat(64),
+        mediaType: "image/png",
+        width: 64,
+        height: 32,
+        bytes: 100,
+        source: "shot.png",
+      } as const
+      expect(yield* Schema.decodeEffect(ToolImage)(stored)).toEqual(stored)
+    }),
   )
 })
 
@@ -415,6 +627,8 @@ type RpcClient = Effect.Success<ReturnType<typeof createRpcHarness>>["client"]
 
 const imageTurn = Effect.fn("test.imageTurn")(function* (params: {
   readonly paths: ReadonlyArray<string>
+  /** The bytes of each path; a copy of `SHOT` with its own filler when absent. */
+  readonly shots?: ReadonlyArray<Uint8Array>
   readonly agent?: AgentDefinition
   readonly models?: ReadonlyArray<Model>
   /** A home and a database file the test keeps across server starts. */
@@ -432,7 +646,7 @@ const imageTurn = Effect.fn("test.imageTurn")(function* (params: {
   })
   const fs = yield* FileSystem.FileSystem
   for (const [index, path] of params.paths.entries()) {
-    yield* fs.writeFile(`${cwd}/${path}`, shotBytes(index))
+    yield* fs.writeFile(`${cwd}/${path}`, params.shots?.[index] ?? shotBytes(index))
   }
   const prompts: Array<Prompt.Prompt> = []
   const seen: SequenceStep["assertOptions"] = (options) => {
@@ -575,6 +789,33 @@ describe("tool images in a request", () => {
         ])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     15_000,
+  )
+
+  it.scopedLive(
+    "a scaled image's line names its original size and the factor that maps coordinates back",
+    () =>
+      Effect.gen(function* () {
+        const { prompts, stored } = yield* imageTurn({
+          paths: ["canvas.png"],
+          shots: [realPng(4000, 2000)],
+        })
+        const { next } = afterLastToolMessage(prompts[1] ?? Prompt.empty)
+        expect(partsOf(next)[0]).toEqual({
+          type: "text",
+          value:
+            "Image from save_image canvas.png 2000x1000, scaled from 4000x2000 (multiply coordinates by 2.00 to map to the original):",
+        })
+        // The stored result keeps the original size beside the scaled one.
+        const results = stored
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result" && part.name === "save_image")
+        expect(results[0]).toMatchObject({
+          result: {
+            image: { width: 2000, height: 1000, originalWidth: 4000, originalHeight: 2000 },
+          },
+        })
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
   )
 
   it.scopedLive(

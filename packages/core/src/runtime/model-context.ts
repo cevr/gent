@@ -402,6 +402,21 @@ const toolImageName = (entry: PromptToolImage): string =>
   ].join(" ")
 
 /**
+ * The line above an image the model sees. A scaled image's line names the
+ * size the tool saved and the factor from the stored image to it, in pi's
+ * and Claude Code's words (`PRIOR_ARTS.md`), so the model can map a
+ * coordinate back. It reads stored fields only, so it stays the same bytes.
+ */
+const toolImageLabel = (entry: PromptToolImage, name: string): string => {
+  const { width, originalWidth, originalHeight } = entry.image
+  if (Predicate.isUndefined(originalWidth) || Predicate.isUndefined(originalHeight)) {
+    return `Image from ${name}:`
+  }
+  const factor = (originalWidth / width).toFixed(2)
+  return `Image from ${name}, scaled from ${originalWidth}x${originalHeight} (multiply coordinates by ${factor} to map to the original):`
+}
+
+/**
  * The tool images a request carries when the model's API class names no
  * bound (`Model.imageLimit`): the newest 20, and about 12 MB of base64. Both
  * sit well inside what the Messages and Responses APIs take in one request.
@@ -484,7 +499,7 @@ export const toolImagePrompt = Effect.fn("ModelContext.toolImagePrompt")(functio
             ToolImageContent.cases.Line.make({ text: `[image no longer stored: ${name}]` }),
           onSome: (data) =>
             ToolImageContent.cases.Bytes.make({
-              label: `Image from ${name}:`,
+              label: toolImageLabel(entry, name),
               mediaType: entry.image.mediaType,
               data,
               ...omitUndefined({ options: params.model.imagePartOptions }),

@@ -19,6 +19,7 @@ import {
   Duration,
   Effect,
   FileSystem,
+  Match,
   Option,
   Path,
   Predicate,
@@ -29,7 +30,13 @@ import { Base64, Hex } from "effect/encoding"
 import type * as Prompt from "effect/ai/Prompt"
 import { ExtensionContext } from "../domain/extension.js"
 import { omitUndefined } from "../domain/guards.js"
-import { resolveDataDir, writeFileAtomic } from "./gent-platform.js"
+import {
+  GentPlatform,
+  type ImageCodecError,
+  type ImageTranscode,
+  resolveDataDir,
+  writeFileAtomic,
+} from "./gent-platform.js"
 
 // ── schema ──────────────────────────────────────────────────────────────────
 
@@ -43,6 +50,10 @@ const Positive = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
  * An image a tool returns, by reference: the SHA-256 of its bytes names its
  * file in the blob store. `source` is a display path or label the model reads
  * beside the image and in the line that stands for it once it is left out.
+ * `originalWidth` and `originalHeight` are the size the tool saved when the
+ * store scaled the image to fit; the stored bytes are the scaled image, of
+ * `width` x `height`. A point at `(x, y)` in the stored image is at
+ * `(x * originalWidth / width, y * originalHeight / height)` in the original.
  */
 export const ToolImage = Schema.TaggedStruct("ToolImage", {
   sha256: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
@@ -51,6 +62,8 @@ export const ToolImage = Schema.TaggedStruct("ToolImage", {
   height: Positive,
   bytes: Positive,
   source: Schema.optional(Schema.String),
+  originalWidth: Schema.optional(Positive),
+  originalHeight: Schema.optional(Positive),
 })
 export type ToolImage = typeof ToolImage.Type
 
@@ -60,17 +73,19 @@ export class ToolImageError extends Schema.TaggedError<ToolImageError>()("ToolIm
 }) {}
 
 /**
- * The largest image the store takes, in bytes: its base64 fits Anthropic's
- * 5 MiB cap on one image. A larger one would fail every later request of the
- * session, as the image stays in the history, so the save refuses it.
+ * The largest image the store keeps, in bytes: its base64 fits the 5 MiB cap
+ * on one image that Anthropic's API takes on Bedrock and Vertex. A larger one
+ * would fail every later request of the session, as the image stays in the
+ * history, so the save encodes it again until it fits.
  */
 const TOOL_IMAGE_MAX_BYTES = (5 * 1024 * 1024 * 3) / 4
 
 /**
- * The longest side the store takes, in pixels. Anthropic refuses a side over
- * 2,000 pixels in a request of more than 20 images, and OpenAI's patch-based
- * models refuse an image of too many patches; at 2,000 pixels every driver's
- * request stays valid, whatever the number of images.
+ * The longest side the store keeps, in pixels. Anthropic refuses a side over
+ * 2,000 pixels in a request of more than 20 images; at 2,000 pixels every
+ * driver's request stays valid, whatever the number of images. Each provider
+ * scales a larger image down itself, so more pixels cost only bytes. Pi,
+ * opencode and Claude Code keep the same bound (`PRIOR_ARTS.md`).
  */
 const TOOL_IMAGE_MAX_SIDE = 2_000
 
@@ -223,6 +238,136 @@ const readImageHeader = (bytes: Uint8Array): Option.Option<ImageHeader> => {
   return Option.none()
 }
 
+// ── scaling ─────────────────────────────────────────────────────────────────
+
+/** The image the store keeps: its bytes, format and size, and the size the tool saved when scaled. */
+interface FittedImage {
+  readonly bytes: Uint8Array
+  readonly mediaType: ToolImageMediaType
+  readonly width: number
+  readonly height: number
+  readonly original: Option.Option<{ readonly width: number; readonly height: number }>
+}
+
+/**
+ * The encoding a scaled image keeps: its own where the codec encodes it. A
+ * GIF (no codec encodes one), or a format no model API takes, becomes a PNG.
+ */
+const SCALED_FORMATS: Readonly<Record<ToolImageMediaType, ImageTranscode["format"]>> = {
+  "image/png": "png",
+  "image/jpeg": "jpeg",
+  "image/gif": "png",
+  "image/webp": "webp",
+}
+
+const ENCODED_MEDIA_TYPES: Readonly<Record<ImageTranscode["format"], ToolImageMediaType>> = {
+  png: "image/png",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+}
+
+/** The quality of a lossy encoding at first, and the JPEG qualities past the byte limit. */
+const LOSSY_QUALITY = 80
+const JPEG_QUALITIES = [80, 60, 40, 20]
+
+/** The side bounds, longest first: each one past the qualities is three quarters of the last, down to 1. */
+const SIDE_BOUNDS: ReadonlyArray<number> = (() => {
+  const bounds = [TOOL_IMAGE_MAX_SIDE]
+  while ((bounds.at(-1) ?? 1) > 1) bounds.push(Math.max(1, Math.floor((bounds.at(-1) ?? 1) * 0.75)))
+  return bounds
+})()
+
+/**
+ * The encodes the store tries, in order, until one is inside the byte limit:
+ * at each side bound, the image's own format, then JPEG at falling quality.
+ * The order is the prior arts' (`PRIOR_ARTS.md`, tool image scaling).
+ */
+const encodesFor = (format: ImageTranscode["format"]): ReadonlyArray<ImageTranscode> => {
+  // PNG is lossless and takes no quality; JPEG's own encode is the ladder's first.
+  const own: ReadonlyArray<Omit<ImageTranscode, "maxSide">> = Match.value(format).pipe(
+    Match.when("png", () => [{ format }]),
+    Match.when("webp", () => [{ format, quality: LOSSY_QUALITY }]),
+    Match.orElse(() => []),
+  )
+  const jpegs = JPEG_QUALITIES.map((quality): Omit<ImageTranscode, "maxSide"> => ({
+    format: "jpeg",
+    quality,
+  }))
+  return SIDE_BOUNDS.flatMap((maxSide) =>
+    [...own, ...jpegs].map((encode): ImageTranscode => ({ ...encode, maxSide })),
+  )
+}
+
+const CODEC_MESSAGES: Readonly<Record<ImageCodecError["reason"], string>> = {
+  "not-an-image": "the bytes are not an image",
+  undecodable: "the image cannot be decoded",
+  "too-large": "the image has more pixels than the codec decodes",
+  failed: "the image cannot be scaled",
+}
+
+/**
+ * The image scaled inside `TOOL_IMAGE_MAX_SIDE` a side with its aspect ratio
+ * kept, and encoded inside `TOOL_IMAGE_MAX_BYTES`. It fails only when the
+ * codec cannot decode the bytes.
+ */
+const fitToolImage = Effect.fn("ToolImage.fit")(
+  function* (bytes: Uint8Array, header: Option.Option<ImageHeader>) {
+    const platform = yield* GentPlatform
+    const format = Option.match(header, {
+      onNone: (): ImageTranscode["format"] => "png",
+      onSome: ({ mediaType }) => SCALED_FORMATS[mediaType],
+    })
+    for (const encode of encodesFor(format)) {
+      const encoded = yield* platform.transcodeImage(bytes, encode)
+      if (encoded.bytes.length > TOOL_IMAGE_MAX_BYTES) continue
+      const original = Option.liftPredicate(
+        { width: encoded.sourceWidth, height: encoded.sourceHeight },
+        (source) => source.width !== encoded.width || source.height !== encoded.height,
+      )
+      return {
+        bytes: encoded.bytes,
+        mediaType: ENCODED_MEDIA_TYPES[encode.format],
+        width: encoded.width,
+        height: encoded.height,
+        original,
+      } satisfies FittedImage
+    }
+    // A 1x1 image encodes in a few bytes, so the last encode always fits.
+    return yield* new ToolImageError({ message: "the image cannot be encoded small enough" })
+  },
+  Effect.mapError((cause) => {
+    if (Schema.is(ToolImageError)(cause)) return cause
+    return new ToolImageError({ message: CODEC_MESSAGES[cause.reason], cause })
+  }),
+)
+
+/**
+ * The image as the store keeps it: the bytes as they are when their header
+ * names a size inside the side bound and they are inside the byte limit (no
+ * decode), else scaled and encoded to fit (`fitToolImage`).
+ */
+const fittedToolImage = (bytes: Uint8Array) => {
+  const header = readImageHeader(bytes)
+  const fits =
+    bytes.length <= TOOL_IMAGE_MAX_BYTES &&
+    Option.exists(
+      header,
+      ({ width, height }) =>
+        width >= 1 && height >= 1 && Math.max(width, height) <= TOOL_IMAGE_MAX_SIDE,
+    )
+  if (fits && Option.isSome(header)) {
+    const { mediaType, width, height } = header.value
+    return Effect.succeed<FittedImage>({
+      bytes,
+      mediaType,
+      width,
+      height,
+      original: Option.none(),
+    })
+  }
+  return fitToolImage(bytes, header)
+}
+
 // ── blob store ──────────────────────────────────────────────────────────────
 
 /**
@@ -336,26 +481,11 @@ const touch = Effect.fn("ToolImage.touch")(function* (file: string) {
   )
 })
 
-/** Writes `bytes` to the store once and returns its reference. */
+/** Writes `bytes` to the store once, scaled to fit, and returns its reference. */
 const storeToolImage = Effect.fn("ToolImage.store")(
-  function* (home: string, bytes: Uint8Array, source: Option.Option<string>) {
-    if (bytes.length > TOOL_IMAGE_MAX_BYTES) {
-      return yield* new ToolImageError({
-        message: `the image is ${bytes.length} bytes, over the ${TOOL_IMAGE_MAX_BYTES}-byte limit`,
-      })
-    }
-    const header = readImageHeader(bytes)
-    if (Option.isNone(header)) {
-      return yield* new ToolImageError({
-        message: "the bytes are not a PNG, JPEG, GIF or WebP image",
-      })
-    }
-    const { width, height, mediaType } = header.value
-    if (width < 1 || height < 1 || Math.max(width, height) > TOOL_IMAGE_MAX_SIDE) {
-      return yield* new ToolImageError({
-        message: `the image is ${width}x${height}; each side must be 1 to ${TOOL_IMAGE_MAX_SIDE} pixels: downscale it before you save it`,
-      })
-    }
+  function* (home: string, input: Uint8Array, source: Option.Option<string>) {
+    const fitted = yield* fittedToolImage(input)
+    const { bytes } = fitted
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const crypto = yield* Crypto.Crypto
@@ -363,11 +493,15 @@ const storeToolImage = Effect.fn("ToolImage.store")(
     const sha256 = Hex.encode(yield* crypto.digest("SHA-256", bytes))
     const image = ToolImage.make({
       sha256,
-      mediaType,
-      width,
-      height,
+      mediaType: fitted.mediaType,
+      width: fitted.width,
+      height: fitted.height,
       bytes: bytes.length,
-      ...omitUndefined({ source: Option.getOrUndefined(source) }),
+      ...omitUndefined({
+        source: Option.getOrUndefined(source),
+        originalWidth: Option.getOrUndefined(Option.map(fitted.original, (size) => size.width)),
+        originalHeight: Option.getOrUndefined(Option.map(fitted.original, (size) => size.height)),
+      }),
     })
     const file = blobPath(path, directory, image)
     // A reuse marks the file as just used; a file gone is written again.
@@ -396,9 +530,13 @@ type SaveToolImageInput = ({ readonly bytes: Uint8Array } | { readonly path: str
  * images, and a line naming it on one that does not. The store keeps one file
  * per content (`<data dir>/blobs/<sha256>.<ext>`), keeps it while a stored
  * message holds it, and removes it a day after the last such message goes
- * (`sweepToolImages`). It takes PNG, JPEG, GIF and WebP, up to 3.75 MiB and 2,000
- * pixels a side; anything else fails with `ToolImageError`, and a larger
- * image must be downscaled first.
+ * (`sweepToolImages`). It keeps PNG, JPEG, GIF and WebP up to 3.75 MiB and
+ * 2,000 pixels a side as they are. A larger image is scaled to fit, its aspect
+ * ratio kept, and encoded again where its bytes are still past the limit (a
+ * GIF, or another format the codec decodes, becomes a PNG); its `ToolImage`
+ * then names its `originalWidth` and `originalHeight`, and the model reads
+ * them beside the image. Only bytes no codec decodes fail, with
+ * `ToolImageError`.
  */
 export const saveToolImage = Effect.fn("saveToolImage")(function* (input: SaveToolImageInput) {
   const ctx = yield* ExtensionContext
