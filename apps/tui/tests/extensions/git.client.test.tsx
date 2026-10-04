@@ -951,7 +951,7 @@ describe("git pane", () => {
         yield* git(repo, "config", "core.pager", pager.program)
         const watched: Array<number> = []
         let aliveAtResume: ReadonlyArray<number> = [-1]
-        const handover = makeHandover({
+        const { handover } = makeHandover({
           suspend: () => {},
           resume: () => {
             aliveAtResume = watched.filter(isAlive)
@@ -987,7 +987,7 @@ describe("git pane", () => {
         // The reader reads a screen and quits: the pager closes the pipe under the patch.
         const pager = yield* fakeProgram("pager", () => ["exec head -c 4096 > /dev/null"])
         yield* git(repo, "config", "core.pager", pager.program)
-        const handover = makeHandover({ suspend: () => {}, resume: () => {} })
+        const { handover } = makeHandover({ suspend: () => {}, resume: () => {} })
         yield* handover(pageWorkTree({ _tag: "WorkTree", cwd: repo, pathspecs: [] }, "HEAD"))
         expect(yield* childGits).toBe("")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
@@ -1013,7 +1013,7 @@ describe("git pane", () => {
           `cat >> '${dir}/log'`,
         ])
         yield* git(repo, "config", "core.pager", pager.program)
-        const handover = makeHandover({ suspend: () => {}, resume: () => {} })
+        const { handover } = makeHandover({ suspend: () => {}, resume: () => {} })
         yield* handover(pageWorkTree({ _tag: "WorkTree", cwd: repo, pathspecs: [] }, "HEAD"))
         const paged = plain(yield* pager.log)
         expect(paged).toContain("+a line of the untracked file")

@@ -1930,12 +1930,14 @@ export const leaveTerminal = (
 /**
  * Holds the process until the renderer is destroyed: OpenTUI mounts
  * synchronously, and a bare suspended fiber does not keep Bun alive.
- * Interrupted (a signal, the session's shutdown), it leaves the terminal as
- * the reader's exit does.
+ * Interrupted (a signal, the session's shutdown), it first ends every
+ * handover (`endHandovers`: its programs stopped and waited for, the renderer
+ * resumed), then leaves the terminal as the reader's exit does.
  */
 export const holdUntilRendererDestroyed = (
   renderer: CliRenderer,
   writeTerminal: (text: string) => void,
+  endHandovers: Effect.Effect<void>,
 ): Effect.Effect<void> =>
   Effect.callback<void>((resume) => {
     let settled = false
@@ -1952,7 +1954,7 @@ export const holdUntilRendererDestroyed = (
       settled = true
       clearInterval(keepAlive)
       renderer.off("destroy", onDestroy)
-      return leaveTerminal(renderer, writeTerminal)
+      return endHandovers.pipe(Effect.andThen(leaveTerminal(renderer, writeTerminal)))
     })
   })
 

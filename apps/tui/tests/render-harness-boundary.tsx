@@ -33,6 +33,7 @@ import {
 } from "../src/client"
 import { type GentRuntime } from "@gent/sdk"
 import { ExtensionUIProvider } from "../src/extensions/host"
+import { makeHandover } from "../src/os"
 import type { AnyExtensionClientModule } from "../src/extensions/client-facets"
 import { ComposerMemoryProvider } from "../src/session"
 import {
@@ -550,6 +551,11 @@ export const renderWithProviders = (
       )
       // Exercise terminal lifecycle operations against OpenTUI's in-memory streams.
       yield* Effect.promise(() => setup.renderer.setupTerminal())
+      // The terminal's holder, as the root makes it with its renderer.
+      const terminal = makeHandover({
+        suspend: () => setup.renderer.suspend(),
+        resume: () => setup.renderer.resume(),
+      })
       const history: Array<string> = []
       setup.renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
         history.push(snapshotText(event.snapshot))
@@ -596,6 +602,7 @@ export const renderWithProviders = (
                               <ExtensionUIProvider
                                 builtins={options?.builtins}
                                 scope={options?.uiScope}
+                                handover={terminal.handover}
                               >
                                 {node()}
                               </ExtensionUIProvider>

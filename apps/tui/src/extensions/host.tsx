@@ -46,8 +46,7 @@ import {
 } from "./loader-boundary"
 import { useWorkspace } from "../workspace"
 import { useClient } from "../client"
-import { HandoverProvider, makeHandover } from "../os"
-import { useRenderer } from "@opentui/solid"
+import { type Handover, HandoverProvider } from "../os"
 import type { BranchId, SessionId } from "@gent/core/protocol"
 
 // ── per-provider client runtime ─────────────────────────────────────────────
@@ -162,14 +161,15 @@ export function ExtensionUIProvider(props: {
   scope?: Scope.Scope
   /** The statically imported builtins; a test adds a module to hold the load. */
   builtins?: ReadonlyArray<AnyExtensionClientModule>
+  /**
+   * The terminal's one handover (`makeHandover`), made by the root with the
+   * renderer it suspends: the root's exit ends it before the renderer goes.
+   */
+  handover: Handover
 }) {
   const workspace = useWorkspace()
   const client = useClient()
-  const renderer = useRenderer()
-  const handover = makeHandover({
-    suspend: () => renderer.suspend(),
-    resume: () => renderer.resume(),
-  })
+  const handover = props.handover
 
   const [activityProvider, setActivityProvider] = createSignal<() => ClientActivitySnapshot>(
     () => ({ state: "unknown" }),

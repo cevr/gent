@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-import { Deferred, Effect, Fiber, Option, Order, Schedule, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Order, Schedule, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import {
   type CliRenderer,
   type CliRendererExternalOutputEvent,
@@ -90,6 +91,7 @@ import {
 } from "./scrollback-hold-boundary"
 import { untilExtensionsLoaded, waitForFrame, waitForTerminal, waitUntil } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
+import { makeHandover } from "../src/os"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { clientContributions, defineClientExtension } from "../src/extensions/client-facets"
 
@@ -4446,7 +4448,7 @@ describe("native transcript exit", () => {
         expect(committedText.join("")).toBe("")
         const renderer = Option.getOrThrow(screen)
         const hold = yield* Effect.forkChild(
-          holdUntilRendererDestroyed(renderer, (text) => written.push(text)),
+          holdUntilRendererDestroyed(renderer, (text) => written.push(text), Effect.void),
         )
         // The hold has started: it waits on the renderer, as the process entry does.
         yield* Effect.yieldNow
@@ -4460,6 +4462,76 @@ describe("native transcript exit", () => {
         expect(written).toHaveLength(1)
         expect(written[0]).toMatch(new RegExp(`^${String.fromCharCode(27)}\\[[1-9][0-9]*A$`))
       }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // A signal while a program holds the terminal (an editor, the git pager):
+  // the exit ends the handover first, the program stopped and the renderer
+  // resumed, and only then leaves the terminal. A renderer destroyed while
+  // suspended commits no row, and a program left running keeps the terminal.
+  it.scopedLive(
+    "a signal while a program holds the terminal stops it and resumes the renderer before the live view moves into history",
+    () =>
+      Effect.gen(function* () {
+        const committedText: string[] = []
+        const steps: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const items: ListMessage[] = [
+          assistant("earlier", "EARLIER-ANSWER"),
+          { ...assistant("open", "SIGNALLED-DRAFT"), draft: true },
+        ]
+        const setup = yield* renderScoped(
+          () => (
+            <Transcript
+              items={items}
+              streaming
+              onRenderer={(renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              }}
+            />
+          ),
+          { width: 60, height: 14 },
+        )
+        yield* waitForFrame(
+          setup,
+          (next) => next.includes("EARLIER-ANSWER") && next.includes("SIGNALLED-DRAFT"),
+          "the live tail",
+        )
+        const renderer = Option.getOrThrow(screen)
+        renderer.once("destroy", () => steps.push("destroy"))
+        const terminal = makeHandover({
+          suspend: () => {
+            steps.push("suspend")
+            renderer.suspend()
+          },
+          resume: () => {
+            steps.push("resume")
+            renderer.resume()
+          },
+        })
+        const holding = yield* Deferred.make<void>()
+        const program = yield* Effect.forkChild(
+          terminal.handover(
+            Deferred.succeed(holding, void 0).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Effect.sync(() => steps.push("program stopped"))),
+            ),
+          ),
+        )
+        yield* Deferred.await(holding)
+        const hold = yield* Effect.forkChild(
+          holdUntilRendererDestroyed(renderer, () => {}, terminal.close),
+        )
+        yield* Effect.yieldNow
+        yield* Fiber.interrupt(hold)
+        expect(steps).toEqual(["suspend", "program stopped", "resume", "destroy"])
+        expect(committedText.join("")).toContain("SIGNALLED-DRAFT")
+        const ended = yield* Fiber.await(program)
+        expect(Exit.hasInterrupts(ended)).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     15_000,
   )
 

@@ -42,7 +42,7 @@ describe("external editor", () => {
     () =>
       Effect.gen(function* () {
         const steps: Array<string> = []
-        const handover = makeHandover({
+        const { handover } = makeHandover({
           suspend: () => steps.push("suspend"),
           resume: () => steps.push("resume"),
         })
@@ -72,7 +72,7 @@ describe("terminal handover", () => {
   it.live("a second handover waits for the first to give the terminal back", () =>
     Effect.gen(function* () {
       const steps: Array<string> = []
-      const handover = makeHandover({
+      const { handover } = makeHandover({
         suspend: () => steps.push("suspend"),
         resume: () => steps.push("resume"),
       })
@@ -101,15 +101,18 @@ describe("terminal handover", () => {
   it.live("a handover that fails or is interrupted gives the terminal back", () =>
     Effect.gen(function* () {
       const steps: Array<string> = []
-      const handover = makeHandover({
+      const { handover } = makeHandover({
         suspend: () => steps.push("suspend"),
         resume: () => steps.push("resume"),
       })
       const before = signalListeners()
       const failed = yield* handover(Effect.fail("boom")).pipe(Effect.flip)
       expect(failed).toBe("boom")
-      const held = yield* Effect.forkChild(handover(Effect.never))
-      yield* Effect.yieldNow
+      const holding = yield* Deferred.make<void>()
+      const held = yield* Effect.forkChild(
+        handover(Deferred.succeed(holding, void 0).pipe(Effect.andThen(Effect.never))),
+      )
+      yield* Deferred.await(holding)
       yield* Fiber.interrupt(held)
       expect(steps).toEqual(["suspend", "resume", "suspend", "resume"])
       // The signal listeners the handover held are back too.
@@ -117,11 +120,45 @@ describe("terminal handover", () => {
     }).pipe(Effect.timeout("4 seconds"), Effect.provide(BunServices.layer)),
   )
 
+  // Gent's exit closes the holder: a handover running then ends, and one
+  // waiting for the terminal never takes it.
+  it.live("closing the holder ends the running handover and the waiting one", () =>
+    Effect.gen(function* () {
+      const steps: Array<string> = []
+      const terminal = makeHandover({
+        suspend: () => steps.push("suspend"),
+        resume: () => steps.push("resume"),
+      })
+      const holding = yield* Deferred.make<void>()
+      const running = yield* Effect.forkChild(
+        terminal.handover(
+          Deferred.succeed(holding, void 0).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Effect.sync(() => steps.push("program stopped"))),
+          ),
+        ),
+      )
+      yield* Deferred.await(holding)
+      const waiting = yield* Effect.forkChild(
+        terminal.handover(Effect.sync(() => steps.push("second program"))),
+      )
+      yield* terminal.close
+      expect(steps).toEqual(["suspend", "program stopped", "resume"])
+      expect(Exit.hasInterrupts(yield* Fiber.await(running))).toBe(true)
+      expect(Exit.hasInterrupts(yield* Fiber.await(waiting))).toBe(true)
+      const late = yield* terminal
+        .handover(Effect.sync(() => steps.push("late program")))
+        .pipe(Effect.exit)
+      expect(Exit.hasInterrupts(late)).toBe(true)
+      expect(steps).toEqual(["suspend", "program stopped", "resume"])
+    }).pipe(Effect.timeout("4 seconds"), Effect.provide(BunServices.layer)),
+  )
+
   it.live(
     "a program the handover runs joins the terminal's foreground group, and gent's ctrl+c and ctrl+\\ listeners wait for the terminal back",
     () =>
       Effect.gen(function* () {
-        const handover = makeHandover({ suspend: () => {}, resume: () => {} })
+        const { handover } = makeHandover({ suspend: () => {}, resume: () => {} })
         // The group the program runs in, then its parent's: this process's.
         const groups = runProcess("sh", ["-c", "ps -o pgid= -p $$; ps -o pgid= -p $PPID"]).pipe(
           Effect.map((result) => result.stdout.split("\n").map((line) => line.trim())),
@@ -153,7 +190,7 @@ describe("terminal handover", () => {
       // The renderer takes its own ctrl+\ listener off when it suspends and
       // puts it back when it resumes, as OpenTUI's exit listener does.
       const renderer = (signal: string) => heard.push(`renderer ${signal}`)
-      const handover = makeHandover({
+      const { handover } = makeHandover({
         suspend: () => process.removeListener("SIGQUIT", renderer),
         resume: () => process.on("SIGQUIT", renderer),
       })

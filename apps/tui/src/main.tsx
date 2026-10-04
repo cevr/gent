@@ -20,7 +20,7 @@ import {
   createClientLog,
   shutdownLog,
 } from "./client"
-import { LinkOpener } from "./os"
+import { LinkOpener, makeHandover } from "./os"
 import { AgentName } from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
@@ -352,6 +352,12 @@ const runGent = ({
         },
       }),
     )
+    // The terminal's holder lives with the renderer it suspends: gent's exit
+    // ends its handovers before it leaves the terminal.
+    const terminal = makeHandover({
+      suspend: () => renderer.suspend(),
+      resume: () => renderer.resume(),
+    })
     yield* Effect.promise(() =>
       render(
         () => (
@@ -364,7 +370,7 @@ const runGent = ({
                 log={log}
                 initialSession={bootstrap.initialSession}
               >
-                <ExtensionUIProvider scope={scope}>
+                <ExtensionUIProvider scope={scope} handover={terminal.handover}>
                   <TerminalDimensionsProvider>
                     <SpinnerClockProvider>
                       <ComposerMemoryProvider
@@ -391,7 +397,11 @@ const runGent = ({
     // Keep a real process handle open until the renderer is destroyed. A
     // signal leaves the terminal as the reader's exit does: the live view's
     // last items reach history before the renderer goes.
-    return yield* holdUntilRendererDestroyed(renderer, envWithShutdown.writeTerminal).pipe(
+    return yield* holdUntilRendererDestroyed(
+      renderer,
+      envWithShutdown.writeTerminal,
+      terminal.close,
+    ).pipe(
       Effect.onInterrupt(() =>
         Effect.sync(() => {
           shutdownLog("shutdown.interrupted")

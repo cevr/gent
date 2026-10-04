@@ -14,8 +14,9 @@
  * visible: the live view looked correct the whole time.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option, Schema } from "effect"
-import { waitFor } from "@gent/core/test-utils"
+import { BunServices } from "@effect/platform-bun"
+import { Effect, FileSystem, Option, Result, Schema } from "effect"
+import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
 import {
   countRows,
   gridText,
@@ -186,6 +187,58 @@ describe("E2E: Scrollback ownership", () => {
             expect([index, countRows(rows, messageText(index))]).toEqual([index, 1])
           }
         }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
+      TEST_TIMEOUT,
+    )
+  }
+
+  // A signal from outside while a program holds the terminal: gent stops the
+  // program and takes the terminal back before it leaves. The editor ignores
+  // the hangup, as a program does whose terminal stays open after gent exits
+  // (a multiplexer pane, a shell): here gent leads the pty's session, and its
+  // exit would hang the program up otherwise. SIGINT is not in the list: while
+  // a program holds the terminal, it passes gent by.
+  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+    it.scopedLive(
+      `${signal} during a handover stops the program before gent exits, and leaves every message on screen`,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* makeTempDirectoryScoped("gent-e2e-handover-exit-")
+          const editor = `${dir}/editor`
+          const pidFile = `${dir}/editor.pid`
+          yield* fs.writeFileString(
+            editor,
+            [
+              "#!/bin/sh",
+              "trap '' HUP",
+              `echo $$ > '${pidFile}'`,
+              "printf 'EDITOR-WAITING\\n'",
+              "exec sleep 600",
+              "",
+            ].join("\n"),
+          )
+          yield* fs.chmod(editor, 0o755)
+          const ctx = yield* seedAndSpawn(["--mock-empty"], SHORT_SCREEN, {
+            VISUAL: editor,
+            EDITOR: editor,
+          })
+          yield* submitMessages(ctx, 2)
+          ctx.pty.write(keys["ctrl+g"])
+          yield* ptyWaitFor(ctx, "EDITOR-WAITING", { timeout: 10_000 })
+          const pid = Number((yield* fs.readFileString(pidFile)).trim())
+          // A red run leaves no sleeping editor behind.
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => Result.try(() => process.kill(pid, "SIGKILL"))),
+          )
+
+          expect(Option.isSome(yield* signalAndExit(ctx, signal, "10 seconds"))).toBe(true)
+          const editorAlive = Result.isSuccess(Result.try(() => process.kill(pid, 0)))
+          const rows = gridText(yield* settleAndCapture(ctx, SETTLE))
+          expect({
+            editorAlive,
+            messageRows: [1, 2].map((index) => countRows(rows, messageText(index))),
+          }).toEqual({ editorAlive: false, messageRows: [1, 1] })
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout(EFFECT_TIMEOUT)),
       TEST_TIMEOUT,
     )
   }

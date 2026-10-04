@@ -2,11 +2,14 @@ import {
   Context,
   Duration,
   Effect,
+  Exit,
+  Fiber,
   FileSystem,
   Layer,
   Option,
   PlatformError,
   Schema,
+  Scope,
   Semaphore,
 } from "effect"
 import { GentPlatform } from "@gent/core/host"
@@ -178,6 +181,22 @@ const inForeground = (command: ChildProcess.Command): ChildProcess.Command => {
 }
 
 /**
+ * The terminal's holder: the handover verb, and `close`, which ends every
+ * handover still running or waiting before the process leaves the terminal.
+ */
+interface TerminalHolder {
+  readonly handover: Handover
+  /**
+   * Interrupt every handover and wait for each to end: its programs stopped
+   * and waited for, its signals given back, the renderer resumed. Gent's exit
+   * runs it before it destroys the renderer, so no program outlives gent on
+   * the terminal and the renderer never leaves while suspended. A handover
+   * asked for after it is interrupted at once.
+   */
+  readonly close: Effect.Effect<void>
+}
+
+/**
  * One terminal, one holder: a handover asked for while another runs waits
  * for its resume, so two programs never draw at once and the renderer never
  * resumes under a program still running.
@@ -186,13 +205,18 @@ const inForeground = (command: ChildProcess.Command): ChildProcess.Command => {
  * listeners off as it suspends and puts them back as it resumes (OpenTUI's
  * exit listener on ctrl+\), so gent holds only its own, and every signal the
  * program's span got has passed before the renderer listens again.
+ *
+ * Each handover runs in a fiber of the holder's own scope, not the caller's:
+ * a caller is a fiber of its own (a command, a key), which gent's exit does
+ * not interrupt. Interrupting the caller interrupts its handover too.
  */
 export const makeHandover = (terminal: {
   readonly suspend: () => void
   readonly resume: () => void
-}): Handover => {
+}): TerminalHolder => {
   const holder = Semaphore.makeUnsafe(1)
-  return (effect) =>
+  const owner = Scope.makeUnsafe()
+  const handover: Handover = (effect) =>
     Effect.acquireUseRelease(
       Effect.sync(terminal.suspend),
       () =>
@@ -202,12 +226,19 @@ export const makeHandover = (terminal: {
           ),
         ),
       () => Effect.sync(terminal.resume),
-    ).pipe(holder.withPermits(1))
+    ).pipe(
+      holder.withPermits(1),
+      Effect.forkIn(owner),
+      Effect.flatMap((fiber) =>
+        Fiber.join(fiber).pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber))),
+      ),
+    )
+  return { handover, close: Scope.close(owner, Exit.void) }
 }
 
 const HandoverContext = createContext<Handover>()
 
-/** `ExtensionUIProvider` provides it, and hands the same verb to the client extensions. */
+/** `ExtensionUIProvider` provides the root's handover, and hands the same verb to the client extensions. */
 export const HandoverProvider = HandoverContext.Provider
 
 export const useHandover = (): Handover =>

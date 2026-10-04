@@ -411,7 +411,9 @@ export interface ClientShell {
    * transcript rows a running turn commits meanwhile land on the return. An
    * interrupt stops and awaits each process the effect spawned before the
    * renderer resumes; a process such a child starts is out of reach, so the
-   * effect spawns each program it runs itself.
+   * effect spawns each program it runs itself. Gent's exit (a signal, the
+   * reader's quit) interrupts every handover the same way before it leaves
+   * the terminal.
    */
   readonly handover: Handover
   /**
