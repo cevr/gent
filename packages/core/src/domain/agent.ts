@@ -479,6 +479,25 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   driver: Schema.optional(DriverRef),
 }) {
   /**
+   * Builds an agent and refuses a key the schema does not name. The schema
+   * drops such a key, so an extension written before `tools` (`allowedTools`,
+   * `deniedTools`) would run with every tool; it fails to load instead.
+   */
+  static override make(
+    input: (typeof AgentDefinition)["~type.make.in"],
+    options?: Schema.MakeOptions,
+  ): AgentDefinition {
+    const unknown = Object.keys(input).filter((key) => !Object.hasOwn(AgentDefinition.fields, key))
+    if (unknown.length > 0) {
+      // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- A definition with a key the schema drops is programmer misuse; it must fail where the extension builds it.
+      throw new Error(
+        `AgentDefinition "${input.name}" has keys the schema does not name: ${unknown.join(", ")}. Tool lists are \`tools\` patterns: allowedTools [a, b] is tools [a, b]; deniedTools [x] is tools ["*", "!x"].`,
+      )
+    }
+    return super.make(input, options)
+  }
+
+  /**
    * Whether a turn of this agent holds the tool `id` (`toolPatternsAdmit`
    * over `tools`). The patterns are authoritative: no extension adds a tool
    * they leave out (`compileToolPolicy`). An extension that selects or

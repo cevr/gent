@@ -750,7 +750,10 @@ over the patterns.
 A config entry or a stored run written before `tools` still loads: an
 `allowedTools` list becomes its ids, a `deniedTools` list becomes `"*"` and
 then each id with `!`, and both become the allowed ids and then the denied
-ones with `!`. `modelId` becomes `model`. Gent writes only the new fields.
+ones with `!`. `modelId` becomes `model`. Gent writes only the new fields. TypeScript source has no
+such reading: `AgentDefinition.make` refuses a key the schema does not name,
+so an extension that still passes `allowedTools` fails to load and the failure
+names the key, where it would otherwise run with every tool.
 
 ### Paths
 

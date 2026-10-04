@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Option, Schema } from "effect"
 import {
+  AgentDefinition,
+  AgentName,
   cacheWriteRate,
   calculateCost,
   DriverRef,
@@ -106,6 +108,20 @@ describe("agent paths", () => {
       { path: "skill", access: "read" },
       { path: "notes", access: "write" },
     ])
+  })
+})
+
+describe("agent definition", () => {
+  // An extension written before `tools`: TS code that is loaded unchecked.
+  test("an agent built with the old tool lists fails and names them", () => {
+    const old = {
+      name: AgentName.make("painter"),
+      allowedTools: ["film.look"],
+      deniedTools: ["bash"],
+    }
+    expect(() => AgentDefinition.make(old)).toThrow(
+      'AgentDefinition "painter" has keys the schema does not name: allowedTools, deniedTools',
+    )
   })
 })
 

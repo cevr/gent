@@ -1428,7 +1428,8 @@ confines the shipped file tools: `fs-tools` reads the agent through
 entry, `write` and `edit` only a write entry. It is not a sandbox: bash and the
 cell are not confined. Config entries and stored runs written before `tools`
 (`allowedTools`, `deniedTools`, `modelId`) decode through `StoredAgentPatch`
-into `tools` and `model`; gent writes only the new shape. Each turn reads the config files as
+into `tools` and `model`; gent writes only the new shape. `AgentDefinition.make` refuses a key the schema does not name, so TypeScript
+that still passes `allowedTools` fails to load rather than run with every tool. Each turn reads the config files as
 they are then, so an edit reaches the next turn without a restart. The loop has no `cell` name rule
 for selection or allow lists. The server root still composes the extension before
 the extension package builtins; its branch lifetime and worker build still belong
