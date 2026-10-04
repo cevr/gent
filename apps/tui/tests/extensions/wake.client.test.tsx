@@ -232,6 +232,58 @@ describe("auto-resume rows", () => {
       yield* waitUntil(() => !active(), "no resume pending")
     }).pipe(Effect.timeout("4 seconds")),
   )
+
+  // The resume fired between the tray's read and the dismiss: the server has
+  // nothing left to cancel, and the turn it started is running.
+  it.scopedLive("a dismiss that cancels nothing says the resume already fired", () =>
+    Effect.gen(function* () {
+      const notes: Array<string> = []
+      let entries = resumePending.entries
+      const contributions = yield* provideClientServices(wakeExtension.setup, {
+        requestEffect: (request) =>
+          Effect.sync(() => {
+            if (request.capabilityId === "wake.dismiss") {
+              entries = []
+              return { dismissed: [] }
+            }
+            return { now: RESUME_NOW, entries } satisfies WakePendingType
+          }),
+        shell: { notify: (message) => notes.push(message) },
+      })
+      const stoppables = Option.getOrElse(
+        Option.fromUndefinedOr(contributions.stoppables),
+        () => [],
+      )
+      const active = () => stoppables.some((stoppable) => stoppable.active())
+      yield* waitUntil(active, "the pending resume read")
+      for (const stoppable of stoppables) stoppable.stop()
+      yield* waitUntil(() => notes.length > 0, "the dismiss reported")
+      expect(notes).toEqual(["auto-resume already fired"])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live(
+    "a pending resume keeps its row when more entries than the tray shows are due first",
+    () =>
+      Effect.sync(() => {
+        const alarm = (wakeId: string, inSeconds: number) => ({
+          _tag: "alarm" as const,
+          wakeId,
+          dueAt: RESUME_NOW + inSeconds * 1000,
+          note: `check ${wakeId}`,
+        })
+        const crowded: WakePendingType = {
+          now: RESUME_NOW,
+          entries: [alarm("a1", 60), alarm("a2", 120), alarm("a3", 180), ...resumePending.entries],
+        }
+        expect(wakeTrayLines(crowded, RESUME_NOW, 80, utc)).toEqual([
+          { glyph: "↻", text: "resume at 01:03 · in 47m 0s · 1/3 · esc cancels" },
+          { glyph: "◷", text: "alarm in 1m 0s · check a1" },
+          { glyph: "◷", text: "alarm in 2m 0s · check a2" },
+          { glyph: " ", text: "+1 more pending" },
+        ])
+      }),
+  )
 })
 
 describe("Wake tray", () => {

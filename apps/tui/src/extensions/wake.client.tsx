@@ -165,8 +165,10 @@ const entryLine = (
 
 /**
  * One line per pending entry, soonest first; past the cap the rest collapse
- * into one count line. Clock times read in the zone `zone` gives, the
- * viewer's own unless a test fixes it.
+ * into one count line. A pending auto-resume comes first whatever its due
+ * time: its row names the key that cancels it, and the cap must not hide
+ * it. Clock times read in the zone `zone` gives, the viewer's own unless a
+ * test fixes it.
  */
 export const wakeTrayLines = (
   pending: WakePendingType,
@@ -174,13 +176,18 @@ export const wakeTrayLines = (
   width: number,
   zone: () => DateTime.TimeZone = DateTime.zoneMakeLocal,
 ): ReadonlyArray<WakeTrayLine> => {
-  // A notice already fired, so it sorts ahead of everything still pending.
+  // The pending resume, then the notices (already fired), then the rest by due time.
+  const rankOf = (entry: WakeEntryType): number => {
+    if (entry._tag === "alarm" && Predicate.isNotUndefined(entry.resume)) return 0
+    if (entry._tag === "notice") return 1
+    return 2
+  }
   const dueOf = (entry: WakeEntryType): number => {
     if (entry._tag === "alarm") return entry.dueAt
     if (entry._tag === "monitor") return entry.deadline
-    return entry.firedAt - Number.MAX_SAFE_INTEGER
+    return entry.firedAt
   }
-  const sorted = [...pending.entries].sort((a, b) => dueOf(a) - dueOf(b))
+  const sorted = [...pending.entries].sort((a, b) => rankOf(a) - rankOf(b) || dueOf(a) - dueOf(b))
   const shown = sorted.slice(0, TRAY_MAX_ROWS)
   const lines = shown.map((entry) => entryLine(entry, now, width, zone))
   const rest = sorted.length - shown.length
@@ -282,7 +289,8 @@ export default defineClientExtension(WAKE_EXTENSION_ID, {
 
     // The auto-resume pending on the branch in view, by id: Esc on an idle,
     // empty composer cancels it on the server, and the pulse that follows
-    // clears its tray row.
+    // clears its tray row. A dismiss that removed nothing came after the
+    // fire: the resume already queued its line, so it says that instead.
     const pendingResume = (): Option.Option<string> =>
       Option.flatMap(pending.value(), (value) =>
         Option.fromUndefinedOr(
@@ -294,7 +302,12 @@ export default defineClientExtension(WAKE_EXTENSION_ID, {
     const cancelResume = (wakeId: string) =>
       shell.cast(
         transport.request(ref(WakeRpc.Dismiss), { wakeId }).pipe(
-          Effect.andThen(Effect.sync(() => shell.notify("auto-resume cancelled"))),
+          Effect.andThen(({ dismissed }) =>
+            Effect.sync(() => {
+              if (dismissed.includes(wakeId)) return shell.notify("auto-resume cancelled")
+              return shell.notify("auto-resume already fired")
+            }),
+          ),
           Effect.catch((failure) =>
             Effect.sync(() => shell.notify(`auto-resume: not cancelled: ${failure.message}`)),
           ),
