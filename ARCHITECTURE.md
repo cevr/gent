@@ -1241,9 +1241,12 @@ cleanup. The Gent policy bridge and other platform isolation remain unfinished.
 The `@gent/extensions` build compiles `src/cell-worker-boundary.ts` into `dist/gent-cell`.
 Turbo builds that declared dependency before the TUI copies the worker into
 `bin/gent-cell` beside `bin/gent`. `@gent/extensions` owns the worker build; the TUI only
-packages it. The worker embeds Bun and needs no external Bun executable. Its
-compile options disable automatic dotenv, bunfig, tsconfig, and package.json
-loading. Both binaries compile to ESM bytecode, so a start does not parse
+packages it. The worker embeds Bun and needs no external Bun executable. The
+compile options of both binaries disable automatic dotenv, bunfig, tsconfig,
+and package.json loading: one shared server serves many projects, so the
+directory gent starts in sets nothing for it, and the worker inherits the
+host's environment. A user who wants a key from a file sets it in the shell
+or with `/auth`. Both binaries compile to ESM bytecode, so a start does not parse
 the embedded bundle (`bin/gent` 0.41 s to 0.05 s before its first module
 runs; the worker 36 ms to 18 ms to its `Ready` frame); the bytecode belongs to
 the Bun each binary embeds. The process launcher uses this artifact as both its runtime

@@ -48,7 +48,14 @@ const build = Effect.gen(function* () {
       },
       compile: {
         outfile,
+        // One shared server serves many projects, so the directory gent starts
+        // in sets nothing for it: no `.env`, `bunfig.toml`, `tsconfig.json` or
+        // `package.json` is read from it. The cell worker inherits this
+        // environment, so its own build turns the same loads off.
+        autoloadDotenv: false,
         autoloadBunfig: false,
+        autoloadTsconfig: false,
+        autoloadPackageJson: false,
         // An extension resolves only the entries the loaders bind. Without this,
         // an unbound package (`@gent/core/host`, a typo) is fetched from the npm
         // registry at import time.
