@@ -19,6 +19,7 @@ import {
   Duration,
   Effect,
   FileSystem,
+  Match,
   Option,
   Path,
   Predicate,
@@ -29,7 +30,13 @@ import { Base64, Hex } from "effect/encoding"
 import type * as Prompt from "effect/ai/Prompt"
 import { ExtensionContext } from "../domain/extension.js"
 import { omitUndefined } from "../domain/guards.js"
-import { resolveDataDir, writeFileAtomic } from "./gent-platform.js"
+import {
+  GentPlatform,
+  type ImageCodecError,
+  type ImageTranscode,
+  resolveDataDir,
+  writeFileAtomic,
+} from "./gent-platform.js"
 
 // ── schema ──────────────────────────────────────────────────────────────────
 
@@ -43,6 +50,14 @@ const Positive = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
  * An image a tool returns, by reference: the SHA-256 of its bytes names its
  * file in the blob store. `source` is a display path or label the model reads
  * beside the image and in the line that stands for it once it is left out.
+ * `originalWidth` and `originalHeight` are the size the tool saved when the
+ * store scaled the image to fit; the stored bytes are the scaled image, of
+ * `width` x `height`. A point at `(x, y)` in the stored image is at
+ * `(x * originalWidth / width, y * originalHeight / height)` in the original.
+ * Every size is of the upright image, as it shows: a JPEG its EXIF
+ * orientation turns or mirrors is stored turned, so its raster is the image
+ * the model sees, and its original size is the turned size, not the size its
+ * raster had.
  */
 export const ToolImage = Schema.TaggedStruct("ToolImage", {
   sha256: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
@@ -51,6 +66,8 @@ export const ToolImage = Schema.TaggedStruct("ToolImage", {
   height: Positive,
   bytes: Positive,
   source: Schema.optional(Schema.String),
+  originalWidth: Schema.optional(Positive),
+  originalHeight: Schema.optional(Positive),
 })
 export type ToolImage = typeof ToolImage.Type
 
@@ -60,17 +77,19 @@ export class ToolImageError extends Schema.TaggedError<ToolImageError>()("ToolIm
 }) {}
 
 /**
- * The largest image the store takes, in bytes: its base64 fits Anthropic's
- * 5 MiB cap on one image. A larger one would fail every later request of the
- * session, as the image stays in the history, so the save refuses it.
+ * The largest image the store keeps, in bytes: its base64 fits the 5 MiB cap
+ * on one image that Anthropic's API takes on Bedrock and Vertex. A larger one
+ * would fail every later request of the session, as the image stays in the
+ * history, so the save encodes it again until it fits.
  */
 const TOOL_IMAGE_MAX_BYTES = (5 * 1024 * 1024 * 3) / 4
 
 /**
- * The longest side the store takes, in pixels. Anthropic refuses a side over
- * 2,000 pixels in a request of more than 20 images, and OpenAI's patch-based
- * models refuse an image of too many patches; at 2,000 pixels every driver's
- * request stays valid, whatever the number of images.
+ * The longest side the store keeps, in pixels. Anthropic refuses a side over
+ * 2,000 pixels in a request of more than 20 images; at 2,000 pixels every
+ * driver's request stays valid, whatever the number of images. Each provider
+ * scales a larger image down itself, so more pixels cost only bytes. Pi,
+ * opencode and Claude Code keep the same bound (`PRIOR_ARTS.md`).
  */
 const TOOL_IMAGE_MAX_SIDE = 2_000
 
@@ -135,6 +154,11 @@ interface ImageHeader {
   readonly mediaType: ToolImageMediaType
   readonly width: number
   readonly height: number
+  /**
+   * False for a JPEG whose EXIF orientation turns or mirrors its raster to
+   * show it. Its header names the raster's size, not the size it shows at.
+   */
+  readonly upright: boolean
 }
 
 const startsWith = (bytes: Uint8Array, prefix: ReadonlyArray<number>, at = 0) =>
@@ -148,14 +172,23 @@ const uint24LE = (bytes: Uint8Array, at: number) =>
   uint16LE(bytes, at) | ((bytes[at + 2] ?? 0) << 16)
 const uint32BE = (bytes: Uint8Array, at: number) =>
   uint16BE(bytes, at) * 65_536 + uint16BE(bytes, at + 2)
+const uint32LE = (bytes: Uint8Array, at: number) =>
+  uint16LE(bytes, at) + uint16LE(bytes, at + 2) * 65_536
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 
-/** The size a JPEG's first start-of-frame segment names, walking the segments before it. */
-const jpegSize = (bytes: Uint8Array): Option.Option<ImageHeader> => {
+/** A JPEG segment before the scan data: its marker, and where it starts (at `0xff`) and ends. */
+interface JpegSegment {
+  readonly marker: number
+  readonly start: number
+  readonly end: number
+}
+
+/** The segments of a JPEG up to its start of scan, which ends the walk. */
+const jpegSegments = (bytes: Uint8Array): ReadonlyArray<JpegSegment> => {
+  const segments: Array<JpegSegment> = []
   let at = 2
-  while (at + 9 < bytes.length) {
-    if (bytes[at] !== 0xff) return Option.none()
+  while (at + 3 < bytes.length && bytes[at] === 0xff) {
     const marker = bytes[at + 1] ?? 0
     // Fill bytes, and the markers that carry no length.
     if (marker === 0xff) {
@@ -166,23 +199,74 @@ const jpegSize = (bytes: Uint8Array): Option.Option<ImageHeader> => {
       at += 2
       continue
     }
-    const isFrame = marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)
-    if (isFrame) {
-      return Option.some({
-        mediaType: "image/jpeg",
-        height: uint16BE(bytes, at + 5),
-        width: uint16BE(bytes, at + 7),
-      })
-    }
-    at += 2 + uint16BE(bytes, at + 2)
+    const end = at + 2 + uint16BE(bytes, at + 2)
+    segments.push({ marker, start: at, end })
+    if (marker === 0xda) break
+    at = end
   }
-  return Option.none()
+  return segments
+}
+
+/**
+ * The orientation a JPEG's EXIF block names (`0x0112` in its first image
+ * directory), read as the codec reads it: a TIFF header of `II` or `MM` and
+ * 42, and the tag one SHORT. 1 (upright) when it names none the codec honours.
+ */
+const jpegOrientation = (bytes: Uint8Array, segments: ReadonlyArray<JpegSegment>): number => {
+  const exif = segments.find(
+    ({ marker, start }) => marker === 0xe1 && startsWith(bytes, ascii("Exif\0\0"), start + 4),
+  )
+  if (Predicate.isUndefined(exif)) return 1
+  const tiff = exif.start + 10
+  const little = startsWith(bytes, ascii("II"), tiff)
+  if (!little && !startsWith(bytes, ascii("MM"), tiff)) return 1
+  const read16 = (at: number) => {
+    if (little) return uint16LE(bytes, at)
+    return uint16BE(bytes, at)
+  }
+  const read32 = (at: number) => {
+    if (little) return uint32LE(bytes, at)
+    return uint32BE(bytes, at)
+  }
+  if (read16(tiff + 2) !== 42) return 1
+  const directory = tiff + read32(tiff + 4)
+  if (directory + 2 > exif.end) return 1
+  for (let index = 0; index < read16(directory); index += 1) {
+    const entry = directory + 2 + index * 12
+    if (entry + 12 > exif.end) return 1
+    if (read16(entry) !== 0x0112) continue
+    // The codec reads the tag only as one SHORT (type 3); it shows any other upright.
+    if (read16(entry + 2) !== 3 || read32(entry + 4) !== 1) return 1
+    return read16(entry + 8)
+  }
+  return 1
+}
+
+/** The size a JPEG's first start-of-frame segment names, and whether its EXIF orientation leaves it upright. */
+const jpegSize = (bytes: Uint8Array): Option.Option<ImageHeader> => {
+  const segments = jpegSegments(bytes)
+  const frame = segments.find(
+    ({ marker, start }) =>
+      marker >= 0xc0 &&
+      marker <= 0xcf &&
+      ![0xc4, 0xc8, 0xcc].includes(marker) &&
+      start + 9 < bytes.length,
+  )
+  if (Predicate.isUndefined(frame)) return Option.none()
+  // Orientations 2 to 8 mirror or turn the raster; 0 and 1 leave it as it is.
+  const orientation = jpegOrientation(bytes, segments)
+  return Option.some({
+    mediaType: "image/jpeg",
+    height: uint16BE(bytes, frame.start + 5),
+    width: uint16BE(bytes, frame.start + 7),
+    upright: orientation < 2 || orientation > 8,
+  })
 }
 
 /** The size a WebP names in its first chunk: lossy (`VP8 `), lossless (`VP8L`) or extended (`VP8X`). */
 const webpSize = (bytes: Uint8Array): Option.Option<ImageHeader> => {
   const size = (width: number, height: number): Option.Option<ImageHeader> =>
-    Option.some({ mediaType: "image/webp", width, height })
+    Option.some({ mediaType: "image/webp", width, height, upright: true })
   if (startsWith(bytes, ascii("VP8X"), 12)) {
     return size(1 + uint24LE(bytes, 24), 1 + uint24LE(bytes, 27))
   }
@@ -208,6 +292,7 @@ const readImageHeader = (bytes: Uint8Array): Option.Option<ImageHeader> => {
       mediaType: "image/png",
       width: uint32BE(bytes, 16),
       height: uint32BE(bytes, 20),
+      upright: true,
     })
   }
   if (startsWith(bytes, [0xff, 0xd8, 0xff])) return jpegSize(bytes)
@@ -216,11 +301,249 @@ const readImageHeader = (bytes: Uint8Array): Option.Option<ImageHeader> => {
       mediaType: "image/gif",
       width: uint16LE(bytes, 6),
       height: uint16LE(bytes, 8),
+      upright: true,
     })
   }
   if (startsWith(bytes, ascii("RIFF")) && startsWith(bytes, ascii("WEBP"), 8))
     return webpSize(bytes)
   return Option.none()
+}
+
+// ── colour profile ──────────────────────────────────────────────────────────
+
+/** A byte range `[start, end)` of an image's container. */
+type ByteRange = readonly [number, number]
+
+/** `bytes` with each of `ranges` (in order, apart) left out. */
+const withoutRanges = (bytes: Uint8Array, ranges: ReadonlyArray<ByteRange>): Uint8Array => {
+  const kept: Array<Uint8Array> = []
+  let from = 0
+  for (const [start, end] of ranges) {
+    kept.push(bytes.subarray(from, start))
+    from = end
+  }
+  kept.push(bytes.subarray(from))
+  const out = new Uint8Array(kept.reduce((total, part) => total + part.length, 0))
+  let at = 0
+  for (const part of kept) {
+    out.set(part, at)
+    at += part.length
+  }
+  return out
+}
+
+/** A JPEG holds its profile in APP2 segments that open with `ICC_PROFILE`. */
+const jpegProfileRanges = (bytes: Uint8Array): ReadonlyArray<ByteRange> =>
+  jpegSegments(bytes).flatMap(({ marker, start, end }): ReadonlyArray<ByteRange> => {
+    if (marker !== 0xe2 || !startsWith(bytes, ascii("ICC_PROFILE\0"), start + 4)) return []
+    return [[start, Math.min(end, bytes.length)]]
+  })
+
+/** A PNG holds its profile in an `iCCP` chunk, before its image data. */
+const pngProfileRanges = (bytes: Uint8Array): ReadonlyArray<ByteRange> => {
+  const ranges: Array<ByteRange> = []
+  let at = PNG_SIGNATURE.length
+  while (at + 8 <= bytes.length && !startsWith(bytes, ascii("IDAT"), at + 4)) {
+    const end = at + 12 + uint32BE(bytes, at)
+    if (startsWith(bytes, ascii("iCCP"), at + 4)) ranges.push([at, Math.min(end, bytes.length)])
+    at = end
+  }
+  return ranges
+}
+
+/** An extended WebP holds its profile in an `ICCP` chunk, and flags it in its `VP8X` chunk. */
+const webpProfileRanges = (bytes: Uint8Array): ReadonlyArray<ByteRange> => {
+  const ranges: Array<ByteRange> = []
+  let at = 12
+  while (at + 8 <= bytes.length) {
+    const size = uint32LE(bytes, at + 4)
+    const end = at + 8 + size + (size % 2)
+    if (startsWith(bytes, ascii("ICCP"), at)) ranges.push([at, Math.min(end, bytes.length)])
+    at = end
+  }
+  return ranges
+}
+
+/**
+ * The image without its ICC colour profile; none when it holds none. The
+ * profile is the only metadata the codec carries into an encode (it drops
+ * EXIF, XMP and comments), so it is the only metadata that can keep an encode
+ * past the byte limit however few its pixels. Without it the image reads as
+ * sRGB.
+ */
+const withoutColorProfile = (
+  bytes: Uint8Array,
+  mediaType: ToolImageMediaType,
+): Option.Option<Uint8Array> => {
+  const ranges = Match.value(mediaType).pipe(
+    Match.when("image/jpeg", () => jpegProfileRanges(bytes)),
+    Match.when("image/png", () => pngProfileRanges(bytes)),
+    Match.when("image/webp", () => webpProfileRanges(bytes)),
+    Match.orElse((): ReadonlyArray<ByteRange> => []),
+  )
+  if (ranges.length === 0) return Option.none()
+  const plain = withoutRanges(bytes, ranges)
+  if (mediaType === "image/webp") {
+    // The RIFF size counts the bytes after it, and VP8X no longer flags a profile.
+    new DataView(plain.buffer, plain.byteOffset).setUint32(4, plain.length - 8, true)
+    if (startsWith(plain, ascii("VP8X"), 12)) plain[20] = (plain[20] ?? 0) & ~0x20
+  }
+  return Option.some(plain)
+}
+
+// ── scaling ─────────────────────────────────────────────────────────────────
+
+/** The image the store keeps: its bytes, format and size, and the size the tool saved when scaled. */
+interface FittedImage {
+  readonly bytes: Uint8Array
+  readonly mediaType: ToolImageMediaType
+  readonly width: number
+  readonly height: number
+  readonly original: Option.Option<{ readonly width: number; readonly height: number }>
+}
+
+/**
+ * The encoding a scaled image keeps: its own where the codec encodes it. A
+ * GIF (no codec encodes one), or a format no model API takes, becomes a PNG.
+ */
+const SCALED_FORMATS: Readonly<Record<ToolImageMediaType, ImageTranscode["format"]>> = {
+  "image/png": "png",
+  "image/jpeg": "jpeg",
+  "image/gif": "png",
+  "image/webp": "webp",
+}
+
+const ENCODED_MEDIA_TYPES: Readonly<Record<ImageTranscode["format"], ToolImageMediaType>> = {
+  png: "image/png",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+}
+
+/** The quality of a lossy encoding at first, and the JPEG qualities past the byte limit. */
+const LOSSY_QUALITY = 80
+const JPEG_QUALITIES = [80, 60, 40, 20]
+
+/** The side bounds, longest first: each one past the qualities is three quarters of the last, down to 1. */
+const SIDE_BOUNDS: ReadonlyArray<number> = (() => {
+  const bounds = [TOOL_IMAGE_MAX_SIDE]
+  while ((bounds.at(-1) ?? 1) > 1) bounds.push(Math.max(1, Math.floor((bounds.at(-1) ?? 1) * 0.75)))
+  return bounds
+})()
+
+/**
+ * The encodes the store tries, in order, until one is inside the byte limit:
+ * at each side bound, the image's own format, then JPEG at falling quality.
+ * The order is the prior arts' (`PRIOR_ARTS.md`, tool image scaling).
+ */
+const encodesFor = (format: ImageTranscode["format"]): ReadonlyArray<ImageTranscode> => {
+  // PNG is lossless and takes no quality; JPEG's own encode is the ladder's first.
+  const own: ReadonlyArray<Omit<ImageTranscode, "maxSide">> = Match.value(format).pipe(
+    Match.when("png", () => [{ format }]),
+    Match.when("webp", () => [{ format, quality: LOSSY_QUALITY }]),
+    Match.orElse(() => []),
+  )
+  const jpegs = JPEG_QUALITIES.map((quality): Omit<ImageTranscode, "maxSide"> => ({
+    format: "jpeg",
+    quality,
+  }))
+  return SIDE_BOUNDS.flatMap((maxSide) =>
+    [...own, ...jpegs].map((encode): ImageTranscode => ({ ...encode, maxSide })),
+  )
+}
+
+/**
+ * The largest colour profile a scaled image keeps: a quarter of the byte
+ * limit. A profile is colour, not pixels. Ordinary ones (sRGB, Display P3,
+ * Adobe RGB) take a few kilobytes and stay; a larger one would take the bytes
+ * the pixels need, and one that alone fills the limit would keep every encode
+ * past it. The store measures the profile in each encode, where it takes its
+ * real bytes (a PNG deflates it, a JPEG or a WebP carries it whole), and
+ * leaves a larger one out of that encode. With at most this much profile, the
+ * pixels keep three quarters of the limit, and JPEG at quality 20 of 2,000 x
+ * 2,000 pixels of noise takes under 0.8 MB.
+ */
+const TOOL_IMAGE_MAX_PROFILE_BYTES = TOOL_IMAGE_MAX_BYTES / 4
+
+const CODEC_MESSAGES: Readonly<Record<ImageCodecError["reason"], string>> = {
+  "not-an-image": "the bytes are not an image",
+  undecodable: "the image cannot be decoded",
+  "too-large": "the image has more pixels than the codec decodes",
+  failed: "the image cannot be scaled",
+}
+
+/**
+ * The image scaled inside `TOOL_IMAGE_MAX_SIDE` a side with its aspect ratio
+ * kept, and encoded inside `TOOL_IMAGE_MAX_BYTES`. It fails only when the
+ * codec cannot decode the bytes.
+ */
+const fitToolImage = Effect.fn("ToolImage.fit")(
+  function* (bytes: Uint8Array, header: Option.Option<ImageHeader>) {
+    const platform = yield* GentPlatform
+    const format = Option.match(header, {
+      onNone: (): ImageTranscode["format"] => "png",
+      onSome: ({ mediaType }) => SCALED_FORMATS[mediaType],
+    })
+    for (const encode of encodesFor(format)) {
+      const encoded = yield* platform.transcodeImage(bytes, encode)
+      const mediaType = ENCODED_MEDIA_TYPES[encode.format]
+      // The profile counts at the size this encode carries it: a PNG deflates
+      // it, a JPEG or a WebP carries it whole.
+      const candidate = withoutColorProfile(encoded.bytes, mediaType).pipe(
+        Option.filter(
+          (plain) => encoded.bytes.length - plain.length > TOOL_IMAGE_MAX_PROFILE_BYTES,
+        ),
+        Option.getOrElse(() => encoded.bytes),
+      )
+      if (candidate.length > TOOL_IMAGE_MAX_BYTES) continue
+      const original = Option.liftPredicate(
+        { width: encoded.sourceWidth, height: encoded.sourceHeight },
+        (source) => source.width !== encoded.width || source.height !== encoded.height,
+      )
+      return {
+        bytes: candidate,
+        mediaType,
+        width: encoded.width,
+        height: encoded.height,
+        original,
+      } satisfies FittedImage
+    }
+    // A guard: with its profile at most a quarter of the limit, an image fits
+    // at the first side bound with the real codec (TOOL_IMAGE_MAX_PROFILE_BYTES).
+    return yield* new ToolImageError({ message: "the image cannot be encoded small enough" })
+  },
+  Effect.mapError((cause) => {
+    if (Schema.is(ToolImageError)(cause)) return cause
+    return new ToolImageError({ message: CODEC_MESSAGES[cause.reason], cause })
+  }),
+)
+
+/**
+ * The image as the store keeps it: the bytes as they are when their header
+ * names an upright size inside the side bound and they are inside the byte
+ * limit (no decode), else scaled and encoded to fit (`fitToolImage`). A JPEG
+ * its EXIF orientation turns or mirrors goes through the codec, which turns
+ * it upright, so the stored raster is the image as it shows.
+ */
+const fittedToolImage = (bytes: Uint8Array) => {
+  const header = readImageHeader(bytes)
+  const fits =
+    bytes.length <= TOOL_IMAGE_MAX_BYTES &&
+    Option.exists(
+      header,
+      ({ width, height, upright }) =>
+        upright && width >= 1 && height >= 1 && Math.max(width, height) <= TOOL_IMAGE_MAX_SIDE,
+    )
+  if (fits && Option.isSome(header)) {
+    const { mediaType, width, height } = header.value
+    return Effect.succeed<FittedImage>({
+      bytes,
+      mediaType,
+      width,
+      height,
+      original: Option.none(),
+    })
+  }
+  return fitToolImage(bytes, header)
 }
 
 // ── blob store ──────────────────────────────────────────────────────────────
@@ -336,26 +659,11 @@ const touch = Effect.fn("ToolImage.touch")(function* (file: string) {
   )
 })
 
-/** Writes `bytes` to the store once and returns its reference. */
+/** Writes `bytes` to the store once, scaled to fit, and returns its reference. */
 const storeToolImage = Effect.fn("ToolImage.store")(
-  function* (home: string, bytes: Uint8Array, source: Option.Option<string>) {
-    if (bytes.length > TOOL_IMAGE_MAX_BYTES) {
-      return yield* new ToolImageError({
-        message: `the image is ${bytes.length} bytes, over the ${TOOL_IMAGE_MAX_BYTES}-byte limit`,
-      })
-    }
-    const header = readImageHeader(bytes)
-    if (Option.isNone(header)) {
-      return yield* new ToolImageError({
-        message: "the bytes are not a PNG, JPEG, GIF or WebP image",
-      })
-    }
-    const { width, height, mediaType } = header.value
-    if (width < 1 || height < 1 || Math.max(width, height) > TOOL_IMAGE_MAX_SIDE) {
-      return yield* new ToolImageError({
-        message: `the image is ${width}x${height}; each side must be 1 to ${TOOL_IMAGE_MAX_SIDE} pixels: downscale it before you save it`,
-      })
-    }
+  function* (home: string, input: Uint8Array, source: Option.Option<string>) {
+    const fitted = yield* fittedToolImage(input)
+    const { bytes } = fitted
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const crypto = yield* Crypto.Crypto
@@ -363,11 +671,15 @@ const storeToolImage = Effect.fn("ToolImage.store")(
     const sha256 = Hex.encode(yield* crypto.digest("SHA-256", bytes))
     const image = ToolImage.make({
       sha256,
-      mediaType,
-      width,
-      height,
+      mediaType: fitted.mediaType,
+      width: fitted.width,
+      height: fitted.height,
       bytes: bytes.length,
-      ...omitUndefined({ source: Option.getOrUndefined(source) }),
+      ...omitUndefined({
+        source: Option.getOrUndefined(source),
+        originalWidth: Option.getOrUndefined(Option.map(fitted.original, (size) => size.width)),
+        originalHeight: Option.getOrUndefined(Option.map(fitted.original, (size) => size.height)),
+      }),
     })
     const file = blobPath(path, directory, image)
     // A reuse marks the file as just used; a file gone is written again.
@@ -396,9 +708,14 @@ type SaveToolImageInput = ({ readonly bytes: Uint8Array } | { readonly path: str
  * images, and a line naming it on one that does not. The store keeps one file
  * per content (`<data dir>/blobs/<sha256>.<ext>`), keeps it while a stored
  * message holds it, and removes it a day after the last such message goes
- * (`sweepToolImages`). It takes PNG, JPEG, GIF and WebP, up to 3.75 MiB and 2,000
- * pixels a side; anything else fails with `ToolImageError`, and a larger
- * image must be downscaled first.
+ * (`sweepToolImages`). It keeps PNG, JPEG, GIF and WebP up to 3.75 MiB and
+ * 2,000 pixels a side as they are, when upright. A larger image is scaled to
+ * fit, its aspect ratio kept, and encoded again where its bytes are still past
+ * the limit (a GIF, or another format the codec decodes, becomes a PNG); its
+ * `ToolImage` then names its `originalWidth` and `originalHeight`, and the
+ * model reads them beside the image. A colour profile an encode carries at
+ * more than a quarter of the byte limit is left out of that encode. A JPEG its
+ * EXIF orientation turns is stored upright. Only bytes no codec decodes fail, with `ToolImageError`.
  */
 export const saveToolImage = Effect.fn("saveToolImage")(function* (input: SaveToolImageInput) {
   const ctx = yield* ExtensionContext

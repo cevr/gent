@@ -5,7 +5,7 @@ import { BuiltinExtensionModules } from "../src/index.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
-import { BunPlatformLive, GentPlatform } from "@gent/core/host"
+import { BunPlatformLive, extensionEntryModules, GentPlatform } from "@gent/core/host"
 import {
   collectTestContributions,
   createRpcHarness,
@@ -18,44 +18,58 @@ import {
 
 /** An `effect`, `effect/*` or `@effect/*` specifier; `effect-encore` is not one. */
 const EFFECT_SPECIFIER = /^(?:effect(?:\/.+)?|@effect\/.+)$/
+/** An `effect` or `effect/*` specifier: core's own dependency, which the core loader binds. */
+const CORE_EFFECT_SPECIFIER = /^effect(?:\/.+)?$/
 const IMPORT_SOURCE = /(?:\bfrom\s+|\bimport\s*\(\s*|^\s*import\s+)"([^"]+)"/gm
 
 // oxlint-disable-next-line effect/noDynamicImports -- the test compares each binding with the module its name resolves to here
 const importSpecifier = (specifier: string) => Effect.promise(() => import(specifier))
 
 describe("builtin peer modules", () => {
-  it.live("bind exactly the effect modules the shipped extensions import", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const testsDirectory = yield* path.fromFileUrl(new URL(".", import.meta.url))
-      const roots = [
-        path.join(testsDirectory, "..", "src"),
-        path.join(testsDirectory, "..", "..", "..", "examples", "extensions"),
-      ]
-      const imported = new Set<string>()
-      for (const root of roots) {
-        const files = yield* fs.readDirectory(root, { recursive: true })
-        for (const file of files.filter((name) => /\.tsx?$/.test(name))) {
-          const source = yield* fs.readFileString(path.join(root, file))
-          for (const [, specifier = ""] of source.matchAll(IMPORT_SOURCE)) {
-            if (EFFECT_SPECIFIER.test(specifier)) imported.add(specifier)
+  it.live(
+    "core and the shipped set bind exactly the effect modules the shipped extensions import",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const testsDirectory = yield* path.fromFileUrl(new URL(".", import.meta.url))
+        const roots = [
+          path.join(testsDirectory, "..", "src"),
+          path.join(testsDirectory, "..", "..", "..", "examples", "extensions"),
+        ]
+        const imported = new Set<string>()
+        for (const root of roots) {
+          const files = yield* fs.readDirectory(root, { recursive: true })
+          for (const file of files.filter((name) => /\.tsx?$/.test(name))) {
+            const source = yield* fs.readFileString(path.join(root, file))
+            for (const [, specifier = ""] of source.matchAll(IMPORT_SOURCE)) {
+              if (EFFECT_SPECIFIER.test(specifier)) imported.add(specifier)
+            }
           }
         }
-      }
-      expect(imported.size).toBeGreaterThan(0)
-      expect([...BuiltinExtensionModules.keys()].sort()).toEqual([...imported].sort())
+        expect(imported.size).toBeGreaterThan(0)
+        const coreEffectModules = [...extensionEntryModules].filter(([specifier]) =>
+          CORE_EFFECT_SPECIFIER.test(specifier),
+        )
+        // `effect` and `effect/*` are bound by the core loader, which the test
+        // harness binds too; the shipped set binds only the `@effect/*` packages.
+        expect(coreEffectModules.map(([specifier]) => specifier).toSorted()).toEqual(
+          [...imported].filter((specifier) => CORE_EFFECT_SPECIFIER.test(specifier)).toSorted(),
+        )
+        expect([...BuiltinExtensionModules.keys()].toSorted()).toEqual(
+          [...imported].filter((specifier) => !CORE_EFFECT_SPECIFIER.test(specifier)).toSorted(),
+        )
 
-      for (const [specifier, source] of BuiltinExtensionModules) {
-        const resolved: object = yield* importSpecifier(specifier)
-        let bound = source()
-        if (bound instanceof Promise) {
-          const pending = bound
-          bound = yield* Effect.promise(() => pending)
+        for (const [specifier, source] of [...coreEffectModules, ...BuiltinExtensionModules]) {
+          const resolved: object = yield* importSpecifier(specifier)
+          let bound = source()
+          if (bound instanceof Promise) {
+            const pending = bound
+            bound = yield* Effect.promise(() => pending)
+          }
+          expect({ specifier, same: bound === resolved }).toEqual({ specifier, same: true })
         }
-        expect({ specifier, same: bound === resolved }).toEqual({ specifier, same: true })
-      }
-    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
   )
 
   // A test process has loaded the SDKs and bound no module, so these run in a

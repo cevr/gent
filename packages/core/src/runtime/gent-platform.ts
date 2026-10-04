@@ -40,6 +40,7 @@ import { causeMessage } from "../domain/guards.js"
  *   - `hash(alg, input)` — content-addressed `sha256` hex digest for durable
  *                          ids and cache keys. Sync because content-addressed
  *                          SQLite chunking is sync.
+ *   - `transcodeImage`   — decode an image, fit it inside a square, encode it
  *
  * Random bytes come from Effect `Crypto`, and `file://` URLs become paths
  * through Effect `Path.fromFileUrl`; neither is a platform fact.
@@ -87,6 +88,37 @@ export const GentBuild = Schema.TaggedUnion({
 export type GentBuild = typeof GentBuild.Type
 
 type GentPlatformHashAlgorithm = "sha256"
+
+/**
+ * One encode of an image: fit it inside `maxSide` x `maxSide` with its aspect
+ * ratio kept and never enlarged, then encode it as `format`, at `quality`
+ * (1 to 100) for a lossy format.
+ */
+export interface ImageTranscode {
+  readonly maxSide: number
+  readonly format: "png" | "jpeg" | "webp"
+  readonly quality?: number
+}
+
+/** The encoded image, its size, and the size its source decoded to. */
+interface TranscodedImage {
+  readonly bytes: Uint8Array
+  readonly width: number
+  readonly height: number
+  readonly sourceWidth: number
+  readonly sourceHeight: number
+}
+
+/**
+ * The codec could not transcode an image: the bytes are no image format it
+ * knows (`not-an-image`), their pixels do not decode (`undecodable`), the
+ * image has more pixels than the codec decodes (`too-large`), or the codec
+ * failed otherwise (`failed`).
+ */
+export class ImageCodecError extends Schema.TaggedError<ImageCodecError>()("ImageCodecError", {
+  reason: Schema.Literals(["not-an-image", "undecodable", "too-large", "failed"]),
+  message: Schema.String,
+}) {}
 
 /**
  * A module a file loaded at runtime may import: its exports, read when a file
@@ -142,6 +174,15 @@ interface GentPlatformApi {
   readonly homeDirectory: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
+  /**
+   * Decode `bytes` (PNG, JPEG, GIF's first frame, WebP, and what else the
+   * runtime decodes), fit and encode them as `options` says. The same bytes
+   * and options give the same bytes.
+   */
+  readonly transcodeImage: (
+    bytes: Uint8Array,
+    options: ImageTranscode,
+  ) => Effect.Effect<TranscodedImage, ImageCodecError>
 }
 
 export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>()(
@@ -192,6 +233,14 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
             const seed = (h >>> 0).toString(16).padStart(8, "0")
             return seed.repeat(8)
           },
+          // No codec: a test that scales images runs the Bun platform.
+          transcodeImage: () =>
+            Effect.fail(
+              new ImageCodecError({
+                reason: "failed",
+                message: "the test platform has no image codec",
+              }),
+            ),
         })
       }),
     )

@@ -2470,9 +2470,9 @@ interface StoredImage {
 }
 
 /**
- * The tool image an image block is stored as; none for any other block, and
- * for an image the store refuses (not PNG, JPEG, GIF or WebP, or too large),
- * which goes to a blob file as before.
+ * The tool image an image block is stored as (scaled to fit where it is too
+ * large); none for any other block, and for an image the store refuses
+ * (bytes no codec decodes), which goes to a blob file as before.
  */
 const storeImageBlock = (block: Schema.Json) => {
   if (!isMediaBlock(block) || block.type !== "image")
@@ -2500,7 +2500,11 @@ const toolImageJson = ({ image, path }: StoredImage): Schema.Json => ({
   width: image.width,
   height: image.height,
   bytes: image.bytes,
-  ...omitUndefined({ source: image.source }),
+  ...omitUndefined({
+    source: image.source,
+    originalWidth: image.originalWidth,
+    originalHeight: image.originalHeight,
+  }),
   path,
 })
 

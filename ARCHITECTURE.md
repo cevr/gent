@@ -84,9 +84,19 @@ updates this list in the same commit.
     the API class: Chat Completions takes 5 and 4 MB), and past either it
     leaves out its oldest images five at a time, each as a fixed line. So
     the prefix changes only at the 21st and 26th image, never at each
-    one, and the stored session never changes. Receipts: `toolImagePrompt`,
-    `toolImagesToDrop` and `toPrompt` in
-    `packages/core/src/runtime/model-context.ts`.
+    one, and the stored session never changes. The store fits each image
+    to one fixed profile when a tool saves it, not to each model: 2,000
+    pixels a side and 3.75 MiB, scaled with its aspect ratio kept and its
+    original size recorded (`originalWidth`, `originalHeight`), which the
+    image's line names with the factors that map coordinates back, one for
+    each side when they differ. Every size is of the upright image (a JPEG
+    its EXIF orientation turns is stored turned), and a colour profile an
+    encode carries at more than a quarter of the byte limit is left out of
+    that encode, so only undecodable bytes fail
+    (the prior arts' settled entry "Tool image scaling" holds why). Receipts:
+    `toolImagePrompt`, `toolImagesToDrop` and `toPrompt` in
+    `packages/core/src/runtime/model-context.ts`; `saveToolImage` in
+    `packages/core/src/runtime/tool-image.ts`.
 11. **A model change is a durable user-role notice the loop writes.** The
     settings update only records the choice. At each step boundary the loop
     compares the model the branch last ran on or was told it continues with
@@ -154,7 +164,8 @@ updates this list in the same commit.
     (through `@gent/core/extensions/api`) and the TUI (through
     `@gent/core/host`) all call it. Host facts core cannot get from
     Effect (OS info, executable path, home directory, the build the process
-    runs) stay on `GentPlatform`.
+    runs) and the image codec (`transcodeImage`, `Bun.Image`) stay on
+    `GentPlatform`.
     The lint holds the edge outside the platform impl, the adapters, the
     tooling and test code: `effect/noGlobals` and `effect/noNodeBuiltinImport`
     ban `Bun.*`, the `bun` and `crypto` modules, `process.execPath`, `kill`,
@@ -895,15 +906,22 @@ Shape:
   and with no `ModelContextCompactor` process resource installed it truncates
   and reports the omission. The `@gent/compaction` extension installs the
   summariser; core keeps only the window marker shape (`context-window`,
-  optional `summarized` range) that status and the TUI read. A compactor that
-  fails degrades to truncation with a visible notice. The request names the
+  optional `summarized` range) that status and the TUI read. A window that
+  every compactor fails degrades to truncation with a visible notice. The request names the
   agent whose window it compacts (`agentName`), so a project compactor can
   serve one agent and fail with `ModelCompactionError` for the others.
   Installed compactors form one chain in scope order, project, then user, then
   builtin (`chainCompactors`, joined where the host merges each extension's
   Resource services): the first summary wins, a `ModelCompactionError` hands
   the window to the next compactor, and with none left the window is
-  truncated. The marker's notice
+  truncated. A compactor runs with the `ExtensionContext` a tool call of its
+  extension on the compacted branch gets: the merge wraps each extension's
+  compactor before it joins the chain (`ownedCompactor`), and each call runs
+  `provideExtensionLeaf` with the owner's id over the turn's host context and
+  the compacted agent. So `ctx.State.changed()` and `ctx.Session.send` name
+  the owner, and `ctx.cwd` is the session's cwd: a user-scope compactor or a
+  process resource that profiles share needs no cwd captured at setup, and
+  the request carries no cwd. The marker's notice
   names the session id, the branch id, and the replaced id range so the model
   can page the replaced history from the cell.
 - Project instructions are an extension, not a profile field. `@gent/agents`
@@ -1822,7 +1840,7 @@ add a worker, runtime owner, or model-facing cell dispatch path.
 Explicit platform/runtime seams:
 
 - `GentPlatform` owns host capabilities such as process identity, signals, env,
-  executable path, ids, hashing, and OS info. Time comes from Effect's `Clock`,
+  executable path, ids, hashing, the image codec, and OS info. Time comes from Effect's `Clock`,
   so a test can drive it.
 - `RuntimeEnvironment` carries launch/session configuration values:
   `cwd`, `home`, and platform name.
@@ -1957,7 +1975,7 @@ fails the call. A result of text alone is its joined text, and one of
 `structuredContent` alone (its text only repeating it) is that value; any
 other result is an object of `structuredContent`, `text`, the other blocks as
 `content`, `images`, and `omitted`, beside a `note`. An image block the tool
-image store takes (`saveToolImage`: PNG, JPEG, GIF or WebP within its limits)
+image store takes (`saveToolImage`: PNG, JPEG, GIF or WebP, scaled to fit)
 is a `ToolImage` in `images`, so the model sees it after the call's result as
 it sees any tool image, and its entry names the `path` of the image's
 content-addressed file (`toolImageFile`), which cell code reads; a typed tool returns only its `structuredContent`, so
@@ -2097,15 +2115,19 @@ and Schema classes as a shipped extension, and an unbound specifier is never
 fetched from npm. The bound specifiers are exact:
 
 - Every extension file: `@gent/core/extensions/api`,
-  `@gent/core/extensions/branch-tools` and `effect`, bound by the server loader
-  (`extensionEntryModules`, `runtime/extension-host.ts`) and by the TUI loader.
-- The peers the shipped extensions import: `BuiltinExtensionModules` in
-  `@gent/extensions`, bound by the SDK server root before it loads extensions.
-  It holds each `effect/*` and `@effect/*` specifier that
+  `@gent/core/extensions/branch-tools`, `effect`, and each `effect/*` module
+  that `packages/extensions/src/` or `examples/extensions/` imports, bound by
+  the server loader (`extensionEntryModules`, `runtime/extension-host.ts`) and
+  by the TUI loader. `effect` is core's own dependency, so the test harness,
+  which binds only core's map, resolves them as production does.
+- The `@effect/*` packages the shipped extensions import:
+  `BuiltinExtensionModules` in `@gent/extensions`, bound by the SDK server
+  root before it loads extensions. It holds each `@effect/*` specifier that
   `packages/extensions/src/` or `examples/extensions/` imports, and no other.
-  `packages/extensions/tests/index.test.ts` derives that set from the sources
-  and fails when the map differs, so a shipped extension never reads a module
-  a user extension cannot. A user extension is as capable as a shipped one.
+  `packages/extensions/tests/index.test.ts` derives both sets from the sources
+  and fails when core's `effect` entries or this map differ, so a shipped
+  extension never reads a module a user extension cannot. A user extension is
+  as capable as a shipped one.
   The provider SDKs (`@effect/ai-anthropic`, `-openai`, `-openai-compat`,
   `-typesafe`) bind lazily: a shipped driver imports its SDK at its first model
   build, and a user extension's import loads it then too, so a launch does not
@@ -2149,7 +2171,8 @@ host-owned design. It should expose:
   platform facts such as OS info, executable path, and home directory;
 - `runProcess` / `ProcessError`: the one command helper over the Effect
   `ChildProcessSpawner`;
-- `saveToolImage` / `ToolImage` / `ToolImageError`: a tool's image, stored
+- `saveToolImage` / `ToolImage` / `ToolImageError`: a tool's image, scaled
+  to fit the fixed limits, stored
   once by content (`<data dir>/blobs/<sha256>.<ext>`) and returned by
   reference in its output (`packages/core/src/runtime/tool-image.ts`).
   Storage counts each blob's references (`tool_image_references`, one row
