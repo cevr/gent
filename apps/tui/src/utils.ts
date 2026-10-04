@@ -929,10 +929,21 @@ const opLessDetail = (call: ActivityCall): string => {
 }
 
 /**
+ * Whether a failed cell's failure is its last op's: an op that failed with
+ * no exit status threw or was cut off, and that ended the cell. An op that
+ * exited non-zero returned its result, so the cell ran on and any later
+ * failure is the cell's own.
+ */
+const endedByLastOp = (call: ActivityCall): boolean => {
+  const last = call.operations.at(-1)
+  return Predicate.isNotUndefined(last) && isFailedOp(last) && Predicate.isUndefined(last.exit)
+}
+
+/**
  * The tools of a group in call order. A cell with no ops is one tool that
- * names its source's verbs. A cell that failed with no failed op (a throw
- * after its ops, or a restart) adds its own failure after its ops; one that
- * failed with a failed op is that op's failure.
+ * names its source's verbs. A cell that failed adds its own failure after
+ * its ops (a throw after its ops, or a restart), unless its last op's
+ * failure ended it (`endedByLastOp`): that is the same failure, said once.
  */
 const activityEntries = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<ActivityEntry> =>
   calls.flatMap((call): ReadonlyArray<ActivityEntry> => {
@@ -947,7 +958,7 @@ const activityEntries = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<Acti
       return [{ operation, tool: true }]
     }
     const entries = call.operations.map((operation) => ({ operation, tool: true }))
-    if (call.status !== "error" || call.operations.some(isFailedOp)) return entries
+    if (call.status !== "error" || endedByLastOp(call)) return entries
     const failure: ActivityOperation = {
       tool: call.toolName,
       outcome: "failed",

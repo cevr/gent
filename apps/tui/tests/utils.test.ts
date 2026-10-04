@@ -1268,6 +1268,19 @@ describe("failure rows", () => {
     ])
   })
 
+  // A command that exits 2 returns its result: the cell runs on, so a later
+  // throw is a failure of its own, and both show.
+  test("a cell that throws after a command exited non-zero shows both failures", () => {
+    const calls = [
+      { ...cell([op("read", "a.ts"), failure("x", "boom", 2)], "error"), reason: "TypeError: y" },
+    ]
+    expect(failedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+      "Ran x · exit 2 · boom",
+      "cell · failed · TypeError: y",
+    ])
+    expect(formatActivityHeader(calls)).toBe("2 tools · 1 read · 1 command · 2 failed")
+  })
+
   test("a narrow row cuts the reason first, then drops it, then cuts the subject", () => {
     const row = failure("sleep 2; ls d.ts", "ls: cannot access 'd.ts': No such file", 2)
     expect(formatFailureRow(row, 80)).toBe(

@@ -6232,6 +6232,41 @@ describe("collapse ladder", () => {
     }),
   )
 
+  // The command exits 2 and returns; the cell then throws for a reason of its
+  // own. Both failures show at collapsed and preview, the header counts both.
+  it.scopedLive(
+    "a cell that throws after a failed command shows both failures, at 120 and 60",
+    () =>
+      Effect.gen(function* () {
+        const cell: ToolCall = {
+          id: "both-cell",
+          toolName: "cell",
+          status: "error",
+          input: { code: "await tools.bash({ command: 'ls d.ts' }); undefinedName()" },
+          summary: "ReferenceError: undefinedName is not defined",
+          output: encodeJson({ error: "ReferenceError: undefinedName is not defined" }),
+          operations: [
+            op("both-op", "bash", { command: "ls d.ts" }, bashOutput("", `${DENIED}\n`, 2)),
+          ],
+        }
+        const items: SessionItem[] = [assistantToolMessage("both", cell)]
+        for (const width of [120, 60]) {
+          const collapsed = yield* draw(items, "collapsed", width)
+          const header = lines(collapsed).find((line) => line.includes("● ") || line.includes("✗ "))
+          expect(header).toContain("· 2 failed")
+          const rows = groupRows(collapsed)
+          expect(rows).toHaveLength(2)
+          expect(rows[0]).toStartWith("  ├ Ran ls d.ts · exit 2")
+          expect(rows[1]).toStartWith("  └ cell · failed · ReferenceError")
+          const preview = groupRows(yield* draw(items, "preview", width))
+          expect(preview[0]).toStartWith("  ├ Ran ls d.ts · exit 2")
+          expect(preview.some((row) => row.startsWith("  └ cell · failed"))).toBe(true)
+          expect(preview.at(-1)).toStartWith("    │ ReferenceError: undefinedName")
+          expect(lines(collapsed).every((line) => line.length <= width - 1)).toBe(true)
+        }
+      }),
+  )
+
   it.scopedLive("preview heads the failed row with its own output, never the cell's display", () =>
     Effect.gen(function* () {
       const wide = yield* draw(debugTurn(), "preview", 120)
