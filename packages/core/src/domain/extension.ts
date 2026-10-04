@@ -257,6 +257,12 @@ export interface LoadedExtension {
   /** Stable package/build identity. Missing means durable replay is unsupported. */
   readonly artifactIdentity?: LoadedArtifactIdentity
   /**
+   * The version of the file this extension loaded from, as the scan read it.
+   * A builtin has none. A Resource's identity names it, so an edited file
+   * builds its Resources again and an untouched one keeps them.
+   */
+  readonly version?: string
+  /**
    * Typed contribution buckets produced by the extension's setup function.
    * Consumers (the registry, the hook compiler, the profile build) read each
    * bucket directly — `contributions.tools`,
@@ -277,10 +283,40 @@ export interface FailedExtension {
   readonly error: string
 }
 
-/** An extension as health reports it: active, or failed with its phase and error. */
+/** An extension the config's `disabledExtensions` names: found, and never set up. */
+export type DisabledExtension = Pick<LoadedExtension, "manifest" | "scope" | "sourcePath">
+
+/** An extension as health reports it: active, failed with its phase and error, or disabled. */
 export type ExtensionStatusInfo =
-  | (Pick<LoadedExtension, "manifest" | "scope" | "sourcePath"> & { readonly status: "active" })
+  | (Pick<LoadedExtension, "manifest" | "scope" | "sourcePath" | "version"> & {
+      readonly status: "active"
+    })
   | (FailedExtension & { readonly status: "failed" })
+  | (DisabledExtension & { readonly status: "disabled" })
+
+const ExtensionStatusIdentity = {
+  id: Schema.String,
+  scope: Schema.Literals(["builtin", "user", "project"]),
+  sourcePath: Schema.String,
+}
+
+/**
+ * One extension of a profile as the `Extensions` facet reports it. `Active`
+ * names the file version it loaded from (none for a builtin); `Failed` names
+ * the phase that stopped it: `load` (the file did not import), `setup`,
+ * `validation` or `startup` (a Resource did not build); `Disabled` is named
+ * by the config's `disabledExtensions`.
+ */
+export const ExtensionStatus = Schema.TaggedUnion({
+  Active: { ...ExtensionStatusIdentity, version: Schema.optional(Schema.String) },
+  Failed: {
+    ...ExtensionStatusIdentity,
+    phase: Schema.Literals(["load", "setup", "validation", "startup"]),
+    error: Schema.String,
+  },
+  Disabled: ExtensionStatusIdentity,
+})
+export type ExtensionStatus = typeof ExtensionStatus.Type
 
 /** Scope precedence for extension resolution. Higher value = higher priority. */
 export const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 }
@@ -999,6 +1035,29 @@ export interface ExtensionModelsService {
 }
 
 /**
+ * The extensions of the run's profile: what each is now, and a reload. Any
+ * extension gets it, so an agent can write an extension, read whether it
+ * loaded, and reload one, while gent runs.
+ */
+export interface ExtensionExtensionsService {
+  /**
+   * Every extension of the session's profile, and each config file that did
+   * not load (a `load` failure named after its file). It reads the files as
+   * they are now: an edited or added extension file is loaded first.
+   */
+  readonly status: Effect.Effect<ReadonlyArray<ExtensionStatus>, ExtensionServiceError>
+  /**
+   * Run the setup of every extension of the profile again, then report as
+   * `status` does. The process and branch Resources of an unchanged
+   * extension stay up, with their state. A run that is going on keeps the
+   * profile it started with. An id the profile does not name fails.
+   */
+  readonly reload: (
+    id: string,
+  ) => Effect.Effect<ReadonlyArray<ExtensionStatus>, ExtensionServiceError>
+}
+
+/**
  * The run's half of the state facet: it knows the session and branch, and
  * takes the extension id from whichever leaf reports the change.
  */
@@ -1024,6 +1083,7 @@ export interface ExtensionHostContext {
   readonly Interaction: ExtensionInteractionService
   readonly FileLock: ExtensionFileLockServiceApi
   readonly Models: ExtensionModelsService
+  readonly Extensions: ExtensionExtensionsService
   /** Reports under the leaf's extension id, which a run does not know. */
   readonly State: ExtensionStateFacet
 }
@@ -1040,6 +1100,7 @@ export interface ExtensionContextService {
   readonly Interaction: ExtensionInteractionService
   readonly FileLock: ExtensionFileLockServiceApi
   readonly Models: ExtensionModelsService
+  readonly Extensions: ExtensionExtensionsService
   readonly State: ExtensionStateServiceApi
 }
 
@@ -1077,6 +1138,7 @@ export const extensionServicesFromHostContext = (
       Interaction: ctx.Interaction,
       FileLock: ctx.FileLock,
       Models: ctx.Models,
+      Extensions: ctx.Extensions,
       State: ctx.State(extensionIdOption),
     }),
   )

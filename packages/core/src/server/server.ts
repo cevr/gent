@@ -304,7 +304,18 @@ export const buildExtensionHealthSnapshot = (
   activationStatuses: ReadonlyArray<ExtensionStatusInfo>,
   runtimeIssues: ReadonlyMap<string, ReadonlyArray<ExtensionHealthIssue>> = new Map(),
 ): ExtensionHealthSnapshot => {
-  const extensions = activationStatuses.map((status) => {
+  const disabledExtensions = activationStatuses.flatMap((status) => {
+    if (status.status !== "disabled") return []
+    const { manifest, scope, sourcePath } = status
+    return [ExtensionHealth.cases.Disabled.make({ manifest, scope, sourcePath })]
+  })
+  // An empty list is left out, so a snapshot with nothing disabled reads as before.
+  const disabled = Option.match(Option.fromUndefinedOr(disabledExtensions[0]), {
+    onNone: () => ({}),
+    onSome: () => ({ disabledExtensions }),
+  })
+  const extensions = activationStatuses.flatMap((status): ReadonlyArray<ExtensionHealth> => {
+    if (status.status === "disabled") return []
     const issues: Array<ExtensionHealthIssue> = []
     if (status.status === "failed") {
       issues.push(
@@ -325,12 +336,14 @@ export const buildExtensionHealthSnapshot = (
 
     const [firstIssue, ...remainingIssues] = issues
     if (Predicate.isUndefined(firstIssue)) {
-      return ExtensionHealth.cases.Healthy.make(payload)
+      return [ExtensionHealth.cases.Healthy.make(payload)]
     }
-    return ExtensionHealth.cases.Degraded.make({
-      ...payload,
-      issues: [firstIssue, ...remainingIssues],
-    })
+    return [
+      ExtensionHealth.cases.Degraded.make({
+        ...payload,
+        issues: [firstIssue, ...remainingIssues],
+      }),
+    ]
   })
 
   const healthyExtensions = extensions.filter(ExtensionHealth.guards.Healthy)
@@ -338,11 +351,15 @@ export const buildExtensionHealthSnapshot = (
   const [firstDegraded, ...remainingDegraded] = degradedExtensions
 
   if (Predicate.isUndefined(firstDegraded)) {
-    return ExtensionHealthSnapshot.cases.Healthy.make({ extensions: healthyExtensions })
+    return ExtensionHealthSnapshot.cases.Healthy.make({
+      extensions: healthyExtensions,
+      ...disabled,
+    })
   }
   return ExtensionHealthSnapshot.cases.Degraded.make({
     healthyExtensions,
     degradedExtensions: [firstDegraded, ...remainingDegraded],
+    ...disabled,
   })
 }
 

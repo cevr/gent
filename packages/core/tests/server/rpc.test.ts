@@ -4374,6 +4374,7 @@ describe("extension requests and slash commands", () => {
                   }
                   return yield* working.resolve(cwd)
                 }),
+              reload: working.reload,
             }),
           ),
         })
@@ -5038,6 +5039,7 @@ describe("session threads", () => {
             if (resolvedCwd === cwd) return Effect.succeed(withReviewer)
             return Effect.succeed(empty)
           },
+          reload: () => Effect.void,
         }),
       )
       return { layer }
@@ -5120,7 +5122,7 @@ describe("session threads", () => {
           extensions: [],
           sessionProfileCacheLayer: Layer.succeed(
             SessionProfileCache,
-            SessionProfileCache.of({ resolve: () => Ref.get(current) }),
+            SessionProfileCache.of({ resolve: () => Ref.get(current), reload: () => Effect.void }),
           ),
           cwd: hostCwd,
         })

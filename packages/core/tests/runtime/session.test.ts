@@ -402,6 +402,7 @@ describe("SessionRuntime", () => {
         SessionProfileCache,
         SessionProfileCache.of({
           resolve: () => Effect.die("control-plane writes must not resolve session profiles"),
+          reload: () => Effect.void,
         }),
       )
       const layer = makeRuntimeLayer(providerLayer, { profileCache: profileCacheLayer })

@@ -2365,7 +2365,10 @@ describe("requestId idempotency", () => {
         }
         const profiles = Layer.succeed(
           SessionProfileCache,
-          SessionProfileCache.of({ resolve: () => Effect.succeed(profile) }),
+          SessionProfileCache.of({
+            resolve: () => Effect.succeed(profile),
+            reload: () => Effect.void,
+          }),
         )
         const deps = Layer.mergeAll(
           testSqliteStorage(Layer.empty, {}),
