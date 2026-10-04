@@ -15,6 +15,7 @@ import {
   Logger,
   Option,
   Queue,
+  Ref,
   References,
   Schema,
   Scope,
@@ -28,9 +29,11 @@ import { SocketCloseError } from "effect/socket/Socket"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import * as Prompt from "effect/ai/Prompt"
 import {
+  AgentDefinition,
   AgentName,
   BranchId,
   dateFromMillis,
+  DEFAULT_AGENT_NAME,
   GentRpcError,
   MessageId,
   Model,
@@ -49,9 +52,11 @@ import {
   userMessageIdForRequest,
 } from "@gent/core/protocol"
 import {
+  createRpcHarness,
   emptyQueueSnapshot,
   EventId,
   type ExtensionStatusScope,
+  LanguageModelLayers,
   makeTempDirectoryScoped,
   testAgent,
   waitFor,
@@ -2256,6 +2261,89 @@ describe("App status and activity rows", () => {
         }).pipe(Effect.timeout("4 seconds")),
     )
   }
+  // A turn runs at the effort of its first step; a level set while it runs
+  // takes effect at the next turn. The row names the level the running turn
+  // runs at until the turn completes, then the session's.
+  it.scopedLive(
+    "the status row keeps the running turn's effort until the turn completes, then shows the new one",
+    () =>
+      Effect.gen(function* () {
+        const reasoner = new Model({
+          id: ModelId.make("effort-test/thinker"),
+          name: "Thinker 1",
+          provider: ProviderId.make("effort-test"),
+          contextLength: 200_000,
+          reasoning: true,
+          efforts: ["low", "medium", "high"],
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.signal("The answer.")
+        const harness = yield* createRpcHarness({
+          providerLayer,
+          agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: reasoner.id })],
+          extensionInputs: [],
+          models: [reasoner],
+        })
+        // The held reply ends before the server closes, whether the test passes or not.
+        yield* Effect.addFinalizer(() => controls.emitAll)
+        let ctx = Option.none<ClientContextValue>()
+        const setup = yield* renderScoped(
+          () => (
+            <>
+              <App />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+            </>
+          ),
+          {
+            client: harness.client,
+            runtime: createMockRuntime(),
+            width: 100,
+            initialSession: sessionNamed(harness.sessionId, harness.branchId, "Effort"),
+          },
+        )
+        const client = yield* requireClient(ctx)
+        // What the server published, in order: the test reads when the turn ends.
+        const published = yield* Ref.make<ReadonlyArray<string>>([])
+        yield* harness.client.session
+          .events({ sessionId: harness.sessionId, branchId: harness.branchId })
+          .pipe(
+            Stream.runForEach(({ event }) => Ref.update(published, (all) => [...all, event._tag])),
+            Effect.forkScoped,
+          )
+        const completed = Effect.map(Ref.get(published), (all) => all.includes("TurnCompleted"))
+        // The row names the session's directory, the harness's temporary one.
+        const statusRow = (frame: string) =>
+          frame.split("\n").find((line) => line.includes("gent-test-cwd-")) ?? ""
+        yield* typeCommand("/effort low")(setup)
+        yield* waitForFrame(setup, (frame) => statusRow(frame).includes("· low"), "low set")
+        yield* Effect.promise(() => setup.mockInput.typeText("think"))
+        setup.mockInput.pressEnter()
+        yield* controls.waitForStreamStart.pipe(Effect.timeout("3 seconds"))
+        yield* typeCommand("/effort high")(setup)
+        yield* waitUntil(
+          () => Option.contains(client.reasoningLevel(), "high"),
+          "the session's level is high",
+        )
+        // The reply streams its text and holds its end: the turn still runs.
+        yield* controls.emitNext
+        const during = yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("The answer.") && statusRow(frame).length > 0,
+          "the reply's text during the turn",
+        )
+        expect(yield* completed).toBe(false)
+        expect(statusRow(during)).toContain("· low")
+        expect(statusRow(during)).not.toContain("high")
+        yield* controls.emitAll
+        yield* waitFor(completed, (done) => done, 3_000, "the turn completed")
+        const after = yield* waitForFrame(
+          setup,
+          (frame) => statusRow(frame).includes("· high"),
+          "the new level after the turn",
+        )
+        expect(statusRow(after)).not.toContain("low")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
   // Under a virtual model the effort picker reads the routed model: its
   // levels, and a default row that names the route's level, which the turn
   // asks for before the agent's, clamped to what the routed model takes.

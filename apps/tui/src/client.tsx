@@ -593,6 +593,13 @@ interface ClientAgentValue {
    * virtual model), else the default one; None before any is known.
    */
   reasoningLevel: () => Option.Option<ReasoningEffort>
+  /**
+   * While a turn runs, the level its requests go out at (its newest
+   * `StreamStarted`, until its `TurnCompleted`; None when they name none): a
+   * level set meanwhile waits for the next turn. Else, and before the turn's
+   * first request, `reasoningLevel`.
+   */
+  turnReasoningLevel: () => Option.Option<ReasoningEffort>
   /** The reasoning level config/agent would apply without a session override. */
   defaultReasoningLevel: () => Option.Option<ReasoningEffort>
   // Derived accessors
@@ -1497,6 +1504,13 @@ export function ClientProvider(props: ClientProviderProps) {
           () => agentStore.defaultReasoningLevel,
         ),
       ),
+    // From the event fold alone, so the level changes at `TurnCompleted`, in
+    // the feed's order; the runtime watch is a second stream with its own.
+    turnReasoningLevel: () =>
+      Option.match(Option.fromUndefinedOr(runtimeMetrics().turnEffort), {
+        onNone: agentValue.reasoningLevel,
+        onSome: (turn) => Option.fromUndefinedOr(turn.level),
+      }),
     defaultReasoningLevel: () => agentStore.defaultReasoningLevel,
     // Derived accessors
     isStreaming: () => agentStore.running,

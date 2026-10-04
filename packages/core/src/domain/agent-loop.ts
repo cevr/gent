@@ -146,6 +146,13 @@ export const SessionRuntimeMetrics = Schema.Struct({
       fallback: Schema.optional(Schema.Boolean),
     }),
   ),
+  /**
+   * The effort the running turn's requests go out at, from its newest
+   * `StreamStarted`: a turn keeps the level of its first step, so a level set
+   * while it runs takes effect at the next turn. `level` is absent when the
+   * request names none. Absent once the turn completes.
+   */
+  turnEffort: Schema.optional(Schema.Struct({ level: Schema.optional(ReasoningEffort) })),
 })
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
@@ -172,12 +179,16 @@ export const stepSessionMetrics = (
   const addCost = (costUsd: Option.Option<number>) =>
     metrics.costUsd + Option.getOrElse(costUsd, () => 0)
   switch (event._tag) {
-    case "TurnCompleted":
+    case "StreamStarted":
+      return { ...metrics, turnEffort: omitUndefined({ level: event.reasoningLevel }) }
+    case "TurnCompleted": {
+      const { turnEffort: _ended, ...idle } = metrics
       return {
-        ...metrics,
+        ...idle,
         turns: metrics.turns + 1,
         durationMs: metrics.durationMs + event.durationMs,
       }
+    }
     case "ModelContextProjected": {
       let compactions = Option.getOrElse(
         Option.map(Option.fromUndefinedOr(metrics.context), (context) => context.compactions),

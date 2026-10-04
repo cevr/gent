@@ -3156,6 +3156,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           branchId: scope.branchId,
           messageId: params.messageId,
           step: params.step,
+          ...effortReceipt(source.reasoningLevel),
         }),
       )
 

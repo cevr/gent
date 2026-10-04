@@ -608,8 +608,9 @@ export function Session(props: SessionProps) {
     return items.concat(
       buildModelLabels({
         // The level the turn asks for, after the clamp of the model that runs
-        // the turn: the level the step's receipt records.
-        reasoningLevel: client.reasoningLevel(),
+        // the turn: the level the step's receipt records. While a turn runs,
+        // its own level; a level set meanwhile shows once it completes.
+        reasoningLevel: client.turnReasoningLevel(),
         model: client.turnModel(),
         theme,
         debugMode: props.debugMode === true,

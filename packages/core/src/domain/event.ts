@@ -79,6 +79,15 @@ export const AgentEvent = Schema.TaggedUnion({
     branchId: BranchId,
     messageId: Schema.optional(MessageId),
     step: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    /**
+     * The effort the step's request goes out at, as its `StreamEnded`
+     * receipt will name it: a client shows the running turn's level before
+     * the step ends. Absent when the request names no level (see
+     * `reasoningDefault`), and on rows written before the field.
+     */
+    reasoningLevel: Schema.optional(ReasoningEffort),
+    /** True when the step's request names no level to a model that reasons. */
+    reasoningDefault: Schema.optional(Schema.Literal(true)),
   },
   StreamChunk: {
     sessionId: SessionId,
