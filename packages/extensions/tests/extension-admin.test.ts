@@ -634,6 +634,32 @@ describe("extension admin pane requests", () => {
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("14 seconds")),
   )
 
+  it.live("the pane reads the session's statuses, and a change pulses the extension's state", () =>
+    Effect.gen(function* () {
+      const server = yield* adminServer({ steps: [] })
+      const { client, sessionId, branchId } = server
+      const pulse = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.filter(
+          ({ event }) =>
+            event._tag === "ExtensionStateChanged" && event.extensionId === "@gent/extension-admin",
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      const status = yield* paneRequest(server, "extensions.pane.status", {})
+      expect(status.detail).toBe("")
+      expect(status.extensions).toContainEqual(
+        expect.objectContaining({ _tag: "Active", id: "@test/probe" }),
+      )
+      yield* paneRequest(server, "extensions.pane.set-enabled", {
+        id: "@test/probe",
+        enabled: false,
+      })
+      expect(Array.from(yield* Fiber.join(pulse))).toHaveLength(1)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("14 seconds")),
+  )
+
   it.live("the pane refuses an id the session does not have, and reloads one it has", () =>
     Effect.gen(function* () {
       const server = yield* adminServer({ steps: [] })

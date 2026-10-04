@@ -24,7 +24,7 @@ import {
 // could ship the same ones. The `/extensions` pane's requests make the same
 // changes as the user's own act, so they never ask.
 
-const EXTENSION_ADMIN_EXTENSION_ID = "@gent/extension-admin"
+export const EXTENSION_ADMIN_EXTENSION_ID = "@gent/extension-admin"
 
 // ── scope ───────────────────────────────────────────────────────────────────
 
@@ -549,11 +549,22 @@ const PaneOutput = Schema.Struct({
   extensions: Schema.Array(ExtensionStatus),
 })
 
-/** The statuses after a pane change, for the pane to draw at once. */
+/** The statuses, for the pane to draw at once. */
 const paneOutput = (detail: string) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     return { detail, extensions: yield* ctx.Extensions.status }
+  })
+
+/**
+ * The statuses after a pane change. The change pulses this extension's
+ * state, so a client that reads health on a pulse reads it again.
+ */
+const changedPaneOutput = (detail: string) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    yield* ctx.State.changed().pipe(Effect.ignore)
+    return yield* paneOutput(detail)
   })
 
 /**
@@ -576,7 +587,9 @@ const setEnabled = (params: { readonly id: string; readonly enabled: boolean }) 
         return yield* paneOutput(`${place.configPath} disables ${params.id} already.`)
       }
       yield* updateDisabled(place.configPath, (current) => [...new Set([...current, params.id])])
-      return yield* paneOutput(`Disabled ${params.id} in ${place.configPath}: the ${place.reach}.`)
+      return yield* changedPaneOutput(
+        `Disabled ${params.id} in ${place.configPath}: the ${place.reach}.`,
+      )
     }
     const edited: Array<string> = []
     for (const place of [user, ...Option.toArray(project)]) {
@@ -586,14 +599,23 @@ const setEnabled = (params: { readonly id: string; readonly enabled: boolean }) 
       edited.push(place.configPath)
     }
     if (edited.length === 0) return yield* paneOutput(`No config disables ${params.id}.`)
-    return yield* paneOutput(`Enabled ${params.id} in ${edited.join(" and ")}.`)
+    return yield* changedPaneOutput(`Enabled ${params.id} in ${edited.join(" and ")}.`)
   })
 
 /**
  * The `/extensions` pane's verbs. The pane is the user's own hand, so a
  * change from it never asks; a refusal fails the request with its reason.
  */
-const ExtensionAdminRpc = defineRequests(EXTENSION_ADMIN_EXTENSION_ID, {
+export const ExtensionAdminRpc = defineRequests(EXTENSION_ADMIN_EXTENSION_ID, {
+  Status: request({
+    id: "extensions.pane.status",
+    description:
+      "The session's extensions as the next turn resolves them, for the /extensions pane",
+    answersDuringTurn: true,
+    input: Schema.Struct({}),
+    output: PaneOutput,
+    execute: () => paneOutput(""),
+  }),
   SetEnabled: request({
     id: "extensions.pane.set-enabled",
     description:
@@ -613,7 +635,7 @@ const ExtensionAdminRpc = defineRequests(EXTENSION_ADMIN_EXTENSION_ID, {
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
         yield* ctx.Extensions.reload(id)
-        return yield* paneOutput(`Set ${id} up again; the next turn runs the new setup.`)
+        return yield* changedPaneOutput(`Set ${id} up again; the next turn runs the new setup.`)
       }),
   }),
 })
@@ -628,6 +650,11 @@ export const ExtensionAdminExtension = defineExtension({
     yield* host.register("tool", ExtensionsAddTool)
     yield* host.register("tool", ExtensionsRemoveTool)
     yield* host.register("tool", ExtensionsReloadTool)
-    yield* host.register("request", ExtensionAdminRpc.SetEnabled, ExtensionAdminRpc.Reload)
+    yield* host.register(
+      "request",
+      ExtensionAdminRpc.Status,
+      ExtensionAdminRpc.SetEnabled,
+      ExtensionAdminRpc.Reload,
+    )
   }),
 })

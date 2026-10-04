@@ -151,11 +151,19 @@ a headless run declines. The `project` scope needs a project the user trusts,
 and `user` is the default only when the session runs from home. A verb's
 optional `resume` queues one message on its own branch (`Session.send`,
 `delivery: "queue"`), so the agent goes on in the same task on the new
-profile. Two requests serve the `/extensions` pane, the user's own hand, so
-they never ask: `extensions.pane.set-enabled` turns an extension off in the
-narrowest config that holds the session (the trusted project's, else the
+profile. Three requests serve the `/extensions` pane, the user's own hand, so
+they never ask: `extensions.pane.status` reads the session's statuses with the
+profile resolved again, `extensions.pane.set-enabled` turns an extension off in
+the narrowest config that holds the session (the trusted project's, else the
 user's) and on in every config that names it, and `extensions.pane.reload`
-reloads one. The bundled `extensions` skill carries the guide and a template. `Models.decide({ definition, input, model?, timeoutMs? })` asks a
+reloads one. A change pulses the extension's state, so every client reads its
+health again. The pane (`apps/tui/src/extensions/extension-admin.client.tsx`)
+draws a row per extension with its scope, its state (`on`, `reload failed`,
+`failed`, `off`) and, after a failed reload, the version that still runs; a
+narrow row drops the version, then the scope, and keeps the id and the state.
+It opens on the first row that is not `on`. `space` turns the row off or on,
+`r` sets it up again, `enter` shows a failure's whole text, and `esc` goes
+back or closes. After each change the TUI loads its client extensions again. The bundled `extensions` skill carries the guide and a template. `Models.decide({ definition, input, model?, timeoutMs? })` asks a
 classifier model (System One: Jev, Clef) every `effect/ai/Decision` of the
 definition in one call and returns the answers, the model, the usage and the
 cost; `Models.available` and `Models.classifiers` say which classifiers have
