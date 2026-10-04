@@ -164,6 +164,7 @@ import {
   ModelContextCapabilityFailure,
   ModelContextLedger,
   announcedModel,
+  assistantRunEfforts,
   modelChangeNotice,
   projectContextWindow,
   projectCurrentWindow,
@@ -1511,6 +1512,12 @@ const toolCallsFromResponseParts = (
     return []
   })
 
+/** What a step's receipt (`StreamEnded`) says its request sent: the model, and the effort. */
+interface StepEffort {
+  readonly model: ModelIdType
+  readonly level: Option.Option<ReasoningEffort>
+}
+
 type ModelTurnSource = {
   /** The compaction summary written for this step, and its price when its model has one. */
   readonly compaction: Option.Option<{ readonly costUsd: Option.Option<number> }>
@@ -1543,6 +1550,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   lastCallAtMillis: Option.Option<number>
   /** The model the branch's last model request ran on. */
   lastCallModel: Option.Option<ModelIdType>
+  /** The branch's step receipts, by the id of the assistant message each step wrote. */
+  stepEfforts: ReadonlyMap<string, StepEffort>
   /**
    * The provider refused this turn's last request as too long: this step
    * hands the window off first, and a second refusal ends the turn.
@@ -1787,8 +1796,20 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       notices: requestNotices(resolved),
     }),
   )
+  // The effort each assistant run of this prompt was sent at, by its
+  // receipt. A receipt of another model says nothing about this one.
+  const reasoningHistory = assistantRunEfforts(projection.messages, (message) =>
+    Option.fromUndefinedOr(params.stepEfforts.get(message.id)).pipe(
+      Option.filter((receipt) => receipt.model === resolved.modelId),
+      Option.flatMap((receipt) => receipt.level),
+    ),
+  )
+  const stepRequest: ResolveModelRequest = {
+    ...modelRequest,
+    hints: { ...modelRequest.hints, reasoningHistory },
+  }
   const wireStream = Stream.unwrap(
-    resolveAdmittedModel(modelRequest).pipe(
+    resolveAdmittedModel(stepRequest).pipe(
       Effect.map((model) => {
         if (resolved.tools.length > 0) {
           if (params.finalStep) {
@@ -2178,18 +2199,48 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (event._tag !== "StreamEnded") return Option.none()
       return Option.fromUndefinedOr(event.model)
     }
+    /** A step's receipt, by the id of the assistant message the step wrote. */
+    const knownStepEffort = ({
+      event,
+    }: EventEnvelope): Option.Option<readonly [string, StepEffort]> => {
+      if (event._tag !== "StreamEnded") return Option.none()
+      return Option.all([
+        Option.fromUndefinedOr(event.messageId),
+        Option.fromUndefinedOr(event.step),
+        Option.fromUndefinedOr(event.model),
+      ]).pipe(
+        Option.map(
+          ([messageId, step, model]) =>
+            [
+              stepAddress(messageId, step).assistant,
+              { model, level: Option.fromUndefinedOr(event.reasoningLevel) },
+            ] as const,
+        ),
+      )
+    }
+    /** The receipts with the ones `events` add; a step that ran again keeps its last. */
+    const withStepEfforts = (
+      known: ReadonlyMap<string, StepEffort>,
+      events: ReadonlyArray<EventEnvelope>,
+    ): ReadonlyMap<string, StepEffort> => {
+      const added = events.flatMap((envelope) => Option.toArray(knownStepEffort(envelope)))
+      if (added.length === 0) return known
+      return new Map([...known, ...added])
+    }
     interface KnownSteps {
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
       readonly measure: Option.Option<StepMeasure>
       readonly lastCallAtMillis: Option.Option<number>
       readonly lastCallModel: Option.Option<ModelIdType>
+      readonly stepEfforts: ReadonlyMap<string, StepEffort>
     }
     const unknownSteps = {
       model: Option.none<ModelIdType>(),
       measure: Option.none<StepMeasure>(),
       lastCallAtMillis: Option.none<number>(),
       lastCallModel: Option.none<ModelIdType>(),
+      stepEfforts: new Map<string, StepEffort>(),
     }
     const lastKnownStep = yield* Ref.make<KnownSteps>({ cursor: 0, ...unknownSteps })
     const newest = <A>(
@@ -2219,6 +2270,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         measure: newest(events, knownStepMeasure, known.measure),
         lastCallAtMillis: newest(events, knownRequestStart, known.lastCallAtMillis),
         lastCallModel: newest(events, knownRequestModel, known.lastCallModel),
+        stepEfforts: withStepEfforts(known.stepEfforts, events),
       }
       yield* Ref.set(lastKnownStep, current)
       return current
@@ -2559,6 +2611,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       measure: Option.Option<StepMeasure>
       lastCallAtMillis: Option.Option<number>
       lastCallModel: Option.Option<ModelIdType>
+      stepEfforts: ReadonlyMap<string, StepEffort>
       overflowed: boolean
     }) {
       const persistAssistantPartsWithBindingsAt = (
@@ -2608,6 +2661,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         measure: params.measure,
         lastCallAtMillis: params.lastCallAtMillis,
         lastCallModel: params.lastCallModel,
+        stepEfforts: params.stepEfforts,
         overflowed: params.overflowed,
       })
       if (Option.isSome(source.compaction))
@@ -3520,6 +3574,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             measure: knownSteps.measure,
             lastCallAtMillis: knownSteps.lastCallAtMillis,
             lastCallModel: knownSteps.lastCallModel,
+            stepEfforts: knownSteps.stepEfforts,
             overflowed: params.overflowed,
           })
         }).pipe(Effect.ensuring(Ref.set(scope.activeStreamRef, Option.none()))),

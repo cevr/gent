@@ -24,7 +24,12 @@ import {
 } from "../domain/message.js"
 import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
-import { cacheWriteRate, ModelId, type ModelPricing } from "../domain/agent.js"
+import {
+  cacheWriteRate,
+  ModelId,
+  type ModelPricing,
+  type ReasoningEffort,
+} from "../domain/agent.js"
 import type { ToolCapability } from "../domain/capability.js"
 import type { TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
@@ -281,10 +286,11 @@ const reasoningReplayAt = (index: number, lastModelChange: number): ReasoningRep
   return "text-only"
 }
 
-export const toPromptMessages = (
+/** Each visible message with the prompt message it becomes, in order; one that becomes none is left out. */
+const promptEntries = (
   messages: ReadonlyArray<Message>,
-): ReadonlyArray<Prompt.Message> => {
-  const result: Prompt.Message[] = []
+): ReadonlyArray<readonly [Message, Prompt.Message]> => {
+  const result: Array<readonly [Message, Prompt.Message]> = []
   const lastModelChange = messages.findLastIndex(
     (message) => message.metadata?.customType === MODEL_CHANGE_MESSAGE_TYPE,
   )
@@ -292,10 +298,36 @@ export const toPromptMessages = (
   for (const [index, message] of messages.entries()) {
     if (!isAiVisibleMessage(message)) continue
     const promptMessage = toPromptMessage(message, reasoningReplayAt(index, lastModelChange))
-    if (Option.isSome(promptMessage)) result.push(promptMessage.value)
+    if (Option.isSome(promptMessage)) result.push([message, promptMessage.value])
   }
 
   return result
+}
+
+export const toPromptMessages = (messages: ReadonlyArray<Message>): ReadonlyArray<Prompt.Message> =>
+  promptEntries(messages).map(([, prompt]) => prompt)
+
+/**
+ * One entry per run of consecutive assistant messages in the prompt
+ * `toPromptMessages` builds, in order: the effort `effortOf` reads for the
+ * run's last message. A driver sends such a run as one assistant turn, so
+ * the entries line up with the turns on the wire
+ * (`ProviderHints.reasoningHistory`).
+ */
+export const assistantRunEfforts = (
+  messages: ReadonlyArray<Message>,
+  effortOf: (message: Message) => Option.Option<ReasoningEffort>,
+): ReadonlyArray<Option.Option<ReasoningEffort>> => {
+  const runs: Array<Option.Option<ReasoningEffort>> = []
+  let previousRole: Prompt.Message["role"] = "system"
+  for (const [message, prompt] of promptEntries(messages)) {
+    if (prompt.role === "assistant") {
+      if (previousRole === "assistant") runs.pop()
+      runs.push(effortOf(message))
+    }
+    previousRole = prompt.role
+  }
+  return runs
 }
 
 /** Opens the notices message, so the model does not read host facts as the user speaking. */

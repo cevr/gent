@@ -313,6 +313,8 @@ export interface SequenceStep extends ScriptedStep {
     readonly reasoning?: string
     /** The output cap the request asks the driver for. */
     readonly maxTokens?: number
+    /** The effort each earlier assistant run was sent at (`ProviderHints.reasoningHistory`). */
+    readonly reasoningHistory: ReadonlyArray<Option.Option<string>>
   }) => void
   readonly assertOptions?: (options: ProviderOptions) => void
   readonly gated?: boolean
@@ -474,6 +476,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
             try: () =>
               step.assertRequest?.({
                 model: String(request.modelId),
+                reasoningHistory: request.hints?.reasoningHistory ?? [],
                 ...omitUndefined({
                   reasoning: request.hints?.reasoning,
                   maxTokens: request.hints?.maxTokens,

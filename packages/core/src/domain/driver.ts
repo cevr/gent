@@ -143,6 +143,17 @@ export interface ProviderHints {
    * the catalog does not say.
    */
   readonly supportsReasoning?: boolean
+  /**
+   * The effort each earlier assistant run of the request's prompt was sent
+   * at, in prompt order: one entry per run of consecutive assistant
+   * messages, from the steps' receipts (`StreamEnded.reasoningLevel`). None
+   * where no receipt says: a step on another model, a step stored before
+   * receipts, a forked branch. A driver whose wire carries an effort change
+   * inside the conversation rebuilds the changes from it, so the request's
+   * earlier bytes stay the same. Absent on a request with no conversation
+   * history to keep (the compaction summary).
+   */
+  readonly reasoningHistory?: ReadonlyArray<Option.Option<ReasoningEffort>>
 }
 
 /**

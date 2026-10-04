@@ -5683,6 +5683,53 @@ describe("effort receipt", () => {
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
+
+  it.live("each request names the effort every earlier assistant run was sent at", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const history: Array<ReadonlyArray<Option.Option<string>>> = []
+        const recorded = (text: string) => ({
+          ...textStep(text),
+          assertRequest: (request: {
+            readonly reasoningHistory: ReadonlyArray<Option.Option<string>>
+          }) => {
+            history.push(request.reasoningHistory)
+          },
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          recorded("first"),
+          recorded("second"),
+          recorded("third"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          models: [effortModel],
+          providerLayer,
+        })
+        const turn = (content: string, level: "minimal" | "max", earlierTurns: number) =>
+          Effect.gen(function* () {
+            yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some(level) })
+            const turnCompleted = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+              Stream.drop(earlierTurns),
+              Stream.runHead,
+              Effect.forkScoped,
+            )
+            yield* client.message.send({ sessionId, branchId, content })
+            yield* Fiber.join(turnCompleted)
+          })
+        yield* turn("first", "minimal", 0)
+        yield* turn("second", "max", 1)
+        yield* turn("third", "max", 2)
+        yield* controls.assertDone
+        expect(history).toEqual([
+          [],
+          [Option.some("low")],
+          [Option.some("low"), Option.some("high")],
+        ])
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
 })
 
 // ── rpc wide events ─────────────────────────────────────────────────────────
