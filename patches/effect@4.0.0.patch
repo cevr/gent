@@ -1,0 +1,34 @@
+diff --git a/dist/ai/LanguageModel.js b/dist/ai/LanguageModel.js
+index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..eda5a71d21a0141321d31795fe90ac1f4003051e 100644
+--- a/dist/ai/LanguageModel.js
++++ b/dist/ai/LanguageModel.js
+@@ -500,7 +500,9 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+         providerOptions.incrementalPrompt = prepared.value.prompt;
+       }
+     }
+-    const ResponseSchema = Schema.mutable(Schema.Array(Response.Part(options.disableToolCallResolution === true ? makeToolkitWithEncodedParameters(toolkit) : makeToolkitWithOpaqueParameters(toolkit))));
++    // A caller that resolves tool calls itself validates their parameters, as
++    // the Toolkit does here: an invalid call is the caller's to answer.
++    const ResponseSchema = Schema.mutable(Schema.Array(Response.Part(makeToolkitWithOpaqueParameters(toolkit))));
+     // If tool call resolution is disabled, return the response without
+     // resolving the tool calls that were generated
+     if (options.disableToolCallResolution === true) {
+@@ -682,7 +684,9 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+         providerOptions.incrementalPrompt = prepared.value.prompt;
+       }
+     }
+-    const ResponseSchema = Schema.NonEmptyArray(Response.StreamPart(options.disableToolCallResolution === true ? makeToolkitWithEncodedParameters(toolkit) : makeToolkitWithOpaqueParameters(toolkit)));
++    // A caller that resolves tool calls itself validates their parameters, as
++    // the Toolkit does here: an invalid call is the caller's to answer.
++    const ResponseSchema = Schema.NonEmptyArray(Response.StreamPart(makeToolkitWithOpaqueParameters(toolkit)));
+     const decodeParts = Schema.decodeEffect(ResponseSchema);
+     // If tool call resolution is disabled, return the response without
+     // resolving the tool calls that were generated
+@@ -1248,7 +1252,6 @@ const resolveToolCalls = (content, toolkit, messages, concurrency) => {
+ // =============================================================================
+ // Utilities
+ // =============================================================================
+-const makeToolkitWithEncodedParameters = toolkit => Toolkit.make(...Object.values(toolkit.tools).map(tool => tool.setParameters(Schema.toEncoded(tool.parametersSchema))));
+ const makeToolkitWithOpaqueParameters = toolkit => Toolkit.make(...Object.values(toolkit.tools).map(tool => tool.setParameters(Schema.Unknown)));
+ // Provider-executed tools bypass Toolkit, so validate their parameters here.
+ const validateProviderExecutedToolCalls = (toolkit, parts) => Effect.forEach(parts, part => {

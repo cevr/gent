@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Layer, Option, Order, Predicate, Schema, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Option, Order, Predicate, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import {
@@ -1035,6 +1035,85 @@ describe("extension model surface over RPC", () => {
         { name: "hidden", isFailure: true, result: { error: "Unknown tool: hidden" } },
         { name: "blocked", isFailure: true, result: { error: "Unknown tool: blocked" } },
       ])
+      yield* controls.assertDone
+    }).pipe(
+      Effect.timeout("4 seconds"),
+      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+    ),
+  )
+
+  // A model calls a tool with input its parameters refuse: a wrong type, a
+  // missing key. The tool runner is the one place that checks a call: each
+  // call fails as a tool result that names the fault, the tool body does not
+  // run, and the turn goes on to the next step. The stream does not fail and
+  // the step is not retried.
+  it.scopedLive("a call the tool runner refuses fails as its result and the turn goes on", () =>
+    Effect.gen(function* () {
+      const ran: Array<unknown> = []
+      const extension = defineExtension({
+        id: "test/refused-call",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "agent",
+            AgentDefinition.make({ name: AgentName.make("main"), tools: ["*"] }),
+          )
+          yield* host.register(
+            "tool",
+            tool({
+              id: "todo",
+              description: "Add a todo",
+              params: Schema.Struct({ todo: Schema.String, done: Schema.Boolean }),
+              output: Schema.String,
+              execute: (input) => Effect.sync(() => ran.push(input)).pipe(Effect.as("added")),
+            }),
+          )
+        }),
+      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        multiToolCallStep(
+          { toolName: "todo", input: { todo: 42, done: false } },
+          { toolName: "todo", input: { todo: "milk" } },
+        ),
+        textStep("finished"),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [],
+        extensionInputs: [extension],
+        providerLayer,
+      })
+      const turn = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map((envelope) => envelope.event),
+        Stream.takeUntil(Predicate.isTagged("TurnCompleted")),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      yield* client.message.send({ sessionId, branchId, content: "Add milk." })
+      const events = Array.from(yield* Fiber.join(turn))
+      const messages = yield* client.message.list({ branchId })
+      const results = messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "tool-result")
+      expect(results.map((part) => [part.name, part.isFailure])).toEqual([
+        ["todo", true],
+        ["todo", true],
+      ])
+      const errors = results.map((part) => Schema.decodeUnknownSync(ErrorResult)(part.result).error)
+      expect(errors[0]).toContain("Tool 'todo' input failed")
+      expect(errors[0]).toContain("todo")
+      expect(errors[1]).toContain("Tool 'todo' input failed")
+      expect(errors[1]).toContain("done")
+      expect(ran).toEqual([])
+      expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
+      expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
+        { streamFailed: false },
+      ])
+      expect(
+        messages.some(
+          (message) =>
+            message.role === "assistant" && messagePartsText(message.parts) === "finished",
+        ),
+      ).toBe(true)
       yield* controls.assertDone
     }).pipe(
       Effect.timeout("4 seconds"),

@@ -3501,8 +3501,8 @@ const makeEncodingToolkit = <Tools extends Record<string, AiTool.Any>>(
  * The tools a scripted part encodes against: the request's, and the tool a
  * call names when the request did not declare it. A model can call a tool it
  * read about but was not given, and a provider sends that name as it is.
- * A scripted call holds its input as a provider sends it, so it encodes
- * against each tool's encoded form: a key the tool's decode would refuse
+ * A scripted call holds its input as a provider sends it, whatever the
+ * model wrote, so it encodes as it is: input the tool's parameters refuse
  * reaches the tool runner, as it does from a provider.
  */
 const toolkitForPart = (
@@ -3511,7 +3511,7 @@ const toolkitForPart = (
 ): AiToolkit.WithHandler<LanguageModelToolMap> => {
   const toolsRecord: LanguageModelToolMap = {}
   for (const tool of options.tools) {
-    toolsRecord[tool.name] = tool.setParameters(Schema.toEncoded(tool.parametersSchema))
+    toolsRecord[tool.name] = tool.setParameters(Schema.Unknown)
   }
   if (part.type === "tool-call" && !options.tools.some((tool) => tool.name === part.name)) {
     toolsRecord[part.name] = AiTool.dynamic(part.name, { parameters: Schema.Unknown })

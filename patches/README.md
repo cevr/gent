@@ -168,3 +168,34 @@ fails with `EPIPE`; a reader who quits the pager early meets the same race.
 Remove this patch when an `@effect/platform-node-shared` release keeps a
 listener on the child's stdin. Checked on 2026-10-04: 4.0.0, the latest
 release, has none.
+
+## `effect@4.0.0`
+
+`LanguageModel.streamText` and `generateText` with
+`disableToolCallResolution: true` decode each tool call's parameters against
+the tool's encoded parameter schema (`makeToolkitWithEncodedParameters`). A
+model call whose input the schema refuses (a wrong type, a missing key)
+fails the whole reply with `InvalidOutputError`. gent resolves tool calls
+itself (`runtime/turn.ts`), so that failure is a failed model step: the
+loop retries it as a transient provider error, a paid request that the
+model will likely answer the same way, and the model never reads why its
+call failed. With tool call resolution on, the SDK already decodes the
+parameters as opaque (`makeToolkitWithOpaqueParameters`) and lets the
+Toolkit refuse an invalid call as that call's result.
+
+The patch decodes the parameters as opaque on both paths. The tool runner
+(`runtime/tools.ts`) is then the one place that checks a call's input: it
+answers an invalid call with a failed result (`Tool '<id>' input failed`)
+that the model reads on its next step. The request is not changed: the
+tool declarations come from the toolkit the turn passes, as before. A
+provider-executed tool call is no longer checked on the disabled path;
+gent declares none. "refused tool calls on the wire" in
+`packages/extensions/tests/wire-tool-names.test.ts` (each shipped driver)
+and "a call the tool runner refuses …" in
+`packages/core/tests/runtime/tools.test.ts` cover it; "tool declarations on
+the wire" in the first file pins each driver's declaration bytes.
+
+Remove this patch when an Effect release decodes tool call parameters as
+opaque with tool call resolution off. Checked on 2026-10-04: 4.0.0, the
+latest release, decodes them against the encoded schema. It patches `dist`
+only; the shipped `src` copy keeps the upstream text.

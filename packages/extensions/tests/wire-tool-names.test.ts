@@ -3,7 +3,8 @@
  * `delegate.start`); Anthropic and OpenAI take only `[a-zA-Z0-9_-]` names.
  * A direct turn (no cell) through each real driver sends wire names in its
  * tool declarations and history, and the call it reads back runs the gent tool.
- * Each driver's tool declarations are pinned byte for byte.
+ * Each driver's tool declarations are pinned byte for byte, and a call the
+ * tool runner refuses comes back to the model as a failed result.
  */
 import { describe, expect, it } from "effect-bun-test"
 import {
@@ -448,7 +449,7 @@ describe("tool names on the wire", () => {
   }
 })
 
-// ── declarations ────────────────────────────────────────────────────────────
+// ── declarations and refused calls ──────────────────────────────────────────
 
 /** Each shipped driver: one per SDK that writes tool declarations. */
 const drivers: ReadonlyArray<Pick<WireCase, "provider" | "model" | "toolCall" | "text">> = [
@@ -578,5 +579,63 @@ describe("tool declarations on the wire", () => {
         }).pipe(Effect.timeout("20 seconds")),
       ),
     )
+  }
+})
+
+/** Each refused call: the input or name the model sent, and what its failed result names. */
+const REFUSED: ReadonlyArray<{
+  readonly label: string
+  readonly name: string
+  readonly input: Schema.Json
+  readonly names: ReadonlyArray<string>
+}> = [
+  {
+    label: "a wrong-typed input",
+    name: "todo",
+    input: { todo: 42, done: false },
+    names: ["Tool 'todo' input failed", "todo"],
+  },
+  {
+    label: "a missing required key",
+    name: "todo",
+    input: { todo: "milk" },
+    names: ["Tool 'todo' input failed", "done"],
+  },
+]
+
+describe("refused tool calls on the wire", () => {
+  for (const wire of drivers) {
+    for (const refused of REFUSED) {
+      it.live(`${wire.provider}: ${refused.label} fails as its result and the turn goes on`, () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const ran: Array<typeof Todo.Type> = []
+            const { bodies, events } = yield* runTurn(
+              wire,
+              [wire.toolCall(refused.name, refused.input), wire.text("done")],
+              ran,
+            )
+            // The failed result went back to the model in the next request.
+            expect(bodies).toHaveLength(2)
+            const failed = events.flatMap((event) =>
+              Match.value(event).pipe(
+                Match.tags({ ToolCallFailed: (call) => [call] }),
+                Match.orElse(() => []),
+              ),
+            )
+            expect(failed.map((event) => event.toolName)).toEqual([refused.name])
+            for (const text of refused.names) {
+              expect(failed[0]?.output ?? "").toContain(text)
+              expect(encodeExternalJson(bodies[1] ?? {})).toContain(text)
+            }
+            expect(ran).toEqual([])
+            expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
+            expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
+              { streamFailed: false },
+            ])
+          }).pipe(Effect.timeout("20 seconds")),
+        ),
+      )
+    }
   }
 })

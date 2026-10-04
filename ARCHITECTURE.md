@@ -948,6 +948,7 @@ Shape:
 - local CLI routing uses the shared server lock by default; remote routing is explicit server topology
 - queue ownership is structural
 - turn resolution streams through `LanguageModel.streamText` from `ModelResolver`, with durable stream/tool/finalization events derived from the response stream.
+- the tool runner (`runtime/tools.ts`) is the one place that checks a tool call's input. The reply decodes each call's parameters as opaque (`patches/README.md`, `effect@4.0.0`), so a call whose input the tool's parameters refuse (a wrong type, a missing key) fails as its own result (`Tool '<id>' input failed: …`), which the model reads on the next step; the stream does not fail and the step is not retried. The request's tool declarations do not change (`tool declarations on the wire` pins each driver's bytes).
 - New `TurnCompleted` receipts include `streamFailed`, including explicit false.
   Historical receipts can omit it; absence does not prove model success. The
   receipt commits with turn duration. This flag reports a failed turn only (a
