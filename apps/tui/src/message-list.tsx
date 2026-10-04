@@ -268,18 +268,21 @@ const resetClock = (retryAt: number, now: number, zone: DateTime.TimeZone): stri
 const errorLabel = (
   event: Extract<SessionEvent, { _tag: "error" }>,
   now: number,
-  zone: DateTime.TimeZone,
+  zone: () => DateTime.TimeZone,
 ): string => {
   if (Predicate.isUndefined(event.retryAt)) return event.error
   const [first = "", ...rest] = event.error.split("\n")
-  return [`${first} · resets ${resetClock(event.retryAt, now, zone)}`, ...rest].join("\n")
+  return [`${first} · resets ${resetClock(event.retryAt, now, zone())}`, ...rest].join("\n")
 }
 
-/** The row's text at `now`; clock times read in `zone`, the viewer's own unless a test fixes it. */
+/**
+ * The row's text at `now`. Clock times read in the zone `zone` gives, the
+ * viewer's own unless a test fixes it; only a row with a reset time asks.
+ */
 export const getSessionEventLabel = (
   event: SessionEvent,
   now = currentMillis(),
-  zone: DateTime.TimeZone = DateTime.zoneMakeLocal(),
+  zone: () => DateTime.TimeZone = DateTime.zoneMakeLocal,
 ): string => {
   if (event._tag === "turn-ended") {
     return [
