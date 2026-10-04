@@ -2149,6 +2149,13 @@ export interface SessionProfile {
    * binding is replayable only inside it.
    */
   readonly generationId: ProcessGenerationId
+  /**
+   * A short hash of the profile's key (`SessionProfileCache`): the place,
+   * the extensions set up and their file versions. A turn names it on each
+   * request (`StreamStarted.profileRevision`). Absent on a profile no cache
+   * built (a fixed test profile).
+   */
+  readonly revision?: string
 }
 
 /**
@@ -2407,6 +2414,9 @@ export interface SessionProfileCacheService {
    */
   readonly reload: (cwd: string, id: ExtensionId) => Effect.Effect<void>
 }
+
+/** Hex digits of a profile revision: enough to tell the profiles of one branch apart. */
+const PROFILE_REVISION_LENGTH = 12
 
 /** One (workspace, cwd) place: at most one current profile, one build lock. */
 const placeKey = (workspaceId: WorkspaceId, cwd: string): string =>
@@ -2883,7 +2893,11 @@ export class SessionProfileCache extends Context.Service<
             // the key is new and no stored entry is lost.
             const consulted = consultedLastGood(place, built.profile.resolved)
             const key = [declarationKey, consultedKey(consulted)].join("\u0001")
-            const entry: ProfileEntry = { key, declarationKey, consulted, place, ...built }
+            const profile: SessionProfile = {
+              ...built.profile,
+              revision: platform.hash("sha256", key).slice(0, PROFILE_REVISION_LENGTH),
+            }
+            const entry: ProfileEntry = { key, declarationKey, consulted, place, ...built, profile }
             entries.set(key, entry)
             aliases.set(list, key)
             yield* Effect.logInfo("session-profile.initialized").pipe(
@@ -3774,6 +3788,7 @@ export const resolveTurnProfile = (params: {
       turnInteractive: interactive,
       turnCapabilityContext: profile.layerContext,
       turnGenerationId: profile.generationId,
+      ...omitUndefined({ turnProfileRevision: profile.revision }),
     }
   })
 

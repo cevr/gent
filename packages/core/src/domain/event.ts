@@ -88,6 +88,14 @@ export const AgentEvent = Schema.TaggedUnion({
     reasoningLevel: Schema.optional(ReasoningEffort),
     /** True when the step's request names no level to a model that reasons. */
     reasoningDefault: Schema.optional(Schema.Literal(true)),
+    /**
+     * A short hash of the extension profile the step's turn runs on: its
+     * place, the extensions it set up and the versions of their files. Two
+     * requests with different revisions ran on different extensions, so a
+     * client tells a prefix an extension change rewrote from a regression.
+     * Absent on rows written before the field.
+     */
+    profileRevision: Schema.optional(Schema.String),
   },
   StreamChunk: {
     sessionId: SessionId,

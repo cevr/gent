@@ -383,16 +383,23 @@ const schemaRevisionFor = (tool: ToolCapability) =>
     ToolSchemaRevision.make(`schema:${platform.hash("sha256", advertisedSchemaJson(tool))}`),
   )
 
+/**
+ * The durable source of an extension's tools. A build artifact names itself.
+ * A user or project file names its version, the hash of the module it built
+ * from: the same bytes after a restart replay, an edit does not. Anything
+ * else has no durable source, so its tools bind to the process.
+ */
 const sourceRevisionFor = (extension: LoadedExtension): Option.Option<ToolSourceRevision> => {
-  if (Predicate.isUndefined(extension.artifactIdentity)) return Option.none()
-  const sourceParts = [
-    "artifact",
-    extension.artifactIdentity,
-    extension.scope,
-    extension.sourcePath,
-    extension.manifest.id,
-  ]
-  return Option.some(ToolSourceRevision.make(sourceParts.join(":")))
+  const tail = [extension.scope, extension.sourcePath, extension.manifest.id]
+  if (Predicate.isNotUndefined(extension.artifactIdentity)) {
+    return Option.some(
+      ToolSourceRevision.make(["artifact", extension.artifactIdentity, ...tail].join(":")),
+    )
+  }
+  if (extension.scope === "builtin" || Predicate.isUndefined(extension.version)) {
+    return Option.none()
+  }
+  return Option.some(ToolSourceRevision.make(["version", extension.version, ...tail].join(":")))
 }
 
 /** Attach the durable identity available for one freshly selected capability. */
