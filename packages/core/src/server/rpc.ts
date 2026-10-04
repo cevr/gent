@@ -367,9 +367,16 @@ const ExtensionManifestInfo = Schema.Struct({
 })
 
 export const ExtensionHealthIssue = Schema.Union([
+  /**
+   * The extension's version did not activate. With `runningVersion`, a new
+   * version failed and the last good one still runs (a failed reload). The
+   * field is optional, so a client built before it reads the issue as a
+   * failed activation, which is true of the new version.
+   */
   Schema.TaggedStruct("ActivationFailed", {
     phase: ExtensionActivationPhase,
     error: Schema.String,
+    runningVersion: Schema.optional(Schema.String),
   }),
   /** A model driver of this extension could not list its models; they are left out. */
   Schema.TaggedStruct("ModelCatalogFailed", {

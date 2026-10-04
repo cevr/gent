@@ -30,7 +30,7 @@ import {
   useTheme,
   widgetContribution,
 } from "@gent/tui/extensions"
-import { childTaskBody } from "@gent/extensions/client"
+import { childTaskBody, threadTaskBody } from "@gent/extensions/client"
 
 // ── thread pane ─────────────────────────────────────────────────────────────
 
@@ -193,8 +193,9 @@ const windowOf = (
         omittedCount: 0,
         preview: Option.match(spoken, {
           onNone: () => "",
-          // A child's first message opens with its source; the preview shows the task.
-          onSome: (message) => firstLine(childTaskBody(messageText(message))),
+          // A child's or a thread's first message opens with its source; the
+          // preview shows the task.
+          onSome: (message) => firstLine(threadTaskBody(childTaskBody(messageText(message)))),
         }),
         updatedAt: last.createdAt.getTime(),
       }

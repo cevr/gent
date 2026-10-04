@@ -3,6 +3,16 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Clock, Effect, Option } from "effect"
 import { createSignal, Show } from "solid-js"
 import {
+  type CliRenderer,
+  NativeSpanFeed,
+  OptimizedBuffer,
+  resolveRenderLib,
+  RGBA,
+  TextRenderable,
+} from "@opentui/core"
+import { createTestRenderer, ManualClock } from "@opentui/core/testing"
+import { Terminal } from "@xterm/headless"
+import {
   CaretLine,
   caretWindow,
   decoration,
@@ -21,7 +31,12 @@ import {
   usePickerGeometry,
 } from "../src/ui"
 import { useScopedKeyboard } from "../src/terminal"
-import { createMockClient, renderFrame, renderScoped } from "./render-harness-boundary"
+import {
+  createMockClient,
+  renderFrame,
+  renderScoped,
+  TerminalOutput,
+} from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import {
   BranchId,
@@ -1199,5 +1214,309 @@ describe("docked pane column budget", () => {
       // A cut row ends one column inside the rule, at every width measured.
       expect(rowLines[0]?.trimEnd().length).toBe(ruleWidth(lines) - 1)
     }),
+  )
+})
+
+// ── box borders under a scissor ─────────────────────────────────────────────
+
+/**
+ * A box drawn under a scissor (a clipped parent, such as the live tail that
+ * cuts off a prompt's top rows) shows inside the scissor what the same box
+ * drawn alone shows there, and leaves every cell outside it as it was: the
+ * scissor crops the box, it does not lay the box or its titles out again.
+ * OpenTUI's border fast path wrote past the scissor (`patches/README.md`).
+ */
+describe("box borders under a scissor", () => {
+  const WIDTH = 24
+  const HEIGHT = 8
+
+  interface Rect {
+    readonly x: number
+    readonly y: number
+    readonly width: number
+    readonly height: number
+  }
+
+  type BoxOptions = Parameters<OptimizedBuffer["drawBox"]>[0]
+
+  const borderColor = RGBA.fromInts(200, 200, 200, 255)
+  const clearBackground = RGBA.fromInts(0, 0, 0, 0)
+  const solidBackground = RGBA.fromInts(10, 20, 30, 255)
+  const groundColor = RGBA.fromInts(90, 90, 90, 255)
+  const box = { x: 2, y: 1, width: 20, height: 6, border: true, borderColor } as const
+
+  /** A buffer with a dot in every cell, so a cell a draw changed shows. */
+  const groundBuffer = Effect.acquireRelease(
+    Effect.sync(() => {
+      const buffer = OptimizedBuffer.create(WIDTH, HEIGHT, "unicode")
+      for (let y = 0; y < HEIGHT; y++) buffer.drawText(".".repeat(WIDTH), 0, y, groundColor)
+      return buffer
+    }),
+    (buffer) => Effect.sync(() => buffer.destroy()),
+  )
+
+  /** Every cell as its char, colors and attributes. */
+  const cellsOf = (buffer: OptimizedBuffer): string[] => {
+    const { char, fg, bg, attributes } = buffer.buffers
+    return Array.from({ length: WIDTH * HEIGHT }, (_, at) =>
+      [
+        char[at],
+        ...fg.subarray(at * 4, at * 4 + 4),
+        ...bg.subarray(at * 4, at * 4 + 4),
+        attributes[at],
+      ].join(","),
+    )
+  }
+
+  /** The cells after `options` is drawn under each of `clips`, the last innermost. */
+  const drawn = (clips: ReadonlyArray<Rect>, options: Option.Option<BoxOptions>) =>
+    Effect.gen(function* () {
+      const buffer = yield* groundBuffer
+      for (const clip of clips) buffer.pushScissorRect(clip.x, clip.y, clip.width, clip.height)
+      if (Option.isSome(options)) buffer.drawBox(options.value)
+      for (const _clip of clips) buffer.popScissorRect()
+      return cellsOf(buffer)
+    })
+
+  const inside = (clips: ReadonlyArray<Rect>, at: number) => {
+    const x = at % WIDTH
+    const y = Math.floor(at / WIDTH)
+    return clips.every(
+      (clip) => x >= clip.x && x < clip.x + clip.width && y >= clip.y && y < clip.y + clip.height,
+    )
+  }
+
+  /** The rows of `cells`, so a failure names the row that differs. */
+  const rowsOf = (cells: ReadonlyArray<string>) =>
+    Array.from({ length: HEIGHT }, (_, y) => cells.slice(y * WIDTH, (y + 1) * WIDTH).join(" | "))
+
+  const cases: ReadonlyArray<{
+    readonly name: string
+    readonly clips: ReadonlyArray<Rect>
+    readonly options: BoxOptions
+  }> = [
+    {
+      name: "a left title cut at its start",
+      clips: [{ x: 6, y: 0, width: 18, height: HEIGHT }],
+      options: { ...box, backgroundColor: clearBackground, title: "TITLE" },
+    },
+    {
+      name: "a centered title cut on its left",
+      clips: [{ x: 10, y: 0, width: 14, height: HEIGHT }],
+      options: {
+        ...box,
+        backgroundColor: clearBackground,
+        title: "CENTER",
+        titleAlignment: "center",
+      },
+    },
+    {
+      name: "a right title cut on its right",
+      clips: [{ x: 0, y: 0, width: 18, height: HEIGHT }],
+      options: {
+        ...box,
+        backgroundColor: clearBackground,
+        title: "RIGHT",
+        titleAlignment: "right",
+      },
+    },
+    {
+      name: "a narrow scissor over a left title's end",
+      clips: [{ x: 7, y: 0, width: 3, height: HEIGHT }],
+      options: { ...box, backgroundColor: clearBackground, title: "TITLE" },
+    },
+    {
+      name: "a wide-character title cut on its left",
+      clips: [{ x: 9, y: 0, width: 15, height: HEIGHT }],
+      options: {
+        ...box,
+        backgroundColor: clearBackground,
+        title: "日本語の題",
+        titleAlignment: "center",
+      },
+    },
+    {
+      name: "a top row and its title above the scissor",
+      clips: [{ x: 0, y: 2, width: WIDTH, height: 6 }],
+      options: {
+        ...box,
+        backgroundColor: clearBackground,
+        title: "TOP",
+        bottomTitle: "BOTTOM",
+        bottomTitleAlignment: "right",
+      },
+    },
+    {
+      name: "nested scissors",
+      clips: [
+        { x: 4, y: 0, width: 16, height: HEIGHT },
+        { x: 0, y: 2, width: 12, height: 6 },
+      ],
+      options: { ...box, backgroundColor: clearBackground, title: "NESTED" },
+    },
+    {
+      name: "a solid background cut on its left",
+      clips: [{ x: 6, y: 0, width: 18, height: HEIGHT }],
+      options: { ...box, backgroundColor: solidBackground, shouldFill: true, title: "SOLID" },
+    },
+  ]
+
+  for (const { name, clips, options } of cases) {
+    it.live(`${name} shows the uncut box's cells inside the scissor and none outside`, () =>
+      Effect.gen(function* () {
+        const whole = yield* drawn([], Option.some(options))
+        const ground = yield* drawn([], Option.none())
+        const cut = yield* drawn(clips, Option.some(options))
+        const expected = whole.map((cell, at) => {
+          if (inside(clips, at)) return cell
+          return ground[at] ?? ""
+        })
+        // The uncut box drew inside the scissor, so the crop has something to keep.
+        expect(whole.some((cell, at) => inside(clips, at) && cell !== ground[at])).toBe(true)
+        expect(rowsOf(cut)).toEqual(rowsOf(expected))
+      }).pipe(Effect.scoped),
+    )
+  }
+})
+
+// ── split region growth ─────────────────────────────────────────────────────
+
+/**
+ * A split region that grows at the terminal's bottom sends the rows it covers
+ * to scrollback with line feeds, and the native frame that moves the region
+ * counts those rows (`noteViewportScroll`). The line feeds and the count
+ * belong to one admitted native frame. Bytes an earlier write left in the
+ * output feed make the native frame skip; when the line feeds went out before
+ * that skip, a second growth before the retry counted too few rows, and the
+ * history rows after it did not join the rows before it (`patches/README.md`).
+ * Each case runs the same session, with and without the skip, and reads the
+ * whole terminal.
+ */
+describe("split region growth", () => {
+  const WIDTH = 45
+  const HEIGHT = 15
+
+  /** One history row, ended as gent ends a transcript row: no newline after it. */
+  const commit = (renderer: CliRenderer, text: string) =>
+    renderer.writeToScrollback(({ renderContext }) => ({
+      root: new TextRenderable(renderContext, { content: text, width: text.length, height: 1 }),
+      startOnNewLine: true,
+      trailingNewline: false,
+    }))
+
+  /**
+   * Leaves bytes in the renderer's output feed that no frame sent. The next
+   * native frame sends them first and is skipped, as when an earlier write is
+   * still pending.
+   */
+  const holdFeedBytes = (renderer: CliRenderer) =>
+    Effect.gen(function* () {
+      // OpenTUI keeps the feed private; the test reads it to hold bytes in it.
+      const feed: unknown = renderer["_feed"]
+      if (!(feed instanceof NativeSpanFeed)) {
+        return yield* Effect.die("a custom stdout gives the renderer an output feed")
+      }
+      resolveRenderLib().streamWrite(feed.streamPtr, "\u001b[0m")
+    })
+
+  /** Every row the terminal holds, scrollback first, each without its trailing spaces. */
+  const terminalRows = (bytes: string) =>
+    Effect.gen(function* () {
+      const emulator = new Terminal({
+        cols: WIDTH,
+        rows: HEIGHT,
+        scrollback: 1000,
+        allowProposedApi: true,
+      })
+      yield* Effect.callback<void>((resume) => {
+        emulator.write(bytes, () => resume(Effect.void))
+      })
+      const buffer = emulator.buffer.active
+      const rows: string[] = []
+      for (let y = 0; y < buffer.length; y++) {
+        rows.push(
+          Option.match(Option.fromNullishOr(buffer.getLine(y)), {
+            onNone: () => "",
+            onSome: (line) => line.translateToString(true).trimEnd(),
+          }),
+        )
+      }
+      emulator.dispose()
+      return rows
+    })
+
+  /**
+   * A session at 45x15: twenty history rows fill the rows above a four-row
+   * region, the region grows to six rows and then to seven, shrinks back to
+   * four, and two more rows commit.
+   */
+  const session = (skipFirstGrowthFrame: boolean) =>
+    Effect.gen(function* () {
+      const output = new TerminalOutput(WIDTH, HEIGHT)
+      const { renderer, renderOnce } = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          createTestRenderer({
+            width: WIDTH,
+            height: HEIGHT,
+            stdout: output.stdout(),
+            bufferedOutput: "stdout",
+            clock: new ManualClock(),
+          }),
+        ),
+        (setup) => Effect.sync(() => setup.renderer.destroy()),
+      )
+      const frame = Effect.promise(() => renderOnce())
+      yield* Effect.promise(() => renderer.setupTerminal())
+      renderer.footerHeight = 4
+      renderer.screenMode = "split-footer"
+      renderer.externalOutputMode = "capture-stdout"
+      yield* frame
+      for (let row = 1; row <= 20; row++) {
+        commit(renderer, `row-${row}`)
+        yield* frame
+      }
+      if (skipFirstGrowthFrame) yield* holdFeedBytes(renderer)
+      const beforeGrowth = output.written().length
+      renderer.footerHeight = 6
+      yield* frame
+      const growthFrameBytes = output.written().slice(beforeGrowth)
+      renderer.footerHeight = 7
+      yield* frame
+      yield* frame
+      renderer.footerHeight = 4
+      yield* frame
+      commit(renderer, "NEW-HISTORY")
+      yield* frame
+      commit(renderer, "SECOND-HISTORY")
+      yield* frame
+      return { growthFrameBytes, rows: yield* terminalRows(output.written()) }
+    })
+
+  // The shrink from seven rows to four freed three rows above the region; the
+  // two new rows take two of them, and the third stays blank.
+  const expectedRows = [
+    ...Array.from({ length: 20 }, (_, index) => `row-${index + 1}`),
+    "NEW-HISTORY",
+    "SECOND-HISTORY",
+    "",
+    ...Array.from({ length: 4 }, () => ""),
+  ]
+
+  it.live("a growth without a skipped frame keeps every history row once and in order", () =>
+    Effect.gen(function* () {
+      const { rows } = yield* session(false)
+      expect(rows).toEqual(expectedRows)
+    }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+  )
+
+  it.live(
+    "a growth whose frame is skipped and that grows again before the retry keeps every history row once and in order",
+    () =>
+      Effect.gen(function* () {
+        const { growthFrameBytes, rows } = yield* session(true)
+        // The skipped frame sends the held bytes and scrolls nothing.
+        expect(growthFrameBytes).toBe("\u001b[0m")
+        expect(rows).toEqual(expectedRows)
+      }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
   )
 })

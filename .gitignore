@@ -13,3 +13,4 @@ bin/
 .gent/plans/
 .gent/prompts/
 .claude/scheduled_tasks.lock
+.alchemy/

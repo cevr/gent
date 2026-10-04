@@ -14,6 +14,7 @@ import {
 } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import {
+  CHILD_TASK_TYPE,
   childTaskText,
   DELEGATE_AGENT_NAME,
   DelegateEntry,
@@ -2209,6 +2210,11 @@ describe("a forked child", () => {
           const child = yield* childOf(harness)
           const childSnapshot = yield* harness.client.session.getSnapshot(child)
           expect(messageTexts(childSnapshot.messages)).toContain(parentContext)
+          // The task message is typed, so a transcript shows the task, not its frame.
+          const typed = childSnapshot.messages.filter(
+            (message) => message.metadata?.customType === CHILD_TASK_TYPE,
+          )
+          expect(messageTexts(typed)).toEqual([childTaskText(harness.sessionId, childTask)])
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,

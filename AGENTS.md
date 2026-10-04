@@ -102,6 +102,7 @@ packages/sdk/            # Client wrappers
 packages/tooling/        # gent lint rules and guards
 packages/e2e/            # PTY and server-process lifecycle tests, drive scripts for live checks
 apps/tui/                # @opentui/solid TUI
+apps/site/               # gent.cvr.im (landing page, install.sh): `bun run plan` / `deploy` there, an Alchemy stack on Railway
 ```
 
 ## Testing

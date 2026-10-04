@@ -186,16 +186,23 @@ last rows. OpenTUI draws only the region, and a region that grows at the
 terminal's bottom pushes rows into scrollback that cannot come back, so
 growing UI never grows it: the suggestions and the docked panes cover the
 tail's last rows, and the footer's base stays as it was while one is open
-(`paneOpen`, from `useDockPaneOpen` in `ui.tsx`). The tail keeps the rows the
-region shows at the smallest base since the last replay (`footerFloor`), so
-the activity row going at a turn's end shows kept rows, not blank ones; rows
-the tail does not fill sit above it, never above the composer. The rows above
-the canvas go to native history in order: during a turn only whole final
-items (`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits
-for its stored answer, a message waits while a call of it runs, and the head
-of a tool run waits until the run ends); at idle
-an item's top rows too (`partialRows`; the live view cuts them off), so each
-row is in history or on screen, once. A commit shrinks the region by its rows
+(`paneOpen`, from `useDockPaneOpen` in `ui.tsx`). The tail shows the rows the
+region holds over the footer's base as it is now: a base that grows (the
+activity row as a turn starts) moves the tail's top rows into history, and
+one that shrinks (the activity row going at a turn's end) leaves blank rows
+above the tail until it grows into them, never above the composer; so does a
+tail that shrinks after history took its top rows (a tool run that folds).
+Blank rows inside an item (history holds its top rows) that stay for 300 ms
+replay the transcript (`watchGap`). Patched OpenTUI grows the region with line
+feeds at the screen's last row, which keep the rows they push in scrollback
+(its own `CSI S` drops them). The rows above the canvas go to native history in order, only from final items
+(`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits for
+its stored answer, a message waits while a call of it runs, and the head of
+a tool run waits until the run ends): an item whole, or its top rows
+(`partialRows`; the live view cuts them off), during a turn too, so each
+final row is in history or on screen, once. Patched OpenTUI crops a box's
+border to the scissor of the boxes around it, with the box's own geometry and
+titles, so a cut prompt draws no rail above the tail. A commit shrinks the region by its rows
 first and then writes them, so they land where they were drawn; a write
 OpenTUI refuses, or rows drawn from an item that changed while they settled
 (`stillOffered`), give the rows back to the live view; an item that changes
@@ -430,16 +437,16 @@ at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 
 ### Slash Commands
 
-| Command            | Action                                                             |
-| ------------------ | ------------------------------------------------------------------ |
-| `/new`, `/clear`   | Start a new session                                                |
-| `/help`            | Open the command palette                                           |
-| `/sessions`        | Sessions pane: every session, live and stored; side threads marked |
-| `/agents`, `/tree` | Aliases of `/sessions`                                             |
-| `/branch`          | Create new branch                                                  |
-| `/fork`            | Fork from a message                                                |
-| `/thread`          | Thread pane: the sessions and windows this one runs on             |
-| `/btw`, `/side`    | Fork pane: ask a parallel session on the side                      |
+| Command            | Action                                                                  |
+| ------------------ | ----------------------------------------------------------------------- |
+| `/new`, `/clear`   | Start a new session                                                     |
+| `/help`            | Open the command palette                                                |
+| `/sessions`        | Sessions pane: one row per thread, live and stored; side threads marked |
+| `/agents`, `/tree` | Aliases of `/sessions`                                                  |
+| `/branch`          | Create new branch                                                       |
+| `/fork`            | Fork from a message                                                     |
+| `/thread`          | Thread pane: the sessions and windows this one runs on                  |
+| `/btw`, `/side`    | Fork pane: ask a parallel session on the side                           |
 
 A command sent before every command source has answered (the client
 extensions' load and the session's server slash list, `commandsSettled` in
@@ -460,21 +467,21 @@ connection cut short is no answer, and the reconnect reads it again.
 Every builtin without its own view lives in `src/extensions/builtins.tsx`; a
 builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 
-| Extension ID                              | Where                    | What                                       |
-| ----------------------------------------- | ------------------------ | ------------------------------------------ |
-| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers      |
-| `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup             |
-| `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup        |
-| `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command                    |
-| `@gent/goal`                              | `builtins.tsx`           | Goal label, goal continuation row          |
-| `@gent/session-tools`                     | `builtins.tsx`           | Sender row for `session.send`              |
-| `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter                    |
-| `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane (the session browser), tray    |
-| `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                           |
-| `@gent/cache`                             | `cache.client.tsx`       | Cache-miss rows, waste total, cache timer  |
-| `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child-completion row |
-| `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                             |
-| `@gent/wake`                              | `wake.client.tsx`        | Wake tray, fired wake row, resume stop     |
+| Extension ID                              | Where                    | What                                                            |
+| ----------------------------------------- | ------------------------ | --------------------------------------------------------------- |
+| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers                           |
+| `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup                                  |
+| `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup                             |
+| `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command                                         |
+| `@gent/goal`                              | `builtins.tsx`           | Goal label, goal continuation row                               |
+| `@gent/session-tools`                     | `builtins.tsx`           | Sender row for `session.send`                                   |
+| `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter                                         |
+| `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane (the session browser), tray (working and done rows) |
+| `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                                                |
+| `@gent/cache`                             | `cache.client.tsx`       | Cache-miss rows, waste total, cache timer                       |
+| `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child-completion row                      |
+| `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                                                  |
+| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row, resume stop                    |
 
 Client extensions author against one public entry, `@gent/tui/extensions`
 (`src/extensions.ts`): `defineClientExtension`, `ClientContext`, the

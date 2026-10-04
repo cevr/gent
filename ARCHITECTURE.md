@@ -289,7 +289,8 @@ names the decision that left it open.
 
 ```text
 apps/
-└── tui/       # OpenTUI client over the shared transport contract
+├── tui/       # OpenTUI client over the shared transport contract
+└── site/      # gent.cvr.im: landing page and install.sh, an Alchemy stack on Railway
 
 packages/
 ├── core/          # entries: extensions/api, extensions/branch-tools, protocol, host, test-utils
@@ -395,9 +396,27 @@ extensions the config leaves active or failed, versions of the extension files
 on disk). Each resolve reads the config and lists the user and project
 extension directories as they are now, under the place's lock, so an edit to
 `disabledExtensions` and an added, fixed or edited extension file reach the
-next turn and the next session without a restart; a file is imported under its
-version (mtime, size, inode), so Bun's module cache does not serve the old one.
-A directory extension's version is its index file's. Project trust comes from
+next turn and the next session without a restart. Each extension entry (a file,
+or a directory's index) is built with every module it imports by a relative
+path into one module (`GentPlatform.bundleModule`, `Bun.build` with package
+imports external), and its version is the built module's hash. The platform
+serves the build at the entry's path with the version in the query
+(`serveModule`), so a new version is imported afresh, the same version comes
+from Bun's module cache, and a package import still resolves from the entry's
+directory. The cache keeps each entry's last build with a stat stamp and a
+content hash of every input (`buildEntry`, `ModuleGraphs`): a resolve with no
+input touched costs a stat of each and reads no input (about 1.5 ms for the
+scan); a save of the same bytes reads and hashes the inputs and builds nothing;
+an edit builds again (about 10 ms; the first build of a process about 70 ms).
+A build is kept only when it is coherent: it read the inputs whose stats and
+bytes were taken before it, and their stats and bytes after it are the same, so
+a save during a build is never kept as the new version, even one that puts the
+earlier bytes back (A, then B, then A: the inode and mtime moved). A build that found an import not known before it, or
+that a save overlapped, builds again with what it found (the first build of an
+entry with relative imports builds twice); after three tries the build runs
+that resolve and is not kept. A failed build is not
+kept, so a relative module created later is found. An untrusted project's
+files are listed, not built. Project trust comes from
 `isProjectExtensionDirectoryTrusted` (`runtime/config.ts`), the reader the TUI's
 client-extension loader calls too: it reads `trustedProjects` from the user
 config file as it is now, and a file that does not decode trusts no project.
@@ -420,19 +439,59 @@ extensions before it, and itself (id, source, file version). So a profile
 rebuilt for a config edit keeps the resources the edit leaves alone, and their
 state with them (an open `/btw` fork, the agents-view watchers, a running
 background job); a resource closes when the last profile that holds it
-retires. The build key of an extension's Resources (`resourceBuildKeys`) names
-that context: the place, then the identity (scope, id, source, file version
-from `LoadedExtension.version`) of each resource-bearing extension up to and
-including it. A reload (`SessionProfileCacheService.reload`, which the
+retires. The build key of an extension's process Resources names that context
+as it started: the place, then the identity (scope, id, source, file version
+from `LoadedExtension.version`) of each resource-bearing extension that
+started before it, then its own (`startProcessResources`). A last good
+version that runs in place of a version that failed to start is named by its
+own version, in its key and in the key of each build over it, so a Resource
+built over one version is never shared by a profile that runs another. Branch
+Resources key on what the profile declares (`resourceBuildKeys`). A reload (`SessionProfileCacheService.reload`, which the
 `Extensions` facet calls) adds a count per (place, extension id) to the file
 stamp, so the next resolve misses the cached profile, runs every setup again,
 and keeps each Resource whose build key it shares; the counts live in memory
-only. An extension the disabled list names is reported `disabled`
+only. The cache keeps, per (place, scope, source path), the last version of
+each user and project extension the place's current profile ran (`lastGood`).
+A new version that fails `load`, `setup` or `validation`
+(`loadRuntimeProfileDeclarations`), or whose process Resources fail at
+`startup` (`buildScopeResources` `fallback`), runs that last good version in
+its place, marked with the failure (`LoadedExtension.reloadFailed`); it keeps
+the Resources the profile before it built, by their build key. A last good
+version runs only in a set it is valid in: one whose contributions collide
+with the set's fails as its new version did, and the set validates again
+without it, so it never takes down an extension whose new version is good.
+The profile key names the versions it decided by: the entry key adds to the
+declaration key (`profileKey`) the last good version under the key of each
+extension whose new version failed (`consultedLastGood`), named by scope and
+source, since a user and a project extension can share an id; a fallback the
+set rejected, and a failure with no last good version, count too. A profile
+serves a resolve only while each of those is still the last good one
+(`runsCurrentLastGood`), so a profile a turn still holds never brings an older
+version back, nor keeps a failure that a newer last good version would fill. Health reports such an extension `Degraded` with an
+`ActivationFailed` issue that carries the optional `runningVersion`, and the
+facet reports it `Active` with the optional `reloadFailed`: both fields are
+optional on the wire, so an older client reads a failed activation. A deleted
+file, a disabled id and an untrusted project keep nothing. Branch Resources
+have no fallback yet. An extension the disabled list names is reported `disabled`
 (`resolveExtensions` takes it as a third list): `ExtensionHealth.Disabled` on
 the wire, in the optional `disabledExtensions` field of both snapshot cases.
 The `Extensions` facet (`status`, `reload`) reads and reloads the session's
-profile; the shipped `@gent/extension-admin` gives `status` to the agent as
-the read-only `extensions.status` tool.
+profile. The shipped `@gent/extension-admin` gives both to the agent
+(`extensions.status`, `extensions.reload`), with four verbs over public entries
+only: `enable` and `disable` edit a scope's `disabledExtensions` under
+`FileLock` with `writeFileAtomic` and refuse a file that does not decode as a
+`UserConfig` (exported from the extension API for this), keeping every raw key;
+`add` copies a file or directory into a scope's extensions directory through a
+hidden staging directory, and `remove` moves one into its own new directory
+(an exclusive create) under the data directory's `extension-trash`, so no
+remove replaces another, and deletes the source only after a whole copy when
+a rename cannot cross file systems. The four ask once
+(`Interaction.approve`) after their reads and before their write, so the tool
+that runs again after the ask writes once; a headless run declines. `project`
+needs a trusted project; trust stays the user's step. `resume` queues one
+follow-up on the tool's own branch, which runs on the profile the change made.
+No verb installs npm or git packages, and no watcher exists: the scan at each
+turn start is the one apply point.
 `buildSessionProfile` then stages the `ExtensionRegistry` and the base
 prompt sections over the built resource context. The cache is a required
 service of the loop behavior and of the server's session wiring: every turn
@@ -643,6 +702,44 @@ Shape:
   terminal columns on a grapheme) over the text; `sessionMessageBody` removes
   the header, with or without the child line, so older rows render the same.
   Full detail shows the header the model reads.
+- A thread is the sessions that share one thread key (`sessionThread`:
+  `sessions.thread_id`, else the session's own id), in creation order; its
+  key is its first session's id and its current session is the newest. A
+  handoff (`continueThread`) joins its parent's thread and every other create
+  starts one; no table, registry or field records a thread. The model opens
+  unrelated work with `thread.start` (`@gent/session-tools`, `── threads ──`):
+  a session spawned under the starter (so spawn depth applies) with its own
+  key, the starter's agent, admission, model and reasoning, a run spec of at
+  most 32 model attempts, and fresh context, whose task is its first turn
+  (`Session.send` `turn`, `completion: "admission"`, metadata `customType:
+"thread-task"`, a first line that says its replies go to the user and not
+  to the starter). The ids come from the tool call (`thread:<id>` for the
+  create, `thread-start:<id>` for the send), so a repeated call is one
+  thread. A thread never reports to its starter: nothing lands on the
+  starter's branch, so its cached prefix holds and no paid turn reads a
+  result it did not ask for; work whose result the starter needs is a
+  delegate child. The thread tools act for the caller's thread, not its
+  session: after a handoff the new session owns what the older one started.
+  `thread.list` reads the caller's thread tree (`listSessions({ thread })`:
+  every session with the caller's thread key and every session below any of
+  them, so a deleted first session, whose handoffs stay detached, loses none
+  of the rest; the agents view reads a `root` the same way), groups it by
+  key, and keeps the groups whose first session any
+  session of the caller's thread spawned, with each one's status from
+  `listActiveLoops`, its current session, and the current session's latest
+  reply (one line, or 4,000 characters head and tail for one named thread);
+  `read_session` reads the rest and `session.send` messages the current
+  session. `thread.stop` stops each working loop of such a thread and
+  refuses any other. One thread runs at most four threads over all its
+  sessions: the count and the start it admits hold one process permit
+  (`ThreadStarts`), and a start past the cap deletes the session it made and
+  names the four. A thread's first message has `customType: "thread-task"`
+  and a delegate child's `"child-task"`; the transcript shows only the task
+  under a `thread · task` or `delegate · task` header. The
+  starter's interrupt does not stop a thread, and a thread's unattended turns
+  decline their asks (`turnCanAsk`). A delegate child is denied
+  `thread.start`. The `# Sessions` prompt section shows its `thread.*` lines
+  only to an agent that may call `thread.start`.
 - A session takes its name from its first user message: at a turn end,
   `@gent/session-tools` renames a session that still has
   `DEFAULT_SESSION_NAME` to the first line of its branch's first user
@@ -1020,14 +1117,44 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   making the fork, is left out with its step, and a result whose call the
   window cut away is left out too, or the child's first projection would
   reject the group. `delegate.start` always denies the child the delegation
-  tools: fan-out is the caller's decision, and a project prompt that
-  addresses "the orchestrator" reaches children too. Parents read child output through `read_session` on the
+  tools and `thread.start`: fan-out is the caller's decision, a project prompt that
+  addresses "the orchestrator" reaches children too, and a child does bounded
+  work for its parent, not unrelated work of its own. Parents read child output through `read_session` on the
   returned session/branch IDs. The session is the only copy of a child's
   output; the completion message carries the outcome and a preview.
 - The TUI agents pane lists children through `AgentsViewRpc.ListAgents` and
-  refreshes on the delegate's `ExtensionStateChanged` pulses, matched by
-  `DELEGATE_EXTENSION_ID`. Completion rows read the completion message's
+  refreshes on the delegate's and session-tools' `ExtensionStateChanged`
+  pulses (`thread.start` sends the second), matched by
+  `DELEGATE_EXTENSION_ID` and `SESSION_TOOLS_EXTENSION_ID`. Completion rows read the completion message's
   details. Core publishes no `AgentRun*` events.
+- `ListAgents` lists one row per thread: `buildRowTree` folds the sessions of
+  one `sessionThread` key (a handoff chain) into one row with the newest
+  session's ids, name and liveness, the most active session's status, the
+  first session's start, parent and side-thread mark, and the additive
+  `sessions` field (the member ids, oldest first, when there are two or
+  more) and `thread` field (the key, which a handoff keeps).
+  `parentSessionId` stays the stored parent; the tree nests a child of an
+  older session under its thread's row through the members, and the TUI
+  does the same through `sessions`. A `root` stands for its thread: the
+  listing reads the subtree of the root's thread key, so a handoff's tray
+  holds what the sessions it continues started. The activity watchers follow
+  the loops before the fold. The pane shows
+  `N sessions` in the right column (a narrow pane drops the side-thread mark
+  first), marks the row current when the shell is on any of its sessions,
+  and a second Ctrl+X deletes each session of the thread, newest first, since
+  a session delete keeps a same-thread handoff.
+- The tray adds `done · <name>` after its `working` rows (three rows at most,
+  the rest counted) for a side thread that a listing showed running and a
+  later one idle while the shell was not on it, in the subtree of the shell's
+  thread. The thread the shell is on counts as seen too, so a finish the
+  reader watched inside the thread is no done row back at its starter; a done
+  row is made only for a descendant. The controller keeps that state outside any component, keyed by
+  thread key, and changes it only for a reply `sessionQuery` keeps
+  (`accepted`). Opening the thread, its next turn on any of its sessions, or
+  its absence from a whole listing of the root it finished under (no filter)
+  clears it; a filtered listing never does. A delegate child gets none: its completion lands in
+  its parent's transcript, and its row carries the additive `delegate` flag
+  (its admission names the `delegate` agent).
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
   root depth; a parent at the depth limit cannot spawn. Only spawn edges count:
@@ -1828,7 +1955,7 @@ TUI is a client over the shared contract, not a parallel app.
 
 The session feed uses the durable input-message and step identity for each assistant message. The protocol exports the shared answer-ID rule. Stream chunks update that message only. Tool events locate their owning message by call or assistant ID, including late child results. Historical streams without IDs receive one local ID per stream.
 
-The split region is a canvas: the footer's base (the composer, the status row, and the activity row while it carries content) and the transcript's last rows, the live tail. OpenTUI's split footer draws only its own region buffer (`getSplitPinnedRenderOffset` and the `footerHeight` setter in `@opentui/core` 0.5.14 `renderer.ts`): a region that grows at the terminal's bottom scrolls the rows above it into the terminal's scrollback, and one that shrinks keeps its top row, so the rows it gave up stay blank. So growing UI never grows the region. The slash suggestions, a docked pane and every other `PickerFrame` dock in the footer and cover the tail's last rows (`NativeTranscript` cuts the tail off at the footer); while one is open the footer's base stays the height it had before (`paneOpen`, from `useDockPaneOpen`), and closing it shows the covered rows again. In a long session the region takes all its rows (`regionMax`, the terminal less two rows), and the tail keeps the rows the region shows at the smallest base since the last replay (`footerFloor`), so a base that shrinks (the activity row going when a turn ends) shows kept rows, never blank ones; rows the region holds beyond the tail sit above it, under history, never between the tail and the composer. The transcript rows above the canvas go to terminal scrollback in transcript order. While a turn runs only a whole final item moves: a streamed answer (a `draft`) waits for the stored answer that replaces it, a queued follow-up and a pending retry wait, and a message waits while one of its calls runs. A tool group is one run of calls across the steps of a turn (`projectToolRuns`; reasoning and blank text pass, answer text, a user message, a session row or an ask end it), drawn at the message that holds its first call: that message waits until the run has ended, and its fingerprint holds the run's calls and the reasoning it took, so a run that grows after history took its top rows replays the transcript. The run takes the reasoning before its first call only from that call's own message, as an earlier message may already be in history. Every block draws at the level of the `ctrl+o` ladder (`DisclosureLevel`: collapsed, one head line and one line a failure; preview, a tree of one line a child; full, the bodies), extension message rows too (`MessageRowProps.disclosure`); a level change replays history, and a block in the live tail (the connection notice) needs none (`apps/tui/AGENTS.md`). Once no turn runs every item is final, and the top rows of an item move too (`ScrollbackSurface.commitRows` with a row range; the live view cuts those rows off the item, `partialRows`), so every transcript row is in scrollback or on screen, once. Rows leave the live view only once scrollback has taken them: a write OpenTUI refuses (the geometry changed under it) puts the rows and the region back, and a later pass writes them; so do rows drawn from an item that changed while they settled (`stillOffered`). An item that changes after history took its top rows replays the transcript: history is immutable. A whole item whose highlight does not settle in three tries, and every whole item at exit, commits as plain text (`PlainHistoryContext`: headings without their marks, code and quote bodies as text), never as raw markdown or blank rows. The plain layout has other rows than the live view, so rows of an item the live view shows in part (its top rows, or the rest once history holds them) commit as drawn on the last try and at exit. At the terminal's bottom the region shrinks only by the rows a commit moves into history: the commit shrinks it first, then writes the rows into the space they left. A commit ends on its last row, with no trailing newline: OpenTUI counts the empty row a newline leaves as history, so on a short screen the region would start a row under the rows. A region above the bottom (a short session) has the terminal's own empty rows under it: it shrinks to what it wants, and a tall pane grows it into those rows. Transcript rows keep the terminal's last column free (`FREE_LAST_COLUMN`): OpenTUI writes a committed row and then erases to the line's end, which in a terminal with a pending wrap erases a full-width row's last cell (a table's right border). Answer tables keep a grid, fit their content within the answer and pad each cell by one column (`ANSWER_TABLE`). A return from the alternate screen (the palette, a picker that holds the composer, the expanded transcript) replays nothing: the terminal kept its own screen, and the region takes back the rows it left, so the shell's lines above gent stay. After the return's first frame the region takes the rows the footer and the live tail want; the tail keeps its measure behind the overlay, so a turn that ended behind a picker shows its last rows. OpenTUI, patched (`patches/README.md`), keeps the split's history state for the screen the alternate one covers: a return at the same size takes back the region's row (a short session's top row too) and the column the last history row ends on, so the next commit starts under that row, not over it; and the terminal setup's reserved rows start at the region's top row, so they push no row into scrollback. Unpatched, the return seeds the split from the cursor at column 0: the next commit overwrites the last history row, and a short session's screen goes to scrollback a second time. A replay (a resize, a disclosure change, an item changed in history, `/clear`, a later transcript for another session or branch) writes history again from the top, so its reset clears the terminal's saved lines too (`resetHistory`): scrollback cannot drop some rows and keep others, and the copy it held would show each row twice. Only the first transcript keeps the shell's lines, as nothing of gent is above it. Exit and SIGINT, SIGTERM or SIGHUP leave the terminal the same way (`leaveTerminal`; the renderer is created without its own listener for those signals, `exitSignals`, which would destroy it before the flush): every item the live view still holds commits (over the alternate screen, the palette, a pane that holds the composer or the expanded transcript, the region first takes back the rows it left), a turn in flight as drawn and as plain text (`flushTranscriptForExit`, bounded at 1.5 s), then the renderer is destroyed, which is created with `clearOnShutdown: false`: the destroy clears only the split region, and the turns stay on screen above the shell prompt. An answer's ` ```mermaid ` fence draws as its own markdown block (`useDiagramCodeBlocks` in `apps/tui/src/mermaid.ts`, an OpenTUI code-block renderer with beautiful-mermaid behind it): it draws while the fence streams, each statement once it ends (a newline, or a `;` outside a label), and a source that does not draw shows as its code block. beautiful-mermaid loads on the first fence, not at launch (`DiagramLibraryContext`), and an answer with a fence reaches history only once the load has ended (`diagramsDrawable`): the first fence starts one load, which lands as loaded or failed; a failed load lets the fence land as code. The session feed retains the data for disclosure and resize replay. User messages use an OpenTUI heavy left border, so snapshot layout does not depend on a later height callback. Incremental one-shot output remains separate work.
+The split region is a canvas: the footer's base (the composer, the status row, and the activity row while it carries content) and the transcript's last rows, the live tail. OpenTUI's split footer draws only its own region buffer (`getSplitPinnedRenderOffset` and the `footerHeight` setter in `@opentui/core` 0.5.14 `renderer.ts`): a region that grows at the terminal's bottom scrolls the rows above it into the terminal's scrollback (OpenTUI, patched, scrolls with line feeds at the screen's last row: its own `CSI S` scroll drops the rows in xterm.js and xterm without saving them), and one that shrinks keeps its top row, so the rows it gave up stay blank. So growing UI never grows the region. The slash suggestions, a docked pane and every other `PickerFrame` dock in the footer and cover the tail's last rows (`NativeTranscript` cuts the tail off at the footer); while one is open the footer's base stays the height it had before (`paneOpen`, from `useDockPaneOpen`), and closing it shows the covered rows again. In a long session the region takes all its rows (`regionMax`, the terminal less two rows), and the tail shows the rows the region holds over the footer's base as it is now. A base that grows (the activity row and the tray row as a turn starts) moves the tail's top rows into history, so no final row hides behind it while the turn runs. A base that shrinks (the activity row going when a turn ends) leaves its rows blank above the tail, under history, until the tail grows into them (the turn's end adds its `Worked for` row), and so does a tail that shrinks after history took its top rows (a tool run that folds into its group row); rows the region holds beyond the tail never sit between the tail and the composer. Blank rows that sit inside an item (history holds its top rows, the tail the rest) and stay for 300 ms replay the transcript (`watchGap`): scrollback takes no row back, and the replay writes the item whole again. The transcript rows above the canvas go to terminal scrollback in transcript order. Only a final item moves, whole or its top rows, while a turn runs too: a streamed answer (a `draft`) waits for the stored answer that replaces it, a queued follow-up and a pending retry wait, and a message waits while one of its calls runs. A tool group is one run of calls across the steps of a turn (`projectToolRuns`; reasoning and blank text pass, answer text, a user message, a session row or an ask end it), drawn at the message that holds its first call: that message waits until the run has ended, and its fingerprint holds the run's calls and the reasoning it took, so a run that grows after history took its top rows replays the transcript. The run takes the reasoning before its first call only from that call's own message, as an earlier message may already be in history. Every block draws at the level of the `ctrl+o` ladder (`DisclosureLevel`: collapsed, one head line and one line a failure; preview, a tree of one line a child; full, the bodies), extension message rows too (`MessageRowProps.disclosure`); a level change replays history, and a block in the live tail (the connection notice) needs none (`apps/tui/AGENTS.md`). The top rows of a final item move when the rest of it still fits (`ScrollbackSurface.commitRows` with a row range; the live view cuts those rows off the item, `partialRows`). Once no turn runs every item is final, so every transcript row is in scrollback or on screen, once. A cut item draws only inside the live view: OpenTUI, patched (`patches/README.md`), crops a box's border to the scissor of the boxes around it, with the box's own geometry and titles, so a prompt that history cuts draws its rail only beside its own rows, not on the rows above the tail. Rows leave the live view only once scrollback has taken them: a write OpenTUI refuses (the geometry changed under it) puts the rows and the region back, and a later pass writes them; so do rows drawn from an item that changed while they settled (`stillOffered`). An item that changes after history took its top rows replays the transcript: history is immutable. A whole item whose highlight does not settle in three tries, and every whole item at exit, commits as plain text (`PlainHistoryContext`: headings without their marks, code and quote bodies as text), never as raw markdown or blank rows. The plain layout has other rows than the live view, so rows of an item the live view shows in part (its top rows, or the rest once history holds them) commit as drawn on the last try and at exit. At the terminal's bottom the region shrinks only by the rows a commit moves into history: the commit shrinks it first, then writes the rows into the space they left. A commit ends on its last row, with no trailing newline: OpenTUI counts the empty row a newline leaves as history, so on a short screen the region would start a row under the rows. A region above the bottom (a short session) has the terminal's own empty rows under it: it shrinks to what it wants, and a tall pane grows it into those rows. Transcript rows keep the terminal's last column free (`FREE_LAST_COLUMN`): OpenTUI writes a committed row and then erases to the line's end, which in a terminal with a pending wrap erases a full-width row's last cell (a table's right border). Answer tables keep a grid, fit their content within the answer and pad each cell by one column (`ANSWER_TABLE`). A return from the alternate screen (the palette, a picker that holds the composer, the expanded transcript) replays nothing: the terminal kept its own screen, and the region takes back the rows it left, so the shell's lines above gent stay. After the return's first frame the region takes the rows the footer and the live tail want; the tail keeps its measure behind the overlay, so a turn that ended behind a picker shows its last rows. OpenTUI, patched (`patches/README.md`), keeps the split's history state for the screen the alternate one covers: a return at the same size takes back the region's row (a short session's top row too) and the column the last history row ends on, so the next commit starts under that row, not over it; and the terminal setup's reserved rows start at the region's top row, so they push no row into scrollback. Unpatched, the return seeds the split from the cursor at column 0: the next commit overwrites the last history row, and a short session's screen goes to scrollback a second time. A replay (a resize, a disclosure change, an item changed in history, `/clear`, a later transcript for another session or branch) writes history again from the top, so its reset clears the terminal's saved lines too (`resetHistory`): scrollback cannot drop some rows and keep others, and the copy it held would show each row twice. Only the first transcript keeps the shell's lines, as nothing of gent is above it. Exit and SIGINT, SIGTERM or SIGHUP leave the terminal the same way (`leaveTerminal`; the renderer is created without its own listener for those signals, `exitSignals`, which would destroy it before the flush): every item the live view still holds commits (over the alternate screen, the palette, a pane that holds the composer or the expanded transcript, the region first takes back the rows it left), a turn in flight as drawn and as plain text (`flushTranscriptForExit`, bounded at 1.5 s), then the renderer is destroyed, which is created with `clearOnShutdown: false`: the destroy clears only the split region, and the turns stay on screen above the shell prompt. An answer's ` ```mermaid ` fence draws as its own markdown block (`useDiagramCodeBlocks` in `apps/tui/src/mermaid.ts`, an OpenTUI code-block renderer with beautiful-mermaid behind it): it draws while the fence streams, each statement once it ends (a newline, or a `;` outside a label), and a source that does not draw shows as its code block. beautiful-mermaid loads on the first fence, not at launch (`DiagramLibraryContext`), and an answer with a fence reaches history only once the load has ended (`diagramsDrawable`): the first fence starts one load, which lands as loaded or failed; a failed load lets the fence land as code. The session feed retains the data for disclosure and resize replay. User messages use an OpenTUI heavy left border, so snapshot layout does not depend on a later height callback. Incremental one-shot output remains separate work.
 
 Production shape:
 
@@ -2256,6 +2383,8 @@ The skills listing goes into every request, so its size is a per-step input cost
 Principles ship as an ordinary `principles` skill with Markdown reference files. The skills resource materializes the embedded bundle in a content-addressed directory under `~/.cache/gent/skills/`. It publishes the complete directory by rename, so concurrent profiles do not expose partial files. The separate cell process reads real paths. User global skills override bundled defaults; project skills retain local-first selection. There is no separate principles tool or principle-content registry.
 
 Repository research uses the bundled `repositories` skill and supervised native commands. Git and package tools own authentication, fetches, revision reads, and command errors. Gent has no repository service, repository model tool, or native Git dependency. The skill preserves existing caches and requires exact revision receipts.
+
+Extension authoring uses the bundled `extensions` skill: where extensions live, a template, the test loop through `extensions.status`, and the `@gent/extension-admin` verbs. There is no scaffold verb; the agent writes the file with the file tools.
 
 Saved-result writes use the existing `write` tool with `atomic: true`. The tool calls `writeFileAtomic` under its existing file lock. A symlink at the path is followed to its target, as a plain write follows it: the target is replaced and the link stays. The content is staged in a hidden sibling file beside the target, synced, then renamed over it; the target keeps its mode. Ordinary completion, failure, and scoped interruption remove the sibling file. Abrupt process death can leave that one hidden file, never a directory, and does not expose a partial destination. This does not claim power-loss durability.
 
