@@ -59,16 +59,16 @@ import {
   overlayHoldsComposer,
   SessionControllerContext,
   shortModelName,
-  STATUS_YIELD,
   useExit,
 } from "./session"
 import { ExtensionRenderBoundary, useExtensionUI } from "./extensions/host"
 import { Auth, providerLabel } from "./auth"
-import type {
-  MessageRendererEntry,
-  StatusLabelAnchor,
-  StatusLabelColor,
-  WidgetSlot,
+import {
+  type MessageRendererEntry,
+  STATUS_YIELD,
+  type StatusLabelAnchor,
+  type StatusLabelColor,
+  type WidgetSlot,
 } from "./extensions/client-facets.js"
 
 // ── boot flow ───────────────────────────────────────────────────────────────
@@ -599,11 +599,11 @@ export function Session(props: SessionProps) {
   // Map semantic color names from extensions to resolved theme colors
   const resolveColor = (color: StatusLabelColor): RGBA => resolveThemeColor(theme, color)
 
-  /** The extension status labels of one group, by priority. */
+  /** The extension status labels of one group, by priority, each with its short form. */
   const extensionLabels = (anchor: StatusLabelAnchor): StatusRowLabel[] =>
     ext
       .statusLabelItems(anchor)
-      .map((item) => ({ text: item.text, color: resolveColor(item.color) }))
+      .map((item) => ({ text: item.text, color: resolveColor(item.color), short: item.short }))
 
   const connectionLabels = (): StatusRowLabel[] => {
     const items: StatusRowLabel[] = []

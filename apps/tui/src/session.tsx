@@ -124,7 +124,13 @@ import type { ToolCall } from "./tool-renderers"
 import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useInputWatch, useScopedKeyboard } from "./terminal"
 import { useExtensionUI } from "./extensions/host"
-import type { ActiveExtensionSession, DisclosureLevel, NoticeRow } from "./extensions/client-facets"
+import {
+  type ActiveExtensionSession,
+  type DisclosureLevel,
+  type NoticeRow,
+  STATUS_YIELD,
+  type StatusLabelShort,
+} from "./extensions/client-facets"
 import type { ResolvedNoticeRows } from "./extensions/loader-boundary"
 
 // ── session labels ──────────────────────────────────────────────────────────
@@ -140,22 +146,6 @@ export interface StatusRowLabel {
    */
   short?: StatusLabelShort
 }
-
-/** A status label's short form, and when it gives way. */
-interface StatusLabelShort {
-  /** The shorter text; empty leaves the label out. */
-  readonly text: string
-  /** The order in which labels take their short forms, lowest first (`STATUS_YIELD`). */
-  readonly rank: number
-}
-
-/**
- * When each core label takes its short form on a narrow row: the debug mark
- * first, then the cwd, before the model, the idle phase word, and the
- * `auto → high` effort last (its short form saves two columns). A plain
- * effort and the right-anchored numbers have none.
- */
-export const STATUS_YIELD = { debug: 0, cwd: 1, model: 2, phase: 3, effort: 4 } as const
 
 /**
  * The model's name without its family word, for a narrow row: `Claude

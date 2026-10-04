@@ -62,6 +62,7 @@ import {
   autocompleteContribution,
   clientContributions,
   defineClientExtension,
+  STATUS_YIELD,
 } from "../src/extensions/client-facets"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { rankAutocompleteItems } from "../src/autocomplete"
@@ -386,6 +387,35 @@ describe("the status row anchors its right-hand labels", () => {
       expect(text).toContain("ctx 42%")
       expect(text).toContain("$12.34")
     }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // A rank between two host ranks gives way between them: the label ranked
+  // 1.5 takes its short form after the cwd (1) and before the model (2).
+  it.scopedLive(
+    "a label with a fractional rank gives way between the host labels it sits between",
+    () =>
+      Effect.gen(function* () {
+        const ranked: StatusRowLabel[] = [
+          label("ready"),
+          { ...label("repo"), short: { text: "", rank: STATUS_YIELD.cwd } },
+          { ...label("Claude Sonnet 5"), short: { text: "Sonnet 5", rank: STATUS_YIELD.model } },
+          {
+            ...label("4 files +120 -31"),
+            short: { text: "+120 -31", rank: STATUS_YIELD.cwd + 0.5 },
+          },
+        ]
+        const setup = yield* renderScoped(() => <StatusRow labels={ranked} />, {
+          width: 36,
+          height: 4,
+        })
+        yield* Effect.promise(() => setup.flush())
+        const row =
+          setup
+            .captureCharFrame()
+            .split("\n")
+            .find((line) => line.includes("ready")) ?? ""
+        expect(row.trimEnd()).toBe("ready · Claude Sonnet 5 · +120 -31")
+      }).pipe(Effect.timeout("10 seconds")),
   )
 })
 

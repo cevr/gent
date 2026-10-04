@@ -123,6 +123,7 @@ import {
   type NoticeRow,
   noticeRowContribution,
   rendererContribution,
+  STATUS_YIELD,
   statusLabelContribution,
   widgetContribution,
 } from "../src/extensions/client-facets"
@@ -2306,6 +2307,48 @@ describe("App status and activity rows", () => {
         }).pipe(Effect.timeout("4 seconds")),
     )
   }
+  // An extension label gives way as a host label does: its short form takes
+  // its place by rank on a narrow row, and its full form comes back once the
+  // row is wide again.
+  const changeLabel = defineClientExtension("@test/change-label", {
+    setup: Effect.succeed(
+      statusLabelContribution({
+        produce: () => [
+          {
+            text: "changes: 4 files +120 -31",
+            color: "textMuted" as const,
+            short: { text: "+120 -31", rank: STATUS_YIELD.cwd + 0.5 },
+          },
+        ],
+      }),
+    ),
+  })
+  it.scopedLive(
+    "an extension label takes its short form on a narrow row and its full form after a resize",
+    () =>
+      Effect.gen(function* () {
+        const { setup } = yield* mountApp({
+          builtins: [changeLabel],
+          cwd: "/work",
+          width: 120,
+          initialSession: sessionNamed("session-short-label", "branch-short-label", "Short"),
+        })
+        const statusRow = (frame: string) =>
+          frame.split("\n").find((line) => line.includes("+120 -31")) ?? ""
+        const wide = yield* waitForFrame(setup, (next) => next.includes("changes:"), "full form")
+        expect(statusRow(wide)).toContain("changes: 4 files +120 -31")
+        setup.resize(32, 24)
+        const narrow = yield* waitForFrame(
+          setup,
+          (next) => !next.includes("changes:") && next.includes("+120 -31"),
+          "short form",
+        )
+        expect(statusRow(narrow)).toContain("+120 -31")
+        setup.resize(120, 24)
+        const again = yield* waitForFrame(setup, (next) => next.includes("changes:"), "full again")
+        expect(statusRow(again)).toContain("changes: 4 files +120 -31")
+      }).pipe(Effect.timeout("4 seconds")),
+  )
   // A turn runs at the effort of its first step; a level set while it runs
   // takes effect at the next turn. The row names the level the running turn
   // runs at until the turn completes, then the session's.

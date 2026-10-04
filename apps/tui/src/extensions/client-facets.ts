@@ -757,9 +757,32 @@ const InteractionRendererContribution = Schema.Struct({
 export const StatusLabelColor = Schema.Union([Schema.instanceOf(RGBA), NamedThemeColor])
 export type StatusLabelColor = Schema.Schema.Type<typeof StatusLabelColor>
 
+/**
+ * When each host label takes its short form on a narrow row: the debug mark
+ * first, then the cwd, before the model, the idle phase word, and the
+ * `auto → high` effort last (its short form saves two columns). A plain
+ * effort and the right-anchored numbers have none. The values are an order,
+ * not widths: an extension label ranks between two host labels with a
+ * fraction (`STATUS_YIELD.cwd + 0.5` gives way after the cwd, before the model).
+ */
+export const STATUS_YIELD = { debug: 0, cwd: 1, model: 2, phase: 3, effort: 4 } as const
+
+/** A status label's short form, and when it gives way. */
+export interface StatusLabelShort {
+  /** The shorter text; empty leaves the label out. */
+  readonly text: string
+  /** The order in which labels take their short forms, lowest first (`STATUS_YIELD`). */
+  readonly rank: number
+}
+
 export interface StatusLabelItem {
   readonly text: string
   readonly color: StatusLabelColor
+  /**
+   * The form the row draws when its group cannot fit every label in full.
+   * Absent, the label keeps its text, and only the row's last cut shortens it.
+   */
+  readonly short?: StatusLabelShort
 }
 
 /** Where a status label sits: the left group, or the right group before the gauge and cost. */
