@@ -155,7 +155,7 @@ import {
   type SessionProfile,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import type { AgentName } from "../domain/agent.js"
+import { type AgentName, isReasoningEffort } from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import {
   type AgentLoopTurnProfile,
@@ -1002,17 +1002,27 @@ const makeSessionMutationsService: Effect.Effect<
           // Merged inside the transaction: a field the change leaves out keeps
           // the stored value, whatever the caller last saw; `Some` sets and
           // `None` clears.
+          // The effort is one setting, `auto` included: a level leaves auto.
+          const effort = Option.getOrElse(Option.fromUndefinedOr(input.reasoningLevel), () =>
+            Option.orElse(Option.fromUndefinedOr(session.reasoningLevel), () =>
+              Option.liftPredicate("auto" as const, () => session.reasoningAuto === true),
+            ),
+          )
           const settings = {
             modelId: Option.getOrUndefined(
               Option.getOrElse(Option.fromUndefinedOr(input.modelId), () =>
                 Option.fromUndefinedOr(session.modelId),
               ),
             ),
-            reasoningLevel: Option.getOrUndefined(
-              Option.getOrElse(Option.fromUndefinedOr(input.reasoningLevel), () =>
-                Option.fromUndefinedOr(session.reasoningLevel),
+            reasoningLevel: Option.getOrUndefined(Option.filter(effort, isReasoningEffort)),
+            ...omitUndefined({
+              reasoningAuto: Option.getOrUndefined(
+                Option.map(
+                  Option.filter(effort, (value) => value === "auto"),
+                  () => true as const,
+                ),
               ),
-            ),
+            }),
           }
           yield* sessionStorage.updateSessionSettings(
             input.sessionId,
@@ -1152,6 +1162,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     lastEventId: Option.getOrNull(Option.fromUndefinedOr(snapshotState.lastEventId)),
     modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
+    reasoningAuto: session.reasoningAuto,
     agent: route.name,
     resolvedModelId: route.modelId,
     resolvedReasoningLevel: Option.getOrUndefined(route.reasoningLevel),

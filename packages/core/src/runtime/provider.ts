@@ -2273,7 +2273,63 @@ interface ModelResolverService {
     driverId: string,
     registry: ExtensionRegistryService,
   ) => Effect.Effect<boolean>
+  /**
+   * Whether the driver `request` dispatches through, in the profile of
+   * `registry`, carries the effort change its hints name inside the
+   * conversation (`ModelDriverContribution.carriesEffort`). False for a
+   * driver that does not say, or a failure to read the catalog.
+   */
+  readonly carriesEffort: (
+    request: ResolveModelRequest,
+    registry: ExtensionRegistryService,
+  ) => Effect.Effect<boolean>
 }
+
+/**
+ * `ModelResolver.carriesEffort` for any resolver: the registered driver the
+ * request dispatches through (its `driverId`, else the provider segment),
+ * asked over its catalog view when `catalogSource` serves one, by the name
+ * the driver serves the model as. A generic catalog provider carries none.
+ */
+export const driverCarriesEffort = (
+  request: ResolveModelRequest,
+  registry: ExtensionRegistryService,
+  catalogSource: Option.Option<ModelCatalogSourceService>,
+): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    const parsed = parseModelId(request.modelId)
+    if (Option.isNone(parsed)) return false
+    const [provider, modelName] = parsed.value
+    const resolved = registry.getResolved()
+    const driver = Option.fromUndefinedOr(
+      resolved.modelDrivers.get(
+        Option.getOrElse(Option.fromUndefinedOr(request.driverId), () => provider),
+      ),
+    )
+    if (Option.isNone(driver)) return false
+    const carries = driver.value.carriesEffort
+    if (Predicate.isUndefined(carries)) return false
+    const hints = Option.getOrElse(Option.fromUndefinedOr(request.hints), (): ProviderHints => ({}))
+    if (Option.isNone(catalogSource)) return carries(modelName, hints)
+    const catalog = configuredCatalog(
+      yield* catalogSource.value.read,
+      yield* registry.providerConfig,
+      resolved.apiClasses,
+    )
+    return carries(
+      currentModelName(catalog, driver.value, modelName),
+      hints,
+      driverCatalogView(catalog, driver.value),
+    )
+  }).pipe(
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+      return Effect.logWarning("model-resolver.carries-effort-failed").pipe(
+        Effect.annotateLogs({ model: String(request.modelId), error: String(Cause.squash(cause)) }),
+        Effect.as(false),
+      )
+    }),
+  )
 
 const resolveModelDefect = (
   // oxlint-disable-next-line effect/noUnknownParameters -- Provider factories can defect with any thrown value.
@@ -2396,9 +2452,14 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
       ModelResolver,
       Effect.gen(function* () {
         const model = yield* LanguageModel.LanguageModel
+        // The drivers still say what their wire carries, over the catalog
+        // when the host serves one.
+        const catalogSource = yield* Effect.serviceOption(ModelCatalogSource)
         return ModelResolver.of({
           resolve: () => Effect.succeed(model),
           signedIn: () => Effect.succeed(true),
+          carriesEffort: (request, registry) =>
+            driverCarriesEffort(request, registry, catalogSource),
         })
       }),
     ).pipe(Layer.provide(layer))
@@ -2425,6 +2486,8 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
             Effect.provideService(ModelCatalogSource, catalogSource),
             Effect.provideService(ExtensionRegistry, registry),
           ),
+        carriesEffort: (request, registry) =>
+          driverCarriesEffort(request, registry, Option.some(catalogSource)),
       })
     }),
   )
@@ -2951,6 +3014,43 @@ const virtualModelProblem = (
   return Option.none()
 }
 
+/** Why a router's effort router (`ModelRouterContribution.effort`) cannot serve; none when it can. */
+const effortRouterProblem = (model: VirtualModel): Option.Option<string> => {
+  if (model.choices.length === 0) return Option.some("it has no choices")
+  const named = model.choices.findIndex((choice) => Predicate.isNotUndefined(choice.model))
+  if (named >= 0)
+    return Option.some(`choice ${named + 1} names a model; an effort choice sets only an effort`)
+  const unset = model.choices.findIndex((choice) => Predicate.isUndefined(choice.effort))
+  if (unset >= 0) return Option.some(`choice ${unset + 1} sets no effort`)
+  if (model.fallback < 0 || model.fallback >= model.choices.length)
+    return Option.some(`its default choice ${model.fallback} is not one of its choices`)
+  return Option.none()
+}
+
+/**
+ * The effort router `/effort auto` runs: the first router's of the profile
+ * that has one (a router whose id a model driver holds serves nothing), or
+ * why it cannot run; none when no router has one.
+ */
+export const servedEffortRouter = (
+  profile: Pick<ResolvedProfile, "modelDrivers" | "modelRouters">,
+): Option.Option<Result.Result<ServedVirtualModel, string>> =>
+  Option.fromUndefinedOr(
+    [...profile.modelRouters.values()].find(
+      (router) => Predicate.isNotUndefined(router.effort) && !profile.modelDrivers.has(router.id),
+    ),
+  ).pipe(
+    Option.flatMap((router) =>
+      Option.map(Option.fromUndefinedOr(router.effort), (model) =>
+        Option.match(effortRouterProblem(model), {
+          onNone: () => Result.succeed({ router, model }),
+          onSome: (problem) =>
+            Result.fail(`Effort router "${router.id}/${model.name}": ${problem}`),
+        }),
+      ),
+    ),
+  )
+
 /**
  * The profile's routers' virtual models as catalog entries (`kind:
  * "virtual"`), and each one refused as a catalog failure under its router.
@@ -2973,6 +3073,14 @@ const virtualModelCatalog = (profile: Pick<ResolvedProfile, "modelDrivers" | "mo
       failures.push({
         driverId: router.id,
         error: `${router.id}/${problem.name}: ${problem.reason}`,
+      })
+    // The effort router is not a model: listed only when it cannot serve.
+    const effort = Option.fromUndefinedOr(router.effort)
+    const effortProblem = Option.flatMap(effort, effortRouterProblem)
+    if (Option.isSome(effort) && Option.isSome(effortProblem))
+      failures.push({
+        driverId: router.id,
+        error: `${router.id}/${effort.value.name}: ${effortProblem.value}`,
       })
     for (const model of router.models) {
       if (!model.choices.some((choice) => Predicate.isNotUndefined(choice.model))) continue

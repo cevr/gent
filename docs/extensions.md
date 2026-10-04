@@ -489,6 +489,27 @@ through `ExtensionContext.Models`; `input.current` says whether the branch's
 prompt cache is warm and how many history tokens a switch writes again. The
 shipped `@gent/router` builds its routers from the `routers` config key.
 
+A router may also carry `effort`, the effort router that `/effort auto` asks:
+a virtual model whose choices each set an `effort` and name no model. It is
+not listed and not selectable. On a session on auto, core calls `route` with
+it once per user turn, after any model route, offering only the levels the
+turn's model accepts; it never asks for a child. On a warm cache it offers
+only the level the cache was written at and the levels whose change the
+model's driver carries inside the conversation: a driver says so with
+`carriesEffort(modelName, hints, catalog)` on its `ModelDriverContribution`,
+true where a change from the levels in `hints.reasoningHistory` to
+`hints.reasoning` rides as a marker or an update and the request keeps the
+bytes the previous request wrote: the same top-level effort and the same
+changes before the reply. A driver without it carries no change, so its models change level
+only on a cold cache. The first registered router with an `effort` serves
+it. When the session runs on one of the same router's virtual models, the
+model route's input carries the effort choices too (`input.effort`, each
+choice with a model that takes it, or none); answer `effort: { choice,
+reason }` beside the model choice to pick both in one classifier call, or
+leave it out and core asks the effort router on its own. The shipped router
+serves the `routers.effort` config entry, else built-in low, medium, high
+and xhigh choices, and answers both in one call.
+
 ```ts
 import {
   defineExtension,

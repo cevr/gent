@@ -10,8 +10,9 @@ import {
   effectiveEffort,
   effectiveModelDriver,
   type EffectiveModelDriver,
+  isReasoningEffort,
   type Model,
-  type ModelId,
+  ModelId,
   type ModelId as ModelIdType,
   promptCacheTtlMsFor,
   type ReasoningEffort,
@@ -97,7 +98,12 @@ import type * as Response from "effect/ai/Response"
 import {
   credentialFailureMessage,
   isWindowFullStopReason,
+  type ModelRouteChoice,
+  type VirtualModelChoice,
   type ModelRouteCurrent,
+  type ModelRouteDecision,
+  type ModelRouteInput,
+  type ModelRouterContribution,
   type ProviderAuthError,
   type ProviderHints,
   ProviderStopReason,
@@ -164,6 +170,7 @@ import {
   type ResolveModelRequest,
   retryProviderCall,
   retryReason,
+  servedEffortRouter,
   type ServedVirtualModel,
   servedVirtualModel,
   virtualDefaultModel,
@@ -391,8 +398,11 @@ type TurnMetrics = {
    * the tokens.
    */
   costUsd: Option.Option<number>
-  /** The turn whose route `costUsd` holds: a route is charged once per turn. */
-  routeCharged: Option.Option<MessageId>
+  /**
+   * The routes `costUsd` holds, by turn and router (`routeChargeKey`): each
+   * route of a turn, its model route and its effort route, is charged once.
+   */
+  routesCharged: ReadonlySet<string>
   toolCallCount: number
   /** Model steps seen this turn; zero means no usage can be reported. */
   steps: number
@@ -409,7 +419,7 @@ const emptyTurnMetrics = (): TurnMetrics => ({
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
   costUsd: Option.some(0),
-  routeCharged: Option.none(),
+  routesCharged: new Set(),
   toolCallCount: 0,
   steps: 0,
   usageKnown: true,
@@ -774,10 +784,11 @@ interface TurnLedger {
    */
   readonly noteCompaction: (costUsd: Option.Option<number>) => Effect.Effect<void>
   /**
-   * The route this turn runs on, published now or recorded before (an
-   * earlier step, a process before a restart). Its classifier calls are
-   * charged once per turn: none when a classifier has no price, which leaves
-   * the turn without a cost; a route that asked no classifier costs nothing.
+   * A route this turn runs on, published now or recorded before (an earlier
+   * step, a process before a restart): its model route or its effort route.
+   * Each route's classifier calls are charged once per turn: none when a
+   * classifier has no price, which leaves the turn without a cost; a route
+   * that asked no classifier costs nothing.
    */
   readonly noteRoute: (route: ModelRouted) => Effect.Effect<void>
   /** What this turn spent, as `TurnCompleted` reports it. */
@@ -807,6 +818,10 @@ const routeCharge = (route: ModelRouted): Option.Option<number> =>
   Option.fromUndefinedOr(route.costUsd).pipe(
     Option.orElse(() => Option.liftPredicate(0, () => Predicate.isUndefined(route.classifier))),
   )
+
+/** One route of one turn: a turn has at most a model route and an effort route. */
+const routeChargeKey = (route: ModelRouted) =>
+  `${route.messageId}\u0000${String(route.effortOnly === true)}\u0000${route.selected}`
 
 export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* () {
   const metrics = yield* Ref.make(emptyTurnMetrics())
@@ -840,7 +855,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           cacheReadTokens: m.cacheReadTokens,
           cacheWriteTokens: m.cacheWriteTokens,
           costUsd: Option.none<number>(),
-          routeCharged: m.routeCharged,
+          routesCharged: m.routesCharged,
           toolCallCount: m.toolCallCount + params.toolCallCount,
           steps: m.steps + 1,
           usageKnown: false,
@@ -886,11 +901,12 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
     // ledger sees for the turn charges it.
     noteRoute: (route) =>
       Ref.update(metrics, (m) => {
-        if (Option.contains(m.routeCharged, route.messageId)) return m
+        const key = routeChargeKey(route)
+        if (m.routesCharged.has(key)) return m
         return {
           ...m,
           costUsd: addCost(m.costUsd, routeCharge(route)),
-          routeCharged: Option.some(route.messageId),
+          routesCharged: new Set([...m.routesCharged, key]),
         }
       }),
     total: Ref.get(metrics),
@@ -1282,6 +1298,8 @@ interface ResolvedTurnContext {
   driverRef: Option.Option<DriverRef>
   /** The effort the session itself set; it wins over a routed choice's. */
   sessionReasoning: Option.Option<ReasoningEffort>
+  /** `/effort auto`: the effort router picks the turn's level (`routeEffort`). */
+  effortAuto: boolean
 }
 
 /** The notices a step's request carries after the conversation: the date first, then the extensions'. */
@@ -1583,6 +1601,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     sessionReasoning: Option.flatMap(session, (value) =>
       Option.fromUndefinedOr(value.reasoningLevel),
     ),
+    effortAuto: Option.exists(session, (value) => value.reasoningAuto === true),
   }
 })
 
@@ -1626,6 +1645,17 @@ interface RoutingLog {
 interface TurnRoute {
   readonly event: ModelRouted
   readonly recorded: boolean
+  /**
+   * Where the call carried the effort router (`ModelRouteInput.effort`): its
+   * pick, or why the call failed. None where the call did not answer for it.
+   */
+  readonly effort: DecidedEffort
+}
+
+/** The effort router the model route's call may answer for too, and what it reads. */
+interface CombinedEffort {
+  readonly served: ServedVirtualModel
+  readonly log: EffortRoutingLog
 }
 
 /** One classifier call a route made: its model and its price, none when unpriced. */
@@ -1671,6 +1701,48 @@ const routeCost = (calls: ReadonlyArray<RouteCall>): Option.Option<number> => {
 }
 
 /**
+ * Ask `router` for one pick, `ROUTE_DEADLINE_MS` at most. A router's
+ * failure, timeout or defect is a reason to fall back, never the turn's. The
+ * router's classifier calls go through the run's own facet; core records
+ * each one's model and price for the event and the turn's cost, a call made
+ * before a failure included.
+ */
+const askRouter = Effect.fn("TurnHelpers.askRouter")(function* (
+  router: ModelRouterContribution,
+  input: ModelRouteInput,
+) {
+  const host = yield* CurrentExtensionHostContext
+  const calls = yield* Ref.make<ReadonlyArray<RouteCall>>([])
+  const Models: ExtensionModelsService = {
+    ...host.Models,
+    decide: (request) =>
+      host.Models.decide(request).pipe(
+        Effect.tap((reply) =>
+          Ref.update(calls, (all) => [
+            ...all,
+            { model: reply.model, costUsd: Option.fromUndefinedOr(reply.costUsd) },
+          ]),
+        ),
+      ),
+  }
+  const picked = yield* router.route(input).pipe(
+    provideExtensionLeaf({}),
+    Effect.provideService(CurrentExtensionHostContext, { ...host, Models }),
+    Effect.map((pick): Result.Result<ModelRouteDecision, string> => Result.succeed(pick)),
+    Effect.timeoutOrElse({
+      duration: Duration.millis(ROUTE_DEADLINE_MS),
+      orElse: () =>
+        Effect.succeed(Result.fail(`the router gave no answer within ${ROUTE_DEADLINE_MS} ms`)),
+    }),
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+      return Effect.succeed(Result.fail(`the router failed: ${causeMessage(Cause.squash(cause))}`))
+    }),
+  )
+  return { picked, calls: yield* Ref.get(calls) }
+})
+
+/**
  * Route one turn of `served`. None when no choice names a model the catalog
  * lists: the turn cannot run.
  */
@@ -1682,6 +1754,8 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
   readonly resolved: ResolvedTurnContext
   readonly served: ServedVirtualModel
   readonly log: RoutingLog
+  /** On `/effort auto`, where this router serves the effort router too. */
+  readonly effort: Option.Option<CombinedEffort>
 }) {
   const { resolved, served, log } = params
   const selected = resolved.modelId
@@ -1690,7 +1764,11 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
     (event) => event.messageId === params.messageId && event.selected === selected,
   )
   if (Option.isSome(recorded)) {
-    return Option.some<TurnRoute>({ event: recorded.value, recorded: true })
+    return Option.some<TurnRoute>({
+      event: recorded.value,
+      recorded: true,
+      effort: Option.none(),
+    })
   }
   const startedAt = yield* Clock.currentTimeMillis
   const modelRegistry = yield* ModelRegistry
@@ -1786,22 +1864,6 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
     return fallbackAmong(entryAt(listed), noneSignedIn)
   }
 
-  const host = yield* CurrentExtensionHostContext
-  const calls = yield* Ref.make<ReadonlyArray<RouteCall>>([])
-  // The router's classifier calls go through the run's own facet; core
-  // records each one's model and price for the event and the turn's cost.
-  const Models: ExtensionModelsService = {
-    ...host.Models,
-    decide: (request) =>
-      host.Models.decide(request).pipe(
-        Effect.tap((reply) =>
-          Ref.update(calls, (all) => [
-            ...all,
-            { model: reply.model, costUsd: Option.fromUndefinedOr(reply.costUsd) },
-          ]),
-        ),
-      ),
-  }
   const now = yield* Clock.currentTimeMillis
   const current = yield* Option.match(log.current, {
     onNone: () => Effect.succeed(Option.none<ModelRouteCurrent>()),
@@ -1825,31 +1887,6 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
       ),
   })
 
-  // A router's failure, timeout or defect is a reason to fall back, never the turn's.
-  const askRouter = served.router
-    .route({
-      model: served.model,
-      messages: resolved.messages,
-      candidates,
-      current,
-      child: resolved.child,
-    })
-    .pipe(
-      provideExtensionLeaf({}),
-      Effect.provideService(CurrentExtensionHostContext, { ...host, Models }),
-      Effect.map((pick) => Result.succeed(pick)),
-      Effect.timeoutOrElse({
-        duration: Duration.millis(ROUTE_DEADLINE_MS),
-        orElse: () =>
-          Effect.succeed(Result.fail(`the router gave no answer within ${ROUTE_DEADLINE_MS} ms`)),
-      }),
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-        return Effect.succeed(
-          Result.fail(`the router failed: ${causeMessage(Cause.squash(cause))}`),
-        )
-      }),
-    )
   // Where the turn cannot route, it keeps the model the branch runs on, a
   // choice or not, and sets no effort: a switch there would rewrite the
   // cache mid-turn or send a prefill. A branch with no request yet takes the
@@ -1866,8 +1903,35 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
     decision = keep("the conversation ends on an assistant message, so the turn keeps its model")
   if (firstRequest && endsOnInput(resolved.messages) && !anyRunnable)
     decision = fallback(noneSignedIn)
+  let spent: ReadonlyArray<RouteCall> = []
+  let effortPick: DecidedEffort = Option.none()
   if (firstRequest && endsOnInput(resolved.messages) && anyRunnable) {
-    const picked = yield* askRouter
+    const effort = yield* Option.match(params.effort, {
+      onNone: () => Effect.succeedNone,
+      onSome: (combined) =>
+        combinedEffortInput({
+          sessionId: params.sessionId,
+          resolved,
+          combined,
+          models: candidates.flatMap(Option.toArray),
+        }),
+    })
+    const asked = yield* askRouter(served.router, {
+      model: served.model,
+      messages: resolved.messages,
+      candidates,
+      current,
+      child: resolved.child,
+      ...omitUndefined({ effort: Option.getOrUndefined(effort) }),
+    })
+    spent = asked.calls
+    const picked = asked.picked
+    if (Option.isSome(effort))
+      effortPick = Result.match(picked, {
+        onFailure: (failure) => Option.some(Result.fail(failure)),
+        onSuccess: (decision) =>
+          Option.map(Option.fromUndefinedOr(decision.effort), Result.succeed),
+      })
     if (Result.isFailure(picked)) {
       yield* Effect.logWarning("turn.route-fell-back").pipe(
         Effect.annotateLogs({ model: selected, reason: picked.failure }),
@@ -1888,7 +1952,6 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
   }
   if (Option.isNone(decision)) return Option.none<TurnRoute>()
 
-  const spent = yield* Ref.get(calls)
   const { choice, model, reason, fellBack } = decision.value
   const event = ModelRouted.make({
     sessionId: params.sessionId,
@@ -1908,7 +1971,451 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
       costUsd: Option.getOrUndefined(routeCost(spent)),
     }),
   })
-  return Option.some<TurnRoute>({ event, recorded: false })
+  return Option.some<TurnRoute>({ event, recorded: false, effort: effortPick })
+})
+
+/**
+ * The effort router's part of a model route's input: each effort choice
+ * with a model of the route's choices it runs on (`admitEfforts` on that
+ * model). None where no choice runs on any of them.
+ */
+const combinedEffortInput = Effect.fn("TurnHelpers.combinedEffortInput")(function* (params: {
+  readonly sessionId: SessionId
+  readonly resolved: ResolvedTurnContext
+  readonly combined: CombinedEffort
+  readonly models: ReadonlyArray<Model>
+}) {
+  const choices = params.combined.served.model.choices
+  const distinct = [...new Map(params.models.map((model) => [model.id, model])).values()]
+  const admitted = yield* Effect.forEach(distinct, (model) =>
+    admitEfforts({
+      sessionId: params.sessionId,
+      turn: {
+        modelId: model.id,
+        modelDriver: effectiveModelDriver(params.resolved.driverRef, model.id),
+      },
+      messages: params.resolved.messages,
+      child: params.resolved.child,
+      choices,
+      log: params.combined.log,
+    }),
+  )
+  const admissions = admitted.flatMap(Option.toArray)
+  const candidates = choices.map((_, index) =>
+    Option.firstSomeOf(
+      admissions.map((admission) =>
+        Option.flatten(Option.fromUndefinedOr(admission.candidates[index])),
+      ),
+    ),
+  )
+  return Option.liftPredicate({ model: params.combined.served.model, candidates }, () =>
+    candidates.some(Option.isSome),
+  )
+})
+
+// ── effort-routing ──────────────────────────────────────────────────────────
+
+/*
+ * `/effort auto` (`Session.reasoningAuto`) asks the effort router
+ * (`ModelRouterContribution.effort`) for the level of each user turn, once,
+ * before the turn's first request, on the model the turn runs on (a model
+ * route first, where the session is on a virtual model). Its pick wins over
+ * a model route's choice: auto is the session's own setting. A `ModelRouted`
+ * with `effortOnly` records the pick. Once that receipt is stored, every
+ * later step, a replay and a recovered turn run at it and charge it, whether
+ * or not a router serves then, and nothing asks again. A process that stops
+ * after the classifier answered and before the receipt was stored leaves no
+ * receipt: the recovered turn asks again, and the first call's cost is not
+ * recorded. A spawned child keeps its own effort and is never routed.
+ *
+ * The model's metadata (the levels it takes, its cache lifetime) is the
+ * catalog entry of the model the turn dispatches to
+ * (`modelDriver.contextModelId`, after a driver override); the receipts name
+ * the model the session asked for.
+ *
+ * Decided by the cache-rate north star: a level change that the driver does
+ * not carry inside the conversation goes at the top of the request and
+ * rewrites the whole cached prefix. On a warm cache a choice is offered only
+ * where its level is the one the cache was written at or the driver carries
+ * the change from this history (`ModelResolver.carriesEffort`, the driver's
+ * `carriesEffort`); with no other choice the turn keeps its level, the router
+ * is not asked, and the receipt says why. A cold cache is written again
+ * anyway: there every level the model takes is offered. A router that fails
+ * keeps the exact level the branch runs at.
+ *
+ * Decided by the cost north star: where the router of the session's virtual
+ * model serves the effort router too, the model route's call carries the
+ * effort choices (`combinedEffortRoute`, `ModelRouteInput.effort`), and one
+ * classifier call picks both. The effort receipt then names no classifier
+ * and no cost: the model route's receipt holds the one charge. A failed
+ * combined call is not repeated; a router that answers no effort leaves the
+ * effort router to be asked alone.
+ */
+
+/** What the effort route reads from the branch's log. */
+interface EffortRoutingLog {
+  /** The branch's newest effort route. */
+  readonly routed: Option.Option<ModelRouted>
+  readonly lastCallModel: Option.Option<ModelIdType>
+  readonly lastCallAtMillis: Option.Option<number>
+  readonly measure: Option.Option<StepMeasure>
+  /** The newest step's receipt: its model, and the effort its request was sent at. */
+  readonly lastEffort: Option.Option<StepEffort>
+  /** Each step's receipt, by the id of the assistant message it wrote. */
+  readonly stepEfforts: ReadonlyMap<string, StepEffort>
+}
+
+/** An effort route's pick: the choice, its level (none: no level named), and why. */
+interface EffortDecision {
+  readonly choice: Option.Option<number>
+  readonly effort: Option.Option<ReasoningEffort>
+  readonly reason: string
+  readonly fellBack: boolean
+}
+
+/** The model a turn runs on: as the session asked for it, and as it dispatches. */
+interface EffortTurnModel {
+  readonly modelId: ModelIdType
+  readonly modelDriver: EffectiveModelDriver
+}
+
+/** The effort choices a turn on one model may take, and the level its cache holds. */
+interface EffortAdmission {
+  /** The catalog entry of the model the turn dispatches to. */
+  readonly model: Model
+  /**
+   * Aligned with the router's choices: the model, for a choice whose level
+   * the model takes as it is and, on a warm cache, that keeps the cache.
+   */
+  readonly candidates: ReadonlyArray<Option.Option<Model>>
+  readonly warm: boolean
+  /** The level the branch's last request on this model went out at. */
+  readonly held: Option.Option<RunEffort>
+}
+
+/**
+ * Which of `choices` a turn on `turn` may take. None where the turn routes
+ * no effort: a model the catalog does not list, one that does not reason,
+ * or one that takes none of the levels.
+ */
+const admitEfforts = Effect.fn("TurnHelpers.admitEfforts")(function* (params: {
+  readonly sessionId: SessionId
+  readonly turn: EffortTurnModel
+  readonly messages: ReadonlyArray<Message>
+  readonly child: boolean
+  readonly choices: ReadonlyArray<VirtualModelChoice>
+  readonly log: EffortRoutingLog
+}) {
+  const { turn, log } = params
+  const listed = yield* (yield* ModelRegistry).get(turn.modelDriver.contextModelId).pipe(
+    Effect.map(Option.filter((model) => Predicate.isUndefined(model.kind))),
+    Effect.catchEager(() => Effect.succeedNone),
+  )
+  const reasons = Option.filter(listed, (model) => model.reasoning !== false)
+  if (Option.isNone(reasons)) return Option.none<EffortAdmission>()
+  const model = reasons.value
+  // A choice runs on the model at a level the model takes as it is.
+  const accepted = params.choices.map((choice) =>
+    Option.filter(Option.fromUndefinedOr(choice.effort), (level) =>
+      Option.contains(effectiveEffort(model, level), level),
+    ),
+  )
+  if (!accepted.some(Option.isSome)) return Option.none<EffortAdmission>()
+  const now = yield* Clock.currentTimeMillis
+  // A cache belongs to the model of the last request; one with no lifetime never goes cold.
+  const warm =
+    Option.contains(log.lastCallModel, turn.modelId) &&
+    Option.exists(log.lastCallAtMillis, (at) =>
+      Option.match(promptCacheTtlMsFor(model, params.child), {
+        onNone: () => true,
+        onSome: (ttlMs) => now < at + ttlMs,
+      }),
+    )
+  const held = Option.flatMap(
+    Option.filter(log.lastEffort, (receipt) => receipt.model === turn.modelId),
+    (receipt) => receipt.level,
+  )
+  if (!warm || Option.isNone(held)) {
+    return Option.some<EffortAdmission>({
+      model,
+      candidates: accepted.map(Option.as(model)),
+      warm,
+      held,
+    })
+  }
+  // Warm: a change of level must ride inside the conversation, from the
+  // efforts its earlier runs were sent at.
+  const reasoningHistory = assistantRunEfforts(params.messages, (message) =>
+    Option.fromUndefinedOr(log.stepEfforts.get(message.id)).pipe(
+      Option.filter((receipt) => receipt.model === turn.modelId),
+      Option.flatMap((receipt) => receipt.level),
+    ),
+  )
+  const resolver = yield* ModelResolver
+  const registry = yield* ExtensionRegistry
+  const keepsCache = (level: ReasoningEffort) => {
+    if (Option.contains(held, level)) return Effect.succeed(true)
+    return resolver.carriesEffort(
+      {
+        modelId: turn.modelId,
+        hints: {
+          reasoning: level,
+          reasoningHistory,
+          cacheKey: params.sessionId,
+          child: params.child,
+          ...omitUndefined({ supportsReasoning: model.reasoning }),
+        },
+        ...omitUndefined({ driverId: Option.getOrUndefined(turn.modelDriver.driverId) }),
+      },
+      registry,
+    )
+  }
+  const candidates = yield* Effect.forEach(accepted, (level) =>
+    Option.match(level, {
+      onNone: () => Effect.succeedNone,
+      onSome: (value) =>
+        Effect.map(keepsCache(value), (keeps) => Option.liftPredicate(model, () => keeps)),
+    }),
+  )
+  return Option.some<EffortAdmission>({ model, candidates, warm, held })
+})
+
+/**
+ * The model route's call, where it carried the effort router: its effort
+ * pick, or why the call failed (no second call is made). None: ask the
+ * effort router alone.
+ */
+type DecidedEffort = Option.Option<Result.Result<ModelRouteChoice, string>>
+
+/**
+ * Route the effort of one turn. None where the turn routes no effort: a
+ * spawned child, a later step (auto set mid-turn: the turn keeps its first
+ * step's level), a model the catalog does not list or that does not reason,
+ * or one that takes none of the router's levels.
+ */
+const routeEffort = Effect.fn("TurnHelpers.routeEffort")(function* (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly messageId: MessageId
+  readonly step: number
+  readonly resolved: ResolvedTurnContext
+  readonly served: ServedVirtualModel
+  readonly log: EffortRoutingLog
+  readonly decided: DecidedEffort
+}) {
+  const { resolved, served, log } = params
+  if (resolved.child || params.step > 1) return Option.none<ModelRouted>()
+  const startedAt = yield* Clock.currentTimeMillis
+  const admission = yield* admitEfforts({
+    sessionId: params.sessionId,
+    turn: resolved,
+    messages: resolved.messages,
+    child: resolved.child,
+    choices: served.model.choices,
+    log,
+  })
+  if (Option.isNone(admission)) return Option.none<ModelRouted>()
+  const { model, candidates, warm, held } = admission.value
+  const choices = served.model.choices
+  const levelAt = (index: number) => Option.fromUndefinedOr(choices[index]?.effort)
+  const runnable = (index: number) =>
+    Option.isSome(Option.flatten(Option.fromUndefinedOr(candidates[index])))
+  const indexes = choices.map((_, index) => index)
+  const choiceAt = (level: RunEffort) =>
+    Option.fromUndefinedOr(
+      indexes.find((index) => runnable(index) && Option.contains(levelAt(index), level)),
+    )
+  // The level the branch runs at, kept exactly as it was sent, a level no
+  // choice names included: a request that named none names none.
+  const keep = (level: RunEffort, reason: string, fellBack: boolean): EffortDecision => ({
+    choice: choiceAt(level),
+    effort: Option.filter(Option.some(level), isReasoningEffort),
+    reason,
+    fellBack,
+  })
+  // With a level held, that level; else the default choice, else the first that runs.
+  const fallback = (reason: string): EffortDecision =>
+    Option.match(held, {
+      onSome: (level) => keep(level, reason, true),
+      onNone: () => {
+        const index = Option.liftPredicate(served.model.fallback, runnable).pipe(
+          Option.orElse(() => Option.fromUndefinedOr(indexes.find(runnable))),
+        )
+        return {
+          choice: index,
+          effort: Option.flatMap(index, levelAt),
+          reason,
+          fellBack: true,
+        }
+      },
+    })
+  // The choices that would change the level the cache was written at.
+  const changes = indexes.filter(
+    (index) =>
+      runnable(index) && !Option.exists(held, (level) => Option.contains(levelAt(index), level)),
+  )
+  const heldLevel = Option.getOrElse(held, (): RunEffort => "default")
+
+  let spent: ReadonlyArray<RouteCall> = []
+  let decision: EffortDecision
+  if (!endsOnInput(resolved.messages)) {
+    decision = Option.match(held, {
+      onNone: () => fallback("the conversation ends on an assistant message"),
+      onSome: (level) =>
+        keep(
+          level,
+          "the conversation ends on an assistant message, so the turn keeps its effort",
+          false,
+        ),
+    })
+  } else if (warm && Option.isSome(held) && changes.length === 0) {
+    decision = keep(
+      heldLevel,
+      `the cache is warm and the driver carries no change from ${heldLevel} on this history, which would rewrite the cache: the turn keeps its effort`,
+      false,
+    )
+  } else if (Option.isSome(params.decided) && Result.isFailure(params.decided.value)) {
+    decision = fallback(params.decided.value.failure)
+  } else if (Option.isSome(params.decided) && Result.isSuccess(params.decided.value)) {
+    const pick = params.decided.value.success
+    if (Number.isInteger(pick.choice) && runnable(pick.choice)) {
+      decision = {
+        choice: Option.some(pick.choice),
+        effort: levelAt(pick.choice),
+        reason: pick.reason,
+        fellBack: false,
+      }
+    } else {
+      decision = fallback(
+        `the router picked effort choice ${pick.choice}, which ${model.id} does not take here`,
+      )
+    }
+  } else if (!indexes.some(runnable)) {
+    decision = fallback(`no effort choice keeps the cache of ${model.id}`)
+  } else {
+    const current = Option.map(log.lastCallModel, (): ModelRouteCurrent => ({
+      model,
+      warm,
+      historyTokens: estimateHistoryTokens(resolved.messages, log.measure),
+    }))
+    const asked = yield* askRouter(served.router, {
+      model: served.model,
+      messages: resolved.messages,
+      candidates,
+      current,
+      child: resolved.child,
+    })
+    spent = asked.calls
+    const picked = asked.picked
+    if (Result.isFailure(picked)) {
+      yield* Effect.logWarning("turn.effort-route-fell-back").pipe(
+        Effect.annotateLogs({ model: model.id, reason: picked.failure }),
+      )
+      decision = fallback(picked.failure)
+    } else if (!Number.isInteger(picked.success.choice) || !runnable(picked.success.choice)) {
+      decision = fallback(
+        `the router picked choice ${picked.success.choice}, which ${model.id} does not take here`,
+      )
+    } else {
+      decision = {
+        choice: Option.some(picked.success.choice),
+        effort: levelAt(picked.success.choice),
+        reason: picked.success.reason,
+        fellBack: false,
+      }
+    }
+  }
+
+  const event = ModelRouted.make({
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    messageId: params.messageId,
+    selected: ModelId.make(`${served.router.id}/${served.model.name}`),
+    model: resolved.modelId,
+    reason: decision.reason.slice(0, ROUTE_REASON_CHARS),
+    durationMs: (yield* Clock.currentTimeMillis) - startedAt,
+    effortOnly: true,
+    ...omitUndefined({
+      choice: Option.getOrUndefined(decision.choice),
+      effort: Option.getOrUndefined(decision.effort),
+      fallback: Option.getOrUndefined(Option.liftPredicate(decision.fellBack, Boolean)),
+      classifier: spent.at(-1)?.model,
+      costUsd: Option.getOrUndefined(routeCost(spent)),
+    }),
+  })
+  return Option.some(event)
+})
+
+/**
+ * The effort part of a model route's call: on `/effort auto`, at a turn's
+ * first step with no effort route stored, where the router that serves the
+ * virtual model serves the effort router too.
+ */
+const combinedEffortRoute = (params: {
+  readonly resolved: ResolvedTurnContext
+  readonly step: number
+  readonly messageId: MessageId
+  readonly routedModel: ServedVirtualModel
+  readonly effortRouter: Option.Option<Result.Result<ServedVirtualModel, string>>
+  readonly log: EffortRoutingLog
+}): Option.Option<CombinedEffort> => {
+  const stored = Option.exists(params.log.routed, (event) => event.messageId === params.messageId)
+  if (!params.resolved.effortAuto || params.step > 1 || stored) return Option.none()
+  return params.effortRouter.pipe(
+    Option.flatMap(Result.getSuccess),
+    Option.filter((served) => served.router.id === params.routedModel.router.id),
+    Option.map((served): CombinedEffort => ({ served, log: params.log })),
+  )
+}
+
+/** The turn at its effort route's level; a route that names none sends no level. */
+const applyEffortRoute = (
+  resolved: ResolvedTurnContext,
+  route: ModelRouted,
+): ResolvedTurnContext => {
+  const { reasoning: _set, ...unnamed } = resolved
+  return Option.match(Option.fromUndefinedOr(route.effort), {
+    onNone: () => unnamed,
+    onSome: (level) => ({ ...unnamed, reasoning: level }),
+  })
+}
+
+/**
+ * A step of a turn on `/effort auto`, at the level its effort route picks:
+ * published once, charged once per turn. A stored route of the turn wins
+ * before any router is read: a recovered turn runs at it and charges it
+ * though its router is gone. A router that cannot serve is a catalog
+ * failure; the turn runs at the level it would without auto.
+ */
+const atAutoEffort = Effect.fn("TurnHelpers.atAutoEffort")(function* (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly messageId: MessageId
+  readonly step: number
+  readonly resolved: ResolvedTurnContext
+  readonly ledger: Pick<TurnLedger, "noteRoute">
+  readonly log: EffortRoutingLog
+  readonly decided: DecidedEffort
+}) {
+  const recorded = Option.filter(params.log.routed, (event) => event.messageId === params.messageId)
+  if (Option.isSome(recorded)) {
+    yield* params.ledger.noteRoute(recorded.value)
+    return applyEffortRoute(params.resolved, recorded.value)
+  }
+  const served = servedEffortRouter((yield* ExtensionRegistry).getResolved())
+  if (Option.isNone(served)) return params.resolved
+  if (Result.isFailure(served.value)) {
+    if (params.step <= 1)
+      yield* Effect.logWarning("turn.effort-router-refused").pipe(
+        Effect.annotateLogs({ reason: served.value.failure }),
+      )
+    return params.resolved
+  }
+  const route = yield* routeEffort({ ...params, served: served.value.success })
+  if (Option.isNone(route)) return params.resolved
+  yield* publishEventOrDie(route.value)
+  yield* params.ledger.noteRoute(route.value)
+  return applyEffortRoute(params.resolved, route.value)
 })
 
 // ── turn-source ─────────────────────────────────────────────────────────────
@@ -2700,12 +3207,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (added.length === 0) return known
       return new Map([...known, ...added])
     }
-    // The newest `ModelRouted` holds the route of the turn it names: a
-    // later step and a recovered turn run on it rather than route again.
+    // The newest `ModelRouted` of each kind holds the route of the turn it
+    // names: a later step and a recovered turn run on it rather than route
+    // again. A turn has at most a model route and an effort route.
     const knownRoute = ({ event }: EventEnvelope): Option.Option<ModelRouted> => {
-      if (event._tag !== "ModelRouted") return Option.none()
+      if (event._tag !== "ModelRouted" || event.effortOnly === true) return Option.none()
       return Option.some(event)
     }
+    const knownEffortRoute = ({ event }: EventEnvelope): Option.Option<ModelRouted> => {
+      if (event._tag !== "ModelRouted" || event.effortOnly !== true) return Option.none()
+      return Option.some(event)
+    }
+    const knownLastEffort = (envelope: EventEnvelope): Option.Option<StepEffort> =>
+      Option.map(knownStepEffort(envelope), ([, receipt]) => receipt)
     interface KnownSteps {
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
@@ -2713,7 +3227,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly lastCallAtMillis: Option.Option<number>
       readonly lastCallModel: Option.Option<ModelIdType>
       readonly stepEfforts: ReadonlyMap<string, StepEffort>
+      readonly lastEffort: Option.Option<StepEffort>
       readonly routed: Option.Option<ModelRouted>
+      readonly effortRouted: Option.Option<ModelRouted>
     }
     const unknownSteps = {
       model: Option.none<ModelIdType>(),
@@ -2721,7 +3237,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       lastCallAtMillis: Option.none<number>(),
       lastCallModel: Option.none<ModelIdType>(),
       stepEfforts: new Map<string, StepEffort>(),
+      lastEffort: Option.none<StepEffort>(),
       routed: Option.none<ModelRouted>(),
+      effortRouted: Option.none<ModelRouted>(),
     }
     const lastKnownStep = yield* Ref.make<KnownSteps>({ cursor: 0, ...unknownSteps })
     const newest = <A>(
@@ -2752,7 +3270,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         lastCallAtMillis: newest(events, knownRequestStart, known.lastCallAtMillis),
         lastCallModel: newest(events, knownRequestModel, known.lastCallModel),
         stepEfforts: withStepEfforts(known.stepEfforts, events),
+        lastEffort: newest(events, knownLastEffort, known.lastEffort),
         routed: newest(events, knownRoute, known.routed),
+        effortRouted: newest(events, knownEffortRoute, known.effortRouted),
       }
       yield* Ref.set(lastKnownStep, current)
       return current
@@ -4002,20 +4522,42 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // A virtual model runs the turn on the concrete model its router picks,
       // before the model-change notice compares models: a routed switch
       // writes the transcript a hand switch writes.
-      const virtual = servedVirtualModel((yield* ExtensionRegistry).getResolved(), resolved.modelId)
+      const profile = (yield* ExtensionRegistry).getResolved()
+      const virtual = servedVirtualModel(profile, resolved.modelId)
+      const effortLog: EffortRoutingLog = {
+        routed: knownSteps.effortRouted,
+        lastCallModel: knownSteps.lastCallModel,
+        lastCallAtMillis: knownSteps.lastCallAtMillis,
+        measure: knownSteps.measure,
+        lastEffort: knownSteps.lastEffort,
+        stepEfforts: knownSteps.stepEfforts,
+      }
+      // One classifier call per user turn: where the virtual model's router
+      // serves the effort router too, its call picks the level as well.
+      const combinedEffort = (routedModel: ServedVirtualModel) =>
+        combinedEffortRoute({
+          resolved,
+          step: params.step,
+          messageId: params.state.message.id,
+          routedModel,
+          effortRouter: servedEffortRouter(profile),
+          log: effortLog,
+        })
+      let decided: DecidedEffort = Option.none()
       if (Option.isSome(virtual)) {
         const unrunnable = (error: string) =>
           publishEventOrDie(
             ErrorOccurred.make({ sessionId: scope.sessionId, branchId: scope.branchId, error }),
           ).pipe(Effect.as(endStep(params.currentTurnAgent, { unanswered: true })))
         if (Result.isFailure(virtual.value)) return yield* unrunnable(virtual.value.failure)
+        const routedModel = virtual.value.success
         const route = yield* routeTurn({
           sessionId: scope.sessionId,
           branchId: scope.branchId,
           messageId: params.state.message.id,
           step: params.step,
           resolved,
-          served: virtual.value.success,
+          served: routedModel,
           log: {
             current: knownSteps.model,
             lastCallModel: knownSteps.lastCallModel,
@@ -4023,6 +4565,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             measure: knownSteps.measure,
             routed: knownSteps.routed,
           },
+          effort: combinedEffort(routedModel),
         })
         if (Option.isNone(route))
           return yield* unrunnable(
@@ -4033,7 +4576,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // starts a new ledger, and the route's classifier calls are still spent.
         yield* scope.turnLedger.noteRoute(route.value.event)
         resolved = applyTurnRoute(resolved, route.value.event)
+        decided = route.value.effort
       }
+      if (resolved.effortAuto)
+        resolved = yield* atAutoEffort({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          messageId: params.state.message.id,
+          step: params.step,
+          resolved,
+          ledger: scope.turnLedger,
+          log: effortLog,
+          decided,
+        })
       if (params.step > 1) {
         resolved = atTurnEffort(
           resolved,

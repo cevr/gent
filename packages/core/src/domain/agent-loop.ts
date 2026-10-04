@@ -147,6 +147,19 @@ export const SessionRuntimeMetrics = Schema.Struct({
     }),
   ),
   /**
+   * The newest effort route of `/effort auto` (`ModelRouted.effortOnly`):
+   * the level it picked for the model it ran on, absent when the turn named
+   * none. A model route's `routed` stays as it was.
+   */
+  effortRouted: Schema.optional(
+    Schema.Struct({
+      model: ModelId,
+      effort: Schema.optional(ReasoningEffort),
+      reason: Schema.String,
+      fallback: Schema.optional(Schema.Boolean),
+    }),
+  ),
+  /**
    * The effort the running turn's requests go out at, from its newest
    * `StreamStarted`: a turn keeps the level of its first step, so a level set
    * while it runs takes effect at the next turn. `level` is absent when the
@@ -211,6 +224,16 @@ export const stepSessionMetrics = (
       }
     }
     case "ModelRouted":
+      if (event.effortOnly === true)
+        return {
+          ...metrics,
+          costUsd: addCost(Option.fromUndefinedOr(event.costUsd)),
+          effortRouted: {
+            model: event.model,
+            reason: event.reason,
+            ...omitUndefined({ effort: event.effort, fallback: event.fallback }),
+          },
+        }
       return {
         ...metrics,
         costUsd: addCost(Option.fromUndefinedOr(event.costUsd)),

@@ -44,6 +44,7 @@ import {
   type LoadedModelCatalog,
   ModelCatalogSource,
   ModelResolver,
+  driverCarriesEffort,
   type ResolveModelRequest,
   finishPart,
   type LanguageModelStreamPart,
@@ -534,7 +535,8 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
 /**
  * A model resolver over a test model layer: it serves the one model for every
  * request, after the sequence's `assertRequest` check when the layer has one.
- * Every driver counts as signed in.
+ * Every driver counts as signed in. The registered drivers say what their
+ * wire carries (`carriesEffort`), over the catalog when the root serves one.
  */
 const resolver = (layer: Layer.Layer<LanguageModel.LanguageModel>): Layer.Layer<ModelResolver> =>
   Layer.effect(
@@ -542,6 +544,7 @@ const resolver = (layer: Layer.Layer<LanguageModel.LanguageModel>): Layer.Layer<
     Effect.gen(function* () {
       const model = yield* LanguageModel.LanguageModel
       const assertRequest = yield* SequenceRequestAssertion
+      const catalogSource = yield* Effect.serviceOption(ModelCatalogSource)
       return ModelResolver.of({
         resolve: (request) =>
           Option.match(assertRequest, {
@@ -549,6 +552,7 @@ const resolver = (layer: Layer.Layer<LanguageModel.LanguageModel>): Layer.Layer<
             onSome: (check) => check(request).pipe(Effect.as(model)),
           }),
         signedIn: () => Effect.succeed(true),
+        carriesEffort: (request, registry) => driverCarriesEffort(request, registry, catalogSource),
       })
     }),
   ).pipe(Layer.provide(layer))
@@ -568,6 +572,7 @@ const signInCheckedResolver = (
       const catalogSource = yield* ModelCatalogSource
       return ModelResolver.of({
         resolve: scripted.resolve,
+        carriesEffort: scripted.carriesEffort,
         signedIn: (driverId, registry) =>
           signInReady(driverId).pipe(
             Effect.provideService(Auth, auth),

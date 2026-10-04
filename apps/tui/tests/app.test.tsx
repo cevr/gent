@@ -60,6 +60,7 @@ import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
   testAgent,
+  textStep,
   waitFor,
 } from "@gent/core/test-utils"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
@@ -91,7 +92,12 @@ import {
 } from "./render-harness-boundary"
 import { LinkOpener, LinkOpenerError } from "../src/os"
 import { createSignal, onMount, Show, type Signal } from "solid-js"
-import { ExtensionId, ProviderAuthError } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  ExtensionHost,
+  ExtensionId,
+  ProviderAuthError,
+} from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
 import {
   type RenderWaitTimeoutError,
@@ -2432,7 +2438,7 @@ describe("App status and activity rows", () => {
       yield* typeCommand("/effort")(setup)
       const picker = yield* waitForFrame(
         setup,
-        (next) => next.includes("Effort · 4"),
+        (next) => next.includes("Effort · 5"),
         "the effort picker",
       )
       expect(picker).toContain("the route's choice (max, sends high)")
@@ -2494,6 +2500,222 @@ describe("App status and activity rows", () => {
       expect(frame).not.toContain("→ Sonnet 5")
     }).pipe(Effect.timeout("4 seconds")),
   )
+  // `/effort auto`: the row names auto and the level its newest effort route
+  // picked, clamped as the request was sent; a narrow row keeps both.
+  for (const [width, left] of [
+    [120, "idle · work · Claude Opus 5 · auto → high · debug"],
+    [60, "Opus 5 · auto → high"],
+  ] as const) {
+    it.scopedLive(
+      `the status row on /effort auto names auto and its routed level at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const sessionId = SessionId.make(`session-effort-auto-${width}`)
+          const branchId = BranchId.make(`branch-effort-auto-${width}`)
+          const opus = new Model({
+            id: ModelId.make("anthropic/claude-opus-5"),
+            name: "Claude Opus 5",
+            provider: ProviderId.make("anthropic"),
+            contextLength: 1_000_000,
+            reasoning: true,
+            efforts: ["low", "medium", "high", "xhigh", "max"],
+          })
+          const cacheLabel = defineClientExtension("@test/auto-cache-label", {
+            setup: Effect.succeed(
+              statusLabelContribution({
+                anchor: "right",
+                produce: () => [{ text: "cache cold", color: "textMuted" as const }],
+              }),
+            ),
+          })
+          const { setup } = yield* mountApp({
+            client: {
+              model: { list: () => Effect.succeed([opus]) },
+              session: {
+                getSnapshot: () =>
+                  Effect.succeed({
+                    sessionId,
+                    branchId,
+                    messages: [],
+                    lastEventId: nullValue,
+                    reasoningLevel: absent,
+                    reasoningAuto: true,
+                    defaultReasoningLevel: "medium",
+                    resolvedModelId: opus.id,
+                    agent: AgentName.make("main"),
+                    runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                    metrics: {
+                      turns: 1,
+                      durationMs: 0,
+                      costUsd: 0.0004,
+                      lastInputTokens: 500,
+                      effortRouted: { model: opus.id, effort: "high", reason: "hard work (0.90)" },
+                    },
+                  }),
+              },
+            },
+            app: { debugMode: true },
+            builtins: [...builtinClientModules, cacheLabel],
+            cwd: "/work",
+            width,
+            initialSession: sessionNamed(sessionId, branchId, "Effort auto"),
+          })
+          const frame = yield* waitForFrame(
+            setup,
+            (next) => next.includes("cache cold") && next.includes("auto"),
+            "auto in the status row",
+          )
+          const row = Option.getOrThrow(
+            Option.fromUndefinedOr(frame.split("\n").find((line) => line.includes("cache cold"))),
+          )
+          expect(row.trimStart().slice(0, left.length)).toBe(left)
+          // The effort picker marks `auto` as the session's.
+          yield* typeCommand("/effort")(setup)
+          const picker = yield* waitForFrame(setup, (next) => next.includes("Effort ·"), "picker")
+          expect(picker).toContain("● auto")
+        }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
+  it.scopedLive(
+    "with no classifier signed in, the effort picker's auto row says routes fall back",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-effort-fallback")
+        const branchId = BranchId.make("branch-effort-fallback")
+        const opus = new Model({
+          id: ModelId.make("anthropic/claude-opus-5"),
+          name: "Claude Opus 5",
+          provider: ProviderId.make("anthropic"),
+          contextLength: 1_000_000,
+          reasoning: true,
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+        })
+        const { setup } = yield* mountApp({
+          client: {
+            model: { list: () => Effect.succeed([opus]) },
+            session: {
+              getSnapshot: () =>
+                Effect.succeed({
+                  sessionId,
+                  branchId,
+                  messages: [],
+                  lastEventId: nullValue,
+                  reasoningLevel: absent,
+                  reasoningAuto: true,
+                  defaultReasoningLevel: "medium",
+                  resolvedModelId: opus.id,
+                  agent: AgentName.make("main"),
+                  runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                  metrics: {
+                    turns: 1,
+                    durationMs: 0,
+                    costUsd: 0,
+                    lastInputTokens: 500,
+                    effortRouted: {
+                      model: opus.id,
+                      effort: "high",
+                      reason: "no classifier model has a credential",
+                      fallback: true,
+                    },
+                  },
+                }),
+            },
+          },
+          app: { debugMode: true },
+          cwd: "/work",
+          width: 120,
+          initialSession: sessionNamed(sessionId, branchId, "Effort fallback"),
+        })
+        yield* waitForFrame(setup, (next) => next.includes("auto"), "auto in the status row")
+        yield* typeCommand("/effort")(setup)
+        const picker = yield* waitForFrame(setup, (next) => next.includes("Effort ·"), "picker")
+        expect(picker).toContain("routes fall back: no classifier model has a credential")
+      }).pipe(Effect.timeout("4 seconds")),
+  )
+  // The whole path on a server: `/effort auto` stores auto, a turn asks the
+  // effort router, the row names its pick, and `/effort high` leaves auto.
+  for (const width of [120, 60]) {
+    it.scopedLive(
+      `/effort auto names the level the router picked after a turn, and /effort high leaves auto, at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const thinker = new Model({
+            id: ModelId.make("effort-test/thinker"),
+            name: "Thinker 1",
+            provider: ProviderId.make("effort-test"),
+            contextLength: 200_000,
+            reasoning: true,
+            efforts: ["low", "medium", "high"],
+          })
+          const effortRouter = defineExtension({
+            id: "test-effort-router",
+            setup: Effect.gen(function* () {
+              yield* (yield* ExtensionHost).register("modelRouter", {
+                id: "router",
+                name: "Test router",
+                models: [],
+                effort: {
+                  name: "effort",
+                  label: "Effort",
+                  choices: [
+                    { effort: "low", reason: "quick" },
+                    { effort: "high", reason: "hard" },
+                  ],
+                  fallback: 1,
+                },
+                route: () => Effect.succeed({ choice: 0, reason: "quick" }),
+              })
+            }),
+          })
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("The answer."),
+          ])
+          const harness = yield* createRpcHarness({
+            providerLayer,
+            agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: thinker.id })],
+            extensionInputs: [effortRouter],
+            models: [thinker],
+          })
+          const setup = yield* renderScoped(() => <App />, {
+            client: harness.client,
+            runtime: createMockRuntime(),
+            width,
+            initialSession: sessionNamed(harness.sessionId, harness.branchId, "Effort auto"),
+          })
+          // The row that names the harness cwd (the client lists no model of a
+          // provider it has no sign-in for).
+          const statusRow = (frame: string) =>
+            Option.getOrElse(
+              Option.fromUndefinedOr(
+                frame.split("\n").find((line) => line.includes("gent-test-cwd")),
+              ),
+              () => "",
+            )
+          yield* typeCommand("/effort auto")(setup)
+          yield* waitForFrame(
+            setup,
+            (frame) => statusRow(frame).includes("auto"),
+            "auto before a route",
+          )
+          yield* Effect.promise(() => setup.mockInput.typeText("think"))
+          setup.mockInput.pressEnter()
+          const routed = yield* waitForFrame(
+            setup,
+            (frame) => frame.includes("The answer.") && statusRow(frame).includes("auto → low"),
+            "the routed level after the turn",
+          )
+          expect(statusRow(routed)).not.toContain("high")
+          yield* typeCommand("/effort high")(setup)
+          const left = yield* waitForFrame(
+            setup,
+            (frame) => statusRow(frame).includes("high"),
+            "the level set by hand",
+          )
+          expect(statusRow(left)).not.toContain("auto")
+        }).pipe(Effect.timeout("10 seconds")),
+      15_000,
+    )
+  }
 })
 
 describe("App drafts, queue restore and forks across session switches", () => {

@@ -192,6 +192,30 @@ describe("Sessions", () => {
       expect(retrieved?.reasoningLevel).toBeUndefined()
     }).pipe(Effect.provide(testSqliteStorage(Layer.empty, {}))),
   )
+  it.live(
+    "a session on /effort auto stores auto in its level column, and a level replaces it",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const sql = yield* SqlClient.SqlClient
+        const id = SessionId.make("effort-auto")
+        yield* sessions.createSession(
+          new Session({ id, reasoningAuto: true, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
+        )
+        const column = sql<{
+          readonly reasoning_level: string
+        }>`SELECT reasoning_level FROM sessions WHERE id = ${id}`
+        // An older build reads `auto` as no level: it is not a reasoning effort.
+        expect((yield* column)[0]?.reasoning_level).toBe("auto")
+        const auto = yield* sessions.getSession(id)
+        expect(auto?.reasoningAuto).toBe(true)
+        expect(auto?.reasoningLevel).toBeUndefined()
+        yield* sessions.updateSessionSettings(id, { reasoningLevel: "high" }, FIXED_NOW)
+        const level = yield* sessions.getSession(id)
+        expect(level?.reasoningAuto).toBeUndefined()
+        expect(level?.reasoningLevel).toBe("high")
+      }).pipe(Effect.provide(testSqliteStorage(Layer.empty, {}))),
+  )
   it.live("fails through StorageError for invalid durable session row shape", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
