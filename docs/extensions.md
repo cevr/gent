@@ -133,8 +133,20 @@ just wrote shows there. `Extensions.reload(id)` runs every setup of the
 profile again and returns the new statuses; an unchanged extension keeps its
 process and branch Resources, a run that is going on keeps its profile, and
 an id the profile does not name fails. Any extension gets this facet. The
-shipped `@gent/extension-admin` extension gives it to the agent as the
-read-only `extensions.status` tool (`packages/extensions/src/extension-admin.ts`). `Models.decide({ definition, input, model?, timeoutMs? })` asks a
+shipped `@gent/extension-admin` extension (`packages/extensions/src/extension-admin.ts`)
+gives the agent `extensions.status`, `extensions.reload`, and four verbs that
+change what the next turn loads: `extensions.enable` and `extensions.disable`
+edit `disabledExtensions` in the user or project `config.json` (every other key
+stays; a file that does not decode is refused, not replaced),
+`extensions.add` copies a file or directory into a scope's extensions
+directory (an existing name is refused), and `extensions.remove` moves one to
+`extension-trash` in the data directory. Each of the four asks the user once
+through `Interaction.approve`, naming the scope, the path and who it reaches;
+a headless run declines. The `project` scope needs a project the user trusts,
+and `user` is the default only when the session runs from home. A verb's
+optional `resume` queues one message on its own branch (`Session.send`,
+`delivery: "queue"`), so the agent goes on in the same task on the new
+profile. The bundled `extensions` skill carries the guide and a template. `Models.decide({ definition, input, model?, timeoutMs? })` asks a
 classifier model (System One: Jev, Clef) every `effect/ai/Decision` of the
 definition in one call and returns the answers, the model, the usage and the
 cost; `Models.available` and `Models.classifiers` say which classifiers have

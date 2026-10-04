@@ -453,8 +453,18 @@ have no fallback yet. An extension the disabled list names is reported `disabled
 (`resolveExtensions` takes it as a third list): `ExtensionHealth.Disabled` on
 the wire, in the optional `disabledExtensions` field of both snapshot cases.
 The `Extensions` facet (`status`, `reload`) reads and reloads the session's
-profile; the shipped `@gent/extension-admin` gives `status` to the agent as
-the read-only `extensions.status` tool.
+profile. The shipped `@gent/extension-admin` gives both to the agent
+(`extensions.status`, `extensions.reload`), with four verbs over public entries
+only: `enable` and `disable` edit a scope's `disabledExtensions` under
+`FileLock` with `writeFileAtomic`, `add` copies a file or directory into a
+scope's extensions directory through a hidden staging name, and `remove` moves
+one to the data directory's `extension-trash`. The four ask once
+(`Interaction.approve`) after their reads and before their write, so the tool
+that runs again after the ask writes once; a headless run declines. `project`
+needs a trusted project; trust stays the user's step. `resume` queues one
+follow-up on the tool's own branch, which runs on the profile the change made.
+No verb installs npm or git packages, and no watcher exists: the scan at each
+turn start is the one apply point.
 `buildSessionProfile` then stages the `ExtensionRegistry` and the base
 prompt sections over the built resource context. The cache is a required
 service of the loop behavior and of the server's session wiring: every turn
@@ -2258,6 +2268,8 @@ The skills listing goes into every request, so its size is a per-step input cost
 Principles ship as an ordinary `principles` skill with Markdown reference files. The skills resource materializes the embedded bundle in a content-addressed directory under `~/.cache/gent/skills/`. It publishes the complete directory by rename, so concurrent profiles do not expose partial files. The separate cell process reads real paths. User global skills override bundled defaults; project skills retain local-first selection. There is no separate principles tool or principle-content registry.
 
 Repository research uses the bundled `repositories` skill and supervised native commands. Git and package tools own authentication, fetches, revision reads, and command errors. Gent has no repository service, repository model tool, or native Git dependency. The skill preserves existing caches and requires exact revision receipts.
+
+Extension authoring uses the bundled `extensions` skill: where extensions live, a template, the test loop through `extensions.status`, and the `@gent/extension-admin` verbs. There is no scaffold verb; the agent writes the file with the file tools.
 
 Saved-result writes use the existing `write` tool with `atomic: true`. The tool calls `writeFileAtomic` under its existing file lock. A symlink at the path is followed to its target, as a plain write follows it: the target is replaced and the link stays. The content is staged in a hidden sibling file beside the target, synced, then renamed over it; the target keeps its mode. Ordinary completion, failure, and scoped interruption remove the sibling file. Abrupt process death can leave that one hidden file, never a directory, and does not expose a partial destination. This does not claim power-loss durability.
 
