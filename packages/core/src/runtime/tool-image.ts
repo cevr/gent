@@ -25,6 +25,7 @@ import {
   Schema,
 } from "effect"
 import { Base64, Hex } from "effect/encoding"
+import type * as Prompt from "effect/ai/Prompt"
 import { ExtensionContext } from "../domain/extension.js"
 import { omitUndefined } from "../domain/guards.js"
 import { resolveDataDir, writeFileAtomic } from "./gent-platform.js"
@@ -76,6 +77,25 @@ const TOOL_IMAGE_MAX_SIDE = 2_000
 export const toolImageBase64Chars = (bytes: number): number => Math.ceil(bytes / 3) * 4
 
 const decodeToolImage = Schema.decodeUnknownOption(ToolImage)
+const decodeJson = Schema.decodeUnknownOption(Schema.Json)
+
+/**
+ * The digests of the tool images the tool results among `parts` hold, once
+ * each: what a stored message references in the blob store.
+ */
+export const toolImageDigests = (parts: ReadonlyArray<Prompt.Part>): ReadonlyArray<string> => {
+  const digests = new Set<string>()
+  for (const part of parts) {
+    if (part.type !== "tool-result") continue
+    for (const image of Option.match(decodeJson(part.result), {
+      onNone: (): ReadonlyArray<ToolImage> => [],
+      onSome: toolImagesOf,
+    })) {
+      digests.add(image.sha256)
+    }
+  }
+  return [...digests]
+}
 
 /**
  * Each `ToolImage` in a tool result, in document order, once per image. A
@@ -204,8 +224,12 @@ const readImageHeader = (bytes: Uint8Array): Option.Option<ImageHeader> => {
 
 // ── blob store ──────────────────────────────────────────────────────────────
 
-/** A blob last written or read longer ago than this is removed when a server starts. */
-const BLOB_MAX_AGE = Duration.days(14)
+/**
+ * A blob no stored message references is removed when a server starts, once
+ * it was last written or read longer ago than this: a save another server
+ * made a moment ago, whose tool result is not stored yet, stays.
+ */
+const UNREFERENCED_BLOB_GRACE = Duration.days(1)
 
 const FILE_EXTENSIONS: Readonly<Record<ToolImageMediaType, string>> = {
   "image/png": "png",
@@ -223,13 +247,22 @@ export const toolImageDirectory = Effect.fn("ToolImage.directory")(function* (ho
 const blobPath = (path: Path.Path, directory: string, image: ToolImage) =>
   path.join(directory, `${image.sha256}.${FILE_EXTENSIONS[image.mediaType]}`)
 
+const SHA256_HEX = /^[0-9a-f]{64}$/
+
 /**
- * Removes the blobs under `home`'s data directory last written or read more
- * than `BLOB_MAX_AGE` ago. The server runs it once when it starts. Each file
- * is checked right before it is removed; a save that finds its file gone
- * writes it again, and a request that finds it gone sends a line instead.
+ * Removes the blobs under `home`'s data directory that no stored message
+ * references (`referenced`, the durable reference count storage keeps) and
+ * that were last written or read more than `UNREFERENCED_BLOB_GRACE` ago. A
+ * blob a stored message references stays however old it is, so a session
+ * resumed after months still shows its images. The server runs it once when
+ * it starts. Each file is checked right before it is removed; a save that
+ * finds its file gone writes it again, and a request that finds it gone
+ * sends a line instead.
  */
-export const sweepToolImages = Effect.fn("ToolImage.sweep")(function* (home: string) {
+export const sweepToolImages = Effect.fn("ToolImage.sweep")(function* <E>(
+  home: string,
+  referenced: (sha256: string) => Effect.Effect<boolean, E>,
+) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const directory = yield* toolImageDirectory(home)
@@ -240,9 +273,15 @@ export const sweepToolImages = Effect.fn("ToolImage.sweep")(function* (home: str
   for (const name of names) {
     const file = path.join(directory, name)
     const written = Option.flatMap(yield* Effect.option(fs.stat(file)), (info) => info.mtime)
-    if (Option.isSome(written) && now - written.value.getTime() > Duration.toMillis(BLOB_MAX_AGE)) {
-      yield* fs.remove(file).pipe(Effect.ignore)
-    }
+    const old = Option.exists(
+      written,
+      (at) => now - at.getTime() > Duration.toMillis(UNREFERENCED_BLOB_GRACE),
+    )
+    if (!old) continue
+    // A file whose name is no digest (a write that never finished) has no reference.
+    const digest = Option.liftPredicate(name.split(".")[0] ?? "", (head) => SHA256_HEX.test(head))
+    if (Option.isSome(digest) && (yield* referenced(digest.value))) continue
+    yield* fs.remove(file).pipe(Effect.ignore)
   }
 })
 
@@ -314,8 +353,9 @@ type SaveToolImageInput = ({ readonly bytes: Uint8Array } | { readonly path: str
  * Put the result anywhere in the tool's output (its schema holds `ToolImage`);
  * the model sees the image after the tool result, on a model that takes
  * images, and a line naming it on one that does not. The store keeps one file
- * per content (`<data dir>/blobs/<sha256>.<ext>`) and removes a file nobody
- * used for 14 days. It takes PNG, JPEG, GIF and WebP, up to 3.75 MiB and 2,000
+ * per content (`<data dir>/blobs/<sha256>.<ext>`), keeps it while a stored
+ * message holds it, and removes it a day after the last such message goes
+ * (`sweepToolImages`). It takes PNG, JPEG, GIF and WebP, up to 3.75 MiB and 2,000
  * pixels a side; anything else fails with `ToolImageError`, and a larger
  * image must be downscaled first.
  */

@@ -339,33 +339,63 @@ describe("tool images through a turn", () => {
   )
 
   it.scopedLive(
-    "a server start removes the blobs nobody used for 14 days and keeps the rest",
+    "a server start keeps every blob a stored message references and removes old ones nobody does",
     () =>
       Effect.gen(function* () {
         const home = yield* makeTempDirectoryScoped("tool-image-sweep-home-")
+        // One workspace across the starts, so a later start can delete the session.
+        const cwd = yield* makeTempDirectoryScoped("tool-image-sweep-cwd-")
+        const storagePath = `${home}/gent.db`
         const fs = yield* FileSystem.FileSystem
         const blobs = `${home}/.gent/blobs`
-        yield* fs.makeDirectory(blobs, { recursive: true })
-        const old = `${blobs}/${"a".repeat(64)}.png`
-        const recent = `${blobs}/${"b".repeat(64)}.png`
-        yield* fs.writeFile(old, pngBytes(1, 1, 1))
-        yield* fs.writeFile(recent, pngBytes(1, 1, 2))
+        // The first server stores a session whose tool result references the shot.
+        const { sessionId } = yield* Effect.scoped(
+          imageTurn({ paths: ["shot.png"], home, cwd, storagePath }),
+        )
+        const referenced = `${blobs}/${sha256Hex(SHOT)}.png`
+        const unreferenced = `${blobs}/${"c".repeat(64)}.png`
+        const fresh = `${blobs}/${"d".repeat(64)}.png`
+        yield* fs.writeFile(unreferenced, pngBytes(1, 1, 1))
+        yield* fs.writeFile(fresh, pngBytes(1, 1, 2))
         const now = (yield* Clock.currentTimeMillis) / 1000
-        const fifteenDaysAgo = now - 15 * 24 * 60 * 60
-        const thirteenDaysAgo = now - 13 * 24 * 60 * 60
-        yield* fs.utimes(old, fifteenDaysAgo, fifteenDaysAgo)
-        yield* fs.utimes(recent, thirteenDaysAgo, thirteenDaysAgo)
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-        yield* createRpcHarness({
-          agents: [testAgent],
-          extensionInputs: [],
-          providerLayer,
-          home,
-        })
-        yield* waitFor(fs.exists(old), (exists) => !exists, 5_000, "the old blob removed")
-        expect(yield* fs.exists(recent)).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
-    15_000,
+        const ago = (hours: number) => now - hours * 60 * 60
+        // Unused for 20 days, as an unloaded session's image is; a fresh one may be another server's save in flight.
+        yield* fs.utimes(referenced, ago(20 * 24), ago(20 * 24))
+        yield* fs.utimes(unreferenced, ago(20 * 24), ago(20 * 24))
+        yield* fs.utimes(fresh, ago(1), ago(1))
+        const restart = <A, E>(then: (client: RpcClient) => Effect.Effect<A, E>) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+              const { client } = yield* createRpcHarness({
+                agents: [testAgent],
+                extensionInputs: [],
+                providerLayer,
+                home,
+                cwd,
+                storagePath,
+              })
+              yield* then(client)
+            }),
+          )
+        yield* restart(() =>
+          waitFor(
+            fs.exists(unreferenced),
+            (exists) => !exists,
+            5_000,
+            "the unreferenced blob removed",
+          ),
+        )
+        expect(yield* fs.exists(referenced)).toBe(true)
+        expect(yield* fs.exists(fresh)).toBe(true)
+        // Its session deleted, the image has no reference left: the next start removes it.
+        yield* restart((client) => client.session.delete({ sessionId }).pipe(Effect.orDie))
+        yield* restart(() =>
+          waitFor(fs.exists(referenced), (exists) => !exists, 5_000, "the released blob removed"),
+        )
+        expect(yield* fs.exists(fresh)).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+    25_000,
   )
 })
 
@@ -381,13 +411,25 @@ const SHOT_DATA = base64(SHOT)
  * call a step, then answers. Returns the prompt of each request, in order.
  * Each path is a copy of `SHOT` with its own filler, written in the cwd.
  */
+type RpcClient = Effect.Success<ReturnType<typeof createRpcHarness>>["client"]
+
 const imageTurn = Effect.fn("test.imageTurn")(function* (params: {
   readonly paths: ReadonlyArray<string>
   readonly agent?: AgentDefinition
   readonly models?: ReadonlyArray<Model>
+  /** A home and a database file the test keeps across server starts. */
+  readonly home?: string
+  readonly cwd?: string
+  readonly storagePath?: string
 }) {
-  const home = yield* makeTempDirectoryScoped("tool-image-request-home-")
-  const cwd = yield* makeTempDirectoryScoped("tool-image-request-cwd-")
+  const home = yield* Option.match(Option.fromUndefinedOr(params.home), {
+    onNone: () => makeTempDirectoryScoped("tool-image-request-home-"),
+    onSome: Effect.succeed,
+  })
+  const cwd = yield* Option.match(Option.fromUndefinedOr(params.cwd), {
+    onNone: () => makeTempDirectoryScoped("tool-image-request-cwd-"),
+    onSome: Effect.succeed,
+  })
   const fs = yield* FileSystem.FileSystem
   for (const [index, path] of params.paths.entries()) {
     yield* fs.writeFile(`${cwd}/${path}`, shotBytes(index))
@@ -409,7 +451,7 @@ const imageTurn = Effect.fn("test.imageTurn")(function* (params: {
     providerLayer,
     home,
     cwd,
-    ...omitUndefined({ models: params.models }),
+    ...omitUndefined({ models: params.models, storagePath: params.storagePath }),
   })
   const turn = yield* client.session.events({ sessionId, branchId }).pipe(
     Stream.map(({ event }) => event),
@@ -421,7 +463,7 @@ const imageTurn = Effect.fn("test.imageTurn")(function* (params: {
   yield* Fiber.join(turn)
   yield* controls.assertDone
   const stored = yield* client.message.list({ branchId })
-  return { prompts, stored, home }
+  return { prompts, stored, home, sessionId }
 })
 
 /** The message after the last tool message of `prompt`, and that tool message. */

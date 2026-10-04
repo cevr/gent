@@ -1990,8 +1990,11 @@ host-owned design. It should expose:
   `ChildProcessSpawner`;
 - `saveToolImage` / `ToolImage` / `ToolImageError`: a tool's image, stored
   once by content (`<data dir>/blobs/<sha256>.<ext>`) and returned by
-  reference in its output (`packages/core/src/runtime/tool-image.ts`; the
-  server sweeps blobs unused for 14 days at start);
+  reference in its output (`packages/core/src/runtime/tool-image.ts`).
+  Storage counts each blob's references (`tool_image_references`, one row
+  for each stored message that holds the image, written in the message's
+  transaction and removed with it), and a server start removes only a blob
+  no stored message references and nobody used for a day;
 - author-facing errors: load, driver, provider-auth, service, process and
   interaction errors that extension code can intentionally return or inspect;
   an error only tests read (the capability errors) stays in core, where core

@@ -335,8 +335,9 @@ result, under the line `Image from <tool> <source> <width>x<height>:`. A model
 the catalog says reads no images gets a line that names the image instead. A
 request sends at most the newest 20 images (5 on Chat Completions); past that
 it leaves out the oldest five at a time, each as a line that names it, and
-the session keeps every image. A server start removes a blob nobody saved or
-sent for 14 days.
+the session keeps every image. A blob stays while any stored message holds
+it, however old the session; a server start removes a blob no stored message
+references once nobody used it for a day.
 
 ### request — extension-to-extension RPC
 

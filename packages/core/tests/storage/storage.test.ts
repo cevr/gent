@@ -328,6 +328,7 @@ describe("Sessions", () => {
           "turn_record_admission",
           "session_admission",
           "model_catalog_snapshots",
+          "tool_image_references",
         ])
       }).pipe(Effect.provide(layer))
 
@@ -362,6 +363,7 @@ describe("Sessions", () => {
           "turn_record_admission",
           "session_admission",
           "model_catalog_snapshots",
+          "tool_image_references",
         ])
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.provide(BunServices.layer)),
@@ -1038,6 +1040,58 @@ describe("persisted loop queue format", () => {
 const MessageDetails = Schema.Struct({ iteration: Schema.Finite })
 
 describe("Messages", () => {
+  it.live("a tool image stays referenced while any stored message holds it", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const messages = yield* MessageStorage
+      const shared = "a".repeat(64)
+      /** A session whose one tool message holds the shared image. */
+      const holding = (name: string) =>
+        Effect.gen(function* () {
+          const sessionId = SessionId.make(`${name}-session`)
+          const branchId = BranchId.make(`${name}-branch`)
+          yield* ensureStorageParents({ sessionId, branchId })
+          yield* messages.createMessage(
+            Message.cases.regular.make({
+              id: MessageId.make(`${name}-message`),
+              sessionId,
+              branchId,
+              role: "tool",
+              parts: [
+                Prompt.toolResultPart({
+                  id: ToolCallId.make(`${name}-call`),
+                  name: "screenshot",
+                  isFailure: false,
+                  providerExecuted: false,
+                  result: {
+                    shot: {
+                      _tag: "ToolImage",
+                      sha256: shared,
+                      mediaType: "image/png",
+                      width: 1,
+                      height: 1,
+                      bytes: 70,
+                    },
+                  },
+                }),
+              ],
+              createdAt: FIXED_NOW,
+            }),
+          )
+          return sessionId
+        })
+      const first = yield* holding("refs-a")
+      const second = yield* holding("refs-b")
+      expect(yield* messages.toolImageReferenced(shared)).toBe(true)
+      expect(yield* messages.toolImageReferenced("b".repeat(64))).toBe(false)
+      // A content-addressed image is shared: one session's delete leaves the other's reference.
+      yield* sessions.deleteSession(first)
+      expect(yield* messages.toolImageReferenced(shared)).toBe(true)
+      yield* sessions.deleteSession(second)
+      expect(yield* messages.toolImageReferenced(shared)).toBe(false)
+    }).pipe(Effect.provide(testSqliteStorage(Layer.empty, {}))),
+  )
+
   it.live("creates and retrieves messages", () =>
     Effect.gen(function* () {
       const messages = yield* MessageStorage
