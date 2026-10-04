@@ -210,9 +210,10 @@ other rows, so rows of an item the live view shows in part commit as drawn. Clos
 picker replays nothing, so the shell's lines above gent stay. The region
 takes back the rows it left, and after the return's first frame
 (`afterReturnFrame`) the rows the footer and the tail want: the tail keeps its
-measure behind an overlay, so a turn that ended there shows its last rows. A
-region that left from the screen's top row starts there again
-(`resetSplitFooterForReplay`). A replay (a
+measure behind an overlay, so a turn that ended there shows its last rows.
+The return sets no cursor and resets nothing: patched OpenTUI keeps the
+split's row and the last history row's end column across the alternate
+screen (`patches/README.md`), so the next commit starts under that row. A replay (a
 resize, a disclosure change, an item changed in history, `/clear`, another
 session or branch) writes history again, so its reset clears the terminal's
 saved lines first (`resetHistory`): the old copy would show each row twice.

@@ -1707,10 +1707,7 @@ interface RowRange {
   readonly to: Option.Option<number>
 }
 
-/**
- * Where the split region sat as the alternate screen took over: the
- * terminal rows above it (`top`) and its height (`rows`).
- */
+/** Where the split region sits: the terminal rows above it (`top`) and its height (`rows`). */
 interface RegionPlace {
   readonly top: number
   readonly rows: number
@@ -1925,7 +1922,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const toolRuns = createMemo(() => projectToolRuns(displayedItems(), true, props.streaming))
   let viewport = Option.none<ScrollBoxRenderable>()
   let settlingNative = false
-  let leftRegion = Option.none<RegionPlace>()
+  /** The split region's height as the alternate screen took over. */
+  let leftRows = Option.none<number>()
   /** A return from the alternate screen waits for its first frame (`afterReturnFrame`). */
   let returnFramePending = false
   const [replayPending, setReplayPending] = createSignal(false)
@@ -2302,21 +2300,16 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   }
 
   /**
-   * Draws the split region on the terminal's own screen again. A return from
-   * the alternate screen starts it at the place it left (`leftRegion`),
-   * under the cursor row the output mode reads. A region that left from the
-   * screen's top row has no row above it for the cursor to name: the output
-   * mode would start it a row down, and its first resize would move it to the
-   * bottom rows the passthrough mode pinned. It starts on the top row again,
-   * as the first transcript does. No history row is on screen above it, so
-   * the clear takes only its own rows, which the next frame draws again.
+   * Draws the split region on the terminal's own screen again. The terminal
+   * kept that screen behind the alternate one, and OpenTUI (patched, see
+   * `patches/README.md`) keeps the split's history state for it: a return at
+   * the same size takes the region back at the row it left, and the next
+   * commit starts under the last history row, which ends mid-row.
    */
-  const enterRegion = (returning: Option.Option<RegionPlace>) => {
+  const enterRegion = () => {
     renderer.screenMode = "split-footer"
-    Option.map(returning, (place) => renderer.setCursorPosition(1, place.top, false))
     renderer.externalOutputMode = "capture-stdout"
     renderer.useMouse = false
-    if (Option.exists(returning, (place) => place.top === 0)) renderer.resetSplitFooterForReplay()
   }
 
   // At exit every item the live view still holds commits, final or not,
@@ -2327,11 +2320,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const flushForExit = Effect.suspend(() => {
     Deferred.doneUnsafe(leaving, Exit.void)
     if (disposed) return Effect.void
-    const away = Option.filter(leftRegion, () => renderer.screenMode === "alternate-screen")
+    const away = Option.filter(leftRows, () => renderer.screenMode === "alternate-screen")
     if (Option.isSome(away)) {
-      leftRegion = Option.none()
-      renderer.footerHeight = away.value.rows
-      enterRegion(away)
+      leftRows = Option.none()
+      renderer.footerHeight = away.value
+      enterRegion()
       // A resize while away left history for the old width: it starts again.
       if (replayPending()) enqueueNative(Effect.sync(resetHistory))
     }
@@ -2403,7 +2396,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       setNativeOutputReady(false)
       renderer.off("frame", afterReturnFrame)
       returnFramePending = false
-      if (renderer.screenMode === "split-footer") leftRegion = Option.some(regionPlace(renderer))
+      if (renderer.screenMode === "split-footer") leftRows = Option.some(renderer.footerHeight)
       renderer.externalOutputMode = "passthrough"
       renderer.screenMode = "alternate-screen"
       // The expanded transcript owns scrolling, so the wheel must reach the scrollbox.
@@ -2417,15 +2410,15 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     // view kept commit as they would have. The footer's size is still the
     // overlay's here, so the region takes the rows it had until the return's
     // first frame (`afterReturnFrame`).
-    const returning = Option.filter(leftRegion, () => renderer.screenMode === "alternate-screen")
-    leftRegion = Option.none()
+    const returning = Option.filter(leftRows, () => renderer.screenMode === "alternate-screen")
+    leftRows = Option.none()
     const replaying = replayPending()
     if (Option.isSome(returning) && !replaying) {
-      renderer.footerHeight = returning.value.rows
+      renderer.footerHeight = returning.value
       returnFramePending = true
       renderer.once("frame", afterReturnFrame)
     } else untrack(() => sizeRegion(replaying))
-    enterRegion(returning)
+    enterRegion()
     if (replayPending() && !settlingNative) {
       settlingNative = true
       renderer.once("frame", finishNativeReturn)
@@ -2725,7 +2718,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * on the terminal's own screen again, at the rows it left. It now takes the
    * rows the footer and the live tail want, which may have changed behind the
    * overlay (a turn that ended there). Before this frame a new size would move
-   * the region from where the output mode placed it.
+   * the region from the rows it took back.
    */
   const afterReturnFrame = () => {
     returnFramePending = false
