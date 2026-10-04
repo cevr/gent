@@ -1,6 +1,6 @@
 import { it, describe, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Path, Schema } from "effect"
+import { Effect, FileSystem, Path, Schedule, Schema } from "effect"
 import { createWorkerEnv, seedAuthKeys, serveModelCatalogFixture } from "@gent/core/test-utils"
 const makeTempDir = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -407,6 +407,48 @@ describe("compiled binary", () => {
         expect(stdout).not.toContain("[tool error: cell]")
       }).pipe(Effect.timeout("45 seconds"), Effect.provide(BunServices.layer)),
     50000,
+  )
+
+  // install.sh never prunes a version a running gent marks, so a server keeps
+  // its gent-cell across updates.
+  it.scopedLive(
+    "in an install, marks its version in use while it runs",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const binary = yield* compiledBinary
+        const home = yield* makeTempDir
+        const versionDir = path.join(home, "gent", "versions", "1.0.0")
+        yield* fs.makeDirectory(versionDir, { recursive: true })
+        for (const name of ["gent", "gent-cell"]) {
+          yield* fs.copyFile(path.join(path.dirname(binary), name), path.join(versionDir, name))
+          yield* fs.chmod(path.join(versionDir, name), 0o755)
+        }
+        // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
+        const proc = Bun.spawn(
+          [path.join(versionDir, "gent"), "server", "start", "--isolate", "--mock", "--port", "0"],
+          {
+            cwd: home,
+            env: { PATH: "/usr/bin:/bin", HOME: home, GENT_DATA_DIR: path.join(home, "data") },
+            stdout: "ignore",
+            stderr: "ignore",
+          },
+        )
+        // A failed wait still stops the server.
+        yield* Effect.addFinalizer(() => Effect.sync(() => proc.kill("SIGKILL")))
+        const marker = path.join(versionDir, ".in-use", String(proc.pid))
+        yield* fs
+          .exists(marker)
+          .pipe(
+            Effect.repeat({ until: (found) => found, schedule: Schedule.spaced("100 millis") }),
+            Effect.timeout("30 seconds"),
+          )
+        proc.kill("SIGTERM")
+        expect(yield* waitForExit(proc, 20000)).not.toBe(-1)
+        expect(yield* fs.exists(marker)).toBe(false)
+      }).pipe(Effect.timeout("55 seconds"), Effect.provide(BunServices.layer)),
+    60000,
   )
 
   // The release runs this script on each platform's pair before it packs the

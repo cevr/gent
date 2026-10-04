@@ -18,10 +18,13 @@
 #   ${XDG_DATA_HOME:-~/.local/share}/gent/gent -> versions/<v>/gent  (current)
 #   ~/.local/bin/gent -> ${XDG_DATA_HOME:-~/.local/share}/gent/gent
 #
-# The current link changes in one rename, so a gent that runs keeps its own
-# version. The current and the previous version stay; `gent upgrade` updates
-# the same layout. GENT_RELEASES_URL names another release host, such as a
-# mirror, with the same paths as the GitHub releases page.
+# The current link changes in one rename, and a version directory never
+# changes once it is in place, so a gent that runs keeps its own pair. One
+# install at a time holds <root>/.lock while it switches and prunes. The
+# current and the previous version stay, and so does every version a running
+# gent marks in <version>/.in-use/<pid>. `gent upgrade` runs the release's own
+# install.sh. GENT_RELEASES_URL names another release host, such as a mirror,
+# with the same paths as the GitHub releases page.
 #
 # Everything is inside main, so a download cut short runs nothing.
 
@@ -61,7 +64,7 @@ main() {
         shift
         ;;
       -h | --help)
-        sed -n '2,25p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
+        sed -n '2,29p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
         return 0
         ;;
       *)
@@ -72,10 +75,12 @@ main() {
   [ -z "$version" ] || [ -z "$from" ] || fail "choose --version or --from, not both"
   [ -z "$version" ] || check_version "$version"
 
-  for tool in tar mkdir ln mv; do need "$tool"; done
+  for tool in tar mkdir ln mv cmp; do need "$tool"; done
   mkdir -p "$root/versions"
+  lock="$root/.lock"
+  locked=0
   work="$(mktemp -d "$root/versions/.tmp-XXXXXX")"
-  trap 'remove_tree "$work"' EXIT
+  trap cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
@@ -85,16 +90,20 @@ main() {
     stage_release
   fi
 
+  # One updater at a time reads the current version, places the new one,
+  # switches and prunes: another updater's switch never lands between them.
+  take_lock
   previous="$(current_version)"
   place_version
   switch_current
   link_bin
   prune
-  say "installed gent $version into $root/versions/$version"
-  [ -z "$previous" ] || [ "$previous" = "$version" ] || say "the previous version, $previous, stays beside it"
+  release_lock
+  say "installed gent $version into $root/versions/$placed"
+  [ -z "$previous" ] || [ "$previous" = "$placed" ] || say "the previous version, $previous, stays beside it"
   edit_path
   report_shadow
-  [ -z "$previous" ] || [ "$previous" = "$version" ] ||
+  [ -z "$previous" ] || [ "$previous" = "$placed" ] ||
     say "a gent of $previous that still runs keeps its server: close it, or run \`gent server stop\`, before you start this one"
 }
 
@@ -182,7 +191,61 @@ check_pair() {
 
 # ── the layout ──────────────────────────────────────────────────────────────
 
-# The version the current link names, or nothing.
+# The lock is a directory: mkdir makes it or fails, in one step, on every
+# system. It holds the owner's PID. A lock whose owner is gone is moved aside
+# (one rename, so one waiter wins it) and removed.
+take_lock() {
+  waited=0
+  unnamed=0
+  while :; do
+    if mkdir "$lock" 2>/dev/null; then
+      echo "$$" >"$lock/pid"
+      locked=1
+      return 0
+    fi
+    owner="$(cat "$lock/pid" 2>/dev/null || true)"
+    stale=0
+    if [ -n "$owner" ]; then
+      unnamed=0
+      kill -0 "$owner" 2>/dev/null || stale=1
+    else
+      # A new lock names its owner at once; one that stays unnamed lost its owner.
+      unnamed=$((unnamed + 1))
+      [ "$unnamed" -lt 5 ] || stale=1
+    fi
+    if [ "$stale" = 1 ]; then
+      if mv "$lock" "$root/.lock-stale-$$" 2>/dev/null; then
+        taken="$(cat "$root/.lock-stale-$$/pid" 2>/dev/null || true)"
+        if [ "$taken" = "$owner" ]; then
+          rm -rf "$root/.lock-stale-$$"
+        elif [ ! -e "$lock" ]; then
+          # Another waiter took the stale lock first: give its lock back.
+          mv "$root/.lock-stale-$$" "$lock" 2>/dev/null || true
+        fi
+      fi
+      continue
+    fi
+    if [ "$waited" = 0 ]; then
+      say "waiting for another install (PID ${owner:-starting}) to finish"
+      waited=1
+    fi
+    sleep 1
+  done
+}
+
+release_lock() {
+  [ "$locked" = 1 ] || return 0
+  locked=0
+  [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$$" ] && rm -rf "$lock"
+  return 0
+}
+
+cleanup() {
+  release_lock
+  remove_tree "$work"
+}
+
+# The version directory the current link names, or nothing.
 current_version() {
   [ -L "$root/gent" ] || return 0
   target="$(readlink "$root/gent")"
@@ -191,20 +254,29 @@ current_version() {
   esac
 }
 
+# An installed version directory never changes, so a gent that runs from it
+# keeps its pair. A directory whose pair matches the new one is reused; any
+# other pair goes in under a fresh name, `<version>_<suffix>`. $placed names
+# the directory the current link will name.
 place_version() {
-  dest="$root/versions/$version"
-  if [ -e "$dest" ]; then
-    # A reinstall of one version replaces it; the old copy goes once the new one is in place.
-    old="$work/replaced"
-    mv "$dest" "$old"
+  placed="$version"
+  if [ -e "$root/versions/$placed" ]; then
+    if same_pair "$work/pair" "$root/versions/$placed"; then
+      return 0
+    fi
+    placed="${version}_${work##*/.tmp-}"
   fi
-  mv "$work/pair" "$dest"
+  mv "$work/pair" "$root/versions/$placed"
+}
+
+same_pair() {
+  cmp -s "$1/gent" "$2/gent" && cmp -s "$1/gent-cell" "$2/gent-cell"
 }
 
 # One rename switches the current version: a link made under a temporary name
 # replaces the old link, so no moment holds no current version.
 switch_current() {
-  ln -s "versions/$version/gent" "$root/.gent-link-$$"
+  ln -s "versions/$placed/gent" "$root/.gent-link-$$"
   mv -f "$root/.gent-link-$$" "$root/gent"
 }
 
@@ -218,15 +290,34 @@ link_bin() {
   mv -f "$bin/.gent-link-$$" "$bin/gent"
 }
 
-# Keep the new version and the one it replaces; remove the rest.
+# Keep the new version, the one it replaces, and every version a gent that
+# runs still uses; remove the rest.
 prune() {
   for dir in "$root"/versions/*; do
     [ -d "$dir" ] || continue
     name="${dir##*/}"
-    [ "$name" = "$version" ] && continue
+    [ "$name" = "$placed" ] && continue
     [ -n "$previous" ] && [ "$name" = "$previous" ] && continue
+    in_use "$dir" && continue
     remove_tree "$dir"
   done
+}
+
+# A gent writes `<version dir>/.in-use/<pid>` at start and removes it at exit.
+# A marker whose process is gone (a crash, a kill -9) is removed here.
+in_use() {
+  [ -d "$1/.in-use" ] || return 1
+  live=1
+  for marker in "$1/.in-use"/*; do
+    [ -e "$marker" ] || continue
+    pid="${marker##*/}"
+    case "$pid" in
+      "" | *[!0-9]*) ;;
+      *) if kill -0 "$pid" 2>/dev/null; then live=0 && continue; fi ;;
+    esac
+    rm -f "$marker"
+  done
+  return "$live"
 }
 
 # ── PATH ────────────────────────────────────────────────────────────────────

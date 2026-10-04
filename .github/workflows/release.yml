@@ -38,10 +38,10 @@ jobs:
             target: bun-linux-arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The pinned Bun builds the bytecode, and each binary embeds that Bun.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
 
@@ -73,7 +73,7 @@ jobs:
       - name: Pack
         run: tar -czf "gent-${{ matrix.platform }}.tar.gz" -C apps/tui/bin gent gent-cell
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: gent-${{ matrix.platform }}
           path: gent-${{ matrix.platform }}.tar.gz
@@ -88,23 +88,25 @@ jobs:
     steps:
       # install.sh ships with the release it installs: the site serves the
       # latest release's copy.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: install.sh
           sparse-checkout-cone-mode: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: gent-*
           merge-multiple: true
           path: dist
 
-      - name: Checksums
-        working-directory: dist
-        run: sha256sum gent-*.tar.gz > SHA256SUMS
-
+      # SHA256SUMS names install.sh too: `gent upgrade` checks it like any
+      # other asset before it runs it.
       - name: Installer
         run: cp install.sh dist/install.sh
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum gent-*.tar.gz install.sh > SHA256SUMS
 
       - name: Draft the release
         env:

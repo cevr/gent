@@ -60,6 +60,7 @@ import {
   resumableSessions,
   server,
   sessions,
+  markVersionInUse,
   storage,
   upgrade,
 } from "./ops"
@@ -461,6 +462,8 @@ const mainEffect = Effect.scoped(
   Effect.gen(function* () {
     const platformContext = yield* Layer.build(BunPlatformLive)
     const platform = Context.makeUnsafe<unknown>(platformContext.mapUnsafe)
+    // An installed gent marks its version in use until it exits, so an update keeps its pair.
+    yield* Effect.provideContext(markVersionInUse, platform)
     const runCli = Effect.gen(function* () {
       const loggerContext = yield* Layer.build(TraceLoggerLayer)
       return yield* Effect.provideContext(
