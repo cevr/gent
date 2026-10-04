@@ -13,13 +13,14 @@ import {
   Layer,
   Option,
   Path,
+  Predicate,
   Ref,
   Schema,
   Stream,
   SynchronizedRef,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { DecisionModel } from "effect/ai"
+import { DecisionModel, LanguageModel, type Prompt } from "effect/ai"
 import type { ChildProcessSpawner } from "effect/process"
 import {
   type BranchId,
@@ -30,14 +31,18 @@ import {
   type ModelDriverContribution,
   ProviderAuthInfo,
   ProviderId,
+  type ProviderHints,
+  ReasoningEffort,
   type SessionId,
 } from "@gent/core/extensions/api"
 import type { AgentEvent } from "@gent/core/protocol"
 import {
   collectTestContributions,
   createRpcHarness,
+  fixtureModelCatalog,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  type SequenceStep,
   textStep,
   waitFor,
 } from "@gent/core/test-utils"
@@ -595,8 +600,14 @@ const toolReply = (name: string) =>
     "tool_use",
   )
 
-/** The real Anthropic driver on an API key, for a 4.6-or-later model. */
-const anthropicModel = Effect.gen(function* () {
+/**
+ * The real Anthropic driver on an API key, for a 4.6-or-later model, with
+ * the hints a turn resolves it with, read against the fixture catalog.
+ */
+const anthropicModelNamed = Effect.fn("test.anthropicModelNamed")(function* (
+  modelName: string,
+  hints: Option.Option<ProviderHints> = Option.none(),
+) {
   const credentialCellRef =
     yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
   const services = Context.add(
@@ -608,10 +619,14 @@ const anthropicModel = Effect.gen(function* () {
   )
   const driver = buildAnthropicModelDriver(credentialCellRef, Option.none(), services, "1h")
   return yield* driver.resolveModel(
-    "claude-sonnet-5",
+    modelName,
     ProviderAuthInfo.cases.Api.make({ key: "route-test-key" }),
+    Option.getOrUndefined(hints),
+    fixtureModelCatalog(),
   )
-}).pipe(Effect.provide(BunServices.layer))
+}, Effect.provide(BunServices.layer))
+
+const anthropicModel = anthropicModelNamed("claude-sonnet-5")
 
 const WireMessage = Schema.Struct({
   role: Schema.String,
@@ -620,6 +635,66 @@ const WireMessage = Schema.Struct({
 const decodeMessages = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ messages: Schema.Array(WireMessage) })),
 )
+
+const OPUS = ModelId.make("anthropic/claude-opus-5")
+const MID_CONVERSATION_BETA = "mid-conversation-output-config-2026-07-01"
+
+const isReasoningEffort = Schema.is(ReasoningEffort)
+
+/** What one step of a turn sent: the hints it resolved its model with, and its prompt. */
+interface SentStep {
+  readonly reasoning: Option.Option<ReasoningEffort>
+  readonly maxTokens: Option.Option<number>
+  readonly reasoningHistory: ReadonlyArray<Option.Option<ReasoningEffort>>
+  readonly prompt: Option.Option<Prompt.Prompt>
+}
+
+const decodeJsonBody = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))
+const isJsonObject = Schema.is(Schema.Record(Schema.String, Schema.Json))
+const isJsonList = Schema.is(Schema.Array(Schema.Json))
+
+/** A request's JSON body; a body that is not an object fails the test. */
+const decodeWireBody = (body: string): Schema.JsonObject =>
+  Option.getOrThrow(Option.filter(Option.some(decodeJsonBody(body)), isJsonObject))
+
+/** The value without its `cache_control` fields: the cache matches the content, and the tail marker moves. */
+const withoutCacheControl = (value: Schema.Json): Schema.Json => {
+  if (isJsonList(value)) return value.map(withoutCacheControl)
+  if (!isJsonObject(value)) return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== "cache_control")
+      .map(([key, item]) => [key, withoutCacheControl(item)] as const),
+  )
+}
+
+const withoutMessages = (body: Schema.JsonObject): Schema.Json =>
+  Object.fromEntries(Object.entries(body).filter(([key]) => key !== "messages"))
+
+/** The body's messages, without cache markers. */
+const wireMessages = (body: Schema.JsonObject): Array<Schema.Json> => {
+  const messages = body["messages"]
+  if (!isJsonList(messages)) return []
+  return messages.map(withoutCacheControl)
+}
+
+/** A message by its role; an effort marker as `effort:<level>`. */
+const messageKind = (message: Schema.Json): string => {
+  if (!isJsonObject(message)) return "?"
+  const config = message["output_config"]
+  if (isJsonObject(config) && Predicate.isString(config["effort"]))
+    return `effort:${config["effort"]}`
+  const role = message["role"]
+  if (Predicate.isString(role)) return role
+  return "?"
+}
+
+/** The effort the body's top level names. */
+const topLevelEffort = (body: Schema.JsonObject): string => {
+  const config = body["output_config"]
+  if (isJsonObject(config) && Predicate.isString(config["effort"])) return config["effort"]
+  return "-"
+}
 
 /** The type of the last block of the last message a request sent, with its role. */
 const lastInput = (body: string) => {
@@ -685,6 +760,163 @@ describe("router on the wire", () => {
         expect(routed.bodies).toEqual(byHand.bodies)
         // No prefill: each request ends on the user's message or a tool result.
         expect(routed.bodies.map(lastInput)).toEqual(["user:text", "user:text", "user:tool_result"])
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a route that changes only the effort rides inside the conversation: the earlier bytes hold and the receipt names the level sent",
+    () =>
+      Effect.gen(function* () {
+        const { home, cwd } = yield* writeHome({
+          routers: {
+            auto: {
+              label: "Auto",
+              classifier: "route-judge/jev-cheap",
+              choices: [
+                { model: OPUS, effort: "low", reason: "light work", default: true },
+                { effort: "high", reason: "hard work on the same model" },
+              ],
+            },
+          },
+        })
+        // The turn runs on the scripted model; each step keeps the hints it
+        // resolved its model with and the prompt it sent, for the real driver.
+        const sent: Array<SentStep> = []
+        const keep = (reply: string): SequenceStep => ({
+          ...textStep(reply),
+          assertRequest: (request) => {
+            sent.push({
+              reasoning: Option.filter(
+                Option.fromUndefinedOr(request.reasoning),
+                isReasoningEffort,
+              ),
+              maxTokens: Option.fromUndefinedOr(request.maxTokens),
+              reasoningHistory: request.reasoningHistory.map(Option.filter(isReasoningEffort)),
+              prompt: Option.none(),
+            })
+          },
+          assertOptions: (options) => {
+            const step = sent.at(-1)
+            if (Predicate.isNotUndefined(step))
+              sent[sent.length - 1] = { ...step, prompt: Option.some(options.prompt) }
+          },
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          keep("answer 1"),
+          keep("answer 2"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          home,
+          cwd,
+          models: [
+            Model.make({
+              id: OPUS,
+              name: "Opus 5",
+              provider: ProviderId.make("anthropic"),
+              contextLength: 1_000_000,
+              reasoning: true,
+              efforts: ["low", "medium", "high", "xhigh", "max"],
+              pricing: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+            }),
+          ],
+          extensionInputs: [
+            ...e2ePreset.extensionInputs,
+            judgeExtension(
+              [
+                { label: "choice1", confidence: 0.9 },
+                { label: "choice2", confidence: 0.9 },
+              ],
+              [],
+            ),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(AUTO),
+          reasoningLevel: Option.none(),
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* client.message.send({ sessionId, branchId, content: "hello" })
+        yield* afterTurns(1)
+        yield* client.message.send({ sessionId, branchId, content: "now the hard part" })
+        const events = yield* afterTurns(2)
+        yield* controls.assertDone
+
+        // One model, two routes: the second changes the effort only.
+        expect(routedEvents(events).map((event) => [event.model, event.effort])).toEqual([
+          [OPUS, "low"],
+          [OPUS, "high"],
+        ])
+        const receipts = events.flatMap((event) => {
+          if (event._tag !== "StreamEnded") return []
+          return [[event.model, event.reasoningLevel]]
+        })
+        expect(receipts).toEqual([
+          [OPUS, "low"],
+          [OPUS, "high"],
+        ])
+        // The turn asks for the route's level and names the level the run before was sent at.
+        expect(sent.map((step) => [step.reasoning, step.reasoningHistory])).toEqual([
+          [Option.some("low"), []],
+          [Option.some("high"), [Option.some("low")]],
+        ])
+
+        // The real driver sends each step's prompt with the hints the turn resolved.
+        const state = makeFakeFetchState()
+        for (const step of sent) {
+          const hints: ProviderHints = {
+            cacheKey: sessionId,
+            supportsReasoning: true,
+            reasoningHistory: step.reasoningHistory,
+            ...Option.match(step.reasoning, {
+              onNone: () => ({}),
+              onSome: (reasoning) => ({ reasoning }),
+            }),
+            ...Option.match(step.maxTokens, {
+              onNone: () => ({}),
+              onSome: (maxTokens) => ({ maxTokens }),
+            }),
+          }
+          const model = yield* anthropicModelNamed("claude-opus-5", Option.some(hints))
+          yield* LanguageModel.streamText({ prompt: Option.getOrThrow(step.prompt) }).pipe(
+            Stream.runDrain,
+            Effect.provide(
+              Layer.provideMerge(
+                model,
+                fakeFetchLayer(state, () => textReply("answer")),
+              ),
+            ),
+          )
+        }
+        expect(state.captured).toHaveLength(2)
+        const bodies = state.captured.map((request) => decodeWireBody(request.body ?? ""))
+        const at = (index: number) => Option.getOrThrow(Option.fromUndefinedOr(bodies[index]))
+        const first = at(0)
+        const second = at(1)
+        // The top level keeps the conversation's first effort: the cache holds.
+        expect(topLevelEffort(second)).toBe("low")
+        expect(withoutCacheControl(withoutMessages(second))).toEqual(
+          withoutCacheControl(withoutMessages(first)),
+        )
+        // The earlier messages are byte-equal; the change rides as a marker
+        // after the run before it, ahead of the turn it applies to.
+        const earlier = wireMessages(first)
+        expect(wireMessages(second).slice(0, earlier.length)).toEqual(earlier)
+        expect(wireMessages(second).map(messageKind)).toEqual([
+          "user",
+          "assistant",
+          "effort:high",
+          "user",
+        ])
+        expect(
+          state.captured.map((request) =>
+            (request.headers["anthropic-beta"] ?? "").split(",").includes(MID_CONVERSATION_BETA),
+          ),
+        ).toEqual([false, true])
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
     30_000,
   )
