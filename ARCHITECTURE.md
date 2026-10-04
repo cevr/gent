@@ -589,10 +589,13 @@ binding names that process and is valid only inside it. A tool of a user or
 project extension file binds to the file's version instead (`version:<hash>`,
 `sourceRevisionFor` in `runtime/tools.ts`): after a restart the same bytes
 replay, an edited file fails with `SourceMismatch`. Each profile also has a
-revision, a short hash of its cache key (place, extensions set up, file
-versions). Every `StreamStarted` of a turn names it (`profileRevision`,
-optional), so the cache fold of the TUI names a prefix miss between two
-revisions `ExtensionsChanged`, not a regression.
+revision, a short hash of what its extensions show the model (`modelSurface`:
+each tool's name, description, parameter schema and prompt lines, and each
+agent), not of their code: a body edit or a reload keeps it. Every
+`StreamStarted` of a turn names it (`profileRevision`, optional), so the cache
+fold of the TUI names a prefix miss between two revisions `ExtensionsChanged`,
+not a regression. The binding keeps the code identity; the revision keeps
+only what the model reads.
 Native source-mode approval, public repair, direct-command cleanup, and external
 callback limits have focused validation. Full gate and terminal/server E2E pass.
 See `plans/live-composition-review.md` for evidence and recovery limits.

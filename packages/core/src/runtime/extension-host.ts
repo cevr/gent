@@ -88,6 +88,7 @@ import {
   environmentSection,
   getToolId,
   getToolMetadata,
+  getToolPrompt,
   isToolCapability,
   type PromptSection,
   type RequestCapability,
@@ -143,6 +144,7 @@ import * as EffectEntry from "effect"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
 import {
   type Branch,
+  encodeToolOutput,
   Message,
   type MessageMetadata,
   type RequesterBranch,
@@ -2150,10 +2152,11 @@ export interface SessionProfile {
    */
   readonly generationId: ProcessGenerationId
   /**
-   * A short hash of the profile's key (`SessionProfileCache`): the place,
-   * the extensions set up and their file versions. A turn names it on each
-   * request (`StreamStarted.profileRevision`). Absent on a profile no cache
-   * built (a fixed test profile).
+   * A short hash of what the profile's extensions show the model
+   * (`modelSurface`): their tools and agents, not their code. A turn names it
+   * on each request (`StreamStarted.profileRevision`), so a cache miss is
+   * blamed on an extension change only when the model read another surface.
+   * Absent on a profile no cache built (a fixed test profile).
    */
   readonly revision?: string
 }
@@ -2414,6 +2417,28 @@ export interface SessionProfileCacheService {
    */
   readonly reload: (cwd: string, id: ExtensionId) => Effect.Effect<void>
 }
+
+/**
+ * What a profile's extensions show the model, as one text: each tool's name,
+ * description, parameter schema and prompt lines, and each agent's
+ * definition, in name order. The code behind them is not in it: a body edit
+ * or a reload of the same code shows the model the same, so the request
+ * names the same revision and no cache miss is blamed on it.
+ */
+const modelSurface = (resolved: ResolvedExtensions): string =>
+  encodeToolOutput({
+    tools: [...resolved.modelCapabilities.values()]
+      .map(({ capability }) => ({
+        name: capability.name,
+        description: capability.description,
+        parameters: Schema.toJsonSchemaDocument(capability.parametersSchema),
+        ...getToolPrompt(capability),
+      }))
+      .toSorted((left, right) => Order.String(left.name, right.name)),
+    agents: [...resolved.agents.values()].toSorted((left, right) =>
+      Order.String(left.name, right.name),
+    ),
+  })
 
 /** Hex digits of a profile revision: enough to tell the profiles of one branch apart. */
 const PROFILE_REVISION_LENGTH = 12
@@ -2895,7 +2920,9 @@ export class SessionProfileCache extends Context.Service<
             const key = [declarationKey, consultedKey(consulted)].join("\u0001")
             const profile: SessionProfile = {
               ...built.profile,
-              revision: platform.hash("sha256", key).slice(0, PROFILE_REVISION_LENGTH),
+              revision: platform
+                .hash("sha256", modelSurface(built.profile.resolved))
+                .slice(0, PROFILE_REVISION_LENGTH),
             }
             const entry: ProfileEntry = { key, declarationKey, consulted, place, ...built, profile }
             entries.set(key, entry)

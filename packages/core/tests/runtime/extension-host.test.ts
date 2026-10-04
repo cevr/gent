@@ -6825,6 +6825,20 @@ describe("profile revision via RPC", () => {
           execute: () => Effect.succeed("on"),
         }),
       )
+      yield* host.register(
+        "request",
+        request({
+          id: "reload",
+          input: Schema.String,
+          output: Schema.String,
+          execute: (id) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Extensions.reload(id)
+              return id
+            }).pipe(Effect.catchEager((error) => Effect.succeed(error.message))),
+        }),
+      )
     }),
   })
 
@@ -6835,7 +6849,7 @@ describe("profile revision via RPC", () => {
   }
 
   it.live(
-    "each request names its profile: a body edit sends the same bytes, an added tool or a disabled extension sends new ones",
+    "each request names what its extensions show the model: a body edit or a reload keeps it, an added tool or a disabled extension changes it",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -6902,6 +6916,14 @@ describe("profile revision via RPC", () => {
 
           const first = yield* turn("first")
           const unchanged = yield* turn("unchanged")
+          yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId: ExtensionId.make("@test/switchable"),
+            capabilityId: "reload",
+            input: "@test/switchable",
+          })
+          const reloaded = yield* turn("reloaded")
           yield* fs.writeFileString(probeFile, probeSource("v2", ["probe_one"]))
           const bodyEdit = yield* turn("body edit")
           yield* fs.writeFileString(probeFile, probeSource("v2", ["probe_one", "probe_two"]))
@@ -6913,8 +6935,8 @@ describe("profile revision via RPC", () => {
           const disabled = yield* turn("disabled")
 
           const requests = yield* Ref.get(captured)
-          expect(requests).toHaveLength(5)
-          const [a, b, c, d, e] = requests
+          expect(requests).toHaveLength(6)
+          const [a, b, , c, d, e] = requests
           if (
             Predicate.isUndefined(a) ||
             Predicate.isUndefined(b) ||
@@ -6928,9 +6950,11 @@ describe("profile revision via RPC", () => {
           expect(first).toBeDefined()
           expect(unchanged).toBe(first)
           expect(b).toEqual(a)
-          // A tool body edit is a new version and costs nothing: the bytes stay.
-          expect(bodyEdit).toBeDefined()
-          expect(bodyEdit).not.toBe(unchanged)
+          // A reload sets the same code up again: the model reads the same.
+          expect(reloaded).toBe(unchanged)
+          // A tool body edit is a new version and costs nothing: the bytes
+          // stay, and the request names the same surface.
+          expect(bodyEdit).toBe(unchanged)
           expect(c).toEqual(b)
           // An added tool and a disabled extension change what the model reads.
           expect(added).not.toBe(bodyEdit)
