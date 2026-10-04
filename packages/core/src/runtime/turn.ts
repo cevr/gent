@@ -1474,12 +1474,36 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   // `ConfigService` is required, so a root that omits it fails at wiring.
   const configService = yield* ConfigService
   // Overrides come from the session's cwd, so a multi-cwd server reads each
-  // project's own config. `get(undefined)` reads the launch-cwd config.
-  const sessionConfig = yield* configService.get(hostCtx.cwd)
+  // project's own config. A turn whose user or project config file does not
+  // load does not run: the file's fields would read as unset (project) or as
+  // the last file that loaded (user), so a `tools` restriction in it could
+  // fall away and the agent would run with more than its author gave it.
+  // Config never widens what an agent may do. The error names each file;
+  // the next turn after the fix runs. Other readers (health, providers, the
+  // route a client reads) stay lenient: only a turn spends authority.
+  const fresh = yield* configService.getFresh(hostCtx.cwd)
+  if (fresh.failures.length > 0) {
+    yield* eventStore
+      .publish(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: fresh.failures
+            .map(
+              (failure) =>
+                `${failure.path} did not load; turns in ${hostCtx.cwd} do not run until it is fixed: ${failure.message}`,
+            )
+            .join("\n"),
+        }),
+      )
+      .pipe(Effect.orDie)
+    // oxlint-disable-next-line effect/noNullish -- A config that does not load ends the turn after the error event is published, as an unknown agent does.
+    return undefined
+  }
   const route = resolveSessionRoute({
     agents: [...resolvedExtensions.agents.values()],
     admission,
-    config: sessionConfig,
+    config: fresh.config,
     session: Option.getOrElse(session, (): SessionSettingsSource => ({})),
   })
   const { name: currentAgent, definition } = route
@@ -4100,10 +4124,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
         if (dispatching.length === 0) return params.toolBindings
         const resolved = yield* resolveForState(params.turnProfile)
-        // The turn's agent no longer exists: the resolve already published an
-        // error that names it. A removed agent grants nothing, so its
-        // dispatching calls lose their bindings and settle as failed; the next
-        // step meets the same missing agent and ends the turn unanswered.
+        // The turn's agent no longer exists, or its config does not load: the
+        // resolve already published an error that names it. Neither grants
+        // anything, so the dispatching calls lose their bindings and settle as
+        // failed; the next step meets the same refusal and ends the turn
+        // unanswered.
         if (Predicate.isUndefined(resolved)) {
           for (const call of dispatching) params.toolBindings.delete(call.name)
           return params.toolBindings

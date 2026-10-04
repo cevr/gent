@@ -766,7 +766,9 @@ restriction it asked for.
 
 A config entry with a key the schema does not name fails to load, and the
 error names the agent and the key: a misspelled `toolz` would otherwise give
-an agent every tool.
+an agent every tool. While a user or project config file for the session's
+directory does not load, its turns do not run: each one ends with an error
+that names the file and the reason, and the turn after the fix runs.
 TypeScript source has no old reading either: `AgentDefinition.make`,
 `new AgentDefinition`, `makeEffect` and `makeOption` refuse a key the schema
 does not name, so an extension that still passes `allowedTools` fails to load

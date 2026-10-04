@@ -14,6 +14,7 @@ import {
   Ref,
   References,
   Schema,
+  Stream,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
@@ -1229,7 +1230,22 @@ const filmTools = (agents: ReadonlyArray<AgentDefinition>) =>
 /** A config file as it is written: plain JSON, the old and new shapes alike. */
 type ConfigFile = typeof UserConfig.Encoded
 
-const writeConfig = (root: string, config: ConfigFile) =>
+const writeConfig = (root: string, config: ConfigFile) => writeConfigJson(root, config)
+
+/** A config file as JSON: a written shape, or a hand edit that misspells `tools`. */
+type ConfigJson =
+  | ConfigFile
+  | {
+      readonly agents: Readonly<
+        Record<
+          string,
+          { readonly tools: ReadonlyArray<string>; readonly toolz: ReadonlyArray<string> }
+        >
+      >
+    }
+
+/** A config file as JSON, a key no schema names included. */
+const writeConfigJson = (root: string, config: ConfigJson) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
@@ -1408,5 +1424,126 @@ describe("agents from config over RPC", () => {
           },
         })
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+  )
+})
+
+// ── a config file that does not load ────────────────────────────────────────
+
+/**
+ * A config file for the session's cwd that does not load stops its turns: a
+ * file that fails sets none of its fields, so a `tools` restriction in it
+ * would fall away and the agent would run with every tool. The root runs as
+ * the SDK runs it, where a failed load does not stop the server.
+ */
+describe("a config file that does not load", () => {
+  const main = AgentName.make("main")
+  const everyTool = AgentDefinition.make({ name: main, tools: ["*"] })
+  const readOnly = { agents: { [main]: { tools: ["read"] } } }
+  const misspelled = { agents: { [main]: { tools: ["read"], toolz: ["read"] } } }
+
+  /** The config roots, the RPC client, and the scripted model. */
+  const startRoot = (params: { readonly user: ConfigJson; readonly project: ConfigJson }) =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("gent-broken-config-home-")
+      const cwd = yield* makeTempDirectoryScoped("gent-broken-config-cwd-")
+      yield* writeConfigJson(home, params.user)
+      yield* writeConfigJson(cwd, params.project)
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...textStep("done"),
+          assertOptions: (options) => expect(advertised(options)).toEqual(["read"]),
+        },
+      ])
+      const harness = yield* createRpcHarness({
+        agents: [],
+        extensionInputs: [filmTools([everyTool])],
+        providerLayer,
+        cwd,
+        home,
+        allowFailedExtensions: true,
+        configServiceLayer: ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+          Layer.provide(BunPlatformLive),
+        ),
+      })
+      return { ...harness, controls, home, cwd }
+    })
+
+  type Root = Effect.Success<ReturnType<typeof startRoot>>
+
+  /** The branch's events so far: the stream replays them, then synchronizes. */
+  const branchEvents = (root: Root) =>
+    root.client.session.events({ sessionId: root.sessionId, branchId: root.branchId }).pipe(
+      Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),
+      Stream.map(({ event }) => event),
+      Stream.runCollect,
+      Effect.map((all) => Array.from(all)),
+    )
+
+  /** Sends a message and waits for its turn to end; returns the turn's errors. */
+  const refusedTurn = (root: Root) =>
+    Effect.gen(function* () {
+      yield* root.client.message.send({
+        sessionId: root.sessionId,
+        branchId: root.branchId,
+        content: "Paint the scene.",
+      })
+      const events = yield* waitFor(
+        branchEvents(root),
+        (all) => all.some((event) => event._tag === "TurnCompleted"),
+        3000,
+        "the turn ended",
+      )
+      return events.filter((event) => event._tag === "ErrorOccurred").map((event) => event.error)
+    })
+
+  /** Fixes the file, then a turn runs with only the tools the file names. */
+  const fixedTurnRuns = (root: Root, configRoot: string) =>
+    Effect.gen(function* () {
+      yield* writeConfigJson(configRoot, readOnly)
+      yield* root.client.message.send({
+        sessionId: root.sessionId,
+        branchId: root.branchId,
+        content: "Paint it again.",
+      })
+      yield* waitFor(
+        root.client.message.list({ branchId: root.branchId }),
+        (messages) =>
+          messages.some(
+            (message) => message.role === "assistant" && messagePartsText(message.parts) === "done",
+          ),
+        3000,
+        "reply",
+      )
+      yield* root.controls.assertDone
+    })
+
+  it.scopedLive("a project file with a misspelled key stops the turn until it is fixed", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      const root = yield* startRoot({ user: {}, project: misspelled })
+      const errors = yield* refusedTurn(root)
+      expect(yield* root.controls.callCount).toBe(0)
+      const file = path.join(root.cwd, ".gent", "config.json")
+      expect(errors.some((error) => error.includes(file) && error.includes("toolz"))).toBe(true)
+      yield* fixedTurnRuns(root, root.cwd)
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive("a user file that breaks after it loaded stops the turn until it is fixed", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      // The last user file that loaded holds bash; the broken one takes it away.
+      const root = yield* startRoot({
+        user: { agents: { [main]: { tools: ["read", "bash"] } } },
+        project: {},
+      })
+      yield* writeConfigJson(root.home, misspelled)
+      const errors = yield* refusedTurn(root)
+      expect(yield* root.controls.callCount).toBe(0)
+      const file = path.join(root.home, ".gent", "config.json")
+      expect(errors.some((error) => error.includes(file) && error.includes("toolz"))).toBe(true)
+      yield* fixedTurnRuns(root, root.home)
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
   )
 })

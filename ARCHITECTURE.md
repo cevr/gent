@@ -1410,7 +1410,13 @@ an extension registers one (`host.register("agent", ...)`), and the config
 `agents` key writes one in JSON as an agent patch, the definition's fields
 without `name`, all optional (`Struct.omit` of the class fields, not a copy).
 A config entry decodes through `AuthoredAgentPatch`, which refuses a key the
-schema does not name and names the agent and the key.
+schema does not name and names the agent and the key. A turn reads the config
+through `ConfigService.getFresh` and does not run while the user or project
+file for its cwd does not load (`resolveTurnContext` publishes an
+`ErrorOccurred` naming each file and ends the turn, as for an unknown agent):
+the stand-in for a failed file (the last user file that loaded, an empty
+project file) could drop a `tools` restriction. Config never widens an agent.
+Health, providers and the route a client reads keep the lenient read.
 `AgentDefinition`'s every authoring constructor (`new`, `make`, `makeEffect`,
 `makeOption`) refuses a key the schema does not name (`refusedAgentKeys`).
 The roster (`resolveAgentRoster`) is the extension agents with each config
