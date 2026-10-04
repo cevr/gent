@@ -114,11 +114,15 @@ const program = Effect.gen(function* () {
 ```
 
 `ExtensionContext` is the host-owned facade. It exposes session,
-interaction, file lock, and state-pulse accessors
-(`Session`, `Interaction`, `FileLock`, `State`)
+interaction, file lock, classifier, and state-pulse accessors
+(`Session`, `Interaction`, `FileLock`, `Models`, `State`)
 plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
-`home`. The `FileLock` / `State` facets wrap the host-internal
-`FileLockService` and `EventStore` so authors
+`home`. `Models.decide({ definition, input, model?, timeoutMs? })` asks a
+classifier model (System One: Jev, Clef) every `effect/ai/Decision` of the
+definition in one call and returns the answers, the model, the usage and the
+cost; `Models.available` and `Models.classifiers` say which classifiers have
+a credential. The `FileLock` / `Models` / `State` facets wrap the
+host-internal `FileLockService`, `DecisionModelResolver` and `EventStore` so authors
 never reach into runtime Tags. No facet duplicates an Effect platform
 service: files, paths, processes, and ids come from `FileSystem`, `Path`,
 `ChildProcessSpawner`, and `Crypto`, and a relative path resolves against

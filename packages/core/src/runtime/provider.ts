@@ -25,9 +25,11 @@ import {
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { Database } from "bun:sqlite"
 import { ModelCatalogSnapshotStorage } from "../storage/storage.js"
+import { type ExtensionModelsService, ExtensionServiceError } from "../domain/extension.js"
 import {
   AgentName,
   byReleaseDateDesc,
+  calculateCost,
   Model,
   ModelId,
   type ModelPricing,
@@ -2402,9 +2404,10 @@ class DecisionModelError extends Schema.TaggedError<DecisionModelError>()("Decis
   message: Schema.String,
 }) {}
 
-/** A classifier model ready to answer, and the catalog id it resolved to. */
+/** A classifier model ready to answer, and the catalog entry it resolved to. */
 interface ResolvedDecisionModel {
   readonly modelId: ModelId
+  readonly entry: Model
   readonly model: DecisionModel.DecisionModel
 }
 
@@ -2425,6 +2428,8 @@ interface ProfileClassifiers {
    * that fails to read counts as none.
    */
   readonly hasCredential: Effect.Effect<boolean>
+  /** The classifier models whose driver has a credential, cheapest first; unpriced ones last. */
+  readonly usable: Effect.Effect<ReadonlyArray<Model>, DecisionModelError>
 }
 
 interface DecisionModelResolverService {
@@ -2549,13 +2554,7 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
       ),
     onNone: () =>
       Effect.gen(function* () {
-        const usable = yield* Effect.filter(classifiers, (entry) =>
-          Effect.gen(function* () {
-            const stored = yield* storedAuth(entry.driver.id)
-            const fromEnv = yield* driverEnvReady(entry.driver)
-            return Option.isSome(stored) || fromEnv
-          }),
-        )
+        const usable = yield* credentialedClassifiers(auth, allDrivers, classifiers)
         // A `-latest` alias tracks its provider's newest model, so it wins
         // over a pinned version wherever the driver order puts it.
         const chosenEntry = Option.orElse(
@@ -2603,7 +2602,48 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
         }),
     ),
   )
-  return { modelId: chosen.model.id, model }
+  return { modelId: chosen.model.id, entry: chosen.model, model }
+})
+
+/** The classifier entries whose driver has a stored or env credential, in catalog order. */
+const credentialedClassifiers = (
+  auth: AuthService,
+  allDrivers: ModelDrivers,
+  classifiers: ReadonlyArray<ClassifierEntry>,
+) =>
+  Effect.filter(classifiers, (entry) =>
+    Effect.gen(function* () {
+      const stored = yield* classifierAuth(auth, allDrivers, entry.driver.id)
+      const fromEnv = yield* driverEnvReady(entry.driver)
+      return Option.isSome(stored) || fromEnv
+    }),
+  )
+
+/** A classifier's price per million tokens, input and output together; none when unpriced. */
+const classifierPrice = (model: Model): Option.Option<number> =>
+  Option.map(Option.fromUndefinedOr(model.pricing), (pricing) => pricing.input + pricing.output)
+
+/** Cheapest first; an unpriced model sorts after every priced one. */
+const byClassifierPrice: Order.Order<Model> = (left, right) => {
+  const leftPrice = classifierPrice(left)
+  const rightPrice = classifierPrice(right)
+  if (Option.isNone(leftPrice) && Option.isNone(rightPrice)) return 0
+  if (Option.isNone(leftPrice)) return 1
+  if (Option.isNone(rightPrice)) return -1
+  return Order.Number(leftPrice.value, rightPrice.value)
+}
+
+const usableClassifiers = Effect.fn("DecisionModelResolver.usable")(function* (
+  auth: AuthService,
+  catalogSource: ModelCatalogSourceService,
+  allDrivers: ModelDrivers,
+) {
+  const { classifiers } = yield* classifierCatalog(auth, catalogSource, allDrivers)
+  const usable = yield* credentialedClassifiers(auth, allDrivers, classifiers)
+  return Arr.sort(
+    usable.map((entry) => entry.model),
+    byClassifierPrice,
+  )
 })
 
 /**
@@ -2626,12 +2666,111 @@ export class DecisionModelResolver extends Context.Service<
           return {
             resolve: (modelId) => resolveDecisionModel(auth, catalogSource, drivers, modelId),
             hasCredential: classifierAvailable(auth, drivers),
+            usable: usableClassifiers(auth, catalogSource, drivers),
           }
         }),
       })
     }),
   )
 }
+
+// ── extension-models ────────────────────────────────────────────────────────
+
+/**
+ * The most one `Models.decide` may take, from resolving the model to its
+ * answer. Nothing else bounds a classifier call: the provider's HTTP client
+ * has no deadline of its own. A call may ask for less.
+ */
+const DECIDE_DEADLINE_MS = 60_000
+
+const modelsError = (operation: string, message: string) =>
+  new ExtensionServiceError({ service: "ExtensionModels", operation, message })
+
+/**
+ * The `ExtensionContext.Models` facet over the runtime's classifier models.
+ * The resolver is the runtime's; the drivers are those of the caller's
+ * profile, read from the `ExtensionRegistry` an extension leaf runs under.
+ * A runtime or a caller without them answers that no classifier is there.
+ */
+export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect.gen(function* () {
+  const resolver = yield* Effect.serviceOption(DecisionModelResolver)
+  const profile = Effect.gen(function* () {
+    const registry = yield* Effect.serviceOption(ExtensionRegistry)
+    if (Option.isNone(resolver) || Option.isNone(registry)) return Option.none()
+    return Option.some(
+      yield* resolver.value.profile.pipe(Effect.provideService(ExtensionRegistry, registry.value)),
+    )
+  })
+  const decide: ExtensionModelsService["decide"] = (params) =>
+    Effect.gen(function* () {
+      const classifiers = yield* profile
+      if (Option.isNone(classifiers))
+        return yield* modelsError("decide", "models.decide is not available in this runtime")
+      const deadlineMs = Option.match(Option.fromUndefinedOr(params.timeoutMs), {
+        onNone: () => DECIDE_DEADLINE_MS,
+        onSome: (asked) => Math.min(Math.max(Math.round(asked), 1), DECIDE_DEADLINE_MS),
+      })
+      const named = params.model ?? "default classifier"
+      return yield* Effect.gen(function* () {
+        const resolved = yield* classifiers.value
+          .resolve(Option.fromUndefinedOr(params.model))
+          .pipe(
+            Effect.mapError((error) => modelsError("decide", `models.decide: ${error.message}`)),
+          )
+        const response = yield* resolved.model
+          .decide(params.definition, { input: params.input })
+          .pipe(
+            Effect.mapError((error) =>
+              modelsError("decide", `models.decide (${resolved.modelId}) failed: ${error.message}`),
+            ),
+          )
+        const usage = omitUndefined({
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+        })
+        const costUsd = Option.map(Option.fromUndefinedOr(resolved.entry.pricing), (pricing) =>
+          calculateCost(
+            { inputTokens: usage.inputTokens ?? 0, outputTokens: usage.outputTokens ?? 0 },
+            Option.some(pricing),
+          ),
+        )
+        return {
+          model: resolved.modelId,
+          answers: response.answers,
+          usage,
+          ...omitUndefined({ costUsd: Option.getOrUndefined(costUsd) }),
+        }
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: Duration.millis(deadlineMs),
+          orElse: () =>
+            Effect.fail(
+              modelsError(
+                "decide",
+                `models.decide (${named}) gave no answer within ${deadlineMs} ms`,
+              ),
+            ),
+        }),
+        Effect.scoped,
+      )
+    })
+  return {
+    decide,
+    available: Effect.flatMap(profile, (classifiers) =>
+      Option.match(classifiers, {
+        onNone: () => Effect.succeed(false),
+        onSome: (found) => found.hasCredential,
+      }),
+    ),
+    classifiers: Effect.flatMap(profile, (classifiers) =>
+      Option.match(classifiers, {
+        onNone: () => Effect.succeed([]),
+        onSome: (found) =>
+          found.usable.pipe(Effect.mapError((error) => modelsError("classifiers", error.message))),
+      }),
+    ),
+  } satisfies ExtensionModelsService
+})
 
 // ── model-registry ──────────────────────────────────────────────────────────
 

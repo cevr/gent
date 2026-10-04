@@ -26,6 +26,7 @@ import {
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionFileLockServiceApi,
+  type ExtensionModelsService,
   type ExtensionHook,
   ExtensionHost,
   type ExtensionHostContext,
@@ -2570,6 +2571,11 @@ const turnStartOf = (state: SessionRuntimeState): Option.Option<number> => {
 interface ExtensionHostContextInput {
   /** Built by the caller over `GentPlatform`, which is an Effect rather than a service Tag. */
   readonly host: ExtensionHostPlatform
+  /**
+   * The classifier facet, built by the caller over `DecisionModelResolver`
+   * (`makeExtensionModels`), which this module cannot import.
+   */
+  readonly models: ExtensionModelsService
   /** The loop's follow-up queue. Absent outside a loop. */
   readonly sessionControl?: ExtensionSessionControlService
 }
@@ -2749,6 +2755,7 @@ export const makeExtensionHostContextProvider = (
       home: environment.home,
       host,
       FileLock,
+      Models: input.models,
 
       State: ((extensionId) =>
         Option.match(extensionId, {

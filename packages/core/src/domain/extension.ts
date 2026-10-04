@@ -15,9 +15,11 @@ import {
   TxRef,
   TxSemaphore,
 } from "effect"
+import type { Decision } from "effect/ai"
 import {
   type AgentDefinition,
   type AgentName,
+  type Model,
   type ModelId,
   type ReasoningEffort,
   type SessionDepthLimitError,
@@ -941,6 +943,49 @@ interface ExtensionStateServiceApi {
   readonly changed: () => Effect.Effect<void, ExtensionServiceError>
 }
 
+/** One classifier call's answers, the model that gave them, and their cost. */
+interface ExtensionDecision<Decisions extends Record<string, Decision.Any>> {
+  readonly model: ModelId
+  readonly answers: Decision.Answers<Decisions>
+  readonly usage: { readonly inputTokens?: number; readonly outputTokens?: number }
+  /** USD at the catalog's price; absent when the catalog does not price the model. */
+  readonly costUsd?: number
+}
+
+/**
+ * The runtime's classifier models (System One: Jev, Clef). Every extension
+ * asks them through this facet: the cell's `models.decide` and a router's
+ * route are two callers of the same verb.
+ */
+export interface ExtensionModelsService {
+  /**
+   * Answers every decision of `definition` about `input` in one provider
+   * call. `model` names a classifier (`provider/model`); with none, a
+   * credentialed one, a `-latest` alias first. The call fails after
+   * `timeoutMs` (60 s at most and by default).
+   */
+  readonly decide: <
+    Input extends Schema.Constraint,
+    Decisions extends Record<string, Decision.Any>,
+  >(params: {
+    readonly definition: Decision.Definition<Input, Decisions>
+    readonly input: Input["Type"]
+    readonly model?: string
+    readonly timeoutMs?: number
+  }) => Effect.Effect<
+    ExtensionDecision<Decisions>,
+    ExtensionServiceError,
+    Input["EncodingServices"]
+  >
+  /**
+   * Whether a call that names no model has a classifier to resolve: some
+   * classifier driver has a stored or env credential. Reads no catalog.
+   */
+  readonly available: Effect.Effect<boolean>
+  /** The classifier models that have a credential, cheapest first; unpriced ones last. */
+  readonly classifiers: Effect.Effect<ReadonlyArray<Model>, ExtensionServiceError>
+}
+
 /**
  * The run's half of the state facet: it knows the session and branch, and
  * takes the extension id from whichever leaf reports the change.
@@ -966,6 +1011,7 @@ export interface ExtensionHostContext {
   readonly Session: ExtensionSessionService
   readonly Interaction: ExtensionInteractionService
   readonly FileLock: ExtensionFileLockServiceApi
+  readonly Models: ExtensionModelsService
   /** Reports under the leaf's extension id, which a run does not know. */
   readonly State: ExtensionStateFacet
 }
@@ -981,6 +1027,7 @@ export interface ExtensionContextService {
   readonly Session: ExtensionSessionService
   readonly Interaction: ExtensionInteractionService
   readonly FileLock: ExtensionFileLockServiceApi
+  readonly Models: ExtensionModelsService
   readonly State: ExtensionStateServiceApi
 }
 
@@ -1017,6 +1064,7 @@ export const extensionServicesFromHostContext = (
       Session: { ...ctx.Session, send },
       Interaction: ctx.Interaction,
       FileLock: ctx.FileLock,
+      Models: ctx.Models,
       State: ctx.State(extensionIdOption),
     }),
   )

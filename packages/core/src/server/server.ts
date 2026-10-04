@@ -130,6 +130,7 @@ import {
   listAuthMethods,
   listAuthProviders,
   listCatalogProviders,
+  makeExtensionModels,
   removeSignIn,
   storeSignIn,
   type ModelCatalogFailure,
@@ -470,6 +471,7 @@ const makeSessionMutationsService: Effect.Effect<
   // deleted session, so no session control is wired.
   const deletedSessionHostProvider = yield* makeExtensionHostContextProvider({
     host: yield* makeExtensionHostPlatform,
+    models: yield* makeExtensionModels,
   })
 
   /**

@@ -2,7 +2,6 @@ import {
   Context,
   DateTime,
   Deferred,
-  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -26,7 +25,10 @@ import {
   BranchId,
   defineExtension,
   ExtensionContext,
+  type ExtensionModelsService,
+  ExtensionServiceError,
   ExtensionHost,
+  omitUndefined,
   ExtensionId,
   getToolId,
   getToolPrompt,
@@ -54,7 +56,6 @@ import {
   CurrentDispatchingCall,
   CurrentInteractionOwner,
   CurrentToolCall,
-  DecisionModelResolver,
   eraseResourceLayer,
   type EventStore,
   EventStoreError,
@@ -1827,13 +1828,6 @@ const DecisionSpec = Schema.TaggedUnion({
 })
 type DecisionSpec = typeof DecisionSpec.Type
 
-/**
- * The most one `models.decide` may take, from resolving the model to its
- * answer. Neither the cell watchdog (paused during a host call) nor the
- * provider's HTTP client bounds it otherwise. A call may ask for less.
- */
-const DECIDE_DEADLINE_MS = 60_000
-
 const DecideInput = Schema.Struct({
   input: Schema.Json,
   decisions: Schema.Record(Schema.String, DecisionSpec),
@@ -1863,7 +1857,7 @@ const decodeReplyJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.
 const handleModelsCall = Effect.fn("CellModelsHost.call")(function* (params: {
   readonly name: string
   readonly input: Schema.Json
-  readonly resolver: Option.Option<typeof DecisionModelResolver.Service>
+  readonly models: ExtensionModelsService
 }) {
   const requested = params.name.slice(MODELS_CALL_PREFIX.length)
   yield* Schema.decodeUnknownEffect(ModelsOperation)(requested).pipe(
@@ -1884,50 +1878,21 @@ const handleModelsCall = Effect.fn("CellModelsHost.call")(function* (params: {
       }),
     catch: (cause) => contextHostFailure(`models.decide input is invalid: ${String(cause)}`),
   })
-  if (Option.isNone(params.resolver))
-    return yield* contextHostFailure("models.decide is not available in this runtime")
-  const resolver = params.resolver.value
-  const deadlineMs = Option.match(Option.fromUndefinedOr(request.timeoutMs), {
-    onNone: () => DECIDE_DEADLINE_MS,
-    onSome: (asked) => Math.min(Math.max(Math.round(asked), 1), DECIDE_DEADLINE_MS),
-  })
-  const named = Option.getOrElse(Option.fromUndefinedOr(request.model), () => "default classifier")
-  const { resolved, response } = yield* Effect.gen(function* () {
-    const resolved = yield* (yield* resolver.profile)
-      .resolve(Option.fromUndefinedOr(request.model))
-      .pipe(Effect.mapError((error) => contextHostFailure(`models.decide: ${error.message}`)))
-    const response = yield* resolved.model
-      .decide(definition, { input: request.input })
-      .pipe(
-        Effect.mapError((error) =>
-          contextHostFailure(`models.decide (${resolved.modelId}) failed: ${error.message}`),
-        ),
-      )
-    return { resolved, response }
-  }).pipe(
-    Effect.timeoutOrElse({
-      duration: Duration.millis(deadlineMs),
-      orElse: () =>
-        Effect.fail(
-          contextHostFailure(`models.decide (${named}) gave no answer within ${deadlineMs} ms`),
-        ),
-    }),
-  )
-  // The answers have null prototypes, and a confidence or a token count the
-  // provider left out is undefined: through JSON text they become plain JSON
-  // without those fields. The runtime keeps no spend record for a tool's own
-  // model call, so the usage goes back to the cell.
+  const reply = yield* params.models
+    .decide({
+      definition,
+      input: request.input,
+      ...omitUndefined({ model: request.model, timeoutMs: request.timeoutMs }),
+    })
+    .pipe(Effect.mapError((error) => contextHostFailure(error.message)))
+  // The answers have null prototypes, and a confidence the provider left out
+  // is undefined: through JSON text they become plain JSON without those
+  // fields. The runtime keeps no spend record for a tool's own model call, so
+  // the usage goes back to the cell.
   return yield* decodeReplyJson(
-    encodeJson({
-      model: resolved.modelId,
-      answers: response.answers,
-      usage: {
-        inputTokens: response.usage.inputTokens,
-        outputTokens: response.usage.outputTokens,
-      },
-    }),
+    encodeJson({ model: reply.model, answers: reply.answers, usage: reply.usage }),
   ).pipe(Effect.mapError((cause) => contextHostFailure(`models.decide answers: ${cause.message}`)))
-}, Effect.scoped)
+})
 
 // ── interaction owner ───────────────────────────────────────────────────────
 
@@ -2278,13 +2243,27 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
 type CellToolHostServices = CellStorage | EventStore | GentPlatform | MessageStorage | ToolRunner
 
 /**
- * The services a host call reads, and the runtime's classifier models, which
- * `models.decide` asks; none in a runtime without them.
+ * The services a host call reads, and the extension context whose `Models`
+ * facet `models.decide` asks; none outside an extension leaf.
  */
 const captureCellHostServices = Effect.all({
   services: Effect.context<CellToolHostServices>(),
-  decisions: Effect.serviceOption(DecisionModelResolver),
+  extension: Effect.serviceOption(ExtensionContext),
 })
+
+/** A host made outside an extension leaf has no classifier to ask. */
+const noCellModels: ExtensionModelsService = {
+  decide: () =>
+    Effect.fail(
+      new ExtensionServiceError({
+        service: "ExtensionModels",
+        operation: "decide",
+        message: "models.decide is not available in this runtime",
+      }),
+    ),
+  available: Effect.succeed(false),
+  classifiers: Effect.succeed([]),
+}
 
 /** One outer cell's host. The turn profile owns every admitted call. */
 export const makeCellToolHost = (
@@ -2294,7 +2273,7 @@ export const makeCellToolHost = (
       readonly catalog?: CellCatalog
     },
 ): Effect.Effect<typeof CellOperationHost.Service, never, CellToolHostServices> =>
-  Effect.map(captureCellHostServices, ({ services, decisions }) =>
+  Effect.map(captureCellHostServices, ({ services, extension }) =>
     CellOperationHost.of({
       catalog: params.catalog,
       call: Effect.fn("CellToolHost.call")((request) =>
@@ -2314,7 +2293,10 @@ export const makeCellToolHost = (
               return yield* handleModelsCall({
                 name: request.name,
                 input: request.input,
-                resolver: decisions,
+                models: Option.match(extension, {
+                  onNone: () => noCellModels,
+                  onSome: (ctx) => ctx.Models,
+                }),
               })
             }
             const storage = (yield* CellStorage).operations
@@ -3214,9 +3196,7 @@ export const CellExtension = defineExtension({
         if (agent.deniedTools?.includes("cell") === true) return {}
         // `models.decide` is listed only when a call that names no model can
         // resolve one; without a credential it can only reject.
-        const classifiers = yield* Effect.serviceOption(DecisionModelResolver)
-        const decides =
-          Option.isSome(classifiers) && (yield* (yield* classifiers.value.profile).hasCredential)
+        const decides = yield* (yield* ExtensionContext).Models.available
         let promptSections = [CELL_WORK_SECTION]
         if (decides) promptSections = [CELL_WORK_SECTION, CELL_MODELS_SECTION]
         return { toolPolicy: { include: ["cell"], modelSet: ["cell"] }, promptSections }

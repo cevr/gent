@@ -31,7 +31,7 @@ Propose nothing against these.
 - Personal library, no shims.
 - Child sessions cache 5 minutes, and they keep their own effort.
 - The handoff leans on discovery (message ids, read tools).
-- Classifiers are one cell primitive (`models.decide`), with no Jev-aware features.
+- Classifiers are one host verb (`ExtensionContext.Models.decide`, the cell's `models.decide`), with no Jev-aware features.
 - In the TUI, state that follows the session identity reads the identity (`sessionIdentity()`, `activeSessionId()`), not the session record, and one-shot state lives outside a component instance.
 - Single files: one concern lives in one file under section banners. A new file has a reason: a process entry, a package entry, a module two concerns share, or a lint-scoped boundary. A test split by feature area is not fragmentation. A candidate breaks it when it splits a concern into fragment or helper files (`x-part.ts`). Merging fragments back is a reduction. A fragment split is a finding.
 - Every session-scoped RPC names its session: `sessionId` is required.
