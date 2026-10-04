@@ -17,6 +17,7 @@ import {
   Schema,
   Stream,
 } from "effect"
+import { crc32, deflateSync } from "node:zlib"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import {
   FetchHttpClient,
@@ -2433,6 +2434,106 @@ describe("mcp binary content", () => {
 const DOT_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 
+/** A truecolor PNG of `width` x `height` in vertical stripes, which a codec decodes. */
+const stripePng = (width: number, height: number) => {
+  const chunk = (type: string, data: Uint8Array) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data])
+    const tail = Buffer.alloc(4)
+    tail.writeUInt32BE(crc32(body))
+    const head = Buffer.alloc(4)
+    head.writeUInt32BE(data.length)
+    return Buffer.concat([head, body, tail])
+  }
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0)
+  header.writeUInt32BE(height, 4)
+  header.set([8, 2], 8)
+  const row = Buffer.concat([
+    Buffer.from([0]),
+    Buffer.from(Array.from({ length: width * 3 }, (_, at) => (Math.floor(at / 48) % 2) * 255)),
+  ])
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(Buffer.concat(Array.from({ length: height }, () => row)))),
+    chunk("IEND", new Uint8Array()),
+  ])
+}
+
+/**
+ * One turn of an agent that calls the fixture's `png` tool natively, the tool
+ * answering `png` (base64) beside the text "a dot": the stored result, whether
+ * its image's blob file exists, and the parts of the user message the next
+ * request carries right after the tool message.
+ */
+const mcpImageTurn = (png: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const fixture = yield* makeFixture
+    const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-images-" })
+    // An agent that lists the MCP tool calls it natively, beside the shipped cell.
+    const pictureAgent = defineExtension({
+      id: "@test/picture-agent",
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.register(
+          "agent",
+          AgentDefinition.make({
+            name: AgentName.make("picture"),
+            description: "looks at pictures",
+            allowedTools: ["mcp.fixture.png"],
+          }),
+        )
+      }),
+    })
+    const prompts: Array<Prompt.Prompt> = []
+    const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+      toolCallStep("mcp.fixture.png", {}),
+      {
+        ...textStep("done"),
+        assertOptions: (options) => {
+          prompts.push(options.prompt)
+        },
+      },
+    ])
+    const result = yield* Effect.gen(function* () {
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...shippedPreset,
+        extensionInputs: [
+          ...shippedWithoutMcp,
+          pictureAgent,
+          McpServers("@test/mcp-png", {
+            fixture: fixture.stdio({ MCP_FIXTURE_PNG: png }),
+          }),
+        ],
+        providerLayer,
+        admission: { agent: AgentName.make("picture") },
+      })
+      yield* client.message.send({ sessionId, branchId, content: "look" })
+      return yield* cellResultAfterDone(client, branchId)
+    }).pipe(
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: dataDir }))),
+    )
+    yield* controls.assertDone
+    // The stored result holds the image by reference; its bytes are one blob file.
+    const reference = yield* Schema.decodeUnknownEffect(
+      Schema.Struct({ text: Schema.String, images: Schema.Tuple([ToolImage]) }),
+    )(result?.result)
+    const blobExists = yield* fs.exists(
+      path.join(dataDir, "blobs", `${reference.images[0].sha256}.png`),
+    )
+    const prompt = prompts[0]?.content ?? []
+    const index = prompt.findLastIndex((message) => message.role === "tool")
+    const next = prompt.slice(index + 1, index + 2)
+    expect(next.map((message) => message.role)).toEqual(["user"])
+    const parts = next.flatMap((message) => {
+      if (message.role !== "user") return []
+      return message.content
+    })
+    return { reference, blobExists, parts }
+  })
+
 describe("mcp images", () => {
   test("an image block the tool image store took is a tool image, not an omitted block", () => {
     const image = ToolImage.make({
@@ -2497,80 +2598,37 @@ describe("mcp images", () => {
     "an MCP image reaches the model after the call's result, through the tool image store",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const fixture = yield* makeFixture
-        const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-images-" })
-        // An agent that lists the MCP tool calls it natively, beside the shipped cell.
-        const pictureAgent = defineExtension({
-          id: "@test/picture-agent",
-          setup: Effect.gen(function* () {
-            const host = yield* ExtensionHost
-            yield* host.register(
-              "agent",
-              AgentDefinition.make({
-                name: AgentName.make("picture"),
-                description: "looks at pictures",
-                allowedTools: ["mcp.fixture.png"],
-              }),
-            )
-          }),
-        })
-        const prompts: Array<Prompt.Prompt> = []
-        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          toolCallStep("mcp.fixture.png", {}),
-          {
-            ...textStep("done"),
-            assertOptions: (options) => {
-              prompts.push(options.prompt)
-            },
-          },
-        ])
-        const result = yield* Effect.gen(function* () {
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...shippedPreset,
-            extensionInputs: [
-              ...shippedWithoutMcp,
-              pictureAgent,
-              McpServers("@test/mcp-png", {
-                fixture: fixture.stdio({ MCP_FIXTURE_PNG: DOT_PNG }),
-              }),
-            ],
-            providerLayer,
-            admission: { agent: AgentName.make("picture") },
-          })
-          yield* client.message.send({ sessionId, branchId, content: "look" })
-          return yield* cellResultAfterDone(client, branchId)
-        }).pipe(
-          Effect.provide(
-            ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: dataDir })),
-          ),
-        )
-        yield* controls.assertDone
-        // The stored result holds the image by reference; its bytes are one blob file.
-        const reference = yield* Schema.decodeUnknownEffect(
-          Schema.Struct({
-            text: Schema.String,
-            images: Schema.Tuple([ToolImage]),
-          }),
-        )(result?.result)
+        const { reference, blobExists, parts } = yield* mcpImageTurn(DOT_PNG)
         expect(reference.text).toBe("a dot")
         expect(reference.images[0]).toMatchObject({ mediaType: "image/png", width: 1, height: 1 })
-        expect(
-          yield* fs.exists(path.join(dataDir, "blobs", `${reference.images[0].sha256}.png`)),
-        ).toBe(true)
+        expect(blobExists).toBe(true)
         // The next request carries the image in a user message right after the tool message.
-        const prompt = prompts[0]?.content ?? []
-        const index = prompt.findLastIndex((message) => message.role === "tool")
-        const next = prompt.slice(index + 1, index + 2)
-        expect(next.map((message) => message.role)).toEqual(["user"])
-        const parts = next.flatMap((message) => {
-          if (message.role !== "user") return []
-          return message.content
-        })
         expect(parts.map((part) => part.type)).toEqual(["text", "file"])
         expect(parts[0]).toMatchObject({ text: "Image from mcp.fixture.png 1x1:" })
         expect(parts[1]).toMatchObject({ data: `data:image/png;base64,${DOT_PNG}` })
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    25_000,
+  )
+
+  it.scopedLive(
+    "an MCP image past the side limit is scaled, and the model reads its original size",
+    () =>
+      Effect.gen(function* () {
+        const { reference, blobExists, parts } = yield* mcpImageTurn(
+          Buffer.from(stripePng(4000, 2)).toString("base64"),
+        )
+        expect(reference.images[0]).toMatchObject({
+          mediaType: "image/png",
+          width: 2000,
+          height: 1,
+          originalWidth: 4000,
+          originalHeight: 2,
+        })
+        expect(blobExists).toBe(true)
+        expect(parts.map((part) => part.type)).toEqual(["text", "file"])
+        expect(parts[0]).toMatchObject({
+          text: "Image from mcp.fixture.png 2000x1, scaled from 4000x2 (multiply coordinates by 2.000 to map to the original):",
+        })
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     25_000,
   )

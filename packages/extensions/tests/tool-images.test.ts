@@ -178,16 +178,110 @@ const paintedPng = (
 const realPng = (width: number, height: number) =>
   paintedPng(width, height, (x, y) => [x % 256, y % 256, 90])
 
-/** A PNG of noise from a fixed seed: no lossy encoder makes it small. */
-const noisePng = (width: number, height: number) => {
+/** Bytes of noise from a fixed seed, one at each call. */
+const noiseSource = () => {
   let state = 2_463_534_242
-  const next = () => {
+  return () => {
     state ^= state << 13
     state ^= state >>> 17
     state ^= state << 5
     return (state >>> 0) & 0xff
   }
+}
+
+/** A PNG of noise from a fixed seed: no lossy encoder makes it small. */
+const noisePng = (width: number, height: number) => {
+  const next = noiseSource()
   return paintedPng(width, height, () => [next(), next(), next()])
+}
+
+/** An ICC colour profile of `size` bytes: its size field, then noise. The codec keeps it as it is. */
+const iccProfile = (size: number) => {
+  const next = noiseSource()
+  return Uint8Array.from([...be32(size), ...Array.from({ length: size - 4 }, next)])
+}
+
+/** `jpeg` with `segments` (a marker and its payload each) right after its start-of-image marker. */
+const withJpegSegments = (
+  jpeg: Uint8Array,
+  segments: ReadonlyArray<readonly [number, Uint8Array]>,
+) =>
+  Uint8Array.from(
+    Buffer.concat([
+      jpeg.subarray(0, 2),
+      ...segments.map(([marker, payload]) =>
+        Buffer.concat([Buffer.from([0xff, marker, ...be16(payload.length + 2)]), payload]),
+      ),
+      jpeg.subarray(2),
+    ]),
+  )
+
+/** The APP2 segments a JPEG carries `profile` in, at most 65,519 bytes of it each. */
+const iccSegments = (profile: Uint8Array) => {
+  const per = 65_519
+  const count = Math.ceil(profile.length / per)
+  return Array.from({ length: count }, (_, index) => {
+    const part = profile.subarray(index * per, (index + 1) * per)
+    const marker: readonly [number, Uint8Array] = [
+      0xe2,
+      Uint8Array.from(Buffer.concat([bytesOf("ICC_PROFILE", [0, index + 1, count]), part])),
+    ]
+    return marker
+  })
+}
+
+/** The APP1 segment of an EXIF block whose only tag is the orientation, big-endian. */
+const exifOrientation = (orientation: number): readonly [number, Uint8Array] => [
+  0xe1,
+  bytesOf(
+    "Exif",
+    [0, 0],
+    "MM",
+    [0, 42],
+    be32(8),
+    be16(1),
+    [0x01, 0x12],
+    be16(3),
+    be32(1),
+    be16(orientation),
+    [0, 0],
+    be32(0),
+  ),
+]
+
+/** `png` with `profile` in an `iCCP` chunk right after its `IHDR`. */
+const withPngProfile = (png: Uint8Array, profile: Uint8Array) =>
+  Uint8Array.from(
+    Buffer.concat([
+      png.subarray(0, 33),
+      pngChunk("iCCP", Buffer.concat([bytesOf("icc", [0, 0]), deflateSync(profile)])),
+      png.subarray(33),
+    ]),
+  )
+
+/** A simple WebP made extended (`VP8X`), with `profile` in an `ICCP` chunk before its image. */
+const withWebpProfile = (webp: Uint8Array, width: number, height: number, profile: Uint8Array) => {
+  const chunk = (fourCC: string, payload: Uint8Array) =>
+    Buffer.concat([
+      bytesOf(fourCC),
+      Buffer.from([payload.length & 0xff, (payload.length >> 8) & 0xff]),
+      Buffer.from([(payload.length >> 16) & 0xff, (payload.length >>> 24) & 0xff]),
+      payload,
+      Buffer.alloc(payload.length % 2),
+    ])
+  const body = Buffer.concat([
+    bytesOf("WEBP"),
+    chunk("VP8X", bytesOf([0x20, 0, 0, 0], le24(width - 1), le24(height - 1))),
+    chunk("ICCP", profile),
+    webp.subarray(12),
+  ])
+  const size = body.length
+  return Uint8Array.from(
+    Buffer.concat([
+      bytesOf("RIFF", [size & 0xff, (size >> 8) & 0xff, (size >> 16) & 0xff, size >>> 24]),
+      body,
+    ]),
+  )
 }
 
 /**
@@ -237,9 +331,9 @@ const encodeAs = (png: Uint8Array, format: "jpeg" | "webp", quality = 80) =>
     return image.webp({ quality }).bytes()
   })
 
-/** The size and format an image's bytes decode to. */
-const imageMetadata = (bytes: Uint8Array) =>
-  Effect.promise(() => new Bun.Image(bytes).metadata()).pipe(
+/** The size and format an image's bytes decode to; `autoOrient: false` reads the stored raster, unturned. */
+const imageMetadata = (bytes: Uint8Array, options: { readonly autoOrient?: boolean } = {}) =>
+  Effect.promise(() => new Bun.Image(bytes, options).metadata()).pipe(
     Effect.map(({ width, height, format }) => ({ width, height, format })),
   )
 
@@ -471,6 +565,125 @@ describe("tool image store", () => {
         expect([image.width, image.height]).toEqual([1800, 1800])
         expect(image.originalWidth).toBeUndefined()
         expect(yield* imageMetadata(stored)).toEqual({ width: 1800, height: 1800, format: "jpeg" })
+      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a decodable image whose colour profile fills the byte limit is stored without the profile",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("tool-image-home-")
+        const fs = yield* FileSystem.FileSystem
+        const profile = iccProfile(4 * 1024 * 1024)
+        const dot = realPng(1, 1)
+        const cases = [
+          {
+            name: "jpeg",
+            bytes: withJpegSegments(yield* encodeAs(dot, "jpeg"), iccSegments(profile)),
+            mediaType: "image/jpeg",
+            ext: "jpg",
+            format: "jpeg",
+          },
+          {
+            name: "png",
+            bytes: withPngProfile(dot, profile),
+            mediaType: "image/png",
+            ext: "png",
+            format: "png",
+          },
+          {
+            name: "webp",
+            bytes: withWebpProfile(yield* encodeAs(dot, "webp"), 1, 1, profile),
+            mediaType: "image/webp",
+            ext: "webp",
+            format: "webp",
+          },
+        ] as const
+        for (const fixture of cases) {
+          expect(fixture.bytes.length).toBeGreaterThan(TOOL_IMAGE_MAX_BYTES)
+          const { image } = yield* saveIn(home, home, {
+            base64: base64(fixture.bytes),
+            source: fixture.name,
+          })
+          const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.${fixture.ext}`)
+          expect({
+            name: fixture.name,
+            mediaType: image.mediaType,
+            size: [image.width, image.height],
+            scaled: Predicate.isNotUndefined(image.originalWidth),
+            small: stored.length < 64 * 1024,
+          }).toEqual({
+            name: fixture.name,
+            mediaType: fixture.mediaType,
+            size: [1, 1],
+            scaled: false,
+            small: true,
+          })
+          expect(yield* imageMetadata(stored)).toEqual({
+            width: 1,
+            height: 1,
+            format: fixture.format,
+          })
+        }
+      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a scaled image keeps a colour profile of ordinary size",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("tool-image-home-")
+        const fs = yield* FileSystem.FileSystem
+        const jpeg = withJpegSegments(
+          yield* encodeAs(realPng(4000, 1000), "jpeg"),
+          iccSegments(iccProfile(3_000)),
+        )
+        const { image } = yield* saveIn(home, home, { base64: base64(jpeg) })
+        const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.jpg`)
+        expect([image.width, image.height]).toEqual([2000, 500])
+        expect(Buffer.from(stored).includes("ICC_PROFILE")).toBe(true)
+      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a JPEG its EXIF orientation turns is stored upright, and its sizes name the upright image",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("tool-image-home-")
+        const fs = yield* FileSystem.FileSystem
+        // Orientation 6: the raster turns a quarter clockwise to show, so its sides swap.
+        type Sides = readonly [number, number]
+        const cases: ReadonlyArray<{
+          readonly raw: Sides
+          readonly size: Sides
+          readonly original: Option.Option<Sides>
+        }> = [
+          { raw: [400, 100], size: [100, 400], original: Option.none() },
+          { raw: [4000, 1000], size: [500, 2000], original: Option.some([1000, 4000]) },
+        ]
+        for (const fixture of cases) {
+          const jpeg = withJpegSegments(
+            yield* encodeAs(realPng(fixture.raw[0], fixture.raw[1]), "jpeg"),
+            [exifOrientation(6)],
+          )
+          const { image } = yield* saveIn(home, home, { base64: base64(jpeg) })
+          const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.jpg`)
+          const size: Sides = [image.width, image.height]
+          const original: Option.Option<Sides> = Option.all([
+            Option.fromUndefinedOr(image.originalWidth),
+            Option.fromUndefinedOr(image.originalHeight),
+          ])
+          expect({ raw: fixture.raw, size, original }).toEqual(fixture)
+          // The stored raster is upright: read unturned, it has the stored size.
+          expect(yield* imageMetadata(stored, { autoOrient: false })).toEqual({
+            width: fixture.size[0],
+            height: fixture.size[1],
+            format: "jpeg",
+          })
+        }
       }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
     25_000,
   )
@@ -803,7 +1016,7 @@ describe("tool images in a request", () => {
         expect(partsOf(next)[0]).toEqual({
           type: "text",
           value:
-            "Image from save_image canvas.png 2000x1000, scaled from 4000x2000 (multiply coordinates by 2.00 to map to the original):",
+            "Image from save_image canvas.png 2000x1000, scaled from 4000x2000 (multiply coordinates by 2.000 to map to the original):",
         })
         // The stored result keeps the original size beside the scaled one.
         const results = stored
@@ -814,6 +1027,33 @@ describe("tool images in a request", () => {
             image: { width: 2000, height: 1000, originalWidth: 4000, originalHeight: 2000 },
           },
         })
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a thin image's line names a factor for each side when they differ",
+    () =>
+      Effect.gen(function* () {
+        const { prompts } = yield* imageTurn({
+          paths: ["thread.png", "strip.png"],
+          shots: [realPng(1, 6000), realPng(4006, 1000)],
+        })
+        const { next } = afterLastToolMessage(prompts[2] ?? Prompt.empty)
+        const lines = (prompts[2]?.content ?? []).flatMap((message) => {
+          if (message.role !== "user") return []
+          return message.content.flatMap((part) => {
+            if (part.type !== "text" || !part.text.startsWith("Image from")) return []
+            return [part.text]
+          })
+        })
+        expect(Option.isSome(next)).toBe(true)
+        expect(lines).toEqual([
+          // Its width stays 1 pixel while its height shrinks by 3.
+          "Image from save_image thread.png 1x2000, scaled from 1x6000 (multiply x by 1.000 and y by 3.000 to map to the original):",
+          // Rounding the height to whole pixels leaves the two factors apart in the third decimal.
+          "Image from save_image strip.png 2000x499, scaled from 4006x1000 (multiply x by 2.003 and y by 2.004 to map to the original):",
+        ])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
     20_000,
   )

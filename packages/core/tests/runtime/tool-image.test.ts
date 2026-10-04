@@ -1,6 +1,7 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Clock, Deferred, Effect, Fiber, FileSystem, Layer, Option, Path } from "effect"
+import { crc32, deflateSync } from "node:zlib"
 import { ExtensionContext } from "../../src/domain/extension"
 import {
   readToolImage,
@@ -8,7 +9,8 @@ import {
   sweepToolImages,
   toolImageDirectory,
 } from "../../src/runtime/tool-image"
-import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { testLeafContext, testToolContext } from "../../src/test-utils/harness"
 
 /** A 1x1 PNG, base64. */
@@ -135,5 +137,87 @@ describe("tool image sweep", () => {
         yield* sweepToolImages(home, (sha256) => Effect.succeed(sha256 === kept))
         expect(yield* fs.readDirectory(directory)).toEqual([`${kept}.png`])
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunPlatformLive)),
+  )
+})
+
+// ── scaling ──────────────────────────────────────────────────────────────────
+
+/** The byte limit of the store: its base64 fits Anthropic's 5 MiB an image. */
+const TOOL_IMAGE_MAX_BYTES = (5 * 1024 * 1024 * 3) / 4
+
+/** A truecolor gradient PNG of `width` x `height`. */
+const gradientPng = (width: number, height: number) => {
+  const chunk = (type: string, data: Uint8Array) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data])
+    const head = Buffer.alloc(4)
+    head.writeUInt32BE(data.length)
+    const tail = Buffer.alloc(4)
+    tail.writeUInt32BE(crc32(body))
+    return Buffer.concat([head, body, tail])
+  }
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0)
+  header.writeUInt32BE(height, 4)
+  header.set([8, 2], 8)
+  const raw = Buffer.alloc((width * 3 + 1) * height)
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1)
+      raw.set([x % 256, y % 256, 90], y * (width * 3 + 1) + 1 + x * 3)
+  }
+  return Uint8Array.from(
+    Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk("IHDR", header),
+      chunk("IDAT", deflateSync(raw)),
+      chunk("IEND", new Uint8Array()),
+    ]),
+  )
+}
+
+/**
+ * The real codec, except that each encode to a side over `side` comes out
+ * past the byte limit. No real image does at 2,000 pixels: JPEG at quality 20
+ * keeps 2,000 x 2,000 pixels of noise under 0.8 MB.
+ */
+const codecPastTheLimitAbove = (side: number) =>
+  Layer.effect(
+    GentPlatform,
+    Effect.gen(function* () {
+      const platform = yield* GentPlatform
+      return GentPlatform.of({
+        ...platform,
+        transcodeImage: (bytes, options) =>
+          platform.transcodeImage(bytes, options).pipe(
+            Effect.map((encoded) => {
+              if (options.maxSide <= side) return encoded
+              return { ...encoded, bytes: new Uint8Array(TOOL_IMAGE_MAX_BYTES + 1) }
+            }),
+          ),
+      })
+    }),
+  ).pipe(Layer.provide(BunGentPlatformLive))
+
+describe("tool image scaling", () => {
+  it.scopedLive(
+    "an image no encode fits at 2,000 pixels a side is scaled to the next side bound",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-tool-image-scale-" })
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-tool-image-scale-cwd-" })
+        const image = yield* saveToolImage({ bytes: gradientPng(4000, 1000) }).pipe(
+          Effect.provideService(ExtensionContext, testLeafContext(testToolContext({ home, cwd }))),
+          Effect.provide(codecPastTheLimitAbove(1500)),
+        )
+        // Three quarters of 2,000 a side, its aspect ratio kept.
+        expect(image).toMatchObject({
+          mediaType: "image/png",
+          width: 1500,
+          height: 375,
+          originalWidth: 4000,
+          originalHeight: 1000,
+        })
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
+    15_000,
   )
 })

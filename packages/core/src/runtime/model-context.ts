@@ -403,17 +403,24 @@ const toolImageName = (entry: PromptToolImage): string =>
 
 /**
  * The line above an image the model sees. A scaled image's line names the
- * size the tool saved and the factor from the stored image to it, in pi's
+ * size the tool saved and the factors from the stored image to it, in pi's
  * and Claude Code's words (`PRIOR_ARTS.md`), so the model can map a
- * coordinate back. It reads stored fields only, so it stays the same bytes.
+ * coordinate back. Whole-pixel sides leave the two factors apart, by a lot
+ * in a thin image (1x6000 stored as 1x2000): the line names one factor only
+ * when both read the same. Three decimals keep a mapped coordinate within one
+ * original pixel at the stored image's 2,000-pixel edge. It reads stored
+ * fields only, so it stays the same bytes.
  */
 const toolImageLabel = (entry: PromptToolImage, name: string): string => {
-  const { width, originalWidth, originalHeight } = entry.image
+  const { width, height, originalWidth, originalHeight } = entry.image
   if (Predicate.isUndefined(originalWidth) || Predicate.isUndefined(originalHeight)) {
     return `Image from ${name}:`
   }
-  const factor = (originalWidth / width).toFixed(2)
-  return `Image from ${name}, scaled from ${originalWidth}x${originalHeight} (multiply coordinates by ${factor} to map to the original):`
+  const x = (originalWidth / width).toFixed(3)
+  const y = (originalHeight / height).toFixed(3)
+  const scaled = `Image from ${name}, scaled from ${originalWidth}x${originalHeight}`
+  if (x === y) return `${scaled} (multiply coordinates by ${x} to map to the original):`
+  return `${scaled} (multiply x by ${x} and y by ${y} to map to the original):`
 }
 
 /**
