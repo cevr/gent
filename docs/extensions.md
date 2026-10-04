@@ -144,8 +144,9 @@ A message carries no agent, run spec or interactive flag. Those belong to the
 target session: `ctx.Session.create` sets them once in its `admission`.
 
 A request that declares `answersDuringTurn: true` can `"steer"` into its own
-branch while a turn runs: the steer joins that turn at its next step, and on
-an idle branch `wake: true` starts one. The `questions.answer` request of
+branch while a turn runs: the steer joins that turn at its next step (a turn
+parked on a blocking ask takes it before its first resumed model request), and
+on an idle branch `wake: true` starts one. The `questions.answer` request of
 `@gent/interaction-tools` delivers the user's answers to `ask_user_async`
 questions this way.
 
