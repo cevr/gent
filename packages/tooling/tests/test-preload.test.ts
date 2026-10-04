@@ -41,7 +41,10 @@ const REMOTE_ENTRY_POINTS = [
   "Bun.connect",
 ] as const
 
-/** The same entry points tried against this machine, and a Unix socket. */
+/**
+ * The same entry points tried against this machine, a Unix socket, and an
+ * address of this machine's own interfaces.
+ */
 const LOCAL_ENTRY_POINTS = [
   "fetch",
   "FetchHttpClient",
@@ -50,6 +53,7 @@ const LOCAL_ENTRY_POINTS = [
   "WebSocket",
   "Bun.connect",
   "a Unix socket",
+  "an interface address",
 ] as const
 
 /** The child's tests. */
@@ -59,6 +63,7 @@ import * as https from "node:https"
 import * as http2 from "node:http2"
 import * as net from "node:net"
 import * as tls from "node:tls"
+import { networkInterfaces } from "node:os"
 import { join } from "node:path"
 import { Effect } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/http"
@@ -146,6 +151,14 @@ test("local: a Unix socket", () =>
     const socket = net.connect(unixPath, () => { socket.end(); resolve() })
     socket.on("error", reject)
   }))
+// The listener is on loopback, so the connection itself is refused; the guard
+// must let it through. A host with no address but loopback tries nothing.
+const interfaceAddress = Object.values(networkInterfaces()).flat()
+  .find((address) => address && address.family === "IPv4" && !address.internal)?.address
+test("local: an interface address", () =>
+  interfaceAddress === undefined
+    ? undefined
+    : attempt(() => fetch("http://" + interfaceAddress + ":" + server.port + "/")))
 test("fetches nothing", () => {})
 `
 

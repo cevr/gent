@@ -20,7 +20,9 @@ bun run --cwd apps/tui dev  # TUI
 attaches to the one that already owns the database; `gent server start` runs
 a standalone server in the foreground; its flags (`--port`, `--isolate`, `--mock`)
 are the one way to choose how it launches. `GENT_DATA_DIR` names the directory that
-holds `data.db` (default `~/.gent`).
+holds `data.db` (default `~/.gent`). The server listens on `127.0.0.1` only: its
+RPC has no auth. To use a server on another machine, tunnel to it
+(`ssh -L 3000:127.0.0.1:3000 <host>`) and pass `--connect http://127.0.0.1:3000/rpc`.
 
 ## Goals
 

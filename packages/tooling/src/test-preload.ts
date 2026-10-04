@@ -34,7 +34,11 @@
  *   (`modelCatalogFixture`, `fixtureModelCatalog` or
  *   `serveModelCatalogFixture` from `@gent/core/test-utils`).
  *   Requests to `localhost`, `127.0.0.1` and `::1` pass, and so does a Unix
- *   socket: a test server runs there. The guard holds every entry point it
+ *   socket: a test server runs there. A request to an address of this
+ *   machine's own interfaces (`os.networkInterfaces`, read once as this file
+ *   loads) passes too: the kernel delivers it on this machine, and a test
+ *   that proves a listener refuses peers on a LAN or tailnet address sends
+ *   one. The guard holds every entry point it
  *   can replace: `fetch` and `fetch.preconnect`; the `node:net` socket's
  *   `connect`, which `net.connect`, `tls.connect`, `http2.connect` and the
  *   agents of `node:http` and `node:https` call; `WebSocket`; and
@@ -83,12 +87,20 @@ afterAll(() => rmSync(testHome, { recursive: true, force: true }))
 
 // ── network guard ───────────────────────────────────────────────────────────
 
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "::1"])
+/** Loopback names and the addresses of this machine's own interfaces. */
+const LOCAL_HOSTS: ReadonlySet<string> = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  ...Object.values(os.networkInterfaces()).flatMap((addresses) =>
+    (addresses ?? []).map((address) => address.address),
+  ),
+])
 /** The remote targets the running test tried to reach. */
 const refusedRequests: Array<string> = []
 
-/** True for this machine's name or loopback address, bracketed or not. */
-const isLoopback = (host: string): boolean => LOOPBACK_HOSTS.has(host.replace(/^\[(.*)\]$/u, "$1"))
+/** True for a loopback name or an address of this machine, bracketed or not. */
+const isThisMachine = (host: string): boolean => LOCAL_HOSTS.has(host.replace(/^\[(.*)\]$/u, "$1"))
 
 /** Records a refused target and makes the failure its entry point raises. */
 const refusal = (target: string): Error => {
@@ -111,7 +123,7 @@ const admit = <A extends ReadonlyArray<unknown>>(
 /** The remote URL `url` names; none for this machine. */
 const remoteUrl = (url: string | URL): Option.Option<string> => {
   const parsed = new URL(url)
-  return Option.liftPredicate(parsed.href, () => !isLoopback(parsed.hostname))
+  return Option.liftPredicate(parsed.href, () => !isThisMachine(parsed.hostname))
 }
 
 /** The fields of a `node:net` socket's or `Bun.connect`'s options that name the peer. */
@@ -142,7 +154,7 @@ const remotePeer = (options: PeerOptions): Option.Option<string> => {
     () => "localhost",
   )
   const portSuffix = Option.match(port, { onNone: () => "", onSome: (value) => `:${value}` })
-  return Option.liftPredicate(`tcp://${host}${portSuffix}`, () => !isLoopback(host))
+  return Option.liftPredicate(`tcp://${host}${portSuffix}`, () => !isThisMachine(host))
 }
 
 // `fetch` and its `preconnect`, which `FetchHttpClient` and every fetch-based

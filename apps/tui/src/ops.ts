@@ -782,7 +782,9 @@ export const resumableSessions = (options: {
 
 /** `--connect <url>`: every command that can attach to a running server. */
 export const connectFlag = Flag.String("connect").pipe(
-  Flag.withDescription("Connect to an existing gent server"),
+  Flag.withDescription(
+    "Connect to an existing gent server; one on another machine only through a tunnel (ssh -L)",
+  ),
   Flag.optional,
 )
 
@@ -937,7 +939,10 @@ const serverStop = Command.make(
 const serverStart = Command.make(
   "start",
   {
-    port: Flag.Int("port").pipe(Flag.withDescription("Bind this TCP port"), Flag.withDefault(3000)),
+    port: Flag.Int("port").pipe(
+      Flag.withDescription("Bind this TCP port on 127.0.0.1"),
+      Flag.withDefault(3000),
+    ),
     isolate: isolateFlag,
     mock: Flag.Boolean("mock").pipe(
       Flag.withDescription("Serve the scripted model instead of a real provider"),

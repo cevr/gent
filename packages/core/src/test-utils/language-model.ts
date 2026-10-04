@@ -133,7 +133,7 @@ export const makeTempDirectoryScoped = (prefix: string) =>
  * lane's server holds.
  */
 export const freePort: Effect.Effect<number> = Effect.gen(function* () {
-  const { address } = yield* BunHttpServer.make({ port: 0 })
+  const { address } = yield* BunHttpServer.make({ hostname: "127.0.0.1", port: 0 })
   if (address._tag === "UnixPathAddress") return yield* Effect.die("a TCP listener has no path")
   return address.port
 }).pipe(Effect.scoped, Effect.orDie)

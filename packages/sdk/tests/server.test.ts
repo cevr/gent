@@ -31,7 +31,7 @@ import {
   ServerLockEntry,
 } from "../src/discovery"
 import { BunServices } from "@effect/platform-bun"
-import { homedir, hostname } from "node:os"
+import { homedir, hostname, networkInterfaces } from "node:os"
 import { Gent } from "../src/client"
 import { buildLogPaths } from "../src/logger"
 
@@ -265,6 +265,7 @@ describe("Server Lock", () => {
           Effect.sync(() =>
             // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
             Bun.serve({
+              hostname: "127.0.0.1",
               port: 0,
               fetch: (request) => {
                 if (new URL(request.url).pathname !== "/_gent/identity") {
@@ -448,6 +449,7 @@ const lockWithIdentity = (
       Effect.sync(() =>
         // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
         Bun.serve({
+          hostname: "127.0.0.1",
           port: 0,
           fetch: () =>
             Response.json({
@@ -502,6 +504,7 @@ describe("Server Lock Ownership", () => {
             Effect.sync(() =>
               // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun HTTP fixture
               Bun.serve({
+                hostname: "127.0.0.1",
                 port: 0,
                 fetch: () => {
                   probes += 1
@@ -704,6 +707,7 @@ describe("Server Lock Ownership", () => {
             Effect.sync(() =>
               // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun endpoint that stalls its body
               Bun.serve({
+                hostname: "127.0.0.1",
                 port: 0,
                 fetch: () =>
                   new Response(
@@ -789,7 +793,11 @@ describe("serverLock.stop", () => {
       const endpoint = yield* Effect.acquireRelease(
         Effect.sync(() =>
           // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
-          Bun.serve({ port: 0, fetch: () => Response.json(identity(entry)) }),
+          Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            fetch: () => Response.json(identity(entry)),
+          }),
         ),
         (server) => Effect.promise(() => server.stop(true)),
       )
@@ -985,6 +993,48 @@ describe("serverLock.stop", () => {
         expect(signals).toEqual(["SIGTERM"])
         expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
+    ),
+  )
+})
+
+// ── listener ────────────────────────────────────────────────────────────────
+
+/** An IPv4 address of this host that is not loopback, such as a LAN or tailnet address. */
+const nonLoopbackIPv4 = Option.fromUndefinedOr(
+  Object.values(networkInterfaces())
+    .flatMap((addresses) => addresses ?? [])
+    .find((address) => address.family === "IPv4" && !address.internal)?.address,
+)
+
+describe("server listener", () => {
+  // The RPC has no auth: a peer that reaches the listener can run bash.
+  it.scopedLive("the owned server listens on loopback only", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const owner = yield* Gent.server({
+          cwd: home,
+          state: Gent.state.memory(),
+          provider: Gent.provider.mock(),
+        })
+        const url = new URL(owner.url)
+        expect(url.hostname).toBe("127.0.0.1")
+        const identityStatus = (host: string) =>
+          HttpClient.get(`http://${host}:${url.port}/_gent/identity`).pipe(
+            Effect.map((response) => response.status),
+            Effect.provide(FetchHttpClient.layer),
+          )
+        expect(yield* identityStatus("127.0.0.1")).toBe(200)
+        // A host with no address but loopback has no peer to refuse: that half is skipped.
+        yield* Option.match(nonLoopbackIPv4, {
+          onNone: () => Effect.void,
+          onSome: (address) =>
+            Effect.gen(function* () {
+              const reached = yield* identityStatus(address).pipe(Effect.exit)
+              expect(Exit.isFailure(reached)).toBe(true)
+            }),
+        })
+      }).pipe(Effect.timeout("15 seconds")),
     ),
   )
 })
