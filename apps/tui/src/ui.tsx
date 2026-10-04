@@ -1624,17 +1624,21 @@ export function NoToolCallIdentity(props: { children: JSX.Element }) {
 
 const ToolFrameBodyContext = createContext(false)
 
-const FrameClicksContext = createContext(false)
+/** Read when a frame draws or takes a click: the surface turns clicks on and off under mounted frames. */
+const FrameClicksContext = createContext<() => boolean>(() => false)
 
 /**
  * Frames inside take a click to open or close, and draw the `▸`/`▾` mark
  * that says so. Only a surface whose mouse is on may say yes: the transcript
  * view. Inline the mouse is off and the wheel scrolls the terminal, so a
- * mark there would promise a click that never comes.
+ * mark there would promise a click that never comes. The context holds an
+ * accessor: the transcript view opens over frames already mounted inline.
  */
 export function FrameClicks(props: { on: boolean; children: JSX.Element }) {
   return (
-    <FrameClicksContext.Provider value={props.on}>{props.children}</FrameClicksContext.Provider>
+    <FrameClicksContext.Provider value={() => props.on}>
+      {props.children}
+    </FrameClicksContext.Provider>
   )
 }
 
@@ -1681,8 +1685,12 @@ export function ToolFrame(props: ToolFrameProps) {
   const bodyOnly = useContext(ToolFrameBodyContext)
   const clicks = useContext(FrameClicksContext)
   // A click toggles the frame where clicks arrive; a new `expanded` from the
-  // owner starts over from it. Each value of the prop gets its own toggle signal.
+  // owner starts over from it, and so does a surface that turns clicks on or
+  // off: a frame opened in the transcript view goes back to the owner's form
+  // inline, where history draws it from the owner's value. Each value of the
+  // prop gets its own toggle signal.
   const toggle = createMemo(() => {
+    clicks()
     const [open, setOpen] = createSignal(props.expanded)
     return { open, setOpen }
   })
@@ -1715,7 +1723,7 @@ export function ToolFrame(props: ToolFrameProps) {
         <box
           flexDirection="row"
           onMouseDown={() => {
-            if (clicks) toggle().setOpen((prev) => !prev)
+            if (clicks()) toggle().setOpen((prev) => !prev)
           }}
         >
           <text flexGrow={1} flexShrink={1} wrapMode="none" truncate>
@@ -1741,7 +1749,7 @@ export function ToolFrame(props: ToolFrameProps) {
             <Show when={callIdentityLabel()}>
               {(identity) => <span style={{ fg: theme.textMuted }}> {identity()}</span>}
             </Show>
-            <Show when={clicks}>
+            <Show when={clicks()}>
               <span style={{ fg: theme.textMuted }}> {expandIndicator()}</span>
             </Show>
           </text>

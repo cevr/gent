@@ -1263,6 +1263,37 @@ describe("tool frame identity", () => {
     }),
   )
 
+  // The transcript view opens over the same mounted frames: clicks turn on
+  // there, and the mark and the click follow at once.
+  it.scopedLive("a frame mounted inline takes clicks once its surface turns them on", () =>
+    Effect.gen(function* () {
+      const [clicks, setClicks] = createSignal(false)
+      const setup = yield* renderScoped(() => (
+        <FrameClicks on={clicks()}>
+          <ToolFrame
+            title="read"
+            status="completed"
+            expanded={false}
+            collapsedContent={<text>FRAME-CLOSED</text>}
+          >
+            <text>FRAME-OPEN</text>
+          </ToolFrame>
+        </FrameClicks>
+      ))
+      const inline = yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "inline")
+      expect(inline).not.toMatch(/[▸▾]/)
+      setClicks(true)
+      const marked = yield* waitForFrame(setup, (next) => next.includes("▸"), "the click mark")
+      const row = marked.split("\n").findIndex((line) => line.includes("read"))
+      yield* Effect.promise(() => setup.mockMouse.click(2, row))
+      yield* waitForFrame(setup, (next) => next.includes("FRAME-OPEN"), "opened by the click")
+      // Back inline the frame takes its owner's form again, as history draws it.
+      setClicks(false)
+      const back = yield* waitForFrame(setup, (next) => !/[▸▾]/.test(next), "the mark gone")
+      expect(back).toContain("FRAME-CLOSED")
+    }),
+  )
+
   it.scopedLive("a click toggles a tool frame, and a new expanded from its owner starts over", () =>
     Effect.gen(function* () {
       const [expanded, setExpanded] = createSignal(false)

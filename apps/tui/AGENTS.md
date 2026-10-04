@@ -308,7 +308,10 @@ ctrl+o`), with a tree row for each failed extension; preview and full list
 A `ToolFrame` draws its `▸`/`▾` mark and takes a click only inside
 `FrameClicks on` (`ui.tsx`), which `NativeTranscript` sets in the transcript
 view, where the mouse is on. Inline the mouse is off and the wheel scrolls
-the terminal, so a mark there would promise a click that never comes.
+the terminal, so a mark there would promise a click that never comes. The
+transcript view opens over frames already mounted inline, so the context
+holds an accessor that the mark and the click handler read; a change of it
+puts each frame back to its owner's form.
 
 A group is one run of tool calls across the steps of a turn, as in fx
 (`projectToolRuns` in `message-list.tsx`): reasoning and blank text between
