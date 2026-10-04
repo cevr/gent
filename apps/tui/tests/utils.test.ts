@@ -14,7 +14,7 @@ import { SocketCloseError } from "effect/socket/Socket"
 import {
   type ActivityCall,
   activityRows,
-  failedOperations,
+  collapsedOperations,
   describeCellCode,
   dropLastGrapheme,
   expandFileRefs,
@@ -835,11 +835,39 @@ describe("formatActivityHeader", () => {
   })
 
   test("a cell whose failure cannot be shown to be its op's counts both", () => {
-    // An interrupted cell settles its running op to failed: the cell's
-    // failure has no text of the op's, so both count.
+    // The cell's failure has no text of the op's and is no cancel: both count.
     expect(formatActivityHeader([cell([op("bash", "git checkout", "failed")], "error")])).toBe(
       "1 tool · 1 command · 2 failed",
     )
+  })
+
+  // A cancelled turn or cell is one event, not a failure: the op it cut says
+  // `cancelled`, and the header counts it apart from the failures.
+  test("a cancelled cell is one cancelled tool, never a failure", () => {
+    const cut = { ...cell([op("read", "a.ts"), op("bash", "sleep 20", "cancelled")], "error") }
+    expect(formatActivityHeader([{ ...cut, cancelled: true }])).toBe(
+      "2 tools · 1 read · 1 command · 1 cancelled",
+    )
+    expect(
+      collapsedOperations([{ ...cut, cancelled: true }]).map((operation) =>
+        formatFailureRow(operation),
+      ),
+    ).toEqual(["Ran sleep 20 · cancelled"])
+    // Cut between its ops: the cell itself is the one cancelled row.
+    const between = { ...cell([op("read", "a.ts")], "error"), cancelled: true }
+    expect(formatActivityHeader([between])).toBe("1 tool · 1 read · 1 cancelled")
+    expect(collapsedOperations([between]).map((operation) => formatFailureRow(operation))).toEqual([
+      "cell · cancelled",
+    ])
+    // A real failure before the cancel still shows: fail loud.
+    const failedFirst = {
+      ...cell([{ ...op("read", "b.ts", "failed"), reason: "ENOENT" }], "error"),
+      cancelled: true,
+    }
+    expect(formatActivityHeader([failedFirst])).toBe("1 tool · 1 read · 1 failed · 1 cancelled")
+    expect(
+      collapsedOperations([failedFirst]).map((operation) => formatFailureRow(operation)),
+    ).toEqual(["Read b.ts · failed · ENOENT", "cell · cancelled"])
   })
 
   test("a cell that failed while its ops succeeded is one failure and no extra tool", () => {
@@ -987,7 +1015,7 @@ describe("activity rows", () => {
       "Called github.search · failed",
     ])
     expect(formatActivityHeader(calls)).toBe("3 tools · 2 linear · 1 github · 1 failed")
-    expect(failedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+    expect(collapsedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
       "Called github.search · failed",
     ])
   })
@@ -1272,7 +1300,7 @@ describe("failure rows", () => {
       cell([op("read", "a.ts"), failure("x", "boom", 2)]),
       { ...cell([op("bash", "y")], "error"), reason: "cell died" },
     ]
-    expect(failedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+    expect(collapsedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
       "Ran x · exit 2 · boom",
       "cell · failed · cell died",
     ])
@@ -1284,7 +1312,7 @@ describe("failure rows", () => {
     const calls = [
       { ...cell([op("read", "a.ts"), failure("x", "boom", 2)], "error"), reason: "TypeError: y" },
     ]
-    expect(failedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+    expect(collapsedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
       "Ran x · exit 2 · boom",
       "cell · failed · TypeError: y",
     ])
@@ -1302,7 +1330,7 @@ describe("failure rows", () => {
         failure: "Error: independent cell failure",
       },
     ]
-    expect(failedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+    expect(collapsedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
       "Read missing.ts · failed · ENOENT",
       "cell · failed · Error: independent cell failure",
     ])

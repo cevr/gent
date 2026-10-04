@@ -266,7 +266,12 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   `formatActivityRow`): `├ Read a.ts, b.ts +1` (the subjects that fit, then a
   count), `├ Edited x.ts +12 / -3` (the diff counts in the success and error
   colours), `└ Ran bun test · exit 1`, and the running op last as
-  `Running …`. A failed op never folds: each has its own row. Under a failed
+  `Running …`. A failed op never folds: each has its own row. A failed cell
+  adds its own row unless its error text is an op's error text. A cut call
+  (the turn's interrupt, `reason: "Interrupted"`, or the cell's cancel, a
+  `CellKernelError` whose reason is `cancelled`; `cutShort`) is no failure:
+  the op it cut reads `└ Ran sleep 20 · cancelled` in the warning colour, the
+  cell adds no row of its own, and the header counts `1 cancelled`. Under a failed
   row, and under the run's last command row, preview draws up to five rows of
   that op's own output (`outputHead`: a command's stdout and stderr, a failed
   call's reason; never the cell's display) behind a `│ ` gutter, then

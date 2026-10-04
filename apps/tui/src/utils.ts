@@ -731,7 +731,11 @@ export function truncatePath(path: string, maxLen = 40): string {
 // ── RLM activity summary ──
 // The collapsed transcript group describes what the cell did, not that a tool ran.
 
-type ActivityOutcome = "succeeded" | "failed" | "incomplete" | "running"
+/**
+ * How a tool ended. `cancelled`: the turn's interrupt or the cell's cancel
+ * cut it; that is one event, not a failure.
+ */
+export type ActivityOutcome = "succeeded" | "failed" | "cancelled" | "incomplete" | "running"
 
 /**
  * The inner-call receipts a saved cell result carries under `operations`.
@@ -792,6 +796,11 @@ export interface ActivityCall {
   readonly reason?: string
   /** The whole error text of the call's own failure, without the runner's lead. */
   readonly failure?: string
+  /**
+   * The call was cut: its result is the turn's interrupt or the cell's
+   * cancel. Its ops cut with it say `cancelled`, and it adds no failure.
+   */
+  readonly cancelled?: boolean
   /** The call itself: its own failure's preview head reads it. */
   readonly source?: ToolCall
 }
@@ -907,7 +916,7 @@ export const plural = (count: number, singular: string, pluralForm = `${singular
 // searched, edited and run. The cell count is detail the full level shows.
 
 /** A call's status as the outcome of the one tool it stands for. */
-export const callOutcome = (status: ActivityCall["status"]): ActivityOutcome => {
+export const callOutcome = (status: ActivityCall["status"]): "succeeded" | "failed" | "running" => {
   if (status === "running") return "running"
   if (status === "error") return "failed"
   return "succeeded"
@@ -915,10 +924,24 @@ export const callOutcome = (status: ActivityCall["status"]): ActivityOutcome => 
 
 const isFailedOp = (operation: ActivityOperation) => operation.outcome === "failed"
 
+const isCancelledOp = (operation: ActivityOperation) => operation.outcome === "cancelled"
+
+/** A call's own outcome: a cut call is cancelled, not failed. */
+const ownOutcome = (call: ActivityCall): ActivityOutcome => {
+  if (call.cancelled === true) return "cancelled"
+  return callOutcome(call.status)
+}
+
+/** Why a call itself failed; a cut call says `cancelled` and nothing more. */
+const ownReason = (call: ActivityCall): string => {
+  if (call.cancelled === true) return ""
+  return call.reason ?? ""
+}
+
 /**
- * One line of a group: a tool the run called, or a cell's own failure. A
- * cell's own failure is no tool, so the header leaves it out of the tool
- * count and counts it among the failures.
+ * One line of a group: a tool the run called, or a cell's own failure or
+ * cancel. A cell's own ending is no tool, so the header leaves it out of the
+ * tool count and counts it among the failures or the cancels.
  */
 interface ActivityEntry {
   readonly operation: ActivityOperation
@@ -954,30 +977,41 @@ const failedWithOp = (call: ActivityCall): boolean =>
   )
 
 /**
+ * Whether a cell's own ending is said already by its ops: a failure shown to
+ * be an op's (`failedWithOp`), or a cancel that cut an op (that op says
+ * `cancelled`). A cancel between ops is the cell's own one row.
+ */
+const endingSaidByOps = (call: ActivityCall): boolean => {
+  if (call.cancelled === true) return call.operations.some(isCancelledOp)
+  return failedWithOp(call)
+}
+
+/**
  * The tools of a group in call order. A cell with no ops is one tool that
- * names its source's verbs. A cell that failed adds its own failure after
- * its ops (a throw after its ops, or a restart), unless its error is shown
- * to be an op's (`failedWithOp`): that is the same failure, said once.
+ * names its source's verbs. A cell that failed or was cancelled adds its own
+ * ending after its ops (a throw after its ops, a restart, a cancel between
+ * ops), unless its ops say it already (`endingSaidByOps`): one event, said
+ * once.
  */
 const activityEntries = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<ActivityEntry> =>
   calls.flatMap((call): ReadonlyArray<ActivityEntry> => {
     if (call.operations.length === 0) {
       const operation = {
         tool: call.toolName,
-        outcome: callOutcome(call.status),
+        outcome: ownOutcome(call),
         detail: opLessDetail(call),
-        reason: call.reason ?? "",
+        reason: ownReason(call),
         source: call.source,
       }
       return [{ operation, tool: true }]
     }
     const entries = call.operations.map((operation) => ({ operation, tool: true }))
-    if (call.status !== "error" || failedWithOp(call)) return entries
+    if (call.status !== "error" || endingSaidByOps(call)) return entries
     const failure: ActivityOperation = {
       tool: call.toolName,
-      outcome: "failed",
+      outcome: ownOutcome(call),
       detail: "",
-      reason: call.reason ?? "",
+      reason: ownReason(call),
       source: call.source,
     }
     return [...entries, { operation: failure, tool: false }]
@@ -1052,8 +1086,10 @@ export function formatActivityHeader(
   const optional = [...counted, ...verbs.slice(0, 4)]
   if (thoughts > 0) optional.push(plural(thoughts, "thought"))
   const failed = entries.filter((entry) => isFailedOp(entry.operation)).length
+  const cancelled = entries.filter((entry) => isCancelledOp(entry.operation)).length
   const tail: string[] = []
   if (failed > 0) tail.push(`${failed} failed`)
+  if (cancelled > 0) tail.push(`${cancelled} cancelled`)
   const duration = formatGroupDuration(calls)
   if (duration.length > 0) tail.push(duration)
   const head = plural(tools.length, "tool")
@@ -1136,7 +1172,7 @@ const addDiff = (
 /**
  * The rows of a group, one per run of ops: consecutive ops of one tool and
  * one outcome fold into one row, so a cell that reads 3 files draws one
- * `Read` row. A running op and a failed op each keep a row of their own: a
+ * `Read` row. A running, failed or cancelled op keeps a row of its own: a
  * failure is one row, with its own exit status and reason.
  */
 export const activityRows = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<ActivityRow> => {
@@ -1152,7 +1188,8 @@ export const activityRows = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<
         row.tool === operation.tool &&
         row.outcome === operation.outcome &&
         operation.outcome !== "running" &&
-        operation.outcome !== "failed",
+        operation.outcome !== "failed" &&
+        operation.outcome !== "cancelled",
     )
     if (Option.isSome(previous)) {
       const row = previous.value
@@ -1175,20 +1212,22 @@ export const activityRows = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<
   return rows
 }
 
-/** The failed ops of a group in call order: the collapsed level draws a row for each. */
-export const failedOperations = (
+/** The failed and cancelled ops of a group in call order: the collapsed level draws a row for each. */
+export const collapsedOperations = (
   calls: ReadonlyArray<ActivityCall>,
 ): ReadonlyArray<ActivityOperation> =>
   activityEntries(calls)
     .map((entry) => entry.operation)
-    .filter(isFailedOp)
+    .filter(Predicate.or(isFailedOp, isCancelledOp))
 
-/** What a failure row says ended the op: a command's exit status, else `failed`. */
-const failureWord = (operation: ActivityOperation): string =>
-  Option.match(Option.fromUndefinedOr(operation.exit), {
+/** What a failure row says ended the op: `cancelled`, a command's exit status, else `failed`. */
+const failureWord = (operation: ActivityOperation): string => {
+  if (isCancelledOp(operation)) return "cancelled"
+  return Option.match(Option.fromUndefinedOr(operation.exit), {
     onNone: () => "failed",
     onSome: (status) => `exit ${status}`,
   })
+}
 
 /** A row as text, in parts: the diff counts draw in their own colours between head and tail. */
 interface ActivityRowText {
@@ -1215,6 +1254,7 @@ export function formatActivityRow(
     const words = row.operations.map(failureWord)
     tail = ` · ${words[0] ?? "failed"}`
   }
+  if (row.outcome === "cancelled") tail = " · cancelled"
   if (row.outcome === "incomplete") tail = " · incomplete"
   const diffWidth = Option.match(row.diff, {
     onNone: () => 0,

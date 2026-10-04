@@ -1,5 +1,6 @@
 import {
   type ActivityCall,
+  type ActivityOutcome,
   activityRows,
   decodeToolOutputOption,
   formatActivityHeader,
@@ -7,7 +8,7 @@ import {
   formatCellRowLabel,
   formatCost,
   formatDuration,
-  failedOperations,
+  collapsedOperations,
   formatFailureRow,
   formatPreviewFooter,
   formatRowCounts,
@@ -83,6 +84,7 @@ import {
   bashOutputRows,
   callOperation,
   cellOperations,
+  cutShort,
   failureLine,
   failureText,
   FoldOperationsProvider,
@@ -367,6 +369,7 @@ const toActivityCall = (call: ToolCall, place: PathPlace): ActivityCall => {
     durationMs: call.durationMs,
     reason: failureLine(call),
     failure: Option.getOrUndefined(failureText(call)),
+    cancelled: cutShort(call),
     source: call,
   }
   if (call.toolName !== "cell") {
@@ -1128,9 +1131,14 @@ function ToolCallGroup(props: {
   const { pathPlace } = useClient()
   const dimensions = useTerminalDimensions()
   const activity = createMemo(() => props.calls.map((call) => toActivityCall(call, pathPlace())))
-  const failed = () => props.calls.some((call) => call.status === "error")
+  // A cut call (the turn's interrupt, the cell's cancel) is no failure.
+  const failed = () => props.calls.some((call) => call.status === "error" && !cutShort(call))
   const opsFailed = () =>
-    activity().some((call) => call.operations.some((operation) => operation.outcome === "failed"))
+    activity().some((call) =>
+      call.operations.some(
+        (operation) => operation.outcome === "failed" || operation.outcome === "cancelled",
+      ),
+    )
   const running = () => props.calls.some((call) => call.status === "running")
   const tick = useSpinnerClock()
   // A call that failed is the group's failure; ops that failed inside a cell
@@ -1162,7 +1170,7 @@ function ToolCallGroup(props: {
   // shows at every level.
   const failureRows = createMemo(() => {
     if (props.fullDetail || props.disclosure !== "collapsed") return []
-    return failedOperations(activity())
+    return collapsedOperations(activity())
   })
   // Preview draws a row per run of one tool, in past-tense words.
   const toolRows = createMemo(() => {
@@ -1194,6 +1202,11 @@ function ToolCallGroup(props: {
       ),
     )
   }
+  // A cancel is the reader's own act, a warning; a failure is an error.
+  const endingColor = (outcome: ActivityOutcome) => {
+    if (outcome === "cancelled") return theme.warning
+    return theme.error
+  }
   const connector = (index: number, count: number) => {
     if (index === count - 1) return "└"
     return "├"
@@ -1208,7 +1221,7 @@ function ToolCallGroup(props: {
         </Show>
         <For each={failureRows()}>
           {(operation, index) => (
-            <text wrapMode="none" truncate style={{ fg: theme.error }}>
+            <text wrapMode="none" truncate style={{ fg: endingColor(operation.outcome) }}>
               {connector(index(), failureRows().length)} {formatFailureRow(operation, lineWidth())}
             </text>
           )}
@@ -1217,8 +1230,8 @@ function ToolCallGroup(props: {
           {(row, index) => {
             const text = () => formatActivityRow(row, lineWidth())
             const color = () => {
-              if (row.outcome === "failed" || row.outcome === "incomplete") return theme.error
-              return theme.textMuted
+              if (row.outcome === "succeeded" || row.outcome === "running") return theme.textMuted
+              return endingColor(row.outcome)
             }
             return (
               <box flexDirection="column">

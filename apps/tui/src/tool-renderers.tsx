@@ -1,6 +1,6 @@
 import type { JSX } from "@opentui/solid"
 import { createPatch, structuredPatch } from "diff"
-import { Match, Option, Schema } from "effect"
+import { Match, Option, Predicate, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
 import { useClient } from "./client"
@@ -790,10 +790,37 @@ export const failureLine = (call: ToolCall): string => {
  * One call as the tool a group counts: its outcome, its arguments, an edit's
  * line counts, and for a failure its exit status and reason.
  */
+/**
+ * The results that say a call was cut, not that it failed: the turn's
+ * interrupt (`reason: "Interrupted"`, written for a call the turn did not
+ * finish) and the cell's own cancel (a `CellKernelError` whose reason is
+ * `cancelled`).
+ */
+const CutResult = Schema.Union([
+  Schema.Struct({ reason: Schema.Literal("Interrupted") }),
+  Schema.TaggedStruct("CellKernelError", { reason: Schema.Literal("cancelled") }),
+])
+
+/** Whether a call ended cut: its result is the turn's interrupt or the cell's cancel. */
+export const cutShort = (call: ToolCall): boolean =>
+  call.status === "error" && Option.isSome(decodeToolOutputOption(CutResult, call.output))
+
+/**
+ * Whether an op of a cut cell ended with the cut: it failed with no exit
+ * status and either has no result of its own (it was running, and settled
+ * with the cell, or its output did not fit the snapshot) or has the cut as
+ * its result. An op that failed with an error of its own keeps its failure.
+ */
+const cutWithCell = (operation: ToolCall): boolean =>
+  operation.status === "error" &&
+  Option.isNone(failedExit(operation)) &&
+  (Predicate.isUndefined(operation.output) || cutShort(operation))
+
 export const callOperation = (call: ToolCall, place: PathPlace): ActivityOperation => {
   const exit = failedExit(call)
   let outcome = callOutcome(call.status)
   if (Option.isSome(exit)) outcome = "failed"
+  if (cutShort(call)) return cancelledOperation(call, place)
   let operation: ActivityOperation = {
     tool: call.toolName,
     outcome,
@@ -813,6 +840,14 @@ export const callOperation = (call: ToolCall, place: PathPlace): ActivityOperati
     onSome: ({ added, removed }) => ({ ...operation, diff: { added, removed } }),
   })
 }
+
+/** A cut call as the tool it stands for: `cancelled`, with no failure or reason. */
+const cancelledOperation = (call: ToolCall, place: PathPlace): ActivityOperation => ({
+  tool: call.toolName,
+  outcome: "cancelled",
+  detail: toolArgSummary(call.toolName, call.input, place),
+  source: call,
+})
 
 /** Consecutive live ops of one tool. */
 interface OperationRun {
@@ -871,7 +906,11 @@ export const cellOperations = (
 ): ReadonlyArray<ActivityOperation> => {
   const live = Option.fromNullishOr(call.operations)
   if (Option.isSome(live) && live.value.length > 0) {
-    return live.value.map((operation) => callOperation(operation, place))
+    const cut = cutShort(call)
+    return live.value.map((operation) => {
+      if (cut && cutWithCell(operation)) return cancelledOperation(operation, place)
+      return callOperation(operation, place)
+    })
   }
   return Option.match(decodeToolOutputOption(CellOperationReceipts, call.output), {
     onNone: () => [],

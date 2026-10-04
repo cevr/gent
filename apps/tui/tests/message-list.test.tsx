@@ -6356,6 +6356,58 @@ describe("collapse ladder", () => {
       }),
   )
 
+  // The owner's rule: a cancelled cell is one `cancelled` row, not a failure.
+  // The turn's interrupt and the cell's own cancel both mark it; the op it cut
+  // has no receipt (settled with the cell) or lost its output to the snapshot.
+  it.scopedLive("a cancelled cell collapses to one cancelled row, at 120 and 60", () =>
+    Effect.gen(function* () {
+      const cutOp = (id: string, summary: ToolCall["summary"]): ToolCall => ({
+        id,
+        toolName: "bash",
+        status: "error",
+        input: { command: "sleep 20; echo cache wired" },
+        summary,
+        output: absent,
+      })
+      const cancelledCell = (id: string, output: string, op: ToolCall): ToolCall => ({
+        id,
+        toolName: "cell",
+        status: "error",
+        input: { code: "await tools.bash({ command: 'sleep 20; echo cache wired' })" },
+        summary: absent,
+        output,
+        operations: [op],
+      })
+      const interrupted = encodeJson({
+        error: "The tool did not finish: the turn was interrupted.",
+        reason: "Interrupted",
+      })
+      const kernelCancel = encodeJson({
+        _tag: "CellKernelError",
+        reason: "cancelled",
+        message: "Cell cancelled. 1 operation ran with no recorded result.",
+      })
+      const cases = [
+        cancelledCell("turn-cut", interrupted, cutOp("turn-cut-op", absent)),
+        cancelledCell("cell-cut", kernelCancel, cutOp("cell-cut-op", "cut by the snapshot")),
+      ]
+      for (const call of cases) {
+        const items: SessionItem[] = [assistantToolMessage(`m-${call.id}`, call)]
+        for (const width of [120, 60]) {
+          const collapsed = yield* draw(items, "collapsed", width)
+          const header = lines(collapsed).find((line) => line.includes("1 tool"))
+          expect(header).toContain("· 1 cancelled")
+          expect(header).not.toContain("failed")
+          expect(header).not.toContain("✗")
+          expect(groupRows(collapsed)).toEqual(["  └ Ran sleep 20; echo cache wired · cancelled"])
+          const preview = groupRows(yield* draw(items, "preview", width))
+          expect(preview[0]).toBe("  └ Ran sleep 20; echo cache wired · cancelled")
+          expect(preview.join("\n")).not.toContain("failed")
+        }
+      }
+    }),
+  )
+
   it.scopedLive("preview heads the failed row with its own output, never the cell's display", () =>
     Effect.gen(function* () {
       const wide = yield* draw(debugTurn(), "preview", 120)
