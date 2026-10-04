@@ -752,10 +752,17 @@ old meaning: a `deniedTools` list alone takes those ids from the tools the
 agent already holds; an `allowedTools` list alone replaces them and keeps the
 inherited denials; both become the allowed ids and then the denied ones with
 `!`. `modelId` becomes `model`. A `tools` list always replaces. When gent
-writes an agent back (a stored run, a rewritten config file, `driver.list`),
-it also writes the old keys for an older gent: `modelId`, and the old lists
-when they can say what the patterns say, else `allowedTools: []`, so an older
-gent gives the agent no tool rather than every tool. `paths` has no old form.
+writes a stored run or a `driver.list` reply, it also writes the old keys for
+an older gent: `modelId`, and the old lists when they can say what the
+patterns say, else `allowedTools: []`, so an older gent gives the agent no
+tool rather than every tool. `paths` has no old form. A config file is yours:
+a write by gent (a driver change, an extension toggle) leaves each agent
+entry as you wrote it.
+
+A `delegate.start` call takes the new keys only (`model`, `tools`, `paths`,
+...). A call with `modelId`, `allowedTools` or `deniedTools` fails, and the
+failure names the key to use; it never runs the child without the
+restriction it asked for.
 
 A config entry with a key the schema does not name fails to load, and the
 error names the agent and the key: a misspelled `toolz` would otherwise give

@@ -1428,19 +1428,25 @@ confines the shipped file tools: `fs-tools` reads the agent through
 `ctx.Session.getAgent()` and refuses a target outside its entries
 (`PathScopeError`) after links and `..` resolve; `read` and `grep` accept any
 entry, `write` and `edit` only a write entry. It is not a sandbox: bash and the
-cell are not confined. One codec owns the encoded agent: `StoredAgentPatch` for
-config entries, `StoredRunOverrides` for `sessions.admission_json` and the
-`delegate.start` overrides, and `StoredAgentDefinition` for `driver.list`. It
-reads the keys before `tools` (`allowedTools`, `deniedTools`, `modelId`) and
-prefers the new ones. A `deniedTools` list alone keeps an internal
+cell are not confined. One reader owns the encoded agent (`readStoredPatch`): it
+reads config entries (`AuthoredAgentPatch`), `sessions.admission_json`
+(`StoredRunOverrides`) and `driver.list` (`StoredAgentDefinition`), with the
+keys before `tools` (`allowedTools`, `deniedTools`, `modelId`), and prefers
+the new ones. A `deniedTools` list alone keeps an internal
 `legacyTools` edit that the merge resolves against the inherited tools (they
 minus those ids); an `allowedTools` list alone replaces and keeps the
-inherited denials; both replace. An explicit `tools` replaces. It writes the
-new keys and also the old ones, so the previous gent, SDK and TUI read a row
-or a reply the same way: `model` also as `modelId`, patterns the old lists
+inherited denials; both replace. An explicit `tools` replaces. A stored row
+and a wire reply get the new keys and also the old ones
+(`writeStoredPatch`), so the previous gent, SDK and TUI read them the same
+way: `model` also as `modelId`, patterns the old lists
 can express as those lists, and any other patterns as `allowedTools: []`, so
 an old reader holds no tool rather than every tool. `paths` has no old form:
-an old reader drops it. Stored and wire readers stay tolerant of unknown keys;
+an old reader drops it. A config entry writes back the keys its author used
+(`writeAuthoredPatch`), and a config write keeps an unchanged field's raw
+JSON, so a config file never gains keys for an older gent. A `delegate.start`
+call writes `RunOverrides`, the new keys only: the model-facing schema names
+nothing else, and an old or unknown key fails the call with a message that
+names the key to use. Stored and wire readers stay tolerant of unknown keys;
 authoring is strict: a config entry, `AgentDefinition.make` and
 `new AgentDefinition` refuse a key the schema does not name, so TypeScript
 that still passes `allowedTools` fails to load rather than run with every tool. Each turn reads the config files as
