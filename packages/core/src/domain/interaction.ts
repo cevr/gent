@@ -312,16 +312,33 @@ class CurrentInteractionCall extends Context.Service<
   }
 >()("@gent/core/src/domain/interaction/CurrentInteractionCall") {}
 
-/** The request a branch shows. Storage holds at most one pending row per branch. */
+/**
+ * Where the request in a branch's slot is. The slot mirrors the storage row,
+ * and storage holds at most one pending row per branch:
+ * - `admitting`: its row is being stored. No call parks on it or answers it.
+ * - `shown`: the branch shows it. It takes an answer, and calls park on it.
+ * - `closing`: it closed, and its row is being taken or settled. No call
+ *   takes, answers, or parks on it. The slot frees only when that write is
+ *   done, so the next ask never stores a pending row beside it.
+ * A call that meets an `admitting` or `closing` request waits for the change.
+ */
+type OpenPhase = "admitting" | "shown" | "closing"
+
+/** The request in a branch's slot. */
 interface OpenRequest {
   readonly requestId: InteractionRequestId
   /** None: a row stored before owners were recorded. The first call to ask takes its answer. */
   readonly owner: Option.Option<InteractionOwner>
   /** The question asked; an answer goes only to an ask of the same question. */
   readonly paramsJson: string
-  /** False while the row is being stored: no call parks on it or claims the slot. */
-  readonly admitted: boolean
+  readonly phase: OpenPhase
 }
+
+/** The slot keeps a request that closed until its row stops being pending. */
+const closingSlot = (open: OpenRequest): Option.Option<OpenRequest> =>
+  Option.some({ ...open, phase: "closing" })
+
+const isShown = (open: OpenRequest) => open.phase === "shown"
 
 /**
  * An answer a call took. The call takes it again on each later run until it
@@ -425,7 +442,8 @@ interface EndedRun {
  * parked on stays open for it, also when that answer came before this run
  * ended. A run that did not park ends the call: its kept answers go, and an
  * open answer it owns but did not take is abandoned, so the next owner in the
- * queue asks. A row with no recorded owner is never abandoned here.
+ * queue asks. A row with no recorded owner is never abandoned here. An
+ * abandoned request holds the slot as `closing` until its row settles.
  */
 const endRun = (
   current: InteractionState,
@@ -441,20 +459,30 @@ const endRun = (
     branch.open,
     (open) =>
       !run.parked &&
-      open.admitted &&
+      isShown(open) &&
       current.decisions.has(open.requestId) &&
       Option.exists(open.owner, ownedByCall),
-  ).pipe(Option.map((open) => open.requestId))
+  )
   let decided = current
-  if (Option.isSome(abandoned)) decided = dropDecision(current, abandoned.value)
+  let open = branch.open
+  if (Option.isSome(abandoned)) {
+    decided = dropDecision(current, abandoned.value.requestId)
+    open = closingSlot(abandoned.value)
+  }
   const next = putBranch(decided, key, {
     ...branch,
     running,
-    open: Option.filter(branch.open, () => Option.isNone(abandoned)),
+    open,
     queue: branch.queue.filter((owner) => !ownedByCall(owner) || owner.occurrence < run.asked),
     taken: branch.taken.filter(stays),
   })
-  return [{ released: branch.taken.filter((entry) => !stays(entry)), abandoned }, next]
+  return [
+    {
+      released: branch.taken.filter((entry) => !stays(entry)),
+      abandoned: Option.map(abandoned, (value) => value.requestId),
+    },
+    next,
+  ]
 }
 
 export const makeInteractionService = (
@@ -481,9 +509,31 @@ export const makeInteractionService = (
       yield* Deferred.completeWith(previous, Effect.void)
     })
 
-    /** The row stops being pending; a call waiting behind it may ask. */
-    const settle = (requestId: InteractionRequestId) =>
-      config.storage.resolve(requestId).pipe(Effect.andThen(signal))
+    /**
+     * Finish closing the request in a branch's slot: `write` takes or settles
+     * its row, and only then does the slot free and a waiting call look
+     * again. The caller has moved the request to `closing` in the same
+     * transition that closed it, and runs this without an interrupt between.
+     */
+    const closeSlot = (key: string, requestId: InteractionRequestId, write: Effect.Effect<void>) =>
+      write.pipe(
+        Effect.andThen(
+          Ref.update(state, (current) => {
+            const branch = branchOf(current, key)
+            const held = Option.exists(
+              branch.open,
+              (open) => open.requestId === requestId && open.phase === "closing",
+            )
+            if (!held) return current
+            return putBranch(current, key, { ...branch, open: Option.none() })
+          }),
+        ),
+        Effect.andThen(signal),
+      )
+
+    /** Settle the closing request's row, then free the slot. */
+    const settle = (key: string, requestId: InteractionRequestId) =>
+      closeSlot(key, requestId, config.storage.resolve(requestId))
 
     /** A kept answer's call ended: its row stops being open. */
     const release = (entries: ReadonlyArray<TakenAnswer>) =>
@@ -540,11 +590,14 @@ export const makeInteractionService = (
       yield* request.persist(record).pipe(Effect.onError(() => release))
       yield* Ref.update(state, (current) => {
         const branch = branchOf(current, key)
-        const open = Option.filter(branch.open, isClaim)
+        const open = Option.filter(
+          branch.open,
+          (value) => isClaim(value) && value.phase === "admitting",
+        )
         if (Option.isNone(open)) return current
         return putBranch(current, key, {
           ...branch,
-          open: Option.some({ ...open.value, admitted: true }),
+          open: Option.some({ ...open.value, phase: "shown" }),
         })
       })
       yield* signal
@@ -606,9 +659,9 @@ export const makeInteractionService = (
       ): Step => {
         const settled = putBranch(dropDecision(current, open.requestId), key, {
           ...branch,
-          open: Option.none(),
+          open: closingSlot(open),
         })
-        let settling = settle(open.requestId)
+        let settling = settle(key, open.requestId)
         if (!current.decisions.has(open.requestId))
           settling = settling.pipe(Effect.andThen(config.onDismiss(open.requestId, branchRef)))
         return [Effect.as(settling, Option.none()), settled]
@@ -647,7 +700,7 @@ export const makeInteractionService = (
         open: OpenRequest,
         wait: Next,
       ): Step => {
-        if (!open.admitted) return [wait, current]
+        if (!isShown(open)) return [wait, current]
         const mine = isOwner(open.owner, asker)
         const sameCall = Option.exists(
           open.owner,
@@ -674,11 +727,11 @@ export const makeInteractionService = (
           if (!sameQuestion) return drop(current, branch, open)
           const taken = putBranch(dropDecision(current, open.requestId), key, {
             ...branch,
-            open: Option.none(),
+            open: closingSlot(open),
             queue: withoutOwner(branch.queue, asker),
             taken: [...branch.taken, { requestId: open.requestId, owner, paramsJson, decision }],
           })
-          const keep = config.storage.take(open.requestId).pipe(Effect.andThen(signal))
+          const keep = closeSlot(key, open.requestId, config.storage.take(open.requestId))
           return [Effect.as(keep, Option.some(decision)), taken]
         }
         const answeredOwner = open.owner.value.toolCallId
@@ -702,7 +755,7 @@ export const makeInteractionService = (
         if (ownPlace) rest = rest.slice(1)
         const claimed = putBranch(current, key, {
           ...branch,
-          open: Option.some({ requestId, owner: asker, paramsJson, admitted: false }),
+          open: Option.some({ requestId, owner: asker, paramsJson, phase: "admitting" }),
           queue: withoutOwner(rest, asker),
         })
         const request = { params, paramsJson, requestId, owner: asker, branch: branchRef }
@@ -755,19 +808,18 @@ export const makeInteractionService = (
       const key = contextKey(branchRef)
       const paramsJson = yield* encodeInteractionParams(params)
       const resumeRequestId = yield* ownership.resumeRequestId
+      /** Close `selected` in the slot and drop its answer; then its row settles. */
+      const closeSelected = (selected: InteractionRequestId) =>
+        Ref.update(state, (current) => {
+          const branch = branchOf(current, key)
+          const decided = dropDecision(current, selected)
+          const open = Option.filter(branch.open, (value) => value.requestId === selected)
+          if (Option.isNone(open)) return decided
+          return putBranch(decided, key, { ...branch, open: closingSlot(open.value) })
+        }).pipe(Effect.andThen(settle(key, selected)))
       /** The owner takes its answer: its receipt first, then the request settles. */
       const takeAnswer = (selected: InteractionRequestId, decision: ApprovalDecision) =>
-        Effect.gen(function* () {
-          yield* ownership.take(selected)
-          yield* Ref.update(state, (current) => {
-            const branch = branchOf(current, key)
-            const taken = dropDecision(current, selected)
-            if (!Option.exists(branch.open, (value) => value.requestId === selected)) return taken
-            return putBranch(taken, key, { ...branch, open: Option.none() })
-          })
-          yield* settle(selected)
-          return decision
-        })
+        ownership.take(selected).pipe(Effect.andThen(closeSelected(selected)), Effect.as(decision))
       if (Option.isSome(resumeRequestId)) {
         const selected = resumeRequestId.value
         const current = yield* Ref.get(state)
@@ -784,11 +836,7 @@ export const makeInteractionService = (
         if (!Option.exists(open, (value) => value.paramsJson !== paramsJson))
           return yield* Effect.uninterruptible(takeAnswer(selected, decision))
         // The answer was to another question: settle it, and ask this one.
-        yield* Ref.update(state, (latest) => {
-          const branch = branchOf(latest, key)
-          return putBranch(dropDecision(latest, selected), key, { ...branch, open: Option.none() })
-        })
-        yield* settle(selected)
+        yield* Effect.uninterruptible(closeSelected(selected))
       }
       const requestId = InteractionRequestId.make(yield* platform.randomId)
       type Look = Effect.Effect<boolean, EventStoreError | InteractionSlotBusyError>
@@ -801,7 +849,7 @@ export const makeInteractionService = (
             if (Option.isNone(branch.open)) {
               const claimed = putBranch(current, key, {
                 ...branch,
-                open: Option.some({ requestId, owner, paramsJson, admitted: false }),
+                open: Option.some({ requestId, owner, paramsJson, phase: "admitting" }),
               })
               const admitted = admit({
                 params,
@@ -814,7 +862,7 @@ export const makeInteractionService = (
               return [Effect.as(admitted, true), claimed]
             }
             const open = branch.open.value
-            if (!open.admitted) return [wait, current]
+            if (!isShown(open)) return [wait, current]
             if (Option.exists(open.owner, (other) => branch.running.has(other.toolCallId)))
               return [wait, current]
             const busy = new InteractionSlotBusyError({
@@ -836,7 +884,8 @@ export const makeInteractionService = (
           Ref.get(state).pipe(
             Effect.map((current): Answer => {
               const branch = branchOf(current, key)
-              if (!Option.exists(branch.open, (value) => value.requestId === requestId))
+              const open = Option.filter(branch.open, (value) => value.requestId === requestId)
+              if (!Option.exists(open, (value) => value.phase !== "closing"))
                 return Effect.fail(
                   new InteractionClosedError({
                     message: "The interaction closed without an answer",
@@ -864,7 +913,7 @@ export const makeInteractionService = (
           // A decoded decision always encodes: a failure here is a defect.
           const decisionJson = yield* Effect.orDie(encodeInteractionDecision(decision))
           const shown = (current: InteractionState) =>
-            branchOf(current, key).open.pipe(Option.filter((open) => open.admitted))
+            branchOf(current, key).open.pipe(Option.filter(isShown))
           const shownHere = (current: InteractionState) =>
             Option.exists(shown(current), (open) => open.requestId === requestId)
           const mismatch = (current: InteractionState) => {
@@ -971,8 +1020,17 @@ export const makeInteractionService = (
               InteractionState,
             ] => {
               const branch = branchOf(current, key)
-              const next = putBranch(current, key, { ...emptyBranch, running: branch.running })
-              return Option.match(branch.open, {
+              // A request already closing keeps the slot until its own close
+              // frees it; any other open request closes here.
+              const closes = Option.filter(branch.open, (value) => value.phase !== "closing")
+              let open = branch.open
+              if (Option.isSome(closes)) open = closingSlot(closes.value)
+              const next = putBranch(current, key, {
+                ...emptyBranch,
+                open,
+                running: branch.running,
+              })
+              return Option.match(closes, {
                 onNone: () => [{ open: Option.none(), taken: branch.taken }, next],
                 onSome: (value) => [
                   {
@@ -990,10 +1048,10 @@ export const makeInteractionService = (
           yield* release(ended.taken)
           const open = ended.open
           if (Option.isNone(open)) return yield* signal
-          yield* settle(open.value.open.requestId)
-          if (open.value.open.admitted && !open.value.answered)
+          yield* settle(key, open.value.open.requestId)
+          if (isShown(open.value.open) && !open.value.answered)
             yield* config.onDismiss(open.value.open.requestId, branchRef)
-        }),
+        }).pipe(Effect.uninterruptible),
 
       rehydrate: Effect.fn("InteractionService.rehydrate")(function* (
         record: InteractionRequestRecord,
@@ -1040,7 +1098,7 @@ export const makeInteractionService = (
               requestId: record.requestId,
               owner: Option.fromUndefinedOr(record.owner),
               paramsJson: record.paramsJson,
-              admitted: true,
+              phase: "shown",
             }),
           })
         })
@@ -1082,7 +1140,7 @@ export const makeInteractionService = (
             const run = { toolCallId, asked: yield* Ref.get(asked), parked: yield* Ref.get(parked) }
             const left = yield* Ref.modify(state, (current) => endRun(current, key, run))
             yield* release(left.released)
-            if (Option.isSome(left.abandoned)) yield* config.storage.resolve(left.abandoned.value)
+            if (Option.isSome(left.abandoned)) yield* settle(key, left.abandoned.value)
             yield* signal
           })
           return yield* self.pipe(

@@ -646,6 +646,68 @@ describe("Interaction Request", () => {
     }).pipe(Effect.provide(storageLive)),
   )
 
+  /**
+   * Call A asks and is answered. When the step runs again, A's run frees the
+   * slot: it takes its answer when it asks again, and abandons it when it
+   * does not. The storage write that stops A's row being pending is held.
+   * Call B asks meanwhile: it must not store its row while A's row is still
+   * pending, which the branch's pending singleton refuses.
+   */
+  const askWhileSlotReleaseIsHeld = (held: "take" | "resolve", aAsksAgain: boolean) =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const base = callbacksFor(is)
+      const writeStarted = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      const hold = (write: Effect.Effect<void>) =>
+        Deferred.succeed(writeStarted, void 0).pipe(
+          Effect.andThen(Deferred.await(gate)),
+          Effect.andThen(write),
+        )
+      let storage: InteractionStorageConfig = { ...base, take: (id) => hold(base.take(id)) }
+      if (held === "resolve") storage = { ...base, resolve: (id) => hold(base.resolve(id)) }
+      const interaction = yield* serviceOver(storage)
+      const branch = { sessionId: SessionId.make(`s-${held}`), branchId: BranchId.make("b-slot") }
+      yield* ensureStorageParents(branch)
+      const a = ToolCallId.make("call-a")
+      const b = ToolCallId.make("call-b")
+      const step = interaction.beginStep(branch, [a, b])
+      const askA = interaction.present({ text: "A?" }, branch)
+      yield* step
+      const x = yield* pendingId(yield* interaction.ownCall(branch, a)(askA).pipe(Effect.exit))
+      yield* interaction.storeResolution(branch, x, { approved: true })
+      yield* step
+      let rerunA = Effect.asVoid(askA)
+      if (!aAsksAgain) rerunA = Effect.void
+      const runA = yield* interaction
+        .ownCall(
+          branch,
+          a,
+        )(rerunA)
+        .pipe(Effect.exit, Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.await(writeStarted)
+      const runB = yield* interaction
+        .ownCall(
+          branch,
+          b,
+        )(interaction.present({ text: "B?" }, branch))
+        .pipe(Effect.exit, Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.succeed(gate, void 0)
+      expect(Exit.isSuccess(yield* Fiber.join(runA))).toBe(true)
+      // B asks once A's row is no longer pending, and the branch shows B's question.
+      const y = yield* pendingId(yield* Fiber.join(runB))
+      expect(yield* shownRequest(interaction, branch)).toEqual(Option.some(y))
+      expect((yield* is.listOpen(branch)).map((record) => record.requestId)).toEqual([y])
+    }).pipe(Effect.provide(storageLive), Effect.timeout("4 seconds"))
+
+  it.live("a taken answer frees the slot only after its row stops being pending", () =>
+    askWhileSlotReleaseIsHeld("take", true),
+  )
+
+  it.live("an abandoned answer frees the slot only after its row stops being pending", () =>
+    askWhileSlotReleaseIsHeld("resolve", false),
+  )
+
   it.live("ending the turn settles its open request and closes the dialog", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
