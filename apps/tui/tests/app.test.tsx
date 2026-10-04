@@ -101,6 +101,7 @@ import {
 import { type ClientContextValue, useClient } from "../src/client"
 import {
   type RenderWaitTimeoutError,
+  untilExtensionsLoaded,
   waitForFrame,
   waitForTerminal,
   waitUntil,
@@ -1485,11 +1486,16 @@ describe("App session view and fatal screen", () => {
             }
           }
           const autocomplete = surface.startsWith("autocomplete")
+          // An autocomplete source loads only once the session reads `ready`:
+          // the order a loaded machine gives, where `ready` comes first.
+          const readySeen = Deferred.makeUnsafe<void>()
+          let loadGate: Effect.Effect<void> = Effect.void
+          if (autocomplete) loadGate = Deferred.await(readySeen)
           const extension = defineClientExtension("@test/breaks", {
-            setup: Effect.succeed(clientContributions(contribution())),
+            setup: loadGate.pipe(Effect.as(clientContributions(contribution()))),
           })
           const responded: Array<boolean> = []
-          const { setup } = yield* mountApp({
+          const { setup, ext } = yield* mountApp({
             builtins: [...builtinClientModules, extension],
             width: 120,
             initialSession: breaksSession,
@@ -1529,8 +1535,11 @@ describe("App session view and fatal screen", () => {
             setup.mockInput.pressKey("o", { ctrl: true })
           }
           if (autocomplete) {
-            // A `%` typed before the extensions load opens nothing.
-            yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "loaded")
+            // A `%` typed before the extensions load opens nothing, and `ready`
+            // is the session's word, not the load's: wait for the load itself.
+            yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "the session ready")
+            Deferred.doneUnsafe(readySeen, Exit.void)
+            yield* untilExtensionsLoaded(setup, ext.loaded)
             yield* Effect.promise(() => setup.mockInput.typeText("%"))
           }
           yield* waitForFrame(
