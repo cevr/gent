@@ -379,6 +379,16 @@ export const saveToolImage = Effect.fn("saveToolImage")(function* (input: SaveTo
   )
 })
 
+/**
+ * The file that holds `image`'s bytes, for code that reads them (a cell, a
+ * command). It stays while a stored message references the image.
+ */
+export const toolImageFile = Effect.fn("ToolImage.file")(function* (image: ToolImage) {
+  const ctx = yield* ExtensionContext
+  const path = yield* Path.Path
+  return blobPath(path, yield* toolImageDirectory(ctx.home), image)
+})
+
 // ── request read ────────────────────────────────────────────────────────────
 
 /**

@@ -2452,7 +2452,7 @@ describe("mcp images", () => {
           ],
         },
         [Option.none(), Option.none(), Option.some("/nonexistent/gent-probe-x/a.wav")],
-        [Option.none(), Option.some(image), Option.none()],
+        [Option.none(), Option.some({ image, path: "/data/blobs/a.png" }), Option.none()],
       ),
     ).toEqual({
       text: "a dot",
@@ -2464,6 +2464,7 @@ describe("mcp images", () => {
           width: 1,
           height: 1,
           bytes: 70,
+          path: "/data/blobs/a.png",
         },
       ],
       omitted: [
@@ -2551,6 +2552,43 @@ describe("mcp images", () => {
         expect(parts.map((part) => part.type)).toEqual(["text", "file"])
         expect(parts[0]).toMatchObject({ text: "Image from mcp.fixture.png 1x1:" })
         expect(parts[1]).toMatchObject({ data: `data:image/png;base64,${DOT_PNG}` })
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    25_000,
+  )
+
+  it.scopedLive(
+    "cell code reads an MCP image's bytes from the content-addressed file its result names",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-image-path-" })
+        const code = [
+          "const result = await tools.mcp.fixture.png()",
+          "const file = result.images[0].path",
+          "const read = Buffer.from(await Bun.file(file).arrayBuffer()).toString('base64')",
+          "JSON.stringify({ file, sha256: result.images[0].sha256, read })",
+        ].join("; ")
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-image-path", {
+            fixture: fixture.stdio({ MCP_FIXTURE_PNG: DOT_PNG }),
+          }),
+          code,
+        ).pipe(
+          Effect.provide(
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: dataDir })),
+          ),
+        )
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const shown = yield* cellDisplay(
+          result,
+          Schema.fromJsonString(
+            Schema.Struct({ file: Schema.String, sha256: Schema.String, read: Schema.String }),
+          ),
+        )
+        expect(shown.file).toBe(path.join(dataDir, "blobs", `${shown.sha256}.png`))
+        expect(shown.read).toBe(DOT_PNG)
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     25_000,
   )

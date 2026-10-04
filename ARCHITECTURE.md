@@ -1808,7 +1808,8 @@ other result is an object of `structuredContent`, `text`, the other blocks as
 `content`, `images`, and `omitted`, beside a `note`. An image block the tool
 image store takes (`saveToolImage`: PNG, JPEG, GIF or WebP within its limits)
 is a `ToolImage` in `images`, so the model sees it after the call's result as
-it sees any tool image; a typed tool returns only its `structuredContent`, so
+it sees any tool image, and its entry names the `path` of the image's
+content-addressed file (`toolImageFile`), which cell code reads; a typed tool returns only its `structuredContent`, so
 its images are dropped. `omitted` names each other image, audio, or blob
 block with its MIME type and size; the cell never receives the bytes.
 Each such block is written once to `<data dir>/mcp-blobs/<sha256>.<ext>` (the

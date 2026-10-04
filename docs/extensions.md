@@ -337,7 +337,9 @@ request sends at most the newest 20 images (5 on Chat Completions); past that
 it leaves out the oldest five at a time, each as a line that names it, and
 the session keeps every image. A blob stays while any stored message holds
 it, however old the session; a server start removes a blob no stored message
-references once nobody used it for a day.
+references once nobody used it for a day. `toolImageFile(image)` gives the
+path of an image's file, for code that reads the bytes (an MCP result names
+it beside each image, so a cell reads it).
 
 ### request — extension-to-extension RPC
 

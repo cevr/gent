@@ -60,6 +60,7 @@ import {
   saveToolImage,
   tool,
   type ToolImage,
+  toolImageFile,
   ToolResultFailure,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
@@ -2462,6 +2463,12 @@ interface ProjectedContent {
   unsaved: number
 }
 
+/** An image block in the tool image store: its reference and the file cell code reads. */
+interface StoredImage {
+  readonly image: ToolImage
+  readonly path: string
+}
+
 /**
  * The tool image an image block is stored as; none for any other block, and
  * for an image the store refuses (not PNG, JPEG, GIF or WebP, or too large),
@@ -2469,18 +2476,24 @@ interface ProjectedContent {
  */
 const storeImageBlock = (block: Schema.Json) => {
   if (!isMediaBlock(block) || block.type !== "image")
-    return Effect.succeed(Option.none<ToolImage>())
+    return Effect.succeed(Option.none<StoredImage>())
   const data = block.data ?? ""
   if (data.length === 0 || base64Bytes(data) > BLOB_FILE_LIMIT) {
-    return Effect.succeed(Option.none<ToolImage>())
+    return Effect.succeed(Option.none<StoredImage>())
   }
   const bytes = Base64.decode(data)
-  if (Result.isFailure(bytes)) return Effect.succeed(Option.none<ToolImage>())
-  return saveToolImage({ bytes: bytes.success }).pipe(Effect.option)
+  if (Result.isFailure(bytes)) return Effect.succeed(Option.none<StoredImage>())
+  return saveToolImage({ bytes: bytes.success }).pipe(
+    Effect.flatMap((image) => Effect.map(toolImageFile(image), (path) => ({ image, path }))),
+    Effect.option,
+  )
 }
 
-/** A `ToolImage` as the JSON a result holds. */
-const toolImageJson = (image: ToolImage): Schema.Json => ({
+/**
+ * A `ToolImage` as the JSON a result holds, with the `path` of its
+ * content-addressed file beside it, as an omitted block names its file.
+ */
+const toolImageJson = ({ image, path }: StoredImage): Schema.Json => ({
   _tag: image._tag,
   sha256: image.sha256,
   mediaType: image.mediaType,
@@ -2488,6 +2501,7 @@ const toolImageJson = (image: ToolImage): Schema.Json => ({
   height: image.height,
   bytes: image.bytes,
   ...omitUndefined({ source: image.source }),
+  path,
 })
 
 /**
@@ -2498,7 +2512,7 @@ const toolImageJson = (image: ToolImage): Schema.Json => ({
 const projectContent = (
   content: ReadonlyArray<Schema.Json>,
   saved: ReadonlyArray<Option.Option<string>>,
-  stored: ReadonlyArray<Option.Option<ToolImage>>,
+  stored: ReadonlyArray<Option.Option<StoredImage>>,
 ): ProjectedContent => {
   const projected: ProjectedContent = { texts: [], blocks: [], images: [], binary: [], unsaved: 0 }
   for (const [index, block] of content.entries()) {
@@ -2561,7 +2575,7 @@ const binaryNote = (count: number, unsaved: number) => {
  * alone (its text only repeating it) is that value. Anything else is an
  * object: `structuredContent`, `text`, the other blocks as `content`, the
  * image blocks the tool image store took as `images` (the model sees each
- * one after the result), and `omitted` naming each other image, audio, or
+ * one after the result; each names the `path` of its file), and `omitted` naming each other image, audio, or
  * blob block with its MIME type and size, and the `path` of the file it was
  * saved to (see `saveBlob`) when `saved` names one, and a `note` saying which
  * the cell can read.
@@ -2569,7 +2583,7 @@ const binaryNote = (count: number, unsaved: number) => {
 export const projectCallResult = (
   result: CallResult,
   saved: ReadonlyArray<Option.Option<string>> = [],
-  stored: ReadonlyArray<Option.Option<ToolImage>> = [],
+  stored: ReadonlyArray<Option.Option<StoredImage>> = [],
 ): Schema.Json => {
   const { texts, blocks, images, binary, unsaved } = projectContent(
     result.content ?? [],
