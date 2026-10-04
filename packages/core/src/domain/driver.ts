@@ -23,13 +23,7 @@ import {
   type Model as AiModel,
   type Response,
 } from "effect/ai"
-import {
-  type CacheWriteByLifetime,
-  Model,
-  ModelId,
-  ProviderId,
-  type ReasoningEffort,
-} from "./agent.js"
+import { type CacheWriteByLifetime, Model, ModelId, ProviderId, ReasoningEffort } from "./agent.js"
 import { omitUndefined } from "./guards.js"
 import type { SessionId } from "./ids.js"
 
@@ -445,10 +439,33 @@ export interface ModelCatalogView {
 }
 
 /**
+ * The effort levels the catalog lists for the model, lowest first; empty when
+ * it lists no effort list (a thinking budget or a toggle only).
+ */
+export const acceptedEfforts = (entry: CatalogModel): ReadonlyArray<ReasoningEffort> =>
+  Option.match(
+    Option.fromUndefinedOr(
+      (entry.reasoningOptions ?? []).find((option) => option.type === "effort"),
+    ),
+    {
+      onNone: () => [],
+      onSome: (option) => ReasoningEffort.literals.filter((level) => option.values.includes(level)),
+    },
+  )
+
+/**
  * A catalog model as gent's `Model`, under `providerId` (a driver id, which
  * may differ from the catalog provider's). A decision model is a classifier.
+ * `efforts` are the levels its requests name (`Model.efforts`): by default
+ * the catalog's effort list; an API class that plans a level otherwise
+ * passes its own (`ApiClassContribution.efforts`).
  */
-export const modelFromCatalog = (providerId: string, entry: CatalogModel): Model => {
+export const modelFromCatalog = (
+  providerId: string,
+  entry: CatalogModel,
+  efforts: (entry: CatalogModel) => ReadonlyArray<ReasoningEffort> = acceptedEfforts,
+): Model => {
+  const levels = efforts(entry)
   const model = Model.make({
     id: ModelId.make(`${providerId}/${entry.id}`),
     name: entry.name,
@@ -466,6 +483,7 @@ export const modelFromCatalog = (providerId: string, entry: CatalogModel): Model
       ),
       releaseDate: entry.releaseDate,
       reasoning: entry.reasoning,
+      efforts: Option.getOrUndefined(Option.liftPredicate(levels, (each) => each.length > 0)),
     }),
   })
   if (entry.decision !== true) return model
@@ -543,6 +561,13 @@ export interface ApiClassContribution {
   readonly protocols: ReadonlyArray<string>
   /** How long a prompt stays cached; none: the model never goes cold. */
   readonly promptCacheTtl: Option.Option<Duration.Duration>
+  /**
+   * The effort levels this class's requests name for `entry`, lowest first
+   * (`Model.efforts`), when its plan differs from the catalog's effort list:
+   * a class that turns reasoning off for `none` lists `none`. Absent: the
+   * catalog's list (`acceptedEfforts`).
+   */
+  readonly efforts?: (entry: CatalogModel) => ReadonlyArray<ReasoningEffort>
   readonly resolveModel: (
     request: ApiClassRequest,
   ) => Effect.Effect<ProviderResolution, DriverError>

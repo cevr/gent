@@ -15,10 +15,12 @@ import {
   SynchronizedRef,
 } from "effect"
 import {
+  acceptedEfforts,
   type ApiClassContribution,
   type ApiClassRequest,
   type CatalogModel,
   catalogModelEntry,
+  clampEffort,
   isRecordArray,
   type JsonRecord,
   Model,
@@ -28,7 +30,7 @@ import {
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderHints,
-  ReasoningEffort,
+  type ReasoningEffort,
   type ReasoningOption,
 } from "@gent/core/extensions/api"
 import {
@@ -757,46 +759,18 @@ export const postOAuthForm = (
 // effort list, the on/off toggle and the thinking budget models.dev lists
 // under `reasoning_options`, and `temperature: false` for a model that
 // refuses a sampling temperature. No class keeps a table of model families.
-
-/** Every effort level, lowest first; the catalog's `null` effort reads as `"none"`. */
-const EFFORT_ORDER = ReasoningEffort.literals
-
-/**
- * The effort a request names for a hint: the lowest level the model accepts
- * at or above `level`, else the highest it accepts. `order` ranks every level
- * lowest first; `accepts` is the model's own list, in the same order. A model
- * that accepts nothing gets none.
- */
-const effortAtOrAbove = <Level extends string>(
-  order: ReadonlyArray<Level>,
-  accepts: ReadonlyArray<Level>,
-  level: Level,
-): Option.Option<Level> => {
-  const rank = order.indexOf(level)
-  return Option.fromUndefinedOr(accepts.find((each) => order.indexOf(each) >= rank)).pipe(
-    Option.orElse(() => Option.fromUndefinedOr(accepts.at(-1))),
-  )
-}
+// The effort list and its clamp are core's (`acceptedEfforts`, `clampEffort`):
+// the step's receipt and a client's level read the same ones.
 
 /** The model's reasoning controls; none when the catalog lists none. */
 const reasoningOptions = (entry: CatalogModel): ReadonlyArray<ReasoningOption> =>
   entry.reasoningOptions ?? []
 
-/** The efforts the model accepts, lowest first; empty when the catalog lists no effort list. */
-const acceptedEfforts = (entry: CatalogModel): ReadonlyArray<ReasoningEffort> =>
-  Option.match(
-    Option.fromUndefinedOr(reasoningOptions(entry).find((option) => option.type === "effort")),
-    {
-      onNone: () => [],
-      onSome: (option) => EFFORT_ORDER.filter((level) => option.values.includes(level)),
-    },
-  )
-
 /** The effort a request names for `level`: the lowest the model accepts at or above it, else its highest. */
 export const effortFor = (
   entry: CatalogModel,
   level: ReasoningEffort,
-): Option.Option<ReasoningEffort> => effortAtOrAbove(EFFORT_ORDER, acceptedEfforts(entry), level)
+): Option.Option<ReasoningEffort> => clampEffort(acceptedEfforts(entry), level)
 
 /** The lowest effort the model accepts; none without an effort list. */
 export const lowestEffort = (entry: CatalogModel): Option.Option<ReasoningEffort> =>
@@ -895,12 +869,14 @@ export const thinkingBudget = (
  * The catalog entries of one provider the agent loop can drive, as models.
  * A model without tool calling is dropped: every gent turn sends tools. Each
  * model carries `promptCacheTtl`, how long the provider keeps a request's
- * prompt cached; models.dev does not say.
+ * prompt cached; models.dev does not say. `apiClass` is the class the
+ * driver plans its requests with: its effort levels are the model's.
  */
 export const catalogModels = (
   catalog: ModelCatalogView,
   providerId: string,
   promptCacheTtl: Duration.Duration,
+  apiClass: Pick<ApiClassContribution, "efforts">,
 ): ReadonlyArray<Model> =>
   Option.match(catalog.provider(providerId), {
     onNone: () => [],
@@ -909,7 +885,7 @@ export const catalogModels = (
         .filter((entry) => entry.toolCall !== false && entry.decision !== true)
         .map((entry) =>
           Model.make({
-            ...modelFromCatalog(providerId, entry),
+            ...modelFromCatalog(providerId, entry, apiClass.efforts),
             promptCacheTtlMs: Duration.toMillis(promptCacheTtl),
           }),
         ),

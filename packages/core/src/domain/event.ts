@@ -133,6 +133,15 @@ export const AgentEvent = Schema.TaggedUnion({
     interrupted: Schema.optional(Schema.Boolean),
     /** How the step ended; the step boundary the loop's policy matched on. */
     outcome: Schema.optional(StepOutcomeTag),
+    /**
+     * The effort the step's request sent for `model`: the hint after the
+     * levels the model accepts (`effectiveEffort`). A driver rebuilds the
+     * effort history of a conversation from these, so a change keeps the
+     * cached prefix. Absent when the request named no level (the model's
+     * default, or a model that does not reason), and on rows written before
+     * the field; such a step reads as one at an unknown level.
+     */
+    reasoningLevel: Schema.optional(ReasoningEffort),
   },
   TurnCompleted: {
     sessionId: SessionId,

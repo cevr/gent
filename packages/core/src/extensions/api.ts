@@ -66,6 +66,7 @@ export {
   type TurnUsage,
 } from "../domain/extension.js"
 export {
+  acceptedEfforts,
   credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
   DriverError,
@@ -102,7 +103,7 @@ export {
 } from "../domain/ids.js"
 // The message a `steer` send lands; `Session.stopMessage({ messageId })` names it.
 export { interjectionMessageId } from "../domain/agent-loop.js"
-export { Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
+export { clampEffort, Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
 export { AuthMethod } from "../domain/driver.js"
 // The assistant message a turn's step stores; `StreamStarted` names the turn and step.
 export {

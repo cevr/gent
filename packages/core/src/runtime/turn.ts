@@ -6,6 +6,7 @@ import {
   calculateCost,
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
+  effectiveEffort,
   effectiveModelDriver,
   type EffectiveModelDriver,
   type ModelId,
@@ -537,6 +538,7 @@ const reportStreamFailure = (
     sessionId: SessionId
     branchId: BranchId
     modelId: ModelIdType
+    reasoningLevel?: ReasoningEffort
   },
   streamError: ProviderError,
   message: string,
@@ -552,6 +554,7 @@ const reportStreamFailure = (
         step: params.step,
         model: params.modelId,
         outcome: "Failed",
+        reasoningLevel: params.reasoningLevel,
       }),
     )
     const error = streamError.message
@@ -580,6 +583,8 @@ export const collectModelTurnResponse = (params: {
   sessionId: SessionId
   branchId: BranchId
   modelId: ModelIdType
+  /** The effort the step's request sent; its end names it. */
+  reasoningLevel?: ReasoningEffort
   activeStream: ActiveStreamHandle
 }) =>
   Effect.gen(function* () {
@@ -638,6 +643,8 @@ export const collectFailedModelTurnResponse = (params: {
   sessionId: SessionId
   branchId: BranchId
   modelId: ModelIdType
+  /** The effort the step's request sent; its end names it. */
+  reasoningLevel?: ReasoningEffort
   activeStream: ActiveStreamHandle
   /** The provider refused the request as too long, and the turn will hand off and retry. */
   contextOverflow: boolean
@@ -1509,6 +1516,8 @@ type ModelTurnSource = {
   readonly compaction: Option.Option<{ readonly costUsd: Option.Option<number> }>
   /** The chars/4 estimate of the system prompt, notices and tools this request carries. */
   readonly overheadTokens: number
+  /** The effort this request sends (`effectiveEffort`); none when it names no level. */
+  readonly reasoningLevel: Option.Option<ReasoningEffort>
   readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
@@ -1670,6 +1679,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     // input within the budget plus the reply never passes the window.
     maxTokens: reservedOutputTokens,
   } satisfies ProviderHints
+  // The receipt names what the driver sends: the same levels, the same clamp.
+  const reasoningLevel = Option.flatMap(Option.fromUndefinedOr(resolved.reasoning), (level) =>
+    effectiveEffort(modelOption.value, level),
+  )
   const modelRequest: ResolveModelRequest = {
     modelId: resolved.modelId,
     // The session is the cache key: the next step reads this step's prefix.
@@ -1839,6 +1852,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   return {
     compaction,
     overheadTokens: budget.reservedSystemTokens + budget.reservedToolTokens,
+    reasoningLevel,
     stream: reportedStream.pipe(
       Stream.mapError(
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
@@ -1883,6 +1897,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             sessionId: params.sessionId,
             branchId: params.branchId,
             modelId: resolved.modelId,
+            reasoningLevel: Option.getOrUndefined(reasoningLevel),
             activeStream: params.activeStream,
             // One recovery per refusal: a step that already handed off, or the
             // last step of the budget, fails the turn as any failure does.
@@ -2623,6 +2638,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           sessionId: scope.sessionId,
           branchId: scope.branchId,
           modelId: params.resolved.modelId,
+          reasoningLevel: Option.getOrUndefined(source.reasoningLevel),
           activeStream: params.activeStream,
         }),
       )
@@ -2671,6 +2687,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               Option.liftPredicate(cacheWritesByLifetime, (writes) => writes.length > 0),
             ),
             outcome: outcome._tag,
+            reasoningLevel: Option.getOrUndefined(source.reasoningLevel),
           }),
         )
         const { inputTokens, outputTokens } = Option.getOrElse(usage, () => ({
@@ -2776,6 +2793,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                   model: params.resolved.modelId,
                   interrupted: true,
                   outcome: "Interrupted",
+                  reasoningLevel: Option.getOrUndefined(source.reasoningLevel),
                 }),
               )
               yield* persistCutStep("Interrupted")

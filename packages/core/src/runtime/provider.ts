@@ -1550,7 +1550,7 @@ const catalogDriverModels = (
     const apiClass = Option.flatMap(entry, (value) => apiClassFor(apiClasses.values(), value))
     return Option.toArray(
       Option.map(apiClass, (speaker) => {
-        const model = modelFromCatalog(driver.id, raw)
+        const model = modelFromCatalog(driver.id, raw, speaker.efforts)
         return Option.match(speaker.promptCacheTtl, {
           onNone: () => model,
           onSome: (ttl) => Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(ttl) }),

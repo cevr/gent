@@ -68,6 +68,7 @@ import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
+  DEFAULT_MODEL_ID,
   Model,
   ModelId,
   ProviderId,
@@ -5623,6 +5624,63 @@ describe("sessionDeleted hook", () => {
         expect(heard[0]?.sessionId).toBe(sessionId)
         expect([...(heard[0]?.branchIds ?? [])].sort()).toEqual([branchId, second.branchId].sort())
       }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+})
+
+// ── effort receipt ──────────────────────────────────────────────────────────
+
+describe("effort receipt", () => {
+  // A model that accepts three levels: a hint between or past them is clamped.
+  const effortModel = Model.make({
+    id: DEFAULT_MODEL_ID,
+    name: "Effort model",
+    provider: ProviderId.make("effort-driver"),
+    contextLength: 128_000,
+    reasoning: true,
+    efforts: ["low", "medium", "high"],
+  })
+
+  it.live("a settings change reaches the next step's receipt at the level the model accepts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("first"),
+          textStep("second"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          models: [effortModel],
+          providerLayer,
+        })
+        // The subscription replays the branch: turn `n` ends at the `n`th completion.
+        const turn = (content: string, level: "minimal" | "max", earlierTurns: number) =>
+          Effect.gen(function* () {
+            yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some(level) })
+            const turnCompleted = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+              Stream.drop(earlierTurns),
+              Stream.runHead,
+              Effect.forkScoped,
+            )
+            yield* client.message.send({ sessionId, branchId, content })
+            yield* Fiber.join(turnCompleted)
+          })
+        yield* turn("first", "minimal", 0)
+        yield* turn("second", "max", 1)
+        const levels = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filterMap(({ event }) => {
+            if (event._tag === "StreamEnded") {
+              return Result.succeed(Option.fromUndefinedOr(event.reasoningLevel))
+            }
+            return Result.failVoid
+          }),
+          Stream.take(2),
+          Stream.runCollect,
+        )
+        // `minimal` is below the lowest accepted level and `max` above the highest.
+        expect(levels).toEqual([Option.some("low"), Option.some("high")])
+      }).pipe(Effect.timeout("8 seconds")),
     ),
   )
 })

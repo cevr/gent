@@ -34,7 +34,8 @@ import {
   ProviderAuthError,
   type ProviderAuthorizationResult,
   type ProviderHints,
-  type ReasoningEffort,
+  acceptedEfforts,
+  ReasoningEffort,
   reportProviderStopReason,
   runProcess,
   writeFileAtomic,
@@ -2314,6 +2315,24 @@ const anthropicRequestPlan = (
   return PLAIN_REQUEST
 }
 
+/**
+ * The effort levels a Messages request names for the entry
+ * (`Model.efforts`): the effort each level's plan sends, and `none` where
+ * the plan for `none` turns reasoning off instead of sending its lowest
+ * effort (a family on by default, an `Off` or `Budget` family, a toggle).
+ * Empty without an effort list: a level then picks a budget or a toggle.
+ */
+const messagesEfforts = (entry: CatalogModel): ReadonlyArray<ReasoningEffort> => {
+  if (acceptedEfforts(entry).length === 0) return []
+  const sent = ReasoningEffort.literals.map((level) =>
+    Option.getOrElse(
+      anthropicRequestPlan(entry, Option.some({ reasoning: level })).effort,
+      (): ReasoningEffort => "none",
+    ),
+  )
+  return ReasoningEffort.literals.filter((level) => sent.includes(level))
+}
+
 type AnthropicConfig = Required<Parameters<typeof AnthropicLanguageModel.layer>[0]>["config"]
 
 /** One model's requests: the SDK config, the plan the client layer applies, and the prompt-cache lifetimes its markers ask for. */
@@ -2512,6 +2531,7 @@ export const MESSAGES_CLASS: ApiClassContribution = {
   npm: ["@ai-sdk/anthropic"],
   protocols: [],
   promptCacheTtl: Option.some(PROMPT_CACHE_LIFETIME[MESSAGES_PROMPT_CACHE_TTL]),
+  efforts: messagesEfforts,
   resolveModel: (request) =>
     Effect.map(loadAnthropicSdk, (sdk) =>
       AiModel.make(
@@ -2544,7 +2564,9 @@ export const buildAnthropicModelDriver = (
   overrides: ANTHROPIC_OVERRIDES,
   // The lifetimes the markers ask for, a root's and a child's, and the write price; see `PromptCacheTtl`.
   listModels: (catalog) =>
-    Effect.succeed(catalogModels(catalog, "anthropic", PROMPT_CACHE_LIFETIME[promptCacheTtl])).pipe(
+    Effect.succeed(
+      catalogModels(catalog, "anthropic", PROMPT_CACHE_LIFETIME[promptCacheTtl], MESSAGES_CLASS),
+    ).pipe(
       Effect.map(withChildPromptCacheLifetime(promptCacheTtl)),
       Effect.map(withPromptCacheWritePrice(promptCacheTtl)),
     ),

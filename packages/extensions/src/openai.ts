@@ -1858,7 +1858,7 @@ export const buildOpenAIModelDriver = (
       }),
     listModels: (catalog, authInfo) =>
       Effect.sync(() => {
-        const models = catalogModels(catalog, "openai", RESPONSES_PROMPT_CACHE_TTL)
+        const models = catalogModels(catalog, "openai", RESPONSES_PROMPT_CACHE_TTL, RESPONSES_CLASS)
         // When OAuth is active, filter to allowed models + zero pricing
         const auth = Option.fromNullishOr(authInfo)
         if (Option.isNone(auth) || auth.value._tag !== "Oauth") return models

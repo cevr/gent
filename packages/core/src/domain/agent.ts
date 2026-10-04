@@ -40,6 +40,23 @@ export interface CacheWriteByLifetime {
   readonly tokens: number
 }
 
+/**
+ * How hard a model reasons, lowest first. `none` is no reasoning: a request
+ * at `none` turns reasoning off where the model can, else asks for its
+ * lowest effort.
+ */
+export const ReasoningEffort = Schema.Literals([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+])
+export type ReasoningEffort = typeof ReasoningEffort.Type
+export const isReasoningEffort = Schema.is(ReasoningEffort)
+
 // Model - individual model from a provider (built-in or custom)
 
 export class Model extends Schema.Class<Model>("Model")({
@@ -64,6 +81,14 @@ export class Model extends Schema.Class<Model>("Model")({
   releaseDate: Schema.optional(Schema.String),
   /** Whether the model reasons, as the catalog says; absent when it does not say. */
   reasoning: Schema.optional(Schema.Boolean),
+  /**
+   * The effort levels a request to the model names, lowest first, as its
+   * driver plans them from the catalog: a hint between or past them goes to
+   * one of them (`effectiveEffort`). Absent or empty when the model takes no
+   * effort level (a thinking budget or an on/off toggle): the hint then
+   * passes as it is.
+   */
+  efforts: Schema.optional(Schema.Array(ReasoningEffort)),
   /**
    * How long the provider keeps a request's prompt cached after the request,
    * in milliseconds, as the model's driver says. A turn that starts on a large
@@ -98,6 +123,39 @@ export const promptCacheTtlMsFor = (
   const own = Option.fromUndefinedOr(model.promptCacheTtlMs)
   if (!child) return own
   return Option.orElse(Option.fromUndefinedOr(model.childPromptCacheTtlMs), () => own)
+}
+
+/**
+ * The level a request names for `level` when the model accepts `accepted`
+ * (lowest first): the lowest accepted level at or above it, else the highest.
+ * None when it accepts none.
+ */
+export const clampEffort = (
+  accepted: ReadonlyArray<ReasoningEffort>,
+  level: ReasoningEffort,
+): Option.Option<ReasoningEffort> => {
+  const order = ReasoningEffort.literals
+  const rank = order.indexOf(level)
+  return Option.fromUndefinedOr(accepted.find((each) => order.indexOf(each) >= rank)).pipe(
+    Option.orElse(() => Option.fromUndefinedOr(accepted.at(-1))),
+  )
+}
+
+/**
+ * The effort a request to `model` sends for the hint `level`: none for a
+ * model the catalog says does not reason, the hint itself for a model that
+ * takes no effort level, else the clamped level (`clampEffort`). The one
+ * reading for the step's receipt (`StreamEnded.reasoningLevel`), the drivers'
+ * request plans, and the level a client shows.
+ */
+export const effectiveEffort = (
+  model: Pick<Model, "reasoning" | "efforts">,
+  level: ReasoningEffort,
+): Option.Option<ReasoningEffort> => {
+  if (model.reasoning === false) return Option.none()
+  const accepted = model.efforts ?? []
+  if (accepted.length === 0) return Option.some(level)
+  return clampEffort(accepted, level)
 }
 
 /**
@@ -184,18 +242,6 @@ export const parseModelId = (modelId: string): Option.Option<readonly [ProviderI
 
 export const AgentName = Schema.String.pipe(Schema.brand("AgentName"))
 export type AgentName = typeof AgentName.Type
-
-export const ReasoningEffort = Schema.Literals([
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-])
-export type ReasoningEffort = typeof ReasoningEffort.Type
-export const isReasoningEffort = Schema.is(ReasoningEffort)
 
 // Agent driver — a reference to a registered model driver.
 //
