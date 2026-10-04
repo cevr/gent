@@ -1460,20 +1460,41 @@ interface DriverProfile {
 const catalogProviderOf = (driver: ModelDriverContribution): string =>
   driver.catalogProvider ?? driver.id
 
-/** The name `driver` lists now for `modelName`: the name its alias stands for, else itself. */
-const currentModelName = (driver: ModelDriverContribution, modelName: string): string =>
-  Option.fromUndefinedOr(driver.aliases).pipe(
+/**
+ * The one name `driver` serves `modelName` as: the name its alias stands
+ * for, else itself. A name the driver's view of `catalog` lists is never
+ * an alias: the real model wins over an alias of the same name. The turn's
+ * model metadata (`ModelRegistry`), its dispatch (`resolveDriverModel`) and
+ * the classifier match all read this, so metadata and dispatch name one model.
+ */
+const currentModelName = (
+  catalog: ModelCatalogView,
+  driver: ModelDriverContribution,
+  modelName: string,
+): string => {
+  const listed = catalogModelEntry(
+    driverCatalogView(catalog, driver),
+    catalogProviderOf(driver),
+    modelName,
+  )
+  if (Option.isSome(listed)) return modelName
+  return Option.fromUndefinedOr(driver.aliases).pipe(
     Option.filter((aliases) => Object.hasOwn(aliases, modelName)),
     Option.flatMap((aliases) => Option.fromUndefinedOr(aliases[modelName])),
     Option.getOrElse(() => modelName),
   )
+}
 
-/** `provider/model` with the model name its driver lists now; an id no driver serves stays. */
-const currentModelId = (drivers: ModelDrivers, modelId: string): string =>
+/** `provider/model` with the one name its driver serves it as; an id no driver serves stays. */
+const currentModelId = (
+  catalog: ModelCatalogView,
+  drivers: ModelDrivers,
+  modelId: string,
+): string =>
   Option.flatMap(parseModelId(modelId), ([providerId, modelName]) =>
     Option.map(
       Option.fromUndefinedOr(drivers.get(providerId)),
-      (driver) => `${providerId}/${currentModelName(driver, modelName)}`,
+      (driver) => `${providerId}/${currentModelName(catalog, driver, modelName)}`,
     ),
   ).pipe(Option.getOrElse(() => modelId))
 
@@ -1584,7 +1605,7 @@ export const resolveDriverModel = (
 ): Effect.Effect<ProviderResolution, ProviderAuthError | DriverError> =>
   Effect.gen(function* () {
     const { driver } = request
-    const modelName = currentModelName(driver, request.modelName)
+    const modelName = currentModelName(request.catalog, driver, request.modelName)
     const view = driverCatalogView(request.catalog, driver)
     const entry = catalogModelEntry(view, catalogProviderOf(driver), modelName)
     if (Option.exists(entry, (value) => value.decision === true)) {
@@ -2244,7 +2265,7 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   const chatEntry = catalogModelEntry(
     driverCatalogView(catalog, driver),
     catalogProviderOf(driver),
-    currentModelName(driver, modelName),
+    currentModelName(catalog, driver, modelName),
   )
   const turnCatalog = yield* Option.match(chatEntry, {
     onSome: () => Effect.succeed(catalog),
@@ -2410,7 +2431,7 @@ const classifierCatalog = Effect.fn("DecisionModelResolver.catalog")(function* (
     if (model.kind !== "classifier" || Predicate.isUndefined(driver)) return []
     return [{ model, driver }]
   })
-  return { drivers, classifiers, failures: catalog.failures }
+  return { drivers, catalog: source, classifiers, failures: catalog.failures }
 })
 
 /**
@@ -2442,7 +2463,7 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
 ) {
   const storedAuth = (driverId: string) => classifierAuth(auth, allDrivers, driverId)
   // A call that cannot resolve a classifier names each catalog that failed.
-  const { drivers, classifiers, failures } = yield* classifierCatalog(
+  const { drivers, catalog, classifiers, failures } = yield* classifierCatalog(
     auth,
     catalogSource,
     allDrivers,
@@ -2454,7 +2475,7 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
     onSome: (id) =>
       Option.match(
         Option.fromUndefinedOr(
-          classifiers.find((entry) => entry.model.id === currentModelId(drivers, id)),
+          classifiers.find((entry) => entry.model.id === currentModelId(catalog, drivers, id)),
         ),
         {
           onSome: Effect.succeed,
@@ -2608,6 +2629,12 @@ export class ModelCatalogRecord extends Context.Service<
  * driver and ignored `disabledExtensions`.
  */
 export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* () {
+  const { models, failures } = yield* servedModelCatalog()
+  return { models, failures }
+})
+
+/** `modelCatalog`, and the drivers and catalog it was listed from. */
+const servedModelCatalog = Effect.fn("ModelRegistry.servedModelCatalog")(function* () {
   const authStore = yield* Auth
   const catalogRecord = yield* ModelCatalogRecord
   const profile = (yield* ExtensionRegistry).getResolved()
@@ -2624,7 +2651,7 @@ export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* ()
     ),
   )
   yield* catalogRecord.record(profile, catalog.failures)
-  return { models: byReleaseDateDesc(catalog.models), failures: catalog.failures }
+  return { served, models: byReleaseDateDesc(catalog.models), failures: catalog.failures }
 })
 
 /** One model of the caller's profile catalog: the turn's context limit and pricing. */
@@ -2645,14 +2672,16 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         const catalogRecord = yield* ModelCatalogRecord
         const catalogSource = yield* ModelCatalogSource
         return ModelRegistry.of({
+          // An alias id reads the model it stands for, as its dispatch resolves it.
           get: (modelId) =>
-            modelCatalog().pipe(
+            servedModelCatalog().pipe(
               Effect.provideService(Auth, authStore),
               Effect.provideService(ModelCatalogRecord, catalogRecord),
               Effect.provideService(ModelCatalogSource, catalogSource),
-              Effect.map((catalog) =>
-                Option.fromUndefinedOr(catalog.models.find((model) => model.id === modelId)),
-              ),
+              Effect.map(({ served, models }) => {
+                const current = currentModelId(served.catalog, served.modelDrivers, modelId)
+                return Option.fromUndefinedOr(models.find((model) => model.id === current))
+              }),
             ),
         })
       }),

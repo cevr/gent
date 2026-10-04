@@ -589,9 +589,11 @@ export interface ModelDriverContribution {
   readonly overrides?: ReadonlyArray<CatalogOverride>
   /**
    * Model names the driver shipped before models.dev named the model, each
-   * to the name its catalog lists now. Core resolves an alias, for a turn and
-   * for `models.decide`, as the name it stands for; lists show only the
-   * current names.
+   * to the name its catalog lists now. Core resolves an alias, for a turn's
+   * model metadata and its dispatch alike and for `models.decide`, as the
+   * name it stands for; lists show only the current names. An alias that
+   * equals a name the driver's catalog view lists is ignored: the real model
+   * wins.
    */
   readonly aliases?: Readonly<Record<string, string>>
   /**

@@ -27,6 +27,7 @@ import {
   isContextOverflow,
   type ModelCatalogView,
   type ModelDriverContribution,
+  modelFromCatalog,
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderResolution,
@@ -57,6 +58,7 @@ import {
   modelCatalog,
   finishPart,
   resolveDriverModel,
+  textStep,
   toolCallPart,
 } from "../../src/runtime/provider"
 import { BunServices } from "@effect/platform-bun"
@@ -64,13 +66,26 @@ import { Model as AiModel, LanguageModel } from "effect/ai"
 import { test as bunTest } from "bun:test"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { ModelId, ProviderId, Model, type ReasoningEffort } from "../../src/domain/agent"
+import {
+  AgentDefinition,
+  DEFAULT_AGENT_NAME,
+  ModelId,
+  ProviderId,
+  Model,
+  type ReasoningEffort,
+} from "../../src/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import type { ProviderConfig } from "../../src/runtime/config"
-import { tool, type ToolCapability } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  ExtensionHost,
+  tool,
+  type ToolCapability,
+} from "@gent/core/extensions/api"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import {
+  createRpcHarness,
   fixtureModelCatalog,
   fixtureModelCatalogSource,
   MODEL_CATALOG_FIXTURE,
@@ -1997,6 +2012,134 @@ const readsWithStored = (stored: Record<string, string>) =>
     }).pipe(Effect.provide(layer))
     return seen
   })
+
+// ── chat aliases ────────────────────────────────────────────────────────────
+
+const ALIAS_DRIVER = "alias-driver"
+
+/**
+ * A driver over the fixture's Anthropic entries that names `aliases`; it
+ * records each model name it is asked to resolve.
+ */
+const aliasDriver = (
+  aliases: Readonly<Record<string, string>>,
+  resolvedNames: Array<string> = [],
+): ModelDriverContribution => ({
+  id: ALIAS_DRIVER,
+  name: "Alias driver",
+  catalogProvider: "anthropic",
+  aliases,
+  listModels: (catalog) =>
+    Effect.succeed(
+      Option.match(catalog.provider("anthropic"), {
+        onNone: () => [],
+        onSome: (provider) => provider.models.map((entry) => modelFromCatalog(ALIAS_DRIVER, entry)),
+      }),
+    ),
+  resolveModel: (modelName) =>
+    Effect.sync(() => {
+      resolvedNames.push(modelName)
+      return stubModel
+    }),
+})
+
+/** A model's id and window, as a turn's metadata reads them. */
+const idAndWindow = (model: Model) => ({ id: String(model.id), window: model.contextLength })
+
+/** The model name a driver's `resolveModel` gets for `modelName`. */
+const dispatchedName = (
+  driver: ModelDriverContribution,
+  resolvedNames: Array<string>,
+  modelName: string,
+) =>
+  Effect.gen(function* () {
+    yield* resolveDriverModel({
+      driver,
+      apiClasses: new Map(),
+      modelName,
+      auth: Option.none(),
+      hints: Option.none(),
+      catalog: fixtureModelCatalog(),
+    })
+    return resolvedNames.at(-1)
+  })
+
+describe("chat aliases", () => {
+  it.scopedLive("an alias id reads the current model's metadata and dispatches as it", () =>
+    Effect.gen(function* () {
+      const resolvedNames: Array<string> = []
+      const driver = aliasDriver({ "claude-old": "claude-sonnet-4-5" }, resolvedNames)
+      const registry = yield* loadRegistryWithDrivers([driver])
+      const metadata = yield* registry.get(`${ALIAS_DRIVER}/claude-old`)
+      expect(Option.map(metadata, idAndWindow)).toEqual(
+        Option.some({ id: `${ALIAS_DRIVER}/claude-sonnet-4-5`, window: 1_000_000 }),
+      )
+      expect(yield* dispatchedName(driver, resolvedNames, "claude-old")).toBe("claude-sonnet-4-5")
+    }),
+  )
+
+  it.scopedLive(
+    "an alias that equals a model id the driver's catalog lists is ignored: the real id wins for metadata and dispatch",
+    () =>
+      Effect.gen(function* () {
+        const resolvedNames: Array<string> = []
+        const driver = aliasDriver({ "claude-haiku-4-5": "claude-sonnet-4-5" }, resolvedNames)
+        const registry = yield* loadRegistryWithDrivers([driver])
+        const metadata = yield* registry.get(`${ALIAS_DRIVER}/claude-haiku-4-5`)
+        expect(Option.map(metadata, idAndWindow)).toEqual(
+          Option.some({ id: `${ALIAS_DRIVER}/claude-haiku-4-5`, window: 200_000 }),
+        )
+        expect(yield* dispatchedName(driver, resolvedNames, "claude-haiku-4-5")).toBe(
+          "claude-haiku-4-5",
+        )
+      }),
+  )
+
+  it.live("a chat turn on an alias id runs with the current model's window", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("done"),
+      ])
+      const driverExtension = defineExtension({
+        id: ALIAS_DRIVER,
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("modelDriver", aliasDriver({ "claude-old": "claude-sonnet-4-5" }))
+        }),
+      })
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        providerLayer,
+        agents: [
+          AgentDefinition.make({
+            name: DEFAULT_AGENT_NAME,
+            model: ModelId.make(`${ALIAS_DRIVER}/claude-old`),
+          }),
+        ],
+        extensionInputs: [driverExtension],
+        models: "catalog",
+      })
+      const turn = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map(({ event }) => event),
+        Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      yield* client.message.send({ sessionId, branchId, content: "hi" })
+      const events = Array.from(yield* Fiber.join(turn))
+      const errors = events.flatMap((event) => {
+        if (event._tag !== "ErrorOccurred") return []
+        return [event.error]
+      })
+      const windows = events.flatMap((event) => {
+        if (event._tag !== "ModelContextProjected") return []
+        return [event.contextLimitTokens]
+      })
+      expect(errors).toEqual([])
+      expect(windows).toEqual([1_000_000])
+      yield* controls.assertDone
+    }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+  )
+})
 
 describe("shared sign-in", () => {
   const rows = (stored: Record<string, AuthInfo>, required: ReadonlyArray<string>) =>

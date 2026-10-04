@@ -1650,9 +1650,10 @@ interface E2ELayerOptions {
   readonly toolRunner?: "test" | "live"
   /**
    * The models the registry knows, and no others. Absent, the registry makes
-   * up a model for every id it is asked for.
+   * up a model for every id it is asked for. `"catalog"`: the production
+   * registry, over the profile's drivers and the models.dev fixture.
    */
-  readonly models?: ReadonlyArray<Model>
+  readonly models?: ReadonlyArray<Model> | "catalog"
   /** The price of every model the test registry makes up. Default: free. */
   readonly modelPricing?: ModelPricing
   /** Auth override. Use for public RPC auth failure-path tests. */
@@ -1773,6 +1774,15 @@ const e2eLayer = <A>(config: E2ELayerWithFeature<A>) =>
     }),
   ).pipe(Layer.provide(BunPlatformLive))
 
+/** The test registry `config` asks for; none for `"catalog"`, which keeps the production one. */
+const testModelRegistry = (
+  config: Pick<E2ELayerOptions, "models" | "modelPricing">,
+): Option.Option<Layer.Layer<ModelRegistry>> => {
+  const models = config.models ?? []
+  if (models === "catalog") return Option.none()
+  return Option.some(ModelRegistry.Test(models, Option.fromUndefinedOr(config.modelPricing)))
+}
+
 const e2eDependencies = <A>(
   config: E2ELayerWithFeature<A>,
   directories: { readonly cwd: string; readonly home: string },
@@ -1788,10 +1798,7 @@ const e2eDependencies = <A>(
     // A broken extension fails the test with its reason, not a later timeout.
     failOnExtensionFailure: config.allowFailedExtensions !== true,
     overrides: {
-      modelRegistryLayer: ModelRegistry.Test(
-        config.models ?? [],
-        Option.fromUndefinedOr(config.modelPricing),
-      ),
+      modelRegistryLayer: Option.getOrUndefined(testModelRegistry(config)),
       modelResolverLayer: LanguageModelLayers.resolver(config.providerLayer),
       authLayer: config.authLayer ?? Auth.Test(),
       modelCatalogHttpLayer: config.modelCatalogHttpLayer ?? modelCatalogFixtureLayer,
