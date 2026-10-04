@@ -75,6 +75,9 @@ const makeRepo = (prefix: string) =>
     return repo
   })
 
+/** The empty tree of a SHA-1 repository: an unborn branch's base. */
+const SHA1_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
 const labelTexts = (labels: ReadonlyArray<StatusLabelItem>) => labels.map((label) => label.text)
 
 // ── parsers ─────────────────────────────────────────────────────────────────
@@ -170,7 +173,7 @@ describe("git labels", () => {
   })
 
   test("a clean checkout shows the branch alone and a dirty one adds the change count", () => {
-    const clean: Checkout = { root: "/r", gitDir: "/r/.git", head, files: [] }
+    const clean: Checkout = { root: "/r", gitDir: "/r/.git", base: "HEAD", head, files: [] }
     expect(labelTexts(checkoutLabels(clean))).toEqual(["main"])
     const dirty: Checkout = {
       ...clean,
@@ -232,19 +235,24 @@ describe("git checkout read", () => {
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
-  it.live("an unborn branch counts its staged lines and a directory outside git has none", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const repo = yield* makeTempDirectoryScoped("gent-git-unborn-")
-      yield* git(repo, "init", "-q", "-b", "fresh")
-      yield* fs.writeFileString(`${repo}/a.txt`, "1\n2\n3\n")
-      yield* git(repo, "add", "a.txt")
-      const checkout = yield* readCheckout(repo, new Map())
-      if (Option.isNone(checkout)) return yield* Effect.die("no checkout")
-      expect(labelTexts(checkoutLabels(checkout.value))).toEqual(["fresh", "1 file +3 -0"])
-      const outside = yield* makeTempDirectoryScoped("gent-git-outside-")
-      expect(Option.isNone(yield* readCheckout(outside, new Map()))).toBe(true)
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  it.live(
+    "an unborn branch counts its lines against the empty tree and a directory outside git has none",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* makeTempDirectoryScoped("gent-git-unborn-")
+        yield* git(repo, "init", "-q", "-b", "fresh")
+        yield* fs.writeFileString(`${repo}/a.txt`, "1\n2\n3\n")
+        yield* git(repo, "add", "a.txt")
+        // A line added after the staging counts too: the change is the work tree, as against HEAD.
+        yield* fs.writeFileString(`${repo}/a.txt`, "1\n2\n3\n4\n")
+        const checkout = yield* readCheckout(repo, new Map())
+        if (Option.isNone(checkout)) return yield* Effect.die("no checkout")
+        expect(checkout.value.base).toBe(SHA1_EMPTY_TREE)
+        expect(labelTexts(checkoutLabels(checkout.value))).toEqual(["fresh", "1 file +4 -0"])
+        const outside = yield* makeTempDirectoryScoped("gent-git-outside-")
+        expect(Option.isNone(yield* readCheckout(outside, new Map()))).toBe(true)
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
 
@@ -407,6 +415,7 @@ describe("git pull request", () => {
     const checkout: Checkout = {
       root: "/r",
       gitDir: "/r/.git",
+      base: "HEAD",
       head: {
         branch: Option.some("main"),
         oid: Option.some("1a2b3c4"),
@@ -615,22 +624,27 @@ describe("git review commands", () => {
     expect(reviewTarget("pr", "/r")).toEqual({ _tag: "PullRequest", cwd: "/r" })
   })
 
-  test("hunk reviews the work tree as it changes, and the reader's git pager stands in for it", () => {
+  test("hunk and the reader's git pager review the work tree against the checkout's base", () => {
     const all = { _tag: "WorkTree" as const, cwd: "/r", pathspecs: [] }
     const one = { ...all, pathspecs: ["a.ts"] }
-    expect(workTreeCommand(all, "hunk", "HEAD")).toEqual(["hunk", ["diff", "--watch"]])
+    // Against HEAD, so a staged change shows as the pane counts it.
+    expect(workTreeCommand(all, "hunk", "HEAD")).toEqual(["hunk", ["diff", "--watch", "HEAD"]])
     expect(workTreeCommand(one, "hunk", "HEAD")).toEqual([
       "hunk",
-      ["diff", "--watch", "--", "a.ts"],
+      ["diff", "--watch", "HEAD", "--", "a.ts"],
     ])
     expect(workTreeCommand(one, "pager", "HEAD")).toEqual([
       "git",
       ["--no-optional-locks", "--paginate", "diff", "HEAD", "--", "a.ts"],
     ])
-    // An unborn branch has no HEAD: its staged lines are the change.
-    expect(workTreeCommand(all, "pager", "--cached")).toEqual([
+    // An unborn branch has no HEAD: its base is the empty tree.
+    expect(workTreeCommand(all, "hunk", SHA1_EMPTY_TREE)).toEqual([
+      "hunk",
+      ["diff", "--watch", SHA1_EMPTY_TREE],
+    ])
+    expect(workTreeCommand(all, "pager", SHA1_EMPTY_TREE)).toEqual([
       "git",
-      ["--no-optional-locks", "--paginate", "diff", "--cached"],
+      ["--no-optional-locks", "--paginate", "diff", SHA1_EMPTY_TREE],
     ])
   })
 })
@@ -805,7 +819,9 @@ describe("git pane", () => {
         yield* waitForFrame(setup, (frame) => frame.includes("#7 Show the branch"), "the pane")
         setup.mockInput.pressEnter()
         const realRepo = yield* fs.realPath(repo)
-        yield* waitForLog(hunk.log, (log) => log.includes(`${realRepo}|diff --watch -- kept.txt`))
+        yield* waitForLog(hunk.log, (log) =>
+          log.includes(`${realRepo}|diff --watch HEAD -- kept.txt`),
+        )
         // Keys belong to hunk until the renderer takes the terminal back.
         yield* waitUntil(
           () => setup.renderer.controlState !== RendererControlState.EXPLICIT_SUSPENDED,
@@ -823,25 +839,50 @@ describe("git pane", () => {
   )
 
   it.live(
-    "without hunk, /diff runs the git pager and says hunk was not found",
+    "without hunk, /diff pages the untracked files' lines too, leaves the index alone, and says hunk was not found",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const repo = yield* makeRepo("gent-git-pager-")
-        // Only an untracked file: `git diff HEAD` prints nothing into the test's output.
-        yield* fs.writeFileString(`${repo}/new.txt`, "x\n")
-        const setup = yield* renderApp(repo, 100, {})
-        yield* waitForFrame(setup, (frame) => frame.includes("1 file +1 -0"), "the checkout")
+        yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\nthree\n")
+        yield* fs.writeFileString(`${repo}/new.txt`, "brand new line\n")
+        const pager = yield* fakePagedGit
+        const setup = yield* renderApp(repo, 100, { git: pager.program })
+        yield* waitForFrame(setup, (frame) => frame.includes("2 files +2 -0"), "the checkout")
         yield* slash(setup, "/diff")
         yield* waitForFrame(
           setup,
           (frame) => frame.includes("hunk not found · using the git pager"),
           "the note",
         )
+        const paged = yield* waitForLog(pager.log, (log) => log.includes("+three"))
+        expect(paged).toContain("+++ b/new.txt")
+        expect(paged).toContain("+brand new line")
+        // The reader's index never learns of the untracked file.
+        const status = yield* gitOutput(repo, "status", "--porcelain")
+        expect(status).toContain("?? new.txt")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     12_000,
   )
 })
+
+/**
+ * A `git` that runs the real one, and writes what a paged command would show
+ * the reader to its log: a test has no terminal for the pager.
+ */
+const fakePagedGit = fakeProgram("git", (dir) => [
+  `case " $* " in *" --paginate "*) exec git "$@" > '${dir}/log' ;; esac`,
+  'exec git "$@"',
+])
+
+/** What a git command in `cwd` prints. */
+const gitOutput = (cwd: string, ...args: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    return yield* spawner.string(
+      ChildProcess.make("git", [...args], { cwd, forceKillAfter: "2 seconds" }),
+    )
+  })
 
 /** Poll a stand-in's log until `done` holds, and answer it. */
 const waitForLog = (log: Effect.Effect<string>, done: (text: string) => boolean) =>

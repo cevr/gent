@@ -97,12 +97,17 @@ interface ChangedFile {
   readonly lines: Option.Option<LineCounts>
 }
 
-/** One read of a checkout: its head and every path that differs from `HEAD`. */
+/** One read of a checkout: its head and every path that differs from its base. */
 export interface Checkout {
   /** The checkout's top directory. */
   readonly root: string
   /** The directory that holds this checkout's `HEAD` and `index` (a worktree has its own). */
   readonly gitDir: string
+  /**
+   * What the changes count against, and a review compares with: `HEAD`, or
+   * the empty tree on an unborn branch, which has no `HEAD`.
+   */
+  readonly base: string
   readonly head: GitHead
   readonly files: ReadonlyArray<ChangedFile>
 }
@@ -338,10 +343,11 @@ const firstLine = (text: string): string => text.trim().split("\n")[0] ?? ""
 const git = (
   cwd: string,
   args: ReadonlyArray<string>,
+  env: Record<string, string> = {},
 ): Effect.Effect<Option.Option<string>, GitReadError, ChildProcessSpawner.ChildProcessSpawner> =>
   runProcess("git", ["--no-optional-locks", ...args], {
     cwd,
-    env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
+    env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", ...env },
     extendEnv: true,
     timeout: LOCAL_TIMEOUT,
   }).pipe(
@@ -372,10 +378,17 @@ const untrackedLines = (
     return Option.some({ added: lineCount(text), deleted: 0 })
   }).pipe(Effect.orElseSucceed(() => Option.none<LineCounts>()))
 
-/** The checkout's top directory and git directory, by the cwd it was asked from. */
+/** The empty tree of each object format: the base of an unborn branch. */
+const EMPTY_TREE = {
+  sha1: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+  sha256: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
+}
+
+/** The checkout's top directory, git directory and empty tree, by the cwd it was asked from. */
 interface Location {
   readonly root: string
   readonly gitDir: string
+  readonly emptyTree: string
 }
 
 /**
@@ -390,12 +403,14 @@ const locate = (
   Option.match(Option.fromUndefinedOr(locations.get(cwd)), {
     onSome: (value) => Effect.succeedSome(value),
     onNone: () =>
-      git(cwd, ["rev-parse", "--show-toplevel", "--absolute-git-dir"]).pipe(
+      git(cwd, ["rev-parse", "--show-toplevel", "--absolute-git-dir", "--show-object-format"]).pipe(
         Effect.map(
           Option.flatMap((output) => {
-            const [root = "", gitDir = ""] = output.trim().split("\n")
+            const [root = "", gitDir = "", format = ""] = output.trim().split("\n")
+            let emptyTree = EMPTY_TREE.sha1
+            if (format === "sha256") emptyTree = EMPTY_TREE.sha256
             return Option.liftPredicate(
-              { root, gitDir },
+              { root, gitDir, emptyTree },
               (value) => value.root.length > 0 && value.gitDir.length > 0,
             )
           }),
@@ -408,8 +423,8 @@ const locate = (
 
 /**
  * Read the checkout at `cwd`: where it is, then its status, then its line
- * counts against `HEAD` (the index on an unborn branch, which has no
- * `HEAD`), then the lines of its untracked files. `None` outside a checkout.
+ * counts against its base (`HEAD`, or the empty tree on an unborn branch),
+ * then the lines of its untracked files. `None` outside a checkout.
  *
  * `located` hears where the checkout is before its status is read, so a
  * watch on its git directory starts before the read and misses no write
@@ -435,9 +450,10 @@ export const readCheckout = (
     ])
     if (Option.isNone(status)) return Option.none()
     const { head, entries } = parseStatus(status.value)
+    const { root, gitDir, emptyTree } = location.value
+    const base = Option.match(head.oid, { onNone: () => emptyTree, onSome: () => "HEAD" })
     let counts: ReadonlyMap<string, Option.Option<LineCounts>> = new Map()
     if (entries.some((entry) => entry.status !== "?")) {
-      const base = Option.match(head.oid, { onNone: () => "--cached", onSome: () => "HEAD" })
       const numstat = yield* git(cwd, [
         "diff",
         "--numstat",
@@ -461,13 +477,13 @@ export const readCheckout = (
         untrackedRead += 1
         if (untrackedRead > UNTRACKED_READ_FILES)
           return Effect.succeed({ ...entry, lines: Option.none<LineCounts>() })
-        return untrackedLines(path.join(location.value.root, entry.path)).pipe(
+        return untrackedLines(path.join(root, entry.path)).pipe(
           Effect.map((lines): ChangedFile => ({ ...entry, lines })),
         )
       },
       { concurrency: 8 },
     )
-    return Option.some({ ...location.value, head, files })
+    return Option.some({ root, gitDir, base, head, files })
   })
 
 // ── pull request ────────────────────────────────────────────────────────────
@@ -691,9 +707,13 @@ export const reviewTarget = (args: string, cwd: string): ReviewTarget => {
 }
 
 /**
- * The program that shows the work tree. `hunk diff --watch` follows the
- * agent's edits while it is open. Without hunk, `git --paginate diff` against
- * `base` runs the reader's own pager (`core.pager`, `$PAGER`, `less`).
+ * The program that shows the work tree against `base`, as the pane counts
+ * it: staged and unstaged changes, untracked files too. `hunk diff --watch
+ * <base>` follows the agent's edits while it is open, and adds the untracked
+ * files itself (with no base, hunk would compare the index with the work tree
+ * and leave a staged change out). Without hunk, `git --paginate diff <base>`
+ * runs the reader's own pager (`core.pager`, `$PAGER`, `less`);
+ * `pageWorkTree` gives it the untracked files.
  */
 export const workTreeCommand = (
   target: WorkTree,
@@ -702,9 +722,21 @@ export const workTreeCommand = (
 ): readonly [string, ReadonlyArray<string>] => {
   let paths: ReadonlyArray<string> = []
   if (target.pathspecs.length > 0) paths = ["--", ...target.pathspecs]
-  if (viewer === "hunk") return ["hunk", ["diff", "--watch", ...paths]]
+  if (viewer === "hunk") return ["hunk", ["diff", "--watch", base, ...paths]]
   return ["git", ["--no-optional-locks", "--paginate", "diff", base, ...paths]]
 }
+
+/** One review: its note for the status row, or the reason it did not run to its end. */
+type ReviewRun = Effect.Effect<
+  Option.Option<string>,
+  | ProgramMissing
+  | ReviewFailed
+  | GhMissing
+  | GhReadError
+  | GitReadError
+  | PlatformError.PlatformError,
+  GitServices
+>
 
 /** No program by this name on `PATH`. */
 class ProgramMissing extends Schema.TaggedError<ProgramMissing>()("ProgramMissing", {
@@ -722,12 +754,20 @@ const QUIT_EARLY = 141
 /** The status row's note when `/diff` first finds no hunk. */
 const HUNK_MISSING = "hunk not found · using the git pager"
 
-/** Run a program on the terminal a handover gives it, in `cwd`. */
+/** Run a program on the terminal a handover gives it, in `cwd`, with `env` over gent's own. */
 const onTerminal = (
   cwd: string,
   [command, args]: readonly [string, ReadonlyArray<string>],
+  env: Record<string, string> = {},
 ): Effect.Effect<void, ProgramMissing | ReviewFailed, ChildProcessSpawner.ChildProcessSpawner> =>
-  runProcess(command, args, { cwd, stdin: "inherit", stdout: "inherit", stderr: "inherit" }).pipe(
+  runProcess(command, args, {
+    cwd,
+    env,
+    extendEnv: true,
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  }).pipe(
     Effect.catchTag(
       "ProcessError",
       (error): Effect.Effect<never, ProgramMissing | ReviewFailed> => {
@@ -741,6 +781,58 @@ const onTerminal = (
       return Effect.fail(new ReviewFailed({ message: `${command} exited with ${result.exitCode}` }))
     }),
   )
+
+/**
+ * Page the work tree against `base` with the reader's git pager, its
+ * untracked files as new ones. `git diff` shows only paths the index
+ * tracks, so the untracked paths go into a copy of the index as
+ * intent-to-add entries (`git add --intent-to-add`, which writes no object),
+ * and the paged diff reads the copy (`GIT_INDEX_FILE`). The reader's index
+ * never changes.
+ */
+const pageWorkTree = (target: WorkTree, base: string) =>
+  Effect.gen(function* () {
+    const command = workTreeCommand(target, "pager", base)
+    let pathspecs: ReadonlyArray<string> = [":/"]
+    if (target.pathspecs.length > 0) pathspecs = target.pathspecs
+    const listed = yield* git(target.cwd, [
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      ...pathspecs,
+    ])
+    const untracked = Option.getOrElse(listed, () => "").split("\0")
+    if (untracked.every((name) => name.length === 0)) return yield* onTerminal(target.cwd, command)
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-diff-" })
+    const index = path.join(dir, "index")
+    const own = yield* git(target.cwd, ["rev-parse", "--git-path", "index"])
+    if (Option.isSome(own)) {
+      const from = path.resolve(target.cwd, own.value.trim())
+      if (yield* fs.exists(from)) yield* fs.copyFile(from, index)
+    }
+    const list = path.join(dir, "untracked")
+    yield* fs.writeFileString(
+      list,
+      Option.getOrElse(listed, () => ""),
+    )
+    const env = { GIT_INDEX_FILE: index }
+    yield* git(
+      target.cwd,
+      [
+        "--literal-pathspecs",
+        "add",
+        "--intent-to-add",
+        `--pathspec-from-file=${list}`,
+        "--pathspec-file-nul",
+      ],
+      env,
+    )
+    return yield* onTerminal(target.cwd, command, env)
+  }).pipe(Effect.scoped)
 
 // ── pane ────────────────────────────────────────────────────────────────────
 
@@ -1045,13 +1137,10 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
       hunkMissing = true
       return Option.some(HUNK_MISSING)
     }
-    // An unborn branch has no `HEAD`: its staged lines are its change.
+    // The base the pane counts against: `HEAD`, the empty tree on an unborn branch.
     const base = () =>
-      Option.match(
-        Option.filter(local.value(), (checkout) => Option.isNone(checkout.head.oid)),
-        { onNone: () => "HEAD", onSome: () => "--cached" },
-      )
-    const showWorkTree = (target: WorkTree) =>
+      Option.match(local.value(), { onNone: () => "HEAD", onSome: (checkout) => checkout.base })
+    const showWorkTree = (target: WorkTree): ReviewRun =>
       shell.handover(
         Effect.gen(function* () {
           if (!hunkMissing) {
@@ -1062,7 +1151,7 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
             if (ran) return Option.none<string>()
           }
           const note = learnHunkMissing()
-          yield* onTerminal(target.cwd, workTreeCommand(target, "pager", base()))
+          yield* pageWorkTree(target, base())
           return note
         }),
       )
@@ -1070,7 +1159,7 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
     // file for `hunk patch`, so the reader's `gh` sign-in reads a private one.
     const pagedPullRequest = (cwd: string) =>
       shell.handover(onTerminal(cwd, ["gh", ["pr", "diff"]]))
-    const showPullRequest = (cwd: string) =>
+    const showPullRequest = (cwd: string): ReviewRun =>
       Effect.gen(function* () {
         if (hunkMissing) {
           yield* pagedPullRequest(cwd)
@@ -1109,6 +1198,7 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
               Effect.sync(() => shell.notify(`${program} not found`)),
             GhMissing: () => Effect.sync(() => shell.notify("gh not found")),
             GhReadError: ({ message }) => Effect.sync(() => shell.notify(message)),
+            GitReadError: ({ message }) => Effect.sync(() => shell.notify(message)),
             ReviewFailed: ({ message }) => Effect.sync(() => shell.notify(message)),
             PlatformError: (error) => Effect.sync(() => shell.notify(error.message)),
           }),
