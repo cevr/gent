@@ -2594,7 +2594,7 @@ type AgentLoopTurnExecutionContext = {
   readonly turnInterruption: TurnInterruption
   readonly inbox: LoopInbox
   /** The branch's services a turn's hooks run with; see `AgentLoopBehavior.branchContext`. */
-  readonly branchContext: Effect.Effect<Context.Context<never>, AgentLoopError>
+  readonly branchContext: Context.Context<never>
 }
 
 export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext) =>
@@ -3511,7 +3511,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
       const receipt = yield* appendTurnReceipt(end)
       if (Option.isNone(receipt)) return
-      const context = yield* scope.branchContext
+      const context = scope.branchContext
       const turnProfile = yield* scope.resolveTurnProfile(
         RunOpener.cases.Turn.make({ openedByClient: openedByClient(state.message) }),
       )

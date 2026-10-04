@@ -1003,6 +1003,7 @@ type Restore = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, 
 
 /** One extension whose Resources of a scope failed to build, and the cause. */
 interface FailedResourceBuild {
+  readonly extension: LoadedExtension
   /** The extension suspended at the `startup` phase, with the full cause. */
   readonly failure: FailedExtension
   /** The messages down the cause chain, for a reader. */
@@ -1034,6 +1035,46 @@ interface BuiltScopeResources {
   readonly failed: ReadonlyArray<FailedResourceBuild>
   /** The given context with every live extension's services merged over it. */
   readonly context: Context.Context<unknown>
+}
+
+/**
+ * What a built Resource of an extension depends on in that extension: its
+ * scope, id, source and file version.
+ */
+const extensionResourceIdentity = (extension: LoadedExtension): string => {
+  let source = extension.sourcePath
+  if (!Predicate.isUndefined(extension.version)) source = `${source}@${extension.version}`
+  return `${extension.scope}:${extension.manifest.id}:${source}`
+}
+
+/** The Resource scopes a scope's Resources build over, itself included. */
+const resourceScopesUnder: Record<ResourceScope, ReadonlyArray<ResourceScope>> = {
+  process: ["process"],
+  branch: ["process", "branch"],
+}
+
+/**
+ * The build key of each extension's `scope` Resources: `root` and the
+ * identities of the extensions, in resolution order up to and including it,
+ * whose Resources it builds over. Two builds with one key build the same
+ * code over the same services, so a later build can share an earlier one. An
+ * edit changes the key of the edited extension and of each one after it, and
+ * leaves the ones before it alone.
+ */
+export const resourceBuildKeys = (
+  extensions: ReadonlyArray<LoadedExtension>,
+  scope: ResourceScope,
+  root: string,
+): ReadonlyMap<LoadedExtension, string> => {
+  const chain = [root]
+  const keys = new Map<LoadedExtension, string>()
+  for (const extension of sortExtensionsByScope(extensions)) {
+    const scopes = new Set((extension.contributions.resources ?? []).map((r) => r.scope))
+    if (!resourceScopesUnder[scope].some((under) => scopes.has(under))) continue
+    chain.push(extensionResourceIdentity(extension))
+    if (scopes.has(scope)) keys.set(extension, chain.join("\u0000"))
+  }
+  return keys
 }
 
 /**
@@ -1104,6 +1145,7 @@ export const buildScopeResources = (params: {
         Effect.annotateLogs({ extensionId: extension.manifest.id, scope: params.scope, error }),
       )
       failed.push({
+        extension,
         failure: toFailedExtension(extension, "startup", error),
         message: causeChainMessage(Cause.squash(built.cause)),
       })
@@ -1400,6 +1442,8 @@ export interface DiscoveredExtension {
   readonly extension: LoadedUserExtension
   readonly scope: ExtensionScope
   readonly sourcePath: string
+  /** The scanned file's version; a builtin has none. */
+  readonly version?: string
 }
 
 /**
@@ -1482,7 +1526,12 @@ const loadExtensionScan = Effect.fn("ExtensionLoader.loadExtensionScan")(functio
       const filePath = file.path
       const result = yield* loadExtensionFile(file).pipe(Effect.result)
       if (Result.isSuccess(result)) {
-        loaded.push({ extension: result.success, scope, sourcePath: filePath })
+        loaded.push({
+          extension: result.success,
+          scope,
+          sourcePath: filePath,
+          version: file.version,
+        })
         continue
       }
       const error = result.failure.message
@@ -1568,6 +1617,9 @@ export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(functi
   }
   if (!Predicate.isUndefined(discovered.extension.artifactIdentity)) {
     loaded = { ...loaded, artifactIdentity: discovered.extension.artifactIdentity }
+  }
+  if (!Predicate.isUndefined(discovered.version)) {
+    loaded = { ...loaded, version: discovered.version }
   }
   return loaded
 })
@@ -2169,26 +2221,11 @@ export class SessionProfileCache extends Context.Service<
         const startProcessResources = (
           place: string,
           extensions: ReadonlyArray<LoadedExtension>,
-          scan: ExtensionScan,
           held: Array<string>,
           restore: Restore,
         ): Effect.Effect<StartedProcessResources> =>
           Effect.gen(function* () {
-            const chain = [place]
-            const versions = new Map<string, string>()
-            for (const file of [...scan.user.paths, ...scan.project.paths]) {
-              versions.set(file.path, file.version)
-            }
-            const identityOf = (extension: LoadedExtension) => {
-              const source = Option.match(
-                Option.fromUndefinedOr(versions.get(extension.sourcePath)),
-                {
-                  onNone: () => extension.sourcePath,
-                  onSome: (version) => `${extension.sourcePath}@${version}`,
-                },
-              )
-              return `${extension.scope}:${extension.manifest.id}:${source}`
-            }
+            const keys = resourceBuildKeys(extensions, "process", place)
             const started = yield* buildScopeResources({
               extensions,
               scope: "process",
@@ -2196,21 +2233,19 @@ export class SessionProfileCache extends Context.Service<
               parent: serverScope,
               restore,
               reuse: (extension) => {
-                const identity = identityOf(extension)
-                const key = [...chain, identity].join("\u0000")
+                const key = keys.get(extension)
+                if (Predicate.isUndefined(key)) return Option.none()
                 const shared = Option.fromNullishOr(sharedResources.get(key))
                 if (Option.isNone(shared)) return Option.none()
                 shared.value.holders += 1
                 held.push(key)
-                chain.push(identity)
                 return Option.some(shared.value.context)
               },
               built: (extension, scope, context) => {
-                const identity = identityOf(extension)
-                const key = [...chain, identity].join("\u0000")
+                const key = keys.get(extension)
+                if (Predicate.isUndefined(key)) return
                 sharedResources.set(key, { scope, context, holders: 1 })
                 held.push(key)
-                chain.push(identity)
               },
             })
             return {
@@ -2231,7 +2266,6 @@ export class SessionProfileCache extends Context.Service<
           cwd: string,
           fresh: FreshConfig,
           declarations: RuntimeProfileDeclarations,
-          scan: ExtensionScan,
           restore: Restore,
         ) =>
           Effect.gen(function* () {
@@ -2241,7 +2275,6 @@ export class SessionProfileCache extends Context.Service<
               const started = yield* startProcessResources(
                 place,
                 declarations.extensionDeclarations.active,
-                scan,
                 held,
                 restore,
               )
@@ -2318,7 +2351,7 @@ export class SessionProfileCache extends Context.Service<
               aliases.set(list, key)
               return found.value
             }
-            const built = yield* buildProfile(place, cwd, fresh, declarations, scan, restore).pipe(
+            const built = yield* buildProfile(place, cwd, fresh, declarations, restore).pipe(
               Effect.orDie,
             )
             const entry: ProfileEntry = { key, place, ...built }

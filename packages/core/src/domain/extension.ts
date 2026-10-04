@@ -257,6 +257,12 @@ export interface LoadedExtension {
   /** Stable package/build identity. Missing means durable replay is unsupported. */
   readonly artifactIdentity?: LoadedArtifactIdentity
   /**
+   * The version of the file this extension loaded from, as the scan read it.
+   * A builtin has none. A Resource's identity names it, so an edited file
+   * builds its Resources again and an untouched one keeps them.
+   */
+  readonly version?: string
+  /**
    * Typed contribution buckets produced by the extension's setup function.
    * Consumers (the registry, the hook compiler, the profile build) read each
    * bucket directly — `contributions.tools`,

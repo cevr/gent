@@ -8,8 +8,10 @@ import {
   Effect,
   Exit,
   Fiber,
+  FileSystem,
   Layer,
   Option,
+  Path,
   Predicate,
   Ref,
   Schedule,
@@ -61,7 +63,9 @@ import {
   fixedSessionProfiles,
   fixtureModelCatalogSource,
   recordingEventStore,
+  testAgent,
   testSqliteStorage,
+  testTurnExtension,
 } from "../../src/test-utils/harness"
 import {
   finishPart,
@@ -2867,6 +2871,184 @@ const gatedQueueStorageLayer = <E>(
   )
   return Layer.provide(built, inner)
 }
+
+// ── branch resources follow the profile ─────────────────────────────────────
+
+const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+/**
+ * A user extension file whose branch Resource names its version, and logs
+ * each acquire and release to `log`, so a test reads which version a call
+ * reached and when each version closed.
+ */
+const branchVersionSource = (input: {
+  readonly id: string
+  readonly toolId: string
+  readonly requestId: string
+  readonly version: string
+  readonly log: string
+}) => `import { appendFileSync } from "node:fs";
+import { Context, Effect, Layer, Schema } from "effect";
+import { defineExtension, defineResource, ExtensionHost, request, tool } from "@gent/core/extensions/api";
+class Probe extends Context.Service<Probe, { readonly version: string }>()(${encodeJsonText(`${input.id}/Probe`)}) {}
+const log = (line: string) => appendFileSync(${encodeJsonText(input.log)}, line + "\\n");
+const version = ${encodeJsonText(input.version)};
+export default defineExtension({
+  id: ${encodeJsonText(input.id)},
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: ${encodeJsonText(`${input.id}/probe`)},
+      scope: "branch",
+      layer: Layer.effect(Probe, Effect.acquireRelease(
+        Effect.sync(() => { log("acquire:" + version); return Probe.of({ version }); }),
+        () => Effect.sync(() => log("release:" + version)),
+      )),
+    }));
+    yield* host.register("tool", tool({
+      id: ${encodeJsonText(input.toolId)},
+      description: "Read the branch probe's version",
+      params: Schema.Struct({}),
+      output: Schema.String,
+      execute: () => Effect.gen(function* () { return (yield* Probe).version; }),
+    }));
+    yield* host.register("request", request({
+      id: ${encodeJsonText(input.requestId)},
+      input: Schema.String,
+      output: Schema.String,
+      answersDuringTurn: true,
+      execute: () => Effect.gen(function* () { return (yield* Probe).version; }),
+    }));
+  }),
+});
+`
+
+describe("branch resources follow the profile", () => {
+  it.scopedLive(
+    "an edit reaches a resident loop's next turn, after the running turn ends on the old version",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTempDirectoryScoped("gent-hot-branch-home-")
+        const extensionsDir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(extensionsDir, { recursive: true })
+        const log = path.join(home, "branch-resource.log")
+        yield* fs.writeFileString(log, "")
+        const hotFile = path.join(extensionsDir, "hot.ts")
+        const hot = {
+          id: "@test/hot-branch",
+          toolId: "hot_probe",
+          requestId: "read-hot-probe",
+          log,
+        }
+        yield* fs.writeFileString(hotFile, branchVersionSource({ ...hot, version: "alpha" }))
+        const readLog = fs
+          .readFileString(log)
+          .pipe(Effect.map((text) => text.split("\n").filter((line) => line.length > 0)))
+
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          // Turn one, on the first version.
+          toolCallStep("hot_probe", {}),
+          { ...toolCallStep("hot_probe", {}), gated: true },
+          textStep("turn one done"),
+          // Turn two, after the edit and the added file.
+          toolCallStep("hot_probe", {}),
+          toolCallStep("added_probe", {}),
+          textStep("turn two done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          extensionInputs: [testTurnExtension],
+          providerLayer,
+          home,
+        })
+        // A watching client holds the loop resident, as an open TUI does.
+        yield* client.session
+          .watchRuntime({ sessionId, branchId })
+          .pipe(Stream.runDrain, Effect.forkScoped)
+        const completions = (count: number) =>
+          client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+            Stream.take(count),
+            Stream.runDrain,
+            Effect.forkScoped,
+          )
+        const probeOutputs = client.session.events({ sessionId, branchId }).pipe(
+          Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),
+          Stream.flatMap(({ event }) => {
+            if (event._tag !== "ToolCallSucceeded") return Stream.empty
+            return Stream.make(`${event.toolName}=${String(event.output)}`)
+          }),
+          Stream.runCollect,
+          Effect.map((all) => Array.from(all)),
+        )
+        const readProbe = client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make(hot.id),
+          capabilityId: hot.requestId,
+          input: "read",
+        })
+
+        const firstTurn = yield* completions(1)
+        yield* client.message.send({ sessionId, branchId, content: "turn one" })
+        // The first turn ran its first probe and waits on its second step.
+        yield* controls.waitForCall(1)
+        expect(yield* readLog).toEqual(["acquire:alpha"])
+
+        // Edit the extension and add another while the turn runs.
+        yield* fs.writeFileString(hotFile, branchVersionSource({ ...hot, version: "beta-two" }))
+        yield* fs.writeFileString(
+          path.join(extensionsDir, "added.ts"),
+          branchVersionSource({
+            id: "@test/hot-added",
+            toolId: "added_probe",
+            requestId: "read-added-probe",
+            version: "added",
+            log,
+          }),
+        )
+        // A request resolves the profile as it is now: it reads the new
+        // version, while the running turn still holds the old one open.
+        expect(yield* readProbe).toBe("beta-two")
+        expect(yield* readLog).not.toContain("release:alpha")
+
+        // The running turn finishes on the version it started with.
+        yield* controls.emitAll(1)
+        yield* Fiber.join(firstTurn)
+        // The old version closes once the turn that used it ended.
+        yield* waitFor(
+          readLog,
+          (lines) => lines.includes("release:alpha"),
+          3_000,
+          "the old branch resource released",
+        )
+
+        const secondTurn = yield* completions(2)
+        yield* client.message.send({ sessionId, branchId, content: "turn two" })
+        yield* Fiber.join(secondTurn)
+        yield* controls.assertDone
+
+        const outputs = yield* probeOutputs
+        expect(outputs).toEqual([
+          expect.stringContaining("hot_probe=alpha"),
+          expect.stringContaining("hot_probe=alpha"),
+          expect.stringContaining("hot_probe=beta-two"),
+          expect.stringContaining("added_probe=added"),
+        ])
+        // Each version built once; only the replaced one closed.
+        const lines = yield* readLog
+        expect(lines.toSorted()).toEqual([
+          "acquire:added",
+          "acquire:alpha",
+          "acquire:beta-two",
+          "release:alpha",
+        ])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+})
 
 describe("agent-loop recovery race", () => {
   it.live(

@@ -127,6 +127,7 @@ import {
   ApprovalService,
   buildScopeResources,
   type CurrentExtensionHostContext,
+  resourceBuildKeys,
   ExtensionRegistry,
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
@@ -1486,13 +1487,13 @@ type AgentLoopBehavior = {
     run: RunOpener,
   ) => Effect.Effect<AgentLoopTurnProfile, AgentLoopError, Scope.Scope>
   /**
-   * Branch-lifetime services: the cell kernel, the model context ledger, and
-   * every extension Resource declared with `scope: "branch"`. Extension leaves
-   * invoked outside a turn (an `extension.request` RPC, say) must be given this
-   * context, or a branch Resource resolves as "Service not found". Built on
-   * first use from the session's profile.
+   * Branch-lifetime services: the cell kernel and the model context ledger.
+   * A run outside a turn (an `extension.request` RPC, say) must be given this
+   * context as a turn is. Extension Resources declared with `scope: "branch"`
+   * are not here: they follow the profile, so `resolveTurnProfile` puts them
+   * in the run's capability context.
    */
-  branchContext: Effect.Effect<Context.Context<never>, AgentLoopError>
+  branchContext: Context.Context<never>
   /** Start the turn a restart cut short; only an opening loop calls it. */
   startRecovered: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   /** Take the next queued item and start it in one permit region, as the loop's own fiber. */
@@ -1773,11 +1774,11 @@ const makeAgentLoopBehavior = (
       )
 
     const turnInterruption = yield* makeTurnInterruption
-    // Branch-owned turn services: the cell kernel, the model context ledger, and
-    // every extension Resource declared with `scope: "branch"`. All three share
-    // `loopScope`, so they are rebuilt per loop and interrupted when the branch
-    // closes. Process-scope Resources are not collected here — they belong to
-    // the process graph host and outlive this scope.
+    // Branch-owned turn services: the cell kernel, the model context ledger,
+    // and every extension Resource declared with `scope: "branch"`. All live
+    // under `loopScope`, so they are built per loop and interrupted when the
+    // branch closes. Process-scope Resources are not collected here — they
+    // belong to the profile cache and outlive this scope.
     const branchTools = yield* CurrentBranchToolFeature
     // A failed read fails the open; the next op opens again.
     const branchCwd = yield* sessionWorkingDirectory(sessionId).pipe(
@@ -1786,108 +1787,228 @@ const makeAgentLoopBehavior = (
     const branchToolContext = yield* Layer.build(
       branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
     ).pipe(Scope.provide(loopScope))
-    // The branch's Resources come from the session's profile, the same one its
-    // turns and requests resolve: the extensions set up for the session's cwd,
-    // over that profile's process services. The host cwd's profile would build
-    // another project's Resources. They are built on the first turn or
-    // request, not at open, so a control-plane write (a cancel, an answer to
-    // no question) never resolves a profile.
+    const branchContext = branchToolContext
+    // The branch's Resources follow the session's profile, the same one its
+    // turns and requests resolve: the extensions set up for the session's
+    // cwd, over that profile's process services. The host cwd's profile
+    // would build another project's Resources. Each resolve builds the
+    // Resources its profile needs and does not have yet, not at open, so a
+    // control-plane write (a cancel, an answer to no question) never
+    // resolves a profile.
+    //
+    // A build of one extension's branch Resources is a generation, named by
+    // its build key (`resourceBuildKeys`): an edit to the extension or to
+    // one it builds over gives a new key, and so a new generation; an edit
+    // elsewhere keeps it. A run holds the generations of the profile it
+    // resolved until it ends, so a turn that started before an edit ends on
+    // the old services while the next run reads the new ones. A generation
+    // the newest profile does not use closes when its last run ends, in
+    // reverse build order. It keeps a lease on the profile it was built
+    // over, so the process services it reads close after it.
+    //
+    // `branchResourceLock` orders the resolves of this loop, so the newest
+    // profile is the last one resolved. The place's lock in the profile
+    // cache is taken inside it, and nothing takes them the other way round.
     const branchResourceLock = yield* Semaphore.make(1)
-    interface BranchResources {
-      readonly context: typeof branchToolContext
-      /** The extensions this loop suspends: their branch Resources failed. */
-      readonly suspended: ReadonlyArray<FailedExtension>
+    /** One resolve's lease on its profile, shared by the run and the generations built over it. */
+    interface ProfileLease {
+      readonly scope: Scope.Closeable
+      holds: number
     }
-    const branchResources = yield* Ref.make(Option.none<BranchResources>())
-    const buildBranchResources = Effect.gen(function* () {
-      const built = yield* Ref.get(branchResources)
-      if (Option.isSome(built)) return built.value
-      // The branch's Resources are built over this profile's services, so
-      // the loop holds its lease until the branch closes. No turn's origin
-      // reaches them.
-      const profile = yield* resolveProfile(
-        RunOpener.cases.Turn.make({ openedByClient: true }),
-      ).pipe(Scope.provide(loopScope))
-      // Each extension's branch Resources build on their own, as its process
-      // Resources do. One that fails, or that needs a service a failed one
-      // would have built, is named once in the log and in the transcript and
-      // is suspended for this loop, as a failed process Resource suspends its
-      // extension for the profile; every other extension and the branch's
-      // turns go on.
-      return yield* Effect.uninterruptible(
-        Effect.gen(function* () {
-          const started = yield* buildScopeResources({
-            extensions: turnRegistry(profile).getResolved().extensions,
-            scope: "branch",
-            context: Context.merge(
-              Context.makeUnsafe<unknown>(new Map()),
-              profile.turnCapabilityContext,
-            ),
-            parent: loopScope,
-            restore: (effect) => effect,
-          })
-          yield* Effect.forEach(
-            started.failed,
-            ({ failure, message }) =>
-              publishEvent(
-                ErrorOccurred.make({
-                  sessionId,
-                  branchId,
-                  error: `Extension "${failure.manifest.id}" branch resource failed to start: ${message}`,
-                  notice: true,
-                }),
-              ).pipe(
-                Effect.catchEager((error) =>
-                  Effect.logWarning("failed to publish ErrorOccurred").pipe(
-                    Effect.annotateLogs({ error: String(error) }),
-                  ),
-                ),
-              ),
-            { discard: true },
-          )
-          const resources: BranchResources = {
-            context: Context.merge(branchToolContext, started.context),
-            suspended: started.failed.map(({ failure }) => failure),
-          }
-          yield* Ref.set(branchResources, Option.some(resources))
-          return resources
-        }),
+    interface BranchGeneration {
+      /** Unique for the loop: a key built again after its generation closed is a new one. */
+      readonly id: number
+      readonly scope: Scope.Closeable
+      /** The services this extension's branch Resources built, and only those. */
+      readonly context: Context.Context<unknown>
+      readonly lease: ProfileLease
+      users: number
+    }
+    const generations = new Map<string, BranchGeneration>()
+    let nextGenerationId = 0
+    // A build that failed is not tried again for the same key, and its
+    // notice is not repeated: the extension stays suspended for this loop
+    // until an edit gives it a new key.
+    const failedBuilds = new Map<string, FailedExtension>()
+    let currentKeys: ReadonlySet<string> = new Set()
+    const releaseLease = (lease: ProfileLease) => {
+      lease.holds -= 1
+      if (lease.holds > 0) return Effect.void
+      return Scope.close(lease.scope, Exit.void)
+    }
+    // Let go of the given generations; the ones no run uses and the newest
+    // profile does not name leave the map at once, and close here, the last
+    // built first.
+    const releaseGenerations = (released: ReadonlyArray<string>) =>
+      Effect.suspend(() => {
+        const retired: Array<BranchGeneration> = []
+        for (const key of released) {
+          const generation = generations.get(key)
+          if (Predicate.isUndefined(generation)) continue
+          generation.users -= 1
+          if (generation.users > 0 || currentKeys.has(key)) continue
+          generations.delete(key)
+          retired.push(generation)
+        }
+        return closeGenerations(retired)
+      })
+    const closeGenerations = (retired: ReadonlyArray<BranchGeneration>) =>
+      Effect.forEach(
+        retired.toReversed(),
+        (generation) =>
+          Scope.close(generation.scope, Exit.void).pipe(
+            Effect.andThen(releaseLease(generation.lease)),
+          ),
+        { discard: true },
       )
-    }).pipe(branchResourceLock.withPermits(1))
-    const branchContext = Effect.map(buildBranchResources, ({ context }) => context)
-    // A turn, a request and a hook read the registry with the loop's
-    // suspended extensions left out, so none of their tools, requests or
-    // hooks is offered or dispatched. The narrowed registry replaces the one
-    // in the capability context, so a leaf that reads `ExtensionRegistry`
-    // sees it too. One context per profile: a profile resolves to the same
-    // context until a config edit replaces it.
-    const suspendedContexts = new WeakMap<
+    // A run's capability context: the profile's services and the branch
+    // services of its generations, with the suspended extensions left out
+    // of the registry, so none of their tools, requests or hooks is offered
+    // or dispatched. The narrowed registry replaces the one in the
+    // capability context, so a leaf that reads `ExtensionRegistry` sees it
+    // too. One context per profile and generation set, so a run sees the
+    // same context until an edit changes one of them.
+    const runContexts = new WeakMap<
       Context.Context<ExtensionRegistry>,
-      Context.Context<ExtensionRegistry>
+      Map<string, Context.Context<ExtensionRegistry>>
     >()
+    const runContext = (
+      profile: AgentLoopTurnProfile,
+      used: ReadonlyArray<string>,
+      suspended: ReadonlyArray<FailedExtension>,
+    ) => {
+      const base = profile.turnCapabilityContext
+      const live = used.flatMap((key) =>
+        Option.toArray(Option.fromUndefinedOr(generations.get(key))),
+      )
+      const memoKey = [
+        ...live.map((generation) => String(generation.id)),
+        ...suspended.map((failure) => failure.manifest.id),
+      ].join("\u0000")
+      let byKey = runContexts.get(base)
+      if (Predicate.isUndefined(byKey)) {
+        byKey = new Map()
+        runContexts.set(base, byKey)
+      }
+      const memo = byKey.get(memoKey)
+      if (!Predicate.isUndefined(memo)) return memo
+      let context = base
+      for (const generation of live) context = Context.merge(context, generation.context)
+      if (suspended.length > 0) {
+        const registry = turnRegistry(profile)
+        const resolved = suspendExtensions(registry.getResolved(), suspended)
+        context = Context.add(
+          context,
+          ExtensionRegistry,
+          ExtensionRegistry.of({
+            getResolved: () => resolved,
+            providerConfig: registry.providerConfig,
+          }),
+        )
+      }
+      byKey.set(memoKey, context)
+      return context
+    }
     const resolveTurnProfile = (opener: RunOpener) =>
       Effect.gen(function* () {
-        const profile = yield* resolveProfile(opener)
-        const { suspended } = yield* buildBranchResources
-        if (suspended.length === 0) return profile
-        const context = profile.turnCapabilityContext
-        const narrowed = Option.getOrElse(
-          Option.fromUndefinedOr(suspendedContexts.get(context)),
-          () => {
-            const registry = turnRegistry(profile)
-            const resolved = suspendExtensions(registry.getResolved(), suspended)
-            return Context.add(
-              context,
-              ExtensionRegistry,
-              ExtensionRegistry.of({
-                getResolved: () => resolved,
-                providerConfig: registry.providerConfig,
+        const runScope = yield* Scope.Scope
+        const { profile, retired } = yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const lease: ProfileLease = { scope: yield* Scope.fork(loopScope), holds: 1 }
+            const resolved = yield* restore(
+              resolveProfile(opener).pipe(Scope.provide(lease.scope)),
+            ).pipe(Effect.onError(() => Scope.close(lease.scope, Exit.void)))
+            const extensions = turnRegistry(resolved).getResolved().extensions
+            const keys = resourceBuildKeys(extensions, "branch", "branch")
+            const used: Array<string> = []
+            const suspended: Array<FailedExtension> = []
+            // Each extension's branch Resources build on their own, as its
+            // process Resources do. One that fails, or that needs a service
+            // a failed one would have built, is named once in the log and in
+            // the transcript and is suspended for this loop, as a failed
+            // process Resource suspends its extension for the profile;
+            // every other extension and the branch's turns go on.
+            const started = yield* buildScopeResources({
+              extensions: extensions.filter((extension) => {
+                const failure = failedBuilds.get(keys.get(extension) ?? "")
+                if (Predicate.isUndefined(failure)) return true
+                suspended.push(failure)
+                return false
               }),
+              scope: "branch",
+              context: Context.merge(
+                Context.makeUnsafe<unknown>(new Map()),
+                resolved.turnCapabilityContext,
+              ),
+              parent: loopScope,
+              restore: (effect) => effect,
+              reuse: (extension) => {
+                const key = keys.get(extension)
+                if (Predicate.isUndefined(key)) return Option.none()
+                const generation = generations.get(key)
+                if (Predicate.isUndefined(generation)) return Option.none()
+                generation.users += 1
+                used.push(key)
+                return Option.some(generation.context)
+              },
+              built: (extension, scope, context) => {
+                const key = keys.get(extension)
+                if (Predicate.isUndefined(key)) return
+                lease.holds += 1
+                nextGenerationId += 1
+                generations.set(key, { id: nextGenerationId, scope, context, lease, users: 1 })
+                used.push(key)
+              },
+            })
+            for (const { extension, failure } of started.failed) {
+              const key = keys.get(extension)
+              if (!Predicate.isUndefined(key)) failedBuilds.set(key, failure)
+              suspended.push(failure)
+            }
+            yield* Effect.forEach(
+              started.failed,
+              ({ failure, message }) =>
+                publishEvent(
+                  ErrorOccurred.make({
+                    sessionId,
+                    branchId,
+                    error: `Extension "${failure.manifest.id}" branch resource failed to start: ${message}`,
+                    notice: true,
+                  }),
+                ).pipe(
+                  Effect.catchEager((error) =>
+                    Effect.logWarning("failed to publish ErrorOccurred").pipe(
+                      Effect.annotateLogs({ error: String(error) }),
+                    ),
+                  ),
+                ),
+              { discard: true },
             )
-          },
-        )
-        suspendedContexts.set(context, narrowed)
-        return { ...profile, turnCapabilityContext: narrowed }
+            // The run lets go of its generations, then of its lease, when it
+            // ends: a generation built over this profile closes before the
+            // profile can retire.
+            yield* Scope.addFinalizer(
+              runScope,
+              releaseGenerations(used).pipe(
+                Effect.andThen(Effect.suspend(() => releaseLease(lease))),
+              ),
+            )
+            // This profile is now the newest: a generation it does not use
+            // closes once no run holds it.
+            currentKeys = new Set(used)
+            const retired: Array<BranchGeneration> = []
+            for (const [key, generation] of generations) {
+              if (generation.users > 0 || currentKeys.has(key)) continue
+              generations.delete(key)
+              retired.push(generation)
+            }
+            const context = runContext(resolved, used, suspended)
+            return { profile: { ...resolved, turnCapabilityContext: context }, retired }
+          }),
+        ).pipe(branchResourceLock.withPermits(1))
+        // An extension finalizer never runs under the lock.
+        yield* closeGenerations(retired)
+        return profile
       })
     const turnWorkerQueue = yield* TxQueue.unbounded<TurnWork>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
@@ -1986,13 +2107,9 @@ const makeAgentLoopBehavior = (
         ),
       interactionAnswered: approval.answered,
       runTurn: (state) =>
-        branchContext.pipe(
-          // The turn's profile lease ends with the turn.
-          Effect.flatMap((context) =>
-            turnExecution.runTurn(state).pipe(Effect.provideContext(context), Effect.scoped),
-          ),
-          Effect.scoped,
-        ),
+        // The turn's profile lease, and its hold on the branch Resources,
+        // end with the turn.
+        turnExecution.runTurn(state).pipe(Effect.provideContext(branchContext), Effect.scoped),
       sessionAgent: sessionAgentName(sessionId),
       loopScope,
     })
@@ -2024,15 +2141,14 @@ const makeAgentLoopBehavior = (
     // hook cannot ask.
     const runOpenHooks = Effect.forkIn(
       Effect.gen(function* () {
-        const { profile, context } = yield* Effect.all({
-          profile: resolveTurnProfile(RunOpener.cases.Turn.make({ openedByClient: false })),
-          context: branchContext,
-        })
+        const profile = yield* resolveTurnProfile(
+          RunOpener.cases.Turn.make({ openedByClient: false }),
+        )
         yield* turnRegistry(profile)
           .getResolved()
           .extensionHooks.emitLoopOpen.pipe(
             runAgentLoopTurnProfile(profile),
-            Effect.provideContext(context),
+            Effect.provideContext(branchContext),
           )
       }).pipe(
         Effect.scoped,
@@ -3170,10 +3286,9 @@ const agentLoopActorHandlers = Effect.gen(function* () {
             environment,
             rpcRegistry.run(operation.extensionId, capabilityId, input),
           ).pipe(
-            // Branch Resources live on the loop scope, not on the turn
-            // profile. Without this an extension leaf reached over RPC
-            // cannot see a `scope: "branch"` service.
-            Effect.provideContext(yield* handle.branchContext),
+            // The cell kernel and the model context ledger live on the loop
+            // scope, not on the profile.
+            Effect.provideContext(handle.branchContext),
           )
           // Reads, extension-owned writes and independently serialized queue
           // verbs answer during a turn; other mutations wait for its permit.
