@@ -124,7 +124,13 @@ import type { ToolCall } from "./tool-renderers"
 import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useInputWatch, useScopedKeyboard } from "./terminal"
 import { useExtensionUI } from "./extensions/host"
-import type { ActiveExtensionSession, DisclosureLevel, NoticeRow } from "./extensions/client-facets"
+import {
+  type ActiveExtensionSession,
+  type DisclosureLevel,
+  type NoticeRow,
+  STATUS_YIELD,
+  type StatusLabelShort,
+} from "./extensions/client-facets"
 import type { ResolvedNoticeRows } from "./extensions/loader-boundary"
 
 // ── session labels ──────────────────────────────────────────────────────────
@@ -140,22 +146,6 @@ export interface StatusRowLabel {
    */
   short?: StatusLabelShort
 }
-
-/** A status label's short form, and when it gives way. */
-interface StatusLabelShort {
-  /** The shorter text; empty leaves the label out. */
-  readonly text: string
-  /** The order in which labels take their short forms, lowest first (`STATUS_YIELD`). */
-  readonly rank: number
-}
-
-/**
- * When each core label takes its short form on a narrow row: the debug mark
- * first, then the cwd, before the model, the idle phase word, and the
- * `auto → high` effort last (its short form saves two columns). A plain
- * effort and the right-anchored numbers have none.
- */
-export const STATUS_YIELD = { debug: 0, cwd: 1, model: 2, phase: 3, effort: 4 } as const
 
 /**
  * The model's name without its family word, for a narrow row: `Claude
@@ -295,35 +285,27 @@ export function buildModelLabels(input: {
   return items
 }
 
-/** `repo/sub/dir (branch)`: the cwd relative to the git root, else its last segment. */
-export function formatCwdGit(
-  cwd: string,
-  gitRoot: Option.Option<string>,
-  branch: Option.Option<string>,
-): string {
-  let label: string
-  if (Option.isSome(gitRoot)) {
-    const repoParts = gitRoot.value.split("/")
-    const repoName = Option.getOrElse(
-      Option.fromNullishOr(repoParts[repoParts.length - 1]),
-      () => "",
-    )
-    if (cwd === gitRoot.value) {
-      label = repoName
-    } else if (cwd.startsWith(gitRoot.value + "/")) {
-      label = repoName + "/" + cwd.slice(gitRoot.value.length + 1)
-    } else {
-      label = Option.getOrElse(Option.fromNullishOr(repoParts[repoParts.length - 1]), () => cwd)
-    }
-  } else {
-    const parts = cwd.split("/")
-    label = Option.getOrElse(Option.fromNullishOr(parts[parts.length - 1]), () => cwd)
-  }
+/** A directory without its trailing slashes; `/` stays `/`. */
+const withoutTrailingSlash = (dir: string): string => dir.replace(/(.)\/+$/, "$1")
 
-  if (Option.isSome(branch) && branch.value.length > 0) {
-    return `${label} (${branch.value})`
-  }
-  return label
+/** The last segment of a directory; the directory itself when it has none. */
+const lastSegment = (dir: string): string => dir.slice(dir.lastIndexOf("/") + 1) || dir
+
+/**
+ * `repo/sub/dir`: the cwd under its project root, named from the root's last
+ * segment; with no root, or a root that does not hold the cwd, the cwd's last
+ * segment. A trailing slash names the same directory.
+ */
+export function formatCwd(cwd: string, projectRoot: Option.Option<string>): string {
+  const dir = withoutTrailingSlash(cwd)
+  return Option.match(Option.map(projectRoot, withoutTrailingSlash), {
+    onNone: () => lastSegment(dir),
+    onSome: (root) => {
+      if (dir === root) return lastSegment(root)
+      if (dir.startsWith(root + "/")) return lastSegment(root) + dir.slice(root.length)
+      return lastSegment(dir)
+    },
+  })
 }
 
 // ── model query ─────────────────────────────────────────────────────────────

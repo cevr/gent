@@ -140,6 +140,16 @@ import {
 import { SqlClient } from "effect/sql"
 import * as Prompt from "effect/ai/Prompt"
 import * as EffectEntry from "effect"
+import * as EffectAi from "effect/ai"
+import * as EffectAiError from "effect/ai/AiError"
+import * as EffectResponse from "effect/ai/Response"
+import * as EffectTool from "effect/ai/Tool"
+import * as EffectEncoding from "effect/encoding"
+import * as EffectHttp from "effect/http"
+import * as EffectHttpClientError from "effect/http/HttpClientError"
+import * as EffectProcess from "effect/process"
+import * as EffectChildProcessSpawner from "effect/process/ChildProcessSpawner"
+import * as EffectSql from "effect/sql"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
 import {
   type Branch,
@@ -626,6 +636,8 @@ interface ResolvedExtensions {
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly apiClasses: ReadonlyMap<string, ApiClassContribution>
   readonly modelRouters: ReadonlyMap<string, ModelRouterContribution>
+  /** The extension that registered each winning router: a route runs as its leaf. */
+  readonly modelRouterOwners: ReadonlyMap<string, ExtensionId>
   readonly slashCommands: ReadonlyArray<SlashCommand>
   readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -933,6 +945,13 @@ export const resolveExtensions = (
     (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.modelRouters), () => []),
     (router) => router.id,
   )
+  // The same scope order as the bucket, so each id names the winner's owner.
+  const modelRouterOwners = new Map<string, ExtensionId>()
+  for (const extension of sorted) {
+    for (const router of extension.contributions.modelRouters ?? []) {
+      modelRouterOwners.set(router.id, extension.manifest.id)
+    }
+  }
 
   const slashCommands = compileSlashCommands(capabilityWinners)
 
@@ -950,6 +969,7 @@ export const resolveExtensions = (
     modelDrivers,
     apiClasses,
     modelRouters,
+    modelRouterOwners,
     slashCommands,
     extensionHooks,
     extensions: sorted,
@@ -1130,20 +1150,49 @@ export const resourceBuildKeys = (
 }
 
 /**
- * `context` with an extension's Resource services `added` over it. A later
- * extension's service wins, except the compactor: a later one is chained in
- * front of the one before it (`chainCompactors`), so in resolution order the
- * project's compactor is asked first, then the user's, then the builtin one.
+ * An extension's compactor, run as that extension's leaf: the run's host
+ * context (session, branch, cwd, the compacted agent) under the owner's
+ * extension id, as a tool call of that extension runs, so its
+ * `State.changed` and `Session.send` name it. A call outside a run has no
+ * host context, and the caller's `ExtensionContext` stands.
+ */
+const ownedCompactor = (
+  extensionId: ExtensionId,
+  compactor: ModelContextCompactor["Service"],
+): ModelContextCompactor["Service"] =>
+  ModelContextCompactor.of({
+    compact: (request) =>
+      Effect.flatMap(
+        Effect.serviceOption(CurrentExtensionHostContext),
+        Option.match({
+          onNone: () => compactor.compact(request),
+          onSome: (host) =>
+            compactor
+              .compact(request)
+              .pipe(provideExtensionLeaf({ extensionId }), provideCurrentHostCtx(host)),
+        }),
+      ),
+  })
+
+/**
+ * `context` with the Resource services `added` by the extension `owner` over
+ * it. A later extension's service wins, except the compactor: it runs as its
+ * owner's leaf (`ownedCompactor`), and a later one is chained in front of the
+ * one before it (`chainCompactors`), so in resolution order the project's
+ * compactor is asked first, then the user's, then the builtin one.
  */
 const mergeResourceServices = (
   context: Context.Context<unknown>,
   added: Context.Context<unknown>,
+  owner: ExtensionId,
 ): Context.Context<unknown> => {
   const merged = Context.merge(context, added)
-  const before = Context.getOption(context, ModelContextCompactor)
   const after = Context.getOption(added, ModelContextCompactor)
-  if (Option.isNone(before) || Option.isNone(after)) return merged
-  return Context.add(merged, ModelContextCompactor, chainCompactors(after.value, before.value))
+  if (Option.isNone(after)) return merged
+  const owned = ownedCompactor(owner, after.value)
+  const before = Context.getOption(context, ModelContextCompactor)
+  if (Option.isNone(before)) return Context.add(merged, ModelContextCompactor, owned)
+  return Context.add(merged, ModelContextCompactor, chainCompactors(owned, before.value))
 }
 
 /**
@@ -1217,7 +1266,7 @@ export const buildScopeResources = (params: {
       }
       const built = yield* start(extension)
       if (Exit.isSuccess(built)) {
-        context = mergeResourceServices(context, built.value)
+        context = mergeResourceServices(context, built.value, extension.manifest.id)
         active.push(extension)
         continue
       }
@@ -1229,7 +1278,7 @@ export const buildScopeResources = (params: {
       if (Option.isSome(fallback)) {
         const previous = yield* start(fallback.value)
         if (Exit.isSuccess(previous)) {
-          context = mergeResourceServices(context, previous.value)
+          context = mergeResourceServices(context, previous.value, fallback.value.manifest.id)
           active.push(fallback.value)
           continue
         }
@@ -1583,12 +1632,14 @@ const extensionDirectories = (
  * entry. A bound specifier also gives a user extension the same module
  * instances as a shipped one: the same Tags and the same Schema classes.
  *
- * The loader binds the two authoring entries and `effect`. The host that
- * composes the shipped extensions binds the other `effect/*` and `@effect/*`
- * modules they import (`BuiltinExtensionModules` in `@gent/extensions`).
- * `@gent/core/protocol` is a client entry; the TUI binds it for client files
- * only. An internal path such as `@gent/core/host` is not bound, and it does
- * not resolve outside the repository.
+ * The loader binds the two authoring entries, `effect`, and each `effect/*`
+ * module a shipped extension imports: `effect` is core's own dependency, so
+ * every loader that binds this map (the server's, the test harness's, the
+ * TUI's) resolves them alike. The host that composes the shipped extensions
+ * binds the `@effect/*` packages they import (`BuiltinExtensionModules` in
+ * `@gent/extensions`). `@gent/core/protocol` is a client entry; the TUI binds
+ * it for client files only. An internal path such as `@gent/core/host` is not
+ * bound, and it does not resolve outside the repository.
  *
  * The gent entries re-export this module, so they are read on first use: a
  * static import here would evaluate them inside their own import cycle.
@@ -1605,6 +1656,17 @@ export const extensionEntryModules: ReadonlyMap<string, RuntimeModuleSource> = n
   ["@gent/core/extensions/api", loadExtensionApiEntry],
   ["@gent/core/extensions/branch-tools", loadBranchToolsEntry],
   ["effect", () => EffectEntry],
+  ["effect/ai", () => EffectAi],
+  ["effect/ai/AiError", () => EffectAiError],
+  ["effect/ai/Prompt", () => Prompt],
+  ["effect/ai/Response", () => EffectResponse],
+  ["effect/ai/Tool", () => EffectTool],
+  ["effect/encoding", () => EffectEncoding],
+  ["effect/http", () => EffectHttp],
+  ["effect/http/HttpClientError", () => EffectHttpClientError],
+  ["effect/process", () => EffectProcess],
+  ["effect/process/ChildProcessSpawner", () => EffectChildProcessSpawner],
+  ["effect/sql", () => EffectSql],
 ])
 
 /** Bind the extension entries before an extension file is imported. */

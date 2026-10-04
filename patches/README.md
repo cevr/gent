@@ -147,3 +147,24 @@ Remove this patch when the SDK sends the reasoning back itself. Rechecked on
 2026-10-01: 4.0.0 still drops reasoning without an item id, so the patch was
 regenerated for that release. It patches `dist` only (the `.js` and the option's type in the `.d.ts`); the shipped
 `src` copy keeps the upstream text.
+
+## `@effect/platform-node-shared@4.0.0`
+
+The child process spawner runs a `stdin` stream into the child through a
+sink that listens for the writable's `error` event only while it runs. A
+child that exits before it reads all of its input (a pager the reader
+quits, a pager an interrupt stops) fails a write that Node still holds
+after the sink stopped, and that `error` event has no listener: it throws
+as an uncaught exception and ends gent. The child's stdout and stderr keep
+a listener of their own for this reason; stdin had none.
+
+The patch adds a no-op `error` listener on the child's stdin when the
+spawner creates the stdin sink. The sink still fails on a write error while
+it runs; the child's exit code reports a child that left early. `src` and
+`dist` get the same change. Without it, the interrupt test in
+`apps/tui/tests/extensions/git.client.test.tsx` ("an interrupted page …")
+fails with `EPIPE`; a reader who quits the pager early meets the same race.
+
+Remove this patch when an `@effect/platform-node-shared` release keeps a
+listener on the child's stdin. Checked on 2026-10-04: 4.0.0, the latest
+release, has none.

@@ -1,0 +1,32 @@
+diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
+index ecb6729d62a1eaa3e6ee621552c027f634bd2581..61126cf3b23c15d6e8bc83ce9e62e40c458f1320 100644
+--- a/dist/NodeChildProcessSpawner.js
++++ b/dist/NodeChildProcessSpawner.js
+@@ -214,6 +214,11 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+     // sink that will attached to the process handle
+     let sink = Sink.drain;
+     if (Predicate.isNotNull(childProcess.stdin)) {
++      // The sink reports a write error while it runs. A child that exits
++      // before it reads all of its input fails a write still buffered after
++      // the sink stopped; the exit code reports that child, so the error
++      // must not throw as an unhandled "error" event.
++      childProcess.stdin.on("error", () => {});
+       sink = NodeSink.fromWritable({
+         evaluate: () => childProcess.stdin,
+         onError: error => toPlatformError("fromWritable(stdin)", toError(error), command),
+diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
+index e5f7a0dd7eb1e5fbca2b1b17eb761bd80c11280b..6f25565bb1c81b8d96252c818423df70ea4c67fb 100644
+--- a/src/NodeChildProcessSpawner.ts
++++ b/src/NodeChildProcessSpawner.ts
+@@ -299,6 +299,11 @@ const make = Effect.gen(function*() {
+       // sink that will attached to the process handle
+       let sink: Sink.Sink<void, unknown, never, PlatformError.PlatformError> = Sink.drain
+       if (Predicate.isNotNull(childProcess.stdin)) {
++        // The sink reports a write error while it runs. A child that exits
++        // before it reads all of its input fails a write still buffered after
++        // the sink stopped; the exit code reports that child, so the error
++        // must not throw as an unhandled "error" event.
++        childProcess.stdin.on("error", () => {})
+         sink = NodeSink.fromWritable({
+           evaluate: () => childProcess.stdin!,
+           onError: (error) => toPlatformError("fromWritable(stdin)", toError(error), command),

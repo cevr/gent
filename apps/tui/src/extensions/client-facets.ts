@@ -10,6 +10,7 @@ import {
   Schema,
   Scope,
 } from "effect"
+import type { ChildProcessSpawner } from "effect/process"
 import {
   type InteractionPresented,
   type AgentName,
@@ -31,6 +32,7 @@ import type { ToolRenderer } from "../tool-renderers"
 import type { JSX } from "@opentui/solid"
 import { RGBA } from "@opentui/core"
 import { NamedThemeColor } from "../theme"
+import type { Handover } from "../os"
 import { repliesInView, type ReplyWriter } from "../utils"
 
 // ── effect boundary ─────────────────────────────────────────────────────────
@@ -45,12 +47,14 @@ import { repliesInView, type ReplyWriter } from "../utils"
  * The runtime accepts only the Effect setup shape.
  *
  * Solid integration: extensions return contributions; the TUI shell owns one
- * per-provider `ManagedRuntime` that provides `FileSystem | Path | ClientContext`,
- * and runs each setup via `runtime.runPromise`. Async work inside
- * contributions (autocomplete `items`, etc.) is wired via the same runtime —
- * the seam is at the rendering edge, not in the Effect surface.
+ * per-provider `ManagedRuntime` that provides `FileSystem | Path |
+ * ChildProcessSpawner | ClientContext`, and runs each setup via
+ * `runtime.runPromise`. Async work inside contributions (autocomplete
+ * `items`, etc.) is wired via the same runtime — the seam is at the rendering
+ * edge, not in the Effect surface.
  *
- * Layering: `ClientDeps` is the TUI-local *floor* (`FileSystem | Path`).
+ * Layering: `ClientDeps` is the TUI-local *floor* (`FileSystem | Path |
+ * ChildProcessSpawner`).
  * The TUI shell augments its runtime with `ClientContext`, and an extension
  * that yields it widens its `R`. `ClientContext` lives here, not in
  * `@gent/core`, because its facets (the shell, the panes, the activity) are
@@ -62,11 +66,14 @@ import { repliesInView, type ReplyWriter } from "../utils"
 /**
  * The dependency channel a client extension's setup Effect MAY require.
  *
- * `ClientDeps` is the TUI-local floor: file system and path services. It is
- * a floor, not a ceiling: the TUI runtime adds `ClientContext`, and an
- * extension that yields it declares a wider `R`.
+ * `ClientDeps` is the TUI-local floor: the Effect platform services for
+ * files, paths and processes, as a server extension has them (ARCHITECTURE
+ * rule 15). Every client extension gets the same floor, shipped or not, and
+ * runs a command through `runProcess`. It is a floor, not a ceiling: the TUI
+ * runtime adds `ClientContext`, and an extension that yields it declares a
+ * wider `R`.
  */
-type ClientDeps = FileSystem.FileSystem | Path.Path
+export type ClientDeps = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 
 // ── activity facet ──────────────────────────────────────────────────────────
 
@@ -394,6 +401,21 @@ export interface ClientShell {
   }) => void
   /** Fork an extension-owned Effect from a sync UI callback. */
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
+  /**
+   * Run an effect with the terminal handed to it, for a program that draws
+   * on the terminal itself (`runProcess` with inherited stdio): the renderer
+   * suspends first and resumes when the effect ends, however it ends. One
+   * handover runs at a time, the host's editor included; a second waits.
+   * Keys go to the program while it runs, ctrl+c and ctrl+\ included (each
+   * process the effect spawns joins the terminal's foreground group), and
+   * transcript rows a running turn commits meanwhile land on the return. An
+   * interrupt stops and awaits each process the effect spawned before the
+   * renderer resumes; a process such a child starts is out of reach, so the
+   * effect spawns each program it runs itself. Gent's exit (a signal, the
+   * reader's quit) interrupts every handover the same way before it leaves
+   * the terminal.
+   */
+  readonly handover: Handover
   /**
    * The one docked pane under the composer. The host keeps a single slot,
    * shared with its own pickers: opening a pane closes whatever pane or picker
@@ -763,9 +785,32 @@ const InteractionRendererContribution = Schema.Struct({
 export const StatusLabelColor = Schema.Union([Schema.instanceOf(RGBA), NamedThemeColor])
 export type StatusLabelColor = Schema.Schema.Type<typeof StatusLabelColor>
 
+/**
+ * When each host label takes its short form on a narrow row: the debug mark
+ * first, then the cwd, before the model, the idle phase word, and the
+ * `auto → high` effort last (its short form saves two columns). A plain
+ * effort and the right-anchored numbers have none. The values are an order,
+ * not widths: an extension label ranks between two host labels with a
+ * fraction (`STATUS_YIELD.cwd + 0.5` gives way after the cwd, before the model).
+ */
+export const STATUS_YIELD = { debug: 0, cwd: 1, model: 2, phase: 3, effort: 4 } as const
+
+/** A status label's short form, and when it gives way. */
+export interface StatusLabelShort {
+  /** The shorter text; empty leaves the label out. */
+  readonly text: string
+  /** The order in which labels take their short forms, lowest first (`STATUS_YIELD`). */
+  readonly rank: number
+}
+
 export interface StatusLabelItem {
   readonly text: string
   readonly color: StatusLabelColor
+  /**
+   * The form the row draws when its group cannot fit every label in full.
+   * Absent, the label keeps its text, and only the row's last cut shortens it.
+   */
+  readonly short?: StatusLabelShort
 }
 
 /** Where a status label sits: the left group, or the right group before the gauge and cost. */
@@ -842,6 +887,7 @@ const AutocompleteContribution = Schema.Struct({
    *  - Sync: returned array used directly.
    *  - Effect: run through the TUI shell's `clientRuntime`. R may be any
    *    subset of services the runtime provides (FileSystem | Path |
+   *    ChildProcessSpawner |
    *    ClientContext).
    *  The popup wraps in `createResource` — undefined while loading, items
    *  when resolved. Async work goes through Effect so client extension code
@@ -1054,7 +1100,8 @@ export const stoppableContribution = (opts: StoppableContribution): ClientContri
 
 /**
  * A client extension's setup is an Effect that yields its dependencies
- * from the per-provider TUI runtime — `ClientDeps` (FileSystem | Path) by
+ * from the per-provider TUI runtime — `ClientDeps` (FileSystem | Path |
+ * ChildProcessSpawner) by
  * default, widened to `ClientContext` when the extension yields it; the
  * per-provider `ManagedRuntime` provides it. The setup handles its own
  * failures; one that dies anyway is that extension's load failure, since the
@@ -1068,7 +1115,8 @@ type ExtensionClientSetup<Services extends ClientRuntimeServices = ClientDeps> =
 
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files.
  *
- * `R` defaults to `ClientDeps` (FileSystem | Path). An extension that yields
+ * `R` defaults to `ClientDeps` (FileSystem | Path | ChildProcessSpawner). An
+ * extension that yields
  * `ClientContext` widens `R` and relies on the loader's runtime to provide it.
  */
 export interface ExtensionClientModule<R extends ClientRuntimeServices = ClientDeps> {

@@ -67,10 +67,9 @@ import {
   SyntaxStyle,
   type TextareaRenderable,
 } from "@opentui/core"
-import { useRenderer } from "@opentui/solid"
 import { isSlashCommandName, nameColumnWidth, parseSlashCommand, useCommand } from "./commands"
 import { useEnv, useWorkspace } from "./workspace"
-import { openExternalEditor, resolveEditor } from "./os"
+import { openExternalEditor, resolveEditor, useHandover } from "./os"
 import {
   type InteractionPresented,
   type ApprovalResult,
@@ -901,13 +900,13 @@ function useComposerController(): ComposerController {
   const { theme } = useTheme()
   const command = useCommand()
   const client = useClient()
-  const renderer = useRenderer()
   const env = useEnv()
   const workspace = useWorkspace()
   const { cast } = useRuntime()
   const history = usePromptHistory()
   const paste = createPasteManager()
   const extensionUI = useExtensionUI()
+  const handover = useHandover()
 
   let inputRef = Option.none<TextareaRenderable>()
 
@@ -1390,12 +1389,7 @@ function useComposerController(): ComposerController {
     )
     const editor = resolveEditor(env.visual, env.editor)
     cast(
-      openExternalEditor(
-        currentContent,
-        () => renderer.suspend(),
-        () => renderer.resume(),
-        editor,
-      ).pipe(
+      openExternalEditor(currentContent, handover, editor).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
             if (result._tag === "applied" && Option.isSome(inputRef)) {

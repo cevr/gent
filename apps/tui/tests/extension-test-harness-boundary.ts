@@ -12,9 +12,8 @@ import type {
   ClientShellTransport,
   PaneOwner,
 } from "../src/extensions/client-facets"
-import { BunServices } from "@effect/platform-bun"
 import { makeClientRuntime } from "../src/extensions/host"
-import { createMockClient } from "./render-harness-boundary"
+import { createMockClient, type TestTools, testPlatformLayer } from "./render-harness-boundary"
 
 type ActiveClientSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
@@ -52,6 +51,13 @@ interface ClientExtensionHarnessOptions {
    * file. The session's directory defaults to `cwd`.
    */
   readonly workspace?: TestWorkspace
+  /**
+   * Where the setup's cleanups go; by default nothing keeps them. A test
+   * whose extension forks a watch or a timer runs them when its scope ends.
+   */
+  readonly lifecycle?: ClientContextDeps["lifecycle"]
+  /** Stand-ins for `gh` and `hunk`; by default the setup finds neither. */
+  readonly tools?: TestTools
 }
 
 type TestWorkspace = Omit<ClientContextDeps["workspace"], "sessionCwd"> &
@@ -85,6 +91,8 @@ export const testClientContextDeps = (
       cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
         Effect.runFork(effect)
       },
+      // A test has no terminal to hand over: the effect runs as it is.
+      handover: (effect) => effect,
       pane: makePaneSlot(),
       ...deps.shell,
     },
@@ -177,7 +185,7 @@ export const makeClientExtensionRuntime = (
   opts: ClientExtensionHarnessOptions = {},
 ): ClientRuntime =>
   makeClientRuntime(
-    BunServices.layer,
+    testPlatformLayer(opts.tools),
     testClientContextDeps({
       ...opts,
       transport: Option.getOrElse(Option.fromUndefinedOr(opts.transport), () =>

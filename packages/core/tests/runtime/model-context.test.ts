@@ -3,6 +3,7 @@ import {
   Clock,
   Duration,
   Effect,
+  Exit,
   Layer,
   Option,
   Predicate,
@@ -73,10 +74,17 @@ import {
   type ReasoningEffort,
 } from "../../src/domain/agent"
 import { omitUndefined } from "../../src/domain/guards"
-import { defineExtension, defineResource, ExtensionHost, tool } from "../../src/extensions/api"
+import {
+  defineExtension,
+  defineResource,
+  ExtensionContext,
+  ExtensionHost,
+  tool,
+} from "../../src/extensions/api"
 import { rangeCompactorLayer } from "../helpers/test-preset"
 import {
   LanguageModelLayers,
+  makeTempDirectoryScoped,
   type SequenceStep,
   waitFor,
 } from "../../src/test-utils/language-model"
@@ -89,7 +97,12 @@ import {
   MessageStorage,
   SessionStorage,
 } from "../../src/storage/storage"
-import { baseLocalLayerWithProvider, createRpcHarness } from "../../src/test-utils/harness"
+import {
+  baseLocalLayerWithProvider,
+  createRpcHarness,
+  testLeafContext,
+  testToolContext,
+} from "../../src/test-utils/harness"
 import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
 import * as Response from "effect/ai/Response"
 
@@ -1254,6 +1267,196 @@ describe("provider overflow recovery", () => {
   )
 })
 
+// ── compactor host context ──────────────────────────────────────────────────
+
+/** What one compactor call read from its `ExtensionContext`. */
+interface CompactorContextRead {
+  readonly extensionId: ExtensionId
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly agentName: Option.Option<AgentName>
+  readonly cwd: string
+  /** Whether its `State.changed()` pulse was published. */
+  readonly pulsed: boolean
+}
+
+/**
+ * A process-scope compactor that pulses its state and records the context
+ * each call runs with. A refusing one then fails with `ModelCompactionError`.
+ */
+const contextReadingCompactorExtension = (params: {
+  readonly id: string
+  readonly reads: Array<CompactorContextRead>
+  readonly refuse: boolean
+}) =>
+  defineExtension({
+    id: params.id,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "resource",
+        defineResource({
+          id: `${params.id}/compactor`,
+          scope: "process",
+          layer: Layer.succeed(
+            ModelContextCompactor,
+            ModelContextCompactor.of({
+              compact: (request) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  const pulse = yield* Effect.exit(ctx.State.changed())
+                  params.reads.push({
+                    extensionId: ctx.extensionId,
+                    sessionId: ctx.sessionId,
+                    branchId: ctx.branchId,
+                    agentName: Option.fromUndefinedOr(ctx.agentName),
+                    cwd: ctx.cwd,
+                    pulsed: Exit.isSuccess(pulse),
+                  })
+                  if (params.refuse) {
+                    return yield* new ModelCompactionError({
+                      modelId: request.modelId,
+                      reason: "NotMine",
+                    })
+                  }
+                  return { notice: "summary of the earlier work", modelId: request.modelId }
+                }),
+            }),
+          ),
+        }),
+      )
+    }),
+  })
+
+const SUMMARIZING_COMPACTOR = ExtensionId.make("test-context-compactor")
+const REFUSING_COMPACTOR = ExtensionId.make("test-refusing-compactor")
+
+/** Send `content` and wait until its turn settles on an assistant reply. */
+const settledTurn = (
+  client: Effect.Success<ReturnType<typeof createRpcHarness>>["client"],
+  target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+  content: string,
+) =>
+  Effect.gen(function* () {
+    yield* client.message.send({ ...target, content })
+    yield* waitFor(
+      client.session.getSnapshot(target),
+      (snapshot) =>
+        snapshot.runtime._tag === "Idle" &&
+        snapshot.messages.some(
+          (message) =>
+            message.role === "user" &&
+            message.parts.some((part) => part.type === "text" && part.text === content),
+        ) &&
+        snapshot.messages.at(-1)?.role === "assistant",
+      3_000,
+      "the turn settled",
+    )
+  })
+
+describe("compactor host context", () => {
+  it.live("a compactor runs with the context of the session whose window it compacts", () =>
+    Effect.gen(function* () {
+      const launchCwd = yield* makeTempDirectoryScoped("gent-compactor-launch-")
+      const otherCwd = yield* makeTempDirectoryScoped("gent-compactor-other-")
+      // Per session: a first turn, then a refused request that hands its history off.
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        textStep("first reply"),
+        overflowStep,
+        textStep("reply after handoff"),
+        textStep("first reply"),
+        overflowStep,
+        textStep("reply after handoff"),
+      ])
+      const reads: Array<CompactorContextRead> = []
+      const harness = yield* createRpcHarness({
+        cwd: launchCwd,
+        providerLayer,
+        agents: [wideAgent],
+        admission: { agent: wideAgent.name },
+        extensionInputs: [
+          contextReadingCompactorExtension({ id: SUMMARIZING_COMPACTOR, reads, refuse: false }),
+        ],
+        models: [wideModel],
+      })
+      const { client } = harness
+      const other = yield* client.session.create({
+        cwd: otherCwd,
+        admission: { agent: wideAgent.name },
+      })
+      const launch = { sessionId: harness.sessionId, branchId: harness.branchId }
+      for (const target of [launch, other]) {
+        yield* settledTurn(client, target, "first")
+        yield* settledTurn(client, target, "second")
+      }
+
+      // Each call reads the session, branch, agent and cwd of the window it
+      // compacts, under its own extension id.
+      const owned = { extensionId: SUMMARIZING_COMPACTOR, pulsed: true }
+      expect(reads).toEqual([
+        { ...owned, ...launch, agentName: Option.some(wideAgent.name), cwd: launchCwd },
+        {
+          ...owned,
+          sessionId: other.sessionId,
+          branchId: other.branchId,
+          agentName: Option.some(wideAgent.name),
+          cwd: otherCwd,
+        },
+      ])
+    }).pipe(Effect.scoped, Effect.timeout("4 seconds")),
+  )
+
+  it.live("each compactor of a chain runs and pulses its state under its own extension id", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        textStep("first reply"),
+        overflowStep,
+        textStep("reply after handoff"),
+      ])
+      const reads: Array<CompactorContextRead> = []
+      // A later extension's compactor is asked first: the refusing one hands
+      // the window to the summarizing one.
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        providerLayer,
+        agents: [wideAgent],
+        admission: { agent: wideAgent.name },
+        extensionInputs: [
+          contextReadingCompactorExtension({ id: SUMMARIZING_COMPACTOR, reads, refuse: false }),
+          contextReadingCompactorExtension({ id: REFUSING_COMPACTOR, reads, refuse: true }),
+        ],
+        models: [wideModel],
+      })
+      const pulses = yield* Ref.make<ReadonlyArray<ExtensionId>>([])
+      yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.runForEach(({ event }) => {
+          if (event._tag !== "ExtensionStateChanged") return Effect.void
+          return Ref.update(pulses, (all) => [...all, event.extensionId])
+        }),
+        Effect.forkScoped,
+      )
+      yield* settledTurn(client, { sessionId, branchId }, "first")
+      yield* settledTurn(client, { sessionId, branchId }, "second")
+
+      expect(reads.map(({ extensionId, pulsed }) => ({ extensionId, pulsed }))).toEqual([
+        { extensionId: REFUSING_COMPACTOR, pulsed: true },
+        { extensionId: SUMMARIZING_COMPACTOR, pulsed: true },
+      ])
+      expect(
+        yield* waitFor(Ref.get(pulses), (all) => all.length >= 2, 1_000, "both pulses arrived"),
+      ).toEqual([REFUSING_COMPACTOR, SUMMARIZING_COMPACTOR])
+      // The summarizing compactor's summary is the handoff.
+      const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+      expect(
+        handoffMarkers(snapshot.messages).map((marker) =>
+          marker.parts.some(
+            (part) => part.type === "text" && part.text.includes("summary of the earlier work"),
+          ),
+        ),
+      ).toEqual([true])
+    }).pipe(Effect.scoped, Effect.timeout("4 seconds")),
+  )
+})
+
 // ── cold prompt cache ───────────────────────────────────────────────────────
 
 const HOUR_MS = 60 * 60_000
@@ -2215,6 +2418,9 @@ const projectWith = (budget: ModelContextBudget) => (messages: ReadonlyArray<Mes
 const summaryModel: CompactionRequest["summaryModel"] = () =>
   Effect.die("the summary model is not resolved in these tests")
 
+/** The context a compactor runs with; the turn provides the branch's own. */
+const leafContext = Layer.succeed(ExtensionContext, testLeafContext(testToolContext()))
+
 describe("turn window projection", () => {
   it.scopedLive("a turn whose own steps overflow hands off at a step boundary", () =>
     Effect.gen(function* () {
@@ -2304,7 +2510,7 @@ describe("turn window projection", () => {
           return Effect.succeed(message)
         },
         summaryModel,
-      }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
+      }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(true)
       expect(requests).toHaveLength(1)
@@ -2427,7 +2633,7 @@ describe("turn window projection", () => {
         promptCache: Option.none(),
         persist: (message) => Effect.succeed(message),
         summaryModel,
-      }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
+      }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(true)
       const marker = durableMessages.find(
@@ -2488,7 +2694,7 @@ describe("turn window projection", () => {
             promptCache: Option.none(),
             persist: (message) => Effect.succeed(message),
             summaryModel,
-          }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
+          }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
         const first = yield* compact([
           line("recompact-old-0", "user", 0),
@@ -2571,7 +2777,7 @@ describe("turn window projection", () => {
           return Effect.succeed(message)
         },
         summaryModel,
-      }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer)))
+      }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(false)
       expect(persisted).toEqual([])
@@ -2647,7 +2853,7 @@ describe("turn window projection", () => {
           promptCache: Option.none(),
           persist: Effect.succeed,
           summaryModel,
-        }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer))),
+        }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer, leafContext))),
       )
 
       const notices = (yield* Ref.get(publisher.published)).filter(

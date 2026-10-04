@@ -276,6 +276,17 @@ Within each directory:
 **Scope precedence**: Higher scope wins for same-key contributions. Project
 overrides User overrides Builtin.
 
+An extension file resolves `@gent/core/extensions/api`,
+`@gent/core/extensions/branch-tools`, `effect`, and each `effect/*` module a
+shipped extension imports (`effect/ai`, `effect/http`, `effect/process`,
+`effect/sql` and the others `extensionEntryModules` in
+`packages/core/src/runtime/extension-host.ts` lists). Core binds them to the
+modules gent runs, so a Tag or Schema class the file imports is the one core
+uses, in tests as in the binary. The gent server also binds the `@effect/*`
+packages the shipped extensions import (the provider SDKs and
+`@effect/platform-bun`). Any other package import resolves from the file's
+own directory.
+
 ## Disabling Extensions
 
 List the extension ids under the `disabledExtensions` key of `.gent/config.json`:
@@ -334,6 +345,38 @@ export default defineExtension({
 `AiTool.Readonly` / `AiTool.Destructive` annotations. They are not authority
 grants. Host authority still comes from `ExtensionContext` or an
 extension-owned service.
+
+A tool that fails reaches the model as a failed tool result that holds only
+its error's message text (`{ "error": "Tool 'verse' failed: NotFound: …" }`);
+the error's other fields do not reach the model. A tool whose failure the
+model should read field by field fails with
+`ToolResultFailure({ message, result })` from `@gent/core/extensions/api`:
+its JSON `result` is the failed tool result the model reads, and `message`
+names the failure in logs.
+
+```ts
+import { tool, ToolResultFailure } from "@gent/core/extensions/api"
+import { Effect, Option, Schema } from "effect"
+
+const verses = new Map([["John 3:16", "For God so loved the world…"]])
+
+export const VerseTool = tool({
+  id: "verse",
+  description: "Read one verse by its reference",
+  params: Schema.Struct({ reference: Schema.String }),
+  output: Schema.String,
+  execute: ({ reference }) =>
+    Effect.fromOption(Option.fromUndefinedOr(verses.get(reference))).pipe(
+      Effect.mapError(
+        () =>
+          new ToolResultFailure({
+            message: `no verse ${reference}`,
+            result: { error: "NotFound", reference, known: [...verses.keys()] },
+          }),
+      ),
+    ),
+})
+```
 
 #### Tool images
 
@@ -555,6 +598,69 @@ them from the same `host` value (`host.cwd`, `host.home`,
 `host.host.osInfo`, `host.host.homeDirectory`) before registering; the resource itself should
 still expose the smallest service Tag it needs.
 
+### Context compaction
+
+When a window hands off (it overflows, the model asks, or a turn starts on a
+large window whose prompt cache went cold), the loop asks a
+`ModelContextCompactor` for the summary the handoff marker carries. An
+extension installs one as a `process` Resource; the Tag, `CompactionRequest`,
+`CompactionSummary` and `ModelCompactionError` come from
+`@gent/core/extensions/branch-tools`. The installed compactors form one
+chain: project, then user, then builtin. The first summary wins. A compactor
+that fails with `ModelCompactionError` passes the window to the next one, and
+the loop truncates the window, with a visible notice, only when no compactor
+is left. `compact` runs with the `ExtensionContext` a tool call of the same
+extension on the compacted branch gets: `ctx.cwd` is the session's cwd, not
+the cwd setup saw, and `ctx.State.changed()` reports under the extension's id.
+
+```ts
+import {
+  defineExtension,
+  defineResource,
+  ExtensionContext,
+  ExtensionHost,
+} from "@gent/core/extensions/api"
+import {
+  CompactionSummary,
+  ModelCompactionError,
+  ModelContextCompactor,
+} from "@gent/core/extensions/branch-tools"
+import { Effect, Layer } from "effect"
+
+const ReviewCompactor = Layer.succeed(
+  ModelContextCompactor,
+  ModelContextCompactor.of({
+    compact: (request) =>
+      Effect.gen(function* () {
+        // Serve one agent; another agent's window goes to the next compactor.
+        if (request.agentName !== "review") {
+          return yield* new ModelCompactionError({ modelId: request.modelId, reason: "NotReview" })
+        }
+        const ctx = yield* ExtensionContext
+        return CompactionSummary.make({
+          notice: `${request.history.length} earlier messages of the review of ${ctx.cwd} left the window.`,
+          modelId: request.modelId,
+        })
+      }),
+  }),
+)
+
+export default defineExtension({
+  id: "review-compactor",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "review-compactor/compactor",
+        scope: "process",
+        layer: ReviewCompactor,
+      }),
+    )
+  }),
+})
+```
+
 ## Agent
 
 ```ts
@@ -596,7 +702,9 @@ of their choices at the start of each turn. Each choice names a model, an
 effort, or both, and a `reason`. Core calls `route` once per turn, before its
 first request, records the pick (`ModelRouted`) and runs every step on it. A
 route that fails, takes over 10 s or picks a choice the turn cannot run falls
-back to the default choice (`fallback`, an index). `route` may ask classifiers
+back to the default choice (`fallback`, an index). `route` runs with the
+`ExtensionContext` a tool of the same extension gets, so its
+`ctx.State.changed()` names the extension. It may ask classifiers
 through `ExtensionContext.Models`; `input.current` says whether the branch's
 prompt cache is warm and how many history tokens a switch writes again. The
 shipped `@gent/router` builds its routers from the `routers` config key.

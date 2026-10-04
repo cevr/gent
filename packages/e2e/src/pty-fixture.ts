@@ -41,12 +41,14 @@ export const keys = {
   "ctrl+c": "\x03",
   "ctrl+d": "\x04",
   "ctrl+e": "\x05",
+  "ctrl+g": "\x07",
   "ctrl+j": "\n",
   "ctrl+o": "\x0f",
   "ctrl+p": "\x10",
   "ctrl+t": "\x14",
   "ctrl+u": "\x15",
   "ctrl+w": "\x17",
+  "ctrl+\\": "\x1c",
   "ctrl+backspace": "\x1b[127;5u",
   "ctrl+backspace-legacy": "\x08",
   "shift+enter": "\x1b[13;2u",
@@ -151,7 +153,7 @@ const spawnWithDir = (
   tempDir: string,
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
-  size: PtySize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
+  size: PtySize = DEFAULT_PTY_SIZE,
 ): Effect.Effect<TestContext, never, Scope.Scope> =>
   Effect.flatMap(serveModelCatalogFixture, (catalogOrigin) =>
     openPty({
@@ -164,17 +166,28 @@ const spawnWithDir = (
         GENT_DATA_DIR: tempDir,
         GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
         GENT_MODEL_CATALOG_URL: catalogOrigin,
+        // The `@gent/git` client runs `gh` when it is on PATH: an empty
+        // config and no token keep it signed out, so it never reaches GitHub.
+        GH_CONFIG_DIR: `${tempDir}/gh`,
+        GH_TOKEN: "",
+        GITHUB_TOKEN: "",
         ...extraEnv,
       },
       size,
     }),
   )
 
-export const seedAndSpawn = (extraArgs: string[] = [], size?: PtySize) =>
+export const DEFAULT_PTY_SIZE: PtySize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }
+
+export const seedAndSpawn = (
+  extraArgs: string[] = [],
+  size: PtySize = DEFAULT_PTY_SIZE,
+  extraEnv: Record<string, string> = {},
+) =>
   Effect.gen(function* () {
     const tempDir = yield* makeTempDirectoryScoped("gent-e2e-")
     yield* seedAuthKeys(`${tempDir}/auth`).pipe(Effect.orDie)
-    return yield* spawnWithDir(tempDir, extraArgs, {}, size)
+    return yield* spawnWithDir(tempDir, extraArgs, extraEnv, size)
   })
 
 /**

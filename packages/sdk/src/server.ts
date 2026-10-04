@@ -123,7 +123,8 @@ export const buildOwnedServer = (
         (error) => new GentConnectionError({ message: `invalid GENT_LOG_LEVEL: ${error.message}` }),
       ),
     )
-    // A user extension imports the same effect modules the shipped ones do.
+    // A user extension imports the same `@effect/*` packages the shipped ones do;
+    // the core loader binds `effect` and its modules.
     yield* platform.bindModules(BuiltinExtensionModules)
     const observability = GentObservability(options.cwd, logLevel, paths.logDir)
     const coreServices = yield* Layer.buildWithScope(

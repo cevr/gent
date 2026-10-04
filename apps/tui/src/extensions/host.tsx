@@ -1,21 +1,11 @@
-import {
-  Cause,
-  Context,
-  Effect,
-  Exit,
-  type FileSystem,
-  Layer,
-  ManagedRuntime,
-  Option,
-  type Path,
-  Scope,
-} from "effect"
+import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Option, Scope } from "effect"
 import {
   type ActiveExtensionSession,
   type AutocompleteContribution,
   type ClientActivitySnapshot,
   type AnyExtensionClientModule,
   type ClientContextDeps,
+  type ClientDeps,
   type ClientRuntime,
   type InteractionRendererComponent,
   makeClientContextLayer,
@@ -56,6 +46,7 @@ import {
 } from "./loader-boundary"
 import { useWorkspace } from "../workspace"
 import { useClient } from "../client"
+import { type Handover, HandoverProvider } from "../os"
 import type { BranchId, SessionId } from "@gent/core/protocol"
 
 // ── per-provider client runtime ─────────────────────────────────────────────
@@ -67,7 +58,7 @@ import type { BranchId, SessionId } from "@gent/core/protocol"
  * `main.tsx` provides, a test passes its own platform layer.
  */
 export const makeClientRuntime = (
-  platform: Layer.Layer<FileSystem.FileSystem | Path.Path>,
+  platform: Layer.Layer<ClientDeps>,
   deps: ClientContextDeps,
 ): ClientRuntime => ManagedRuntime.make(Layer.merge(platform, makeClientContextLayer(deps)))
 
@@ -152,7 +143,7 @@ interface ExtensionUIContextValue {
   readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
   /** Register dynamic autocomplete contributions (e.g. from session controller) */
   readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
-  /** ManagedRuntime providing FileSystem, Path, ClientContext — used by
+  /** ManagedRuntime providing FileSystem, Path, ChildProcessSpawner, ClientContext — used by
    *  Effect-typed contribution surfaces (autocomplete `items`, etc.). */
   readonly clientRuntime: ClientRuntime
 }
@@ -177,9 +168,15 @@ export function ExtensionUIProvider(props: {
   scope?: Scope.Scope
   /** The statically imported builtins; a test adds a module to hold the load. */
   builtins?: ReadonlyArray<AnyExtensionClientModule>
+  /**
+   * The terminal's one handover (`makeHandover`), made by the root with the
+   * renderer it suspends: the root's exit ends it before the renderer goes.
+   */
+  handover: Handover
 }) {
   const workspace = useWorkspace()
   const client = useClient()
+  const handover = props.handover
 
   const [activityProvider, setActivityProvider] = createSignal<() => ClientActivitySnapshot>(
     () => ({ state: "unknown" }),
@@ -377,10 +374,10 @@ export function ExtensionUIProvider(props: {
 
   // Per-provider ManagedRuntime that adds the `ClientContext` extensions yield
   // to the platform services the root provides (`uiServices` in `main.tsx`,
-  // read through `ClientProvider`). `loadTuiExtensions` runs each setup on it.
-  const platform = Layer.succeedContext(
-    Context.makeUnsafe<FileSystem.FileSystem | Path.Path>(client.services.mapUnsafe),
-  )
+  // read through `ClientProvider`: `BunPlatformLive` holds the file system,
+  // the path service and the process spawner). `loadTuiExtensions` runs each
+  // setup on it.
+  const platform = Layer.succeedContext(Context.makeUnsafe<ClientDeps>(client.services.mapUnsafe))
   const clientRuntime: ClientRuntime = makeClientRuntime(platform, {
     transport: {
       client: client.client,
@@ -403,6 +400,7 @@ export function ExtensionUIProvider(props: {
       notify: (message) => client.setNotice(message),
       switchSession: (input) => client.switchSession(input.sessionId, input.branchId, input.name),
       cast: client.runtime.cast,
+      handover,
       pane: {
         open: (id) => Option.map(paneOwner(), (owner) => owner.open(id)),
         close: (id) => Option.map(paneOwner(), (owner) => owner.close(id)),
@@ -633,7 +631,12 @@ export function ExtensionUIProvider(props: {
         clientRuntime,
       }}
     >
-      <ToolRenderersProvider value={toolRenderers}>{props.children}</ToolRenderersProvider>
+      {/* The one terminal handover: the host's editor and every client
+          extension (`ClientShell.handover`) share it, so no two programs hold
+          the terminal. */}
+      <HandoverProvider value={handover}>
+        <ToolRenderersProvider value={toolRenderers}>{props.children}</ToolRenderersProvider>
+      </HandoverProvider>
     </ExtensionUIContext.Provider>
   )
 }
