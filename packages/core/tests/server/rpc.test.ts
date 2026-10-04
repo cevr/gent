@@ -3396,6 +3396,65 @@ describe("interaction.respondInteraction", () => {
   )
 
   it.live(
+    "an answer sent before the asking call's run ends resumes the turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const answered = yield* Deferred.make<void>()
+          // The asking call's run ends only once the answer is in, so the
+          // answer arrives between the ask and the end of the run that parked.
+          const extension = orderedApprovalExtension((params, attempt) => {
+            if (attempt > 1) return approveAs(params)
+            return approveAs(params).pipe(Effect.onError(() => Deferred.await(answered)))
+          })
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("ordered_approval", { label: "ask", text: "Proceed?" }),
+            textStep("answered early"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              agents: e2ePreset.agents,
+              providerLayer,
+              extensions: [extension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({})
+          yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filterMap((envelope) => {
+              if (envelope.event._tag === "InteractionPresented")
+                return Result.succeed(envelope.event)
+              return Result.failVoid
+            }),
+            Stream.take(1),
+            Stream.runForEach((presented) =>
+              client.interaction
+                .respondInteraction({
+                  sessionId,
+                  branchId,
+                  requestId: presented.requestId,
+                  approved: true,
+                  notes: "early",
+                })
+                .pipe(Effect.andThen(Deferred.completeWith(answered, Effect.void))),
+            ),
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "ask and hold the run" })
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "answered early",
+          }).pipe(Effect.timeout("5 seconds"))
+          const results = toolResultTexts(snapshot.messages)
+          expect(results.some((result) => result.includes("ask=early"))).toBe(true)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
     "the first answer wins: a different second reply is refused and the call gets the first",
     () =>
       Effect.scoped(

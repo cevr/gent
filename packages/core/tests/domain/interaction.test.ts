@@ -619,6 +619,33 @@ describe("Interaction Request", () => {
     }).pipe(Effect.provide(storageLive)),
   )
 
+  it.live("an answer that comes before its parked call's run ends stays for that call", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const interaction = yield* serviceOver(callbacksFor(is))
+      const branch = { sessionId: SessionId.make("s-early"), branchId: BranchId.make("b-early") }
+      yield* ensureStorageParents(branch)
+      const run = asCall(interaction, branch)
+      // The reply lands after the ask is shown and before the run that asked ends.
+      const requestId = yield* pendingId(
+        yield* run(
+          interaction.present({ text: "Go?" }, branch).pipe(
+            Effect.tapErrorTag("InteractionPendingError", (pending) =>
+              interaction.storeResolution(branch, pending.requestId, {
+                approved: true,
+                notes: "early",
+              }),
+            ),
+          ),
+        ).pipe(Effect.exit),
+      )
+      // The turn that parks on it finds the answer, so it goes on at once.
+      expect(yield* interaction.answered(requestId)).toBe(true)
+      expect((yield* run(interaction.present({ text: "Go?" }, branch))).notes).toBe("early")
+      expect(yield* is.listOpen(branch)).toEqual([])
+    }).pipe(Effect.provide(storageLive)),
+  )
+
   it.live("ending the turn settles its open request and closes the dialog", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage

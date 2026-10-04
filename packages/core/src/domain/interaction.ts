@@ -27,9 +27,12 @@ import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "./ids.js"
  * A request belongs to its owner: the tool call that asked, and which of that
  * call's asks it was. An answer goes to its owner only, never to another call
  * that asks the same question. A branch shows one request at a time; the other
- * owners queue in the order they asked. An answer whose owner ends its run
- * without taking it is settled as abandoned, so the next owner in the queue
- * asks. Recovery rebuilds the owner from the stored row.
+ * owners queue in the order they asked. A call ends when one of its runs ends
+ * without parking; a run that parks continues the call, and the answer to the
+ * question it parked on stays for it, even when that answer comes before the
+ * run ends. An answer whose call ends without taking it is settled as
+ * abandoned, so the next owner in the queue asks. Recovery rebuilds the owner
+ * from the stored row.
  *
  * An answer matches its question as well as its owner: a call that asks a
  * different question in the same place asks again. A call keeps the answers
@@ -251,8 +254,9 @@ export interface InteractionService {
    */
   readonly beginStep: (branch: BranchRef, callIds: ReadonlyArray<ToolCallId>) => Effect.Effect<void>
   /**
-   * Run one call of the open step as the owner of what it asks. When the call
-   * ends, an answer it did not take is settled as abandoned.
+   * Run one call of the open step as the owner of what it asks. A run that
+   * parks keeps what the call owns for its next run; a run that does not park
+   * ends the call, and an answer it did not take is settled as abandoned.
    */
   readonly ownCall: (
     branch: BranchRef,
@@ -403,20 +407,55 @@ const dropDecision = (
   return { ...current, decisions }
 }
 
+/** What one run of a call leaves behind when it ends. */
+interface EndedRun {
+  /** Answers the call kept and gives up: their rows stop being open. */
+  readonly released: ReadonlyArray<TakenAnswer>
+  /** An answer the call did not take and never will: its row settles. */
+  readonly abandoned: Option.Option<InteractionRequestId>
+}
+
 /**
- * The open request, when it is answered and its owner can no longer take
- * the answer. A row with no recorded owner is never abandoned here.
+ * One run of a call ends, in one transition. The call no longer runs and
+ * gives up its queued places for asks it did not make in this run.
+ *
+ * Whether the call itself ends is one fact: did this run park. A run that
+ * parked continues its call, because the step runs it again when the turn
+ * resumes. It keeps the answers it took, and the answer to the question it
+ * parked on stays open for it, also when that answer came before this run
+ * ended. A run that did not park ends the call: its kept answers go, and an
+ * open answer it owns but did not take is abandoned, so the next owner in the
+ * queue asks. A row with no recorded owner is never abandoned here.
  */
-const abandonedOpen = (
+const endRun = (
   current: InteractionState,
-  branch: BranchInteractions,
-  gone: (owner: InteractionOwner) => boolean,
-) =>
-  Option.filter(
+  key: string,
+  run: { readonly toolCallId: ToolCallId; readonly asked: number; readonly parked: boolean },
+): [EndedRun, InteractionState] => {
+  const branch = branchOf(current, key)
+  const ownedByCall = (owner: InteractionOwner) => owner.toolCallId === run.toolCallId
+  const running = new Set(branch.running)
+  running.delete(run.toolCallId)
+  const stays = (entry: TakenAnswer) => run.parked || !ownedByCall(entry.owner)
+  const abandoned = Option.filter(
     branch.open,
     (open) =>
-      open.admitted && current.decisions.has(open.requestId) && Option.exists(open.owner, gone),
-  )
+      !run.parked &&
+      open.admitted &&
+      current.decisions.has(open.requestId) &&
+      Option.exists(open.owner, ownedByCall),
+  ).pipe(Option.map((open) => open.requestId))
+  let decided = current
+  if (Option.isSome(abandoned)) decided = dropDecision(current, abandoned.value)
+  const next = putBranch(decided, key, {
+    ...branch,
+    running,
+    open: Option.filter(branch.open, () => Option.isNone(abandoned)),
+    queue: branch.queue.filter((owner) => !ownedByCall(owner) || owner.occurrence < run.asked),
+    taken: branch.taken.filter(stays),
+  })
+  return [{ released: branch.taken.filter((entry) => !stays(entry)), abandoned }, next]
+}
 
 export const makeInteractionService = (
   config: InteractionServiceConfig,
@@ -450,27 +489,6 @@ export const makeInteractionService = (
     const release = (entries: ReadonlyArray<TakenAnswer>) =>
       Effect.forEach(entries, (entry) => config.storage.resolve(entry.requestId), {
         discard: true,
-      })
-
-    /** Settle an answer its owner did not take. */
-    const abandon = (key: string, gone: (owner: InteractionOwner) => boolean) =>
-      Effect.gen(function* () {
-        const abandoned = yield* Ref.modify(
-          state,
-          (current): [Option.Option<InteractionRequestId>, InteractionState] => {
-            const branch = branchOf(current, key)
-            const open = abandonedOpen(current, branch, gone)
-            if (Option.isNone(open)) return [Option.none(), current]
-            const requestId = open.value.requestId
-            const next = putBranch(dropDecision(current, requestId), key, {
-              ...branch,
-              open: Option.none(),
-            })
-            return [Option.some(requestId), next]
-          },
-        )
-        if (Option.isSome(abandoned)) yield* config.storage.resolve(abandoned.value)
-        yield* signal
       })
 
     /** This ask's owner: the running call and the index of this ask in its run. */
@@ -1058,34 +1076,14 @@ export const makeInteractionService = (
           const key = contextKey(branchRef)
           const asked = yield* Ref.make(0)
           const parked = yield* Ref.make(false)
-          // When the call ends, it gives up its place for asks it did not
-          // make in this run, and an answer it did not take. A run that did
-          // not park ends the call, so the answers it kept go too.
+          // The run ends in one transition (see `endRun`). The running set
+          // always changes, so every call that waits for its turn looks again.
           const ended = Effect.gen(function* () {
-            const count = yield* Ref.get(asked)
-            const keep = yield* Ref.get(parked)
-            const stays = (entry: TakenAnswer) => keep || entry.owner.toolCallId !== toolCallId
-            const released = yield* Ref.modify(
-              state,
-              (current): [ReadonlyArray<TakenAnswer>, InteractionState] => {
-                const branch = branchOf(current, key)
-                const running = new Set(branch.running)
-                running.delete(toolCallId)
-                return [
-                  branch.taken.filter((entry) => !stays(entry)),
-                  putBranch(current, key, {
-                    ...branch,
-                    running,
-                    queue: branch.queue.filter(
-                      (owner) => owner.toolCallId !== toolCallId || owner.occurrence < count,
-                    ),
-                    taken: branch.taken.filter(stays),
-                  }),
-                ]
-              },
-            )
-            yield* release(released)
-            yield* abandon(key, (owner) => owner.toolCallId === toolCallId)
+            const run = { toolCallId, asked: yield* Ref.get(asked), parked: yield* Ref.get(parked) }
+            const left = yield* Ref.modify(state, (current) => endRun(current, key, run))
+            yield* release(left.released)
+            if (Option.isSome(left.abandoned)) yield* config.storage.resolve(left.abandoned.value)
+            yield* signal
           })
           return yield* self.pipe(
             Effect.provideService(CurrentInteractionCall, { toolCallId, asked, parked }),
