@@ -1850,31 +1850,87 @@ const storedPromptAnswer = (authInfo: Option.Option<ProviderAuthInfo>, key: stri
     Option.filter((answer) => answer.trim() !== ""),
   )
 
-/** `api` with each `${VAR}` filled from the stored answer, then the variable. */
+/** The value of a base URL's `${name}`: the stored answer, then the variable. */
+const urlVariableValue = (
+  provider: CatalogProvider,
+  name: string,
+  authInfo: Option.Option<ProviderAuthInfo>,
+): Effect.Effect<string, ProviderAuthError> =>
+  Option.match(storedPromptAnswer(authInfo, name), {
+    onSome: (answer) => Effect.succeed(answer),
+    onNone: () =>
+      Effect.flatMap(envValue(name), (value) =>
+        Effect.fromOption(value).pipe(
+          Effect.mapError(
+            () =>
+              new ProviderAuthError({
+                message: `${provider.name} needs ${name}: none stored with the sign-in and no ${name} env var; sign in again with /auth`,
+              }),
+          ),
+        ),
+      ),
+  })
+
+/** A variable that begins a base URL (Neon's `${NEON_AI_GATEWAY_BASE_URL}/v1`): it holds the URL's origin. */
+const LEADING_URL_VARIABLE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}/
+
+const parseUrl = Option.liftThrowable((value: string) => new URL(value))
+
+/** Whether a URL carries a user or a password, which would sign the request as someone else's. */
+const hasCredentials = (url: URL): boolean => url.username !== "" || url.password !== ""
+
+/**
+ * `api` with each `${VAR}` filled from the stored answer, then the variable.
+ * A variable that begins the URL holds its origin and path prefix: an
+ * absolute https URL with no user, password, query or fragment, kept as the
+ * user typed it. Any other variable fills one component, percent-encoded, so
+ * its value cannot add a host, a user, a path or a query: the key goes only
+ * to a host the catalog and the user typed. The filled URL must parse, with
+ * no user or password.
+ */
 const filledBaseUrl = (
   provider: CatalogProvider,
   api: string,
   authInfo: Option.Option<ProviderAuthInfo>,
 ): Effect.Effect<string, ProviderAuthError> =>
-  Effect.reduce(
-    urlVariables(api),
-    () => api,
-    (url, name) =>
-      Option.match(storedPromptAnswer(authInfo, name), {
-        onSome: (answer) => Effect.succeed(answer),
-        onNone: () =>
-          Effect.flatMap(envValue(name), (value) =>
-            Effect.fromOption(value).pipe(
-              Effect.mapError(
-                () =>
-                  new ProviderAuthError({
-                    message: `${provider.name} needs ${name}: none stored with the sign-in and no ${name} env var; sign in again with /auth`,
-                  }),
-              ),
-            ),
-          ),
-      }).pipe(Effect.map((value) => url.replaceAll(`\${${name}}`, encodeURIComponent(value)))),
-  )
+  Effect.gen(function* () {
+    const leading = Option.fromNullishOr(LEADING_URL_VARIABLE.exec(api))
+    let prefix = ""
+    let rest = api
+    if (Option.isSome(leading)) {
+      const [placeholder, name = ""] = leading.value
+      const value = yield* urlVariableValue(provider, name, authInfo)
+      const origin = yield* Effect.fromOption(
+        Option.filter(
+          parseUrl(value),
+          (url) =>
+            url.protocol === "https:" &&
+            !hasCredentials(url) &&
+            url.search === "" &&
+            url.hash === "",
+        ),
+      ).pipe(
+        Effect.mapError(
+          () =>
+            new ProviderAuthError({
+              message: `${provider.name} needs ${name} as an https URL with no user, password, query or fragment; sign in again with /auth`,
+            }),
+        ),
+      )
+      prefix = origin.href.replace(/\/+$/, "")
+      rest = api.slice(placeholder.length)
+    }
+    const names = urlVariables(rest)
+    for (const name of names) {
+      const value = yield* urlVariableValue(provider, name, authInfo)
+      rest = rest.replaceAll(`\${${name}}`, encodeURIComponent(value))
+    }
+    const filled = `${prefix}${rest}`
+    if (Option.exists(parseUrl(filled), (url) => !hasCredentials(url))) return filled
+    return yield* new ProviderAuthError({
+      message: `${provider.name} base URL ${api} is no valid URL once ${names.join(", ")} is filled; sign in again with /auth`,
+    })
+  })
 
 /** Sends the config's `headers` with every request. */
 const withHeaders =

@@ -2921,6 +2921,8 @@ describe("generic providers", () => {
     readonly env?: Record<string, string>
     readonly config?: ProviderConfig
     readonly seen?: Array<ApiClassRequest>
+    /** The catalog in place of `genericCatalog`. */
+    readonly catalog?: LoadedModelCatalog
   }
 
   const inProfile =
@@ -2945,7 +2947,7 @@ describe("generic providers", () => {
           Layer.mergeAll(
             Auth.Test(setup.stored ?? {}),
             registry,
-            ModelCatalogSource.fixed(genericCatalog),
+            ModelCatalogSource.fixed(setup.catalog ?? genericCatalog),
           ),
         ),
         Layer.merge(ConfigProvider.layer(ConfigProvider.fromEnv({ env: setup.env ?? {} }))),
@@ -3085,6 +3087,101 @@ describe("generic providers", () => {
       expect(yield* resolveFailure("regional/small", { stored: { regional: bare } })).toBe(
         "Regional needs REGION_ID: none stored with the sign-in and no REGION_ID env var; sign in again with /auth",
       )
+    }),
+  )
+
+  /** Base URLs as models.dev writes Neon's (a variable holds the origin) and Infomaniak's (one path segment). */
+  const urlCatalog = modelCatalogFromBodies({
+    chat: encodeCatalogJson({
+      gateway: {
+        id: "gateway",
+        name: "Gateway",
+        env: ["GATEWAY_BASE_URL", "GATEWAY_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        api: "${GATEWAY_BASE_URL}/v1",
+        models: { m: { name: "M", tool_call: true } },
+      },
+      product: {
+        id: "product",
+        name: "Product",
+        env: ["PRODUCT_ID", "PRODUCT_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://product.test/2/ai/${PRODUCT_ID}/openai/v1",
+        models: { m: { name: "M", tool_call: true } },
+      },
+      regional: {
+        id: "regional",
+        name: "Regional",
+        env: ["REGION_ID", "REGIONAL_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://${REGION_ID}.regional.test/v1",
+        models: { small: { name: "Small", tool_call: true } },
+      },
+    }),
+    decision: "{}",
+  })
+
+  /** The base URL one model resolves with when `variable` holds `value`. */
+  const baseUrlWith = (modelId: string, provider: string, variable: string, value: string) =>
+    Effect.gen(function* () {
+      const seen: Array<ApiClassRequest> = []
+      const stored = { [provider]: AuthApi.make({ type: "api", key: "sk" }) }
+      const outcome = yield* resolved(modelId, {
+        catalog: urlCatalog,
+        stored,
+        env: { [variable]: value },
+        seen,
+      }).pipe(
+        Effect.map(() => Option.getOrNull(seen[0]?.baseUrl ?? Option.none())),
+        Effect.catch((error) => Effect.succeed(`failed: ${error.message}`)),
+      )
+      return outcome
+    })
+
+  // Neon's gateway URL is the user's own: the variable is a whole https
+  // origin, kept as typed, never percent-encoded into a path.
+  it.live(
+    "a variable that begins a base URL takes a whole https URL; one with another scheme, a user or a query fails",
+    () =>
+      Effect.gen(function* () {
+        const gateway = (value: string) =>
+          baseUrlWith("gateway/m", "gateway", "GATEWAY_BASE_URL", value)
+        expect(yield* gateway("https://gw.example.test")).toBe("https://gw.example.test/v1")
+        expect(yield* gateway("https://gw.example.test/team/")).toBe(
+          "https://gw.example.test/team/v1",
+        )
+        const refused =
+          "failed: Gateway needs GATEWAY_BASE_URL as an https URL with no user, password, query or fragment; sign in again with /auth"
+        for (const value of [
+          "gw.example.test",
+          "http://gw.example.test",
+          "file:///etc/passwd",
+          "https://user:secret@gw.example.test",
+          "https://gw.example.test@evil.test",
+          "https://gw.example.test/?next=https://evil.test",
+          "https://gw.example.test#evil.test",
+        ]) {
+          expect(yield* gateway(value)).toBe(refused)
+        }
+      }),
+  )
+
+  // A variable inside a URL fills one host label or path segment: a value
+  // cannot add a host, a user, a path or a query, so the key goes only to
+  // the host the catalog and the user typed.
+  it.live("a variable inside a base URL fills one component and cannot move the host", () =>
+    Effect.gen(function* () {
+      expect(yield* baseUrlWith("product/m", "product", "PRODUCT_ID", "1/../../x?y")).toBe(
+        "https://product.test/2/ai/1%2F..%2F..%2Fx%3Fy/openai/v1",
+      )
+      expect(yield* baseUrlWith("regional/small", "regional", "REGION_ID", "eu-1")).toBe(
+        "https://eu-1.regional.test/v1",
+      )
+      const refused =
+        "failed: Regional base URL https://${REGION_ID}.regional.test/v1 is no valid URL once REGION_ID is filled; sign in again with /auth"
+      for (const value of ["evil.test/steal?", "user@evil.test", "evil.test#"]) {
+        expect(yield* baseUrlWith("regional/small", "regional", "REGION_ID", value)).toBe(refused)
+      }
     }),
   )
 
