@@ -552,14 +552,17 @@ export const hook = <K extends ExtensionHookKind, E = never, R = never>(
   // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Hook slots intentionally erase author error and service types at the runtime membrane.
   ({ kind, hook: { handler } }) as AnyExtensionHook
 
-/** Fragment a `turnProjection` hook returns to shape the turn's tools */
+/**
+ * Fragment a `turnProjection` hook returns to shape the turn's tools. The
+ * host tools are the agent's to name (`AgentDefinition.admitsTool`); a hook
+ * only picks the model-facing subset of them.
+ */
 export interface ToolPolicyFragment {
-  /** Tool names the host may run although the agent does not allow them. Agent deny still wins. */
-  readonly include?: ReadonlyArray<string>
   /**
    * Model-facing subset of the final admitted host tools. The last supplied set
-   * wins. Missing, denied, and filtered interactive tools cannot be restored here.
-   * An empty set advertises no tools. Omission preserves the previous selection.
+   * wins. Missing, unadmitted, and filtered interactive tools cannot be restored
+   * here. An empty set advertises no tools. Omission preserves the previous
+   * selection.
    */
   readonly modelSet?: ReadonlyArray<string>
 }

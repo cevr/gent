@@ -1211,7 +1211,12 @@ Core runtime should not reach for ambient process state unless the app shell is 
 
 The Bun cell implementation in `packages/extensions/src/cell.ts` is the shipped model
 execution surface. Its extension section registers the `@gent/cell` tool and selects it
-through the ordinary `turnProjection` hook. `ToolPolicyFragment.modelSet` narrows
+through the ordinary `turnProjection` hook. The agent's lists are authoritative
+(`AgentDefinition.admitsTool`, read by `compileToolPolicy`): an agent with
+`allowedTools` gets exactly those tools, and no extension adds one, so the cell
+is the surface only for an agent that admits it (no allow list, or one that
+names `cell`, and no deny of it); any other agent keeps its own tools as the
+model surface. `ToolPolicyFragment.modelSet` narrows
 the final admitted host tools for model calls. The last explicit set wins; an
 empty set advertises no tools. It cannot restore unknown, denied, or filtered
 interactive tools. Without a set, the model receives the admitted tools directly.

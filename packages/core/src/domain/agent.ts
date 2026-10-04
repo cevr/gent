@@ -341,7 +341,20 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
    */
   maxModelAttempts: Schema.optional(Schema.Natural),
   driver: Schema.optional(DriverRef),
-}) {}
+}) {
+  /**
+   * Whether a turn of this agent holds the tool `id`: the allow list, when
+   * set, names it, and the deny list does not. The lists are authoritative:
+   * an agent with `allowedTools` gets exactly those tools, and no extension
+   * adds one (`compileToolPolicy`). An extension that selects or describes
+   * its own tool asks this first.
+   */
+  admitsTool(id: string): boolean {
+    const allowed = Option.fromUndefinedOr(this.allowedTools)
+    if (Option.isSome(allowed) && !allowed.value.includes(id)) return false
+    return this.deniedTools?.includes(id) !== true
+  }
+}
 
 // Default model — used when an agent has no model set
 export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")

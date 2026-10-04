@@ -1087,7 +1087,58 @@ describe("shipped model surface", () => {
   )
 
   it.scopedLive(
-    "allowedTools scopes host tools inside the cell instead of replacing the surface",
+    "an agent whose allowedTools omit the cell gets exactly those tools and no cell",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped()
+        const file = path.join(directory, "note.txt")
+        yield* fs.writeFileString(file, "closed surface")
+        const closedAgent = defineExtension({
+          id: "@test/closed-agent",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "agent",
+              AgentDefinition.make({
+                name: AgentName.make("closed"),
+                description: "reads only",
+                allowedTools: ["read"],
+              }),
+            )
+          }),
+        })
+        const nativeReadOnly = (step: SequenceStep): SequenceStep => ({
+          ...step,
+          assertOptions: (options) => {
+            expect(options.tools.map((tool) => tool.name)).toEqual(["read"])
+            const system = systemTextOf(options.prompt)
+            expect(system).not.toContain("## Host Tools")
+            expect(system).not.toContain("tools.read(")
+          },
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          nativeReadOnly(toolCallStep("read", { path: file })),
+          nativeReadOnly(textStep("closed")),
+        ])
+        const harness = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [...shippedPreset.extensionInputs, closedAgent],
+          branchTools: CellBranchTools,
+          providerLayer,
+          admission: { agent: AgentName.make("closed") },
+        })
+        const results = yield* sendAndAwaitReply(harness, "read the note", "closed")
+        expect(results).toHaveLength(1)
+        expect(results[0]).toMatchObject({ isFailure: false, name: "read" })
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    18000,
+  )
+
+  it.scopedLive(
+    "an agent that lists the cell gets it, with only its other listed tools inside",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -1095,8 +1146,8 @@ describe("shipped model surface", () => {
         const directory = yield* fs.makeTempDirectoryScoped()
         const file = path.join(directory, "note.txt")
         yield* fs.writeFileString(file, "scoped surface")
-        // The agent allows `read` only and never names `cell`: the cell stays the model
-        // surface and `grep` is unreachable from inside it.
+        // The agent allows the cell and `read`: the cell is the model surface and
+        // `grep` is unreachable from inside it.
         const scopedAgent = defineExtension({
           id: "@test/scoped-agent",
           setup: Effect.gen(function* () {
@@ -1106,7 +1157,7 @@ describe("shipped model surface", () => {
               AgentDefinition.make({
                 name: AgentName.make("scoped"),
                 description: "reads only",
-                allowedTools: ["read"],
+                allowedTools: ["cell", "read"],
               }),
             )
           }),
@@ -1310,7 +1361,7 @@ describe("branch cell lifetime", () => {
           },
           {
             send: true,
-            code: "const finished = await tools.delegate.start({todo: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['delegate.start'], systemPromptAddendum: 'Report the verified result'}}); await tools['child-handle']({_tag: 'save', handle: finished}); await tools['model-started']({call: 12}); true",
+            code: "const finished = await tools.delegate.start({todo: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['cell', 'read_session'], deniedTools: ['delegate.start'], systemPromptAddendum: 'Report the verified result'}}); await tools['child-handle']({_tag: 'save', handle: finished}); await tools['model-started']({call: 12}); true",
           },
           {
             send: false,
@@ -1334,8 +1385,8 @@ describe("branch cell lifetime", () => {
             expect(request.reasoning).toBe("high")
           },
           assertOptions: (options) => {
-            // The allow list scopes the host tools inside the child's cell; the cell
-            // stays the surface and the denied tool leaves the catalog.
+            // The allow list names the cell and scopes the host tools inside it;
+            // the denied tool leaves the catalog.
             expect(options.tools.map((tool) => tool.name)).toEqual(["cell"])
             const system = systemTextOf(options.prompt)
             expect(system).toContain("Report the verified result")

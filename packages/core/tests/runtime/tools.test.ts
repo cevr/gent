@@ -752,22 +752,46 @@ describe("compileToolPolicy", () => {
     const result = compileToolPolicy(allTools, agent, {}, [
       { toolPolicy: { modelSet: ["read"] } },
       { toolPolicy: { modelSet: [] } },
-      { toolPolicy: { include: ["bash"] } },
+      { promptSections: [] },
     ])
     expect(result.modelTools).toEqual([])
     expect(names(result.tools)).toEqual(names(allTools))
   })
 
   test("a cell name has no special allowance without an extension policy", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("primary"), allowedTools: ["read"] })
+    const agent = AgentDefinition.make({
+      name: AgentName.make("primary"),
+      allowedTools: ["cell", "read"],
+    })
     const tools = [makeTool("cell"), ...allTools]
     const direct = compileToolPolicy(tools, agent, {}, [])
-    expect(names(direct.modelTools)).toEqual(["read"])
-    const selected = compileToolPolicy(tools, agent, {}, [
-      { toolPolicy: { include: ["cell"], modelSet: ["cell"] } },
-    ])
+    expect(names(direct.modelTools)).toEqual(["cell", "read"])
+    const selected = compileToolPolicy(tools, agent, {}, [{ toolPolicy: { modelSet: ["cell"] } }])
     expect(names(selected.modelTools)).toEqual(["cell"])
     expect(names(selected.tools)).toEqual(["cell", "read"])
+  })
+
+  test("an agent with allowedTools gets exactly those tools whatever an extension selects", () => {
+    const agent = AgentDefinition.make({ name: AgentName.make("painter"), allowedTools: ["read"] })
+    const { tools, modelTools } = compileToolPolicy([makeTool("cell"), ...allTools], agent, {}, [
+      { toolPolicy: { modelSet: ["cell", "bash", "read"] } },
+    ])
+    expect(names(tools)).toEqual(["read"])
+    expect(names(modelTools)).toEqual(["read"])
+  })
+
+  test("an agent admits a tool its allow list names and its deny list leaves out", () => {
+    const open = AgentDefinition.make({ name: AgentName.make("open"), deniedTools: ["bash"] })
+    expect(open.admitsTool("cell")).toBe(true)
+    expect(open.admitsTool("bash")).toBe(false)
+    const closed = AgentDefinition.make({
+      name: AgentName.make("closed"),
+      allowedTools: ["read", "bash"],
+      deniedTools: ["bash"],
+    })
+    expect(closed.admitsTool("read")).toBe(true)
+    expect(closed.admitsTool("bash")).toBe(false)
+    expect(closed.admitsTool("cell")).toBe(false)
   })
 
   test("no allow-list → all tools", () => {
@@ -789,27 +813,6 @@ describe("compileToolPolicy", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("primary"), allowedTools: [] })
     const { tools } = compileToolPolicy(allTools, agent, {}, [])
     expect(tools).toEqual([])
-  })
-
-  test("an extension include adds a tool the agent's allowedTools leaves out", () => {
-    const agent = AgentDefinition.make({
-      name: AgentName.make("primary"),
-      allowedTools: ["read", "grep", "lookup"],
-    })
-    const projections = [{ toolPolicy: { include: ["bash"] } }]
-    const { tools } = compileToolPolicy(allTools, agent, {}, projections)
-    expect(names(tools)).toContain("bash")
-    expect(names(tools)).toContain("read")
-  })
-
-  test("denied tools cannot be re-added by extension projection include", () => {
-    const agent = AgentDefinition.make({
-      name: AgentName.make("primary"),
-      deniedTools: ["bash"],
-    })
-    const projections = [{ toolPolicy: { include: ["bash"] } }]
-    const { tools } = compileToolPolicy(allTools, agent, {}, projections)
-    expect(names(tools)).not.toContain("bash")
   })
 
   test("extension prompt sections collected", () => {

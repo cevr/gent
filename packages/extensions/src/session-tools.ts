@@ -752,7 +752,7 @@ export const SessionToolsExtension = defineExtension({
     yield* host.on("turnProjection", ({ agent }) =>
       stoppedTurnNotices().pipe(
         Effect.map((notices) => {
-          if (agent.deniedTools?.includes(getToolId(SendSessionTool)) === true) return { notices }
+          if (!agent.admitsTool(getToolId(SendSessionTool))) return { notices }
           return { promptSections: [SESSIONS_SECTION], notices }
         }),
       ),

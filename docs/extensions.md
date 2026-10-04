@@ -490,6 +490,12 @@ export default defineExtension({
 })
 ```
 
+`allowedTools` is authoritative: the agent gets exactly the tools it names,
+less its `deniedTools`, and no extension adds one. The cell is the model
+surface only for an agent that admits `cell`; the helper above calls `read`
+and `write` directly. An extension that selects or describes its own tool in a
+`turnProjection` hook asks `agent.admitsTool(id)` first.
+
 ## Model router
 
 A `modelRouter` serves virtual models: ids `<router id>/<name>` that pick one

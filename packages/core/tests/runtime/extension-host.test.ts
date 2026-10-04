@@ -5039,7 +5039,7 @@ describe("turn projection hooks", () => {
         hookExt("builtin-hook", "builtin", () =>
           Effect.succeed({
             promptSections: [{ id: "shared", content: "builtin", priority: 50 }],
-            toolPolicy: { include: ["builtin-tool"] },
+            toolPolicy: { modelSet: ["builtin-tool"] },
           }),
         ),
         hookExt("project-hook", "project", () =>
@@ -5061,7 +5061,7 @@ describe("turn projection hooks", () => {
         { id: "project-only", content: "project-only", priority: 60 },
       ])
       expect(result.policyFragments).toEqual([
-        { include: ["builtin-tool"] },
+        { modelSet: ["builtin-tool"] },
         { modelSet: ["project-visible"] },
       ])
     }))
@@ -5073,7 +5073,7 @@ describe("turn projection hooks", () => {
         hookExt("good-hook", "project", () =>
           Effect.succeed({
             promptSections: [{ id: "good", content: "still-runs", priority: 50 }],
-            toolPolicy: { include: ["still-runs"] },
+            toolPolicy: { modelSet: ["still-runs"] },
           }),
         ),
       ])
@@ -5082,7 +5082,7 @@ describe("turn projection hooks", () => {
         .resolveTurnProjection(hookCtx.projection)
         .pipe(Effect.provideService(CurrentExtensionHostContext, hookCtx.host))
       expect(result.promptSections).toEqual([{ id: "good", content: "still-runs", priority: 50 }])
-      expect(result.policyFragments).toEqual([{ include: ["still-runs"] }])
+      expect(result.policyFragments).toEqual([{ modelSet: ["still-runs"] }])
     }))
 
   test("defecting hook is logged + skipped", () =>

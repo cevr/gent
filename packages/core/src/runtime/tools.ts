@@ -1172,24 +1172,6 @@ interface CompiledToolPolicy {
   readonly promptSections: ReadonlyArray<PromptSection>
 }
 
-const applyToolProjection = (
-  tools: ToolCapability[],
-  projection: TurnProjection,
-  allToolsByName: ReadonlyMap<string, ToolCapability>,
-): ToolCapability[] => {
-  const include = Option.fromUndefinedOr(projection.toolPolicy?.include)
-  if (Option.isNone(include)) return tools
-  const existing = new Set(tools.map((tool) => String(getToolId(tool))))
-  for (const name of include.value) {
-    if (existing.has(name)) continue
-    const tool = allToolsByName.get(name)
-    if (Predicate.isUndefined(tool)) continue
-    tools.push(tool)
-    existing.add(name)
-  }
-  return tools
-}
-
 const collectProjectionPromptSections = (
   projections: ReadonlyArray<TurnProjection>,
 ): PromptSection[] => {
@@ -1205,12 +1187,12 @@ const collectProjectionPromptSections = (
  * Compile the active tool set and prompt sections for a turn.
  *
  * Pipeline:
- * 1. Agent allow/deny filtering
- * 2. Extension `include` fragments add tools
- * 3. Re-apply agent deny list (extensions can't escape denials)
- * 4. Drop interactive tools in a non-interactive turn
- * 5. The last `modelSet` picks the model-facing subset
- * 6. Collect extension-contributed prompt sections
+ * 1. The agent's lists: an agent with `allowedTools` gets exactly those
+ *    tools, less its `deniedTools` (`AgentDefinition.admitsTool`); no
+ *    extension adds a tool to the set
+ * 2. Drop interactive tools in a non-interactive turn
+ * 3. The last `modelSet` picks the model-facing subset
+ * 4. Collect extension-contributed prompt sections
  */
 export const compileToolPolicy = (
   allTools: ReadonlyArray<ToolCapability>,
@@ -1218,21 +1200,10 @@ export const compileToolPolicy = (
   turn: { readonly interactive?: boolean },
   extensionProjections: ReadonlyArray<TurnProjection>,
 ): CompiledToolPolicy => {
-  const allToolsByName = new Map(allTools.map((t) => [String(getToolId(t)), t]))
+  // 1. The agent's lists
+  let tools = allTools.filter((tool) => agent.admitsTool(String(getToolId(tool))))
 
-  // 1. Agent allow/deny filtering
-  let tools = filterToolsForAgent(allTools, agent)
-
-  // 2. Extension `include` fragments. An include may add a tool the agent's
-  // allow list leaves out; only the deny list holds against it (step 3).
-  for (const projection of extensionProjections) {
-    tools = applyToolProjection(tools, projection, allToolsByName)
-  }
-
-  // 3. Re-apply agent deny list — extensions can't escape denials
-  tools = applyDenyFilter(tools, agent)
-
-  // 4. Filter interactive tools in a turn no user watches (`turnCanAsk`)
+  // 2. Filter interactive tools in a turn no user watches (`turnCanAsk`)
   if (turn.interactive === false) {
     tools = tools.filter((t) => getToolMetadata(t).interactive !== true)
   }
@@ -1255,38 +1226,6 @@ export const compileToolPolicy = (
     modelTools,
     promptSections: collectProjectionPromptSections(extensionProjections),
   }
-}
-
-// Tool filtering — pure helper for agent tool visibility
-
-const filterToolsForAgent = (
-  allTools: ReadonlyArray<ToolCapability>,
-  agent: AgentDefinition,
-): ToolCapability[] => {
-  let tools: ToolCapability[]
-
-  if (!Predicate.isUndefined(agent.allowedTools)) {
-    const names = new Set(agent.allowedTools)
-    tools = allTools.filter((t) => names.has(String(getToolId(t))))
-  } else {
-    tools = [...allTools]
-  }
-
-  if (!Predicate.isUndefined(agent.deniedTools)) {
-    tools = applyDenyFilter(tools, agent)
-  }
-
-  return tools
-}
-
-/** Re-apply deny filter — extensions can't escape agent denials. */
-const applyDenyFilter = (
-  tools: ReadonlyArray<ToolCapability>,
-  agent: AgentDefinition,
-): ToolCapability[] => {
-  if (Predicate.isUndefined(agent.deniedTools)) return [...tools]
-  const denied = new Set(agent.deniedTools)
-  return tools.filter((t) => !denied.has(String(getToolId(t))))
 }
 
 // ── tool-call-recovery ──────────────────────────────────────────────────────

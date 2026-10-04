@@ -1288,7 +1288,7 @@ const CHILDREN_SECTION = {
 }
 
 const childrenSection = (agent: AgentDefinition) => {
-  if (agent.deniedTools?.includes("delegate.start") === true) return []
+  if (!agent.admitsTool("delegate.start")) return []
   return [CHILDREN_SECTION]
 }
 
