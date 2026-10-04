@@ -14,7 +14,8 @@ import {
   Session as DomainSession,
 } from "@gent/core/protocol"
 import { type Session as ClientSession, useClient } from "./client"
-import { formatCost, formatDuration, isConversation, randomId, truncate } from "./utils"
+import { formatCost, formatDuration, isConversation, plural, randomId, truncate } from "./utils"
+import type { DisclosureLevel } from "./extensions/client-facets"
 import { textWidth } from "./bun-adapter"
 import { createMemo, createSignal, ErrorBoundary, For, type JSX, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
@@ -326,12 +327,19 @@ export const resolveInteractiveState = (input: {
  * Host chrome: connection issues and extensions that failed to load. It reads
  * the host's own contexts, so it is not an extension, and no extension id can
  * disable or shadow the report of failed extensions.
+ *
+ * It is a node on the `ctrl+o` ladder: collapsed is one line that counts the
+ * issues, with a tree row for each failed extension (a failure shows at every
+ * level) and the key that lists the rest; preview and full list each issue on
+ * its own tree row. It draws in the live tail, so a level change costs no
+ * history replay.
  */
 
-export function ConnectionWidget() {
+export function ConnectionWidget(props: { readonly disclosure: DisclosureLevel }) {
   const client = useClient()
   const ext = useExtensionUI()
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
   const connectionIssue = () => client.connectionIssue()
   const degradedExtensions = () => {
     const health = client.extensionHealth()
@@ -364,49 +372,52 @@ export function ConnectionWidget() {
     if (hasFailedExtensions() || hasUnavailableCatalogs()) return theme.warning
     return theme.error
   }
-  const subtitle = () => {
-    if (hasFailedExtensions()) return "extension activation degraded"
-    if (hasUnavailableCatalogs()) return "some models unavailable"
-    return Option.getOrElse(connectionIssue(), () => "")
+  // What went wrong, counted: the connection issue in its own words, then how
+  // many extensions failed and how many model catalogs did not load.
+  const summary = () => {
+    const parts = Option.toArray(connectionIssue())
+    if (hasFailedExtensions())
+      parts.push(`${plural(failedExtensions().length, "extension")} failed`)
+    if (hasUnavailableCatalogs())
+      parts.push(`${plural(unavailableCatalogs().length, "model catalog")} unavailable`)
+    return parts.join(" · ")
+  }
+  // One row per failed extension and per catalog, in that order; collapsed
+  // keeps the failures and counts the catalogs on the head line.
+  const collapsed = () => props.disclosure === "collapsed"
+  const rows = () => {
+    if (collapsed()) return failedExtensions()
+    return [...failedExtensions(), ...unavailableCatalogs()]
+  }
+  const hint = () => {
+    if (collapsed() && hasUnavailableCatalogs()) return " · ctrl+o"
+    return ""
+  }
+  // The columns right of the indent, less the last column every row keeps free.
+  const width = () => dimensions().width - 2 - 1
+  const heading = "• connection"
+  const connector = (index: number) => {
+    if (index === rows().length - 1) return "└"
+    return "├"
   }
   return (
     <Show when={visible()}>
       <box flexDirection="column" paddingLeft={2} marginTop={1} marginBottom={1}>
-        <text>
-          <span style={{ fg: accent(), bold: true }}>• connection</span>
-          <span style={{ fg: theme.textMuted }}> · {subtitle()}</span>
+        <text wrapMode="none">
+          <span style={{ fg: accent(), bold: true }}>{heading}</span>
+          <span style={{ fg: theme.textMuted }}>
+            {" "}
+            · {truncate(summary(), width() - heading.length - 3 - hint().length)}
+            {hint()}
+          </span>
         </text>
-        <box flexDirection="column" paddingLeft={2}>
-          <Show when={Option.isSome(connectionIssue())}>
-            <text>
-              <span style={{ fg: theme.text }}>{Option.getOrUndefined(connectionIssue())}</span>
+        <For each={rows()}>
+          {(row, index) => (
+            <text wrapMode="none" style={{ fg: theme.textMuted }}>
+              {connector(index())} {truncate(row, width() - 2)}
             </text>
-          </Show>
-          <Show when={hasFailedExtensions()}>
-            <text>
-              <span style={{ fg: theme.text }}>failed extensions:</span>
-            </text>
-            <For each={failedExtensions()}>
-              {(line) => (
-                <text paddingLeft={2}>
-                  <span style={{ fg: theme.textMuted }}>{line}</span>
-                </text>
-              )}
-            </For>
-          </Show>
-          <Show when={hasUnavailableCatalogs()}>
-            <text>
-              <span style={{ fg: theme.text }}>model catalogs that did not load:</span>
-            </text>
-            <For each={unavailableCatalogs()}>
-              {(line) => (
-                <text paddingLeft={2}>
-                  <span style={{ fg: theme.textMuted }}>{line}</span>
-                </text>
-              )}
-            </For>
-          </Show>
-        </box>
+          )}
+        </For>
       </box>
     </Show>
   )
@@ -765,7 +776,7 @@ export function Session(props: SessionProps) {
               </text>
             </box>
           </Show>
-          <ConnectionWidget />
+          <ConnectionWidget disclosure={controller.uiState().disclosure} />
           <ExtensionWidgets slot="below-messages" />
           {/* QueueWidget stays hardwired because its data comes from session controller
             state that is not exposed through the extension context. */}

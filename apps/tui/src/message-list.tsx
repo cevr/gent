@@ -1,5 +1,6 @@
 import {
   type ActivityCall,
+  type ActivityOutcome,
   activityRows,
   decodeToolOutputOption,
   formatActivityHeader,
@@ -7,6 +8,8 @@ import {
   formatCellRowLabel,
   formatCost,
   formatDuration,
+  collapsedOperations,
+  formatFailureRow,
   formatPreviewFooter,
   formatRowCounts,
   getString,
@@ -16,10 +19,10 @@ import {
   plural,
   repliesInView,
   type ReplyWriter,
-  previewOutput,
   truncate,
   workingIconFrame,
 } from "./utils"
+import { textWidth } from "./bun-adapter"
 import {
   type Cause,
   DateTime,
@@ -39,6 +42,7 @@ import {
   CollapsedRow,
   formatToolCallIdentity,
   ToolCallIdentityProvider,
+  FrameClicks,
   ToolFrameBody,
   UserRow,
   useSpinnerClock,
@@ -80,9 +84,13 @@ import {
   bashOutputRows,
   callOperation,
   cellOperations,
-  failureReason,
+  cutShort,
+  failureLine,
+  failureText,
   FoldOperationsProvider,
   GenericToolRenderer,
+  type OutputHead,
+  outputHead,
   RegisteredToolCall,
   type ToolCall,
   ToolCallSchema,
@@ -90,6 +98,7 @@ import {
 import { useExtensionUI } from "./extensions/host"
 import {
   type MessageRenderer,
+  type DisclosureLevel,
   type MessageRowProps,
   StatusLabelColor,
 } from "./extensions/client-facets"
@@ -100,7 +109,6 @@ import {
   MODEL_CHANGE_MESSAGE_TYPE,
 } from "@gent/core/protocol"
 import { DiagramLibraryContext, diagramsDrawable, useDiagramCodeBlocks } from "./mermaid"
-import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 
 // ── reasoning text ──────────────────────────────────────────────────────────
@@ -128,6 +136,27 @@ export const reasoningMarkdown = (reasoning: string): string => {
     .map((summary) => summary.trim())
     .filter((summary) => summary.length > 0)
     .join("\n\n")
+}
+
+/**
+ * Reasoning at the collapsed and preview levels, in one line:
+ * `∴ Thought · <first summary's heading> · N summaries`. Where the line is
+ * wider than `width` columns, the count drops first, then the heading is cut.
+ */
+const formatThoughtLine = (reasoning: string, width = Number.POSITIVE_INFINITY): string => {
+  const summaries = reasoningMarkdown(reasoning)
+    .split("\n\n")
+    .filter((summary) => summary.length > 0)
+  const first = (summaries[0] ?? "").split("\n")[0] ?? ""
+  const heading = first
+    .replace(/^#+\s*/, "")
+    .replace(/^\*\*(.*)\*\*$/, "$1")
+    .trim()
+  let line = "∴ Thought"
+  if (heading.length > 0) line = `${line} · ${heading}`
+  const count = ` · ${plural(summaries.length, "summary", "summaries")}`
+  if (summaries.length > 1 && textWidth(line + count) <= width) return line + count
+  return truncate(line, width)
 }
 
 // ── session event labels ────────────────────────────────────────────────────
@@ -241,6 +270,20 @@ export const getSessionEventLabel = (event: SessionEvent, now = currentMillis())
 
 interface SessionEventIndicatorProps {
   event: SessionEvent
+  /** Below it an error keeps its first lines; open, it shows whole. */
+  open: boolean
+}
+
+/** The lines a session error keeps below the full level: a provider body can run long. */
+const ERROR_LINES = 4
+
+/** An error's first `ERROR_LINES` lines, then the count of the rest and the key that shows them. */
+const cappedError = (text: string): string => {
+  const lines = text.replace(/\s+$/, "").split("\n")
+  if (lines.length <= ERROR_LINES) return text
+  return [...lines.slice(0, ERROR_LINES), formatPreviewFooter(lines.length - ERROR_LINES)].join(
+    "\n",
+  )
 }
 
 function SessionEventIndicator(props: SessionEventIndicatorProps) {
@@ -252,7 +295,9 @@ function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const content = () => {
     const event = props.event
     if (event._tag === "retrying" && event.outcome === "pending") tick()
-    return getSessionEventLabel(event, currentMillis())
+    const label = getSessionEventLabel(event, currentMillis())
+    if (event._tag === "error" && !props.open) return cappedError(label)
+    return label
   }
 
   const color = () => {
@@ -313,11 +358,20 @@ const HandoffDetails = Schema.Struct({
 type HandoffDetails = typeof HandoffDetails.Type
 const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
 
-const PREVIEW_LINES = 20
+/** The rows of a call's own output a preview draws under its row: fx's command head. */
+const HEAD_LINES = 5
 
 /** A call as its group counts it: a cell by its ops, any other call as the one tool it is. */
 const toActivityCall = (call: ToolCall, place: PathPlace): ActivityCall => {
-  const base = { toolName: call.toolName, status: call.status, durationMs: call.durationMs }
+  const base = {
+    toolName: call.toolName,
+    status: call.status,
+    durationMs: call.durationMs,
+    reason: failureLine(call),
+    failure: Option.getOrUndefined(failureText(call)),
+    cancelled: cutShort(call),
+    source: call,
+  }
   if (call.toolName !== "cell") {
     return { ...base, operations: [callOperation(call, place)], code: "" }
   }
@@ -333,10 +387,7 @@ const cellResultText = (call: ToolCall) =>
     }),
   })
 
-/**
- * The text a cell or bash row shows beneath itself: the cell display, or the
- * command output. Any other call shows its renderer's body instead.
- */
+/** The text a cell or bash row counts beneath itself: the cell display, or the command output. */
 const rowOutputText = (call: ToolCall): Option.Option<string> => {
   if (call.toolName === "cell") {
     const result = cellResultText(call)
@@ -369,38 +420,6 @@ const rowOutputLines = (call: ToolCall): number => {
     return bashOutputRows(call).total
   }
   return lineCount(Option.getOrElse(rowOutputText(call), () => ""))
-}
-
-/**
- * A call's renderer body at the preview level: the body the full level draws,
- * cut to the preview's rows, with the preview's footer for the rest.
- */
-function PreviewBody(props: { call: ToolCall }) {
-  const { theme } = useTheme()
-  const [height, setHeight] = createSignal(0)
-  const hidden = () => Math.max(0, height() - PREVIEW_LINES)
-  return (
-    <box flexDirection="column">
-      <box flexDirection="column" maxHeight={PREVIEW_LINES} overflow="hidden">
-        <box
-          flexDirection="column"
-          flexShrink={0}
-          onSizeChange={function () {
-            setHeight(this.height)
-          }}
-        >
-          <ToolFrameBody>
-            <SingleToolCall toolCall={props.call} expanded={true} />
-          </ToolFrameBody>
-        </box>
-      </box>
-      <Show when={hidden() > 0}>
-        <text>
-          <span style={{ fg: theme.textMuted, dim: true }}>{formatPreviewFooter(hidden())}</span>
-        </text>
-      </Show>
-    </box>
-  )
 }
 
 /** A declined command (stored by an earlier version) never ran and a background one has not ended: neither has lines to count. */
@@ -538,12 +557,17 @@ const ANSWER_INDENT = 2
 /**
  * A run of tool calls: what one group header draws. As in fx, a run spans the
  * steps of a turn. Reasoning and blank text between its calls do not end it;
- * answer text, an image, a user message, a session row, or an ask does.
+ * answer text, an image, a user message, a session row, or an ask does. As in
+ * opencode's activity line, the run also takes the reasoning just before its
+ * first call (from that call's own message) and the reasoning just before the
+ * text that ends it, and its header counts them all as thoughts.
  */
 interface ToolRun {
   readonly calls: ReadonlyArray<ToolCall>
-  /** The reasoning the run took from between its calls, by the id of the call it came before. */
+  /** The reasoning the run took before its calls, by the id of the call it came before. */
   readonly reasoning: ReadonlyMap<string, ReadonlyArray<string>>
+  /** The reasoning the run took from before the text that ended it. */
+  readonly closing: ReadonlyArray<string>
   /** Nothing after the run has ended it yet: another step may join it. */
   readonly open: boolean
   /** A step the run took is still a streamed answer (a `draft`) that its stored answer replaces. */
@@ -574,9 +598,23 @@ interface RunDraft {
   readonly headMessage: string
   readonly calls: ToolCall[]
   readonly reasoning: Map<string, ReadonlyArray<string>>
-  /** Reasoning and blank text since the last call: the run takes them only if another call joins. */
-  readonly held: { keys: string[]; reasoning: string[] }
+  closing: ReadonlyArray<string>
+  /**
+   * Reasoning and blank text since the last call: the run takes them only if
+   * another call joins, or answer text ends the run. `streamed` marks one held
+   * from a streamed answer.
+   */
+  readonly held: Passing
 }
+
+/** Reasoning and blank text segments in a row, with the keys of the segments. */
+interface Passing {
+  keys: string[]
+  reasoning: string[]
+  streamed: boolean
+}
+
+const noPassing = (): Passing => ({ keys: [], reasoning: [], streamed: false })
 
 /** A run while the walk may still change it. */
 interface RunState {
@@ -601,6 +639,10 @@ const projectToolRuns = (
   const drafts: RunState[] = []
   const absorbed = new Set<string>()
   let current = Option.none<RunState>()
+  // Reasoning and blank text in this message with no run open: a call in the
+  // same message starts a run that takes them. Only the same message: an
+  // earlier one may already be in history, and taking from it would change it.
+  let prelude = noPassing()
   // Whatever ends a run ends it for good: no later call joins it.
   const close = () => {
     Option.map(current, (entry) => {
@@ -613,21 +655,33 @@ const projectToolRuns = (
       onSome: (entry) => joinRun(entry, call, key, absorbed, message.draft === true),
       onNone: () => {
         const entry = startRun(call, key, message.id)
+        takeHeld(entry, prelude, call.id, absorbed)
         drafts.push(entry)
         current = Option.some(entry)
       },
     })
+    prelude = noPassing()
     if (asksReader(call)) close()
   }
   const takeSegment = (message: StepMessage, segment: AssistantSegment, index: number) => {
     const key = segmentKey(message.id, index)
+    const streamed = message.draft === true
     if (segment._tag === "tool-call") return takeCall(message, segment.toolCall, key)
-    if (acrossSteps && passesRun(segment) && Option.isSome(current)) {
-      return holdSegment(current.value, segment, key)
+    if (acrossSteps && passesRun(segment)) {
+      return Option.match(current, {
+        onSome: (entry) => holdSegment(entry.draft.held, segment, key, streamed),
+        onNone: () => holdSegment(prelude, segment, key, streamed),
+      })
     }
+    // Answer text ends the run, which takes the reasoning given just before it.
+    if (acrossSteps && segment._tag === "text") {
+      Option.map(current, (entry) => takeClosing(entry, streamed, absorbed))
+    }
+    prelude = noPassing()
     close()
   }
   for (const item of items) {
+    prelude = noPassing()
     if (waitsInPlace(item)) continue
     if (!isMessageItem(item) || item.role !== "assistant") {
       close()
@@ -664,11 +718,19 @@ const startRun = (call: ToolCall, key: string, messageId: string): RunState => (
     headMessage: messageId,
     calls: [call],
     reasoning: new Map<string, ReadonlyArray<string>>(),
-    held: { keys: [], reasoning: [] },
+    closing: [],
+    held: noPassing(),
   },
   open: true,
   streamed: false,
 })
+
+/** The run takes the passing segments: their keys draw at its head, their reasoning before `callId`. */
+const takeHeld = (entry: RunState, passing: Passing, callId: string, absorbed: Set<string>) => {
+  for (const key of passing.keys) absorbed.add(key)
+  if (passing.reasoning.length > 0) entry.draft.reasoning.set(callId, passing.reasoning)
+  if (passing.streamed) entry.streamed = true
+}
 
 /** A call joins the run, and the segments held since the last call go with it. */
 const joinRun = (
@@ -681,24 +743,49 @@ const joinRun = (
   const { draft } = entry
   draft.calls.push(call)
   absorbed.add(key)
-  for (const held of draft.held.keys) absorbed.add(held)
-  if (draft.held.reasoning.length > 0) draft.reasoning.set(call.id, draft.held.reasoning)
-  draft.held.keys = []
-  draft.held.reasoning = []
+  takeHeld(entry, draft.held, call.id, absorbed)
+  Object.assign(draft.held, noPassing())
   if (streamed) entry.streamed = true
 }
 
-/** A segment that passes the run waits: the run takes it only if another call joins. */
-const holdSegment = (entry: RunState, segment: AssistantSegment, key: string) => {
-  entry.draft.held.keys.push(key)
-  if (segment._tag === "reasoning") entry.draft.held.reasoning.push(segment.content)
+/**
+ * Answer text ends the run, and the run takes the reasoning held before it.
+ * The head waits for the run's end, so it takes them before history does;
+ * the run is streamed while the text or the reasoning is, so the head waits
+ * for the stored answer too.
+ */
+const takeClosing = (entry: RunState, streamed: boolean, absorbed: Set<string>) => {
+  const { held } = entry.draft
+  if (held.reasoning.length === 0) return
+  for (const key of held.keys) absorbed.add(key)
+  entry.draft.closing = held.reasoning
+  if (held.streamed || streamed) entry.streamed = true
+  Object.assign(held, noPassing())
+}
+
+/** A segment that passes the run waits: the run takes it only if a call or answer text comes next. */
+const holdSegment = (
+  passing: Passing,
+  segment: AssistantSegment,
+  key: string,
+  streamed: boolean,
+) => {
+  passing.keys.push(key)
+  if (segment._tag === "reasoning") passing.reasoning.push(segment.content)
+  if (streamed) passing.streamed = true
 }
 
 const toolRunsOf = (drafts: ReadonlyArray<RunState>, absorbed: ReadonlySet<string>): ToolRuns => {
   const heads = new Map<string, ToolRun>()
   const headedBy = new Map<string, ToolRun[]>()
   for (const { draft, open, streamed } of drafts) {
-    const run: ToolRun = { calls: draft.calls, reasoning: draft.reasoning, open, streamed }
+    const run: ToolRun = {
+      calls: draft.calls,
+      reasoning: draft.reasoning,
+      closing: draft.closing,
+      open,
+      streamed,
+    }
     heads.set(draft.head, run)
     headedBy.set(draft.headMessage, [...(headedBy.get(draft.headMessage) ?? []), run])
   }
@@ -930,8 +1017,33 @@ function AssistantMessage(props: {
       return [{ segment, run: Option.fromUndefinedOr(props.runs.heads.get(key)) }]
     }),
   )
-  const reasoningMarkdownBlock = (content: string) => (
-    <box flexDirection="column" marginBottom={1}>
+  // Reasoning opens at the full level and in the transcript view; below
+  // that it is one line, as fx and Codex keep it out of the inline view.
+  const dimensions = useTerminalDimensions()
+  const thoughtWidth = () => dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN
+  const reasoningOpen = () => props.fullDetail || props.disclosure === "full"
+  // Reasoning parts itself from the block after it; the message's last block
+  // leaves the gap to the next message's own margin.
+  const reasoningBlock = (content: string, last: boolean) => (
+    <Show
+      when={reasoningOpen()}
+      fallback={
+        <box marginBottom={gapAfter(last)}>
+          <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+            {formatThoughtLine(content, thoughtWidth())}
+          </text>
+        </box>
+      }
+    >
+      {reasoningMarkdownBlock(content, last)}
+    </Show>
+  )
+  const gapAfter = (last: boolean) => {
+    if (last) return 0
+    return 1
+  }
+  const reasoningMarkdownBlock = (content: string, last = false) => (
+    <box flexDirection="column" marginBottom={gapAfter(last)}>
       <markdown
         syntaxStyle={props.syntaxStyle()}
         streaming
@@ -952,10 +1064,11 @@ function AssistantMessage(props: {
           draw either. */}
       <Show when={segments().length > 0}>
         <For each={drawnSegments()}>
-          {({ segment, run }) =>
+          {({ segment, run }, index) =>
             Match.value(segment).pipe(
               Match.tagsExhaustive({
-                reasoning: (segment) => reasoningMarkdownBlock(segment.content),
+                reasoning: (segment) =>
+                  reasoningBlock(segment.content, index() === drawnSegments().length - 1),
                 image: (segment) => (
                   <text style={{ fg: theme.info }}>
                     [Image: {segment.image.mediaType.replace("image/", "")}]
@@ -970,6 +1083,10 @@ function AssistantMessage(props: {
                     reasoning={Option.match(run, {
                       onNone: () => new Map<string, ReadonlyArray<string>>(),
                       onSome: (value) => value.reasoning,
+                    })}
+                    closing={Option.match(run, {
+                      onNone: () => [],
+                      onSome: (value) => value.closing,
                     })}
                     renderReasoning={reasoningMarkdownBlock}
                     runOpen={Option.exists(run, (value) => value.open)}
@@ -999,9 +1116,12 @@ function AssistantMessage(props: {
 
 function ToolCallGroup(props: {
   calls: ToolCall[]
-  /** Reasoning from between the run's steps, by the id of the call it came before: the full level draws it. */
+  /** Reasoning the run took, by the id of the call it came before: the full level draws it. */
   reasoning: ReadonlyMap<string, ReadonlyArray<string>>
-  renderReasoning: (content: string) => JSX.Element
+  /** Reasoning the run took from before the text that ended it: the full level draws it last. */
+  closing: ReadonlyArray<string>
+  /** Draws reasoning; `last` drops the gap after it, where the group's own block ends. */
+  renderReasoning: (content: string, last?: boolean) => JSX.Element
   /** A later step may still join the group's run, so its last call is not yet its last. */
   runOpen: boolean
   disclosure: DisclosureLevel
@@ -1011,9 +1131,14 @@ function ToolCallGroup(props: {
   const { pathPlace } = useClient()
   const dimensions = useTerminalDimensions()
   const activity = createMemo(() => props.calls.map((call) => toActivityCall(call, pathPlace())))
-  const failed = () => props.calls.some((call) => call.status === "error")
+  // A cut call (the turn's interrupt, the cell's cancel) is no failure.
+  const failed = () => props.calls.some((call) => call.status === "error" && !cutShort(call))
   const opsFailed = () =>
-    activity().some((call) => call.operations.some((operation) => operation.outcome === "failed"))
+    activity().some((call) =>
+      call.operations.some(
+        (operation) => operation.outcome === "failed" || operation.outcome === "cancelled",
+      ),
+    )
   const running = () => props.calls.some((call) => call.status === "running")
   const tick = useSpinnerClock()
   // A call that failed is the group's failure; ops that failed inside a cell
@@ -1033,41 +1158,59 @@ function ToolCallGroup(props: {
   // surface that draws the header or the rows (the live tail, a history
   // commit) keeps the terminal's last column free.
   const lineWidth = () => dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN - 2
-  const header = createMemo(() => formatActivityHeader(activity(), lineWidth()))
-  // The transcript view and the full level both open every row; collapsed keeps only failures.
+  // Every reasoning segment the run took counts as a thought; one with no text is none.
+  const thoughts = () =>
+    [...props.closing, ...Array.from(props.reasoning.values()).flat()].filter(
+      (content) => content.trim().length > 0,
+    ).length
+  const header = createMemo(() => formatActivityHeader(activity(), lineWidth(), thoughts()))
+  // The transcript view and the full level both open every row.
   const rowsOpen = () => props.fullDetail || props.disclosure === "full"
+  // Collapsed draws one line under the header for each failure, so a failure
+  // shows at every level.
+  const failureRows = createMemo(() => {
+    if (props.fullDetail || props.disclosure !== "collapsed") return []
+    return collapsedOperations(activity())
+  })
   // Preview draws a row per run of one tool, in past-tense words.
   const toolRows = createMemo(() => {
     if (props.fullDetail || props.disclosure !== "preview") return []
     return activityRows(activity())
   })
-  // A failed call draws its frame, with its id and reason, at every level.
-  const visibleCalls = () => {
-    if (rowsOpen()) return props.calls
-    return props.calls.filter((call) => call.status === "error")
-  }
-  // Preview shows the head of the last finished call beneath the rows: a cell
-  // or bash row its output text, any other call its renderer body. An open
-  // run's last call changes with each step, and a head drawn for one step and
-  // dropped at the next would shrink the live tail (its freed rows reach
-  // scrollback blank), so the head waits for the run's end.
-  const previewed = createMemo(() => {
-    if (props.fullDetail || props.disclosure !== "preview" || props.runOpen)
-      return Option.none<ToolCall>()
-    return Option.filter(
-      Option.fromNullishOr(props.calls.at(-1)),
-      (last) => last.status === "completed",
-    )
+  // The run's last command row draws the head of its output, but only once
+  // the run has ended: while a step may still join, the last command changes,
+  // and a head drawn for one step and dropped at the next would shrink the
+  // live tail (its freed rows reach scrollback blank). A failed row's op has
+  // settled, so its head is final at once.
+  const lastCommandRow = createMemo(() => {
+    if (props.runOpen) return -1
+    return toolRows().findLastIndex((row) => row.tool === "bash")
   })
-  const preview = createMemo(() =>
-    previewed().pipe(
-      Option.flatMap(rowOutputText),
-      Option.map((text) => previewOutput(text, PREVIEW_LINES)),
-      Option.getOrElse(() => previewOutput("")),
-    ),
-  )
-  const previewBody = () =>
-    Option.toArray(Option.filter(previewed(), (last) => Option.isNone(rowOutputText(last))))
+  const rowHead = (row: ReturnType<typeof activityRows>[number], index: number) => {
+    if (row.outcome !== "failed" && index !== lastCommandRow()) return Option.none<OutputHead>()
+    const operation = Option.fromUndefinedOr(row.operations.at(-1))
+    return Option.flatMap(operation, (value) =>
+      Option.fromUndefinedOr(value.source).pipe(
+        Option.flatMap((source) => outputHead(source, HEAD_LINES)),
+        // A saved receipt has no output to read: its reason is the head.
+        Option.orElse(() =>
+          Option.map(
+            Option.liftPredicate(value.reason ?? "", (reason) => reason.length > 0),
+            (reason): OutputHead => ({ lines: [reason], hidden: 0 }),
+          ),
+        ),
+      ),
+    )
+  }
+  // A cancel is the reader's own act, a warning; a failure is an error.
+  const endingColor = (outcome: ActivityOutcome) => {
+    if (outcome === "cancelled") return theme.warning
+    return theme.error
+  }
+  const connector = (index: number, count: number) => {
+    if (index === count - 1) return "└"
+    return "├"
+  }
   return (
     <Show when={props.calls.length > 0}>
       <box flexDirection="column">
@@ -1076,47 +1219,50 @@ function ToolCallGroup(props: {
             {symbol()} {header()}
           </text>
         </Show>
+        <For each={failureRows()}>
+          {(operation, index) => (
+            <text wrapMode="none" truncate style={{ fg: endingColor(operation.outcome) }}>
+              {connector(index(), failureRows().length)} {formatFailureRow(operation, lineWidth())}
+            </text>
+          )}
+        </For>
         <For each={toolRows()}>
           {(row, index) => {
             const text = () => formatActivityRow(row, lineWidth())
-            const connector = () => {
-              if (index() === toolRows().length - 1) return "└"
-              return "├"
-            }
             const color = () => {
-              if (row.outcome === "failed" || row.outcome === "incomplete") return theme.error
-              return theme.textMuted
+              if (row.outcome === "succeeded" || row.outcome === "running") return theme.textMuted
+              return endingColor(row.outcome)
             }
             return (
-              <text wrapMode="none" truncate style={{ fg: color() }}>
-                {connector()} {text().head}
-                <Show when={Option.getOrUndefined(text().diff)}>
-                  {(diff) => (
-                    <>
-                      <span style={{ fg: theme.success }}> +{diff().added}</span>
-                      <span style={{ fg: color() }}> / </span>
-                      <span style={{ fg: theme.error }}>-{diff().removed}</span>
-                    </>
-                  )}
+              <box flexDirection="column">
+                <text wrapMode="none" truncate style={{ fg: color() }}>
+                  {connector(index(), toolRows().length)} {text().head}
+                  <Show when={Option.getOrUndefined(text().diff)}>
+                    {(diff) => (
+                      <>
+                        <span style={{ fg: theme.success }}> +{diff().added}</span>
+                        <span style={{ fg: color() }}> / </span>
+                        <span style={{ fg: theme.error }}>-{diff().removed}</span>
+                      </>
+                    )}
+                  </Show>
+                  {text().tail}
+                </text>
+                <Show when={Option.getOrUndefined(rowHead(row, index()))}>
+                  {(head) => <OutputHeadRows head={head()} width={lineWidth() - 2} />}
                 </Show>
-                {text().tail}
-              </text>
+              </box>
             )
           }}
         </For>
-        <Show when={visibleCalls().length > 0}>
-          <For each={visibleCalls()}>
+        <Show when={rowsOpen()}>
+          <For each={props.calls}>
             {(call, index) => {
               const color = () => {
                 if (call.status === "error") return theme.error
                 return theme.textMuted
               }
-              const connector = () => {
-                if (index() === visibleCalls().length - 1) return "└"
-                return "├"
-              }
               const status = () => {
-                if (call.status === "error") return " · failed"
                 if (call.status === "running") return " · running"
                 if (Predicate.isNotUndefined(call.durationMs))
                   return ` · ${formatDuration(call.durationMs, "precise")}`
@@ -1143,25 +1289,23 @@ function ToolCallGroup(props: {
                 if (text.length === 0) return ""
                 return ` · ${text}`
               }
-              // The open rows draw the reasoning a step gave before this call.
-              const reasoningBefore = () => {
-                if (!rowsOpen()) return []
-                return props.reasoning.get(call.id) ?? []
-              }
-              // Open rows draw their bodies: a blank line parts each from the last,
-              // as it parts transcript blocks.
+              // A blank line parts each open row from the last, as it parts
+              // transcript blocks.
               const gap = () => {
-                if (rowsOpen() && index() > 0) return 1
+                if (index() > 0) return 1
                 return 0
               }
               return (
                 <box flexDirection="column" marginTop={gap()}>
-                  <For each={reasoningBefore()}>{(content) => props.renderReasoning(content)}</For>
+                  {/* The open rows draw the reasoning a step gave before this call. */}
+                  <For each={props.reasoning.get(call.id) ?? []}>
+                    {(content) => props.renderReasoning(content)}
+                  </For>
+                  {/* A failed call draws its renderer's frame, which names its id and reason. */}
                   <Show
                     when={call.status === "error"}
                     fallback={
                       <box flexDirection="column">
-                        {/* The raw call id is detail: the open frame (ctrl+o) names it, the row does not. */}
                         <box flexDirection="row">
                           <text
                             flexGrow={1}
@@ -1170,76 +1314,80 @@ function ToolCallGroup(props: {
                             truncate
                             style={{ fg: color() }}
                           >
-                            {connector()} {call.toolName} {label()}
+                            {connector(index(), props.calls.length)} {call.toolName} {label()}
                             {counts()}
                             {status()}
                           </text>
-                          <Show when={rowsOpen()}>
-                            <text flexShrink={0} wrapMode="none" style={{ fg: theme.textMuted }}>
-                              {" "}
-                              #{formatToolCallIdentity(call.id)}
-                            </text>
-                          </Show>
+                          <text flexShrink={0} wrapMode="none" style={{ fg: theme.textMuted }}>
+                            {" "}
+                            #{formatToolCallIdentity(call.id)}
+                          </text>
                         </box>
-                        <Show when={rowsOpen()}>
-                          <ToolFrameBody>
-                            <SingleToolCall toolCall={call} expanded={true} />
-                          </ToolFrameBody>
-                        </Show>
+                        <ToolFrameBody>
+                          <OpenToolCall toolCall={call} />
+                        </ToolFrameBody>
                       </box>
                     }
                   >
-                    <SingleToolCall toolCall={call} expanded={rowsOpen()} />
+                    <OpenToolCall toolCall={call} />
                   </Show>
                 </box>
               )
             }}
           </For>
+          <Show when={props.closing.length > 0}>
+            <box flexDirection="column" marginTop={1}>
+              <For each={[...props.closing]}>
+                {(content, index) =>
+                  props.renderReasoning(content, index() === props.closing.length - 1)
+                }
+              </For>
+            </box>
+          </Show>
         </Show>
-        <Show when={preview().lines.length > 0}>
-          <box flexDirection="column" paddingLeft={2}>
-            <For each={preview().lines}>
-              {(line) => <text style={{ fg: theme.textMuted }}>{line}</text>}
-            </For>
-            <Show when={preview().hidden > 0}>
-              <text>
-                <span style={{ fg: theme.textMuted, dim: true }}>
-                  {formatPreviewFooter(preview().hidden)}
-                </span>
-              </text>
-            </Show>
-          </box>
-        </Show>
-        <For each={previewBody()}>{(call) => <PreviewBody call={call} />}</For>
       </box>
     </Show>
   )
 }
 
-function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
+/**
+ * A call's own output under its preview row, one line a row behind a `│ `
+ * gutter, then the count of the lines left out and the key that shows them.
+ * `width` is the columns a line has after the gutter.
+ */
+function OutputHeadRows(props: { head: OutputHead; width: number }) {
   const { theme } = useTheme()
+  return (
+    <box flexDirection="column" paddingLeft={2}>
+      <For each={[...props.head.lines]}>
+        {(line) => (
+          <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+            │ {truncate(line, props.width)}
+          </text>
+        )}
+      </For>
+      <Show when={props.head.hidden > 0}>
+        <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+          │{" "}
+          <span style={{ fg: theme.textMuted, dim: true }}>
+            {formatPreviewFooter(props.head.hidden)}
+          </span>
+        </text>
+      </Show>
+    </box>
+  )
+}
+
+/** A call opened at the full level: its registered renderer, else the generic frame. */
+function OpenToolCall(props: { toolCall: ToolCall }) {
   return (
     <RegisteredToolCall
       toolCall={props.toolCall}
-      expanded={props.expanded}
+      expanded={true}
       fallback={
-        <Show
-          when={props.expanded}
-          fallback={
-            <Show when={props.toolCall.status === "error"}>
-              <text>
-                <span style={{ fg: theme.error }}>
-                  [x {props.toolCall.toolName}] #{formatToolCallIdentity(props.toolCall.id)}{" "}
-                  {Option.getOrElse(failureReason(props.toolCall), () => "failed")}
-                </span>
-              </text>
-            </Show>
-          }
-        >
-          <ToolCallIdentityProvider id={props.toolCall.id}>
-            <GenericToolRenderer toolCall={props.toolCall} expanded />
-          </ToolCallIdentityProvider>
-        </Show>
+        <ToolCallIdentityProvider id={props.toolCall.id}>
+          <GenericToolRenderer toolCall={props.toolCall} expanded />
+        </ToolCallIdentityProvider>
       }
     />
   )
@@ -1272,7 +1420,12 @@ export function MessageList(props: MessageListProps) {
           {(item) =>
             (() => {
               if (!isMessageItem(item)) {
-                return <SessionEventIndicator event={item} />
+                return (
+                  <SessionEventIndicator
+                    event={item}
+                    open={props.fullDetail === true || props.disclosure === "full"}
+                  />
+                )
               }
               return (
                 <Show
@@ -1298,6 +1451,7 @@ export function MessageList(props: MessageListProps) {
                     pendingMode={item.pendingMode}
                     customType={item.metadata?.customType}
                     details={item.metadata?.details}
+                    disclosure={props.disclosure}
                     fullDetail={props.fullDetail === true}
                   />
                 </Show>
@@ -1409,7 +1563,11 @@ const historyFingerprints = (
     if (headed.length === 0) return own
     return encodeFingerprint([
       own,
-      headed.map((run) => [run.calls.map(toolFingerprint), Array.from(run.reasoning.values())]),
+      headed.map((run) => [
+        run.calls.map(toolFingerprint),
+        Array.from(run.reasoning.values()),
+        run.closing,
+      ]),
     ])
   })
 
@@ -2811,33 +2969,36 @@ export function NativeTranscript(props: NativeTranscriptProps) {
             setLiveHeight(this.height)
           }}
         >
-          <ToolRunsContext.Provider value={Option.some(toolRuns)}>
-            <For each={liveItems()}>
-              {(item, index) => (
-                <box
-                  flexDirection="column"
-                  flexShrink={0}
-                  overflow={cutOverflow(index())}
-                  height={cutHeight(item, index())}
-                >
+          {/* The transcript view turns the mouse on: there its frames take clicks. */}
+          <FrameClicks on={props.expanded}>
+            <ToolRunsContext.Provider value={Option.some(toolRuns)}>
+              <For each={liveItems()}>
+                {(item, index) => (
                   <box
                     flexDirection="column"
                     flexShrink={0}
-                    marginTop={-cutRows(index())}
-                    onSizeChange={function () {
-                      measureItem(item, this)
-                    }}
-                    // A change between no row and one sends no size change.
-                    renderBefore={function () {
-                      measureItem(item, this)
-                    }}
+                    overflow={cutOverflow(index())}
+                    height={cutHeight(item, index())}
                   >
-                    {props.renderItems([item])}
+                    <box
+                      flexDirection="column"
+                      flexShrink={0}
+                      marginTop={-cutRows(index())}
+                      onSizeChange={function () {
+                        measureItem(item, this)
+                      }}
+                      // A change between no row and one sends no size change.
+                      renderBefore={function () {
+                        measureItem(item, this)
+                      }}
+                    >
+                      {props.renderItems([item])}
+                    </box>
                   </box>
-                </box>
-              )}
-            </For>
-          </ToolRunsContext.Provider>
+                )}
+              </For>
+            </ToolRunsContext.Provider>
+          </FrameClicks>
           {props.children}
         </box>
       </scrollbox>

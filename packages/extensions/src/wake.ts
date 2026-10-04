@@ -1041,7 +1041,9 @@ export const WakeExtension = defineExtension({
     yield* host.on("sessionDeleted", ({ branchIds }) => store.removeBranches(branchIds))
     // The branch resource starts without a session facade, so the loop's open
     // is where stored entries get their timers back: after a restart or a
-    // branch close, as soon as anything reaches the branch. A past-due alarm
+    // branch close, as soon as anything reaches the branch, and for each new
+    // build of the resource (an edit, a disable and enable), once the build
+    // before it closed with its timers. A past-due alarm
     // fires at once; a notify one leaves its notice and starts no turn.
     yield* host.on("loopOpen", () =>
       rearmPendingAlarms().pipe(

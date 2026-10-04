@@ -37,8 +37,11 @@ import {
   extensionServiceError,
   ExtensionServiceError,
   type ExtensionSetupServices,
+  type ExtensionExtensionsService,
   type ExtensionStateFacet,
   type ExtensionStatusInfo,
+  type DisabledExtension,
+  ExtensionStatus,
   type TurnNotice,
   type TurnProjection,
   type TurnProjectionInput,
@@ -300,7 +303,12 @@ interface CompiledExtensionHooks {
     input: Omit<TurnAfterInput, "readNotices">,
     readNotices: ReadonlyMap<ExtensionId, ReadonlySet<string>>,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
-  readonly emitLoopOpen: Effect.Effect<void, never, CurrentExtensionHostContext>
+  /** The extensions with a `loopOpen` hook. */
+  readonly loopOpenExtensions: ReadonlySet<ExtensionId>
+  /** Runs the `loopOpen` hooks of the named extensions; the loop says which (see its activation). */
+  readonly emitLoopOpen: (
+    extensionIds: ReadonlySet<ExtensionId>,
+  ) => Effect.Effect<void, never, CurrentExtensionHostContext>
   readonly emitSessionDeleted: (
     input: SessionDeletedInput,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
@@ -549,12 +557,16 @@ export const compileExtensionHooks = (
         }
       }),
 
+    loopOpenExtensions: new Set(loopOpenSlots.map((slot) => slot.extensionId)),
     // Each hook runs on its own: one that never returns holds up no other.
     // The slots are fixed when the registry compiles, one per registration.
-    emitLoopOpen: Effect.forEach(loopOpenSlots, (slot) => runHook(void 0, slot), {
-      concurrency: Math.max(loopOpenSlots.length, 1),
-      discard: true,
-    }),
+    emitLoopOpen: (extensionIds) => {
+      const slots = loopOpenSlots.filter((slot) => extensionIds.has(slot.extensionId))
+      return Effect.forEach(slots, (slot) => runHook(void 0, slot), {
+        concurrency: Math.max(slots.length, 1),
+        discard: true,
+      })
+    },
 
     // Each extension removes its own data, so no handler waits for another.
     // Each runs up to its bound; one that never returns is cut and logged.
@@ -617,6 +629,7 @@ interface ResolvedExtensions {
   readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
+  readonly disabledExtensions: ReadonlyArray<DisabledExtension>
   readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
 }
 
@@ -817,6 +830,7 @@ const activeExtensionStatus = (extension: LoadedExtension): ExtensionStatusInfo 
   manifest: extension.manifest,
   scope: extension.scope,
   sourcePath: extension.sourcePath,
+  ...omitUndefined({ version: extension.version }),
   status: "active",
 })
 
@@ -824,6 +838,26 @@ const failedExtensionStatus = (failure: FailedExtension): ExtensionStatusInfo =>
   ...failure,
   status: "failed",
 })
+
+const disabledExtensionStatus = (disabled: DisabledExtension): ExtensionStatusInfo => ({
+  manifest: disabled.manifest,
+  scope: disabled.scope,
+  sourcePath: disabled.sourcePath,
+  status: "disabled",
+})
+
+/** A health status as the `Extensions` facet reports it. */
+const extensionStatusOf = (info: ExtensionStatusInfo): ExtensionStatus => {
+  const identity = { id: info.manifest.id, scope: info.scope, sourcePath: info.sourcePath }
+  if (info.status === "failed") {
+    return ExtensionStatus.cases.Failed.make({ ...identity, phase: info.phase, error: info.error })
+  }
+  if (info.status === "disabled") return ExtensionStatus.cases.Disabled.make(identity)
+  return ExtensionStatus.cases.Active.make({
+    ...identity,
+    ...omitUndefined({ version: info.version }),
+  })
+}
 
 const capabilityToCommand = (extensionId: ExtensionId, cap: RequestCapability): SlashCommand => {
   const slash = Option.fromUndefinedOr(cap.slash)
@@ -860,6 +894,7 @@ const capabilityToCommand = (extensionId: ExtensionId, cap: RequestCapability): 
 export const resolveExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
   failedExtensions: ReadonlyArray<FailedExtension> = [],
+  disabledExtensions: ReadonlyArray<DisabledExtension> = [],
 ): ResolvedExtensions => {
   const mergedFailures = [...failedExtensions]
   const sorted = sortExtensionsByScope(extensions)
@@ -904,6 +939,7 @@ export const resolveExtensions = (
   const extensionStatuses: ExtensionStatusInfo[] = [
     ...sorted.map(activeExtensionStatus),
     ...mergedFailures.map(failedExtensionStatus),
+    ...disabledExtensions.map(disabledExtensionStatus),
   ]
 
   return {
@@ -917,6 +953,7 @@ export const resolveExtensions = (
     extensionHooks,
     extensions: sorted,
     failedExtensions: mergedFailures,
+    disabledExtensions,
     extensionStatuses,
   }
 }
@@ -1002,6 +1039,7 @@ type Restore = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, 
 
 /** One extension whose Resources of a scope failed to build, and the cause. */
 interface FailedResourceBuild {
+  readonly extension: LoadedExtension
   /** The extension suspended at the `startup` phase, with the full cause. */
   readonly failure: FailedExtension
   /** The messages down the cause chain, for a reader. */
@@ -1024,6 +1062,7 @@ export const suspendExtensions = (
   return resolveExtensions(
     resolved.extensions.filter((extension) => !suspended.has(extension.manifest.id)),
     [...resolved.failedExtensions, ...failed],
+    resolved.disabledExtensions,
   )
 }
 
@@ -1033,6 +1072,56 @@ interface BuiltScopeResources {
   readonly failed: ReadonlyArray<FailedResourceBuild>
   /** The given context with every live extension's services merged over it. */
   readonly context: Context.Context<unknown>
+}
+
+/**
+ * What a built Resource of an extension depends on in that extension: its
+ * scope, id, source and file version.
+ */
+const extensionResourceIdentity = (extension: LoadedExtension): string => {
+  let source = extension.sourcePath
+  if (!Predicate.isUndefined(extension.version)) source = `${source}@${extension.version}`
+  return `${extension.scope}:${extension.manifest.id}:${source}`
+}
+
+const resourceScopesOf = (extension: LoadedExtension): ReadonlySet<ResourceScope> =>
+  new Set((extension.contributions.resources ?? []).map((resource) => resource.scope))
+
+/**
+ * The build key of each extension's `scope` Resources: `root`, then the
+ * identities of everything the build reads, in resolution order. Two builds
+ * with one key build the same code over the same services, so a later build
+ * can share an earlier one.
+ *
+ * A process Resource builds over the process Resources of the extensions
+ * before it, so its key is theirs and its own: an edit changes the key of
+ * the edited extension and of each one after it. A branch Resource builds
+ * over the whole process context, where a later extension can override a
+ * service an earlier one built, and over the branch Resources before it. So
+ * its key holds every process-bearing extension, then the branch-bearing
+ * ones up to and including it.
+ */
+export const resourceBuildKeys = (
+  extensions: ReadonlyArray<LoadedExtension>,
+  scope: ResourceScope,
+  root: string,
+): ReadonlyMap<LoadedExtension, string> => {
+  const sorted = sortExtensionsByScope(extensions)
+  const chain = [root]
+  if (scope === "branch") {
+    for (const extension of sorted) {
+      if (resourceScopesOf(extension).has("process")) {
+        chain.push(extensionResourceIdentity(extension))
+      }
+    }
+  }
+  const keys = new Map<LoadedExtension, string>()
+  for (const extension of sorted) {
+    if (!resourceScopesOf(extension).has(scope)) continue
+    chain.push(extensionResourceIdentity(extension))
+    keys.set(extension, chain.join("\u0000"))
+  }
+  return keys
 }
 
 /**
@@ -1103,6 +1192,7 @@ export const buildScopeResources = (params: {
         Effect.annotateLogs({ extensionId: extension.manifest.id, scope: params.scope, error }),
       )
       failed.push({
+        extension,
         failure: toFailedExtension(extension, "startup", error),
         message: causeChainMessage(Cause.squash(built.cause)),
       })
@@ -1399,6 +1489,8 @@ export interface DiscoveredExtension {
   readonly extension: LoadedUserExtension
   readonly scope: ExtensionScope
   readonly sourcePath: string
+  /** The scanned file's version; a builtin has none. */
+  readonly version?: string
 }
 
 /**
@@ -1481,7 +1573,12 @@ const loadExtensionScan = Effect.fn("ExtensionLoader.loadExtensionScan")(functio
       const filePath = file.path
       const result = yield* loadExtensionFile(file).pipe(Effect.result)
       if (Result.isSuccess(result)) {
-        loaded.push({ extension: result.success, scope, sourcePath: filePath })
+        loaded.push({
+          extension: result.success,
+          scope,
+          sourcePath: filePath,
+          version: file.version,
+        })
         continue
       }
       const error = result.failure.message
@@ -1568,6 +1665,9 @@ export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(functi
   if (!Predicate.isUndefined(discovered.extension.artifactIdentity)) {
     loaded = { ...loaded, artifactIdentity: discovered.extension.artifactIdentity }
   }
+  if (!Predicate.isUndefined(discovered.version)) {
+    loaded = { ...loaded, version: discovered.version }
+  }
   return loaded
 })
 
@@ -1594,18 +1694,29 @@ const toFailedExtension = (
   error,
 })
 
+/** Set up extensions, and the ones the disabled list named, which were not. */
+interface ExtensionSetupResult extends ExtensionActivationResult {
+  readonly disabled: ReadonlyArray<DisabledExtension>
+}
+
 export const setupExtensions = (params: {
   readonly extensions: ReadonlyArray<DiscoveredExtension>
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>
-}): Effect.Effect<ExtensionActivationResult, never, ExtensionLoaderServices> =>
+}): Effect.Effect<ExtensionSetupResult, never, ExtensionLoaderServices> =>
   Effect.gen(function* () {
     const active: LoadedExtension[] = []
     const failed: FailedExtension[] = []
+    const disabled: DisabledExtension[] = []
 
     for (const discovered of params.extensions) {
       if (params.disabled.has(discovered.extension.manifest.id)) {
+        disabled.push({
+          manifest: discovered.extension.manifest,
+          scope: discovered.scope,
+          sourcePath: discovered.sourcePath,
+        })
         yield* Effect.logDebug("extension.setup.skipped.disabled").pipe(
           Effect.annotateLogs({
             extensionId: discovered.extension.manifest.id,
@@ -1649,7 +1760,7 @@ export const setupExtensions = (params: {
       }
     }
 
-    return { active, failed }
+    return { active, failed, disabled }
   })
 
 const extensionKey = (ext: Pick<LoadedExtension, "scope" | "manifest" | "sourcePath">) =>
@@ -1844,6 +1955,8 @@ export interface SessionProfile {
  */
 interface RuntimeProfileDeclarations {
   readonly extensionDeclarations: ExtensionActivationResult
+  /** Found and named by the disabled list, so never set up. */
+  readonly disabledExtensions: ReadonlyArray<DisabledExtension>
   readonly coreSections: ReadonlyArray<PromptSection>
 }
 
@@ -1869,6 +1982,10 @@ export const loadRuntimeProfileDeclarations = (
       ),
     )
     const importFailed = discovery.failed.filter((ext) => !disabledSet.has(ext.manifest.id))
+    const importDisabled = discovery.failed.flatMap(({ manifest, scope, sourcePath }) => {
+      if (!disabledSet.has(manifest.id)) return []
+      return [{ manifest, scope, sourcePath } satisfies DisabledExtension]
+    })
 
     // 3. Setup builtin + external extensions
     const setup = yield* setupExtensions({
@@ -1907,6 +2024,7 @@ export const loadRuntimeProfileDeclarations = (
 
     return {
       extensionDeclarations: declarations,
+      disabledExtensions: [...setup.disabled, ...importDisabled],
       coreSections,
     }
   })
@@ -1992,6 +2110,13 @@ export interface SessionProfileCacheService {
    * later config edit superseded closes when its last lease is released.
    */
   readonly resolve: (cwd: string) => Effect.Effect<SessionProfile, never, ScopeType.Scope>
+  /**
+   * Make the next `resolve` for the cwd set up its extensions again, though
+   * no file or config changed. The new profile keeps each extension's
+   * process Resources whose build key it shares. The count lives in memory
+   * only: a restart sets everything up anyway.
+   */
+  readonly reload: (cwd: string, id: ExtensionId) => Effect.Effect<void>
 }
 
 /** One (workspace, cwd) place: at most one current profile, one build lock. */
@@ -2108,6 +2233,16 @@ export class SessionProfileCache extends Context.Service<
         >()
         // A raw disabled list seen before, to the profile it resolved to.
         const aliases = new Map<string, string>()
+        // How many times each extension of a place was reloaded. The counts
+        // join the file stamp, so a reload misses both the alias and the
+        // profile and builds a new profile.
+        const reloads = new Map<string, Map<string, number>>()
+        const filesStamp = (place: string, scan: ExtensionScan): ReadonlyArray<string> => [
+          ...extensionScanStamp(scan),
+          ...Array.from(reloads.get(place) ?? new Map<string, number>())
+            .map(([id, count]) => `reload:${id}#${count}`)
+            .toSorted(),
+        ]
         // The profile the place's config selects now. Only a superseded
         // profile retires; the current one stays cached without a lease.
         const current = new Map<string, string>()
@@ -2168,26 +2303,11 @@ export class SessionProfileCache extends Context.Service<
         const startProcessResources = (
           place: string,
           extensions: ReadonlyArray<LoadedExtension>,
-          scan: ExtensionScan,
           held: Array<string>,
           restore: Restore,
         ): Effect.Effect<StartedProcessResources> =>
           Effect.gen(function* () {
-            const chain = [place]
-            const versions = new Map<string, string>()
-            for (const file of [...scan.user.paths, ...scan.project.paths]) {
-              versions.set(file.path, file.version)
-            }
-            const identityOf = (extension: LoadedExtension) => {
-              const source = Option.match(
-                Option.fromUndefinedOr(versions.get(extension.sourcePath)),
-                {
-                  onNone: () => extension.sourcePath,
-                  onSome: (version) => `${extension.sourcePath}@${version}`,
-                },
-              )
-              return `${extension.scope}:${extension.manifest.id}:${source}`
-            }
+            const keys = resourceBuildKeys(extensions, "process", place)
             const started = yield* buildScopeResources({
               extensions,
               scope: "process",
@@ -2195,21 +2315,19 @@ export class SessionProfileCache extends Context.Service<
               parent: serverScope,
               restore,
               reuse: (extension) => {
-                const identity = identityOf(extension)
-                const key = [...chain, identity].join("\u0000")
+                const key = keys.get(extension)
+                if (Predicate.isUndefined(key)) return Option.none()
                 const shared = Option.fromNullishOr(sharedResources.get(key))
                 if (Option.isNone(shared)) return Option.none()
                 shared.value.holders += 1
                 held.push(key)
-                chain.push(identity)
                 return Option.some(shared.value.context)
               },
               built: (extension, scope, context) => {
-                const identity = identityOf(extension)
-                const key = [...chain, identity].join("\u0000")
+                const key = keys.get(extension)
+                if (Predicate.isUndefined(key)) return
                 sharedResources.set(key, { scope, context, holders: 1 })
                 held.push(key)
-                chain.push(identity)
               },
             })
             return {
@@ -2230,7 +2348,6 @@ export class SessionProfileCache extends Context.Service<
           cwd: string,
           fresh: FreshConfig,
           declarations: RuntimeProfileDeclarations,
-          scan: ExtensionScan,
           restore: Restore,
         ) =>
           Effect.gen(function* () {
@@ -2240,17 +2357,17 @@ export class SessionProfileCache extends Context.Service<
               const started = yield* startProcessResources(
                 place,
                 declarations.extensionDeclarations.active,
-                scan,
                 held,
                 restore,
               )
               // A config failure is not part of the profile: health reads it
               // live (`configHealthStatuses`), so it clears when the file is
               // fixed. A root that fails on any failure still sees it here.
-              const resolved = resolveExtensions(started.active, [
-                ...declarations.extensionDeclarations.failed,
-                ...started.failed,
-              ])
+              const resolved = resolveExtensions(
+                started.active,
+                [...declarations.extensionDeclarations.failed, ...started.failed],
+                declarations.disabledExtensions,
+              )
               const buildFailures = [
                 ...fresh.failures.map((failure) =>
                   configLoadFailure(pathSvc, config.home, failure),
@@ -2304,7 +2421,7 @@ export class SessionProfileCache extends Context.Service<
               Option.fromNullishOr(entries.get(key)),
             )
             if (Option.isSome(aliased)) return aliased.value
-            const files = extensionScanStamp(scan)
+            const files = filesStamp(place, scan)
             const declarations = yield* restore(
               loadRuntimeProfileDeclarations(
                 effectiveInputs(inputsFor(cwd), fresh.config),
@@ -2317,7 +2434,7 @@ export class SessionProfileCache extends Context.Service<
               aliases.set(list, key)
               return found.value
             }
-            const built = yield* buildProfile(place, cwd, fresh, declarations, scan, restore).pipe(
+            const built = yield* buildProfile(place, cwd, fresh, declarations, restore).pipe(
               Effect.orDie,
             )
             const entry: ProfileEntry = { key, place, ...built }
@@ -2395,7 +2512,7 @@ export class SessionProfileCache extends Context.Service<
                   const list = listKey(
                     place,
                     effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
-                    extensionScanStamp(scan),
+                    filesStamp(place, scan),
                   )
                   const entry = yield* entryFor(place, list, scan, canonicalCwd, fresh, restore)
                   leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
@@ -2415,7 +2532,19 @@ export class SessionProfileCache extends Context.Service<
             return entry.profile
           })
 
-        return SessionProfileCache.of({ resolve })
+        const reload: SessionProfileCacheService["reload"] = (cwd, id) =>
+          Effect.gen(function* () {
+            const workspaceId = yield* CurrentWorkspaceId
+            const place = placeKey(workspaceId, pathSvc.resolve(cwd))
+            const lock = yield* lockFor(place)
+            yield* Effect.sync(() => {
+              const counts = reloads.get(place) ?? new Map<string, number>()
+              counts.set(id, (counts.get(id) ?? 0) + 1)
+              reloads.set(place, counts)
+            }).pipe(lock.withPermits(1))
+          })
+
+        return SessionProfileCache.of({ resolve, reload })
       }),
     )
 }
@@ -2733,6 +2862,46 @@ export const makeExtensionHostContextProvider = (
       withLock: (path, effect) => fileLock((service) => service.withLock(path, effect)),
     }
 
+    // The `Extensions` facet reads the profile the session's turns resolve,
+    // and the config files, the way `extension.listStatus` does.
+    const profiles = yield* facet(SessionProfileCache, "SessionProfileCache")
+    const configs = yield* facet(ConfigService, "ConfigService")
+    const paths = yield* facet(Path.Path, "Path")
+    const extensionStatuses = (cwd: string) =>
+      profiles((cache) =>
+        configs((configService) =>
+          paths((path) =>
+            Effect.gen(function* () {
+              const profile = yield* cache.resolve(cwd)
+              const configStatuses = yield* configHealthStatuses(cwd).pipe(
+                Effect.provideService(ConfigService, configService),
+                Effect.provideService(Path.Path, path),
+                Effect.provideService(RuntimeEnvironment, environment),
+              )
+              return [...profile.resolved.extensionStatuses, ...configStatuses].map(
+                extensionStatusOf,
+              )
+            }).pipe(Effect.scoped),
+          ),
+        ),
+      ).pipe(inWorkspace)
+    const extensionsFacet = (cwd: string): ExtensionExtensionsService => ({
+      status: extensionStatuses(cwd),
+      reload: (id) =>
+        Effect.gen(function* () {
+          const before = yield* extensionStatuses(cwd)
+          if (!before.some((status) => status.id === id)) {
+            return yield* new ExtensionServiceError({
+              service: "ExtensionExtensions",
+              operation: "reload",
+              message: `No extension "${id}" in the profile of ${cwd}`,
+            })
+          }
+          yield* profiles((cache) => cache.reload(cwd, ExtensionId.make(id))).pipe(inWorkspace)
+          return yield* extensionStatuses(cwd)
+        }),
+    })
+
     // `Session.events` from the start replays the history; from now it
     // starts at the newest stored event.
     const subscribeFrom = (from: "start" | "now"): EventId | "latest" => {
@@ -2779,6 +2948,7 @@ export const makeExtensionHostContextProvider = (
       host,
       FileLock,
       Models: input.models,
+      Extensions: extensionsFacet(runInfo.sessionCwd ?? environment.cwd),
 
       State: ((extensionId) =>
         Option.match(extensionId, {
@@ -3120,7 +3290,7 @@ export const sessionWorkingDirectory = (
 export const resolveTurnProfile = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly profileCache: SessionProfileCacheService
+  readonly profileCache: Pick<SessionProfileCacheService, "resolve">
   readonly hostProvider: ExtensionHostContextProvider
   readonly opener: RunOpener
 }): Effect.Effect<

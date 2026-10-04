@@ -2108,7 +2108,7 @@ describe("useSessionFeed", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a running read names its file from the cwd, as its row does", () =>
+  it.live("a running read names its verb and its file from the cwd, as its row does", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-running-read")
       const branchId = BranchId.make("branch-feed-running-read")
@@ -2131,7 +2131,7 @@ describe("useSessionFeed", () => {
       yield* waitUntil(() => Option.isSome(activeTool())).pipe(
         Effect.andThen(
           Effect.sync(() =>
-            expect(Option.getOrElse(activeTool(), () => "")).toBe("read(src/app.tsx)"),
+            expect(Option.getOrElse(activeTool(), () => "")).toBe("Reading src/app.tsx"),
           ),
         ),
         Effect.ensuring(Effect.sync(dispose)),

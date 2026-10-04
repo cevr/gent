@@ -153,6 +153,7 @@ export { ToolResultFailure } from "../domain/message.js"
 export {
   ExtensionContext,
   ExtensionServiceError,
+  ExtensionStatus,
   type ExtensionContextService,
   type ExtensionModelsService,
 } from "../domain/extension.js"

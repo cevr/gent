@@ -314,6 +314,121 @@ describe("child-completion row", () => {
   )
 })
 
+describe("child-completion row on the ctrl+o ladder", () => {
+  const answer = Array.from({ length: 8 }, (_, i) => `ANSWER-LINE-${i + 1}`).join("\n")
+  const ladderDetails = {
+    ...fullDetails,
+    usage: { input: 1200, output: 300, costUsd: 0.0123 },
+    tools: Array.from({ length: 7 }, (_, i) => ({
+      name: "read",
+      summary: `file-${i + 1}.ts`,
+      status: "completed",
+    })),
+    toolCount: 14,
+  }
+  const drawAt = (
+    disclosure: "collapsed" | "preview" | "full",
+    width: number,
+    details: Schema.JsonObject = ladderDetails,
+  ) =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[completion(details, envelope(answer))]}
+            disclosure={disclosure}
+            syntaxStyle={syntaxStyle}
+          />
+        ),
+        { initialSession: parentSession, width, height: 30 },
+      )
+      const frame = yield* waitForFrame(
+        setup,
+        (text) => /[✓✕] delegate (completed|ended)/.test(text),
+        "completion row",
+      )
+      return frame.split("\n").map((line) => line.trimEnd())
+    })
+
+  it.scopedLive(
+    "collapsed is one line that drops the usage, then the call count, when narrow",
+    () =>
+      Effect.gen(function* () {
+        const wide = yield* drawAt("collapsed", 120)
+        expect(wide).toContain("  ✓ delegate completed · ess-1234 · 14 tools · ↑1.2k ↓300 $0.01")
+        expect(wide.join("\n")).not.toContain("file-7.ts")
+        expect(wide.join("\n")).not.toContain("ANSWER-LINE")
+        // The row is a tree node like a tool group: no user rail.
+        expect(wide.join("\n")).not.toContain("┃")
+        const narrow = yield* drawAt("collapsed", 60)
+        expect(narrow).toContain("  ✓ delegate completed · ess-1234 · 14 tools")
+        const tight = yield* drawAt("collapsed", 40)
+        expect(tight).toContain("  ✓ delegate completed · ess-1234")
+        for (const [frame, width] of [
+          [narrow, 60],
+          [tight, 40],
+        ] as const)
+          expect(frame.every((line) => line.length <= width - 1)).toBe(true)
+      }),
+  )
+
+  it.scopedLive("a failed child's collapsed line ends with its error, cut first", () =>
+    Effect.gen(function* () {
+      const failed = {
+        ...ladderDetails,
+        outcome: { streamFailed: true },
+        error: "CHILD-ERROR: sign-in failed, the keychain is locked\nmore detail",
+      }
+      const wide = (yield* drawAt("collapsed", 120, failed)).join("\n")
+      expect(wide).toContain(
+        "✕ delegate ended (model stream failed) · ess-1234 · 14 tools · ↑1.2k ↓300 $0.01",
+      )
+      expect(wide).toContain("· CHILD-ERROR: sign-in failed")
+      expect(wide).not.toContain("more detail")
+      const narrow = yield* drawAt("collapsed", 60, failed)
+      const [line = ""] = narrow.filter((value) => value.includes("✕ delegate"))
+      // The usage and the call count drop before the error does.
+      expect(line).toBe("  ✕ delegate ended (model stream failed) · ess-1234 · CHIL…")
+      expect(line.length).toBeLessThanOrEqual(59)
+    }),
+  )
+
+  it.scopedLive("preview adds the last five calls as a tree and a five-line answer head", () =>
+    Effect.gen(function* () {
+      for (const width of [120, 60]) {
+        const frame = yield* drawAt("preview", width)
+        const start = frame.findIndex((line) => line.includes("✓ delegate completed"))
+        expect(frame.slice(start + 1, start + 14)).toEqual([
+          "  ├ … 9 earlier calls",
+          "  ├ ✓ read file-3.ts",
+          "  ├ ✓ read file-4.ts",
+          "  ├ ✓ read file-5.ts",
+          "  ├ ✓ read file-6.ts",
+          "  └ ✓ read file-7.ts",
+          "    │ ANSWER-LINE-1",
+          "    │ ANSWER-LINE-2",
+          "    │ ANSWER-LINE-3",
+          "    │ ANSWER-LINE-4",
+          "    │ ANSWER-LINE-5",
+          "    │ … +3 lines (ctrl+o)",
+          "",
+        ])
+      }
+    }),
+  )
+
+  it.scopedLive("full draws every call the details kept and the whole answer", () =>
+    Effect.gen(function* () {
+      const frame = (yield* drawAt("full", 120)).join("\n")
+      expect(frame).toContain("├ … 7 earlier calls")
+      expect(frame).toContain("├ ✓ read file-1.ts")
+      expect(frame).toContain("└ ✓ read file-7.ts")
+      expect(frame).toContain("ANSWER-LINE-8")
+      expect(frame).not.toContain("(ctrl+o)")
+    }),
+  )
+})
+
 describe("delegate.start row", () => {
   it.scopedLive("draws the task and the child handle", () =>
     Effect.gen(function* () {

@@ -64,9 +64,9 @@ import {
   splitProps,
 } from "solid-js"
 import { useRenderer } from "@opentui/solid"
-import type { DisclosureLevel } from "../src/session"
+import type { DisclosureLevel } from "../src/extensions/client-facets"
 import { useTheme } from "../src/theme"
-import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
+import { FrameClicks, ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import {
   BUILTIN_TOOL_RENDERERS,
   FoldOperationsProvider,
@@ -1241,20 +1241,77 @@ describe("tool frame identity", () => {
       }),
   )
 
-  it.scopedLive("a click toggles a tool frame, and a new expanded from its owner starts over", () =>
+  it.scopedLive("inline, a frame draws no open mark and a click leaves it as it is", () =>
     Effect.gen(function* () {
-      const [expanded, setExpanded] = createSignal(false)
       const setup = yield* renderScoped(() => (
         <ToolFrame
           title="read"
           status="completed"
-          expanded={expanded()}
+          expanded={false}
           collapsedContent={<text>FRAME-CLOSED</text>}
         >
           <text>FRAME-OPEN</text>
         </ToolFrame>
       ))
       const closed = yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "closed")
+      expect(closed).not.toMatch(/[▸▾]/)
+      const row = closed.split("\n").findIndex((line) => line.includes("read"))
+      yield* Effect.promise(() => setup.mockMouse.click(2, row))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("FRAME-CLOSED")
+      expect(renderFrame(setup)).not.toContain("FRAME-OPEN")
+    }),
+  )
+
+  // The transcript view opens over the same mounted frames: clicks turn on
+  // there, and the mark and the click follow at once.
+  it.scopedLive("a frame mounted inline takes clicks once its surface turns them on", () =>
+    Effect.gen(function* () {
+      const [clicks, setClicks] = createSignal(false)
+      const setup = yield* renderScoped(() => (
+        <FrameClicks on={clicks()}>
+          <ToolFrame
+            title="read"
+            status="completed"
+            expanded={false}
+            collapsedContent={<text>FRAME-CLOSED</text>}
+          >
+            <text>FRAME-OPEN</text>
+          </ToolFrame>
+        </FrameClicks>
+      ))
+      const inline = yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "inline")
+      expect(inline).not.toMatch(/[▸▾]/)
+      setClicks(true)
+      const marked = yield* waitForFrame(setup, (next) => next.includes("▸"), "the click mark")
+      const row = marked.split("\n").findIndex((line) => line.includes("read"))
+      yield* Effect.promise(() => setup.mockMouse.click(2, row))
+      yield* waitForFrame(setup, (next) => next.includes("FRAME-OPEN"), "opened by the click")
+      // Back inline the frame takes its owner's form again, as history draws it.
+      setClicks(false)
+      const back = yield* waitForFrame(setup, (next) => !/[▸▾]/.test(next), "the mark gone")
+      expect(back).toContain("FRAME-CLOSED")
+    }),
+  )
+
+  it.scopedLive("a click toggles a tool frame, and a new expanded from its owner starts over", () =>
+    Effect.gen(function* () {
+      const [expanded, setExpanded] = createSignal(false)
+      // The transcript view turns the mouse on; there a frame takes clicks.
+      const setup = yield* renderScoped(() => (
+        <FrameClicks on>
+          <ToolFrame
+            title="read"
+            status="completed"
+            expanded={expanded()}
+            collapsedContent={<text>FRAME-CLOSED</text>}
+          >
+            <text>FRAME-OPEN</text>
+          </ToolFrame>
+        </FrameClicks>
+      ))
+      const closed = yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "closed")
+      expect(closed).toContain("▸")
       const row = closed.split("\n").findIndex((line) => line.includes("read"))
       yield* Effect.promise(() => setup.mockMouse.click(2, row))
       yield* waitForFrame(setup, (next) => next.includes("FRAME-OPEN"), "opened by the click")
@@ -1268,57 +1325,76 @@ describe("tool frame identity", () => {
     }),
   )
 
-  it.scopedLive("a failed call with no renderer shows its identity and reason in both views", () =>
-    Effect.gen(function* () {
-      const error = `Tool 'unknown_fx_tool' failed: ${LONG_TOOL_ERROR}`
-      const items: SessionItem[] = [
-        unknownFailureMessage("call-unknown-7"),
-        // A reloaded call whose output did not come through reads its summary,
-        // in the shape the runner stores today and in the older JSON shape.
-        assistantToolMessage("assistant-unknown-summary", {
-          ...runnerFailure("call-unknown-8", "unknown_fx_tool", absent, error),
-          output: absent,
-        }),
-        assistantToolMessage("assistant-unknown-json-summary", {
-          ...jsonSummaryFailure("call-unknown-9", "unknown_fx_tool", absent, error),
-          output: absent,
-        }),
-      ]
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
-            <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
-          </>
-        ),
-        { width: 160, height: 40 },
-      )
-      const frame = renderFrame(setup)
-      for (const id of ["call-unknown-7", "call-unknown-8", "call-unknown-9"])
-        expect(frame.match(new RegExp(`#${id}\\b`, "g"))?.length).toBe(2)
-      expect(frame.match(/\[x unknown_fx_tool\]/g)?.length).toBe(6)
-      expect(frame.match(/failed: connection refused by the upstream/g)?.length).toBe(6)
-      expect(frame).not.toContain('{"error"')
-    }),
+  it.scopedLive(
+    "a failed call with no renderer names its reason on its row, its identity only when open",
+    () =>
+      Effect.gen(function* () {
+        const error = `Tool 'unknown_fx_tool' failed: ${LONG_TOOL_ERROR}`
+        const items: SessionItem[] = [
+          unknownFailureMessage("call-unknown-7"),
+          // A reloaded call whose output did not come through reads its summary,
+          // in the shape the runner stores today and in the older JSON shape.
+          assistantToolMessage("assistant-unknown-summary", {
+            ...runnerFailure("call-unknown-8", "unknown_fx_tool", absent, error),
+            output: absent,
+          }),
+          assistantToolMessage("assistant-unknown-json-summary", {
+            ...jsonSummaryFailure("call-unknown-9", "unknown_fx_tool", absent, error),
+            output: absent,
+          }),
+        ]
+        const setup = yield* renderScoped(
+          () => (
+            <>
+              <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+              <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
+            </>
+          ),
+          { width: 160, height: 40 },
+        )
+        const frame = renderFrame(setup)
+        // A row says the tool and `failed` once; the reason follows without the runner's lead.
+        expect(frame.match(/unknown_fx_tool · failed/g)?.length).toBe(6)
+        expect(frame.match(/connection refused by the upstream/g)?.length).toBe(6)
+        expect(frame).not.toContain("Tool 'unknown_fx_tool' failed")
+        for (const id of ["call-unknown-7", "call-unknown-8", "call-unknown-9"])
+          expect(frame).not.toContain(`#${id}`)
+        expect(frame).not.toContain("[x unknown_fx_tool]")
+        expect(frame).not.toContain('{"error"')
+        const open = yield* renderScoped(
+          () => <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />,
+          { width: 160, height: 40 },
+        ).pipe(Effect.map(renderFrame))
+        for (const id of ["call-unknown-7", "call-unknown-8", "call-unknown-9"])
+          expect(open.match(new RegExp(`#${id}\\b`, "g"))?.length).toBe(1)
+        expect(open.match(/failed: connection refused by the upstream/g)?.length).toBe(3)
+      }),
   )
 
-  it.scopedLive("propagates identity through a registered renderer at narrow width", () =>
-    Effect.gen(function* () {
-      const setup = yield* renderScoped(
-        () => <RegisteredToolMessageLists items={[registeredFailureMessage("call-reg-7")]} />,
-        { width: 42, height: 20 },
-      )
-      const frame = yield* waitForFrame(
-        setup,
-        (next) => next.includes("#call-reg-7") && next.includes("failed"),
-        "registered renderer failure",
-      )
-      expect(frame.match(/#call-reg-7/g)?.length).toBe(2)
-      expect(frame.match(/failed/g)?.length).toBeGreaterThanOrEqual(2)
-      expect(frame.match(/✕ failed/g)?.length).toBe(2)
-      expect(frame).not.toContain("[x read]")
-      expect(frame.match(/read/g)?.length).toBeGreaterThanOrEqual(2)
-    }),
+  it.scopedLive(
+    "a registered renderer's failure keeps its identity for the open view at narrow width",
+    () =>
+      Effect.gen(function* () {
+        const setup = yield* renderScoped(
+          () => (
+            <RegisteredToolMessageLists
+              items={[registeredFailureMessage("call-reg-7")]}
+              fullDetail
+            />
+          ),
+          { width: 42, height: 20 },
+        )
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => next.includes("#call-reg-7") && next.includes("✕ failed"),
+          "registered renderer failure",
+        )
+        // Collapsed and preview draw one row each; only the open frame names the call id.
+        expect(frame.match(/└ Read \/tmp\/failure\.txt · failed/g)?.length).toBe(2)
+        expect(frame.match(/#call-reg-7/g)?.length).toBe(1)
+        expect(frame.match(/✕ failed/g)?.length).toBe(1)
+        expect(frame).not.toContain("[x read]")
+      }),
   )
 
   it.scopedLive("a failed builtin call shows its reason in every view, and as a cell op", () =>
@@ -1378,10 +1454,11 @@ describe("tool frame identity", () => {
       for (const tool of ["bash", "edit", "write", "read_session", "summary"]) {
         expect(frame.match(new RegExp(`REASON-${tool}\\b`, "g"))?.length).toBe(3)
       }
-      // The cell's ops draw in full detail only, each as its collapsed sub-row:
-      // the direct read in its three views, plus the read the cell admitted.
-      expect(frame.match(/REASON-read\b/g)?.length).toBe(4)
-      expect(frame.match(/REASON-grep\b/g)?.length).toBe(1)
+      // A cell's failed ops are rows of the run in every view, like direct calls:
+      // the direct read and the read the cell admitted, each in three views.
+      expect(frame.match(/REASON-read\b/g)?.length).toBe(6)
+      expect(frame.match(/REASON-grep\b/g)?.length).toBe(3)
+      expect(frame).toContain("Read gone.txt · failed · REASON-read")
       expect(frame).toContain("✕ mcp_fetch Tool 'mcp_fetch' failed: REASON-mcp_fetch")
       expect(frame).toContain("✕ mcp_search Tool 'mcp_search' failed: REASON-mcp_search")
       // A reason reads as its sentence, never as the stored JSON.
@@ -1789,10 +1866,10 @@ describe("cell rows", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("● 1 tool · 1 command")
       expect(frame).toContain("└ Ran seq 25")
-      expect(frame).toContain("row 1")
-      expect(frame).toContain("row 20")
-      expect(frame).not.toContain("row 21")
-      expect(frame).toContain("… +5 lines (ctrl+o)")
+      expect(frame).toContain("│ row 1")
+      expect(frame).toContain("│ row 5")
+      expect(frame).not.toContain("row 6")
+      expect(frame).toContain("│ … +20 lines (ctrl+o)")
     }),
   )
 
@@ -1825,11 +1902,13 @@ describe("cell rows", () => {
         )
         const preview = yield* waitForFrame(
           setup,
-          (frame) => frame.includes("… +5 lines (ctrl+o)"),
+          (frame) => frame.includes("└ Wrote · failed"),
           "cell preview",
         )
-        // The preview rows name the ops in past-tense words and no call id.
-        expect(preview).toContain("└ Wrote · failed")
+        // The preview rows name the ops in past-tense words and no call id;
+        // the failed op heads its own reason, never the cell's display.
+        expect(preview).toContain("│ denied")
+        expect(preview).not.toContain("CELL-OUTPUT")
         expect(preview).not.toContain("#call-stable")
         yield* Effect.sync(() => setDisclosure("full"))
         const full = yield* waitForFrame(
@@ -2325,11 +2404,14 @@ describe("transcript block spacing", () => {
         id: "cell-thirty-reads",
         operations: [...reads, ...(twoOpCell.operations ?? [])],
       }
+      // The transcript view, where the mouse is on and a frame takes clicks.
       const setup = yield* renderScoped(
         () => (
-          <ToolRenderersProvider value={builtinRenderers}>
-            <CellToolRenderer expanded={true} toolCall={foldedCell} />
-          </ToolRenderersProvider>
+          <FrameClicks on>
+            <ToolRenderersProvider value={builtinRenderers}>
+              <CellToolRenderer expanded={true} toolCall={foldedCell} />
+            </ToolRenderersProvider>
+          </FrameClicks>
         ),
         { width: 100, height: 120 },
       )
@@ -2548,9 +2630,9 @@ describe("expanded grep body", () => {
 })
 
 describe("write body", () => {
-  // The preview level draws the last call as the full level does, cut short:
-  // one call has one owner for what shows beneath it, never its raw result.
-  it.scopedLive("the preview draws a write through its renderer, not its JSON", () =>
+  // Preview draws one row a call, and the full level opens the renderer's body;
+  // neither draws the call's raw result.
+  it.scopedLive("a write is one row in the preview and its renderer's body when open", () =>
     Effect.gen(function* () {
       const cwd = "/work/proj"
       const path = `${cwd}/apps/tui/src/ops.ts`
@@ -2574,13 +2656,15 @@ describe("write body", () => {
           return (
             <Show when={renderers().size > 0}>
               <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
+              <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />
             </Show>
           )
         },
         { width: 100, height: 20, cwd },
       )
-      const frame = yield* waitForFrame(setup, (next) => next.includes("written"), "the preview")
-      expect(frame).toContain("7.2 KB written")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("written"), "the open body")
+      expect(frame.split("\n").map((line) => line.trim())).toContain("└ Wrote apps/tui/src/ops.ts")
+      expect(frame.match(/7\.2 KB written/g)).toHaveLength(1)
       expect(frame).not.toContain("bytesWritten")
       expect(frame).not.toContain(cwd)
     }),
@@ -2716,13 +2800,16 @@ describe("read_session row", () => {
           },
         ],
       }
+      // The transcript view, where the mouse is on and a frame takes clicks.
       const setup = yield* renderScoped(
         () => (
-          <MessageList
-            items={[assistantToolMessage("assistant-cell-read", cell)]}
-            disclosure="full"
-            syntaxStyle={syntaxStyle}
-          />
+          <FrameClicks on>
+            <MessageList
+              items={[assistantToolMessage("assistant-cell-read", cell)]}
+              disclosure="full"
+              syntaxStyle={syntaxStyle}
+            />
+          </FrameClicks>
         ),
         { width: 100, height: 40 },
       )
@@ -5629,8 +5716,6 @@ describe("tool runs across steps", () => {
       readonly after?: ReadonlyArray<AssistantSegment>
       readonly tool?: string
       readonly stdout?: string
-      /** What the cell's last expression showed: the preview draws it under the rows. */
-      readonly display?: string
     } = {},
   ): ListMessage => {
     const tool = options.tool ?? "bash"
@@ -5640,7 +5725,7 @@ describe("tool runs across steps", () => {
       status: "completed",
       input: { code: "await tools.bash({ command: 'x' })" },
       summary: absent,
-      output: encodeJson({ display: options.display ?? "", bindings: [], truncated: false }),
+      output: encodeJson({ display: "", bindings: [], truncated: false }),
       operations: commands.map((command, index) => ({
         id: `${id}-op-${index}`,
         toolName: tool,
@@ -5702,12 +5787,12 @@ describe("tool runs across steps", () => {
   // still join, that call changes with each step: a head drawn for one step
   // and dropped at the next would shrink the live tail, and the rows it
   // pushed into scrollback come back blank. So the head waits for the run's end.
-  it.scopedLive("the preview draws the last call's output only once the run has ended", () =>
+  it.scopedLive("the preview heads the last command's output only once the run has ended", () =>
     Effect.gen(function* () {
       const open: SessionItem[] = [
         clientPrompt("head-prompt", "look around"),
-        step("o1", ["ls"], { display: "FIRST-STEP-OUTPUT" }),
-        step("o2", ["git status"], { display: "SECOND-STEP-OUTPUT" }),
+        step("o1", ["ls"], { stdout: "FIRST-STEP-OUTPUT\n" }),
+        step("o2", ["git status"], { stdout: "SECOND-STEP-OUTPUT\n" }),
       ]
       const [streaming, setStreaming] = createSignal(true)
       const committed: string[] = []
@@ -5738,7 +5823,7 @@ describe("tool runs across steps", () => {
       // A turn that ends with no answer (an interrupt) ends the run.
       setStreaming(false)
       const ended = yield* shown()
-      expect(ended).toContain("SECOND-STEP-OUTPUT")
+      expect(ended).toContain("│ SECOND-STEP-OUTPUT")
       expect(ended).not.toContain("FIRST-STEP-OUTPUT")
     }).pipe(Effect.timeout("8 seconds")),
   )
@@ -5773,24 +5858,30 @@ describe("tool runs across steps", () => {
     }),
   )
 
-  it.scopedLive("reasoning between steps stays in the run and shows at the full level", () =>
-    Effect.gen(function* () {
-      const items: SessionItem[] = [
-        step("r1", ["git status"], { before: [reasoning("FIRST-THOUGHT")] }),
-        step("r2", ["bun test"], { before: [reasoning("SECOND-THOUGHT"), text("  ")] }),
-      ]
-      const collapsed = yield* draw(items, "collapsed")
-      expect(headers(collapsed)).toEqual(["● 2 tools · 2 commands"])
-      // The thought before the run draws as before; the one inside it waits for the full level.
-      expect(collapsed).toContain("FIRST-THOUGHT")
-      expect(collapsed).not.toContain("SECOND-THOUGHT")
-      const full = yield* draw(items, "full")
-      const lines = full.split("\n")
-      const thought = lines.findIndex((line) => line.includes("SECOND-THOUGHT"))
-      const secondRow = lines.findIndex((line) => line.includes("└ cell"))
-      expect(thought).toBeGreaterThan(lines.findIndex((line) => line.includes("├ cell")))
-      expect(secondRow).toBeGreaterThan(thought)
-    }),
+  it.scopedLive(
+    "reasoning before and between a run's steps counts in its header and opens at full",
+    () =>
+      Effect.gen(function* () {
+        const items: SessionItem[] = [
+          step("r1", ["git status"], { before: [reasoning("FIRST-THOUGHT")] }),
+          step("r2", ["bun test"], { before: [reasoning("SECOND-THOUGHT"), text("  ")] }),
+        ]
+        for (const disclosure of ["collapsed", "preview"] as const) {
+          const frame = yield* draw(items, disclosure)
+          expect(headers(frame)).toEqual(["● 2 tools · 2 commands · 2 thoughts"])
+          expect(frame).not.toContain("THOUGHT")
+        }
+        const full = yield* draw(items, "full")
+        const lines = full.split("\n")
+        const first = lines.findIndex((line) => line.includes("FIRST-THOUGHT"))
+        const thought = lines.findIndex((line) => line.includes("SECOND-THOUGHT"))
+        const firstRow = lines.findIndex((line) => line.includes("├ cell"))
+        const secondRow = lines.findIndex((line) => line.includes("└ cell"))
+        expect(first).toBeLessThan(firstRow)
+        expect(first).toBeGreaterThan(lines.findIndex((line) => line.includes("● 2 tools")))
+        expect(thought).toBeGreaterThan(firstRow)
+        expect(secondRow).toBeGreaterThan(thought)
+      }),
   )
 
   it.scopedLive("a run's rows clip to one line each at 60 columns", () =>
@@ -5863,9 +5954,12 @@ describe("tool runs across steps", () => {
         const committedText: string[] = []
         const setup = yield* renderScoped(
           () => (
+            // At the full level the reasoning draws whole, so its rows push
+            // the earlier items to history while the run is open.
             <Transcript
               items={items()}
               streaming={true}
+              disclosure="full"
               onRenderer={(renderer) => {
                 renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
                   committedText.push(committedTextOf(event))
@@ -5994,5 +6088,584 @@ describe("tool runs across steps", () => {
       expect(committedText.join("")).toContain("● 2 tools · 2 commands")
       expect(committedText.join("")).toContain("GROW-PROMPT")
     }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+// ── collapse ladder ─────────────────────────────────────────────────────────
+
+/**
+ * Every block is a node on one ladder. Collapsed is the head line and one
+ * line a failure; preview is the head and a `├`/`└` row a child, one line
+ * each, with a five-row head of its own output under a failed row and the
+ * run's last command; full opens the bodies.
+ */
+describe("collapse ladder", () => {
+  const DENIED = "ls: cannot access 'gent-debug-tools/d.ts': No such file or directory"
+  /** What a cell's last expression showed: an inspect dump no preview draws. */
+  const DUMP = `{ stdout: '', stderr: "${DENIED}\\n", exitCode: 2 }`
+  const op = (
+    id: string,
+    toolName: string,
+    input: Readonly<Record<string, string>>,
+    output: string,
+  ): ToolCall => ({ id, toolName, status: "completed", input, summary: absent, output })
+  const bashOutput = (stdout: string, stderr: string, exitCode: number) =>
+    encodeJson({ stdout, stderr, exitCode })
+  /** One step of the scripted `debug tools` turn: reasoning, then one cell that runs `ops`. */
+  const cellStep = (
+    id: string,
+    reasoningText: string,
+    operations: ReadonlyArray<ToolCall>,
+    display = "",
+  ): ListMessage => ({
+    _tag: "regular-message",
+    id,
+    role: "assistant",
+    content: "",
+    reasoning: reasoningText,
+    images: [],
+    createdAt: 0,
+    segments: [
+      { _tag: "reasoning", content: reasoningText },
+      {
+        _tag: "tool-call",
+        toolCall: {
+          id: `${id}-cell`,
+          toolName: "cell",
+          status: "completed",
+          input: { code: "await tools.bash({ command: 'x' })" },
+          summary: absent,
+          output: encodeJson({ display, bindings: [], truncated: false }),
+          operations: [...operations],
+        },
+      },
+    ],
+  })
+  const file = (name: string) => `gent-debug-tools/${name}.ts`
+  /** The scripted `debug tools` turn: six steps, the last bash exits 2, then the answer. */
+  const debugTurn = (): SessionItem[] => [
+    clientPrompt("dbg-prompt", "debug tools"),
+    cellStep("dbg-0", "Set up a scratch fixture to work on.", [
+      op(
+        "dbg-0-0",
+        "bash",
+        { command: "mkdir -p gent-debug-tools && sleep 1" },
+        bashOutput("", "", 0),
+      ),
+    ]),
+    cellStep(
+      "dbg-1",
+      "Read the three files together.",
+      ["a", "b", "c"].map((name) =>
+        op(
+          `dbg-1-${name}`,
+          "read",
+          { path: file(name) },
+          encodeJson({ content: "1\tx", path: file(name), lineCount: 1, truncated: false }),
+        ),
+      ),
+    ),
+    cellStep("dbg-2", "Find the open TODOs.", [
+      op(
+        "dbg-2-0",
+        "grep",
+        { pattern: "TODO", path: "gent-debug-tools" },
+        encodeJson({ matches: [], truncated: false }),
+      ),
+    ]),
+    cellStep("dbg-3", "Widen the greeting.", [
+      {
+        ...op(
+          "dbg-3-0",
+          "edit",
+          { path: file("a"), oldString: '"hello"', newString: '"hello, world"' },
+          encodeJson({ path: file("a"), replacements: 1 }),
+        ),
+      },
+    ]),
+    cellStep(
+      "dbg-4",
+      "Check for the file the TODO wants; it does not exist yet.",
+      [
+        op(
+          "dbg-4-0",
+          "bash",
+          { command: "sleep 2; ls gent-debug-tools/d.ts" },
+          bashOutput("", `${DENIED}\n`, 2),
+        ),
+      ],
+      DUMP,
+    ),
+    {
+      ...assistant("dbg-answer", "The check for d.ts failed: it does not exist yet."),
+      reasoning: "Summarize.",
+      segments: [
+        { _tag: "reasoning", content: "Summarize." },
+        { _tag: "text", content: "The check for d.ts failed: it does not exist yet." },
+      ],
+    },
+  ]
+  const draw = (items: SessionItem[], disclosure: DisclosureLevel, width: number) =>
+    renderScoped(
+      () => <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />,
+      { width, height: 60 },
+    ).pipe(Effect.map(renderFrame))
+  const lines = (frame: string) => frame.split("\n").map((line) => line.trimEnd())
+  /** The rows under the group header, up to the first blank row. */
+  const groupRows = (frame: string) => {
+    const all = lines(frame)
+    const header = all.findIndex((line) => /^ {2}[●✗] \d+ tools?\b/.test(line))
+    const end = all.findIndex((line, index) => index > header && line.trim().length === 0)
+    return all.slice(header + 1, end)
+  }
+
+  it.scopedLive(
+    "collapsed draws each failure as one row under the header, at 120 and 60 columns",
+    () =>
+      Effect.gen(function* () {
+        const wide = yield* draw(debugTurn(), "collapsed", 120)
+        const [failure, ...rest] = groupRows(wide)
+        expect(rest).toEqual([])
+        expect(failure).toStartWith(
+          "  └ Ran sleep 2; ls gent-debug-tools/d.ts · exit 2 · ls: cannot access",
+        )
+        expect(failure?.length ?? 0).toBeLessThanOrEqual(119)
+        expect(wide).not.toContain("Ran mkdir")
+        const narrow = yield* draw(debugTurn(), "collapsed", 60)
+        // The reason is cut first; the verb, the command and the exit status stay.
+        expect(groupRows(narrow)).toEqual([
+          "  └ Ran sleep 2; ls gent-debug-tools/d.ts · exit 2 · ls: c…",
+        ])
+        expect(lines(narrow).every((line) => line.length <= 59)).toBe(true)
+      }),
+  )
+
+  it.scopedLive("a failed call's collapsed row names its reason, not its frame or call id", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        assistantToolMessage(
+          "assistant-read-failed",
+          runnerFailure(
+            "call-read-failed",
+            "read",
+            { path: "/tmp/missing.txt" },
+            "ENOENT: no such file",
+          ),
+        ),
+      ]
+      for (const width of [120, 60]) {
+        const frame = yield* draw(items, "collapsed", width)
+        expect(groupRows(frame)).toEqual([
+          "  └ Read /tmp/missing.txt · failed · ENOENT: no such file",
+        ])
+        expect(frame).not.toContain("#call-read-failed")
+      }
+    }),
+  )
+
+  // The command exits 2 and returns; the cell then throws for a reason of its
+  // own. Both failures show at collapsed and preview, the header counts both.
+  it.scopedLive(
+    "a cell that throws after a failed command shows both failures, at 120 and 60",
+    () =>
+      Effect.gen(function* () {
+        const cell: ToolCall = {
+          id: "both-cell",
+          toolName: "cell",
+          status: "error",
+          input: { code: "await tools.bash({ command: 'ls d.ts' }); undefinedName()" },
+          summary: "ReferenceError: undefinedName is not defined",
+          output: encodeJson({ error: "ReferenceError: undefinedName is not defined" }),
+          operations: [
+            op("both-op", "bash", { command: "ls d.ts" }, bashOutput("", `${DENIED}\n`, 2)),
+          ],
+        }
+        const items: SessionItem[] = [assistantToolMessage("both", cell)]
+        for (const width of [120, 60]) {
+          const collapsed = yield* draw(items, "collapsed", width)
+          const header = lines(collapsed).find((line) => line.includes("● ") || line.includes("✗ "))
+          expect(header).toContain("· 2 failed")
+          const rows = groupRows(collapsed)
+          expect(rows).toHaveLength(2)
+          expect(rows[0]).toStartWith("  ├ Ran ls d.ts · exit 2")
+          expect(rows[1]).toStartWith("  └ cell · failed · ReferenceError")
+          const preview = groupRows(yield* draw(items, "preview", width))
+          expect(preview[0]).toStartWith("  ├ Ran ls d.ts · exit 2")
+          expect(preview.some((row) => row.startsWith("  └ cell · failed"))).toBe(true)
+          expect(preview.at(-1)).toStartWith("    │ ReferenceError: undefinedName")
+          expect(lines(collapsed).every((line) => line.length <= width - 1)).toBe(true)
+        }
+      }),
+  )
+
+  // A cell catches a failed read and goes on, then throws its own error. Only
+  // a cell failure that is the op's own text folds into the op's row.
+  it.scopedLive(
+    "a cell that caught a failed read and threw its own error shows both, at 120 and 60",
+    () =>
+      Effect.gen(function* () {
+        const readError = "Tool 'read' failed: ENOENT: no such file or directory, open 'missing.ts'"
+        const cellCall = (id: string, message: string): ToolCall => ({
+          id,
+          toolName: "cell",
+          status: "error",
+          input: { code: "try { await tools.read({ path: 'missing.ts' }) } catch {}; throw x" },
+          summary: message,
+          output: encodeJson({
+            _tag: "CellEvaluationError",
+            phase: "execute",
+            message,
+            output: "",
+          }),
+          operations: [
+            {
+              id: `${id}-read`,
+              toolName: "read",
+              status: "error",
+              input: { path: "missing.ts" },
+              summary: readError,
+              output: encodeJson({ error: readError }),
+            },
+          ],
+        })
+        const caught = [
+          assistantToolMessage(
+            "caught",
+            cellCall("caught-cell", "Error: independent cell failure"),
+          ),
+        ]
+        for (const width of [120, 60]) {
+          const collapsed = yield* draw(caught, "collapsed", width)
+          const header = lines(collapsed).find((line) => line.includes("✗ "))
+          expect(header).toContain("· 2 failed")
+          const rows = groupRows(collapsed)
+          expect(rows).toHaveLength(2)
+          expect(rows[0]).toStartWith("  ├ Read missing.ts · failed · ENOENT")
+          expect(rows[1]).toStartWith("  └ cell · failed · Error: independent")
+          const preview = groupRows(yield* draw(caught, "preview", width))
+          expect(preview[0]).toStartWith("  ├ Read missing.ts · failed")
+          expect(preview.some((row) => row.startsWith("  └ cell · failed"))).toBe(true)
+          expect(preview.at(-1)).toStartWith("    │ Error: independent cell failure")
+          expect(lines(collapsed).every((line) => line.length <= width - 1)).toBe(true)
+        }
+        // The read's failure went up uncaught: the cell's failure is its text, one row.
+        const uncaught = [assistantToolMessage("uncaught", cellCall("uncaught-cell", readError))]
+        const folded = yield* draw(uncaught, "collapsed", 120)
+        expect(lines(folded).find((line) => line.includes("✗ "))).toContain("· 1 failed")
+        expect(groupRows(folded)).toHaveLength(1)
+      }),
+  )
+
+  // The owner's rule: a cancelled cell is one `cancelled` row, not a failure.
+  // The turn's interrupt and the cell's own cancel both mark it; the op it cut
+  // has no receipt (settled with the cell) or lost its output to the snapshot.
+  it.scopedLive("a cancelled cell collapses to one cancelled row, at 120 and 60", () =>
+    Effect.gen(function* () {
+      const cutOp = (id: string, summary: ToolCall["summary"]): ToolCall => ({
+        id,
+        toolName: "bash",
+        status: "error",
+        input: { command: "sleep 20; echo cache wired" },
+        summary,
+        output: absent,
+      })
+      const cancelledCell = (id: string, output: string, op: ToolCall): ToolCall => ({
+        id,
+        toolName: "cell",
+        status: "error",
+        input: { code: "await tools.bash({ command: 'sleep 20; echo cache wired' })" },
+        summary: absent,
+        output,
+        operations: [op],
+      })
+      const interrupted = encodeJson({
+        error: "The tool did not finish: the turn was interrupted.",
+        reason: "Interrupted",
+      })
+      const kernelCancel = encodeJson({
+        _tag: "CellKernelError",
+        reason: "cancelled",
+        message: "Cell cancelled. 1 operation ran with no recorded result.",
+      })
+      const cases = [
+        cancelledCell("turn-cut", interrupted, cutOp("turn-cut-op", absent)),
+        cancelledCell("cell-cut", kernelCancel, cutOp("cell-cut-op", "cut by the snapshot")),
+      ]
+      for (const call of cases) {
+        const items: SessionItem[] = [assistantToolMessage(`m-${call.id}`, call)]
+        for (const width of [120, 60]) {
+          const collapsed = yield* draw(items, "collapsed", width)
+          const header = lines(collapsed).find((line) => line.includes("1 tool"))
+          expect(header).toContain("· 1 cancelled")
+          expect(header).not.toContain("failed")
+          expect(header).not.toContain("✗")
+          expect(groupRows(collapsed)).toEqual(["  └ Ran sleep 20; echo cache wired · cancelled"])
+          const preview = groupRows(yield* draw(items, "preview", width))
+          expect(preview[0]).toBe("  └ Ran sleep 20; echo cache wired · cancelled")
+          expect(preview.join("\n")).not.toContain("failed")
+        }
+      }
+    }),
+  )
+
+  it.scopedLive("preview heads the failed row with its own output, never the cell's display", () =>
+    Effect.gen(function* () {
+      const wide = yield* draw(debugTurn(), "preview", 120)
+      expect(groupRows(wide)).toEqual([
+        "  ├ Ran mkdir -p gent-debug-tools && sleep 1",
+        "  ├ Read gent-debug-tools/a.ts, gent-debug-tools/b.ts, gent-debug-tools/c.ts",
+        "  ├ Searched /TODO/ in gent-debug-tools",
+        "  ├ Edited gent-debug-tools/a.ts +1 / -1",
+        "  └ Ran sleep 2; ls gent-debug-tools/d.ts · exit 2",
+        `    │ ${DENIED}`,
+      ])
+      expect(wide).not.toContain("stdout:")
+      const narrow = yield* draw(debugTurn(), "preview", 60)
+      expect(groupRows(narrow).at(-1)).toStartWith("    │ ls: cannot access")
+      expect(lines(narrow).every((line) => line.length <= 59)).toBe(true)
+    }),
+  )
+
+  it.scopedLive("a command's preview head is five rows, then a count of the rest", () =>
+    Effect.gen(function* () {
+      for (const width of [120, 60]) {
+        const frame = yield* draw([bashMessage("call-bash-head", 25)], "preview", width)
+        expect(groupRows(frame)).toEqual([
+          "  └ Ran seq 25",
+          "    │ row 1",
+          "    │ row 2",
+          "    │ row 3",
+          "    │ row 4",
+          "    │ row 5",
+          "    │ … +20 lines (ctrl+o)",
+        ])
+      }
+    }),
+  )
+
+  // ── reasoning ──
+
+  const thinkingOnly = (id: string, content: string): ListMessage => ({
+    ...assistant(id, ""),
+    reasoning: content,
+    segments: [{ _tag: "reasoning", content }],
+  })
+
+  it.scopedLive(
+    "a run counts the reasoning before, inside and after it as thoughts, at 120 and 60",
+    () =>
+      Effect.gen(function* () {
+        const wide = yield* draw(debugTurn(), "collapsed", 120)
+        expect(lines(wide)).toContain(
+          "  ● 7 tools · 3 read · 2 commands · 1 search · 1 edit · 6 thoughts · 1 failed",
+        )
+        // The run took the thought before its first call and the one before the answer.
+        expect(wide).not.toContain("Set up a scratch fixture")
+        expect(wide).not.toContain("Summarize.")
+        expect(wide).not.toContain("∴")
+        expect(wide).toContain("The check for d.ts failed: it does not exist yet.")
+        const narrow = yield* draw(debugTurn(), "collapsed", 60)
+        // The thoughts count is the first part a narrow header drops.
+        const [header = ""] = lines(narrow).filter((line) => line.includes("● 7 tools"))
+        expect(header).not.toContain("thought")
+        expect(header).toContain("· 1 failed")
+        expect(header.length).toBeLessThanOrEqual(59)
+      }),
+  )
+
+  it.scopedLive("the full level draws a run's thoughts where they came: first, between, last", () =>
+    Effect.gen(function* () {
+      const full = lines(yield* draw(debugTurn(), "full", 120))
+      const at = (text: string) => full.findIndex((line) => line.includes(text))
+      expect(at("● 7 tools")).toBeLessThan(at("Set up a scratch fixture"))
+      expect(at("Set up a scratch fixture")).toBeLessThan(at("Read the three files"))
+      expect(at("Check for the file")).toBeLessThan(at("Summarize."))
+      expect(at("Summarize.")).toBeLessThan(at("The check for d.ts failed"))
+      expect(full.filter((line) => line.includes("Summarize."))).toHaveLength(1)
+    }),
+  )
+
+  it.scopedLive(
+    "reasoning with no call is one line at collapsed and preview, and its markdown at full",
+    () =>
+      Effect.gen(function* () {
+        const reasoningText =
+          "**Verifying final test output****Refactoring LedgerStore.list****Checking the lint**"
+        const items: SessionItem[] = [
+          clientPrompt("thought-prompt", "check it"),
+          {
+            ...assistant("thought-answer", "All green."),
+            reasoning: reasoningText,
+            segments: [
+              { _tag: "reasoning", content: reasoningText },
+              { _tag: "text", content: "All green." },
+            ],
+          },
+        ]
+        for (const disclosure of ["collapsed", "preview"] as const) {
+          const wide = yield* draw(items, disclosure, 120)
+          expect(lines(wide)).toContain("  ∴ Thought · Verifying final test output · 3 summaries")
+          expect(wide).not.toContain("Refactoring")
+          const narrow = yield* draw(items, disclosure, 30)
+          const [line = ""] = lines(narrow).filter((value) => value.includes("∴"))
+          expect(line).toBe("  ∴ Thought · Verifying fina…")
+        }
+        const full = yield* draw(items, "full", 120)
+        expect(full).toContain("Refactoring LedgerStore.list")
+        expect(full).not.toContain("∴")
+      }),
+  )
+
+  it.scopedLive("a run takes no reasoning from an earlier message, nor any a turn end leaves", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        clientPrompt("held-prompt", "debug tools"),
+        thinkingOnly("held-before", "EARLIER-THOUGHT"),
+        cellStep("held-step", "", [
+          op("held-op", "bash", { command: "ls" }, bashOutput("x\n", "", 0)),
+        ]),
+        thinkingOnly("held-after", "TRAILING-THOUGHT"),
+      ]
+      const frame = lines(yield* draw(items, "collapsed", 120))
+      expect(frame).toContain("  ● 1 tool · 1 command")
+      expect(frame).toContain("  ∴ Thought · EARLIER-THOUGHT")
+      expect(frame).toContain("  ∴ Thought · TRAILING-THOUGHT")
+    }),
+  )
+
+  it.scopedLive(
+    "native history takes a run with its closing thought once, after the stored answer",
+    () =>
+      Effect.gen(function* () {
+        const prompt = clientPrompt("closing-prompt", "RUN-PROMPT")
+        const answer: ListMessage = {
+          ...assistant("closing-answer", longBody("ANSWER")),
+          reasoning: "CLOSING-THOUGHT",
+          segments: [
+            { _tag: "reasoning", content: "CLOSING-THOUGHT" },
+            { _tag: "text", content: longBody("ANSWER") },
+          ],
+        }
+        const steps = [
+          cellStep("closing-1", "LEADING-THOUGHT", [
+            op("closing-op-1", "bash", { command: "git status" }, bashOutput("ok\n", "", 0)),
+          ]),
+          cellStep("closing-2", "MIDDLE-THOUGHT", [
+            op("closing-op-2", "bash", { command: "bun test" }, bashOutput("ok\n", "", 0)),
+          ]),
+        ]
+        const [items, setItems] = createSignal<ListMessage[]>([
+          assistant("closing-earlier", longBody("EARLIER")),
+          prompt,
+          ...steps,
+          { ...answer, draft: true },
+        ])
+        const committed: string[] = []
+        const setup = yield* renderScoped(
+          () => (
+            <Transcript
+              items={items()}
+              streaming={true}
+              onRenderer={(renderer) => {
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committed.push(committedTextOf(event))
+                })
+              }}
+            />
+          ),
+          { width: 60, height: 14 },
+        )
+        const flushUntil = (done: () => boolean) =>
+          Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({ until: done, schedule: Schedule.spaced("10 millis") }),
+            Effect.timeout("3 seconds"),
+            Effect.ignore,
+          )
+        // The streamed answer ended the run, but its reasoning is the run's
+        // closing thought: the head waits for the stored answer.
+        yield* flushUntil(() => committed.join("").includes("RUN-PROMPT"))
+        yield* flushUntil(() => false).pipe(Effect.timeout("300 millis"), Effect.ignore)
+        expect(committed.join("")).toContain("RUN-PROMPT")
+        expect(committed.join("")).not.toContain("tools")
+        setItems([assistant("closing-earlier", longBody("EARLIER")), prompt, ...steps, answer])
+        yield* flushUntil(() => committed.join("").includes("● 2 tools"))
+        const history = committed.join("")
+        expect(history.match(/● \d+ tools?/g)).toEqual(["● 2 tools"])
+        expect(history).toContain("● 2 tools · 2 commands · 3 thoughts")
+        expect(history).not.toContain("THOUGHT")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // ── full level ──
+
+  it.scopedLive(
+    "an edit op's body reads its hunks, and its frame shows a mark only in the transcript view",
+    () =>
+      Effect.gen(function* () {
+        const items: SessionItem[] = [
+          clientPrompt("edit-prompt", "widen it"),
+          cellStep("edit-step", "", [
+            op(
+              "edit-op",
+              "edit",
+              {
+                path: "src/a.ts",
+                oldString: "const greeting = 1",
+                newString: "const greeting = 2",
+              },
+              encodeJson({ path: "src/a.ts", replacements: 1 }),
+            ),
+          ]),
+        ]
+        for (const width of [120, 60]) {
+          for (const expanded of [false, true]) {
+            const setup = yield* renderScoped(
+              () => <Transcript items={items} disclosure="full" expanded={expanded} />,
+              { width, height: 40 },
+            )
+            const frame = yield* waitForFrame(setup, (next) => next.includes("@@"), "the edit body")
+            expect(frame).toContain("-const greeting = 1")
+            expect(frame).toContain("+const greeting = 2")
+            expect(frame).not.toMatch(/Index:|={10}|\+\+\+ |--- src|No newline/)
+            // Inline the mouse is off: no frame promises a click.
+            expect(/[▸▾]/.test(frame)).toBe(expanded)
+            destroyRenderSetup(setup)
+          }
+        }
+      }),
+  )
+
+  // ── session error ──
+
+  it.scopedLive("a long session error keeps four lines below full and counts the rest", () =>
+    Effect.gen(function* () {
+      const body = Array.from({ length: 10 }, (_, index) => `PROVIDER-LINE-${index + 1}`).join("\n")
+      const items: SessionItem[] = [{ _tag: "error", error: body, createdAt: 1, seq: 1 }]
+      for (const width of [120, 60]) {
+        for (const disclosure of ["collapsed", "preview"] as const) {
+          const frame = lines(yield* draw(items, disclosure, width)).filter(
+            (line) => line.length > 0,
+          )
+          expect(frame).toEqual([
+            "● PROVIDER-LINE-1",
+            "  PROVIDER-LINE-2",
+            "  PROVIDER-LINE-3",
+            "  PROVIDER-LINE-4",
+            "  … +6 lines (ctrl+o)",
+          ])
+        }
+        const full = yield* draw(items, "full", width)
+        expect(full).toContain("PROVIDER-LINE-10")
+        expect(full).not.toContain("(ctrl+o)")
+      }
+      // A short error shows whole at every level.
+      const short = yield* draw(
+        [{ _tag: "error", error: "one\ntwo", createdAt: 1, seq: 1 }],
+        "collapsed",
+        60,
+      )
+      expect(lines(short).filter((line) => line.length > 0)).toEqual(["● one", "  two"])
+    }),
   )
 })

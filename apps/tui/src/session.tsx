@@ -68,6 +68,7 @@ import {
   formatError,
   formatTokens,
   type PathPlace,
+  formatRunningCall,
   toolArgSummary,
   lostRequest,
   randomId,
@@ -123,7 +124,7 @@ import type { ToolCall } from "./tool-renderers"
 import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useInputWatch, useScopedKeyboard } from "./terminal"
 import { useExtensionUI } from "./extensions/host"
-import type { ActiveExtensionSession, NoticeRow } from "./extensions/client-facets"
+import type { ActiveExtensionSession, DisclosureLevel, NoticeRow } from "./extensions/client-facets"
 import type { ResolvedNoticeRows } from "./extensions/loader-boundary"
 
 // ── session labels ──────────────────────────────────────────────────────────
@@ -944,9 +945,6 @@ type SessionOverlayState = Schema.Schema.Type<typeof SessionOverlayState>
 /** Whether the overlay takes the composer and the session's keys; an extension pane does not. */
 export const overlayHoldsComposer = (overlay: SessionOverlayState): boolean =>
   overlay._tag !== "none" && overlay._tag !== "pane"
-
-/** How much of each tool group the inline transcript shows. `ctrl+o` cycles; `esc` collapses. */
-export type DisclosureLevel = "collapsed" | "preview" | "full"
 
 const DISCLOSURE_CYCLE: readonly DisclosureLevel[] = ["collapsed", "preview", "full"]
 
@@ -2233,11 +2231,8 @@ const isToolResultEvent = Predicate.or(
 type ToolStartedEvent = Extract<AgentEvent, { _tag: "ToolCallStarted" }>
 
 /** The status-line label for a running tool: its name plus a short input. */
-const activeToolLabel = (event: ToolStartedEvent, place: PathPlace): string => {
-  const inputSummary = toolArgSummary(event.toolName, event.input, place)
-  if (inputSummary.length === 0) return event.toolName
-  return `${event.toolName}(${inputSummary})`
-}
+const activeToolLabel = (event: ToolStartedEvent, place: PathPlace): string =>
+  formatRunningCall(event.toolName, toolArgSummary(event.toolName, event.input, place))
 
 /** A call that started and has no result yet; an op names the cell that admitted it. */
 interface RunningCall {

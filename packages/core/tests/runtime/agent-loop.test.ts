@@ -2,14 +2,17 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
   Clock,
+  Context,
   DateTime,
   Deferred,
   Duration,
   Effect,
   Exit,
   Fiber,
+  FileSystem,
   Layer,
   Option,
+  Path,
   Predicate,
   Ref,
   Schedule,
@@ -36,6 +39,7 @@ import {
   AgentLoopSessionGovernance,
   type AgentLoopState,
   buildInitialAgentLoopState,
+  closeBranchGenerations,
   emptyAdmissionGate,
   makeAgentLoopWorker,
   makeHoldCount,
@@ -61,7 +65,9 @@ import {
   fixedSessionProfiles,
   fixtureModelCatalogSource,
   recordingEventStore,
+  testAgent,
   testSqliteStorage,
+  testTurnExtension,
 } from "../../src/test-utils/harness"
 import {
   finishPart,
@@ -101,6 +107,7 @@ import {
 } from "../../src/domain/message"
 import {
   defineExtension,
+  defineResource,
   ExtensionContext,
   ExtensionHost,
   getToolId,
@@ -2867,6 +2874,727 @@ const gatedQueueStorageLayer = <E>(
   )
   return Layer.provide(built, inner)
 }
+
+// ── branch resources follow the profile ─────────────────────────────────────
+
+const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+/**
+ * A user extension file whose branch Resource names its version, and logs
+ * each acquire and release to `log`, so a test reads which version a call
+ * reached and when each version closed.
+ */
+const branchVersionSource = (input: {
+  readonly id: string
+  readonly toolId: string
+  readonly requestId: string
+  readonly version: string
+  readonly log: string
+}) => `import { appendFileSync } from "node:fs";
+import { Context, Effect, Layer, Schema } from "effect";
+import { defineExtension, defineResource, ExtensionHost, request, tool } from "@gent/core/extensions/api";
+class Probe extends Context.Service<Probe, { readonly version: string }>()(${encodeJsonText(`${input.id}/Probe`)}) {}
+const log = (line: string) => appendFileSync(${encodeJsonText(input.log)}, line + "\\n");
+const version = ${encodeJsonText(input.version)};
+export default defineExtension({
+  id: ${encodeJsonText(input.id)},
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: ${encodeJsonText(`${input.id}/probe`)},
+      scope: "branch",
+      layer: Layer.effect(Probe, Effect.acquireRelease(
+        Effect.sync(() => { log("acquire:" + version); return Probe.of({ version }); }),
+        () => Effect.sync(() => log("release:" + version)),
+      )),
+    }));
+    yield* host.register("tool", tool({
+      id: ${encodeJsonText(input.toolId)},
+      description: "Read the branch probe's version",
+      params: Schema.Struct({}),
+      output: Schema.String,
+      execute: () => Effect.gen(function* () { return (yield* Probe).version; }),
+    }));
+    yield* host.register("request", request({
+      id: ${encodeJsonText(input.requestId)},
+      input: Schema.String,
+      output: Schema.String,
+      answersDuringTurn: true,
+      execute: () => Effect.gen(function* () { return (yield* Probe).version; }),
+    }));
+  }),
+});
+`
+
+describe("branch resources follow the profile", () => {
+  it.scopedLive(
+    "an edit reaches a resident loop's next turn, after the running turn ends on the old version",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTempDirectoryScoped("gent-hot-branch-home-")
+        const extensionsDir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(extensionsDir, { recursive: true })
+        const log = path.join(home, "branch-resource.log")
+        yield* fs.writeFileString(log, "")
+        const hotFile = path.join(extensionsDir, "hot.ts")
+        const hot = {
+          id: "@test/hot-branch",
+          toolId: "hot_probe",
+          requestId: "read-hot-probe",
+          log,
+        }
+        yield* fs.writeFileString(hotFile, branchVersionSource({ ...hot, version: "alpha" }))
+        const readLog = fs
+          .readFileString(log)
+          .pipe(Effect.map((text) => text.split("\n").filter((line) => line.length > 0)))
+
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          // Turn one, on the first version.
+          toolCallStep("hot_probe", {}),
+          { ...toolCallStep("hot_probe", {}), gated: true },
+          textStep("turn one done"),
+          // Turn two, after the edit and the added file.
+          toolCallStep("hot_probe", {}),
+          toolCallStep("added_probe", {}),
+          textStep("turn two done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          extensionInputs: [testTurnExtension],
+          providerLayer,
+          home,
+        })
+        // A watching client holds the loop resident, as an open TUI does.
+        yield* client.session
+          .watchRuntime({ sessionId, branchId })
+          .pipe(Stream.runDrain, Effect.forkScoped)
+        const completions = (count: number) =>
+          client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+            Stream.take(count),
+            Stream.runDrain,
+            Effect.forkScoped,
+          )
+        const probeOutputs = client.session.events({ sessionId, branchId }).pipe(
+          Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),
+          Stream.flatMap(({ event }) => {
+            if (event._tag !== "ToolCallSucceeded") return Stream.empty
+            return Stream.make(`${event.toolName}=${String(event.output)}`)
+          }),
+          Stream.runCollect,
+          Effect.map((all) => Array.from(all)),
+        )
+        const readProbe = client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make(hot.id),
+          capabilityId: hot.requestId,
+          input: "read",
+        })
+
+        const firstTurn = yield* completions(1)
+        yield* client.message.send({ sessionId, branchId, content: "turn one" })
+        // The first turn ran its first probe and waits on its second step.
+        yield* controls.waitForCall(1)
+        expect(yield* readLog).toEqual(["acquire:alpha"])
+
+        // Edit the extension and add another while the turn runs.
+        yield* fs.writeFileString(hotFile, branchVersionSource({ ...hot, version: "beta-two" }))
+        yield* fs.writeFileString(
+          path.join(extensionsDir, "added.ts"),
+          branchVersionSource({
+            id: "@test/hot-added",
+            toolId: "added_probe",
+            requestId: "read-added-probe",
+            version: "added",
+            log,
+          }),
+        )
+        // A request resolves the profile as it is now: it reads the new
+        // version, while the running turn still holds the old one open.
+        expect(yield* readProbe).toBe("beta-two")
+        expect(yield* readLog).not.toContain("release:alpha")
+
+        // The running turn finishes on the version it started with.
+        yield* controls.emitAll(1)
+        yield* Fiber.join(firstTurn)
+        // The old version closes once the turn that used it ended.
+        yield* waitFor(
+          readLog,
+          (lines) => lines.includes("release:alpha"),
+          3_000,
+          "the old branch resource released",
+        )
+
+        const secondTurn = yield* completions(2)
+        yield* client.message.send({ sessionId, branchId, content: "turn two" })
+        yield* Fiber.join(secondTurn)
+        yield* controls.assertDone
+
+        const outputs = yield* probeOutputs
+        expect(outputs).toEqual([
+          expect.stringContaining("hot_probe=alpha"),
+          expect.stringContaining("hot_probe=alpha"),
+          expect.stringContaining("hot_probe=beta-two"),
+          expect.stringContaining("added_probe=added"),
+        ])
+        // Each version built once; only the replaced one closed.
+        const lines = yield* readLog
+        expect(lines.toSorted()).toEqual([
+          "acquire:added",
+          "acquire:alpha",
+          "acquire:beta-two",
+          "release:alpha",
+        ])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+})
+
+const SHARED_KEY = "@gent/core/tests/runtime/agent-loop.test/Shared"
+
+class Shared extends Context.Service<Shared, { readonly version: string }>()(
+  "@gent/core/tests/runtime/agent-loop.test/Shared",
+) {}
+
+class Captured extends Context.Service<Captured, { readonly version: string }>()(
+  "@gent/core/tests/runtime/agent-loop.test/Captured",
+) {}
+
+/** A user extension whose process Resource overrides the builtin's `Shared`. */
+const sharedOverrideSource = (version: string) => `import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class Shared extends Context.Service<Shared, { readonly version: string }>()(${encodeJsonText(SHARED_KEY)}) {}
+export default defineExtension({
+  id: "@test/shared-override",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "@test/shared-override/shared",
+      scope: "process",
+      layer: Layer.succeed(Shared, Shared.of({ version: ${encodeJsonText(version)} })),
+    }));
+  }),
+});
+`
+
+describe("branch resources over process services", () => {
+  // A builtin's branch Resource reads `Shared` when it builds. A user
+  // extension later in resolution order overrides `Shared`; editing it must
+  // build the branch Resource again over the new service.
+  const capturing = defineExtension({
+    id: "@test/captures-shared",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "resource",
+        defineResource({
+          id: "@test/captures-shared/shared",
+          scope: "process",
+          layer: Layer.succeed(Shared, Shared.of({ version: "builtin" })),
+        }),
+        defineResource({
+          id: "@test/captures-shared/captured",
+          scope: "branch",
+          layer: Layer.effect(
+            Captured,
+            Effect.gen(function* () {
+              const shared = yield* Shared
+              return Captured.of({ version: shared.version })
+            }),
+          ),
+        }),
+      )
+      yield* host.register(
+        "request",
+        request({
+          id: "read-captured",
+          input: Schema.String,
+          output: Schema.String,
+          answersDuringTurn: true,
+          execute: () =>
+            Effect.gen(function* () {
+              return (yield* Captured).version
+            }),
+        }),
+      )
+    }),
+  })
+
+  it.scopedLive(
+    "an edit to a later process service builds the branch Resource again",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTempDirectoryScoped("gent-branch-over-process-home-")
+        const extensionsDir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(extensionsDir, { recursive: true })
+        const overrideFile = path.join(extensionsDir, "override.ts")
+        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-one"))
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          extensionInputs: [testTurnExtension, capturing],
+          providerLayer,
+          home,
+        })
+        yield* client.session
+          .watchRuntime({ sessionId, branchId })
+          .pipe(Stream.runDrain, Effect.forkScoped)
+        const readCaptured = client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@test/captures-shared"),
+          capabilityId: "read-captured",
+          input: "read",
+        })
+        expect(yield* readCaptured).toBe("override-one")
+        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-two"))
+        expect(yield* readCaptured).toBe("override-two")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+})
+
+/**
+ * A user extension with a branch Resource, a process Resource and a
+ * `loopOpen` hook, each logging its version. With `failRelease`, the branch
+ * Resource's finalizer dies after it logs. With `hangOpen`, the hook never
+ * returns, and logs when it is stopped.
+ */
+const lifecycleSource = (input: {
+  readonly version: string
+  readonly log: string
+  readonly failRelease: boolean
+  readonly hangOpen: boolean
+}) => `import { appendFileSync, existsSync } from "node:fs";
+import { Context, Effect, Layer, Schedule, Schema } from "effect";
+import { defineExtension, defineResource, ExtensionHost, request } from "@gent/core/extensions/api";
+class Probe extends Context.Service<Probe, { readonly version: string }>()("@test/lifecycle/Probe") {}
+class Process extends Context.Service<Process, { readonly version: string }>()("@test/lifecycle/Process") {}
+const log = (line: string) => appendFileSync(${encodeJsonText(input.log)}, line + "\\n");
+const version = ${encodeJsonText(input.version)};
+const failRelease = ${String(input.failRelease)};
+const hangOpen = ${String(input.hangOpen)};
+export default defineExtension({
+  id: "@test/lifecycle",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "@test/lifecycle/process",
+      scope: "process",
+      layer: Layer.effect(Process, Effect.acquireRelease(
+        Effect.sync(() => Process.of({ version })),
+        () => Effect.sync(() => log("process-release:" + version)),
+      )),
+    }), defineResource({
+      id: "@test/lifecycle/probe",
+      scope: "branch",
+      layer: Layer.effect(Probe, Effect.acquireRelease(
+        Effect.sync(() => { log("acquire:" + version); return Probe.of({ version }); }),
+        () => Effect.sync(() => log("release:" + version)).pipe(
+          Effect.andThen(failRelease ? Effect.die("release boom") : Effect.void),
+        ),
+      )),
+    }));
+    yield* host.on("loopOpen", () => Effect.gen(function* () {
+      log("open:" + (yield* Probe).version);
+      if (hangOpen) yield* Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => log("open-stopped:" + version))));
+    }));
+    yield* host.register("request", request({
+      id: "read-lifecycle",
+      input: Schema.String,
+      output: Schema.String,
+      answersDuringTurn: true,
+      execute: () => Effect.gen(function* () { return (yield* Probe).version; }),
+    }), request({
+      id: "hold-lifecycle",
+      input: Schema.String,
+      output: Schema.String,
+      answersDuringTurn: true,
+      // Holds its run, and so its generation, until the marker file exists.
+      execute: () => Effect.gen(function* () {
+        const { version } = yield* Probe;
+        log("hold:" + version);
+        yield* Effect.suspend(() => existsSync(${encodeJsonText(input.log)} + ".go") ? Effect.void : Effect.fail("wait")).pipe(
+          Effect.retry(Schedule.spaced("20 millis")),
+        );
+        return version;
+      }),
+    }));
+  }),
+});
+`
+
+describe("branch generation lifecycle", () => {
+  // Generations that share one lease, each with a finalizer that records its
+  // close; the lease records its own.
+  const retiredGenerations = (
+    closes: Ref.Ref<ReadonlyArray<string>>,
+    finalizers: ReadonlyArray<Effect.Effect<void>>,
+  ) =>
+    Effect.gen(function* () {
+      const record = (name: string) => Ref.update(closes, (current) => [...current, name])
+      const leaseScope = yield* Scope.make()
+      yield* Scope.addFinalizer(leaseScope, record("lease"))
+      const lease = { scope: leaseScope, holds: finalizers.length, owner: yield* Scope.make() }
+      return yield* Effect.forEach(finalizers, (finalizer, index) =>
+        Effect.gen(function* () {
+          const scope = yield* Scope.make()
+          yield* Scope.addFinalizer(scope, finalizer.pipe(Effect.ensuring(record(`g${index}`))))
+          return {
+            id: index,
+            scope,
+            context: Context.makeUnsafe<unknown>(new Map()),
+            lease,
+            users: 0,
+            extensionId: ExtensionId.make(`@test/g${index}`),
+            activated: true,
+          }
+        }),
+      )
+    })
+
+  it.live("a finalizer that dies leaves every other generation and the lease closed", () =>
+    Effect.gen(function* () {
+      const closes = yield* Ref.make<ReadonlyArray<string>>([])
+      const retired = yield* retiredGenerations(closes, [
+        Effect.void,
+        Effect.die("boom"),
+        Effect.void,
+      ])
+      yield* closeBranchGenerations(retired)
+      expect(yield* Ref.get(closes)).toEqual(["g2", "g1", "g0", "lease"])
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live("an interrupt while a generation closes leaves none of them open", () =>
+    Effect.gen(function* () {
+      const closes = yield* Ref.make<ReadonlyArray<string>>([])
+      const started = yield* Deferred.make<void>()
+      const proceed = yield* Deferred.make<void>()
+      const retired = yield* retiredGenerations(closes, [
+        Effect.void,
+        Deferred.succeed(started, void 0).pipe(Effect.andThen(Deferred.await(proceed))),
+      ])
+      const closing = yield* Effect.forkChild(closeBranchGenerations(retired), {
+        startImmediately: true,
+      })
+      yield* Deferred.await(started)
+      const interrupting = yield* Effect.forkChild(Fiber.interrupt(closing), {
+        startImmediately: true,
+      })
+      yield* Deferred.succeed(proceed, void 0)
+      yield* Fiber.join(interrupting)
+      expect(yield* Ref.get(closes)).toEqual(["g1", "g0", "lease"])
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  // `hanger` adds a second user extension, with no Resources, whose
+  // `loopOpen` hook logs `hang` and never returns.
+  const lifecycleHarness = (options: {
+    readonly failRelease?: boolean
+    readonly hangOpen?: boolean
+    readonly hanger?: boolean
+  }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* makeTempDirectoryScoped("gent-branch-lifecycle-home-")
+      const extensionsDir = path.join(home, ".gent", "extensions")
+      yield* fs.makeDirectory(extensionsDir, { recursive: true })
+      const log = path.join(home, "lifecycle.log")
+      yield* fs.writeFileString(log, "")
+      const file = path.join(extensionsDir, "lifecycle.ts")
+      const write = (version: string) =>
+        fs.writeFileString(
+          file,
+          lifecycleSource({
+            version,
+            log,
+            failRelease: options.failRelease === true,
+            hangOpen: options.hangOpen === true,
+          }),
+        )
+      yield* write("one")
+      if (options.hanger === true) {
+        yield* fs.writeFileString(
+          path.join(extensionsDir, "hanger.ts"),
+          `import { appendFileSync } from "node:fs";
+import { Effect } from "effect";
+import { defineExtension, ExtensionHost } from "@gent/core/extensions/api";
+export default defineExtension({
+  id: "@test/hanger",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.on("loopOpen", () => Effect.sync(() => appendFileSync(${encodeJsonText(log)}, "hang\\n")).pipe(Effect.andThen(Effect.never)));
+  }),
+});
+`,
+        )
+      }
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [testAgent],
+        extensionInputs: [testTurnExtension],
+        providerLayer,
+        home,
+      })
+      // A watching client holds the loop resident, as an open TUI does.
+      yield* client.session
+        .watchRuntime({ sessionId, branchId })
+        .pipe(Stream.runDrain, Effect.forkScoped)
+      const call = (capabilityId: string) =>
+        client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@test/lifecycle"),
+          capabilityId,
+          input: "read",
+        })
+      const read = call("read-lifecycle")
+      const hold = call("hold-lifecycle")
+      const letGo = fs.writeFileString(`${log}.go`, "")
+      const readLog = fs
+        .readFileString(log)
+        .pipe(Effect.map((text) => text.split("\n").filter((line) => line.length > 0)))
+      return { write, read, hold, letGo, readLog }
+    })
+
+  it.scopedLive(
+    "a branch finalizer that fails leaves the next run working and the old profile retiring",
+    () =>
+      Effect.gen(function* () {
+        const { write, read, readLog } = yield* lifecycleHarness({ failRelease: true })
+        expect(yield* read).toBe("one")
+        yield* write("two")
+        // The edit retires generation one, whose finalizer dies.
+        expect(yield* read).toBe("two")
+        // The profile it was built over still retires, and its process
+        // Resource closes.
+        const lines = yield* waitFor(
+          readLog,
+          (current) => current.includes("process-release:one"),
+          5_000,
+          "the old profile's process Resource released",
+        )
+        expect(lines).toContain("release:one")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a rebuilt branch generation runs its loopOpen hooks once, after the old one closed",
+    () =>
+      Effect.gen(function* () {
+        const { write, read, readLog } = yield* lifecycleHarness({})
+        expect(yield* read).toBe("one")
+        yield* waitFor(
+          readLog,
+          (current) => current.includes("open:one"),
+          5_000,
+          "loopOpen ran for the first generation",
+        )
+        yield* write("two")
+        expect(yield* read).toBe("two")
+        const lines = yield* waitFor(
+          readLog,
+          (current) => current.includes("open:two"),
+          5_000,
+          "loopOpen ran for the rebuilt generation",
+        )
+        // The new generation's hooks ran after the old one closed.
+        expect(lines.indexOf("release:one")).toBeGreaterThan(-1)
+        expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
+        // Another run on the same generation runs no hook again.
+        expect(yield* read).toBe("two")
+        const after = yield* readLog
+        expect(after.filter((line) => line.startsWith("open:"))).toEqual(["open:one", "open:two"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "an extension with no branch Resources runs its loopOpen hooks again when it comes back",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTempDirectoryScoped("gent-loop-open-return-home-")
+        const extensionsDir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(extensionsDir, { recursive: true })
+        const log = path.join(home, "opener.log")
+        yield* fs.writeFileString(log, "")
+        const opener = path.join(extensionsDir, "opener.ts")
+        const away = path.join(home, "opener.ts")
+        yield* fs.writeFileString(
+          opener,
+          `import { appendFileSync } from "node:fs";
+import { Effect } from "effect";
+import { defineExtension, ExtensionHost } from "@gent/core/extensions/api";
+export default defineExtension({
+  id: "@test/opener",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.on("loopOpen", () => Effect.sync(() => appendFileSync(${encodeJsonText(log)}, "open\\n")));
+  }),
+});
+`,
+        )
+        yield* fs.writeFileString(
+          path.join(extensionsDir, "pinger.ts"),
+          `import { Effect, Schema } from "effect";
+import { defineExtension, ExtensionHost, request } from "@gent/core/extensions/api";
+export default defineExtension({
+  id: "@test/pinger",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("request", request({
+      id: "ping",
+      input: Schema.String,
+      output: Schema.String,
+      answersDuringTurn: true,
+      execute: () => Effect.succeed("pong"),
+    }));
+  }),
+});
+`,
+        )
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          extensionInputs: [testTurnExtension],
+          providerLayer,
+          home,
+        })
+        yield* client.session
+          .watchRuntime({ sessionId, branchId })
+          .pipe(Stream.runDrain, Effect.forkScoped)
+        const ping = client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@test/pinger"),
+          capabilityId: "ping",
+          input: "ping",
+        })
+        const opens = fs
+          .readFileString(log)
+          .pipe(Effect.map((text) => text.split("\n").filter((line) => line === "open").length))
+        expect(yield* ping).toBe("pong")
+        yield* waitFor(opens, (count) => count === 1, 5_000, "loopOpen ran at open")
+        // The extension leaves the profile, and the next run reads that.
+        yield* fs.rename(opener, away)
+        expect(yield* ping).toBe("pong")
+        // It comes back: its hooks run again.
+        yield* fs.rename(away, opener)
+        expect(yield* ping).toBe("pong")
+        yield* waitFor(opens, (count) => count === 2, 5_000, "loopOpen ran when it came back")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a rebuilt generation runs its loopOpen hooks only after a run holding the old one ends",
+    () =>
+      Effect.gen(function* () {
+        const { write, read, hold, letGo, readLog } = yield* lifecycleHarness({})
+        expect(yield* read).toBe("one")
+        yield* waitFor(
+          readLog,
+          (current) => current.includes("open:one"),
+          5_000,
+          "loopOpen ran for the first generation",
+        )
+        // A run on generation one, held open.
+        const holding = yield* Effect.forkScoped(hold)
+        yield* waitFor(
+          readLog,
+          (current) => current.includes("hold:one"),
+          5_000,
+          "the holding run started",
+        )
+        yield* write("two")
+        expect(yield* read).toBe("two")
+        yield* letGo
+        expect(yield* Fiber.join(holding)).toBe("one")
+        const lines = yield* waitFor(
+          readLog,
+          (current) => current.includes("open:two"),
+          5_000,
+          "loopOpen ran for the rebuilt generation",
+        )
+        // Generation one, and whatever its hooks set up, ended before the
+        // hooks of generation two ran.
+        expect(lines.indexOf("release:one")).toBeGreaterThan(-1)
+        expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
+        expect(lines.filter((line) => line.startsWith("open:"))).toEqual(["open:one", "open:two"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a hook that never returns holds up no other extension's rebuilt generation",
+    () =>
+      Effect.gen(function* () {
+        const { write, read, readLog } = yield* lifecycleHarness({ hanger: true })
+        expect(yield* read).toBe("one")
+        yield* waitFor(
+          readLog,
+          (current) => current.includes("open:one") && current.includes("hang"),
+          5_000,
+          "both loopOpen hooks ran",
+        )
+        yield* write("two")
+        expect(yield* read).toBe("two")
+        // The hanger's hook holds only its own extension: generation one
+        // closes, and the hooks of generation two run.
+        const lines = yield* waitFor(
+          readLog,
+          (current) => current.includes("open:two"),
+          5_000,
+          "loopOpen ran for the rebuilt generation",
+        )
+        expect(lines.indexOf("release:one")).toBeGreaterThan(-1)
+        expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
+        expect(lines.filter((line) => line === "hang")).toEqual(["hang"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a hook of a retired generation stops with it, and the next generation's hooks run",
+    () =>
+      Effect.gen(function* () {
+        const { write, read, readLog } = yield* lifecycleHarness({ hangOpen: true })
+        expect(yield* read).toBe("one")
+        yield* waitFor(
+          readLog,
+          (current) => current.includes("open:one"),
+          5_000,
+          "loopOpen ran for the first generation",
+        )
+        yield* write("two")
+        expect(yield* read).toBe("two")
+        const lines = yield* waitFor(
+          readLog,
+          (current) => current.includes("open:two"),
+          5_000,
+          "loopOpen ran for the rebuilt generation",
+        )
+        // The old hook stops before its generation's Resources release, and
+        // both before the new hook runs.
+        const stopped = lines.indexOf("open-stopped:one")
+        expect(stopped).toBeGreaterThan(-1)
+        expect(stopped).toBeLessThan(lines.indexOf("release:one"))
+        expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
+        expect(lines).not.toContain("open-stopped:two")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+})
 
 describe("agent-loop recovery race", () => {
   it.live(

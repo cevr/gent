@@ -14,6 +14,7 @@ import { SocketCloseError } from "effect/socket/Socket"
 import {
   type ActivityCall,
   activityRows,
+  collapsedOperations,
   describeCellCode,
   dropLastGrapheme,
   expandFileRefs,
@@ -21,6 +22,8 @@ import {
   fileHref,
   formatActivityHeader,
   formatActivityRow,
+  formatFailureRow,
+  formatRunningCall,
   formatAge,
   formatCost,
   formatCellRowLabel,
@@ -818,15 +821,53 @@ describe("formatActivityHeader", () => {
     )
   })
 
-  test("a cell that failed with its op counts one failure", () => {
-    // An interrupted cell: live its op is settled to failed when the cell ends,
-    // and a reload projects the same op as failed.
-    expect(formatActivityHeader([cell([op("bash", "git checkout", "failed")], "error")])).toBe(
-      "1 tool · 1 command · 1 failed",
+  test("a cell that failed with its op's own failure counts one failure", () => {
+    // The op's failure went up uncaught: the cell's failure is its text.
+    const thrown = { ...op("read", "gone.ts", "failed"), failure: "ENOENT: gone.ts" }
+    expect(formatActivityHeader([{ ...cell([thrown], "error"), failure: "ENOENT: gone.ts" }])).toBe(
+      "1 tool · 1 read · 1 failed",
     )
     expect(
-      formatActivityHeader([cell([op("bash", "a", "failed"), op("bash", "b", "failed")], "error")]),
-    ).toBe("2 tools · 2 commands · 2 failed")
+      formatActivityHeader([
+        { ...cell([op("bash", "a", "failed"), thrown], "error"), failure: "ENOENT: gone.ts" },
+      ]),
+    ).toBe("2 tools · 1 command · 1 read · 2 failed")
+  })
+
+  test("a cell whose failure cannot be shown to be its op's counts both", () => {
+    // The cell's failure has no text of the op's and is no cancel: both count.
+    expect(formatActivityHeader([cell([op("bash", "git checkout", "failed")], "error")])).toBe(
+      "1 tool · 1 command · 2 failed",
+    )
+  })
+
+  // A cancelled turn or cell is one event, not a failure: the op it cut says
+  // `cancelled`, and the header counts it apart from the failures.
+  test("a cancelled cell is one cancelled tool, never a failure", () => {
+    const cut = { ...cell([op("read", "a.ts"), op("bash", "sleep 20", "cancelled")], "error") }
+    expect(formatActivityHeader([{ ...cut, cancelled: true }])).toBe(
+      "2 tools · 1 read · 1 command · 1 cancelled",
+    )
+    expect(
+      collapsedOperations([{ ...cut, cancelled: true }]).map((operation) =>
+        formatFailureRow(operation),
+      ),
+    ).toEqual(["Ran sleep 20 · cancelled"])
+    // Cut between its ops: the cell itself is the one cancelled row.
+    const between = { ...cell([op("read", "a.ts")], "error"), cancelled: true }
+    expect(formatActivityHeader([between])).toBe("1 tool · 1 read · 1 cancelled")
+    expect(collapsedOperations([between]).map((operation) => formatFailureRow(operation))).toEqual([
+      "cell · cancelled",
+    ])
+    // A real failure before the cancel still shows: fail loud.
+    const failedFirst = {
+      ...cell([{ ...op("read", "b.ts", "failed"), reason: "ENOENT" }], "error"),
+      cancelled: true,
+    }
+    expect(formatActivityHeader([failedFirst])).toBe("1 tool · 1 read · 1 failed · 1 cancelled")
+    expect(
+      collapsedOperations([failedFirst]).map((operation) => formatFailureRow(operation)),
+    ).toEqual(["Read b.ts · failed · ENOENT", "cell · cancelled"])
   })
 
   test("a cell that failed while its ops succeeded is one failure and no extra tool", () => {
@@ -840,7 +881,7 @@ describe("formatActivityHeader", () => {
         cell([op("read", "c.ts")], "error"),
         cell([], "error"),
       ]),
-    ).toBe("3 tools · 1 command · 1 read · 3 failed")
+    ).toBe("3 tools · 1 command · 1 read · 4 failed")
   })
 
   test("a finished group carries the sum of its call durations", () => {
@@ -886,6 +927,17 @@ describe("formatActivityHeader", () => {
     )
     expect(formatActivityHeader(calls, 50)).toBe("6 tools · 3 read · 1 search · 1 failed · 9.7s")
     expect(formatActivityHeader(calls, 10)).toBe("6 tools · 1 failed · 9.7s")
+  })
+
+  test("thoughts count after the kinds, and a narrow header drops them first", () => {
+    const calls = [cell([op("read", "a"), op("bash", "t", "failed")])]
+    expect(formatActivityHeader(calls, Number.POSITIVE_INFINITY, 1)).toBe(
+      "2 tools · 1 read · 1 command · 1 thought · 1 failed",
+    )
+    expect(formatActivityHeader(calls, Number.POSITIVE_INFINITY, 6)).toBe(
+      "2 tools · 1 read · 1 command · 6 thoughts · 1 failed",
+    )
+    expect(formatActivityHeader(calls, 40, 6)).toBe("2 tools · 1 read · 1 command · 1 failed")
   })
 })
 
@@ -946,6 +998,44 @@ describe("activity rows", () => {
     expect(rows([cell([op("bash", "a", "running")]), cell([op("bash", "b", "running")])])).toEqual([
       "Running a",
       "Running b",
+    ])
+  })
+
+  test("an MCP call reads as Called <server>.<tool>, and the header counts it by server", () => {
+    const calls = [
+      cell([
+        op("mcp.linear.list_issues", "team=core"),
+        op("mcp.linear.get_issue", "GEN-12"),
+        op("mcp.github.search", "", "failed"),
+      ]),
+    ]
+    expect(rows(calls)).toEqual([
+      "Called linear.list_issues team=core",
+      "Called linear.get_issue GEN-12",
+      "Called github.search · failed",
+    ])
+    expect(formatActivityHeader(calls)).toBe("3 tools · 2 linear · 1 github · 1 failed")
+    expect(collapsedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+      "Called github.search · failed",
+    ])
+  })
+
+  test("a running call reads in its row's running words", () => {
+    expect(formatRunningCall("bash", "mkdir -p gent-debug-tools")).toBe(
+      "Running mkdir -p gent-debug-tools",
+    )
+    expect(formatRunningCall("mcp.linear.list_issues", "team=core")).toBe(
+      "Calling linear.list_issues team=core",
+    )
+    expect(formatRunningCall("cell", "")).toBe("cell")
+  })
+
+  test("failed ops never fold, and a command's row ends with its exit status", () => {
+    const exited = (detail: string, exit: number) => ({ ...op("bash", detail, "failed"), exit })
+    expect(rows([cell([exited("a", 1), exited("b", 2), op("bash", "c", "failed")])])).toEqual([
+      "Ran a · exit 1",
+      "Ran b · exit 2",
+      "Ran c · failed",
     ])
   })
 
@@ -1195,5 +1285,71 @@ describe("truncateStart", () => {
     expect(truncateStart("abcdefghij", 4)).toBe("ghij")
     expect(truncateStart("漢字漢字", 3)).toBe("字")
     expect(truncateStart("fits", 10)).toBe("fits")
+  })
+})
+
+describe("failure rows", () => {
+  const failure = (detail: string, reason: string, exit: number) => ({
+    ...op("bash", detail, "failed"),
+    reason,
+    exit,
+  })
+
+  test("the failures of a run are its failed ops in order, a cell's own failure included", () => {
+    const calls = [
+      cell([op("read", "a.ts"), failure("x", "boom", 2)]),
+      { ...cell([op("bash", "y")], "error"), reason: "cell died" },
+    ]
+    expect(collapsedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+      "Ran x · exit 2 · boom",
+      "cell · failed · cell died",
+    ])
+  })
+
+  // A command that exits 2 returns its result: the cell runs on, so a later
+  // throw is a failure of its own, and both show.
+  test("a cell that throws after a command exited non-zero shows both failures", () => {
+    const calls = [
+      { ...cell([op("read", "a.ts"), failure("x", "boom", 2)], "error"), reason: "TypeError: y" },
+    ]
+    expect(collapsedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+      "Ran x · exit 2 · boom",
+      "cell · failed · TypeError: y",
+    ])
+    expect(formatActivityHeader(calls)).toBe("2 tools · 1 read · 1 command · 2 failed")
+  })
+
+  // A cell can catch a failed op and go on: a later throw of its own is
+  // another failure, and both show.
+  test("a cell that caught a failed op and threw its own error shows both failures", () => {
+    const read = { ...op("read", "missing.ts", "failed"), reason: "ENOENT", failure: "ENOENT" }
+    const calls = [
+      {
+        ...cell([read], "error"),
+        reason: "Error: independent cell failure",
+        failure: "Error: independent cell failure",
+      },
+    ]
+    expect(collapsedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+      "Read missing.ts · failed · ENOENT",
+      "cell · failed · Error: independent cell failure",
+    ])
+    expect(formatActivityHeader(calls)).toBe("1 tool · 1 read · 2 failed")
+  })
+
+  test("a narrow row cuts the reason first, then drops it, then cuts the subject", () => {
+    const row = failure("sleep 2; ls d.ts", "ls: cannot access 'd.ts': No such file", 2)
+    expect(formatFailureRow(row, 80)).toBe(
+      "Ran sleep 2; ls d.ts · exit 2 · ls: cannot access 'd.ts': No such file",
+    )
+    expect(formatFailureRow(row, 40)).toBe("Ran sleep 2; ls d.ts · exit 2 · ls: can…")
+    expect(formatFailureRow(row, 30)).toBe("Ran sleep 2; ls d.ts · exit 2")
+    expect(formatFailureRow(row, 20)).toBe("Ran sleep … · exit 2")
+    for (const width of [80, 40, 30, 20])
+      expect(textWidth(formatFailureRow(row, width))).toBeLessThanOrEqual(width)
+  })
+
+  test("a failure with no reason ends with its outcome word", () => {
+    expect(formatFailureRow(op("write", "out.json", "failed"))).toBe("Wrote out.json · failed")
   })
 })

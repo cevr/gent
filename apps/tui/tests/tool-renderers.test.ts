@@ -5,6 +5,7 @@ import {
   bashOutputRows,
   callOperation,
   cellOperations,
+  diffHunkLines,
   getEditUnifiedDiff,
   getFiletype,
   type ToolCall,
@@ -91,12 +92,33 @@ describe("group ops", () => {
       outcome: "succeeded",
       detail: "src/a.ts",
       diff: { added: 2, removed: 1 },
+      source: edit,
     })
-    expect(callOperation(op("r1", "read", { path: "/home/me/x.md" }, "error"), place)).toEqual({
+    const read = op("r1", "read", { path: "/home/me/x.md" }, "error")
+    expect(callOperation(read, place)).toEqual({
       tool: "read",
       outcome: "failed",
       detail: "~/x.md",
+      source: read,
+      reason: "",
     })
+  })
+
+  // A failure row says why in one line, without the runner's `Tool '<name>' failed:` lead;
+  // a command that exited nonzero gives its status and its first line of output.
+  test("a failed op carries its exit status and a one-line reason", () => {
+    const read: ToolCall = {
+      ...op("r2", "read", { path: "/work/proj/x.md" }, "error"),
+      summary: "Tool 'read' failed: ENOENT: no such file\nat open",
+    }
+    expect(callOperation(read, place).reason).toBe("ENOENT: no such file")
+    const bash: ToolCall = {
+      ...op("b2", "bash", { command: "ls d.ts" }),
+      output: '{"stdout":"","stderr":"\\nls: no d.ts\\nmore\\n","exitCode":2}',
+    }
+    const failed = callOperation(bash, place)
+    expect(failed.exit).toBe(2)
+    expect(failed.reason).toBe("ls: no d.ts")
   })
 
   // fx counts a command that exits nonzero among a group's failures; the
@@ -155,6 +177,23 @@ describe("edit diff", () => {
     expect(diff).toContain("+++ /foo/bar.ts")
     expect(diff).toContain("-const x = 1")
     expect(diff).toContain("+const x = 2")
+  })
+
+  test("the collapsed body reads the hunks only: no patch preamble, no newline notes", () => {
+    const diff = Option.getOrElse(
+      Option.map(
+        getEditUnifiedDiff({ path: "/foo/bar.ts", oldString: "a\nb", newString: "a\nc" }),
+        (value) => value.diff,
+      ),
+      () => "",
+    )
+    expect(diff).toContain("\\ No newline at end of file")
+    const hunks = diffHunkLines(diff)
+    expect(hunks[0]).toMatch(/^@@ /)
+    expect(hunks).toEqual(expect.arrayContaining([" a", "-b", "+c"]))
+    expect(hunks.some((line) => /^(Index:|===|---|\+\+\+|\\ )/.test(line))).toBe(false)
+    // Text with no hunk header is kept whole.
+    expect(diffHunkLines("plain\ntext")).toEqual(["plain", "text"])
   })
 
   // The renderer falls back to the summary line for each of these.

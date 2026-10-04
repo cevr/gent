@@ -645,6 +645,12 @@ export interface InteractionRendererProps {
 }
 
 /**
+ * How much of each block the inline transcript shows: one line, a tree of one
+ * line a child, or every body. `ctrl+o` steps through them; `esc` collapses.
+ */
+export type DisclosureLevel = "collapsed" | "preview" | "full"
+
+/**
  * One user-role message a harness or an extension wrote, as its row draws it.
  * The transcript picks the renderer by the message's `metadata.customType`;
  * with full detail on, every message draws the plain row instead.
@@ -656,6 +662,8 @@ export interface MessageRowProps {
   readonly pendingMode?: "queued" | "steer"
   /** The message's `metadata.details`, for the renderer to decode. */
   readonly details: unknown
+  /** The transcript's level, so a row folds with `ctrl+o` like every other block. */
+  readonly disclosure: DisclosureLevel
 }
 
 export type MessageRenderer = (props: MessageRowProps) => JSX.Element
