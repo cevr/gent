@@ -3419,6 +3419,83 @@ describe("native transcript rows under the footer", () => {
     15_000,
   )
 
+  // After the return's first frame the region follows the footer and the
+  // live tail again: a turn that starts after the picker closed grows the
+  // region in a short session, and a footer that grows takes rows too.
+  it.scopedLive(
+    "after a picker closes the region follows a turn that grows and a footer that grows",
+    () =>
+      Effect.gen(function* () {
+        const turn = (rows: number): ListMessage => ({
+          ...assistant(
+            "turn",
+            Array.from({ length: rows }, (_, at) => `TURN-${at + 1}`).join("\n\n"),
+          ),
+          draft: true,
+        })
+        const [items, setItems] = createSignal<ListMessage[]>([
+          clientPrompt("ask", "FIRST-ASK"),
+          assistant("short", "SHORT-ANSWER"),
+        ])
+        const [streaming, setStreaming] = createSignal(false)
+        const [footer, setFooter] = createSignal(3)
+        const [overlayOpen, setOverlayOpen] = createSignal(false)
+        let screen = Option.none<CliRenderer>()
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items,
+              streaming,
+              footer,
+              paneOpen: () => false,
+              overlayOpen,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+              },
+            }),
+          { width: 60, height: 30 },
+        )
+        yield* waitForFrame(setup, (next) => next.includes("SHORT-ANSWER"), "the short session")
+        const renderer = Option.getOrThrow(screen)
+        const flush = Effect.promise(() => setup.flush())
+        const rowsAbove = () => Schema.decodeUnknownSync(RegionPlace)(renderer).renderOffset
+        yield* flush
+        const regionRows = renderer.footerHeight
+        setOverlayOpen(true)
+        yield* flush
+        yield* flush
+        setOverlayOpen(false)
+        yield* flush
+        yield* flush
+        expect([rowsAbove(), renderer.footerHeight]).toEqual([0, regionRows])
+        // A turn starts on the terminal's own screen and grows.
+        batch(() => {
+          setItems([...items(), clientPrompt("next", "NEXT-ASK"), turn(2)])
+          setStreaming(true)
+        })
+        yield* flush
+        setItems([...items().slice(0, -1), turn(6)])
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => next.includes("TURN-6") && next.includes("COMPOSER"),
+          "the grown turn",
+        )
+        yield* flush
+        const grown = renderer.footerHeight
+        expect(grown).toBeGreaterThan(regionRows)
+        expect(rowsAbove()).toBe(0)
+        for (const text of ["FIRST-ASK", "NEXT-ASK", "TURN-1", "TURN-6"]) {
+          expect([text, frame.includes(text)]).toEqual([text, true])
+        }
+        // The footer grows by three rows, and the region with it.
+        setFooter(6)
+        yield* flush
+        yield* flush
+        expect(renderer.footerHeight).toBe(grown + 3)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
   it.scopedLive(
     "a turn's final items reach history while it runs, once the tail holds more than the region shows",
     () =>
