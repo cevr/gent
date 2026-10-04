@@ -3392,7 +3392,7 @@ export const retryProviderCall =
  *
  * `ScriptedLanguageModel.debug` drives the real agent loop with canned
  * replies (and a deterministic 429 retry budget), or with a multi-step tool
- * turn when the message asks for it (`DEBUG_TOOL_SCENARIO_PHRASE`), and `empty` finishes every
+ * turn when the message asks for it (`DEBUG_SCENARIOS`), and `empty` finishes every
  * step with nothing. `Gent.provider.mock()` ships both; the test harness
  * builds its gated and sequenced models from the same stream-part helpers.
  */
@@ -3655,33 +3655,45 @@ export const multiToolCallStep = (
 // ── debug tool scenario ─────────────────────────────────────────────────────
 
 /**
- * A user message holding this phrase plays the debug model's tool turn: six
- * steps that call the real tools in the session's directory. Step 1 writes
+ * A user message holding a scenario's phrase plays that scenario's turn.
+ *
+ * `debug tools` plays six steps that call the real tools in the session's directory. Step 1 writes
  * three files under `gent-debug-tools/` with bash, then the steps read the
  * three at once, grep them, edit one, and run a bash command that exits 2.
  * Each step opens with reasoning; the last answers. The two bash commands
  * sleep, so the run stays open long enough to resize or scroll during it.
  *
+ * `debug ask` asks one background question with `ask_user_async`, works on
+ * its assumption in a bash step that sleeps, and answers. The sleep keeps
+ * the turn open long enough to answer the question while it runs.
+ *
  * A step calls the tools the request advertises: each op as its own call, or,
  * on a turn narrowed to `cell`, one `cell` call whose code awaits the ops.
  */
-const DEBUG_TOOL_SCENARIO_PHRASE = "debug tools"
 
 const SCENARIO_DIR = "gent-debug-tools"
 
 /** One host tool call of the scenario. */
 interface ScenarioOp {
   readonly tool: string
-  readonly input: Readonly<Record<string, string>>
+  readonly input: Schema.JsonObject
+}
+
+interface ScenarioStep {
+  readonly reasoning: string
+  /** The ops of a tool step, run together; none on the answer step. */
+  readonly ops: ReadonlyArray<ScenarioOp>
+}
+
+interface Scenario {
+  readonly phrase: string
+  readonly steps: ReadonlyArray<ScenarioStep>
+  readonly answer: string
 }
 
 const scenarioFile = (name: string) => `${SCENARIO_DIR}/${name}`
 
-const SCENARIO: ReadonlyArray<{
-  readonly reasoning: string
-  /** The ops of a tool step, run together; none on the answer step. */
-  readonly ops: ReadonlyArray<ScenarioOp>
-}> = [
+const TOOL_STEPS: ReadonlyArray<ScenarioStep> = [
   {
     reasoning: "Set up a scratch fixture to work on.",
     ops: [
@@ -3726,11 +3738,51 @@ const SCENARIO: ReadonlyArray<{
   { reasoning: "Summarize.", ops: [] },
 ]
 
-const SCENARIO_ANSWER = `Read three files in ${SCENARIO_DIR}, found two TODOs, widened the greeting in a.ts. The check for d.ts failed: it does not exist yet.`
+const ASK_STEPS: ReadonlyArray<ScenarioStep> = [
+  {
+    reasoning: "The backend is the user's call; ask in the background and go on.",
+    ops: [
+      {
+        tool: "ask_user_async",
+        input: {
+          questions: [
+            {
+              header: "cache",
+              question: "Which cache backend do you want in production?",
+              options: [
+                { label: "in-memory LRU" },
+                { label: "Redis", description: "shared across instances" },
+                { label: "SQLite file", description: "survives a restart" },
+              ],
+              assume: "in-memory LRU",
+            },
+          ],
+        },
+      },
+    ],
+  },
+  {
+    reasoning: "Wire the assumed cache in meanwhile.",
+    ops: [{ tool: "bash", input: { command: "sleep 20; echo cache wired" } }],
+  },
+  { reasoning: "Summarize.", ops: [] },
+]
 
-const encodeOpInput = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
-)
+const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
+  {
+    phrase: "debug tools",
+    steps: TOOL_STEPS,
+    answer: `Read three files in ${SCENARIO_DIR}, found two TODOs, widened the greeting in a.ts. The check for d.ts failed: it does not exist yet.`,
+  },
+  {
+    phrase: "debug ask",
+    steps: ASK_STEPS,
+    answer:
+      "Wired an in-memory LRU cache. The backend question is still open; I assumed in-memory LRU.",
+  },
+]
+
+const encodeOpInput = Schema.encodeSync(Schema.fromJsonString(Schema.JsonObject))
 
 /** The `cell` code that awaits a step's ops: one call, or all of them together. */
 const cellCode = (ops: ReadonlyArray<ScenarioOp>): string => {
@@ -3741,12 +3793,13 @@ const cellCode = (ops: ReadonlyArray<ScenarioOp>): string => {
 
 /** Scenario step `index` as the request's tool surface takes it; none past the last. */
 const scenarioStep = (
+  scenario: Scenario,
   index: number,
   viaCell: boolean,
   callId: (call: number) => ToolCallId,
 ): Option.Option<ScriptedStep> =>
-  Option.map(Option.fromUndefinedOr(SCENARIO[index]), ({ reasoning, ops }) => {
-    let scripted = textStep(SCENARIO_ANSWER)
+  Option.map(Option.fromUndefinedOr(scenario.steps[index]), ({ reasoning, ops }) => {
+    let scripted = textStep(scenario.answer)
     if (viaCell && ops.length > 0) {
       scripted = toolCallStep("cell", { code: cellCode(ops) }, { toolCallId: callId(0) })
     } else if (ops.length > 0) {
@@ -3799,14 +3852,19 @@ const withCacheUsage = (step: ScriptedStep, index: number, inputTokens: number):
   }),
 })
 
-const scenarioStream = (options: ProviderOptions, latestUserText: string, delayMs: number) =>
+const scenarioStream = (
+  scenario: Scenario,
+  options: ProviderOptions,
+  latestUserText: string,
+  delayMs: number,
+) =>
   Effect.gen(function* () {
     const index = stepsSinceLatestUser(options.prompt)
     const advertised = new Set(options.tools.map((tool) => tool.name))
     const viaCell = advertised.has("cell") && !advertised.has("read")
     // Ids unique across runs: a resumed session may already hold an earlier run's.
     const run = (yield* Clock.currentTimeMillis).toString(36)
-    const step = scenarioStep(index, viaCell, (call) =>
+    const step = scenarioStep(scenario, index, viaCell, (call) =>
       ToolCallId.make(`debug-${run}-${index}-${call}`),
     )
     const inputTokens = Math.max(1, Math.ceil(latestUserText.length / 4))
@@ -3827,8 +3885,11 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
     streamText: (modelOptions) =>
       Effect.suspend(() => {
         const latestUserText = extractLatestUserText(modelOptions.prompt)
-        if (latestUserText.toLowerCase().includes(DEBUG_TOOL_SCENARIO_PHRASE)) {
-          return scenarioStream(modelOptions, latestUserText, delayMs)
+        const scenario = Option.fromUndefinedOr(
+          DEBUG_SCENARIOS.find((entry) => latestUserText.toLowerCase().includes(entry.phrase)),
+        )
+        if (Option.isSome(scenario)) {
+          return scenarioStream(scenario.value, modelOptions, latestUserText, delayMs)
         }
         const seen = attempts.get(latestUserText) ?? 0
         let retryBudget = 0

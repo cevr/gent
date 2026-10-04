@@ -147,6 +147,13 @@ fields:
 A message carries no agent, run spec or interactive flag. Those belong to the
 target session: `ctx.Session.create` sets them once in its `admission`.
 
+A request that declares `answersDuringTurn: true` can `"steer"` into its own
+branch while a turn runs: the steer joins that turn at its next step (a turn
+parked on a blocking ask takes it before its first resumed model request), and
+on an idle branch `wake: true` starts one. The `questions.answer` request of
+`@gent/interaction-tools` delivers the user's answers to `ask_user_async`
+questions this way.
+
 `"queue"` and `"steer"` target the current branch when no `sessionId` and
 `branchId` are named. A `"turn"` names its target, and the current branch
 refuses it: a turn that waits on its own loop never returns, so it takes
@@ -317,7 +324,9 @@ mutation permit until it ends, and a request is a side mutation until it says
 otherwise. A request that does not change this branch's loop state (its queue,
 follow-ups or messages) declares `answersDuringTurn: true` and answers mid-turn.
 Reads qualify, and so do writes outside the loop, such as another session or
-a process resource. Any request a client sends while the agent works needs it.
+a process resource, and the `"queue"` and `"steer"` sends of
+`ctx.Session.send`, which the loop's queue owner serializes on its own. Any
+request a client sends while the agent works needs it.
 
 Request handlers receive params only. Host authority comes from
 `yield* ExtensionContext`, and extension-owned services are ordinary Effect

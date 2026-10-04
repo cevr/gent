@@ -89,6 +89,27 @@ export function dropLastGrapheme(value: string): string {
   return value.slice(0, last)
 }
 
+/** The text less its first character as the reader sees it: one grapheme. */
+export function dropFirstGrapheme(value: string): string {
+  for (const { segment } of graphemes.segment(value)) return value.slice(segment.length)
+  return value
+}
+
+/**
+ * The first grapheme boundary of `value` at or after `index`. An edit can
+ * join its neighbours into one character (a ZWJ between two emoji, two
+ * regional indicators that meet), so an index that was a boundary before the
+ * edit can fall inside a character after it.
+ */
+export function graphemeBoundaryFrom(value: string, index: number): number {
+  for (const { index: start, segment } of graphemes.segment(value)) {
+    const end = start + segment.length
+    if (index <= start) return start
+    if (index < end) return end
+  }
+  return value.length
+}
+
 /** How many characters the reader sees: graphemes, not code units. */
 export const graphemeCount = (value: string): number => Array.from(graphemes.segment(value)).length
 
@@ -523,6 +544,26 @@ function summarizeGrep(args: Schema.JsonObject, place: PathPlace): string {
   return `/${pattern}/ in ${displayPath(rawPath, place)}`
 }
 
+const decodeAskedQuestions = Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))
+
+/** A background question: `<header> · <question> · assuming <assume>`, and how many more the call asked. */
+function summarizeAskAsync(args: Schema.JsonObject): string {
+  const questions = Option.getOrElse(decodeAskedQuestions(args["questions"]), () => [])
+  return Option.match(Option.fromUndefinedOr(questions[0]), {
+    onNone: () => "",
+    onSome: (first) => {
+      const parts = [
+        getStringArg(first, "header"),
+        getStringArg(first, "question"),
+        `assuming ${getStringArg(first, "assume")}`,
+      ].filter((part) => part.length > 0)
+      const more = questions.length - 1
+      if (more > 0) parts.push(`+${more} more`)
+      return parts.join(" · ")
+    },
+  })
+}
+
 function summarizeDelegate(args: Schema.JsonObject): string {
   return truncate(getStringArg(args, "todo"), 40)
 }
@@ -550,6 +591,7 @@ const toolArgFormatters = {
   },
   grep: summarizeGrep,
   "delegate.start": summarizeDelegate,
+  ask_user_async: summarizeAskAsync,
   read_session: (args) => truncate(getStringArg(args, "sessionId"), 50),
   handoff: (args) => truncate(getStringArg(args, "reason"), 50),
 } satisfies Record<string, ToolArgFormatter>
@@ -909,6 +951,7 @@ const TOOL_KINDS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["write", ["edit", "edit"]],
   ["bash", ["command", "commands"]],
   ["delegate.start", ["child", "children"]],
+  ["ask_user_async", ["question", "questions"]],
 ])
 
 /**
@@ -967,6 +1010,7 @@ const TOOL_VERBS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["bash", ["Ran", "Running"]],
   ["delegate.start", ["Started", "Starting"]],
   ["ask_user", ["Asked", "Asking"]],
+  ["ask_user_async", ["Asked", "Asking"]],
 ])
 
 /** One row of a group at the preview level: a run of ops of one tool and one outcome. */

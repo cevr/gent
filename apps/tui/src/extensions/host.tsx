@@ -8,7 +8,6 @@ import {
   ManagedRuntime,
   Option,
   type Path,
-  Predicate,
   Scope,
 } from "effect"
 import {
@@ -22,6 +21,7 @@ import {
   makeClientContextLayer,
   type MessageRendererEntry,
   type PaneOwner,
+  type QueuedMessage,
   type StatusLabelAnchor,
   type StatusLabelItem,
 } from "./client-facets.js"
@@ -232,15 +232,38 @@ export function ExtensionUIProvider(props: {
     const messages = new Map(
       [...resolved().messageRenderers].map(([type, entry]) => {
         const component = bounded(entry.extensionId, entry.component)
-        const prompt = entry.prompt
-        if (Predicate.isUndefined(prompt)) return [type, { ...entry, component }]
-        const guardedPrompt = (content: string) =>
-          guarded(
-            entry.extensionId,
-            () => prompt(content),
-            () => content,
-          )
-        return [type, { ...entry, component, prompt: guardedPrompt }]
+        // A throw in either text function fails the extension; the host
+        // shows the message's own text in its place.
+        const prompt = Option.map(
+          Option.fromUndefinedOr(entry.prompt),
+          (read) => (content: string) =>
+            guarded(
+              entry.extensionId,
+              () => read(content),
+              () => content,
+            ),
+        )
+        const queueLabel = Option.map(
+          Option.fromUndefinedOr(entry.queueLabel),
+          (label) => (message: QueuedMessage) =>
+            guarded(
+              entry.extensionId,
+              () => label(message),
+              () => message.content,
+            ),
+        )
+        return [
+          type,
+          {
+            ...entry,
+            component,
+            ...Option.match(prompt, { onNone: () => ({}), onSome: (read) => ({ prompt: read }) }),
+            ...Option.match(queueLabel, {
+              onNone: () => ({}),
+              onSome: (label) => ({ queueLabel: label }),
+            }),
+          },
+        ]
       }),
     )
     return {

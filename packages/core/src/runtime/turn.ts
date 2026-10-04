@@ -4305,7 +4305,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         toolCalls: pendingToolCalls,
         recoveredResults,
       })
-      if (Option.isNone(known)) return { step: pendingStep, interaction: Option.none() }
+      // The step's results are already stored: this is the step boundary.
+      if (Option.isNone(known)) {
+        yield* deliverSteeringAtStepBoundary({ finalStep: false })
+        return { step: pendingStep, interaction: Option.none() }
+      }
       const unsettledCalls = nativeToolCalls.filter(
         (toolCall) => !known.value.knownResults.has(toolCall.id),
       )
@@ -4384,6 +4388,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
       if (Option.isNone(interactionSignal)) {
         yield* clearProcessLocalReplayBindings(pendingAssistant.value.id)
+        // The resumed step's results are stored and no stream is open: steering
+        // that arrived while the turn was parked joins before the next model
+        // request, as it does after any tool step (`runTools`).
+        yield* deliverSteeringAtStepBoundary({ finalStep: false })
         return { step: pendingStep, interaction: Option.none() }
       }
       const pending = interactionSignal.value
@@ -4400,8 +4408,18 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      *
      * The inbox decides *which* items a step may take and when none may be
      * taken at all; this supplies only the transcript write.
+     *
+     * An interrupted turn makes no further model request, so it holds
+     * steering back as a final step does: a joined message would be marked
+     * answered by a turn that never reads it. It stays queued and opens the
+     * next turn.
      */
     const deliverSteeringAtStepBoundary = (options: { readonly finalStep: boolean }) =>
+      Effect.gen(function* () {
+        const interrupted = yield* scope.turnInterruption.interrupted
+        return yield* deliverSteeringUnlessLast({ finalStep: options.finalStep || interrupted })
+      })
+    const deliverSteeringUnlessLast = (options: { readonly finalStep: boolean }) =>
       scope.inbox.deliverSteering({
         finalStep: options.finalStep,
         // The message joins the transcript now. Its admission time could sort it

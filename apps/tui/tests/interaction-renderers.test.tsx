@@ -187,7 +187,7 @@ describe("AskUserRenderer answers", () => {
     options: [{ label: "Red" }, { label: "Blue" }],
   }
 
-  const ask = (questions: ReadonlyArray<typeof color & { multiple?: boolean }>) =>
+  const ask = (questions: ReadonlyArray<typeof color & { multiple?: boolean }>, width = 80) =>
     Effect.gen(function* () {
       const results: ApprovalResult[] = []
       const setup = yield* renderScoped(
@@ -202,7 +202,7 @@ describe("AskUserRenderer answers", () => {
             resolve={(r) => results.push(r)}
           />
         ),
-        { width: 80, height: 24 },
+        { width, height: 24 },
       )
       yield* waitForFrame(setup, (f) => f.includes("Pick a color"), "the question")
       return { setup, results }
@@ -240,6 +240,60 @@ describe("AskUserRenderer answers", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       expect(results).toEqual([{ approved: true, notes: '[["Green"]]' }])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("the caret moves through a typed answer, and an edit lands at the caret", () =>
+    Effect.gen(function* () {
+      const { setup, results } = yield* ask([color])
+      yield* Effect.promise(() => setup.mockInput.typeText("xGren"))
+      yield* waitForFrame(setup, (f) => f.includes("Other: xGren│"), "the typed answer")
+      setup.mockInput.pressArrow("left")
+      setup.mockInput.pressArrow("left")
+      yield* Effect.promise(() => setup.mockInput.typeText("e"))
+      yield* waitForFrame(setup, (f) => f.includes("Other: xGre│en"), "the insert at the caret")
+      setup.mockInput.pressKey("HOME")
+      setup.mockInput.pressKey("DELETE")
+      yield* waitForFrame(setup, (f) => f.includes("Other: │Green"), "the delete after the caret")
+      setup.mockInput.pressArrow("right")
+      setup.mockInput.pressBackspace()
+      yield* waitForFrame(setup, (f) => f.includes("Other: │reen"), "the erase before the caret")
+      setup.mockInput.pressKey("END")
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* waitForFrame(setup, (f) => f.includes("Other: reen!│"), "the caret at the end")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([{ approved: true, notes: '[["reen!"]]' }])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("an erase that joins two characters into one leaves the caret after it", () =>
+    Effect.gen(function* () {
+      const { setup, results } = yield* ask([color])
+      // Two regional indicators with an x between them: deleting the x makes the 🇨🇺 flag.
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("\u{1F1E8}x\u{1F1FA}"))
+      setup.mockInput.pressArrow("left")
+      setup.mockInput.pressBackspace()
+      // The caret is after the flag, so a backspace takes the flag whole.
+      setup.mockInput.pressBackspace()
+      yield* Effect.promise(() => setup.mockInput.typeText("a"))
+      yield* waitForFrame(setup, (f) => f.includes("Other: a│"), "the flag erased whole")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([{ approved: true, notes: '[["a"]]' }])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("an answer wider than the row scrolls so the caret stays in view", () =>
+    Effect.gen(function* () {
+      const { setup } = yield* ask([color], 40)
+      const answer = `start ${"m".repeat(60)} finish`
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(answer))
+      const tail = yield* waitForFrame(setup, (f) => f.includes("finish│"), "the tail in view")
+      expect(tail).not.toContain("start")
+      setup.mockInput.pressKey("HOME")
+      const head = yield* waitForFrame(setup, (f) => f.includes("Other: │start"), "the head")
+      expect(head).not.toContain("finish")
     }).pipe(Effect.timeout("10 seconds")),
   )
 

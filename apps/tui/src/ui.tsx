@@ -24,7 +24,14 @@ import {
   useTerminalDimensions,
 } from "./terminal"
 import { useTheme } from "./theme"
-import { dropLastGrapheme, truncate, useRequiredContext } from "./utils"
+import {
+  dropFirstGrapheme,
+  dropLastGrapheme,
+  graphemeBoundaryFrom,
+  truncate,
+  truncateStart,
+  useRequiredContext,
+} from "./utils"
 import { textWidth } from "./bun-adapter"
 import type { MessageRowProps } from "./extensions/client-facets"
 
@@ -468,14 +475,24 @@ const fullLines = (lines: PickerBodyLines): number => lines.rows + lines.query
  * back, so the frame gives the detail line only rows the list does not need.
  */
 interface PickerBody {
+  /** True inside a frame: the frame draws the title and the key hints. */
+  readonly framed: boolean
   readonly rows: () => Option.Option<number>
   readonly report: (lines: Option.Option<PickerBodyLines>) => void
 }
 
 const PickerBodyContext = createContext<PickerBody>({
+  framed: false,
   rows: () => Option.none(),
   report: () => {},
 })
+
+/**
+ * Whether the body sits in a `PickerFrame`. A body that draws its own key
+ * hints out of a frame (the option list of an ask) leaves them to the frame
+ * inside one.
+ */
+export const useInPickerFrame = (): boolean => useContext(PickerBodyContext).framed
 
 /**
  * A frame body reports the lines it draws and reads back the rows the frame
@@ -670,7 +687,7 @@ export function PickerFrame(
       if (Option.isSome(shownNote())) return rows - 1
       return rows
     })
-  const body: PickerBody = { rows: listRows, report: setList }
+  const body: PickerBody = { framed: true, rows: listRows, report: setList }
   return (
     <box
       flexDirection="column"
@@ -810,6 +827,138 @@ export const eraseText = (text: string, unit: EraseUnit): string =>
     Match.when("line", () => ""),
     Match.exhaustive,
   )
+
+/**
+ * One line of typed text and its caret: a string index that never splits a
+ * character. A field that reads its keys through its keyboard scope keeps
+ * this where the composer's textarea keeps its own caret.
+ */
+export interface CaretLine {
+  readonly text: string
+  readonly caret: number
+}
+
+/** The text before and after the caret. */
+const caretSplit = (line: CaretLine): readonly [string, string] => [
+  line.text.slice(0, line.caret),
+  line.text.slice(line.caret),
+]
+
+/**
+ * The line with its caret on a boundary of the whole text: after an edit
+ * that joined two characters into one, the caret goes after that character.
+ */
+const onBoundary = (line: CaretLine): CaretLine => ({
+  text: line.text,
+  caret: graphemeBoundaryFrom(line.text, line.caret),
+})
+
+export const CaretLine = {
+  empty: { text: "", caret: 0 } satisfies CaretLine,
+  /** `text` typed or pasted at the caret; the caret goes after it. */
+  insert: (line: CaretLine, text: string): CaretLine => {
+    const [before, after] = caretSplit(line)
+    return onBoundary({ text: before + text + after, caret: before.length + text.length })
+  },
+}
+
+/** An edit of a caret line. */
+type CaretEdit = (line: CaretLine) => CaretLine
+
+const caretLeft: CaretEdit = (line) => ({
+  ...line,
+  caret: dropLastGrapheme(caretSplit(line)[0]).length,
+})
+
+/** The caret one character to the right; at the end it stays. */
+const caretRight: CaretEdit = (line) => {
+  const [, after] = caretSplit(line)
+  return { ...line, caret: line.caret + after.length - dropFirstGrapheme(after).length }
+}
+
+const caretHome: CaretEdit = (line) => ({ ...line, caret: 0 })
+const caretEnd: CaretEdit = (line) => ({ ...line, caret: line.text.length })
+
+const deleteForward: CaretEdit = (line) => {
+  const [before, after] = caretSplit(line)
+  return { text: before + dropFirstGrapheme(after), caret: line.caret }
+}
+
+const deleteToEnd: CaretEdit = (line) => ({ text: caretSplit(line)[0], caret: line.caret })
+
+/** The erase keys of `lineEdit`, on the text before the caret. */
+const eraseAtCaret =
+  (unit: EraseUnit): CaretEdit =>
+  (line) => {
+    const [before, after] = caretSplit(line)
+    const kept = eraseText(before, unit)
+    return { text: kept + after, caret: kept.length }
+  }
+
+/** The caret keys, as the composer's textarea binds them; modifiers match exactly. */
+const CARET_KEYS: ReadonlyArray<{
+  readonly name: string
+  readonly ctrl: boolean
+  readonly edit: CaretEdit
+}> = [
+  { name: "left", ctrl: false, edit: caretLeft },
+  { name: "b", ctrl: true, edit: caretLeft },
+  { name: "right", ctrl: false, edit: caretRight },
+  { name: "f", ctrl: true, edit: caretRight },
+  { name: "home", ctrl: false, edit: caretHome },
+  { name: "a", ctrl: true, edit: caretHome },
+  { name: "end", ctrl: false, edit: caretEnd },
+  { name: "e", ctrl: true, edit: caretEnd },
+  { name: "delete", ctrl: false, edit: deleteForward },
+  { name: "d", ctrl: true, edit: deleteForward },
+  { name: "k", ctrl: true, edit: deleteToEnd },
+]
+
+/**
+ * The edit a key makes on a line with a caret, with the keys of the
+ * composer's textarea: the erase keys of `lineEdit` take the text before the
+ * caret; delete and ctrl+d the character after it, ctrl+k the rest of the
+ * line; left and right (ctrl+b, ctrl+f) move one character, home and end
+ * (ctrl+a, ctrl+e) to an end of the line.
+ */
+export const caretLineEdit = (event: ScopedKeyboardEvent): Option.Option<CaretEdit> => {
+  const erase = eraseKey(event)
+  if (Option.isSome(erase))
+    return Option.some((line) => onBoundary(eraseAtCaret(erase.value)(line)))
+  if (event.meta === true || event.option === true || event.super === true) return Option.none()
+  return Option.fromUndefinedOr(
+    CARET_KEYS.find(
+      (binding) => binding.name === event.name && binding.ctrl === (event.ctrl === true),
+    ),
+  ).pipe(Option.map((binding) => (line: CaretLine) => onBoundary(binding.edit(line))))
+}
+
+/** The part of a caret line a row shows: the text on each side of the caret. */
+interface CaretWindow {
+  readonly before: string
+  readonly after: string
+}
+
+/**
+ * The part of a caret line that fits `room` columns, the caret's own column
+ * included. The caret stays in view: a line wider than the room shows the
+ * text before the caret and up to a third of the room after it, and a cut
+ * end shows `…`.
+ */
+export const caretWindow = (line: CaretLine, room: number): CaretWindow => {
+  const [before, after] = caretSplit(line)
+  const textRoom = Math.max(1, room - 1)
+  if (textWidth(line.text) <= textRoom) return { before, after }
+  const afterRoom = Math.min(textWidth(after), Math.floor(textRoom / 3))
+  if (textWidth(before) <= textRoom - afterRoom) {
+    return { before, after: truncate(after, textRoom - textWidth(before)) }
+  }
+  const shownAfter = truncate(after, afterRoom)
+  return {
+    before: "…" + truncateStart(before, textRoom - textWidth(shownAfter) - 1),
+    after: shownAfter,
+  }
+}
 
 // ── State ─────────────────────────────────────────────────────────
 //

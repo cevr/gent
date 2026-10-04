@@ -3,6 +3,8 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Clock, Effect, Option } from "effect"
 import { createSignal, Show } from "solid-js"
 import {
+  CaretLine,
+  caretWindow,
   decoration,
   groupedRows,
   keyHint,
@@ -68,6 +70,30 @@ const plainRows = (items: ReadonlyArray<Fruit>): ReadonlyArray<SelectListRow<Fru
       )
     }),
   )
+
+describe("caret line", () => {
+  test("a caret in a line wider than the room keeps text on both sides in view", () => {
+    const text = `start ${"m".repeat(30)} finish`
+    const line: CaretLine = { text, caret: text.indexOf("finish") }
+    const shown = caretWindow(line, 21)
+    // 20 columns of text: up to a third goes after the caret, the rest before it.
+    expect(shown).toEqual({ before: "…mmmmmmmmmmmm ", after: "finish" })
+    const early: CaretLine = { text, caret: 0 }
+    expect(caretWindow(early, 21)).toEqual({ before: "", after: "start mmmmmmmmmmmmm…" })
+    expect(caretWindow({ text: "short", caret: 2 }, 21)).toEqual({ before: "sh", after: "ort" })
+  })
+
+  test("an insert that joins two characters into one puts the caret after the whole character", () => {
+    // A ZWJ between two women makes one grapheme, 👩‍👩, with boundaries 0 and 5.
+    const line = CaretLine.insert({ text: "👩👩", caret: "👩".length }, "\u200d")
+    expect(line).toEqual({ text: "👩\u200d👩", caret: "👩\u200d👩".length })
+  })
+
+  test("an insert at the caret lands between whole characters", () => {
+    const line = CaretLine.insert({ text: "a👍🏽b", caret: "a👍🏽".length }, "c")
+    expect(line).toEqual({ text: "a👍🏽cb", caret: "a👍🏽c".length })
+  })
+})
 
 describe("select list reducer", () => {
   it.effect("wraps the cursor at both ends and clamps a list that shrank", () =>

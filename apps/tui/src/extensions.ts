@@ -48,6 +48,7 @@ export {
   type MessageRowProps,
   type NoticeRow,
   noticeRowContribution,
+  type QueuedMessage,
   rendererContribution,
   sessionQuery,
   statusLabelContribution,

@@ -2379,8 +2379,8 @@ describe("Scripted debug model tool scenario", () => {
       ),
   })
   /** The prompt of the scenario's step `done`: the user's ask, then `done` answered steps. */
-  const promptAfter = (done: number): Prompt.RawInput => [
-    { role: "user", content: "run the debug tools scenario" },
+  const promptAfter = (done: number, ask = "run the debug tools scenario"): Prompt.RawInput => [
+    { role: "user", content: ask },
     ...Array.from({ length: done }, (_, step) => [
       {
         role: "assistant" as const,
@@ -2400,12 +2400,12 @@ describe("Scripted debug model tool scenario", () => {
       },
     ]).flat(),
   ]
-  const step = (done: number, tools: ReadonlyArray<string>) =>
+  const step = (done: number, tools: ReadonlyArray<string>, ask?: string) =>
     Effect.gen(function* () {
       const model = yield* LanguageModel.LanguageModel
       const parts = yield* model
         .streamText({
-          prompt: promptAfter(done),
+          prompt: promptAfter(done, ask),
           toolkit: advertising(tools),
           disableToolCallResolution: true,
         })
@@ -2438,6 +2438,25 @@ describe("Scripted debug model tool scenario", () => {
       ])
       const answer = steps[5]?.find((part) => part.type === "text-delta")
       expect(answer).toEqual(expect.objectContaining({ delta: expect.stringContaining("d.ts") }))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("debug ask asks a background question, works on its assumption, then answers", () =>
+    Effect.gen(function* () {
+      const tools = ["ask_user_async", "bash"]
+      const steps = yield* Effect.forEach([0, 1, 2], (done) => step(done, tools, "debug ask"))
+      expect(steps.map((parts) => callsOf(parts).map((call) => call.name))).toEqual([
+        ["ask_user_async"],
+        ["bash"],
+        [],
+      ])
+      expect(callsOf(steps[0] ?? [])[0]?.params).toEqual(
+        expect.objectContaining({
+          questions: [expect.objectContaining({ header: "cache", assume: "in-memory LRU" })],
+        }),
+      )
+      const answer = steps[2]?.find((part) => part.type === "text-delta")
+      expect(answer).toEqual(expect.objectContaining({ delta: expect.stringContaining("assumed") }))
     }).pipe(Effect.timeout("4 seconds")),
   )
 
