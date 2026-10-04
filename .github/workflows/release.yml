@@ -2,8 +2,9 @@ name: Release
 
 # A tag `v<version>` builds the gent and gent-cell pair on each platform's own
 # runner, runs the release smoke on it, and drafts a GitHub release with one
-# archive per platform and their SHA256SUMS. The owner checks the draft and
-# publishes it; install.sh and `gent upgrade` read published releases only.
+# archive per platform, their SHA256SUMS and install.sh. The owner checks the
+# draft and publishes it; install.sh and `gent upgrade` read published
+# releases only.
 
 on:
   push:
@@ -85,6 +86,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      # install.sh ships with the release it installs: the site serves the
+      # latest release's copy.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: install.sh
+          sparse-checkout-cone-mode: false
+
       - uses: actions/download-artifact@v4
         with:
           pattern: gent-*
@@ -94,6 +102,9 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum gent-*.tar.gz > SHA256SUMS
+
+      - name: Installer
+        run: cp install.sh dist/install.sh
 
       - name: Draft the release
         env:
