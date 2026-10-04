@@ -106,6 +106,7 @@ import {
   toolResultMessageIdForTurn,
 } from "../../src/domain/message"
 import {
+  BranchAddress,
   defineExtension,
   defineResource,
   ExtensionContext,
@@ -191,6 +192,7 @@ import type { LanguageModel } from "effect/ai"
 import { SingleRunner } from "effect/cluster"
 import { SessionRuntime } from "../../src/runtime/session"
 import { test } from "bun:test"
+import { SqlClient } from "effect/sql"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import * as Response from "effect/ai/Response"
 import {
@@ -3291,6 +3293,83 @@ describe("branch resources follow the profile", () => {
   )
 })
 
+class NoteRows extends Context.Service<
+  NoteRows,
+  { readonly add: (text: string) => Effect.Effect<number> }
+>()("@gent/core/tests/runtime/agent-loop.test/NoteRows") {}
+
+describe("resource host context", () => {
+  // A process Resource owns a table in the session database: its build
+  // reads the `SqlClient` the host gives every Resource build.
+  const noteRows = defineResource({
+    id: "@test/note-rows/rows",
+    scope: "process",
+    layer: Layer.effect(
+      NoteRows,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`CREATE TABLE IF NOT EXISTS test_note_rows (text TEXT NOT NULL)`.pipe(
+          Effect.orDie,
+        )
+        return NoteRows.of({
+          add: (text) =>
+            Effect.gen(function* () {
+              yield* sql`INSERT INTO test_note_rows (text) VALUES (${text})`
+              const rows = yield* sql<{ readonly count: number }>`
+                SELECT COUNT(*) AS count FROM test_note_rows`
+              return rows[0]?.count ?? 0
+            }).pipe(Effect.orDie),
+        })
+      }),
+    ),
+  })
+  const noteRowsExtension = defineExtension({
+    id: "@test/note-rows",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("resource", noteRows)
+      yield* host.register(
+        "tool",
+        tool({
+          id: "note_row",
+          description: "Store a note row",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.Finite,
+          resources: [noteRows],
+          execute: ({ text }) => Effect.flatMap(NoteRows, (rows) => rows.add(text)),
+        }),
+      )
+    }),
+  })
+
+  it.scopedLive("a tool writes and reads rows of a table its process Resource created", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        toolCallStep("note_row", { text: "first" }),
+        toolCallStep("note_row", { text: "second" }),
+        textStep("done"),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [testAgent],
+        extensionInputs: [testTurnExtension, noteRowsExtension],
+        providerLayer,
+      })
+      const outputs = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+        Stream.flatMap(({ event }) => {
+          if (event._tag !== "ToolCallSucceeded") return Stream.empty
+          return Stream.make(event.output)
+        }),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      yield* client.message.send({ sessionId, branchId, content: "store two" })
+      expect(Array.from(yield* Fiber.join(outputs))).toEqual(["1", "2"])
+      yield* controls.assertDone
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+})
+
 const SHARED_KEY = "@gent/core/tests/runtime/agent-loop.test/Shared"
 
 class Shared extends Context.Service<Shared, { readonly version: string }>()(
@@ -3301,10 +3380,18 @@ class Captured extends Context.Service<Captured, { readonly version: string }>()
   "@gent/core/tests/runtime/agent-loop.test/Captured",
 ) {}
 
-/** A user extension whose process Resource overrides the builtin's `Shared`. */
-const sharedOverrideSource = (version: string) => `import { Context, Effect, Layer } from "effect";
+/**
+ * A user extension whose process Resource also provides `Shared`, and logs
+ * when its instance closes.
+ */
+const sharedOverrideSource = (
+  version: string,
+  log: string,
+) => `import { appendFileSync } from "node:fs";
+import { Context, Effect, Layer } from "effect";
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
 class Shared extends Context.Service<Shared, { readonly version: string }>()(${encodeJsonText(SHARED_KEY)}) {}
+const version = ${encodeJsonText(version)};
 export default defineExtension({
   id: "@test/shared-override",
   setup: Effect.gen(function* () {
@@ -3312,24 +3399,37 @@ export default defineExtension({
     yield* host.register("resource", defineResource({
       id: "@test/shared-override/shared",
       scope: "process",
-      layer: Layer.succeed(Shared, Shared.of({ version: ${encodeJsonText(version)} })),
+      layer: Layer.effect(Shared, Effect.acquireRelease(
+        Effect.sync(() => Shared.of({ version })),
+        () => Effect.sync(() => appendFileSync(${encodeJsonText(log)}, "release:" + version + "\\n")),
+      )),
     }));
   }),
 });
 `
 
 describe("branch resources over process services", () => {
-  // A builtin's branch Resource reads `Shared` when it builds. A user
-  // extension later in resolution order overrides `Shared`; editing it must
-  // build the branch Resource again over the new service.
+  // A builtin's branch Resource reads the `Shared` its own process Resource
+  // builds, and its branch. A user extension later in resolution order
+  // provides `Shared` too; its services never reach the branch build.
+  const builds: Array<string> = []
+  const sharedResource = defineResource({
+    id: "@test/captures-shared/shared",
+    scope: "process",
+    layer: Layer.succeed(Shared, Shared.of({ version: "builtin" })),
+  })
   const capturedResource = defineResource({
     id: "@test/captures-shared/captured",
     scope: "branch",
+    resources: [sharedResource],
     layer: Layer.effect(
       Captured,
       Effect.gen(function* () {
         const shared = yield* Shared
-        return Captured.of({ version: shared.version })
+        const address = yield* BranchAddress
+        const version = `${shared.version}@${address.sessionId}/${address.branchId}:${address.cwd}`
+        builds.push(version)
+        return Captured.of({ version })
       }),
     ),
   })
@@ -3337,15 +3437,7 @@ describe("branch resources over process services", () => {
     id: "@test/captures-shared",
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
-      yield* host.register(
-        "resource",
-        defineResource({
-          id: "@test/captures-shared/shared",
-          scope: "process",
-          layer: Layer.succeed(Shared, Shared.of({ version: "builtin" })),
-        }),
-        capturedResource,
-      )
+      yield* host.register("resource", sharedResource, capturedResource)
       yield* host.register(
         "request",
         request({
@@ -3364,22 +3456,27 @@ describe("branch resources over process services", () => {
   })
 
   it.scopedLive(
-    "an edit to a later process service builds the branch Resource again",
+    "a branch Resource reads its branch and its own process services, and an edit to another extension keeps its build",
     () =>
       Effect.gen(function* () {
+        builds.length = 0
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const home = yield* makeTempDirectoryScoped("gent-branch-over-process-home-")
+        const cwd = yield* makeTempDirectoryScoped("gent-branch-over-process-cwd-")
         const extensionsDir = path.join(home, ".gent", "extensions")
         yield* fs.makeDirectory(extensionsDir, { recursive: true })
+        const log = path.join(home, "override.log")
+        yield* fs.writeFileString(log, "")
         const overrideFile = path.join(extensionsDir, "override.ts")
-        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-one"))
+        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-one", log))
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           agents: [testAgent],
           extensionInputs: [testTurnExtension, capturing],
           providerLayer,
           home,
+          cwd,
         })
         yield* client.session
           .watchRuntime({ sessionId, branchId })
@@ -3391,9 +3488,19 @@ describe("branch resources over process services", () => {
           capabilityId: "read-captured",
           input: "read",
         })
-        expect(yield* readCaptured).toBe("override-one")
-        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-two"))
-        expect(yield* readCaptured).toBe("override-two")
+        const expected = `builtin@${sessionId}/${branchId}:${cwd}`
+        expect(yield* readCaptured).toBe(expected)
+        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-two", log))
+        expect(yield* readCaptured).toBe(expected)
+        expect(builds).toEqual([expected])
+        // The kept build moved to the newest profile, so the profile before
+        // retires and the edited extension's old process Resource closes.
+        yield* waitFor(
+          fs.readFileString(log),
+          (text) => text.includes("release:override-one"),
+          5_000,
+          "the old override released",
+        )
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
     15_000,
   )

@@ -100,7 +100,7 @@ import {
   type WaitingForInteractionState,
 } from "../domain/agent-loop.js"
 import { type AgentEvent, ErrorOccurred, EventStore } from "../domain/event.js"
-import type { FailedExtension } from "../domain/extension.js"
+import { BranchAddress, type FailedExtension } from "../domain/extension.js"
 import { causeChainMessage } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
@@ -127,9 +127,10 @@ import type { SqlClient } from "effect/sql"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import {
   ApprovalService,
+  branchBuildContext,
+  branchResourceKeys,
   buildScopeResources,
   type CurrentExtensionHostContext,
-  resourceBuildKeys,
   ExtensionRegistry,
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
@@ -1542,7 +1543,13 @@ interface BranchGeneration {
   readonly scope: Scope.Closeable
   /** The services this extension's branch Resources built, and only those. */
   readonly context: Context.Context<unknown>
-  readonly lease: ProfileLease
+  /**
+   * The newest profile that uses it. A later run that keeps it moves it to
+   * its own profile, which holds every service its build read (its key says
+   * so): the profile before can retire, with another extension's old
+   * process services.
+   */
+  lease: ProfileLease
   users: number
   /** The extension whose Resources these are. */
   readonly extensionId: ExtensionId
@@ -1968,6 +1975,10 @@ const makeAgentLoopBehavior = (
       branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
     ).pipe(Scope.provide(loopScope))
     const branchContext = branchToolContext
+    const branchAddress = Context.make(
+      BranchAddress,
+      BranchAddress.of({ sessionId, branchId, cwd: branchCwd, home: runtimeEnvironment.home }),
+    )
     // The branch's Resources follow the session's profile, the same one its
     // turns and requests resolve: the extensions set up for the session's
     // cwd, over that profile's process services. The host cwd's profile
@@ -1977,14 +1988,14 @@ const makeAgentLoopBehavior = (
     // resolves a profile.
     //
     // A build of one extension's branch Resources is a generation, named by
-    // its build key (`resourceBuildKeys`): an edit to the extension or to
-    // one it builds over gives a new key, and so a new generation; an edit
-    // elsewhere keeps it. A run holds the generations of the profile it
-    // resolved until it ends, so a turn that started before an edit ends on
-    // the old services while the next run reads the new ones. A generation
-    // the newest profile does not use closes when its last run ends, in
-    // reverse build order. It keeps a lease on the profile it was built
-    // over, so the process services it reads close after it.
+    // its build key (`branchResourceKeys`): an edit to the extension gives a
+    // new key, and so a new generation; an edit elsewhere keeps it. A run
+    // holds the generations of the profile it resolved until it ends, so a
+    // turn that started before an edit ends on the old services while the
+    // next run reads the new ones. A generation the newest profile does not
+    // use closes when its last run ends, in reverse build order. It keeps a
+    // lease on the newest profile that uses it, so the process services it
+    // reads close after it.
     //
     // `branchResourceLock` orders the resolves of this loop, so the newest
     // profile is the last one resolved. The place's lock in the profile
@@ -2144,128 +2155,140 @@ const makeAgentLoopBehavior = (
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             yield* restore(branchResourceLock.take(1))
-            const { profile, retired, resolveNumber, lease } = yield* Effect.gen(function* () {
-              const lease: ProfileLease = {
-                scope: yield* Scope.fork(loopScope),
-                holds: 1,
-                owner: loopScope,
-              }
-              const resolved = yield* restore(resolveProfile(opener, lease.scope)).pipe(
-                Effect.onError(() => Scope.close(lease.scope, Exit.void)),
-              )
-              const extensions = turnRegistry(resolved).getResolved().extensions
-              const keys = resourceBuildKeys(extensions, "branch", "branch")
-              const used: Array<string> = []
-              const suspended: Array<FailedExtension> = []
-              // Each extension's branch Resources build on their own, as its
-              // process Resources do. One that fails, or that needs a service
-              // a failed one would have built, is named once in the log and in
-              // the transcript and is suspended for this loop, as a failed
-              // process Resource suspends its extension for the profile;
-              // every other extension and the branch's turns go on.
-              const started = yield* buildScopeResources({
-                extensions: extensions.filter((extension) => {
-                  const failure = failedBuilds.get(keys.get(extension) ?? "")
-                  if (Predicate.isUndefined(failure)) return true
+            const { profile, retired, moved, resolveNumber, lease } = yield* Effect.gen(
+              function* () {
+                const lease: ProfileLease = {
+                  scope: yield* Scope.fork(loopScope),
+                  holds: 1,
+                  owner: loopScope,
+                }
+                const resolved = yield* restore(resolveProfile(opener, lease.scope)).pipe(
+                  Effect.onError(() => Scope.close(lease.scope, Exit.void)),
+                )
+                const extensions = turnRegistry(resolved).getResolved().extensions
+                const builds = resolved.turnResourceBuilds
+                const keys = branchResourceKeys(extensions, builds)
+                const used: Array<string> = []
+                // The leases of the profiles before that kept generations held.
+                const moved: Array<ProfileLease> = []
+                const suspended: Array<FailedExtension> = []
+                // Each extension's branch Resources build on their own, as its
+                // process Resources do. One that fails, or that needs a service
+                // a failed one would have built, is named once in the log and in
+                // the transcript and is suspended for this loop, as a failed
+                // process Resource suspends its extension for the profile;
+                // every other extension and the branch's turns go on.
+                const started = yield* buildScopeResources({
+                  extensions: extensions.filter((extension) => {
+                    const failure = failedBuilds.get(keys.get(extension) ?? "")
+                    if (Predicate.isUndefined(failure)) return true
+                    suspended.push(failure)
+                    return false
+                  }),
+                  scope: "branch",
+                  context: Context.merge(
+                    Context.makeUnsafe<unknown>(new Map()),
+                    resolved.turnCapabilityContext,
+                  ),
+                  buildContext: (extension) => branchBuildContext(extension, builds, branchAddress),
+                  parent: loopScope,
+                  restore: (effect) => effect,
+                  reuse: (extension) => {
+                    const key = keys.get(extension)
+                    if (Predicate.isUndefined(key)) return Option.none()
+                    const generation = generations.get(key)
+                    if (Predicate.isUndefined(generation)) return Option.none()
+                    generation.users += 1
+                    if (generation.lease !== lease) {
+                      lease.holds += 1
+                      moved.push(generation.lease)
+                      generation.lease = lease
+                    }
+                    used.push(key)
+                    return Option.some(generation.context)
+                  },
+                  built: (extension, scope, context) => {
+                    const key = keys.get(extension)
+                    if (Predicate.isUndefined(key)) return
+                    lease.holds += 1
+                    nextGenerationId += 1
+                    generations.set(key, {
+                      id: nextGenerationId,
+                      scope,
+                      context,
+                      lease,
+                      users: 1,
+                      extensionId: extension.manifest.id,
+                      activated: false,
+                    })
+                    used.push(key)
+                  },
+                })
+                for (const { extension, failure } of started.failed) {
+                  const key = keys.get(extension)
+                  if (!Predicate.isUndefined(key)) failedBuilds.set(key, failure)
                   suspended.push(failure)
-                  return false
-                }),
-                scope: "branch",
-                context: Context.merge(
-                  Context.makeUnsafe<unknown>(new Map()),
-                  resolved.turnCapabilityContext,
-                ),
-                parent: loopScope,
-                restore: (effect) => effect,
-                reuse: (extension) => {
-                  const key = keys.get(extension)
-                  if (Predicate.isUndefined(key)) return Option.none()
-                  const generation = generations.get(key)
-                  if (Predicate.isUndefined(generation)) return Option.none()
-                  generation.users += 1
-                  used.push(key)
-                  return Option.some(generation.context)
-                },
-                built: (extension, scope, context) => {
-                  const key = keys.get(extension)
-                  if (Predicate.isUndefined(key)) return
-                  lease.holds += 1
-                  nextGenerationId += 1
-                  generations.set(key, {
-                    id: nextGenerationId,
-                    scope,
-                    context,
-                    lease,
-                    users: 1,
-                    extensionId: extension.manifest.id,
-                    activated: false,
-                  })
-                  used.push(key)
-                },
-              })
-              for (const { extension, failure } of started.failed) {
-                const key = keys.get(extension)
-                if (!Predicate.isUndefined(key)) failedBuilds.set(key, failure)
-                suspended.push(failure)
-              }
-              yield* Effect.forEach(
-                started.failed,
-                ({ failure, message }) =>
-                  publishEvent(
-                    ErrorOccurred.make({
-                      sessionId,
-                      branchId,
-                      error: `Extension "${failure.manifest.id}" branch resource failed to start: ${message}`,
-                      notice: true,
-                    }),
-                  ).pipe(
-                    Effect.catchEager((error) =>
-                      Effect.logWarning("failed to publish ErrorOccurred").pipe(
-                        Effect.annotateLogs({ error: String(error) }),
+                }
+                yield* Effect.forEach(
+                  started.failed,
+                  ({ failure, message }) =>
+                    publishEvent(
+                      ErrorOccurred.make({
+                        sessionId,
+                        branchId,
+                        error: `Extension "${failure.manifest.id}" branch resource failed to start: ${message}`,
+                        notice: true,
+                      }),
+                    ).pipe(
+                      Effect.catchEager((error) =>
+                        Effect.logWarning("failed to publish ErrorOccurred").pipe(
+                          Effect.annotateLogs({ error: String(error) }),
+                        ),
                       ),
                     ),
+                  { discard: true },
+                )
+                // The run lets go of its generations, then of its lease, when it
+                // ends: a generation built over this profile closes before the
+                // profile can retire.
+                yield* Scope.addFinalizer(
+                  runScope,
+                  releaseGenerations(used).pipe(
+                    Effect.ensuring(releaseProfileLease(lease)),
+                    Effect.annotateLogs({ sessionId, branchId }),
                   ),
-                { discard: true },
-              )
-              // The run lets go of its generations, then of its lease, when it
-              // ends: a generation built over this profile closes before the
-              // profile can retire.
-              yield* Scope.addFinalizer(
-                runScope,
-                releaseGenerations(used).pipe(
-                  Effect.ensuring(releaseProfileLease(lease)),
-                  Effect.annotateLogs({ sessionId, branchId }),
-                ),
-              )
-              // This profile is now the newest: a generation it does not use
-              // closes once no run holds it.
-              currentKeys = new Set(used)
-              const retired: Array<BranchGeneration> = []
-              for (const [key, generation] of generations) {
-                if (generation.users > 0 || currentKeys.has(key)) continue
-                retire(key, generation, retired)
-              }
-              const context = runContext(resolved, used, suspended)
-              const profile = { ...resolved, turnCapabilityContext: context }
-              // The openers of the newest profile, as the run reads it: a
-              // suspended extension's hooks are not in its registry.
-              const registry = turnRegistry(profile).getResolved()
-              newestOpeners = registry.extensions.flatMap((extension) => {
-                if (!registry.extensionHooks.loopOpenExtensions.has(extension.manifest.id)) {
-                  return []
+                )
+                // This profile is now the newest: a generation it does not use
+                // closes once no run holds it.
+                currentKeys = new Set(used)
+                const retired: Array<BranchGeneration> = []
+                for (const [key, generation] of generations) {
+                  if (generation.users > 0 || currentKeys.has(key)) continue
+                  retire(key, generation, retired)
                 }
-                const key = Option.fromUndefinedOr(keys.get(extension))
-                return [{ extensionId: extension.manifest.id, key }]
-              })
-              const present = new Set(newestOpeners.map((opener) => opener.extensionId))
-              for (const id of openedWithoutResources) {
-                if (!present.has(id)) openedWithoutResources.delete(id)
-              }
-              resolveCount += 1
-              return { profile, retired, resolveNumber: resolveCount, lease }
-            }).pipe(Effect.ensuring(branchResourceLock.release(1)))
+                const context = runContext(resolved, used, suspended)
+                const profile = { ...resolved, turnCapabilityContext: context }
+                // The openers of the newest profile, as the run reads it: a
+                // suspended extension's hooks are not in its registry.
+                const registry = turnRegistry(profile).getResolved()
+                newestOpeners = registry.extensions.flatMap((extension) => {
+                  if (!registry.extensionHooks.loopOpenExtensions.has(extension.manifest.id)) {
+                    return []
+                  }
+                  const key = Option.fromUndefinedOr(keys.get(extension))
+                  return [{ extensionId: extension.manifest.id, key }]
+                })
+                const present = new Set(newestOpeners.map((opener) => opener.extensionId))
+                for (const id of openedWithoutResources) {
+                  if (!present.has(id)) openedWithoutResources.delete(id)
+                }
+                resolveCount += 1
+                return { profile, retired, moved, resolveNumber: resolveCount, lease }
+              },
+            ).pipe(Effect.ensuring(branchResourceLock.release(1)))
             // An extension finalizer never runs under the lock.
             yield* closeGenerations(retired)
+            yield* Effect.forEach(moved, releaseProfileLease, { discard: true })
             return { profile, lease, newest: () => resolveNumber === resolveCount }
           }),
         )

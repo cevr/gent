@@ -2361,6 +2361,10 @@ describe("requestId idempotency", () => {
           layerContext,
           registryService: Context.get(layerContext, ExtensionRegistry),
           baseSections: [],
+          resourceBuilds: {
+            host: Context.merge(Context.makeUnsafe<unknown>(new Map()), layerContext),
+            process: new Map(),
+          },
           generationId: ProcessGenerationId.make("test"),
         }
         const profiles = Layer.succeed(

@@ -92,6 +92,7 @@ import {
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
   provideExtensionLeaf,
+  type ResourceBuildInputs,
   RunOpener,
 } from "./extension-host.js"
 import type * as Response from "effect/ai/Response"
@@ -319,6 +320,8 @@ export interface AgentLoopTurnProfile {
    * extension (a failed branch Resource) writes the narrowed registry here.
    */
   readonly turnCapabilityContext: Context.Context<ExtensionRegistry>
+  /** What the profile's branch Resources build over (`SessionProfile.resourceBuilds`). */
+  readonly turnResourceBuilds: ResourceBuildInputs
   /** Identity of the process that built the profile; a process-local tool binding replays only inside it. */
   readonly turnGenerationId: ProcessGenerationId
   /** The profile's revision (`SessionProfile.revision`), named on each request of the turn. */

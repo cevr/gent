@@ -3012,6 +3012,14 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "missingEffectContext:off -- the test asserts that this leaf does not compile",
     count: 6,
   },
+  {
+    // The type tests assert that a resource layer needing a service its
+    // build does not get fails to compile; the Effect diagnostic reports the
+    // same failure.
+    file: "packages/core/tests/extensions/api.test.ts",
+    text: "missingLayerContext:off -- the test asserts that this resource does not compile",
+    count: 3,
+  },
 ]
 
 const approvedCount = (entry: ApprovedSuppressionEntry): number => entry.count ?? 1

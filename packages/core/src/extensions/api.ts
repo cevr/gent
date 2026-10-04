@@ -138,6 +138,8 @@ export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).
   defineResource,
+  // The branch a branch Resource builds for.
+  BranchAddress,
 } from "../domain/extension.js"
 
 // Typed capability factories. Extension registries dispatch by factory-origin

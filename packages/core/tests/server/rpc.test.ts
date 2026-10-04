@@ -4008,20 +4008,26 @@ const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
   Effect.gen(function* () {
     const resolved = resolveExtensions(extensions)
     const registryContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
+    const host = Context.merge(Context.makeUnsafe<unknown>(new Map()), registryContext)
     const started = yield* buildScopeResources({
       extensions: resolved.extensions,
       scope: "process",
-      context: Context.merge(Context.makeUnsafe<unknown>(new Map()), registryContext),
+      context: host,
+      buildContext: (_extension, before) => before,
       parent: yield* Effect.scope,
       restore: (effect) => effect,
     })
     const layerContext = started.context
+    const process = new Map(
+      Array.from(started.services, ([id, context]) => [id, { key: `${cwd}:${id}`, context }]),
+    )
     return {
       cwd,
       resolved,
       layerContext,
       registryService: Context.get(layerContext, ExtensionRegistry),
       baseSections: [],
+      resourceBuilds: { host, process },
       generationId: ProcessGenerationId.make("test"),
     } satisfies SessionProfile
   })

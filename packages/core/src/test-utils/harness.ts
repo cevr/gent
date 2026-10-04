@@ -569,6 +569,7 @@ export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (ru
   const turnProfile: AgentLoopTurnProfile = {
     turnGenerationId: profile.generationId,
     turnCapabilityContext: profile.layerContext,
+    turnResourceBuilds: profile.resourceBuilds,
     turnBaseSections: profile.baseSections,
     turnHostCtx: hostProvider.forRun(hostRun(run)),
     turnInteractive: hostRun(run).interactive,
@@ -1630,6 +1631,10 @@ export const fixedSessionProfiles = (
               layerContext,
               registryService: Context.get(layerContext, ExtensionRegistry),
               baseSections: [],
+              resourceBuilds: {
+                host: Context.merge(Context.makeUnsafe<unknown>(new Map()), layerContext),
+                process: new Map(),
+              },
               generationId: ProcessGenerationId.make("test"),
             }
             cache.set(cwd, profile)

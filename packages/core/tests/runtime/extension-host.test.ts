@@ -2347,6 +2347,7 @@ describe("resolveTurnProfile", () => {
           layerContext: Context.make(ExtensionRegistry, profileRegistry),
           registryService: profileRegistry,
           baseSections: [],
+          resourceBuilds: { host: Context.makeUnsafe(new Map()), process: new Map() },
           generationId: ProcessGenerationId.make("test"),
         }
         const fakeProfileCache: Pick<SessionProfileCacheService, "resolve"> = {
@@ -2659,6 +2660,11 @@ const fsLayer = Layer.provideMerge(
     BunGentPlatformLive,
   ),
   childProcessSpawnerLive,
+)
+
+/** The session database every Resource build reads, in memory. */
+const profileStorageLayer = SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(
+  Layer.provide(BunPlatformLive),
 )
 
 /**
@@ -3106,7 +3112,7 @@ describe("extension activation isolation", () => {
       })
       expect(profile.resolved.failedExtensions[0]?.error).toContain("setup boom")
       expect(profile.resolved.extensionStatuses[0]).toMatchObject({ status: "active" })
-    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+    }).pipe(Effect.provide(Layer.mergeAll(fsLayer, ConfigService.Test(), profileStorageLayer))),
   )
 
   it.scopedLive("a failed resource layer suspends only its extension and keeps siblings live", () =>
@@ -3170,7 +3176,7 @@ describe("extension activation isolation", () => {
       expect(profile.resolved.failedExtensions[0]?.error).toContain("resource layer boom")
       // The healthy resource stays acquired until the server scope closes.
       expect(released).toBe(0)
-    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+    }).pipe(Effect.provide(Layer.mergeAll(fsLayer, ConfigService.Test(), profileStorageLayer))),
   )
 
   // Only an interrupt of the resolve stops the build. An extension whose
@@ -3207,7 +3213,7 @@ describe("extension activation isolation", () => {
       expect(profile.resolved.failedExtensions).toMatchObject([
         { manifest: { id: ExtensionId.make("self-interrupting") }, phase: "startup" },
       ])
-    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+    }).pipe(Effect.provide(Layer.mergeAll(fsLayer, ConfigService.Test(), profileStorageLayer))),
   )
 })
 
@@ -4873,6 +4879,7 @@ const buildProcessResources = (extensions: ReadonlyArray<LoadedExtension>) =>
       extensions,
       scope: "process",
       context: Context.makeUnsafe<unknown>(new Map()),
+      buildContext: (_extension, before) => before,
       parent: yield* Effect.scope,
       restore: (effect) => effect,
     })
@@ -5257,6 +5264,7 @@ const makeMutationsLayer = (
     layerContext: Context.make(ExtensionRegistry, launchRegistry),
     registryService: launchRegistry,
     baseSections: [],
+    resourceBuilds: { host: Context.makeUnsafe(new Map()), process: new Map() },
     generationId: ProcessGenerationId.make("test"),
   }
   const eventStoreLayer = recordingEventStore(events)

@@ -12,8 +12,8 @@ import type * as Response from "effect/ai/Response"
 import * as AiTool from "effect/ai/Tool"
 import type {
   AnyResourceContribution,
+  DeclaredResourceServices,
   ExtensionContext,
-  ResourceServices,
   TurnNotice,
 } from "./extension.js"
 import type { ExtensionPlatformServices } from "../runtime/gent-platform.js"
@@ -299,16 +299,6 @@ type RequiredDeclarations<Resources, Feature> = ([Resources] extends [ReadonlyAr
   ? unknown
   : { readonly resources: Resources }) &
   ([Feature] extends [never] ? unknown : { readonly branchTools: BranchToolFeature<Feature> })
-
-/**
- * The services a `resources` declaration proves present. Only a tuple type
- * proves which definitions the value holds; an array type such as
- * `ReadonlyArray<typeof Counter>` also types an empty or partial array, so it
- * grants nothing. The factories take `Resources` as a `const` type parameter,
- * so an inline `resources: [Counter]` infers as a tuple.
- */
-type DeclaredResourceServices<Resources extends ReadonlyArray<AnyResourceContribution>> =
-  number extends Resources["length"] ? never : ResourceServices<Resources[number]>
 
 /** Author-facing input to `request({...})`. */
 export type RequestInput<

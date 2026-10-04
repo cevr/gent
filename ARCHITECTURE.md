@@ -315,9 +315,15 @@ updates this list in the same commit.
     `Effect.serviceOption` still reads a service the root holds
     (`registry_probe` in `packages/core/tests/server/rpc.test.ts`). The
     resource services derive from each `defineResource` value; there is no
-    hand-written list. Package validation fails an extension that does not
-    register the resource definition a leaf names; the check is by identity,
-    so another definition under the same id fails too. Profile validation
+    hand-written list. `defineResource` bounds its layer the same way: the
+    host's services every build gets (`ResourceHostServices`: the platform,
+    `SqlClient`, `InteractionStorage`), and for a branch Resource its
+    `BranchAddress` and the services of the process Resources it names in
+    `resources`. Package validation fails an extension that does not
+    register the resource definition a leaf or a branch Resource names; the
+    check is by identity, so another definition under the same id fails too.
+    A process Resource names none, and a branch Resource names only process
+    Resources. Profile validation
     fails an extension whose leaf names a branch-tool feature other than the
     one the root installs (`CurrentBranchToolFeature`, which the session
     profile cache reads once when the root builds it). The feature stays a
@@ -525,8 +531,8 @@ from `LoadedExtension.version`) of each resource-bearing extension that
 started before it, then its own (`startProcessResources`). A last good
 version that runs in place of a version that failed to start is named by its
 own version, in its key and in the key of each build over it, so a Resource
-built over one version is never shared by a profile that runs another. Branch
-Resources key on what the profile declares (`resourceBuildKeys`). A reload (`SessionProfileCacheService.reload`, which the
+built over one version is never shared by a profile that runs another. A
+branch Resource keys on what its build reads (`branchResourceKeys`). A reload (`SessionProfileCacheService.reload`, which the
 `Extensions` facet calls) adds a count per (place, extension id) to the file
 stamp, so the next resolve misses the cached profile, runs every setup again,
 and keeps each Resource whose build key it shares; the counts live in memory
@@ -2308,8 +2314,16 @@ Other notes:
 
 - Process and branch Resources build through one builder,
   `buildScopeResources` in `runtime/extension-host.ts`: extension by
-  extension in resolution order, each in its own child scope, over the
-  services the extensions before it built. A layer that fails to build closes
+  extension in resolution order, each in its own child scope. Every build
+  reads the host's services (`ResourceHostServices`: the extension
+  platform, the session database's `SqlClient` and `InteractionStorage`),
+  given by value in the profile cache's build context. A process build runs
+  over the process Resources the extensions before it built too. A branch
+  build reads only its `BranchAddress` (session, branch, cwd, home) and the
+  process Resources of its own extension it names
+  (`defineResource({ resources })`, `branchBuildContext`); `defineResource`
+  bounds the layer's requirements to these, so a build that reads anything
+  else does not compile. A layer that fails to build closes
   what it acquired, is logged naming its extension
   (`extension.resource.failed`), and leaves every other extension's Resources
   live. A process Resource that fails rejects its extension: the profile
@@ -2320,15 +2334,20 @@ Other notes:
   Resources the profile needs and the loop does not have yet, so a
   control-plane write never resolves a profile. One build of one extension's
   branch Resources is a generation, named by its build key
-  (`resourceBuildKeys`): a branch key names every extension with process
-  Resources, since a branch build reads the whole process context, then the
-  extensions with branch Resources up to its own. An edit to the extension,
-  or to one it builds over, gives a new generation, and an edit elsewhere
-  keeps it. A run holds the generations of its profile until it
-  ends, so a turn that started before an edit ends on the old services and
-  the next run reads the new ones; a generation the newest profile does not
-  use closes when its last run ends, outside the lock, newest first, and then
-  lets go of the profile lease it was built over. That close
+  (`branchResourceKeys`): what the build reads, that is its extension's
+  identity, or, when it names process Resources, the key those were built
+  under. An edit to the extension, or to a process-bearing one before it
+  that its named process Resources build over, gives a new generation; an
+  edit elsewhere keeps it, with its state. A run holds the generations of
+  its profile until it ends, so a turn that started before an edit ends on
+  the old services and the next run reads the new ones. A generation holds
+  the lease of the newest profile that uses it: a run that keeps a
+  generation moves it to its own profile's lease, which holds every service
+  the build read (its key says so), and lets go of the old one after the
+  lock, so the profile before retires with another extension's old process
+  Resources. A generation the newest profile does not use closes when its
+  last run ends, outside the lock, newest first, and then lets go of its
+  profile lease. That close
   (`closeBranchGenerations`) is the generation's only one, so it cannot stop
   part way: it is uninterruptible, it closes every retired scope though one
   before it fails, and it lets go of each lease whatever the close ends in.
