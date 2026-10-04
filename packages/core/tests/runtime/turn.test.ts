@@ -3450,6 +3450,97 @@ describe("virtual model routing", () => {
   )
 
   it.scopedLive(
+    "a turn recovered after its route and before its first step keeps the route's charge in its cost, once",
+    () =>
+      Effect.gen(function* () {
+        // A priced classifier makes the cost its 21 tokens plus the step's;
+        // an unpriced one leaves the turn's cost unknown.
+        const cases = [
+          { judge: routeJudgeDriver, cost: Option.some((21 + 13) / 1_000_000) },
+          { judge: unpricedRouteJudgeDriver, cost: Option.none<number>() },
+        ]
+        for (const { judge, cost } of cases) {
+          const tempDir = yield* makeTempDirectoryScoped("gent-route-charge-")
+          const dbPath = `${tempDir}/gent.db`
+          const judged: ModelRouterContribution["route"] = () =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Models.decide({
+                definition: Decision.make({
+                  input: Schema.String,
+                  decisions: {
+                    choice: Decision.classify({
+                      instructions: "Which choice",
+                      criteria: { choice1: "light work", choice2: "hard work" },
+                    }),
+                  },
+                }),
+                input: "route me",
+              })
+              return { choice: 1, reason: "hard" }
+            })
+          // First process: the turn routes, sends its first request and dies
+          // before the step commits.
+          const firstProvider = yield* LanguageModelLayers.sequence([
+            { ...textStep("never emitted"), gated: true },
+          ])
+          const started = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(
+                createE2ELayer({
+                  agents: e2ePreset.agents,
+                  providerLayer: firstProvider.layer,
+                  extensionInputs: [routingExtension({ drivers: [judge], route: judged })],
+                  storagePath: dbPath,
+                  modelPricing: { input: 1, output: 1 },
+                }),
+              )
+              const { sessionId, branchId } = yield* client.session.create({})
+              yield* client.auth.setKey({ provider: judge.id, key: "test-key", sessionId })
+              yield* selectAuto(client, sessionId)
+              yield* client.message
+                .send({ sessionId, branchId, content: "route me" })
+                .pipe(Effect.forkScoped)
+              yield* firstProvider.controls.waitForCall(0)
+              return { sessionId, branchId }
+            }).pipe(Effect.timeout("10 seconds")),
+          )
+
+          // Second process: the recovered turn runs its step on the recorded
+          // route; the router is not asked again.
+          const secondProvider = yield* LanguageModelLayers.sequence([textStep("RECOVERED")])
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(
+                createE2ELayer({
+                  agents: e2ePreset.agents,
+                  providerLayer: secondProvider.layer,
+                  extensionInputs: [
+                    routingExtension({ drivers: [judge], route: () => Effect.die("asked again") }),
+                  ],
+                  storagePath: dbPath,
+                  modelPricing: { input: 1, output: 1 },
+                }),
+              )
+              const afterTurns = yield* recordBranchEvents(client, started)
+              yield* client.session.getSnapshot(started)
+              const events = yield* afterTurns(1)
+              expect(routedEvents(events)).toHaveLength(1)
+              expect(stepModels(events)).toEqual([STRONG_MODEL])
+              const completed = events.filter(Schema.is(TurnCompleted))
+              expect(completed).toHaveLength(1)
+              const turnCost = Option.fromUndefinedOr(completed[0]?.costUsd)
+              expect([judge.id, Option.isSome(turnCost)]).toEqual([judge.id, Option.isSome(cost)])
+              if (Option.isSome(cost))
+                expect(Option.getOrThrow(turnCost)).toBeCloseTo(cost.value, 12)
+            }).pipe(Effect.timeout("20 seconds")),
+          )
+        }
+      }).pipe(Effect.timeout("50 seconds")),
+    60_000,
+  )
+
+  it.scopedLive(
     "a virtual model that routes to a router is refused: the catalog omits it and its turn says why",
     () =>
       Effect.gen(function* () {
@@ -3695,6 +3786,22 @@ const routeJudgeDriver: ModelDriverContribution = {
         }),
       ),
     ),
+}
+
+/** The route judge with no price: a route through it has no known cost. */
+const unpricedRouteJudgeDriver: ModelDriverContribution = {
+  ...routeJudgeDriver,
+  id: "free-judge",
+  name: "Free judge",
+  listModels: () =>
+    Effect.succeed([
+      Model.make({
+        id: ModelId.make("free-judge/jev"),
+        name: "jev",
+        provider: ProviderId.make("free-judge"),
+        kind: "classifier",
+      }),
+    ]),
 }
 
 // ── turn record ─────────────────────────────────────────────────────────────
@@ -5295,6 +5402,36 @@ describe("turn ledger", () => {
         })
       }
       expect((yield* ledger.total).costUsd).toEqual(Option.some(0.75))
+    }),
+  )
+
+  it.effect("a route that every step of its turn reads is charged once", () =>
+    Effect.gen(function* () {
+      const ledger = yield* makeTurnLedger
+      const messageId = MessageId.make("ledger-routed")
+      yield* ledger.beginTurn(messageId)
+      const route = ModelRouted.make({
+        sessionId,
+        branchId,
+        messageId,
+        selected: ModelId.make("router/auto"),
+        model: ModelId.make("test/priced"),
+        reason: "hard",
+        classifier: ModelId.make("judge/jev"),
+        costUsd: 0.125,
+        durationMs: 1,
+      })
+      for (const cost of [0.5, 0.25]) {
+        yield* ledger.noteRoute(route)
+        yield* ledger.noteStep({
+          agent: AgentName.make("primary"),
+          model: ModelId.make("test/priced"),
+          usage: Option.some({ inputTokens: 100, outputTokens: 10 }),
+          costUsd: Option.some(cost),
+          toolCallCount: 0,
+        })
+      }
+      expect((yield* ledger.total).costUsd).toEqual(Option.some(0.875))
     }),
   )
 })

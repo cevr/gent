@@ -830,7 +830,8 @@ Shape:
   a hand switch writes and sends the same bytes, and the earlier model's
   reasoning goes back as text only (`toPromptMessages`). The router's
   classifier calls go through the run's own `ExtensionContext.Models`; their
-  cost lands on the event and the session's cost. The auth gate asks for the
+  cost lands on the event and the session's cost, and the turn's ledger
+  charges it once per turn, a recovered turn too (`noteRoute`). The auth gate asks for the
   driver of a virtual model's default choice (`routeCredentialDriver`).
   The shipped router (`packages/extensions/src/router.ts`, `@gent/router`)
   reads `routers` from `~/.gent/config.json` and from a trusted project's

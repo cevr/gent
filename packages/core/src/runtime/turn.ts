@@ -383,12 +383,15 @@ type TurnMetrics = {
   cacheReadTokens: number
   cacheWriteTokens: number
   /**
-   * USD of the steps and of the compaction summaries this turn wrote. None
-   * once one of them could not be priced (its model has no price, or it
-   * reported no usable counts): a sum of the rest would read as the turn's
-   * whole cost, the same rule `usageKnown` keeps for the tokens.
+   * USD of the steps, of the compaction summaries this turn wrote and of its
+   * route's classifier calls. None once one of them could not be priced (its
+   * model has no price, or it reported no usable counts): a sum of the rest
+   * would read as the turn's whole cost, the same rule `usageKnown` keeps for
+   * the tokens.
    */
   costUsd: Option.Option<number>
+  /** The turn whose route `costUsd` holds: a route is charged once per turn. */
+  routeCharged: Option.Option<MessageId>
   toolCallCount: number
   /** Model steps seen this turn; zero means no usage can be reported. */
   steps: number
@@ -405,6 +408,7 @@ const emptyTurnMetrics = (): TurnMetrics => ({
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
   costUsd: Option.some(0),
+  routeCharged: Option.none(),
   toolCallCount: 0,
   steps: 0,
   usageKnown: true,
@@ -753,10 +757,12 @@ interface TurnLedger {
    */
   readonly noteCompaction: (costUsd: Option.Option<number>) => Effect.Effect<void>
   /**
-   * The classifier calls that routed this turn, and their price: none when a
-   * classifier has no price, which leaves the turn without a cost.
+   * The route this turn runs on, published now or recorded before (an
+   * earlier step, a process before a restart). Its classifier calls are
+   * charged once per turn: none when a classifier has no price, which leaves
+   * the turn without a cost; a route that asked no classifier costs nothing.
    */
-  readonly noteRoute: (costUsd: Option.Option<number>) => Effect.Effect<void>
+  readonly noteRoute: (route: ModelRouted) => Effect.Effect<void>
   /** What this turn spent, as `TurnCompleted` reports it. */
   readonly total: Effect.Effect<TurnMetrics>
   /** A step's request carried these notices. */
@@ -775,6 +781,15 @@ const positiveCount = (count: number) => Option.liftPredicate(count, (value) => 
 /** Two prices summed: none when either is unknown. */
 const addCost = (total: Option.Option<number>, cost: Option.Option<number>) =>
   Option.zipWith(total, cost, (sum, value) => sum + value)
+
+/**
+ * What a route's classifier calls cost: nothing when it asked none, none when
+ * it asked one with no price.
+ */
+const routeCharge = (route: ModelRouted): Option.Option<number> =>
+  Option.fromUndefinedOr(route.costUsd).pipe(
+    Option.orElse(() => Option.liftPredicate(0, () => Predicate.isUndefined(route.classifier))),
+  )
 
 export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* () {
   const metrics = yield* Ref.make(emptyTurnMetrics())
@@ -808,6 +823,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           cacheReadTokens: m.cacheReadTokens,
           cacheWriteTokens: m.cacheWriteTokens,
           costUsd: Option.none<number>(),
+          routeCharged: m.routeCharged,
           toolCallCount: m.toolCallCount + params.toolCallCount,
           steps: m.steps + 1,
           usageKnown: false,
@@ -849,8 +865,17 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
       }),
     noteCompaction: (costUsd) =>
       Ref.update(metrics, (m) => ({ ...m, costUsd: addCost(m.costUsd, costUsd) })),
-    noteRoute: (costUsd) =>
-      Ref.update(metrics, (m) => ({ ...m, costUsd: addCost(m.costUsd, costUsd) })),
+    // Every step of a routed turn reads its route; only the first one this
+    // ledger sees for the turn charges it.
+    noteRoute: (route) =>
+      Ref.update(metrics, (m) => {
+        if (Option.contains(m.routeCharged, route.messageId)) return m
+        return {
+          ...m,
+          costUsd: addCost(m.costUsd, routeCharge(route)),
+          routeCharged: Option.some(route.messageId),
+        }
+      }),
     total: Ref.get(metrics),
     noteNotices: (notices) =>
       Ref.update(shown, (current) => {
@@ -3867,16 +3892,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           return yield* unrunnable(
             `Model router "${resolved.modelId}": no choice names a model the catalog lists`,
           )
-        if (!route.value.recorded) {
-          yield* publishEventOrDie(route.value.event)
-          yield* scope.turnLedger.noteRoute(
-            Option.fromUndefinedOr(route.value.event.costUsd).pipe(
-              Option.orElse(() =>
-                Option.liftPredicate(0, () => Predicate.isUndefined(route.value.event.classifier)),
-              ),
-            ),
-          )
-        }
+        if (!route.value.recorded) yield* publishEventOrDie(route.value.event)
+        // A recorded route is charged too: a process that recovers the turn
+        // starts a new ledger, and the route's classifier calls are still spent.
+        yield* scope.turnLedger.noteRoute(route.value.event)
         resolved = applyTurnRoute(resolved, route.value.event)
       }
       const previousModel = knownSteps.model
