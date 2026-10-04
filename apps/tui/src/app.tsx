@@ -605,10 +605,7 @@ export function Session(props: SessionProps) {
         // The level the turn asks for, after the clamp of the model that runs
         // the turn: the level the step's receipt records.
         reasoningLevel: client.reasoningLevel(),
-        model: Option.match(routed, {
-          onNone: () => model,
-          onSome: (route) => Option.some(route.model),
-        }),
+        model: client.turnModel(),
         theme,
         debugMode: props.debugMode === true,
       }),
@@ -628,10 +625,7 @@ export function Session(props: SessionProps) {
       ...buildContextLabels({
         metrics: client.sessionMetrics(),
         // A virtual model has no window: the gauge reads the routed model's.
-        model: Option.orElse(
-          Option.map(client.routedModel(), (route) => route.model),
-          () => client.modelInfo(),
-        ),
+        model: client.turnModel(),
         theme,
       }),
       ...costLabels(),
@@ -791,7 +785,11 @@ export function Session(props: SessionProps) {
           <SettingsPicker
             open={controller.uiState().overlay._tag === "reasoning"}
             title="Effort"
-            rows={reasoningRows(client.modelInfo(), client.defaultReasoningLevel())}
+            rows={reasoningRows(
+              client.turnModel(),
+              client.defaultReasoningLevel(),
+              Option.flatMap(client.routedModel(), (route) => route.effort),
+            )}
             current={Option.some(
               Option.getOrElse(
                 Option.fromUndefinedOr(client.session().reasoningLevel),

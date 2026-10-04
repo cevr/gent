@@ -614,6 +614,12 @@ interface ClientAgentValue {
    */
   routedModel: () => Option.Option<RoutedModel>
   /**
+   * The concrete model the next turn runs on, as far as the client knows:
+   * the routed model under a virtual model, else `modelInfo`. Its window and
+   * its effort levels are the ones the status row and the effort picker read.
+   */
+  turnModel: () => Option.Option<Model>
+  /**
    * The chat models the session's profile serves, in catalog order: a
    * registered driver's, and an active models.dev provider's. Empty until
    * the catalog loads.
@@ -1508,6 +1514,11 @@ export function ClientProvider(props: ClientProviderProps) {
             effort: Option.fromUndefinedOr(routed.effort),
           })),
         ),
+      ),
+    turnModel: () =>
+      Option.orElse(
+        Option.map(agentValue.routedModel(), (route) => route.model),
+        agentValue.modelInfo,
       ),
     models: runnableModels,
     modelCatalog: () => {

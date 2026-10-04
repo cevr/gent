@@ -452,19 +452,20 @@ const pickableEfforts = (model: Option.Option<Model>): ReadonlyArray<ReasoningEf
 const defaultEffortDetail = (
   model: Option.Option<Model>,
   fallback: Option.Option<ReasoningEffort>,
+  source: string,
 ): string =>
   Option.match(fallback, {
-    onNone: () => "agent or config default",
+    onNone: () => source,
     onSome: (level) => {
       const sent = Option.match(model, {
         onNone: () => Option.some(level),
         onSome: (value) => effectiveEffort(value, level),
       })
       return Option.match(sent, {
-        onNone: () => `agent or config default (${level}, the model takes none)`,
+        onNone: () => `${source} (${level}, the model takes none)`,
         onSome: (effort) => {
-          if (effort === level) return `agent or config default (${level})`
-          return `agent or config default (${level}, sends ${effort})`
+          if (effort === level) return `${source} (${level})`
+          return `${source} (${level}, sends ${effort})`
         },
       })
     },
@@ -472,13 +473,23 @@ const defaultEffortDetail = (
 
 /**
  * `default`, then the levels `model` accepts (`pickableEfforts`). `fallback`
- * is the level without the session's own (`defaultReasoningLevel`).
+ * is the level without the session's own (`defaultReasoningLevel`); under a
+ * virtual model, `route` is the newest route's level, which the turn asks
+ * for before the fallback (`applyTurnRoute`), and `model` is the routed one.
  */
 export const reasoningRows = (
   model: Option.Option<Model>,
   fallback: Option.Option<ReasoningEffort>,
+  route: Option.Option<ReasoningEffort> = Option.none(),
 ): readonly PickerRow[] => [
-  { id: DEFAULT_ROW_ID, name: DEFAULT_ROW_ID, detail: defaultEffortDetail(model, fallback) },
+  {
+    id: DEFAULT_ROW_ID,
+    name: DEFAULT_ROW_ID,
+    detail: Option.match(route, {
+      onNone: () => defaultEffortDetail(model, fallback, "agent or config default"),
+      onSome: (level) => defaultEffortDetail(model, Option.some(level), "the route's choice"),
+    }),
+  },
   ...pickableEfforts(model).map((level) => ({ id: level, name: level, detail: "" })),
 ]
 

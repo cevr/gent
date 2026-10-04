@@ -2240,6 +2240,71 @@ describe("App status and activity rows", () => {
         }).pipe(Effect.timeout("4 seconds")),
     )
   }
+  // Under a virtual model the effort picker reads the routed model: its
+  // levels, and a default row that names the route's level, which the turn
+  // asks for before the agent's, clamped to what the routed model takes.
+  it.scopedLive("the effort picker under a virtual model lists the routed model's levels", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-routed-effort")
+      const branchId = BranchId.make("branch-routed-effort")
+      const auto = new Model({
+        id: ModelId.make("router/auto"),
+        name: "Auto",
+        provider: ProviderId.make("router"),
+        kind: "virtual",
+      })
+      const sonnet = new Model({
+        id: ModelId.make("anthropic/claude-sonnet-5"),
+        name: "Sonnet 5",
+        provider: ProviderId.make("anthropic"),
+        reasoning: true,
+        efforts: ["low", "medium", "high"],
+      })
+      const { setup } = yield* mountApp({
+        client: {
+          model: { list: () => Effect.succeed([sonnet, auto]) },
+          session: {
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId,
+                branchId,
+                messages: [],
+                lastEventId: nullValue,
+                reasoningLevel: absent,
+                defaultReasoningLevel: "medium",
+                resolvedModelId: auto.id,
+                agent: AgentName.make("main"),
+                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                metrics: {
+                  turns: 1,
+                  durationMs: 0,
+                  costUsd: 0,
+                  lastInputTokens: 0,
+                  routed: {
+                    selected: auto.id,
+                    model: sonnet.id,
+                    effort: "max",
+                    reason: "choice 2: difficult work",
+                  },
+                },
+              }),
+          },
+        },
+        width: 120,
+        initialSession: sessionNamed(sessionId, branchId, "Routed effort"),
+      })
+      // The row shows what the routed model is sent for the route's `max`.
+      yield* waitForFrame(setup, (next) => next.includes("Auto → Sonnet 5 · high"), "the row")
+      yield* typeCommand("/effort")(setup)
+      const picker = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Effort · 4"),
+        "the effort picker",
+      )
+      expect(picker).toContain("the route's choice (max, sends high)")
+      expect(picker).not.toContain("minimal")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   // The route belongs to the virtual model: once the session leaves it, the
   // row names the concrete model alone.
   it.scopedLive("a route of a virtual model the session left is not named", () =>

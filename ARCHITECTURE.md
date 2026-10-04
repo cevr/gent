@@ -852,7 +852,8 @@ Shape:
   virtual model the TUI status row names both (`Auto → Sonnet 5`; under 80
   columns the routed half drops its provider label), shows the level in the
   same order after the routed model's clamp, and reads the context gauge
-  against the routed model's window.
+  against the routed model's window. The effort picker lists the routed
+  model's levels, and its `default` row names the route's level.
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in
