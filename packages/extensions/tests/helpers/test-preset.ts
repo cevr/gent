@@ -9,8 +9,9 @@ import type { E2ELayerConfig } from "@gent/core/test-utils"
 
 /**
  * The shipped composition: every builtin extension (the agents among them), and the branch-tool
- * feature the cell surface among them runs on. Named together because a
- * `cell` tool whose storage and kernel are missing fails on first use.
+ * feature the cell surface among them runs on. Named together because the
+ * `cell` tool declares the feature, and its extension fails to load in a
+ * root that does not install it.
  */
 export const shippedPreset = {
   agents: [],

@@ -100,6 +100,7 @@ import type {
   ModelRouterContribution,
 } from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
+import { type BranchToolFeature, CurrentBranchToolFeature } from "./tools.js"
 import {
   type ExtensionPlatformServices,
   GentPlatform,
@@ -151,6 +152,7 @@ import * as EffectTool from "effect/ai/Tool"
 import * as EffectEncoding from "effect/encoding"
 import * as EffectHttp from "effect/http"
 import * as EffectHttpClientError from "effect/http/HttpClientError"
+import { HttpClient } from "effect/http"
 import * as EffectProcess from "effect/process"
 import * as EffectChildProcessSpawner from "effect/process/ChildProcessSpawner"
 import * as EffectSql from "effect/sql"
@@ -2068,8 +2070,37 @@ const collectDuplicateExtensionIds = (
   }
 }
 
+/**
+ * The leaves of one extension that name a branch-tool feature other than the
+ * one the root installs. Such a leaf's storage and per-branch services exist
+ * in no other root, so it would fail on its first call.
+ */
+const branchToolFeatureErrors = (
+  contribs: ExtensionContributions,
+  installed: BranchToolFeature<never>,
+): ReadonlyArray<string> => {
+  const leaves = [
+    ...(contribs.tools ?? []).flatMap((capability, i) => {
+      if (!isToolCapability(capability)) return []
+      const metadata = getToolMetadata(capability)
+      return [{ label: `tools[${i}] (${metadata.id})`, feature: metadata.branchTools }]
+    }),
+    ...(contribs.requests ?? []).map((capability, i) => ({
+      label: `requests[${i}] (${capability.id})`,
+      feature: capability.branchTools,
+    })),
+  ]
+  return leaves.flatMap(({ label, feature }) => {
+    if (Predicate.isUndefined(feature) || feature === installed) return []
+    return [
+      `${label}: runs on the branch-tool feature "${feature.id}", which this root does not install (it installs "${installed.id}")`,
+    ]
+  })
+}
+
 const collectValidationFailures = (
   extensions: ReadonlyArray<LoadedExtension>,
+  installedBranchTools: BranchToolFeature<never>,
 ): ReadonlyMap<string, { ext: LoadedExtension; errors: ReadonlyArray<string> }> => {
   const failures = new Map<string, { ext: LoadedExtension; errors: string[] }>()
 
@@ -2084,6 +2115,12 @@ const collectValidationFailures = (
   }
 
   collectDuplicateExtensionIds(extensions, addFailure)
+
+  for (const ext of extensions) {
+    for (const error of branchToolFeatureErrors(ext.contributions, installedBranchTools)) {
+      addFailure(ext, error)
+    }
+  }
 
   const collectScopedCollisions = <T>(
     pickItems: (contribs: ExtensionContributions) => ReadonlyArray<T>,
@@ -2150,11 +2187,16 @@ const collectValidationFailures = (
   return failures
 }
 
+/**
+ * Fail each extension whose declarations conflict with another's or with the
+ * root: a leaf that names a branch-tool feature fails unless it is the one
+ * `CurrentBranchToolFeature` holds, the feature the root installs.
+ */
 export const validateLoadedExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): Effect.Effect<ExtensionActivationResult> =>
-  Effect.sync(() => {
-    const failures = collectValidationFailures(extensions)
+  Effect.gen(function* () {
+    const failures = collectValidationFailures(extensions, yield* CurrentBranchToolFeature)
     if (failures.size === 0) return { active: [...extensions], failed: [] }
 
     const active: LoadedExtension[] = []
@@ -2537,16 +2579,7 @@ export class SessionProfileCache extends Context.Service<
 >()("@gent/core/src/runtime/extension-host/SessionProfileCache") {
   static Live = (
     config: SessionProfileCacheConfig,
-  ): Layer.Layer<
-    SessionProfileCache,
-    never,
-    | FileSystem.FileSystem
-    | Path.Path
-    | ChildProcessSpawner
-    | Crypto.Crypto
-    | ConfigService
-    | GentPlatform
-  > =>
+  ): Layer.Layer<SessionProfileCache, never, ExtensionPlatformServices | ConfigService> =>
     Layer.effect(
       SessionProfileCache,
       Effect.gen(function* () {
@@ -2555,7 +2588,11 @@ export class SessionProfileCache extends Context.Service<
         const pathSvc = yield* Path.Path
         const spawner = yield* ChildProcessSpawner
         const crypto = yield* Crypto.Crypto
+        const httpClient = yield* HttpClient.HttpClient
         const platform = yield* GentPlatform
+        // The feature the root installs, read once where the root builds this
+        // cache: each profile validates its extensions' leaves against it.
+        const installedBranchTools = yield* CurrentBranchToolFeature
         // Every profile's resources close with this server scope.
         const serverScope = yield* Scope.Scope
         const generationId = ProcessGenerationId.make(yield* platform.randomId)
@@ -2567,8 +2604,10 @@ export class SessionProfileCache extends Context.Service<
           Context.add(Path.Path, pathSvc),
           Context.add(ChildProcessSpawner, spawner),
           Context.add(Crypto.Crypto, crypto),
+          Context.add(HttpClient.HttpClient, httpClient),
           Context.add(ConfigService, configService),
           Context.add(GentPlatform, platform),
+          Context.add(CurrentBranchToolFeature, installedBranchTools),
         )
 
         interface ProfileEntry {
@@ -2813,7 +2852,8 @@ export class SessionProfileCache extends Context.Service<
                       if (sameSource(other, extension)) return previous
                       return other
                     })
-                    if (collectValidationFailures(substituted).size > 0) return false
+                    if (collectValidationFailures(substituted, installedBranchTools).size > 0)
+                      return false
                     effective = substituted
                     return true
                   }),

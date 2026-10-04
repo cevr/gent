@@ -300,19 +300,26 @@ updates this list in the same commit.
     `packages/extensions/src/compaction.ts`,
     `packages/extensions/src/anthropic.ts` (`PromptCacheTtl`),
     `apps/tui/src/extensions/cache.client.tsx`.
-18. **A tool body yields only the services it is given.** `tool` bounds the
-    services its `execute` may require: `ExtensionContext`,
-    `ExtensionPlatformServices`, the core services the branch-tools entry
-    exports (`BranchToolHostServices`), the services of the resources the tool
-    names in `resources`, and the storage of the feature it names in
-    `branchTools`. A body that needs any other service does not compile, so a
-    tool cannot reach a core service the root happens to hold. The resource
-    services derive from each `defineResource` value; there is no
-    hand-written list. Package validation fails an extension whose tool names
-    a resource the extension does not register. Receipts:
-    `packages/core/src/domain/capability.ts` (`tool`),
-    `packages/core/src/domain/extension.ts` (`validateToolResources`),
-    `packages/core/tests/extensions/api.test.ts`.
+18. **A leaf yields only the services it is given.** `tool` and `request`
+    bound the services their `execute` may require (`LeafServices`):
+    `ExtensionContext`, `ExtensionPlatformServices`, the core services the
+    branch-tools entry exports (`BranchToolHostServices`), the services of the
+    resources the leaf names in `resources`, and the storage of the feature it
+    names in `branchTools`. A body that needs any other service does not
+    compile, so a leaf cannot reach a core service the root happens to hold.
+    The resource services derive from each `defineResource` value; there is
+    no hand-written list. Package validation fails an extension whose leaf
+    names a resource the extension does not register. Profile validation
+    fails an extension whose leaf names a branch-tool feature other than the
+    one the root installs (`CurrentBranchToolFeature`, which the session
+    profile cache reads once when the root builds it). The feature stays a
+    root input, not an extension resource: its tables join core's migration
+    chain and its storage builds over core's SQL client before any profile
+    loads. Receipts: `packages/core/src/domain/capability.ts` (`tool`,
+    `request`), `packages/core/src/domain/extension.ts`
+    (`validateLeafResources`), `packages/core/src/runtime/extension-host.ts`
+    (`branchToolFeatureErrors`), `packages/core/tests/extensions/api.test.ts`,
+    `packages/core/tests/runtime/extension-host.test.ts`.
 
 ### Known gaps
 

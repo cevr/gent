@@ -82,6 +82,7 @@ const SessionNotesSummary = request({
   },
   input: Schema.Struct({}),
   output: Schema.String,
+  resources: [SessionNotesResource],
   execute: () =>
     Effect.gen(function* () {
       const notes = yield* currentNotes

@@ -3127,6 +3127,7 @@ const cellBranchLayer: BranchToolLayerFactory = (input) =>
  * Bundling them is what lets core take the cell as input instead of naming it.
  */
 export const CellBranchTools: BranchToolFeature<CellStorageTags> = {
+  id: "cell",
   migrations: cellMigrations,
   storage: cellStorageLayer,
   branchLayer: cellBranchLayer,

@@ -1369,6 +1369,7 @@ export const WakeRpc = defineRequests(WAKE_EXTENSION_ID, {
     answersDuringTurn: true,
     input: Schema.Struct({ wakeId: Schema.String }),
     output: Schema.Struct({ dismissed: Schema.Array(Schema.String) }),
+    resources: [WakeAlarmsResource],
     execute: ({ wakeId }) =>
       Effect.gen(function* () {
         const dismissed = yield* cancelWakes((entry) => entry.wakeId !== wakeId)

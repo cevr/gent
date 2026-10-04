@@ -23,6 +23,7 @@
  * import { type BranchToolFeature, BranchToolWork } from "@gent/core/extensions/branch-tools"
  *
  * export const MyBranchTools: BranchToolFeature<MyStorageTags> = {
+ *   id: "my-feature",
  *   migrations: myMigrations,
  *   storage: myStorageLayer,
  *   branchLayer: myBranchLayer,

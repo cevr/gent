@@ -604,6 +604,12 @@ export class BranchToolWork extends Context.Service<BranchToolWork, BranchToolWo
 ) {}
 
 export interface BranchToolFeature<A> {
+  /**
+   * Names the feature where a load failure reports it: a tool or request
+   * that declares this feature (`branchTools`) in a root that installs
+   * another fails its extension's load, naming both.
+   */
+  readonly id: string
   /** Migrations creating the feature's tables, merged into core's chain. */
   readonly migrations: FeatureMigrations
   /**
@@ -626,6 +632,7 @@ export type BranchToolHostServices = EventStore | MessageStorage | InteractionSt
 
 /** The feature a deployment installs when its tools hold no branch state. */
 export const noBranchTools: BranchToolFeature<never> = {
+  id: "none",
   migrations: {},
   storage: Layer.empty,
   branchLayer: () => emptyErasedResourceLayer,

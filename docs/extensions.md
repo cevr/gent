@@ -341,7 +341,10 @@ export default defineExtension({
   The same extension must register each one, or the extension fails to load
   with `tools[i] (id): names resource "…", which this extension does not register`.
 - `branchTools` — the branch-tool feature whose storage the body yields (see
-  `@gent/core/extensions/branch-tools`); the composition root installs it
+  `@gent/core/extensions/branch-tools`). The composition root installs one
+  feature (`createDependencies({ branchTools })`); in a root that installs
+  another, the extension fails to load with
+  `tools[i] (id): runs on the branch-tool feature "…", which this root does not install (it installs "…")`.
 - Optional: `readonly`, `destructive`, `interactive`, `dispatches`,
   `promptSnippet`, `promptGuidelines`, `summary` (the one-line result summary
   a client shows for a call)
@@ -526,7 +529,12 @@ request a client sends while the agent works needs it.
 Request handlers receive params only. Host authority comes from
 `yield* ExtensionContext`, and extension-owned services are ordinary Effect
 services; authors import the smallest service Tag they need rather than
-declaring capability labels. The loader binds every registered request to the
+declaring capability labels. A handler yields the same services a tool body
+does, with the same two declarations: `resources` names the `defineResource`
+values whose services it yields, and `branchTools` the feature whose storage
+it yields. A handler that needs any other service does not compile, and the
+loader checks both declarations as it checks a tool's, reporting
+`requests[i] (id): …`. The loader binds every registered request to the
 enclosing `defineExtension({ id })`, so the extension id is written once. Client-only protocol modules that export refs before server setup can use
 `defineRequests(extensionId, { ...requests })` to bind a whole request map with
 one id.
@@ -832,7 +840,8 @@ The framework validates all loaded extensions before creating the registry:
 
 - **Duplicate IDs** in same scope degrade the conflicting extension
 - **Model-callable tools** require a non-empty `description`
-- **A tool's `resources`** must be registered by the same extension
+- **A tool's or request's `resources`** must be registered by the same extension
+- **A tool's or request's `branchTools`** must be the feature the root installs
 - Same-name tools/agents/drivers in same scope degrade
 
 Cross-scope: higher scope wins silently (project overrides user overrides
@@ -863,7 +872,8 @@ builtin).
   shortcuts.
 - Handlers take input only; host authority comes from `yield* ExtensionContext`.
 - Extension-private authority is an imported service Tag from a resource layer
-  that the tool names in `resources`, not a read/write or capability declaration.
+  that the tool or request names in `resources`, not a read/write or capability
+  declaration.
 - Runtime services such as `GentPlatform`, `ToolRunner`, storage Tags and event
   stores are not on `@gent/core/extensions/api`. The branch-tools entry exports
   the core services a branch tool reads, and any extension that imports it may

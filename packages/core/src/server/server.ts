@@ -1923,9 +1923,10 @@ interface DependenciesConfig<A = never> {
   /**
    * The branch-tool feature this deployment ships — its migrations, storage,
    * and per-branch factory as one value. Required, not defaulted: a root that
-   * ships a stateful tool surface and forgets this would get a tool that
-   * fails on first use, and a default would hide that until run time. A
-   * deployment whose tools are all stateless passes `noBranchTools`.
+   * ships a stateful tool surface must name its feature. A tool or request
+   * that declares another feature (`branchTools`) fails its extension's load
+   * with the reason. A deployment whose tools are all stateless passes
+   * `noBranchTools`.
    */
   branchTools: BranchToolFeature<A>
   /** Internal composition-root knobs used by tests to preset the production root. */

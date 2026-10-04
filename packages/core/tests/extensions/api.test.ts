@@ -612,6 +612,56 @@ describe("defineExtension", () => {
       expect(exit._tag).toBe("Success")
     }))
 
+  test("a request that names a resource its extension does not register fails package validation", () =>
+    Effect.gen(function* () {
+      const counter = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(
+          ReadOnlyService,
+          ReadOnlyService.of({ read: Effect.succeed("count") }),
+        ),
+      })
+      const ext = defineExtension({
+        id: "named-resource",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("request", readOnlyRequest(counter))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(Cause.pretty(exit.cause)).toContain(
+          'requests[0] (read-only-request): names resource "named-resource/counter", which this extension does not register',
+        )
+      }
+    }))
+
+  test("a request that names a resource its extension registers passes package validation", () =>
+    Effect.gen(function* () {
+      const counter = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(
+          ReadOnlyService,
+          ReadOnlyService.of({ read: Effect.succeed("count") }),
+        ),
+      })
+      const ext = defineExtension({
+        id: "named-resource",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("resource", counter)
+          yield* host.register("request", readOnlyRequest(counter))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Success")
+    }))
+
   test("defineResource rejects an empty resource id", () =>
     Effect.sync(() => {
       expect(() => defineResource({ id: "", scope: "process", layer: Layer.empty })).toThrow()
@@ -723,6 +773,16 @@ const readOnlyTool = (resource: ReturnType<typeof defineResource<ReadOnlyService
     execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
   })
 
+/** A request that reads `ReadOnlyService` from the resource it names. */
+const readOnlyRequest = (resource: ReturnType<typeof defineResource<ReadOnlyService, "process">>) =>
+  request({
+    id: "read-only-request",
+    input: NoInput,
+    output: StringOutput,
+    resources: [resource],
+    execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+  })
+
 describe("Capability factory-shape locks (compile-time)", () => {
   test("tool({...}) — happy path compiles", () => {
     const ok = tool({
@@ -795,7 +855,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       params: NoInput,
       output: StringOutput,
       // @ts-expect-error -- `ReadOnlyService` is no tool service and no named resource provides it
-      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this tool does not compile
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
       execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
     })
     expect(true).toBe(true)
@@ -814,11 +874,17 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("request({...}) — write-capable Tag in R is allowed", () => {
+  test("request({...}) body may yield the services of the resources it names", () => {
+    const writer = defineResource({
+      id: "locks/writer",
+      scope: "process",
+      layer: Layer.succeed(WriteCapableService, WriteCapableService.of({ write: Effect.void })),
+    })
     const ok = request({
       id: "ok-write",
       input: NoInput,
       output: StringOutput,
+      resources: [writer],
       execute: () =>
         Effect.gen(function* () {
           const svc = yield* WriteCapableService
@@ -828,6 +894,18 @@ describe("Capability factory-shape locks (compile-time)", () => {
     })
 
     void ok
+    expect(true).toBe(true)
+  })
+
+  test("request({...}) body that needs a service it does not declare does not compile", () => {
+    request({
+      id: "undeclared-write",
+      input: NoInput,
+      output: Schema.Void,
+      // @ts-expect-error -- `WriteCapableService` is no request service and no named resource provides it
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
+      execute: () => Effect.flatMap(WriteCapableService, (svc) => svc.write),
+    })
     expect(true).toBe(true)
   })
 

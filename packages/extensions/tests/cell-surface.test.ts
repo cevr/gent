@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  Cause,
   Effect,
   Exit,
   Fiber,
@@ -920,6 +921,27 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
 })
 
 describe("shipped model surface", () => {
+  it.scopedLive(
+    "the shipped extensions without the cell feature stop the root at load",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(
+          createRpcHarness({
+            agents: [],
+            extensionInputs: shippedPreset.extensionInputs,
+            providerLayer: LanguageModelLayers.debug(),
+          }),
+        )
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(Cause.pretty(exit.cause)).toContain(
+            'tools[0] (cell): runs on the branch-tool feature "cell", which this root does not install (it installs "none")',
+          )
+        }
+      }).pipe(Effect.timeout("15 seconds")),
+    20000,
+  )
+
   it.scopedLive(
     "a cell starts in its session's working directory, not the host's",
     () =>

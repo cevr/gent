@@ -3322,6 +3322,17 @@ describe("branch resources over process services", () => {
   // A builtin's branch Resource reads `Shared` when it builds. A user
   // extension later in resolution order overrides `Shared`; editing it must
   // build the branch Resource again over the new service.
+  const capturedResource = defineResource({
+    id: "@test/captures-shared/captured",
+    scope: "branch",
+    layer: Layer.effect(
+      Captured,
+      Effect.gen(function* () {
+        const shared = yield* Shared
+        return Captured.of({ version: shared.version })
+      }),
+    ),
+  })
   const capturing = defineExtension({
     id: "@test/captures-shared",
     setup: Effect.gen(function* () {
@@ -3333,17 +3344,7 @@ describe("branch resources over process services", () => {
           scope: "process",
           layer: Layer.succeed(Shared, Shared.of({ version: "builtin" })),
         }),
-        defineResource({
-          id: "@test/captures-shared/captured",
-          scope: "branch",
-          layer: Layer.effect(
-            Captured,
-            Effect.gen(function* () {
-              const shared = yield* Shared
-              return Captured.of({ version: shared.version })
-            }),
-          ),
-        }),
+        capturedResource,
       )
       yield* host.register(
         "request",
@@ -3352,6 +3353,7 @@ describe("branch resources over process services", () => {
           input: Schema.String,
           output: Schema.String,
           answersDuringTurn: true,
+          resources: [capturedResource],
           execute: () =>
             Effect.gen(function* () {
               return (yield* Captured).version

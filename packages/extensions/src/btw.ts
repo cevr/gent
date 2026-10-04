@@ -579,6 +579,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
     answersDuringTurn: true,
     input: ForkInput,
     output: ForkOutput,
+    resources: [OpenForksResource],
     execute: Effect.fn("BtwRpc.Fork")(function* (input: ForkInput) {
       const question = yield* checkQuestion(input.question)
       const ctx = yield* ExtensionContext
@@ -657,6 +658,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
     answersDuringTurn: true,
     input: AskInput,
     output: Schema.Struct({ asked: Schema.Boolean }),
+    resources: [OpenForksResource],
     execute: Effect.fn("BtwRpc.Ask")(function* (input: AskInput) {
       const question = yield* checkQuestion(input.question)
       if (question.length === 0) return yield* new ForkError({ message: "Question is empty" })
@@ -679,6 +681,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
     answersDuringTurn: true,
     input: Schema.Struct({}),
     output: Schema.Struct({ merged: Schema.Boolean }),
+    resources: [OpenForksResource],
     execute: Effect.fn("BtwRpc.Merge")(function* () {
       const ctx = yield* ExtensionContext
       const forks = yield* OpenForks
@@ -729,6 +732,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
     answersDuringTurn: true,
     input: Schema.Struct({}),
     output: ForkProgress,
+    resources: [OpenForksResource],
     execute: Effect.fn("BtwRpc.Progress")(function* () {
       const ctx = yield* ExtensionContext
       const forks = yield* OpenForks

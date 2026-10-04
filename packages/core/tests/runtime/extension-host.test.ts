@@ -180,7 +180,7 @@ import {
   type TurnAfterInput,
   type ExtensionHookHandler,
 } from "../../src/domain/extension"
-import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
+import { CurrentBranchToolFeature, noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
@@ -6399,6 +6399,111 @@ describe("live Profile", () => {
         expect(strict._tag).toBe("Failure")
       }),
     ).pipe(Effect.provide(sharedLayer)))
+
+  test("a leaf on a branch-tool feature the root does not install fails its extension load", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped()
+        const feature = { ...noBranchTools, id: "probe-feature" }
+        const extension = defineExtension({
+          id: "@gent/test-runtime-profile/feature",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "tool",
+              tool({
+                id: "rp-feature-tool",
+                description: "feature fixture",
+                params: S.Struct({}),
+                output: S.String,
+                branchTools: feature,
+                execute: () => Effect.succeed("ok"),
+              }),
+            )
+            yield* host.register(
+              "request",
+              request({
+                id: "rp-feature-request",
+                input: S.Struct({}),
+                output: S.String,
+                branchTools: feature,
+                execute: () => Effect.succeed("ok"),
+              }),
+            )
+          }),
+        })
+        const inputs = { cwd: home, home, platform: "darwin", extensions: [extension] }
+        const scan = yield* scanRuntimeProfileExtensions(inputs, new Map())
+
+        const missing = yield* loadRuntimeProfileDeclarations(inputs, scan)
+        expect(missing.extensionDeclarations.failed).toEqual([
+          expect.objectContaining({
+            manifest: { id: "@gent/test-runtime-profile/feature" },
+            phase: "validation",
+            error:
+              'tools[0] (rp-feature-tool): runs on the branch-tool feature "probe-feature", which this root does not install (it installs "none"); ' +
+              'requests[0] (rp-feature-request): runs on the branch-tool feature "probe-feature", which this root does not install (it installs "none")',
+          }),
+        ])
+
+        const installed = yield* loadRuntimeProfileDeclarations(inputs, scan).pipe(
+          Effect.provideService(CurrentBranchToolFeature, feature),
+        )
+        expect(installed.extensionDeclarations.failed).toEqual([])
+        expect(
+          installed.extensionDeclarations.active.map((ext) => String(ext.manifest.id)),
+        ).toEqual(["@gent/test-runtime-profile/feature"])
+      }),
+    ).pipe(Effect.provide(sharedLayer)))
+
+  test("a root that does not install a leaf's branch-tool feature stops at load with the reason", () =>
+    Effect.gen(function* () {
+      const feature = { ...noBranchTools, id: "probe-feature" }
+      const extension = defineExtension({
+        id: "@gent/test-root/feature",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "tool",
+            tool({
+              id: "root-feature-tool",
+              description: "feature fixture",
+              params: S.Struct({}),
+              output: S.String,
+              branchTools: feature,
+              execute: () => Effect.succeed("ok"),
+            }),
+          )
+        }),
+      })
+      const missing = yield* Effect.exit(
+        Effect.scoped(
+          createRpcHarness({
+            agents: [testAgent],
+            extensionInputs: [extension],
+            providerLayer: LanguageModelLayers.debug(),
+          }),
+        ),
+      )
+      expect(missing._tag).toBe("Failure")
+      if (missing._tag === "Failure") {
+        expect(Cause.pretty(missing.cause)).toContain(
+          'tools[0] (root-feature-tool): runs on the branch-tool feature "probe-feature", which this root does not install (it installs "none")',
+        )
+      }
+      const installed = yield* Effect.exit(
+        Effect.scoped(
+          createRpcHarness({
+            agents: [testAgent],
+            extensionInputs: [extension],
+            providerLayer: LanguageModelLayers.debug(),
+            branchTools: feature,
+          }),
+        ),
+      )
+      expect(installed._tag).toBe("Success")
+    }).pipe(Effect.timeout("20 seconds")))
 
   test("live Profile builds a process resource layer once", () =>
     Effect.scoped(

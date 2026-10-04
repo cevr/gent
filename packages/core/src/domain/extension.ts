@@ -1333,16 +1333,25 @@ const validateResources = (contribs: ExtensionContributions): Option.Option<stri
   return Option.none()
 }
 
-/** Each resource a tool names is one its own extension registers. */
-const validateToolResources = (contribs: ExtensionContributions): Option.Option<string> => {
+/** Each resource a tool or a request names is one its own extension registers. */
+const validateLeafResources = (contribs: ExtensionContributions): Option.Option<string> => {
   const registered = new Set((contribs.resources ?? []).map((resource) => String(resource.id)))
-  for (const [i, capability] of (contribs.tools ?? []).entries()) {
-    if (!isToolCapability(capability)) continue
-    const metadata = getToolMetadata(capability)
-    for (const resource of metadata.resources) {
+  const leaves = [
+    ...(contribs.tools ?? []).flatMap((capability, i) => {
+      if (!isToolCapability(capability)) return []
+      const metadata = getToolMetadata(capability)
+      return [{ label: `tools[${i}] (${metadata.id})`, resources: metadata.resources }]
+    }),
+    ...(contribs.requests ?? []).map((capability, i) => ({
+      label: `requests[${i}] (${capability.id})`,
+      resources: capability.resources,
+    })),
+  ]
+  for (const leaf of leaves) {
+    for (const resource of leaf.resources) {
       if (registered.has(resource)) continue
       return Option.some(
-        `tools[${i}] (${metadata.id}): names resource "${resource}", which this extension does not register`,
+        `${leaf.label}: names resource "${resource}", which this extension does not register`,
       )
     }
   }
@@ -1413,7 +1422,7 @@ export const validateExtensionPackage = (
       validateKnownBuckets,
       validateResources,
       validateCapabilities,
-      validateToolResources,
+      validateLeafResources,
       validateAgents,
       validateDriverIds,
     ]

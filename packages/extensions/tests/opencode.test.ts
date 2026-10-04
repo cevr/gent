@@ -38,7 +38,7 @@ import {
 import { buildOpenCodeModelDriver, OPENCODE_GATEWAYS, OpenCodeExtension } from "../src/opencode.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { decideTicket, systemOneBody, TICKET, TICKET_QUESTIONS } from "./helpers/decision-wire.js"
-import { BuiltinExtensions } from "../src/index.js"
+import { shippedPreset } from "./helpers/test-preset.js"
 
 /**
  * The OpenCode gateways, Zen and Go: one driver constructor, three wire
@@ -978,9 +978,8 @@ describe("OpenCode Zen classifiers", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client, sessionId } = yield* createRpcHarness({
-          agents: [],
+          ...shippedPreset,
           modelCatalogHttpLayer: yield* catalogHttpLayer,
-          extensionInputs: BuiltinExtensions,
           providerLayer,
         })
         const classifierIds = client.model
@@ -1057,9 +1056,8 @@ describe("OpenCode catalog", () => {
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
       const { client, sessionId } = yield* createRpcHarness({
-        agents: [],
+        ...shippedPreset,
         modelCatalogHttpLayer: yield* catalogHttpLayer,
-        extensionInputs: BuiltinExtensions,
         providerLayer,
       })
       const ids = (yield* client.model.list({ sessionId })).map((model) => model.id)
