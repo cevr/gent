@@ -395,7 +395,8 @@ model must answer.
 Lifecycle extension points are typed hook kinds, not keyed middleware bags:
 `systemPrompt`, `turnProjection`, `turnAfter`, `loopOpen` (a branch's loop was
 built in this process, or the extension's branch Resources were built again
-after an edit or a disable and enable: re-arm timers, report lost work), and `sessionDeleted`
+after an edit or a disable and enable: re-arm timers, report lost work; a hook
+still running when those Resources retire is interrupted before they release), and `sessionDeleted`
 (remove what the extension keeps for a deleted session outside the database).
 Each `host.on` call is typed by the kind's input and output.
 

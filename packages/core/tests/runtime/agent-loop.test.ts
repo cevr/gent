@@ -3162,12 +3162,14 @@ describe("branch resources over process services", () => {
 /**
  * A user extension with a branch Resource, a process Resource and a
  * `loopOpen` hook, each logging its version. With `failRelease`, the branch
- * Resource's finalizer dies after it logs.
+ * Resource's finalizer dies after it logs. With `hangOpen`, the hook never
+ * returns, and logs when it is stopped.
  */
 const lifecycleSource = (input: {
   readonly version: string
   readonly log: string
   readonly failRelease: boolean
+  readonly hangOpen: boolean
 }) => `import { appendFileSync, existsSync } from "node:fs";
 import { Context, Effect, Layer, Schedule, Schema } from "effect";
 import { defineExtension, defineResource, ExtensionHost, request } from "@gent/core/extensions/api";
@@ -3176,6 +3178,7 @@ class Process extends Context.Service<Process, { readonly version: string }>()("
 const log = (line: string) => appendFileSync(${encodeJsonText(input.log)}, line + "\\n");
 const version = ${encodeJsonText(input.version)};
 const failRelease = ${String(input.failRelease)};
+const hangOpen = ${String(input.hangOpen)};
 export default defineExtension({
   id: "@test/lifecycle",
   setup: Effect.gen(function* () {
@@ -3199,6 +3202,7 @@ export default defineExtension({
     }));
     yield* host.on("loopOpen", () => Effect.gen(function* () {
       log("open:" + (yield* Probe).version);
+      if (hangOpen) yield* Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => log("open-stopped:" + version))));
     }));
     yield* host.register("request", request({
       id: "read-lifecycle",
@@ -3289,7 +3293,13 @@ describe("branch generation lifecycle", () => {
     }).pipe(Effect.timeout("5 seconds")),
   )
 
-  const lifecycleHarness = (failRelease: boolean) =>
+  // `hanger` adds a second user extension, with no Resources, whose
+  // `loopOpen` hook logs `hang` and never returns.
+  const lifecycleHarness = (options: {
+    readonly failRelease?: boolean
+    readonly hangOpen?: boolean
+    readonly hanger?: boolean
+  }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -3300,8 +3310,32 @@ describe("branch generation lifecycle", () => {
       yield* fs.writeFileString(log, "")
       const file = path.join(extensionsDir, "lifecycle.ts")
       const write = (version: string) =>
-        fs.writeFileString(file, lifecycleSource({ version, log, failRelease }))
+        fs.writeFileString(
+          file,
+          lifecycleSource({
+            version,
+            log,
+            failRelease: options.failRelease === true,
+            hangOpen: options.hangOpen === true,
+          }),
+        )
       yield* write("one")
+      if (options.hanger === true) {
+        yield* fs.writeFileString(
+          path.join(extensionsDir, "hanger.ts"),
+          `import { appendFileSync } from "node:fs";
+import { Effect } from "effect";
+import { defineExtension, ExtensionHost } from "@gent/core/extensions/api";
+export default defineExtension({
+  id: "@test/hanger",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.on("loopOpen", () => Effect.sync(() => appendFileSync(${encodeJsonText(log)}, "hang\\n")).pipe(Effect.andThen(Effect.never)));
+  }),
+});
+`,
+        )
+      }
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
       const { client, sessionId, branchId } = yield* createRpcHarness({
         agents: [testAgent],
@@ -3334,7 +3368,7 @@ describe("branch generation lifecycle", () => {
     "a branch finalizer that fails leaves the next run working and the old profile retiring",
     () =>
       Effect.gen(function* () {
-        const { write, read, readLog } = yield* lifecycleHarness(true)
+        const { write, read, readLog } = yield* lifecycleHarness({ failRelease: true })
         expect(yield* read).toBe("one")
         yield* write("two")
         // The edit retires generation one, whose finalizer dies.
@@ -3356,7 +3390,7 @@ describe("branch generation lifecycle", () => {
     "a rebuilt branch generation runs its loopOpen hooks once, after the old one closed",
     () =>
       Effect.gen(function* () {
-        const { write, read, readLog } = yield* lifecycleHarness(false)
+        const { write, read, readLog } = yield* lifecycleHarness({})
         expect(yield* read).toBe("one")
         yield* waitFor(
           readLog,
@@ -3466,7 +3500,7 @@ export default defineExtension({
     "a rebuilt generation runs its loopOpen hooks only after a run holding the old one ends",
     () =>
       Effect.gen(function* () {
-        const { write, read, hold, letGo, readLog } = yield* lifecycleHarness(false)
+        const { write, read, hold, letGo, readLog } = yield* lifecycleHarness({})
         expect(yield* read).toBe("one")
         yield* waitFor(
           readLog,
@@ -3497,6 +3531,66 @@ export default defineExtension({
         expect(lines.indexOf("release:one")).toBeGreaterThan(-1)
         expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
         expect(lines.filter((line) => line.startsWith("open:"))).toEqual(["open:one", "open:two"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a hook that never returns holds up no other extension's rebuilt generation",
+    () =>
+      Effect.gen(function* () {
+        const { write, read, readLog } = yield* lifecycleHarness({ hanger: true })
+        expect(yield* read).toBe("one")
+        yield* waitFor(
+          readLog,
+          (current) => current.includes("open:one") && current.includes("hang"),
+          5_000,
+          "both loopOpen hooks ran",
+        )
+        yield* write("two")
+        expect(yield* read).toBe("two")
+        // The hanger's hook holds only its own extension: generation one
+        // closes, and the hooks of generation two run.
+        const lines = yield* waitFor(
+          readLog,
+          (current) => current.includes("open:two"),
+          5_000,
+          "loopOpen ran for the rebuilt generation",
+        )
+        expect(lines.indexOf("release:one")).toBeGreaterThan(-1)
+        expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
+        expect(lines.filter((line) => line === "hang")).toEqual(["hang"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a hook of a retired generation stops with it, and the next generation's hooks run",
+    () =>
+      Effect.gen(function* () {
+        const { write, read, readLog } = yield* lifecycleHarness({ hangOpen: true })
+        expect(yield* read).toBe("one")
+        yield* waitFor(
+          readLog,
+          (current) => current.includes("open:one"),
+          5_000,
+          "loopOpen ran for the first generation",
+        )
+        yield* write("two")
+        expect(yield* read).toBe("two")
+        const lines = yield* waitFor(
+          readLog,
+          (current) => current.includes("open:two"),
+          5_000,
+          "loopOpen ran for the rebuilt generation",
+        )
+        // The old hook stops before its generation's Resources release, and
+        // both before the new hook runs.
+        const stopped = lines.indexOf("open-stopped:one")
+        expect(stopped).toBeGreaterThan(-1)
+        expect(stopped).toBeLessThan(lines.indexOf("release:one"))
+        expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
+        expect(lines).not.toContain("open-stopped:two")
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
     20_000,
   )

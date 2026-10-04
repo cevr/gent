@@ -1926,20 +1926,29 @@ const makeAgentLoopBehavior = (
       [...generations.values(), ...retiring].some(
         (other) => other !== generation && other.extensionId === generation.extensionId,
       )
-    const dueOpeners = (claim: boolean): ReadonlySet<ExtensionId> => {
-      const due = new Set<ExtensionId>()
+    // Each due extension with the generation its hooks activate, if it has one.
+    const dueOpeners = (
+      claim: boolean,
+    ): ReadonlyArray<{
+      readonly extensionId: ExtensionId
+      readonly generation: Option.Option<BranchGeneration>
+    }> => {
+      const due: Array<{
+        readonly extensionId: ExtensionId
+        readonly generation: Option.Option<BranchGeneration>
+      }> = []
       for (const { extensionId, key } of newestOpeners) {
         if (Option.isNone(key)) {
           if (openedWithoutResources.has(extensionId)) continue
           if (claim) openedWithoutResources.add(extensionId)
-          due.add(extensionId)
+          due.push({ extensionId, generation: Option.none() })
           continue
         }
         const generation = generations.get(key.value)
         if (Predicate.isUndefined(generation) || generation.activated) continue
         if (olderAlive(generation)) continue
         if (claim) generation.activated = true
-        due.add(extensionId)
+        due.push({ extensionId, generation: Option.some(generation) })
       }
       return due
     }
@@ -1947,7 +1956,7 @@ const makeAgentLoopBehavior = (
     // newest state.
     const activationRequests = yield* Queue.sliding<void>(1)
     const requestActivation = Effect.suspend(() => {
-      if (dueOpeners(false).size === 0) return Effect.void
+      if (dueOpeners(false).length === 0) return Effect.void
       return Queue.offer(activationRequests, void 0).pipe(Effect.asVoid)
     })
     // Let go of the given generations; the ones no run uses and the newest
@@ -2034,7 +2043,7 @@ const makeAgentLoopBehavior = (
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             yield* restore(branchResourceLock.take(1))
-            const { profile, retired, resolveNumber } = yield* Effect.gen(function* () {
+            const { profile, retired, resolveNumber, lease } = yield* Effect.gen(function* () {
               const lease: ProfileLease = {
                 scope: yield* Scope.fork(loopScope),
                 holds: 1,
@@ -2152,11 +2161,11 @@ const makeAgentLoopBehavior = (
                 if (!present.has(id)) openedWithoutResources.delete(id)
               }
               resolveCount += 1
-              return { profile, retired, resolveNumber: resolveCount }
+              return { profile, retired, resolveNumber: resolveCount, lease }
             }).pipe(Effect.ensuring(branchResourceLock.release(1)))
             // An extension finalizer never runs under the lock.
             yield* closeGenerations(retired)
-            return { profile, newest: () => resolveNumber === resolveCount }
+            return { profile, lease, newest: () => resolveNumber === resolveCount }
           }),
         )
       })
@@ -2295,26 +2304,54 @@ const makeAgentLoopBehavior = (
     // queues on this branch starts at once. No client opened the run, so a
     // hook cannot ask.
     //
-    // One activation at a time resolves and claims (see activation above);
-    // the hooks it claimed run on their own fiber, which holds the run's
-    // generations until they end, so a hook that never returns holds up no
-    // later activation.
+    // One activation at a time resolves and claims (see activation above).
+    // Each extension it claimed runs its hooks on a fiber of its own, which
+    // holds the profile the hooks read (a hold on its lease) and none of the
+    // run's generations: an extension with branch Resources runs them in its
+    // generation's scope, so they stop when that generation retires, before
+    // its Resources release; one without runs them in the loop's scope. The
+    // activation's run lets go of its generations once the hooks are forked,
+    // so a hook that never returns keeps no other extension's generation,
+    // and so no other extension's next activation, waiting.
     const activate = Effect.gen(function* () {
       const claimed = yield* Deferred.make<void>()
       yield* Effect.forkIn(
         Effect.gen(function* () {
-          const { profile, newest } = yield* resolveBranchProfile(
+          const { profile, lease, newest } = yield* resolveBranchProfile(
             RunOpener.cases.Turn.make({ openedByClient: false }),
           )
           // A newer resolve asked again if this one left an activation due.
           if (!newest()) return
           const due = dueOpeners(true)
           yield* Deferred.succeed(claimed, void 0)
-          if (due.size === 0) return
-          yield* turnRegistry(profile)
-            .getResolved()
-            .extensionHooks.emitLoopOpen(due)
-            .pipe(runAgentLoopTurnProfile(profile), Effect.provideContext(branchContext))
+          const hooks = turnRegistry(profile).getResolved().extensionHooks
+          for (const { extensionId, generation } of due) {
+            lease.holds += 1
+            // Started at once, so the hold is let go even if its owner
+            // closes before the hook's first step.
+            yield* Effect.forkIn(
+              hooks.emitLoopOpen(new Set([extensionId])).pipe(
+                runAgentLoopTurnProfile(profile),
+                Effect.provideContext(branchContext),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("agent-loop.loop-open-hooks.failed").pipe(
+                    Effect.annotateLogs({
+                      sessionId,
+                      branchId,
+                      extensionId,
+                      error: Cause.pretty(cause),
+                    }),
+                  ),
+                ),
+                Effect.ensuring(releaseProfileLease(lease)),
+              ),
+              Option.match(generation, {
+                onNone: (): Scope.Scope => loopScope,
+                onSome: (owner) => owner.scope,
+              }),
+              { startImmediately: true },
+            )
+          }
         }).pipe(
           Effect.scoped,
           Effect.ensuring(Deferred.succeed(claimed, void 0)),
