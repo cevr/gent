@@ -1433,12 +1433,12 @@ const writeWakeFile = (
   branch: BranchId = branchId,
 ) => writeWakeText(home, encodeAlarms(entries), branch)
 
-const readFile = (home: string) =>
-  readStoredFile(wakeFile(home)).pipe(Effect.provide(BunServices.layer))
+const readFile = (home: string, branch: BranchId = branchId) =>
+  readStoredFile(wakeFile(home, branch)).pipe(Effect.provide(BunServices.layer))
 
 /** The branch file's entries, decoded as the store reads them. */
-const storedEntries = (home: string) =>
-  readFile(home).pipe(Effect.flatMap(decodeAlarms), Effect.orDie)
+const storedEntries = (home: string, branch: BranchId = branchId) =>
+  readFile(home, branch).pipe(Effect.flatMap(decodeAlarms), Effect.orDie)
 
 /** A branch with no pending entry keeps no file: the empty list is a missing file. */
 const wakeFileExists = (home: string) =>
@@ -2732,6 +2732,237 @@ describe("auto-resume", () => {
     15_000,
   )
 
+  // A steer on an idle branch waits for the next turn and is not in the
+  // transcript yet: the resume must not start that turn for it.
+  it.live(
+    "a steer the user parked on the idle branch keeps the resume from starting a turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* makeTempDirectoryScoped("wake-resume-parked-")
+          yield* writeGentConfig(home, AUTO_RESUME_ON)
+          const calls = yield* Ref.make(0)
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer: scriptedModel([USAGE_LIMIT, "answered the user"], calls),
+            home,
+          })
+          const ids = { sessionId, branchId }
+          yield* client.message.send({ ...ids, content: "migrate the tests" })
+          yield* eventually(
+            pendingOf(client, ids),
+            (pending) => pending.entries.some(isResumeAlarm),
+            "the resume is stored",
+          )
+          yield* client.steer.command({
+            command: SteerCommand.make({
+              _tag: "Interject",
+              ...ids,
+              requestId: RequestId.make("parked-steer"),
+              message: "first look at the loader",
+            }),
+          })
+          yield* eventually(
+            client.queue.get(ids),
+            (queue) => queue.steering.length === 1,
+            "the steer is parked",
+          )
+          yield* advanceUntil(
+            pendingOf(client, ids),
+            (pending) => pending.entries.length === 0,
+            "the due resume dropped its row",
+            "5 seconds",
+          )
+          // A fire admits its line before it drops the row.
+          expect((yield* client.queue.get(ids)).steering).toHaveLength(1)
+          expect(yield* Ref.get(calls)).toBe(1)
+          // The user's next message is the next turn; once it answered and
+          // nothing waits, the transcript is complete.
+          yield* client.message.send({ ...ids, content: "go on" })
+          yield* eventually(
+            Effect.all([client.session.getSnapshot(ids), client.queue.get(ids)]),
+            ([current, queue]) =>
+              current.runtime._tag === "Idle" &&
+              answered(current.messages, "answered the user") &&
+              queue.steering.length === 0 &&
+              queue.followUp.length === 0,
+            "the user's turn answered",
+          )
+          const snapshot = yield* client.session.getSnapshot(ids)
+          expect(hasWake(snapshot.messages)).toBe(false)
+        }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live(
+    "a headless run's usage limit stores no resume, so the server that stays up starts no turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* makeTempDirectoryScoped("wake-resume-headless-")
+          yield* writeGentConfig(home, AUTO_RESUME_ON)
+          const seen = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
+          const calls = yield* Ref.make(0)
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            extensionInputs: [...e2ePreset.extensionInputs, turnAfterProbe(seen)],
+            providerLayer: scriptedModel([USAGE_LIMIT, "should not run"], calls),
+            home,
+          })
+          const ids = { sessionId, branchId }
+          yield* client.message.send({ ...ids, content: "migrate the tests", unattended: true })
+          yield* eventually(Ref.get(seen), (all) => all.length === 1, "the turn ended")
+          expect((yield* pendingOf(client, ids)).entries).toEqual([])
+          yield* TestClock.adjust("2 minutes")
+          const snapshot = yield* client.session.getSnapshot(ids)
+          expect(hasWake(snapshot.messages)).toBe(false)
+          expect(yield* Ref.get(calls)).toBe(1)
+        }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live(
+    "a headless run's usage limit leaves nothing for a later process to resume",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* makeTempDirectoryScoped("wake-resume-headless-restart-")
+          yield* writeGentConfig(home, AUTO_RESUME_ON)
+          const directory = yield* makeTempDirectoryScoped("wake-db-")
+          const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
+          const seen = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
+          const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+            createE2ELayer({
+              ...e2ePreset,
+              extensionInputs: [...e2ePreset.extensionInputs, turnAfterProbe(seen)],
+              providerLayer,
+              storagePath: `${directory}/gent.db`,
+              cwd,
+              home,
+            })
+          const firstCalls = yield* Ref.make(0)
+          const ids = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(
+                layerFor(scriptedModel([USAGE_LIMIT], firstCalls)),
+              )
+              const created = yield* client.session.create({})
+              yield* client.message.send({
+                sessionId: created.sessionId,
+                branchId: created.branchId,
+                content: "migrate the tests",
+                unattended: true,
+              })
+              yield* eventually(Ref.get(seen), (all) => all.length === 1, "the headless turn ended")
+              return { sessionId: created.sessionId, branchId: created.branchId }
+            }),
+          )
+          // The process stopped with the resume due 90 s after the limit; the
+          // next process opens the branch 30 s past due, inside the window a
+          // stored resume still fires in.
+          expect(yield* storedEntries(home, ids.branchId)).toEqual([])
+          yield* TestClock.adjust("2 minutes")
+          const laterCalls = yield* Ref.make(0)
+          const { client } = yield* createRpcClient(
+            layerFor(scriptedModel(["should not run"], laterCalls)),
+          )
+          expect((yield* pendingOf(client, ids)).entries).toEqual([])
+          const snapshot = yield* client.session.getSnapshot(ids)
+          expect(hasWake(snapshot.messages)).toBe(false)
+          expect(yield* Ref.get(laterCalls)).toBe(0)
+        }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("15 seconds")),
+      ),
+    20_000,
+  )
+
+  it.live(
+    "a usage limit on the user's own next turn counts as the next attempt",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* makeTempDirectoryScoped("wake-resume-count-")
+          yield* writeGentConfig(home, AUTO_RESUME_ON)
+          const calls = yield* Ref.make(0)
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer: scriptedModel([USAGE_LIMIT], calls),
+            home,
+          })
+          const ids = { sessionId, branchId }
+          yield* client.message.send({ ...ids, content: "migrate the tests" })
+          yield* eventually(
+            pendingOf(client, ids),
+            (pending) => pending.entries.some(isResumeAlarm),
+            "the first resume is stored",
+          )
+          const [first] = (yield* pendingOf(client, ids)).entries
+          yield* client.message.send({ ...ids, content: "try the loader first" })
+          yield* eventually(
+            pendingOf(client, ids),
+            (pending) =>
+              pending.entries.some(
+                (entry) => isResumeAlarm(entry) && entry.wakeId !== first?.wakeId,
+              ),
+            "the second turn's resume is stored",
+          )
+          expect((yield* pendingOf(client, ids)).entries).toMatchObject([
+            { _tag: "alarm", resume: { attempt: 2, maxResumes: 3 } },
+          ])
+          expect(yield* Ref.get(calls)).toBe(2)
+        }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live(
+    "a turn that answered starts the count again",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* makeTempDirectoryScoped("wake-resume-recount-")
+          yield* writeGentConfig(home, AUTO_RESUME_ON)
+          const calls = yield* Ref.make(0)
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer: scriptedModel([USAGE_LIMIT, "answered the user", USAGE_LIMIT], calls),
+            home,
+          })
+          const ids = { sessionId, branchId }
+          yield* client.message.send({ ...ids, content: "migrate the tests" })
+          yield* eventually(
+            pendingOf(client, ids),
+            (pending) => pending.entries.some(isResumeAlarm),
+            "the first resume is stored",
+          )
+          yield* client.message.send({ ...ids, content: "what is left?" })
+          yield* eventually(
+            client.session.getSnapshot(ids),
+            (current) =>
+              current.runtime._tag === "Idle" && answered(current.messages, "answered the user"),
+            "the user's turn answered",
+          )
+          yield* eventually(
+            pendingOf(client, ids),
+            (pending) => pending.entries.length === 0,
+            "the answered turn took the resume's place",
+          )
+          yield* client.message.send({ ...ids, content: "now migrate the rest" })
+          yield* eventually(
+            pendingOf(client, ids),
+            (pending) => pending.entries.some(isResumeAlarm),
+            "the third turn's resume is stored",
+          )
+          expect((yield* pendingOf(client, ids)).entries).toMatchObject([
+            { _tag: "alarm", resume: { attempt: 1 } },
+          ])
+          expect(yield* Ref.get(calls)).toBe(3)
+        }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
   // A recovered turn can end twice: its hooks run again after a restart.
   it.scopedLive("a repeated end of the same stopped turn stores one resume", () =>
     Effect.gen(function* () {
@@ -2760,7 +2991,12 @@ describe("auto-resume", () => {
       }
       const ctx = testLeafContext({
         ...base,
-        Session: { ...base.Session, getDetail: () => Effect.succeed(detail) },
+        Session: {
+          ...base.Session,
+          getDetail: () => Effect.succeed(detail),
+          // No receipt yet: the turn is the first the limit stopped.
+          events: () => Stream.empty,
+        },
       })
       const ended: TurnAfterInput = {
         sessionId: base.sessionId,

@@ -17,9 +17,11 @@ import {
   Predicate,
   Schema,
   Semaphore,
+  Stream,
 } from "effect"
 import type { ChildProcessSpawner } from "effect/process"
 import {
+  type AgentEvent,
   type Branch,
   type BranchId,
   defineExtension,
@@ -29,9 +31,9 @@ import {
   ExtensionHost,
   ExtensionId,
   type ExtensionServiceError,
-  isRuntimeUserMessage,
   isSpawnedSession,
   type Message,
+  MessageId,
   omitUndefined,
   request,
   tailChars,
@@ -77,13 +79,13 @@ const NoticeOutcome = Schema.Literals(["fired", "matched", "timed-out", "blocked
  * row as a plain alarm.
  */
 const ResumeAlarm = Schema.Struct({
-  /** 1 after a turn any other message opened; one more after each resumed turn the limit stopped again. */
+  /** The turns a usage limit stopped since the branch's last answered turn, the resumed one included. */
   attempt: Schema.Finite,
   /** The user's `wake.autoResume.maxResumes` when the resume was armed. */
   maxResumes: Schema.Finite,
   /** When the limit resets, in epoch milliseconds (`TurnAfterInput.retryAt`); the alarm is due a margin after it. */
   resetAt: Schema.Finite,
-  /** The message that opened the stopped turn. Any newer message the resume finds when it fires takes its place. */
+  /** The message that opened the stopped turn. A newer step on the branch when the resume fires takes its place. */
   messageId: Schema.String,
 })
 type ResumeAlarm = typeof ResumeAlarm.Type
@@ -315,6 +317,7 @@ const queueWake = (
   content: string,
   details: WakeDetails & { readonly firedAt: number },
   settle: SettleRow,
+  ifLatest: Option.Option<MessageId> = Option.none(),
 ) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
@@ -346,6 +349,7 @@ const queueWake = (
       content,
       metadata: { customType: WAKE_MESSAGE_TYPE, extensionId: WAKE_EXTENSION_ID, details },
       wake: true,
+      ...omitUndefined({ ifLatest: Option.getOrUndefined(ifLatest) }),
     }).pipe(
       Effect.as(true),
       Effect.catchEager((error) =>
@@ -432,70 +436,53 @@ const lateResumeNotice = (entry: AlarmEntry, resume: ResumeAlarm, firedAt: numbe
     resume: { resetAt: resume.resetAt },
   })
 
-/** A branch's messages, as `Session.getDetail` lists them. */
-const branchMessages = (
-  detail: {
-    readonly branches: ReadonlyArray<{
-      readonly branch: Branch
-      readonly messages: ReadonlyArray<Message>
-    }>
-  },
-  branchId: BranchId,
-): ReadonlyArray<Message> =>
-  detail.branches.find((entry) => entry.branch.id === branchId)?.messages ?? []
-
-/**
- * The newest message a person or an extension sent to the branch: not one
- * the runtime wrote, and not a steer a running turn joined (that turn's own
- * opener stays the step that was taken).
- */
-const newestStep = (messages: ReadonlyArray<Message>): Option.Option<Message> =>
-  Option.fromUndefinedOr(
-    messages.findLast((message) => message.role === "user" && !isRuntimeUserMessage(message)),
-  )
-
 /**
  * Fires one resume. Past due by more than `RESUME_PAST_DUE_MS`, it leaves a
- * notice in the row's place. When a newer message than the stopped turn's
- * opener is on the branch, someone took the next step: the row goes and
- * nothing is sent. Otherwise it queues the one resume message.
+ * notice in the row's place. Otherwise it queues the one resume line on a
+ * condition (`ifLatest`): the loop admits it, and starts its turn, only while
+ * the branch is idle, nothing waits in its queue, and the stopped turn's
+ * opener is still the branch's newest step. A message the user sent, or a
+ * steer they parked, since the turn stopped takes the resume's place. The
+ * loop decides in the admission itself, so no send lands between a read and
+ * the queue. The row goes either way.
+ *
+ * The fire holds the alarms' lifecycle, as a dismiss does: a dismiss that
+ * comes while the line is queued waits for the fire and then finds no row,
+ * so it reports that nothing was cancelled.
  */
 const fireResume = Effect.fn("Wake.fireResume")(function* (entry: AlarmEntry, resume: ResumeAlarm) {
-  const ctx = yield* ExtensionContext
-  const firedAt = yield* Clock.currentTimeMillis
-  if (firedAt - entry.dueAt > RESUME_PAST_DUE_MS) {
-    yield* Effect.logInfo("wake.resume.late").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
-    yield* store.update((current) => [
-      ...dropPendingRow(entry.wakeId)(current),
-      lateResumeNotice(entry, resume, firedAt),
-    ])
-    return yield* ctx.State.changed()
-  }
-  const detail = yield* ctx.Session.getDetail(ctx.sessionId)
-  const newest = newestStep(branchMessages(detail, ctx.branchId))
-  if (!Option.exists(newest, (message) => message.id === resume.messageId)) {
-    yield* Effect.logInfo("wake.resume.superseded").pipe(
-      Effect.annotateLogs({ wakeId: entry.wakeId }),
+  const alarms = yield* WakeAlarms
+  yield* Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const firedAt = yield* Clock.currentTimeMillis
+    if (firedAt - entry.dueAt > RESUME_PAST_DUE_MS) {
+      yield* Effect.logInfo("wake.resume.late").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
+      yield* store.update((current) => [
+        ...dropPendingRow(entry.wakeId)(current),
+        lateResumeNotice(entry, resume, firedAt),
+      ])
+      return yield* ctx.State.changed()
+    }
+    yield* queueWake(
+      entry,
+      resumeMessage(resume),
+      {
+        outcome: "fired",
+        note: entry.note,
+        firedAt,
+        resume: { attempt: resume.attempt, resetAt: resume.resetAt },
+      },
+      dropPendingRow(entry.wakeId),
+      Option.some(MessageId.make(resume.messageId)),
     )
-    yield* store.update(dropPendingRow(entry.wakeId))
-    return yield* ctx.State.changed()
-  }
-  yield* queueWake(
-    entry,
-    resumeMessage(resume),
-    {
-      outcome: "fired",
-      note: entry.note,
-      firedAt,
-      resume: { attempt: resume.attempt, resetAt: resume.resetAt },
-    },
-    dropPendingRow(entry.wakeId),
-  )
+    yield* ctx.State.changed()
+  }).pipe(alarms.withLifecycle)
 })
 
 /** What a timer needs while it runs: the branch context, its file, and the monitor's shell. */
 type WakeWorkServices =
   | ExtensionContext
+  | WakeAlarms
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
@@ -707,6 +694,7 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: PendingWakeEntry) {
         )
       }),
       Effect.provideService(ExtensionContext, ctx),
+      Effect.provideService(WakeAlarms, alarms),
       Effect.provideContext(platform),
     ),
   )
@@ -783,9 +771,12 @@ const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEn
  * counts: a resume spends the user's money, and a project file cannot.
  * A spawned session stores none: its completion carries the error to its
  * parent, which resumes on the same account. A limit that resets more than
- * 24 hours away stores none either. The branch keeps one resume: the latest
- * turn's, so any other turn (a message the user sent, an alarm's wake)
- * takes a pending resume's place.
+ * 24 hours away stores none either, and so does a turn on a branch whose
+ * newest client message no user watches (`MessageMetadata.unattended`, a
+ * headless run): nothing is stored, so no later fire or re-arm of the branch
+ * has a resume to run. The branch keeps one resume: the latest turn's, so
+ * any other turn (a message the user sent, an alarm's wake) takes a pending
+ * resume's place.
  */
 
 const DEFAULT_MAX_RESUMES = 3
@@ -829,15 +820,66 @@ const readAutoResume = Effect.fn("Wake.autoResumeConfig")(function* () {
   )
 })
 
-const decodeWakeDetails = Schema.decodeUnknownOption(WakeDetails)
+/** A branch's messages, as `Session.getDetail` lists them. */
+const branchMessages = (
+  detail: {
+    readonly branches: ReadonlyArray<{
+      readonly branch: Branch
+      readonly messages: ReadonlyArray<Message>
+    }>
+  },
+  branchId: BranchId,
+): ReadonlyArray<Message> =>
+  detail.branches.find((entry) => entry.branch.id === branchId)?.messages ?? []
 
-/** The resume a message carries when an auto-resume sent it. */
-const resumeOf = (message: Message) => {
-  if (message.metadata?.customType !== WAKE_MESSAGE_TYPE) return Option.none()
-  return decodeWakeDetails(message.metadata.details).pipe(
-    Option.flatMap((details) => Option.fromUndefinedOr(details.resume)),
+/** No user watches the branch's turns: its newest client message came from a headless run. */
+const unattended = (messages: ReadonlyArray<Message>): boolean =>
+  messages.findLast((message) => message.metadata?.fromClient === true)?.metadata?.unattended ===
+  true
+
+const isSynchronized = (event: AgentEvent) => event._tag === "StreamSynchronized"
+
+/**
+ * The turns a usage limit stopped since the branch's last answered turn,
+ * read from the branch's durable events (as `delegate` reads a child's
+ * end). A receipt that answered starts the count again; an interrupt, a
+ * turn that gave up, or a failure that was not a usage limit neither counts
+ * nor starts it again. The receipt of `messageId`'s own turn is left out, so
+ * a repeated end of the same turn counts the same.
+ */
+const limitedSinceAnswer = Effect.fn("Wake.limitedSinceAnswer")(function* (messageId: string) {
+  const ctx = yield* ExtensionContext
+  const folded = yield* ctx.Session.events({
+    sessionId: ctx.sessionId,
+    branchId: ctx.branchId,
+  }).pipe(
+    Stream.takeUntil(isSynchronized),
+    Stream.runFold(
+      () => ({ limited: false, count: 0 }),
+      (state, event) => {
+        if (event._tag === "ErrorOccurred") {
+          if (event.notice === true) return state
+          return { ...state, limited: Predicate.isNotUndefined(event.retryAt) }
+        }
+        if (event._tag !== "TurnCompleted") return state
+        // Each receipt closes its turn: an error before it is not the next turn's.
+        if (event.messageId === messageId) return { ...state, limited: false }
+        if (
+          event.streamFailed !== true &&
+          event.unanswered !== true &&
+          event.interrupted !== true
+        ) {
+          return { limited: false, count: 0 }
+        }
+        if (event.streamFailed === true && state.limited) {
+          return { limited: false, count: state.count + 1 }
+        }
+        return { ...state, limited: false }
+      },
+    ),
   )
-}
+  return folded.count
+})
 
 const capNotice = (wakeId: string, maxResumes: number, resetAt: number, firedAt: number) =>
   WakeEntry.cases.notice.make({
@@ -864,13 +906,14 @@ const planResume = Effect.fn("Wake.planResume")(function* (input: TurnAfterInput
   const ctx = yield* ExtensionContext
   const detail = yield* ctx.Session.getDetail(ctx.sessionId)
   if (isSpawnedSession(detail.session)) return Option.none<WakeEntry>()
-  const opener = Option.fromUndefinedOr(
-    branchMessages(detail, ctx.branchId).find((message) => message.id === input.messageId),
-  )
-  const attempt = Option.match(Option.flatMap(opener, resumeOf), {
-    onNone: () => 1,
-    onSome: (resume) => resume.attempt + 1,
-  })
+  if (unattended(branchMessages(detail, ctx.branchId))) {
+    yield* Effect.logInfo("wake.resume.unattended").pipe(
+      Effect.annotateLogs({ messageId: input.messageId }),
+    )
+    return Option.none<WakeEntry>()
+  }
+  // This turn is one more stop.
+  const attempt = (yield* limitedSinceAnswer(input.messageId)) + 1
   const { maxResumes } = config.value
   const wakeId = `resume:${input.messageId}:${resetAt}`
   if (attempt > maxResumes) return Option.some(capNotice(wakeId, maxResumes, resetAt, now))
