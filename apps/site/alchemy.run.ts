@@ -81,17 +81,24 @@ const verifyValue = (token: Option.Option<string>) =>
     }),
   )
 
-/** The deployed site service, as the stack yields it. */
+/** The deployed site service and its project, as the stack yields them. */
 type DeployedSite = Effect.Success<typeof Server>
+type DeployedProject = Effect.Success<typeof GentProject>
 
 /** `gent.cvr.im`: the Railway custom domain and its two Cloudflare records. */
-const Hostname = Effect.fn("Site.hostname")(function* (service: DeployedSite) {
+const Hostname = Effect.fn("Site.hostname")(function* (
+  service: DeployedSite,
+  project: DeployedProject,
+) {
   const zone = yield* Cloudflare.Zone.Zone("Zone", { name: ZONE }).pipe(
     Alchemy.RemovalPolicy.retain(),
   )
+  // The yielded project, not its declaration: the domain reads the
+  // environment id from the project's attributes, and a declaration passed
+  // as a prop resolves to none (`CustomDomainNotCreated`).
   const domain = yield* CustomDomain("Domain", {
     service,
-    environment: GentProject,
+    environment: project,
     domain: DOMAIN,
     targetPort: PORT,
   })
@@ -125,10 +132,10 @@ export default Alchemy.Stack(
   { providers, state: Alchemy.localState() },
   Effect.gen(function* () {
     const { stage } = yield* Alchemy.Stack
-    yield* GentProject
+    const project = yield* GentProject
     const service = yield* Server.pipe(adoptInProd)
     if (stage !== "prod") return { url: service.url, serviceId: service.serviceId }
-    const domain = yield* Hostname(service)
+    const domain = yield* Hostname(service, project)
     return {
       url: domain.url,
       serviceId: service.serviceId,
