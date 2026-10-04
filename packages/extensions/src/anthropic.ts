@@ -2561,13 +2561,18 @@ const carriesToolResult = (message: JsonRecord): boolean => {
 }
 
 /**
- * The messages with a marker at each effort change. A change at run `k` goes
- * before the user turn after run `k - 1`, where the new effort takes effect;
- * a user turn that answers a tool call keeps its place right after the call,
- * so the marker goes after it. The place depends only on the messages up to
- * that turn, so the next request has the marker at the same place. None when
- * the assistant turns do not match the receipts' runs (the SDK merged or
- * dropped one), or a change has no user turn after its run.
+ * The messages with a marker at each effort change. A marker takes effect
+ * from the next user turn (platform.claude.com/docs/en/build-with-claude/effort,
+ * read 2026-10-04), so a change at run `k` goes before the user turn after
+ * run `k - 1`; a user turn that answers a tool call keeps its place right
+ * after the call, so the marker goes after it, and it takes effect at run `k`
+ * only when another user turn follows before that run. The place depends only
+ * on the messages up to that turn, so the next request has the marker at the
+ * same place. None, so the request is plain and its top level names the
+ * reply's effort, when the assistant turns do not match the receipts' runs
+ * (the SDK merged or dropped one), or a change would take effect only after
+ * its run: a change right after a tool result, or a prompt the SDK merged into
+ * the tool result before it.
  */
 const withEffortMarkers = (
   messages: ReadonlyArray<JsonRecord>,
@@ -2586,6 +2591,12 @@ const withEffortMarkers = (
     if (Predicate.isUndefined(turn)) return Option.none()
     let place = previous + 1
     if (carriesToolResult(turn)) place = previous + 2
+    // The run starts at its assistant message, or the reply at the end.
+    const run = Option.getOrElse(
+      Option.fromUndefinedOr(assistants[change.run]),
+      () => messages.length,
+    )
+    if (place >= run) return Option.none()
     places.set(place, change.effort)
   }
   const result: Array<JsonRecord> = []
@@ -2594,8 +2605,6 @@ const withEffortMarkers = (
     if (Predicate.isNotUndefined(effort)) result.push(effortMarker(effort))
     result.push(message)
   }
-  const last = places.get(messages.length)
-  if (Predicate.isNotUndefined(last)) result.push(effortMarker(last))
   return Option.some(result)
 }
 

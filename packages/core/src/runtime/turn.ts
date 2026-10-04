@@ -1898,6 +1898,29 @@ interface StepEffort {
   readonly level: Option.Option<ReasoningEffort>
 }
 
+/**
+ * The turn at the effort its first step was sent at. A level set while the
+ * turn runs takes effect at the next turn, as an effort marker does
+ * (Anthropic applies one from the next user turn, and a step after a tool
+ * result has none before it), so each step's receipt names the level the
+ * provider applies. A first step on another model, or one whose receipt
+ * names no level, leaves the level as set.
+ */
+const atTurnEffort = <Resolved extends ResolvedTurnContext>(
+  resolved: Resolved,
+  firstStep: Option.Option<StepEffort>,
+): Resolved =>
+  Option.match(
+    Option.flatMap(
+      Option.filter(firstStep, (receipt) => receipt.model === resolved.modelId),
+      (receipt) => receipt.level,
+    ),
+    {
+      onNone: () => resolved,
+      onSome: (level) => ({ ...resolved, reasoning: level }),
+    },
+  )
+
 type ModelTurnSource = {
   /** The compaction summary written for this step, and its price when its model has one. */
   readonly compaction: Option.Option<{ readonly costUsd: Option.Option<number> }>
@@ -3921,6 +3944,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // starts a new ledger, and the route's classifier calls are still spent.
         yield* scope.turnLedger.noteRoute(route.value.event)
         resolved = applyTurnRoute(resolved, route.value.event)
+      }
+      if (params.step > 1) {
+        resolved = atTurnEffort(
+          resolved,
+          Option.fromUndefinedOr(
+            knownSteps.stepEfforts.get(stepAddress(params.state.message.id, 1).assistant),
+          ),
+        )
       }
       const previousModel = knownSteps.model
       if (Option.isSome(previousModel) && previousModel.value !== resolved.modelId) {

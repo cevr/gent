@@ -62,6 +62,7 @@ import {
 import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  type SequenceStep,
   waitFor,
 } from "../../src/test-utils/language-model"
 import {
@@ -5727,6 +5728,64 @@ describe("effort receipt", () => {
           [Option.some("low")],
           [Option.some("low"), Option.some("high")],
         ])
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
+
+  it.live("an effort set while a turn runs takes effect at the next turn, as a marker does", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sent: Array<Option.Option<string>> = []
+        const recorded = (step: SequenceStep): SequenceStep => ({
+          ...step,
+          assertRequest: (request) => {
+            sent.push(Option.fromUndefinedOr(request.reasoning))
+          },
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...recorded(toolCallStep("echo_probe", { text: "ping" })), gated: true },
+          recorded(textStep("same turn")),
+          recorded(textStep("next turn")),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          models: [effortModel],
+          providerLayer,
+          extensions: [EchoProbeExtension],
+        })
+        const turnEnd = (earlierTurns: number) =>
+          client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+            Stream.drop(earlierTurns),
+            Stream.runHead,
+            Effect.forkScoped,
+          )
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some("low") })
+        const firstEnd = yield* turnEnd(0)
+        yield* client.message.send({ sessionId, branchId, content: "call echo" })
+        // The first step waits on the model; the level changes now.
+        yield* controls.waitForCall(0)
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some("high") })
+        yield* controls.emitAll(0)
+        yield* Fiber.join(firstEnd)
+        const secondEnd = yield* turnEnd(1)
+        yield* client.message.send({ sessionId, branchId, content: "again" })
+        yield* Fiber.join(secondEnd)
+        yield* controls.assertDone
+        const receipts = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filterMap(({ event }) => {
+            if (event._tag === "StreamEnded") {
+              return Result.succeed(Option.fromUndefinedOr(event.reasoningLevel))
+            }
+            return Result.failVoid
+          }),
+          Stream.take(3),
+          Stream.runCollect,
+        )
+        // Each step's receipt names the level its request was sent at; the
+        // running turn keeps its level, the next turn takes the new one.
+        expect(sent).toEqual([Option.some("low"), Option.some("low"), Option.some("high")])
+        expect(receipts).toEqual([Option.some("low"), Option.some("low"), Option.some("high")])
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )

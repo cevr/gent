@@ -72,7 +72,11 @@ updates this list in the same commit.
     both models, so a replay after a further switch writes the right one. A
     turn under an agent or run-spec model override writes none; the turn after
     it notices the change back. An effort change, or a branch with no settled
-    step, writes nothing. Each step's `StreamEnded.reasoningLevel` receipt
+    step, writes nothing. A turn runs at one effort: a level set while it
+    runs takes effect at the next turn (`atTurnEffort`), where a Claude
+    effort marker takes effect too (from the next user turn; a marker after a
+    tool result would wait past the reply, so such a change sends the plain
+    request). Each step's `StreamEnded.reasoningLevel` receipt
     names the effort that step was sent at, after the clamp, and each request
     hands the drivers those receipts per earlier assistant run
     (`ProviderHints.reasoningHistory`). A driver whose wire can change the

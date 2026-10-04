@@ -736,8 +736,8 @@ describe("request bodies", () => {
 // ── effort changes ──────────────────────────────────────────────────────────
 
 /**
- * One session's conversation, whole: a tool step, a text step, then a second
- * user turn. Request `n` sends the first `PREFIXES[n]` messages.
+ * One session's conversation, whole: a turn of a tool step and a text step,
+ * then two turns of one text step each. A request sends a prefix of it.
  */
 const SESSION: Prompt.RawInput = [
   { role: "system", content: "You are terse." },
@@ -769,15 +769,18 @@ const SESSION: Prompt.RawInput = [
   },
   { role: "assistant", content: [{ type: "text", text: "It says alpha." }] },
   { role: "user", content: "Thanks." },
+  { role: "assistant", content: [{ type: "text", text: "Welcome." }] },
+  { role: "user", content: "Read it again." },
 ]
 
 const sessionPrompt = (messages: number): Prompt.RawInput =>
   Prompt.make(SESSION).content.slice(0, messages)
 
 /**
- * The session's three requests: the first step at `low`, the second at
- * `high` after the tool result, the third at `low` after the user's turn.
- * Each request names the effort every earlier assistant run was sent at.
+ * The session's four requests. A turn runs at one effort (core keeps a level
+ * set mid-turn for the next turn): both steps of the first turn at `low`, the
+ * second turn at `high`, the third at `low`. Each request names the effort
+ * every earlier assistant run was sent at.
  */
 const SESSION_REQUESTS: ReadonlyArray<{
   readonly messages: number
@@ -785,9 +788,47 @@ const SESSION_REQUESTS: ReadonlyArray<{
   readonly history: ReadonlyArray<Option.Option<ReasoningEffort>>
 }> = [
   { messages: 2, reasoning: "low", history: [] },
-  { messages: 4, reasoning: "high", history: [Option.some("low")] },
-  { messages: 6, reasoning: "low", history: [Option.some("low"), Option.some("high")] },
+  { messages: 4, reasoning: "low", history: [Option.some("low")] },
+  { messages: 6, reasoning: "high", history: [Option.some("low"), Option.some("low")] },
+  {
+    messages: 8,
+    reasoning: "low",
+    history: [Option.some("low"), Option.some("low"), Option.some("high")],
+  },
 ]
+
+/**
+ * The effort each assistant run of the body, then its reply, runs at, as the
+ * provider applies the body: the top level first. A Messages effort marker
+ * takes effect from the next user turn; a Responses `configuration_update`
+ * at once (Codex sends one right before the request it changes,
+ * `codex-rs/core/src/session/turn.rs`).
+ */
+const appliedEfforts = (body: Schema.JsonObject): ReadonlyArray<string> => {
+  let markers: "next-user-turn" | "at-once" = "next-user-turn"
+  if (Predicate.isNotUndefined(body["input"])) markers = "at-once"
+  let applied = topLevelEffort(body)
+  let pending = applied
+  const runs: Array<string> = []
+  let inRun = false
+  for (const kind of itemKinds(body)) {
+    if (kind.startsWith("effort:")) {
+      pending = kind.slice("effort:".length)
+      if (markers === "at-once") applied = pending
+      continue
+    }
+    if (kind === "user" || kind === "function_call_output") {
+      if (markers === "next-user-turn") applied = pending
+      inRun = false
+      continue
+    }
+    if (kind === "assistant" || kind === "function_call" || kind === "reasoning") {
+      if (!inRun) runs.push(applied)
+      inRun = true
+    }
+  }
+  return [...runs, applied]
+}
 
 const sessionHints = (
   reasoning: ReasoningEffort,
@@ -897,7 +938,17 @@ const CARRYING: ReadonlyArray<readonly [string, string, ReadonlyArray<string>]> 
       [
         "anthropic",
         model,
-        ["user", "assistant", "user", "effort:high", "assistant", "effort:low", "user"],
+        [
+          "user",
+          "assistant",
+          "user",
+          "assistant",
+          "effort:high",
+          "user",
+          "assistant",
+          "effort:low",
+          "user",
+        ],
       ] as const,
   ),
   [
@@ -908,6 +959,8 @@ const CARRYING: ReadonlyArray<readonly [string, string, ReadonlyArray<string>]> 
       "user",
       "function_call",
       "function_call_output",
+      "assistant",
+      "user",
       "effort:high",
       "assistant",
       "user",
@@ -923,27 +976,73 @@ describe("effort changes", () => {
         const bodies = (yield* sessionBodies(label, modelName)).map((request) =>
           bodyOf(Option.some(request)),
         )
-        const at = (index: number) => Option.getOrThrow(Option.fromUndefinedOr(bodies[index]))
-        const first = at(0)
-        const second = at(1)
-        const third = at(2)
-        expect([modelName, ...bodies.map(topLevelEffort)]).toEqual([modelName, "low", "low", "low"])
-        expect([modelName, topLevelOf(second), topLevelOf(third)]).toEqual([
+        expect([modelName, ...bodies.map(topLevelEffort)]).toEqual([
           modelName,
-          topLevelOf(first),
-          topLevelOf(first),
+          ...bodies.map(() => "low"),
         ])
-        const earlier = conversationOf(first)
-        expect([modelName, conversationOf(second).slice(0, earlier.length)]).toEqual([
+        for (const [index, body] of bodies.entries()) {
+          if (index === 0) continue
+          const earlier = Option.getOrThrow(Option.fromUndefinedOr(bodies[index - 1]))
+          expect([modelName, index, topLevelOf(body)]).toEqual([
+            modelName,
+            index,
+            topLevelOf(earlier),
+          ])
+          const kept = conversationOf(earlier)
+          expect([modelName, index, conversationOf(body).slice(0, kept.length)]).toEqual([
+            modelName,
+            index,
+            kept,
+          ])
+        }
+        expect([
           modelName,
-          earlier,
-        ])
-        const middle = conversationOf(second)
-        expect([modelName, conversationOf(third).slice(0, middle.length)]).toEqual([
-          modelName,
-          middle,
-        ])
-        expect([modelName, itemKinds(third)]).toEqual([modelName, kinds])
+          itemKinds(Option.getOrThrow(Option.fromUndefinedOr(bodies.at(-1)))),
+        ]).toEqual([modelName, kinds])
+      }
+    }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live(
+    "each run and the reply run at the effort the receipts name, as the provider applies it",
+    () =>
+      Effect.gen(function* () {
+        for (const [label, modelName] of CARRYING) {
+          const requests = yield* sessionBodies(label, modelName)
+          for (const [index, request] of requests.entries()) {
+            const step = Option.getOrThrow(Option.fromUndefinedOr(SESSION_REQUESTS[index]))
+            const receipts = step.history.map((entry) => Option.getOrElse(entry, () => "?"))
+            expect([modelName, index, appliedEfforts(bodyOf(Option.some(request)))]).toEqual([
+              modelName,
+              index,
+              [...receipts, step.reasoning],
+            ])
+          }
+        }
+      }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live("a change a Messages reply cannot take in time sends the plain request", () =>
+    Effect.gen(function* () {
+      const route = yield* routeNamed("anthropic")
+      // A marker after the tool result takes effect only at the next user
+      // turn, after the reply; a prompt merged into the tool result before
+      // it has no user turn of its own to precede.
+      const merged: Prompt.RawInput = [
+        ...Prompt.make(sessionPrompt(4)).content,
+        ...Prompt.make([{ role: "user", content: "Stop and summarize." }]).content,
+      ]
+      const cases: ReadonlyArray<readonly [string, Prompt.RawInput]> = [
+        ["after a tool result", sessionPrompt(4)],
+        ["a prompt merged into a tool result", merged],
+      ]
+      for (const [reason, prompt] of cases) {
+        const hints = sessionHints("high", [Option.some("low")])
+        const { reasoningHistory: _history, ...plain } = hints
+        const carried = bodyOf(yield* captureRequest(route, "claude-fable-5-1", hints, prompt))
+        const without = bodyOf(yield* captureRequest(route, "claude-fable-5-1", plain, prompt))
+        expect([reason, carried]).toEqual([reason, without])
+        expect([reason, appliedEfforts(carried)]).toEqual([reason, ["high", "high"]])
       }
     }).pipe(Effect.timeout("30 seconds")),
   )
@@ -954,15 +1053,24 @@ describe("effort changes", () => {
       Effect.gen(function* () {
         const route = yield* routeNamed("anthropic")
         for (const modelName of ["claude-fable-5-1", "claude-opus-5-5"]) {
+          const before = [
+            Option.some<ReasoningEffort>("high"),
+            Option.some<ReasoningEffort>("high"),
+          ]
           const first = bodyOf(
-            yield* captureRequest(route, modelName, sessionHints("high", []), sessionPrompt(2)),
+            yield* captureRequest(
+              route,
+              modelName,
+              sessionHints("high", before.slice(0, 1)),
+              sessionPrompt(4),
+            ),
           )
           const off = bodyOf(
             yield* captureRequest(
               route,
               modelName,
-              { ...sessionHints("high", [Option.some("high")]), reasoning: "none" },
-              sessionPrompt(4),
+              { ...sessionHints("high", before), reasoning: "none" },
+              sessionPrompt(6),
             ),
           )
           // The top level and the earlier conversation stay as sent; the
@@ -975,8 +1083,9 @@ describe("effort changes", () => {
           ])
           expect([modelName, itemKinds(off)]).toEqual([
             modelName,
-            ["user", "assistant", "user", "effort:low"],
+            ["user", "assistant", "user", "assistant", "effort:low", "user"],
           ])
+          expect([modelName, appliedEfforts(off)]).toEqual([modelName, ["high", "high", "low"]])
         }
       }).pipe(Effect.timeout("30 seconds")),
   )
@@ -988,21 +1097,23 @@ describe("effort changes", () => {
         requests.map((request) =>
           (request.headers["anthropic-beta"] ?? "").split(",").includes(MID_CONVERSATION_BETA),
         ),
-      ).toEqual([false, true, true])
+      ).toEqual([false, false, true, true])
     }).pipe(Effect.timeout("30 seconds")),
   )
 
-  it.live("the conversation's cache marker skips an effort marker at the tail", () =>
+  it.live("the conversation's cache marker stays on the user turn after an effort marker", () =>
     Effect.gen(function* () {
       const requests = yield* sessionBodies("anthropic", "claude-fable-5-1")
-      const second = Option.getOrThrow(Option.fromUndefinedOr(requests[1]))
-      expect(itemKinds(bodyOf(Option.some(second)))).toEqual([
+      const changed = Option.getOrThrow(Option.fromUndefinedOr(requests[2]))
+      expect(itemKinds(bodyOf(Option.some(changed)))).toEqual([
         "user",
         "assistant",
         "user",
+        "assistant",
         "effort:high",
+        "user",
       ])
-      expect(line("tail", second)).toContain("cache=[messages.2.content.0=1h system.0=1h]")
+      expect(line("tail", changed)).toContain("cache=[messages.5.content.0=1h system.0=1h]")
     }).pipe(Effect.timeout("30 seconds")),
   )
 
@@ -1021,8 +1132,8 @@ describe("effort changes", () => {
         const [carried, without] = yield* withAndWithoutHistory(
           label,
           modelName,
-          sessionHints("low", [Option.some("low"), Option.some("high")]),
-          6,
+          sessionHints("low", [Option.some("low"), Option.some("low"), Option.some("high")]),
+          8,
         )
         expect([label, modelName, carried]).toEqual([label, modelName, without])
       }
@@ -1039,20 +1150,20 @@ describe("effort changes", () => {
           {
             reasoning: "low",
             supportsReasoning: true,
-            reasoningHistory: [Option.some("low"), Option.some("high")],
+            reasoningHistory: [Option.some("low"), Option.some("low"), Option.some("high")],
           },
         ],
         [
           "no receipts",
           "anthropic",
           "claude-fable-5-1",
-          sessionHints("low", [Option.none(), Option.none()]),
+          sessionHints("low", [Option.none(), Option.none(), Option.none()]),
         ],
         [
           "no receipts",
           "openai",
           "gpt-6.1-sol",
-          sessionHints("low", [Option.none(), Option.none()]),
+          sessionHints("low", [Option.none(), Option.none(), Option.none()]),
         ],
         [
           "runs not aligned",
@@ -1065,17 +1176,17 @@ describe("effort changes", () => {
           "thinking turned off",
           "anthropic",
           "claude-opus-5",
-          sessionHints("high", [Option.some("none"), Option.some("high")]),
+          sessionHints("high", [Option.some("none"), Option.some("none"), Option.some("high")]),
         ],
         [
           "thinking between tools",
           "anthropic",
           "claude-sonnet-5-5",
-          sessionHints("high", [Option.some("none"), Option.some("high")]),
+          sessionHints("high", [Option.some("none"), Option.some("none"), Option.some("high")]),
         ],
       ]
       for (const [reason, label, modelName, hints] of cases) {
-        const [carried, without] = yield* withAndWithoutHistory(label, modelName, hints, 6)
+        const [carried, without] = yield* withAndWithoutHistory(label, modelName, hints, 8)
         expect([reason, modelName, carried]).toEqual([reason, modelName, without])
       }
     }).pipe(Effect.timeout("30 seconds")),
