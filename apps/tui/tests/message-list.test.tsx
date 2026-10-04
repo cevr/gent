@@ -5598,6 +5598,37 @@ describe("tool runs across steps", () => {
     }),
   )
 
+  // The header fits the columns its row has: the answer indent, the glyph
+  // and its space, and the column every transcript row keeps free.
+  it.scopedLive(
+    "a header as long as the row once had room for drops a kind, and the renderer cuts no word",
+    () =>
+      Effect.gen(function* () {
+        const items: SessionItem[] = [
+          step("x1", ["a.ts", "b.ts", "c.ts"], { tool: "read" }),
+          step("x2", ["mkdir x", "ls"]),
+          step("x3", ["TODO"], { tool: "grep" }),
+          step("x4", ["a.ts"], { tool: "edit" }),
+        ]
+        // The transcript surface, which keeps the terminal's last column free.
+        const drawLive = (width: number) =>
+          renderScoped(() => <Transcript items={items} />, { width, height: 30 }).pipe(
+            Effect.map(renderFrame),
+          )
+        const whole = "7 tools · 3 read · 2 commands · 1 search · 1 edit"
+        expect(headers(yield* drawLive(100))).toEqual([`● ${whole}`])
+        // At `whole.length + 4` the header filled the columns the old rule
+        // gave it, one more than its row has.
+        for (const width of [whole.length + 4, whole.length + 5]) {
+          const [header = ""] = headers(yield* drawLive(width))
+          expect(header).not.toMatch(/\.\.\.|…/)
+          expect(header).toMatch(/^● 7 tools( · \d (read|commands|search|edit))*$/)
+          expect(header.length).toBeLessThanOrEqual(width - 3)
+        }
+        expect(headers(yield* drawLive(whole.length + 5))).toEqual([`● ${whole}`])
+      }),
+  )
+
   it.scopedLive(
     "native history takes a run's head only once the run ends, with every step in it",
     () =>

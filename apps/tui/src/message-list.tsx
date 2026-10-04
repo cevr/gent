@@ -1029,8 +1029,10 @@ function ToolCallGroup(props: {
     if (opsFailed()) return theme.warning
     return theme.textMuted
   }
-  // The columns right of the group's glyph or connector.
-  const lineWidth = () => dimensions().width - ANSWER_INDENT - 2
+  // The columns right of the group's glyph or connector and its space: every
+  // surface that draws the header or the rows (the live tail, a history
+  // commit) keeps the terminal's last column free.
+  const lineWidth = () => dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN - 2
   const header = createMemo(() => formatActivityHeader(activity(), lineWidth()))
   // The transcript view and the full level both open every row; collapsed keeps only failures.
   const rowsOpen = () => props.fullDetail || props.disclosure === "full"
