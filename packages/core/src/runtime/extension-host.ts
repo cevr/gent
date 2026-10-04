@@ -1101,6 +1101,10 @@ const resourceScopesOf = (extension: LoadedExtension): ReadonlySet<ResourceScope
  * service an earlier one built, and over the branch Resources before it. So
  * its key holds every process-bearing extension, then the branch-bearing
  * ones up to and including it.
+ *
+ * These are the keys of what the set declares. A profile's process Resources
+ * key on what started instead (`startProcessResources`), since a last good
+ * version can start in place of a declared version.
  */
 export const resourceBuildKeys = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -1311,12 +1315,27 @@ const contentHash = Effect.fn("ExtensionLoader.contentHash")(function* (
 })
 
 /**
+ * How many times one resolve builds an entry before it gives up on a
+ * coherent build: each try after the first follows an import the last try
+ * found, or a save during the last try.
+ */
+const COHERENT_BUILD_TRIES = 3
+
+/**
  * Build an extension entry into one module, or reuse its last build. Each
  * resolve stats the entry and the modules its last build read: no stat
  * changed, the last build stands. A stat changed but no byte did (a save of
  * the same bytes, a `touch`), the last build stands and the new stats are
  * kept. Otherwise the entry builds again. The version is the built module's
  * hash, so two builds of the same code share one version.
+ *
+ * A build is kept only when it is coherent: it read the files whose stats
+ * and bytes were taken before it, and those bytes did not change while it
+ * ran. A build that read a module not known before it, or that a save
+ * overlapped, builds again with the inputs it found, so the first build of
+ * an entry with relative imports builds twice. A build still not coherent
+ * after `COHERENT_BUILD_TRIES` runs this resolve and is not kept, so the
+ * next resolve builds again.
  */
 const buildEntry = Effect.fn("ExtensionLoader.buildEntry")(function* (
   entry: string,
@@ -1325,45 +1344,56 @@ const buildEntry = Effect.fn("ExtensionLoader.buildEntry")(function* (
   const fs = yield* FileSystem.FileSystem
   const platform = yield* GentPlatform
   const known = Option.fromNullishOr(graphs.get(entry))
-  const inputs = Option.match(known, {
+  let inputs = Option.match(known, {
     onNone: () => [entry],
     onSome: (graph) => [...graph.stamps.keys()],
   })
-  const before = new Map<string, string>()
-  for (const input of inputs) before.set(input, yield* statStamp(fs, input))
+  const statAll = Effect.fn("ExtensionLoader.statInputs")(function* (files: ReadonlyArray<string>) {
+    const stamps = new Map<string, string>()
+    for (const input of files) stamps.set(input, yield* statStamp(fs, input))
+    return stamps
+  })
+  let stamps = yield* statAll(inputs)
+  let content = yield* contentHash(inputs)
   if (Option.isSome(known)) {
     const graph = known.value
-    if ([...before].every(([input, stamp]) => graph.stamps.get(input) === stamp)) {
+    if ([...stamps].every(([input, stamp]) => graph.stamps.get(input) === stamp)) {
       return { version: graph.version, build: Result.succeed(graph.code) }
     }
-    if ((yield* contentHash(inputs)) === graph.content) {
-      graphs.set(entry, { ...graph, stamps: before })
+    if (content === graph.content) {
+      graphs.set(entry, { ...graph, stamps })
       return { version: graph.version, build: Result.succeed(graph.code) }
     }
   }
-  const built = yield* platform.bundleModule(entry).pipe(Effect.result)
-  if (Result.isFailure(built)) {
-    const error = `Failed to build ${entry}: ${built.failure.message}`
-    graphs.delete(entry)
-    return {
-      version: `!${platform.hash("sha256", error)}`,
-      build: Result.fail(error),
+  for (let attempt = 1; ; attempt++) {
+    const built = yield* platform.bundleModule(entry).pipe(Effect.result)
+    if (Result.isFailure(built)) {
+      const error = `Failed to build ${entry}: ${built.failure.message}`
+      graphs.delete(entry)
+      return {
+        version: `!${platform.hash("sha256", error)}`,
+        build: Result.fail(error),
+      }
     }
+    const version = platform.hash("sha256", built.success.code)
+    const read = new Set(built.success.inputs)
+    const sameInputs = read.size === inputs.length && inputs.every((input) => read.has(input))
+    // The bytes after the build match the bytes before it: the build read
+    // them, unless a save came and went inside it.
+    const after = yield* contentHash(built.success.inputs)
+    if (sameInputs && after === content) {
+      const graph: ModuleGraph = { stamps, content, version, code: built.success.code }
+      graphs.set(entry, graph)
+      return { version, build: Result.succeed(graph.code) }
+    }
+    if (attempt >= COHERENT_BUILD_TRIES) {
+      graphs.delete(entry)
+      return { version, build: Result.succeed(built.success.code) }
+    }
+    inputs = [...built.success.inputs]
+    stamps = yield* statAll(inputs)
+    content = yield* contentHash(inputs)
   }
-  // A known input keeps the stat from before the build: an edit during the
-  // build then shows as a change on the next resolve.
-  const stamps = new Map<string, string>()
-  for (const input of built.success.inputs) {
-    stamps.set(input, before.get(input) ?? (yield* statStamp(fs, input)))
-  }
-  const graph: ModuleGraph = {
-    stamps,
-    content: yield* contentHash(built.success.inputs),
-    version: platform.hash("sha256", built.success.code),
-    code: built.success.code,
-  }
-  graphs.set(entry, graph)
-  return { version: graph.version, build: Result.succeed(graph.code) }
 })
 
 /**
@@ -2130,8 +2160,8 @@ const sameSource = (
  * Load, set up and validate a profile's extensions. A user or project
  * extension whose new version fails to load, set up or validate runs its last
  * good version (`lastGood`) instead, marked with the failure
- * (`LoadedExtension.reloadFailed`). A project the user does not trust keeps
- * nothing: a revoke is a removal.
+ * (`LoadedExtension.reloadFailed`), when the set stays valid with it. A
+ * project the user does not trust keeps nothing: a revoke is a removal.
  */
 export const loadRuntimeProfileDeclarations = (
   inputs: RuntimeProfileInputs,
@@ -2189,37 +2219,62 @@ export const loadRuntimeProfileDeclarations = (
         })),
       )
     }
+    // Each last good version, and the failure it stands for.
+    const standsFor = new Map<LoadedExtension, FailedExtension>()
     const kept: LoadedExtension[] = []
     const failedBeforeValidation: FailedExtension[] = []
     for (const failure of [...importFailed, ...setup.failed]) {
       const fallback = fallbackFor(failure)
-      if (Option.isSome(fallback)) kept.push(fallback.value)
-      else failedBeforeValidation.push(failure)
+      if (Option.isNone(fallback)) {
+        failedBeforeValidation.push(failure)
+        continue
+      }
+      kept.push(fallback.value)
+      standsFor.set(fallback.value, failure)
     }
 
-    // 5. Validate declarations without acquiring process resources. A new
-    // version that fails validation runs its last good version, if that is
-    // another version, and the set is validated once more with it.
-    const candidates = [...setup.active, ...kept]
-    let extensionDeclarations = yield* validateLoadedExtensions(candidates)
+    // 5. Validate declarations without acquiring process resources. The new
+    // versions validate among themselves first. One that fails runs its last
+    // good version, if that is another version.
+    const fresh = yield* validateLoadedExtensions(setup.active)
     const replaced = new Map<LoadedExtension, LoadedExtension>()
-    for (const failure of extensionDeclarations.failed) {
-      const fresh = Option.fromNullishOr(
+    for (const failure of fresh.failed) {
+      const failedFresh = Option.fromNullishOr(
         setup.active.find((extension) => sameSource(extension, failure)),
       )
-      if (Option.isNone(fresh)) continue
+      if (Option.isNone(failedFresh)) continue
       const fallback = fallbackFor(failure)
-      if (Option.isNone(fallback) || fallback.value.version === fresh.value.version) continue
-      replaced.set(fresh.value, fallback.value)
+      if (Option.isNone(fallback) || fallback.value.version === failedFresh.value.version) continue
+      replaced.set(failedFresh.value, fallback.value)
+      standsFor.set(fallback.value, failure)
     }
-    if (replaced.size > 0) {
-      extensionDeclarations = yield* validateLoadedExtensions(
-        candidates.map((extension) => replaced.get(extension) ?? extension),
+    // A last good version runs only in a set it is valid in: one that
+    // collides leaves the set, its extension fails as its new version did,
+    // and the set validates again without it. So a last good version never
+    // takes down an extension whose new version is good.
+    let candidates = [
+      ...setup.active.map((extension) => replaced.get(extension) ?? extension),
+      ...kept,
+    ]
+    let extensionDeclarations = yield* validateLoadedExtensions(candidates)
+    const rejected: FailedExtension[] = []
+    for (;;) {
+      const colliding = candidates.filter(
+        (extension) =>
+          standsFor.has(extension) &&
+          extensionDeclarations.failed.some((failure) => sameSource(extension, failure)),
       )
+      if (colliding.length === 0) break
+      for (const fallback of colliding) {
+        const failure = standsFor.get(fallback)
+        if (!Predicate.isUndefined(failure)) rejected.push(failure)
+      }
+      candidates = candidates.filter((extension) => !colliding.includes(extension))
+      extensionDeclarations = yield* validateLoadedExtensions(candidates)
     }
     const declarations: ExtensionActivationResult = {
       active: extensionDeclarations.active,
-      failed: [...failedBeforeValidation, ...extensionDeclarations.failed],
+      failed: [...failedBeforeValidation, ...rejected, ...extensionDeclarations.failed],
     }
     // 6. Build the base prompt section: core writes the environment
     const isGitRepo = yield* fs
@@ -2430,7 +2485,10 @@ export class SessionProfileCache extends Context.Service<
         )
 
         interface ProfileEntry {
+          /** The declaration key and the startup fallbacks the profile runs. */
           readonly key: string
+          /** `profileKey`: the place, the declared extensions and their files. */
+          readonly declarationKey: string
           readonly place: string
           readonly profile: SessionProfile
           readonly scope: Scope.Closeable
@@ -2477,40 +2535,47 @@ export class SessionProfileCache extends Context.Service<
             Option.fromNullishOr(lastGood.get(lastGoodKey(place, failure)))
         /**
          * Keep each extension the place's current profile runs as its last
-         * good version, and forget the ones it no longer has. When a version
-         * changes, a raw list that resolved to a profile running an older
-         * last good version must build again, so its alias goes.
+         * good version, and forget the ones it no longer has.
          */
         const recordLastGood = (place: string, resolved: ResolvedExtensions) => {
           const present = new Set<string>()
-          let changed = false
           for (const extension of resolved.extensions) {
             if (extension.scope === "builtin") continue
             const key = lastGoodKey(place, extension)
             present.add(key)
-            if (!Predicate.isUndefined(extension.reloadFailed)) continue
-            const previous = Option.fromNullishOr(lastGood.get(key))
-            if (Option.isNone(previous) || previous.value.version !== extension.version) {
-              changed = true
-            }
-            lastGood.set(key, extension)
+            if (Predicate.isUndefined(extension.reloadFailed)) lastGood.set(key, extension)
           }
           for (const failure of resolved.failedExtensions) present.add(lastGoodKey(place, failure))
           for (const key of lastGood.keys()) {
-            if (!key.startsWith(`${place}\u0000`) || present.has(key)) continue
-            lastGood.delete(key)
-            changed = true
-          }
-          if (!changed) return
-          for (const [list, target] of aliases) {
-            const entry = Option.fromNullishOr(entries.get(target))
-            if (Option.isNone(entry) || entry.value.place !== place) continue
-            const runsLastGood = entry.value.profile.resolved.extensions.some(
-              (extension) => !Predicate.isUndefined(extension.reloadFailed),
-            )
-            if (runsLastGood) aliases.delete(list)
+            if (key.startsWith(`${place}\u0000`) && !present.has(key)) lastGood.delete(key)
           }
         }
+        /**
+         * A profile that runs a last good version in place of a version that
+         * failed serves a resolve only while that version is still the last
+         * good one: after a newer version ran, the same failure runs the
+         * newer one. A profile a turn holds outlives that change, so the
+         * lookup checks it, by alias or by key.
+         */
+        const runsCurrentLastGood = (entry: ProfileEntry): boolean =>
+          entry.profile.resolved.extensions.every((extension) => {
+            if (Predicate.isUndefined(extension.reloadFailed)) return true
+            const current = Option.fromNullishOr(lastGood.get(lastGoodKey(entry.place, extension)))
+            return Option.isSome(current) && current.value.version === extension.version
+          })
+        /**
+         * The startup fallbacks a profile runs, by id and version: the part
+         * of its identity its declarations do not hold (`profileKey`), since
+         * a startup failure picks the last good version as it is then.
+         */
+        const startupFallbacksKey = (resolved: ResolvedExtensions): string =>
+          resolved.extensions
+            .flatMap((extension) => {
+              if (extension.reloadFailed?.phase !== "startup") return []
+              return [`${extension.manifest.id}~${extension.version ?? ""}`]
+            })
+            .toSorted()
+            .join("\u0000")
         const filesStamp = (place: string, scan: ExtensionScan): ReadonlyArray<string> => [
           ...extensionScanStamp(scan),
           ...Array.from(reloads.get(place) ?? new Map<string, number>())
@@ -2581,52 +2646,63 @@ export class SessionProfileCache extends Context.Service<
           restore: Restore,
         ): Effect.Effect<StartedProcessResources> =>
           Effect.gen(function* () {
-            const keys = new Map(resourceBuildKeys(extensions, "process", place))
-            // A last good version in place of a version that failed to start
-            // has the key it would have in that place, so it shares the
-            // Resources the profile before it built.
-            const keyOf = (extension: LoadedExtension): Option.Option<string> => {
-              const known = Option.fromNullishOr(keys.get(extension))
-              if (Option.isSome(known)) return known
-              // `resourceBuildKeys` sorts, so the order here does not count.
-              const substituted = [
-                ...extensions.filter((other) => !sameSource(other, extension)),
-                extension,
-              ]
-              const key = Option.fromNullishOr(
-                resourceBuildKeys(substituted, "process", place).get(extension),
-              )
-              if (Option.isSome(key)) keys.set(extension, key.value)
-              return key
+            // The key of a build is the identities of the builds it runs over,
+            // as they started: a last good version that runs in place of a
+            // version that failed to start is named by its own version, and a
+            // build after it by that version too (`resourceBuildKeys` names
+            // what the set declares, not what started). `buildScopeResources`
+            // shares or builds one extension at a time in resolution order,
+            // and each one it shares or builds is live over the ones before.
+            const chain = [place]
+            const keyOf = (extension: LoadedExtension) =>
+              [...chain, extensionResourceIdentity(extension)].join("\u0000")
+            const accept = (extension: LoadedExtension, key: string) => {
+              chain.push(extensionResourceIdentity(extension))
+              held.push(key)
             }
+            // The set as it runs: each last good version in place of the
+            // version it stands for.
+            let effective = extensions
             const started = yield* buildScopeResources({
               extensions,
               scope: "process",
               context: platformServicesContext,
               parent: serverScope,
               restore,
-              reuse: (extension) =>
-                Option.flatMap(keyOf(extension), (key) => {
-                  const shared = Option.fromNullishOr(sharedResources.get(key))
-                  if (Option.isNone(shared)) return Option.none()
-                  shared.value.holders += 1
-                  held.push(key)
-                  return Option.some(shared.value.context)
-                }),
+              reuse: (extension) => {
+                const key = keyOf(extension)
+                const shared = Option.fromNullishOr(sharedResources.get(key))
+                if (Option.isNone(shared)) return Option.none()
+                shared.value.holders += 1
+                accept(extension, key)
+                return Option.some(shared.value.context)
+              },
               built: (extension, scope, context) => {
                 const key = keyOf(extension)
-                if (Option.isNone(key)) return
-                sharedResources.set(key.value, { scope, context, holders: 1 })
-                held.push(key.value)
+                sharedResources.set(key, { scope, context, holders: 1 })
+                accept(extension, key)
               },
+              // A last good version runs only where its contributions collide
+              // with none of the set's: the set validated without it, so a
+              // collision is its own, and the extension whose new version
+              // failed is the one that fails.
               fallback: (extension, error) => {
                 if (extension.scope === "builtin") return Option.none()
                 return Option.fromNullishOr(lastGood.get(lastGoodKey(place, extension))).pipe(
                   Option.filter((previous) => previous.version !== extension.version),
-                  Option.map((previous) => ({
+                  Option.map((previous): LoadedExtension => ({
                     ...previous,
                     reloadFailed: { phase: "startup", error },
                   })),
+                  Option.filter((previous) => {
+                    const substituted = effective.map((other) => {
+                      if (sameSource(other, extension)) return previous
+                      return other
+                    })
+                    if (collectValidationFailures(substituted).size > 0) return false
+                    effective = substituted
+                    return true
+                  }),
                 )
               },
             })
@@ -2727,7 +2803,7 @@ export class SessionProfileCache extends Context.Service<
           Effect.gen(function* () {
             const aliased = Option.flatMap(Option.fromNullishOr(aliases.get(list)), (key) =>
               Option.fromNullishOr(entries.get(key)),
-            )
+            ).pipe(Option.filter(runsCurrentLastGood))
             if (Option.isSome(aliased)) return aliased.value
             const files = filesStamp(place, scan)
             const declarations = yield* restore(
@@ -2737,16 +2813,26 @@ export class SessionProfileCache extends Context.Service<
                 lastGoodFor(place),
               ).pipe(Effect.provideContext(platformServicesContext)),
             )
-            const key = profileKey(place, declarations.extensionDeclarations, files)
-            const found = Option.fromNullishOr(entries.get(key))
+            // Profiles of one declaration key differ only by the startup
+            // fallbacks they run; the one whose fallbacks are still the last
+            // good versions serves.
+            const declarationKey = profileKey(place, declarations.extensionDeclarations, files)
+            const found = Option.fromNullishOr(
+              [...entries.values()].find(
+                (entry) => entry.declarationKey === declarationKey && runsCurrentLastGood(entry),
+              ),
+            )
             if (Option.isSome(found)) {
-              aliases.set(list, key)
+              aliases.set(list, found.value.key)
               return found.value
             }
             const built = yield* buildProfile(place, cwd, fresh, declarations, restore).pipe(
               Effect.orDie,
             )
-            const entry: ProfileEntry = { key, place, ...built }
+            // A profile with these fallbacks would have been found above, so
+            // the key is new and no stored entry is lost.
+            const key = [declarationKey, startupFallbacksKey(built.profile.resolved)].join("\u0001")
+            const entry: ProfileEntry = { key, declarationKey, place, ...built }
             entries.set(key, entry)
             aliases.set(list, key)
             yield* Effect.logInfo("session-profile.initialized").pipe(

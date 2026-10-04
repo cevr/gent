@@ -479,6 +479,176 @@ const makeCacheLayer = (params: {
   )
 }
 
+/**
+ * A user directory extension whose process Resource serves the `value` a
+ * relative module exports, and a writer for that module.
+ */
+const graphExtensionFixture = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-profile-graph-" })
+  const home = path.join(directory, "home")
+  const launch = path.join(directory, "launch")
+  const extensionDir = path.join(home, ".gent", "extensions", "graph")
+  const index = path.join(extensionDir, "index.ts")
+  const valueModule = path.join(extensionDir, "value.ts")
+  yield* fs.makeDirectory(extensionDir, { recursive: true })
+  yield* fs.makeDirectory(launch, { recursive: true })
+  yield* writeFileAtomic(
+    index,
+    `import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+import { value } from "./value.ts";
+class Marker extends Context.Service<Marker, { readonly value: string }>()(
+  "@gent/core/tests/runtime/extension-host.test/SessionProfileResourceMarker",
+) {}
+export default defineExtension({
+  id: "profile-graph",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "profile-graph/marker",
+      scope: "process",
+      layer: Layer.succeed(Marker, Marker.of({ value })),
+    }));
+  }),
+});
+`,
+  )
+  return {
+    home,
+    launch,
+    index,
+    // Replaced, as gent and most editors save: a new inode and mtime.
+    writeValue: (value: string) =>
+      writeFileAtomic(valueModule, `export const value = "${value}";\n`).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      ),
+    marker: (profile: SessionProfile) =>
+      Context.get(profile.layerContext, SessionProfileResourceMarker).value,
+  }
+})
+
+/** A user extensions directory for `chainSource` files, and what their Resources serve. */
+const chainFixture = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-profile-chain-" })
+  const home = path.join(directory, "home")
+  const launch = path.join(directory, "launch")
+  const extensionsDir = path.join(home, ".gent", "extensions")
+  yield* fs.makeDirectory(extensionsDir, { recursive: true })
+  yield* fs.makeDirectory(launch, { recursive: true })
+  const file = (name: string) => path.join(extensionsDir, `${name}.ts`)
+  return {
+    home,
+    launch,
+    write: (name: string, source: string) => writeFileAtomic(file(name), source),
+    remove: (name: string) => fs.remove(file(name), { force: true }),
+    seen: (profile: SessionProfile) => Context.get(profile.layerContext, ChainDependent).seen(),
+  }
+})
+
+/** The service `chainSource.a` serves: its label, and whether its scope closed. */
+class ChainService extends Context.Service<
+  ChainService,
+  { readonly value: string; readonly closed: () => boolean }
+>()("@gent/core/tests/runtime/extension-host.test/ChainService") {}
+
+/** The service B serves: what it read from A's service when it was built. */
+class ChainDependent extends Context.Service<
+  ChainDependent,
+  { readonly seen: () => { readonly value: string; readonly closed: boolean } }
+>()("@gent/core/tests/runtime/extension-host.test/ChainDependent") {}
+
+/**
+ * User extension files for a chain of process Resources. `a` serves
+ * `ChainService` labelled `value`, or dies at setup or startup when `value`
+ * is `setup` or `startup`, and may register a tool. `b` serves `ChainDependent` over `a`'s
+ * service. `c` registers only a tool.
+ */
+const chainSource = {
+  a: (value: string, toolId = "") =>
+    `import { Context, Effect, Layer, Schema } from "effect";
+import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api";
+class ChainService extends Context.Service<ChainService, { readonly value: string; readonly closed: () => boolean }>()(
+  "@gent/core/tests/runtime/extension-host.test/ChainService",
+) {}
+export default defineExtension({
+  id: "chain-a",
+  setup: Effect.gen(function* () {
+    ${chainSetupFailure(value)}
+    const host = yield* ExtensionHost;
+    ${chainToolRegistration(toolId)}
+    yield* host.register("resource", defineResource({
+      id: "chain-a/service",
+      scope: "process",
+      layer: ${chainServiceLayer(value)},
+    }));
+  }),
+});
+`,
+  b: `import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class ChainService extends Context.Service<ChainService, { readonly value: string; readonly closed: () => boolean }>()(
+  "@gent/core/tests/runtime/extension-host.test/ChainService",
+) {}
+class ChainDependent extends Context.Service<ChainDependent, { readonly seen: () => { readonly value: string; readonly closed: boolean } }>()(
+  "@gent/core/tests/runtime/extension-host.test/ChainDependent",
+) {}
+export default defineExtension({
+  id: "chain-b",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "chain-b/dependent",
+      scope: "process",
+      layer: Layer.effect(ChainDependent, Effect.gen(function* () {
+        const a = yield* ChainService;
+        return ChainDependent.of({ seen: () => ({ value: a.value, closed: a.closed() }) });
+      })),
+    }));
+  }),
+});
+`,
+  c: (toolId: string) => `import { Effect, Schema } from "effect";
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api";
+export default defineExtension({
+  id: "chain-c",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    ${chainToolRegistration(toolId)}
+  }),
+});
+`,
+}
+
+function chainSetupFailure(value: string): string {
+  if (value === "setup") return 'yield* Effect.die("setup broke");'
+  return ""
+}
+
+function chainServiceLayer(value: string): string {
+  if (value === "startup") return 'Layer.effect(ChainService, Effect.die("startup broke"))'
+  return `Layer.effect(ChainService, Effect.gen(function* () {
+        const state = { closed: false };
+        yield* Effect.addFinalizer(() => Effect.sync(() => { state.closed = true; }));
+        return ChainService.of({ value: "${value}", closed: () => state.closed });
+      }))`
+}
+
+function chainToolRegistration(toolId: string): string {
+  if (toolId.length === 0) return ""
+  return `yield* host.register("tool", tool({
+      id: "${toolId}",
+      description: "A chain tool",
+      params: Schema.Struct({}),
+      output: Schema.String,
+      execute: () => Effect.succeed("${toolId}"),
+    }));`
+}
+
 const markerExtension = (id: string, value: string, stop: Effect.Effect<void> = Effect.void) =>
   defineExtension({
     id,
@@ -660,65 +830,90 @@ export default defineExtension({
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-profile-graph-" })
-        const home = path.join(directory, "home")
-        const launch = path.join(directory, "launch")
-        const extensionDir = path.join(home, ".gent", "extensions", "graph")
-        const index = path.join(extensionDir, "index.ts")
-        const valueModule = path.join(extensionDir, "value.ts")
-        yield* fs.makeDirectory(extensionDir, { recursive: true })
-        yield* fs.makeDirectory(launch, { recursive: true })
-        yield* writeFileAtomic(
-          index,
-          `import { Context, Effect, Layer } from "effect";
-import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
-import { value } from "./value.ts";
-class Marker extends Context.Service<Marker, { readonly value: string }>()(
-  "@gent/core/tests/runtime/extension-host.test/SessionProfileResourceMarker",
-) {}
-export default defineExtension({
-  id: "profile-graph",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost;
-    yield* host.register("resource", defineResource({
-      id: "profile-graph/marker",
-      scope: "process",
-      layer: Layer.succeed(Marker, Marker.of({ value })),
-    }));
-  }),
-});
-`,
-        )
-        // Replaced, as gent and most editors save: a new inode and mtime.
-        const writeValue = (value: string) =>
-          writeFileAtomic(valueModule, `export const value = "${value}";\n`)
-        const marker = (profile: SessionProfile) =>
-          Context.get(profile.layerContext, SessionProfileResourceMarker).value
+        const fixture = yield* graphExtensionFixture
+        const bundles = yield* Ref.make(0)
 
         yield* Effect.gen(function* () {
           const cache = yield* SessionProfileCache
-          const resolve = Effect.scoped(cache.resolve(launch))
-          yield* writeValue("first")
+          const resolve = Effect.scoped(cache.resolve(fixture.launch))
+          yield* fixture.writeValue("first")
           const first = yield* resolve
-          expect(marker(first)).toBe("first")
+          expect(fixture.marker(first)).toBe("first")
 
-          yield* writeValue("second")
+          const beforeEdit = yield* Ref.get(bundles)
+          yield* fixture.writeValue("second")
           const second = yield* resolve
-          expect(marker(second)).toBe("second")
+          expect(fixture.marker(second)).toBe("second")
+          expect(yield* Ref.get(bundles)).toBeGreaterThan(beforeEdit)
 
-          // The same bytes, saved again: the same version, so the same profile.
-          yield* writeValue("second")
+          // The same bytes, saved again: the same version, so the same
+          // profile, and no build.
+          const built = yield* Ref.get(bundles)
+          yield* fixture.writeValue("second")
           expect(yield* resolve).toBe(second)
-          const indexText = yield* fs.readFileString(index)
-          yield* writeFileAtomic(index, indexText)
+          const indexText = yield* fs.readFileString(fixture.index)
+          yield* writeFileAtomic(fixture.index, indexText)
           expect(yield* resolve).toBe(second)
+          expect(yield* Ref.get(bundles)).toBe(built)
         }).pipe(
           Effect.timeout("15 seconds"),
-          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
+          Effect.provide(
+            makeCacheLayer({ cwd: fixture.launch, home: fixture.home, extensions: [] }),
+          ),
+          Effect.updateService(GentPlatform, (live) =>
+            GentPlatform.of({
+              ...live,
+              bundleModule: (entry) =>
+                live.bundleModule(entry).pipe(Effect.tap(() => Ref.update(bundles, (n) => n + 1))),
+            }),
+          ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
         )
       }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // An editor can save while a build reads the files. The build then holds
+  // the old bytes; the next resolve must not keep it as the new version.
+  it.scopedLive("a save during a build reaches the next resolve", () =>
+    Effect.gen(function* () {
+      const fixture = yield* graphExtensionFixture
+      const duringBuild = yield* Ref.make(Option.none<Effect.Effect<void>>())
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const resolve = Effect.scoped(cache.resolve(fixture.launch))
+        yield* fixture.writeValue("first")
+        expect(fixture.marker(yield* resolve)).toBe("first")
+
+        // The build reads "second"; the save of "third" lands before the
+        // build ends.
+        yield* Ref.set(duringBuild, Option.some(fixture.writeValue("third").pipe(Effect.orDie)))
+        yield* fixture.writeValue("second")
+        yield* resolve
+        expect(Option.isNone(yield* Ref.get(duringBuild))).toBe(true)
+        expect(fixture.marker(yield* resolve)).toBe("third")
+        expect(fixture.marker(yield* resolve)).toBe("third")
+      }).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.provide(makeCacheLayer({ cwd: fixture.launch, home: fixture.home, extensions: [] })),
+        Effect.updateService(GentPlatform, (live) =>
+          GentPlatform.of({
+            ...live,
+            bundleModule: (entry) =>
+              live
+                .bundleModule(entry)
+                .pipe(
+                  Effect.tap(() =>
+                    Ref.getAndSet(duringBuild, Option.none()).pipe(
+                      Effect.flatMap((save) => Option.getOrElse(save, () => Effect.void)),
+                    ),
+                  ),
+                ),
+          }),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
   )
 
   // A new version that fails to load, set up or start keeps the last good
@@ -826,6 +1021,151 @@ export default defineExtension({
             makeCacheLayer({ cwd: launch, home, extensions: [], allowFailedExtensions: true }),
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A Resource built over a last good version depends on that version. A
+  // later profile that runs another version of the extension it depends on
+  // must not share it: its service would read a version that is gone.
+  it.scopedLive(
+    "a Resource built over a last good version is not shared by a profile that runs a newer one",
+    () =>
+      Effect.gen(function* () {
+        const chain = yield* chainFixture
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(chain.launch))
+          yield* chain.write("a", chainSource.a("first"))
+          yield* chain.write("b", chainSource.b)
+          expect(chain.seen(yield* resolve)).toEqual({ value: "first", closed: false })
+
+          // A new version fails to start: b builds over the last good one.
+          // A running turn holds this profile.
+          const runningTurn = yield* Scope.make()
+          yield* chain.write("a", chainSource.a("startup"))
+          const kept = yield* cache.resolve(chain.launch).pipe(Scope.provide(runningTurn))
+          expect(chain.seen(kept)).toEqual({ value: "first", closed: false })
+
+          yield* chain.write("a", chainSource.a("third"))
+          expect(chain.seen(yield* resolve)).toEqual({ value: "third", closed: false })
+
+          // The broken version again, beside a new extension: its last good
+          // version is now the third.
+          yield* chain.write("a", chainSource.a("startup"))
+          yield* chain.write("c", chainSource.c("chain.c"))
+          const later = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const profile = yield* cache.resolve(chain.launch)
+              expect(chain.seen(profile)).toEqual({ value: "third", closed: false })
+              yield* Scope.close(runningTurn, Exit.void)
+              return chain.seen(profile)
+            }),
+          )
+          expect(later).toEqual({ value: "third", closed: false })
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(
+            makeCacheLayer({
+              cwd: chain.launch,
+              home: chain.home,
+              extensions: [],
+              allowFailedExtensions: true,
+            }),
+          ),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("1".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A profile a turn still holds may run an older last good version. A
+  // resolve after a newer good version must run the newer one, though the
+  // files match that older profile's.
+  it.scopedLive(
+    "a version that fails to start runs the newest good version, though a profile with an older one is held",
+    () =>
+      Effect.gen(function* () {
+        const chain = yield* chainFixture
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(chain.launch))
+          const value = (profile: SessionProfile) =>
+            Context.get(profile.layerContext, ChainService).value
+          yield* chain.write("a", chainSource.a("first"))
+          expect(value(yield* resolve)).toBe("first")
+
+          const runningTurn = yield* Scope.make()
+          yield* chain.write("a", chainSource.a("startup"))
+          expect(value(yield* cache.resolve(chain.launch).pipe(Scope.provide(runningTurn)))).toBe(
+            "first",
+          )
+
+          yield* chain.write("a", chainSource.a("third"))
+          const third = yield* resolve
+          expect(value(third)).toBe("third")
+
+          yield* chain.write("a", chainSource.a("startup"))
+          const again = yield* resolve
+          expect(value(again)).toBe("third")
+          const status = again.resolved.extensionStatuses.find(
+            (info) => info.manifest.id === "chain-a",
+          )
+          expect(status).toMatchObject({
+            status: "active",
+            reloadFailed: { phase: "startup" },
+          })
+          yield* Scope.close(runningTurn, Exit.void)
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(
+            makeCacheLayer({
+              cwd: chain.launch,
+              home: chain.home,
+              extensions: [],
+              allowFailedExtensions: true,
+            }),
+          ),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("2".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A last good version runs only in a set it is valid in. Its tool may
+  // collide with an extension added since: then the extension whose new
+  // version failed is failed, and the other one runs.
+  it.scopedLive(
+    "a last good version that collides with another extension does not run, and the other one does",
+    () =>
+      Effect.gen(function* () {
+        const chain = yield* chainFixture
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(chain.launch))
+          const statusOf = (profile: SessionProfile, id: string) =>
+            profile.resolved.extensionStatuses.find((info) => info.manifest.id === id)
+          for (const phase of ["setup", "startup"] as const) {
+            yield* chain.remove("c")
+            yield* chain.write("a", chainSource.a(`good before ${phase}`, "chain.common"))
+            expect(statusOf(yield* resolve, "chain-a")).toMatchObject({ status: "active" })
+
+            yield* chain.write("a", chainSource.a(phase, "chain.fresh"))
+            yield* chain.write("c", chainSource.c("chain.common"))
+            const profile = yield* resolve
+            expect(statusOf(profile, "chain-a")).toMatchObject({ status: "failed", phase })
+            expect(statusOf(profile, "chain-c")).toMatchObject({ status: "active" })
+            expect(Option.isNone(Context.getOption(profile.layerContext, ChainService))).toBe(true)
+          }
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(
+            makeCacheLayer({
+              cwd: chain.launch,
+              home: chain.home,
+              extensions: [],
+              allowFailedExtensions: true,
+            }),
+          ),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("3".repeat(64))),
         )
       }).pipe(Effect.provide(BunPlatformLive)),
   )
