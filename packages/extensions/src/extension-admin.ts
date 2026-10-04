@@ -1,11 +1,13 @@
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect"
 import {
   defineExtension,
+  defineRequests,
   ExtensionContext,
   ExtensionHost,
   ExtensionStatus,
   hasProjectScope,
   isProjectTrusted,
+  request,
   resolveDataDir,
   tool,
   UserConfig,
@@ -19,7 +21,8 @@ import {
 // scope and no running turn. A verb that changes what the next turn loads asks
 // the user once; a headless run declines. Every verb uses only the public
 // `ExtensionContext` and the Effect platform services, so a user extension
-// could ship the same ones.
+// could ship the same ones. The `/extensions` pane's requests make the same
+// changes as the user's own act, so they never ask.
 
 const EXTENSION_ADMIN_EXTENSION_ID = "@gent/extension-admin"
 
@@ -44,6 +47,35 @@ interface ScopePlace {
   readonly reach: string
 }
 
+/** The user scope's place: `~/.gent`. */
+const userPlace = Effect.fn("ExtensionAdmin.userPlace")(function* () {
+  const ctx = yield* ExtensionContext
+  const path = yield* Path.Path
+  const root = path.join(ctx.home, ".gent")
+  return {
+    scope: "user",
+    extensionsDir: path.join(root, "extensions"),
+    configPath: path.join(root, "config.json"),
+    reach: "user scope: every project on this server, from each session's next turn",
+  } satisfies ScopePlace
+})
+
+/** The project scope's place, `<cwd>/.gent`, when the session has a project scope its user trusts. */
+const trustedProjectPlace = Effect.fn("ExtensionAdmin.trustedProjectPlace")(function* () {
+  const ctx = yield* ExtensionContext
+  const path = yield* Path.Path
+  if (!(yield* hasProjectScope({ user: ctx.home, project: ctx.cwd }))) return Option.none()
+  if (!(yield* isProjectTrusted({ home: ctx.home, cwd: ctx.cwd }))) return Option.none()
+  const projectRoot = path.resolve(ctx.cwd)
+  const root = path.join(projectRoot, ".gent")
+  return Option.some({
+    scope: "project",
+    extensionsDir: path.join(root, "extensions"),
+    configPath: path.join(root, "config.json"),
+    reach: `project scope: every session in ${projectRoot}, from its next turn`,
+  } satisfies ScopePlace)
+})
+
 /**
  * The scope a verb writes to. `user` is the default only when the session
  * runs from home, where there is no project scope. `project` needs a project
@@ -61,33 +93,20 @@ const scopePlace = Effect.fn("ExtensionAdmin.scopePlace")(function* (
     )
   }
   const scope = Option.getOrElse(requested, (): AdminScope => "user")
-  if (scope === "user") {
-    const root = path.join(ctx.home, ".gent")
-    return {
-      scope,
-      extensionsDir: path.join(root, "extensions"),
-      configPath: path.join(root, "config.json"),
-      reach: "user scope: every project on this server, from each session's next turn",
-    } satisfies ScopePlace
-  }
+  if (scope === "user") return yield* userPlace()
   const projectRoot = path.resolve(ctx.cwd)
   if (!projectScope) {
     return yield* refuse(
       "This session runs from the home directory, so there is no project scope. Use `user`.",
     )
   }
-  if (!(yield* isProjectTrusted({ home: ctx.home, cwd: ctx.cwd }))) {
+  const project = yield* trustedProjectPlace()
+  if (Option.isNone(project)) {
     return yield* refuse(
       `The project ${projectRoot} is not trusted, so its extensions do not load. The user trusts it by adding its canonical root to \`trustedProjects\` in ~/.gent/config.json; an agent cannot.`,
     )
   }
-  const root = path.join(projectRoot, ".gent")
-  return {
-    scope,
-    extensionsDir: path.join(root, "extensions"),
-    configPath: path.join(root, "config.json"),
-    reach: `project scope: every session in ${projectRoot}, from its next turn`,
-  } satisfies ScopePlace
+  return project.value
 })
 
 // ── config ──────────────────────────────────────────────────────────────────
@@ -523,6 +542,82 @@ const ExtensionsReloadTool = tool({
     }),
 })
 
+// ── pane requests ───────────────────────────────────────────────────────────
+
+const PaneOutput = Schema.Struct({
+  detail: Schema.String,
+  extensions: Schema.Array(ExtensionStatus),
+})
+
+/** The statuses after a pane change, for the pane to draw at once. */
+const paneOutput = (detail: string) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    return { detail, extensions: yield* ctx.Extensions.status }
+  })
+
+/**
+ * Turn one extension of the session off or on, as the user asked in the
+ * pane. Off writes the narrowest config that holds the session: the trusted
+ * project's, else the user's. On takes the id from every config that names
+ * it, since any one of them keeps it off.
+ */
+const setEnabled = (params: { readonly id: string; readonly enabled: boolean }) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const user = yield* userPlace()
+    const project = yield* trustedProjectPlace()
+    if (!params.enabled) {
+      const known = (yield* ctx.Extensions.status).some((status) => status.id === params.id)
+      if (!known) return yield* refuse(`No extension of this session has the id ${params.id}.`)
+      const place = Option.getOrElse(project, () => user)
+      const { disabled } = yield* readConfig(place.configPath)
+      if (disabled.includes(params.id)) {
+        return yield* paneOutput(`${place.configPath} disables ${params.id} already.`)
+      }
+      yield* updateDisabled(place.configPath, (current) => [...new Set([...current, params.id])])
+      return yield* paneOutput(`Disabled ${params.id} in ${place.configPath}: the ${place.reach}.`)
+    }
+    const edited: Array<string> = []
+    for (const place of [user, ...Option.toArray(project)]) {
+      const { disabled } = yield* readConfig(place.configPath)
+      if (!disabled.includes(params.id)) continue
+      yield* updateDisabled(place.configPath, (current) => current.filter((id) => id !== params.id))
+      edited.push(place.configPath)
+    }
+    if (edited.length === 0) return yield* paneOutput(`No config disables ${params.id}.`)
+    return yield* paneOutput(`Enabled ${params.id} in ${edited.join(" and ")}.`)
+  })
+
+/**
+ * The `/extensions` pane's verbs. The pane is the user's own hand, so a
+ * change from it never asks; a refusal fails the request with its reason.
+ */
+const ExtensionAdminRpc = defineRequests(EXTENSION_ADMIN_EXTENSION_ID, {
+  SetEnabled: request({
+    id: "extensions.pane.set-enabled",
+    description:
+      "Turn an extension of the session off or on, as the user asked in the /extensions pane",
+    answersDuringTurn: true,
+    input: Schema.Struct({ id: Schema.String, enabled: Schema.Boolean }),
+    output: PaneOutput,
+    execute: setEnabled,
+  }),
+  Reload: request({
+    id: "extensions.pane.reload",
+    description: "Set an extension of the session up again, as the user asked in the pane",
+    answersDuringTurn: true,
+    input: Schema.Struct({ id: Schema.String }),
+    output: PaneOutput,
+    execute: ({ id }) =>
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        yield* ctx.Extensions.reload(id)
+        return yield* paneOutput(`Set ${id} up again; the next turn runs the new setup.`)
+      }),
+  }),
+})
+
 export const ExtensionAdminExtension = defineExtension({
   id: EXTENSION_ADMIN_EXTENSION_ID,
   setup: Effect.gen(function* () {
@@ -533,5 +628,6 @@ export const ExtensionAdminExtension = defineExtension({
     yield* host.register("tool", ExtensionsAddTool)
     yield* host.register("tool", ExtensionsRemoveTool)
     yield* host.register("tool", ExtensionsReloadTool)
+    yield* host.register("request", ExtensionAdminRpc.SetEnabled, ExtensionAdminRpc.Reload)
   }),
 })

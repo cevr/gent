@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Clock, Effect, Fiber, FileSystem, Layer, Option, Path, Ref, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { ExtensionStatus, resolveDataDir } from "@gent/core/extensions/api"
+import { ExtensionId, ExtensionStatus, resolveDataDir } from "@gent/core/extensions/api"
 import { BunPlatformLive } from "@gent/core/host"
 import { messagePartsText } from "@gent/core/protocol"
 import {
@@ -21,6 +21,14 @@ import { bundledSkillFiles } from "../src/skills.js"
 const StatusOutput = Schema.fromJsonString(
   Schema.Struct({ extensions: Schema.Array(ExtensionStatus) }),
 )
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+
+/** What a pane request answers: what it did, and the statuses after it. */
+const PaneOutput = Schema.Struct({
+  detail: Schema.String,
+  extensions: Schema.Array(ExtensionStatus),
+})
 
 const VerbOutput = Schema.fromJsonString(
   Schema.Struct({
@@ -525,5 +533,122 @@ describe("extension admin verbs", () => {
         expect(kept.every(Boolean)).toBe(true)
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
     25_000,
+  )
+})
+
+// ── pane requests ───────────────────────────────────────────────────────────
+
+describe("extension admin pane requests", () => {
+  /** One pane request on the harness session, as the `/extensions` pane sends it. */
+  const paneRequest = (
+    server: Effect.Success<ReturnType<typeof adminServer>>,
+    capabilityId: string,
+    input: Readonly<Record<string, string | boolean>>,
+  ) =>
+    server.client.extension
+      .request({
+        sessionId: server.sessionId,
+        branchId: server.branchId,
+        extensionId: ExtensionId.make("@gent/extension-admin"),
+        capabilityId,
+        input,
+      })
+      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PaneOutput)))
+  const disabledIn = (configPath: string) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const text = yield* fs.readFileString(configPath).pipe(Effect.orElseSucceed(() => "{}"))
+      const config = yield* Schema.decodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({ disabledExtensions: Schema.optional(Schema.Array(Schema.String)) }),
+        ),
+      )(text)
+      return config.disabledExtensions ?? []
+    })
+
+  it.live("the pane turns an extension off and on without an ask, and the next turn follows", () =>
+    Effect.gen(function* () {
+      const server = yield* adminServer({
+        steps: [
+          {
+            ...textStep("off"),
+            assertOptions: (options) => expect(toolNames(options)).not.toContain("probe.version"),
+          },
+          {
+            ...textStep("on"),
+            assertOptions: (options) => expect(toolNames(options)).toContain("probe.version"),
+          },
+        ],
+      })
+      // The live approval service waits for an answer: an ask would never return.
+      const off = yield* paneRequest(server, "extensions.pane.set-enabled", {
+        id: "@test/probe",
+        enabled: false,
+      })
+      expect(off.extensions).toContainEqual(
+        expect.objectContaining({ _tag: "Disabled", id: "@test/probe" }),
+      )
+      expect(yield* disabledIn(server.userConfig)).toEqual(["@test/probe"])
+      const offTurn = yield* server.run("is it off?", false)
+      expect(offTurn.some((event) => event._tag === "InteractionPresented")).toBe(false)
+
+      const on = yield* paneRequest(server, "extensions.pane.set-enabled", {
+        id: "@test/probe",
+        enabled: true,
+      })
+      expect(on.extensions).toContainEqual(
+        expect.objectContaining({ _tag: "Active", id: "@test/probe" }),
+      )
+      expect(yield* disabledIn(server.userConfig)).toEqual([])
+      yield* server.run("is it on?", false)
+      yield* server.controls.assertDone
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("14 seconds")),
+  )
+
+  it.live(
+    "in a trusted project the pane turns off in the project config, and turns on in every config that names it",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const project = yield* makeTempDirectoryScoped("gent-extension-admin-project-")
+        const server = yield* adminServer({
+          cwd: project,
+          userConfig: `${encodeJson({ trustedProjects: [project], disabledExtensions: ["@test/other"] })}\n`,
+          steps: [],
+        })
+        const projectConfig = path.join(project, ".gent", "config.json")
+        yield* paneRequest(server, "extensions.pane.set-enabled", {
+          id: "@test/probe",
+          enabled: false,
+        })
+        expect(yield* disabledIn(projectConfig)).toEqual(["@test/probe"])
+        expect(yield* disabledIn(server.userConfig)).toEqual(["@test/other"])
+
+        const on = yield* paneRequest(server, "extensions.pane.set-enabled", {
+          id: "@test/other",
+          enabled: true,
+        })
+        expect(on.detail).toContain(server.userConfig)
+        expect(yield* disabledIn(server.userConfig)).toEqual([])
+        expect(yield* disabledIn(projectConfig)).toEqual(["@test/probe"])
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("14 seconds")),
+  )
+
+  it.live("the pane refuses an id the session does not have, and reloads one it has", () =>
+    Effect.gen(function* () {
+      const server = yield* adminServer({ steps: [] })
+      const refused = yield* paneRequest(server, "extensions.pane.set-enabled", {
+        id: "@test/missing",
+        enabled: false,
+      }).pipe(Effect.flip)
+      expect(String(refused.message)).toContain("@test/missing")
+      expect(yield* disabledIn(server.userConfig)).toEqual([])
+
+      const reloaded = yield* paneRequest(server, "extensions.pane.reload", { id: "@test/probe" })
+      expect(reloaded.detail).toContain("@test/probe")
+      expect(reloaded.extensions).toContainEqual(
+        expect.objectContaining({ _tag: "Active", id: "@test/probe" }),
+      )
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("14 seconds")),
   )
 })

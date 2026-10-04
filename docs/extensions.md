@@ -151,7 +151,11 @@ a headless run declines. The `project` scope needs a project the user trusts,
 and `user` is the default only when the session runs from home. A verb's
 optional `resume` queues one message on its own branch (`Session.send`,
 `delivery: "queue"`), so the agent goes on in the same task on the new
-profile. The bundled `extensions` skill carries the guide and a template. `Models.decide({ definition, input, model?, timeoutMs? })` asks a
+profile. Two requests serve the `/extensions` pane, the user's own hand, so
+they never ask: `extensions.pane.set-enabled` turns an extension off in the
+narrowest config that holds the session (the trusted project's, else the
+user's) and on in every config that names it, and `extensions.pane.reload`
+reloads one. The bundled `extensions` skill carries the guide and a template. `Models.decide({ definition, input, model?, timeoutMs? })` asks a
 classifier model (System One: Jev, Clef) every `effect/ai/Decision` of the
 definition in one call and returns the answers, the model, the usage and the
 cost; `Models.available` and `Models.classifiers` say which classifiers have

@@ -513,6 +513,10 @@ a rename cannot cross file systems. The four ask once
 that runs again after the ask writes once; a headless run declines. `project`
 needs a trusted project; trust stays the user's step. `resume` queues one
 follow-up on the tool's own branch, which runs on the profile the change made.
+The `/extensions` pane's two requests (`ExtensionAdminRpc`) make the same
+changes without an ask, since the pane is the user's own act: a toggle off
+writes the narrowest config that holds the session (the trusted project's,
+else the user's), a toggle on takes the id from every config that names it.
 No verb installs npm or git packages, and no watcher exists: the scan at each
 turn start is the one apply point.
 `buildSessionProfile` then stages the `ExtensionRegistry` and the base
