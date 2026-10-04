@@ -738,7 +738,7 @@ describe("select list rows", () => {
 /**
  * The ruled frame the docked panes share.
  *
- * `/model`, `/think`, `/thread` and the resume-branch pane draw the same `PickerFrame` the
+ * `/model`, `/effort`, `/thread` and the resume-branch pane draw the same `PickerFrame` the
  * slash-command popup does: ruled off top and bottom under the composer, not
  * a bordered box. These pin the two things that framing decides — the rows a
  * pane keeps to the height rule, and the columns a row may spend.

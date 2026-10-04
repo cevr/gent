@@ -5,10 +5,14 @@ import { App, resolveInteractiveState, resolveInteractiveBootstrap } from "../sr
 import { mountClient } from "../tests/render-harness-boundary"
 import {
   baseLocalLayer,
+  createE2ELayer,
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   LanguageModelLayers,
   testAgent,
 } from "@gent/core/test-utils"
+import { DEFAULT_MODEL_ID, Model, ProviderId } from "@gent/core/protocol"
+import { defineExtension, ExtensionHost } from "@gent/core/extensions/api"
+import { Model as AiModel } from "effect/ai"
 import { Gent } from "@gent/sdk"
 import { repoRoot } from "./helpers"
 import { waitForFrame } from "../tests/helpers-boundary"
@@ -134,5 +138,98 @@ describe("session lifecycle", () => {
         }),
       ),
     10000,
+  )
+})
+
+describe("effort command", () => {
+  // The model accepts three levels: a level past them is sent clamped.
+  const effortModel = Model.make({
+    id: DEFAULT_MODEL_ID,
+    name: "Effort Model",
+    provider: ProviderId.make(DEFAULT_MODEL_ID.split("/")[0] ?? ""),
+    contextLength: 128_000,
+    reasoning: true,
+    efforts: ["low", "medium", "high"],
+  })
+  // The driver lists the model, so the client's catalog names it; no turn runs.
+  const effortDriver = defineExtension({
+    id: "effort-driver",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("modelDriver", {
+        id: effortModel.provider,
+        name: "Effort driver",
+        listModels: () => Effect.succeed([effortModel]),
+        resolveModel: () =>
+          Effect.succeed(
+            AiModel.make(effortModel.provider, effortModel.id, LanguageModelLayers.failing),
+          ),
+      })
+    }),
+  })
+
+  // `/effort off` is `none`, sent as the model's lowest level; `/think` is the
+  // old name; `/effort default` clears the session's level.
+  it.live(
+    "/effort and its /think alias store the session's level, and the status row shows what is sent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* repoRoot
+          const { client, runtime } = yield* Gent.test(
+            createE2ELayer({
+              providerLayer: LanguageModelLayers.debug(),
+              agents: [testAgent],
+              extensionInputs: [effortDriver],
+              models: [effortModel],
+              toolRunner: "test",
+            }),
+          )
+          const bootstrap = yield* resolveInteractiveBootstrap({ client, cwd, continue_: false })
+          const sessionId = bootstrap.initialSession.sessionId
+          // A stored key, so the driver needs no sign-in (the layer's own temp home).
+          yield* client.auth.setKey({ provider: effortModel.provider, key: "test-key", sessionId })
+          const { setup } = yield* mountClient({
+            client,
+            runtime,
+            initialPrompt: bootstrap.initialPrompt,
+            initialSession: bootstrap.initialSession,
+            cwd,
+            width: 100,
+            height: 32,
+            view: () => <App />,
+          })
+          const statusRow = (frame: string) =>
+            Option.getOrElse(
+              Option.fromUndefinedOr(frame.split("\n").find((row) => row.includes("Effort Model"))),
+              () => "",
+            )
+          yield* waitForFrame(setup, (frame) => statusRow(frame).length > 0, "status row", 3000)
+          const run = (line: string, stored: Option.Option<string>, shown: Option.Option<string>) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() => setup.mockInput.typeText(line))
+              yield* Effect.promise(() => setup.renderOnce())
+              setup.mockInput.pressEnter()
+              yield* waitForFrame(
+                setup,
+                (frame) =>
+                  Option.match(shown, {
+                    onNone: () => !/\b(low|medium|high)\b/.test(statusRow(frame)),
+                    onSome: (level) => statusRow(frame).includes(` ${level}`),
+                  }),
+                `status row after ${line}`,
+                3000,
+              )
+              const session = yield* client.session.get({ sessionId })
+              const level: Option.Option<string> = Option.fromNullishOr(session?.reasoningLevel)
+              expect([line, level]).toEqual([line, stored])
+            })
+          yield* run("/effort off", Option.some("none"), Option.some("low"))
+          yield* run("/think high", Option.some("high"), Option.some("high"))
+          yield* run("/effort max", Option.some("max"), Option.some("high"))
+          yield* run("/effort default", Option.none(), Option.none())
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15000,
   )
 })

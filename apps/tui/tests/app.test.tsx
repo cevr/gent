@@ -2779,7 +2779,7 @@ describe("App cancel and quit keys during a turn", () => {
     readonly draft: Option.Option<string>
   }> = [
     { name: "/model", title: "Model ·", open: typeCommand("/model"), draft: Option.none() },
-    { name: "/think", title: "Reasoning ·", open: typeCommand("/think"), draft: Option.none() },
+    { name: "/effort", title: "Effort ·", open: typeCommand("/effort"), draft: Option.none() },
     { name: "/auth", title: "Sign in ·", open: typeCommand("/auth"), draft: Option.none() },
     {
       name: "prompt search",
@@ -3916,7 +3916,7 @@ describe("App docked panes at short heights", () => {
         (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("┃ after"),
         "the full terminal",
       )
-      expect(renderFrame(view.setup)).not.toContain("Reasoning ·")
+      expect(renderFrame(view.setup)).not.toContain("Effort ·")
       expect(view.steers).toEqual([])
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
@@ -4658,15 +4658,15 @@ describe("App startup prompt and renames", () => {
         () => sentMessages.some((message) => message.content === initialPrompt),
         "sent message",
       )
-      // The docked reasoning pane is part of the session view: a new mount
-      // would close it.
+      // The docked effort pane is part of the session view: a new mount
+      // would close it. `/think` is the command's earlier name.
       yield* typeCommand("/think")(setup)
-      yield* waitForFrame(setup, (frame) => frame.includes("Reasoning ·"), "the reasoning pane")
+      yield* waitForFrame(setup, (frame) => frame.includes("Effort ·"), "the effort pane")
       // The server names the session after the first turn. The record is new;
       // the session is the same one.
       yield* renameSessionA(setup, clientContext)
       const frame = yield* waitForFrame(setup, () => true, "the frame after the rename")
-      expect(frame).toContain("Reasoning ·")
+      expect(frame).toContain("Effort ·")
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -5461,13 +5461,13 @@ describe("TUI renderer surfaces", () => {
       expect(statusRowAbove(palette, "Commands")).toBe(true)
       view.setup.mockInput.pressEscape()
       yield* waitForFrame(view.setup, (frame) => !frame.includes("esc close"), "palette closed")
-      yield* typeCommand("/think")(view.setup)
-      const think = yield* waitForFrame(
+      yield* typeCommand("/effort")(view.setup)
+      const effort = yield* waitForFrame(
         view.setup,
-        (frame) => frame.includes("Reasoning ·"),
-        "the reasoning pane",
+        (frame) => frame.includes("Effort ·"),
+        "the effort pane",
       )
-      expect(statusRowAbove(think, "Reasoning ·")).toBe(true)
+      expect(statusRowAbove(effort, "Effort ·")).toBe(true)
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a resumed session with turns behind it reads idle, not ready", () =>

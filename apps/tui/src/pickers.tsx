@@ -17,6 +17,7 @@ import {
   type BranchId,
   type Message,
   type MessageId,
+  effectiveEffort,
   messagePartsImages,
   messagePartsText,
   type Model,
@@ -431,16 +432,51 @@ export const modelRows = (models: readonly Model[]): readonly PickerRow[] =>
 /** The row id that clears the session override and falls back to config/agent. */
 export const DEFAULT_ROW_ID = "default"
 
-export const reasoningRows = (resolved: Option.Option<ReasoningEffort>): readonly PickerRow[] => [
-  {
-    id: DEFAULT_ROW_ID,
-    name: DEFAULT_ROW_ID,
-    detail: Option.match(resolved, {
-      onNone: () => "agent or config default",
-      onSome: (level) => `agent or config default (${level})`,
-    }),
-  },
-  ...ReasoningEffort.literals.map((level) => ({ id: level, name: level, detail: "" })),
+/**
+ * The effort levels a reader may pick for `model`: none for a model that does
+ * not reason, the model's own list when the catalog names one, else every
+ * level (a model with no list, or a catalog that has not loaded the model).
+ */
+const pickableEfforts = (model: Option.Option<Model>): ReadonlyArray<ReasoningEffort> =>
+  Option.match(model, {
+    onNone: () => ReasoningEffort.literals,
+    onSome: (value) => {
+      if (value.reasoning === false) return []
+      const accepted = value.efforts ?? []
+      if (accepted.length === 0) return ReasoningEffort.literals
+      return accepted
+    },
+  })
+
+/** The `default` row's note: the level the session falls back to, and what the model is sent for it. */
+const defaultEffortDetail = (
+  model: Option.Option<Model>,
+  resolved: Option.Option<ReasoningEffort>,
+): string =>
+  Option.match(resolved, {
+    onNone: () => "agent or config default",
+    onSome: (level) => {
+      const sent = Option.match(model, {
+        onNone: () => Option.some(level),
+        onSome: (value) => effectiveEffort(value, level),
+      })
+      return Option.match(sent, {
+        onNone: () => `agent or config default (${level}, the model takes none)`,
+        onSome: (effort) => {
+          if (effort === level) return `agent or config default (${level})`
+          return `agent or config default (${level}, sends ${effort})`
+        },
+      })
+    },
+  })
+
+/** `default`, then the levels `model` accepts (`pickableEfforts`). */
+export const reasoningRows = (
+  model: Option.Option<Model>,
+  resolved: Option.Option<ReasoningEffort>,
+): readonly PickerRow[] => [
+  { id: DEFAULT_ROW_ID, name: DEFAULT_ROW_ID, detail: defaultEffortDetail(model, resolved) },
+  ...pickableEfforts(model).map((level) => ({ id: level, name: level, detail: "" })),
 ]
 
 const filterRows = (rows: readonly PickerRow[], query: string): readonly PickerRow[] => {
@@ -464,7 +500,7 @@ interface SettingsPickerProps {
 }
 
 /**
- * A docked filter list under the composer, shared by `/model` and `/think`.
+ * A docked filter list under the composer, shared by `/model` and `/effort`.
  *
  * A pane, not a modal: it is ruled off top and bottom under the composer, the
  * same framing the slash-command popup and the agents pane draw, so the

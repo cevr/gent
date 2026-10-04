@@ -590,6 +590,7 @@ export function Session(props: SessionProps) {
     return items.concat(
       buildModelLabels({
         reasoningLevel: client.reasoningLevel(),
+        model,
         theme,
         debugMode: props.debugMode === true,
       }),
@@ -767,8 +768,8 @@ export function Session(props: SessionProps) {
           />
           <SettingsPicker
             open={controller.uiState().overlay._tag === "reasoning"}
-            title="Reasoning"
-            rows={reasoningRows(client.resolvedReasoningLevel())}
+            title="Effort"
+            rows={reasoningRows(client.modelInfo(), client.resolvedReasoningLevel())}
             current={Option.some(
               Option.getOrElse(
                 Option.fromUndefinedOr(client.session().reasoningLevel),

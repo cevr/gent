@@ -53,6 +53,7 @@ import {
   ModelId,
   ProviderId,
   type QueueEntryInfo,
+  type ReasoningEffort,
   type InteractionPresented,
   AgentEvent,
   AgentName,
@@ -675,6 +676,7 @@ describe("buildModelLabels", () => {
   test("empty when no data", () => {
     const labels = buildModelLabels({
       reasoningLevel: Option.none(),
+      model: Option.none(),
       theme,
       debugMode: false,
     })
@@ -684,6 +686,7 @@ describe("buildModelLabels", () => {
   test("shows thinking level when set", () => {
     const labels = buildModelLabels({
       reasoningLevel: Option.some("high"),
+      model: Option.none(),
       theme,
       debugMode: false,
     })
@@ -692,9 +695,31 @@ describe("buildModelLabels", () => {
     expect(labels[0]!.color).toBe(theme.info)
   })
 
+  test("shows the effort the model is sent, after the levels it accepts", () => {
+    const shown = (
+      level: ReasoningEffort,
+      model: { readonly reasoning?: boolean; readonly efforts?: ReadonlyArray<ReasoningEffort> },
+    ) =>
+      buildModelLabels({
+        reasoningLevel: Option.some(level),
+        model: Option.some(model),
+        theme,
+        debugMode: false,
+      }).map((label) => label.text)
+    const threeLevels = { reasoning: true, efforts: ["low", "medium", "high"] } as const
+    expect(shown("max", threeLevels)).toEqual(["high"])
+    expect(shown("none", threeLevels)).toEqual(["low"])
+    expect(shown("medium", threeLevels)).toEqual(["medium"])
+    // A model that does not reason is sent no effort.
+    expect(shown("high", { reasoning: false })).toEqual([])
+    // A model with no effort list is sent the level as named.
+    expect(shown("xhigh", { reasoning: true })).toEqual(["xhigh"])
+  })
+
   test("debug mode shows debug label", () => {
     const labels = buildModelLabels({
       reasoningLevel: Option.none(),
+      model: Option.none(),
       theme,
       debugMode: true,
     })
@@ -705,6 +730,7 @@ describe("buildModelLabels", () => {
   test("the thinking level comes before the debug label", () => {
     const labels = buildModelLabels({
       reasoningLevel: Option.some("high"),
+      model: Option.none(),
       theme,
       debugMode: true,
     })

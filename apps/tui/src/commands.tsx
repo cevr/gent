@@ -189,7 +189,7 @@ export const parseSlashCommand = (input: string): Option.Option<readonly [string
  *
  * The composer asks this to decide whether completing a slash name should
  * dispatch the command or only insert its text. No command in this repo
- * requires an argument: the arg-aware ones (`/model`, `/think`, `/goal`,
+ * requires an argument: the arg-aware ones (`/model`, `/effort`, `/goal`,
  * `/driver`, `/btw`) all treat an empty arg as "open my picker" or
  * "show usage", so naming a command is always enough to run it.
  */

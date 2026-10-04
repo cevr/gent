@@ -207,7 +207,7 @@ describe("Branch picker", () => {
 // ── settings picker ─────────────────────────────────────────────────────────
 
 /**
- * The docked settings pane behind `/model` and `/think`.
+ * The docked settings pane behind `/model` and `/effort`.
  *
  * It lists rows, marks the one the next turn would use, narrows as the user
  * types, and hands the selected id back.
@@ -221,6 +221,15 @@ const catalogue = [
   model("anthropic/claude-opus-5", "Claude Opus 5"),
   model("openai/gpt-5.6-luna", "GPT-5.6 Luna"),
 ]
+
+/** A model that reasons and accepts three effort levels. */
+const effortModel = new Model({
+  id: ModelId.make("test/effort"),
+  name: "Effort",
+  provider: ProviderId.make("test"),
+  reasoning: true,
+  efforts: ["low", "medium", "high"],
+})
 
 describe("Settings picker", () => {
   it.scopedLive("keeps typing from snapping the cursor back to the current row", () =>
@@ -283,32 +292,63 @@ describe("Settings picker", () => {
     }),
   )
 
-  it.scopedLive("lists default plus every reasoning level and marks the session override", () =>
-    Effect.gen(function* () {
-      const selected: Array<string> = []
-      const setup = yield* renderScoped(() => (
-        <SettingsPicker
-          open={true}
-          title="Reasoning"
-          rows={reasoningRows(Option.some("max"))}
-          current={Option.some("high")}
-          onSelect={(id) => {
-            selected.push(id)
-          }}
-          onClose={() => {}}
-        />
-      ))
-      yield* waitForFrame(setup, () => renderFrame(setup).includes("Reasoning · 8"), "pane")
-      expect(renderFrame(setup)).toContain("agent or config default (max)")
-      expect(renderFrame(setup)).toContain("● high")
-      // The current row is preselected; the top row is `default`.
-      setup.mockInput.pressArrow("up")
-      setup.mockInput.pressArrow("up")
-      setup.mockInput.pressArrow("up")
-      setup.mockInput.pressArrow("up")
-      setup.mockInput.pressArrow("up")
-      setup.mockInput.pressEnter()
-      expect(selected).toEqual([DEFAULT_ROW_ID])
+  it.scopedLive(
+    "lists default plus the levels the model accepts and marks the session override",
+    () =>
+      Effect.gen(function* () {
+        const selected: Array<string> = []
+        const setup = yield* renderScoped(() => (
+          <SettingsPicker
+            open={true}
+            title="Effort"
+            rows={reasoningRows(Option.some(effortModel), Option.some("max"))}
+            current={Option.some("medium")}
+            onSelect={(id) => {
+              selected.push(id)
+            }}
+            onClose={() => {}}
+          />
+        ))
+        yield* waitForFrame(setup, () => renderFrame(setup).includes("Effort · 4"), "pane")
+        // The agent's `max` is past the model's highest level: the row names what is sent.
+        expect(renderFrame(setup)).toContain("agent or config default (max, sends high)")
+        expect(renderFrame(setup)).toContain("● medium")
+        expect(renderFrame(setup)).not.toContain("xhigh")
+        // The current row is preselected; the top row is `default`.
+        setup.mockInput.pressArrow("up")
+        setup.mockInput.pressArrow("up")
+        setup.mockInput.pressEnter()
+        expect(selected).toEqual([DEFAULT_ROW_ID])
+      }),
+  )
+
+  it.live("the effort rows follow what the model accepts", () =>
+    Effect.sync(() => {
+      const ids = (rowsModel: Option.Option<Model>) =>
+        reasoningRows(rowsModel, Option.none()).map((row) => row.id)
+      expect(ids(Option.some(effortModel))).toEqual([DEFAULT_ROW_ID, "low", "medium", "high"])
+      // A model that reasons with no effort list takes every level as named.
+      const anyLevel = new Model({
+        id: effortModel.id,
+        name: effortModel.name,
+        provider: effortModel.provider,
+        reasoning: true,
+      })
+      expect(ids(Option.some(anyLevel))).toEqual([
+        DEFAULT_ROW_ID,
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+      ])
+      // A model that does not reason takes no level.
+      const noReasoning = new Model({ ...effortModel, reasoning: false })
+      expect(ids(Option.some(noReasoning))).toEqual([DEFAULT_ROW_ID])
+      // Before the catalog names the model, every level shows.
+      expect(ids(Option.none())).toHaveLength(8)
     }),
   )
 
