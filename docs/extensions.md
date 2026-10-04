@@ -327,9 +327,9 @@ export const ScreenshotTool = tool({
 
 `saveToolImage` takes `{ bytes }` or `{ path }`, and an optional `source`
 label. It reads the format and size from the image's own header and takes
-PNG, JPEG, GIF and WebP up to 3.75 MiB and 8,000 pixels a side; anything
+PNG, JPEG, GIF and WebP up to 3.75 MiB and 2,000 pixels a side; anything
 else fails with `ToolImageError`, so an image the model API would refuse
-never enters a session. The stored tool result stays ordinary JSON. Each
+never enters a session. A tool downscales a larger image before it saves it. The stored tool result stays ordinary JSON. Each
 request reads the bytes back and sends the image right after the tool
 result, under the line `Image from <tool> <source> <width>x<height>:`. A model
 the catalog says reads no images gets a line that names the image instead. A

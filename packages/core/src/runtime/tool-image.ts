@@ -64,8 +64,13 @@ export class ToolImageError extends Schema.TaggedError<ToolImageError>()("ToolIm
  */
 const TOOL_IMAGE_MAX_BYTES = (5 * 1024 * 1024 * 3) / 4
 
-/** The longest side the store takes, in pixels: Anthropic refuses a larger image. */
-const TOOL_IMAGE_MAX_SIDE = 8_000
+/**
+ * The longest side the store takes, in pixels. Anthropic refuses a side over
+ * 2,000 pixels in a request of more than 20 images, and OpenAI's patch-based
+ * models refuse an image of too many patches; at 2,000 pixels every driver's
+ * request stays valid, whatever the number of images.
+ */
+const TOOL_IMAGE_MAX_SIDE = 2_000
 
 /** The base64 characters an image of `bytes` takes in a request. */
 export const toolImageBase64Chars = (bytes: number): number => Math.ceil(bytes / 3) * 4
@@ -268,7 +273,7 @@ const storeToolImage = Effect.fn("ToolImage.store")(
     const { width, height, mediaType } = header.value
     if (width < 1 || height < 1 || Math.max(width, height) > TOOL_IMAGE_MAX_SIDE) {
       return yield* new ToolImageError({
-        message: `the image is ${width}x${height}; each side must be 1 to ${TOOL_IMAGE_MAX_SIDE} pixels`,
+        message: `the image is ${width}x${height}; each side must be 1 to ${TOOL_IMAGE_MAX_SIDE} pixels: downscale it before you save it`,
       })
     }
     const fs = yield* FileSystem.FileSystem
@@ -310,8 +315,9 @@ type SaveToolImageInput = ({ readonly bytes: Uint8Array } | { readonly path: str
  * the model sees the image after the tool result, on a model that takes
  * images, and a line naming it on one that does not. The store keeps one file
  * per content (`<data dir>/blobs/<sha256>.<ext>`) and removes a file nobody
- * used for 14 days. It takes PNG, JPEG, GIF and WebP, up to 3.75 MiB and 8,000
- * pixels a side; anything else fails with `ToolImageError`.
+ * used for 14 days. It takes PNG, JPEG, GIF and WebP, up to 3.75 MiB and 2,000
+ * pixels a side; anything else fails with `ToolImageError`, and a larger
+ * image must be downscaled first.
  */
 export const saveToolImage = Effect.fn("saveToolImage")(function* (input: SaveToolImageInput) {
   const ctx = yield* ExtensionContext

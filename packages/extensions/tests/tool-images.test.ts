@@ -263,13 +263,15 @@ describe("tool image store", () => {
       expect(yield* failureOf({ base64: base64(huge) })).toBe(
         "ToolImageError: the image is 4194304 bytes, over the 3932160-byte limit",
       )
-      expect(yield* failureOf({ base64: base64(pngBytes(9000, 10)) })).toBe(
-        "ToolImageError: the image is 9000x10; each side must be 1 to 8000 pixels",
+      // Past 2,000 pixels a side some model APIs refuse the request: the tool must downscale.
+      expect(yield* failureOf({ base64: base64(pngBytes(2001, 10)) })).toBe(
+        "ToolImageError: the image is 2001x10; each side must be 1 to 2000 pixels: downscale it before you save it",
       )
       expect(yield* failureOf({ path: "missing.png" })).toBe(
         "ToolImageError: cannot read the image missing.png",
       )
       expect(yield* fs.exists(`${home}/.gent/blobs`)).toBe(false)
+      expect(yield* failureOf({ base64: base64(pngBytes(2000, 2000)) })).toBe("stored")
     }).pipe(Effect.provide(BunServices.layer)),
   )
 })
