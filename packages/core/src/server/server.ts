@@ -1843,8 +1843,11 @@ interface DependencyOverrides {
   >
   /** The HTTP client the models.dev catalog fetches through; tests pass the fixture client. */
   readonly modelCatalogHttpLayer?: Layer.Layer<HttpClient.HttpClient>
-  /** Replaces the auth-backed live resolver (a scripted or fixed model). */
-  readonly modelResolverLayer?: Layer.Layer<ModelResolver>
+  /**
+   * Replaces the auth-backed live resolver (a scripted or fixed model). It may
+   * read the auth store and the catalog, as a resolver that checks sign-ins does.
+   */
+  readonly modelResolverLayer?: Layer.Layer<ModelResolver, never, Auth | ModelCatalogSource>
   readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>

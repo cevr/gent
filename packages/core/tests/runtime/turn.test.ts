@@ -3268,6 +3268,62 @@ describe("virtual model routing", () => {
   )
 
   it.scopedLive(
+    "a router's pick on a provider with no sign-in leaves the turn on the default, and the route says why",
+    () =>
+      Effect.gen(function* () {
+        // The default's provider has a sign-in, the alternative's has none
+        // until the second turn.
+        const signedModel = ModelId.make("signed/main")
+        const unsignedModel = ModelId.make("unsigned/alt")
+        const chatDriver = (id: string): ModelDriverContribution => ({
+          id,
+          name: id,
+          envCredential: "GENT_TEST_ROUTE_SIGN_IN_KEY_NEVER_SET",
+          resolveModel: () => Effect.die("the test resolver serves the scripted model"),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("on the default"),
+          textStep("on the alternative"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          signIn: "checked",
+          extensionInputs: [
+            routingExtension({
+              choices: [
+                { model: signedModel, reason: "everyday work" },
+                { model: unsignedModel, reason: "hard work" },
+              ],
+              drivers: [chatDriver("signed"), chatDriver("unsigned")],
+              route: () => Effect.succeed({ choice: 1, reason: "hard" }),
+            }),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "signed", key: "test-key", sessionId })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "hard" })
+        yield* afterTurns(1)
+        // With a sign-in, the same pick runs.
+        yield* client.auth.setKey({ provider: "unsigned", key: "test-key", sessionId })
+        yield* client.message.send({ sessionId, branchId, content: "hard again" })
+        const events = yield* afterTurns(2)
+        const routed = routedEvents(events)
+        expect(routed[0]).toMatchObject({
+          model: signedModel,
+          choice: 0,
+          fallback: true,
+          reason: 'the router picked choice 1, whose provider "unsigned" has no sign-in',
+        })
+        expect(routed[1]).toMatchObject({ model: unsignedModel, choice: 1, reason: "hard" })
+        expect(routed[1]?.fallback).toBeUndefined()
+        expect(stepModels(events)).toEqual([signedModel, unsignedModel])
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
     "a route that falls back keeps the model the branch runs on when it is a choice",
     () =>
       Effect.gen(function* () {

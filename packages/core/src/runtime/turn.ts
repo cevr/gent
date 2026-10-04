@@ -1686,7 +1686,7 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
   const choices = served.model.choices
   // A choice that names no model keeps the model the branch runs on.
   const kept = Option.orElse(log.current, () => virtualDefaultModel(served.model))
-  const candidates = yield* Effect.forEach(choices, (choice) =>
+  const listed = yield* Effect.forEach(choices, (choice) =>
     Option.match(
       Option.orElse(Option.fromUndefinedOr(choice.model), () => kept),
       {
@@ -1694,6 +1694,25 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
         onSome: entryOf,
       },
     ),
+  )
+  // A turn runs only on a model whose driver has a sign-in that `/auth` lists
+  // as ready: the driver the turn would dispatch through on it.
+  const modelResolver = yield* ModelResolver
+  const registry = yield* ExtensionRegistry
+  const driverOf = (model: Model) => effectiveModelDriver(resolved.driverRef, model.id).driverId
+  const unsignedDriver = yield* Effect.forEach(listed, (entry) =>
+    Option.match(Option.flatMap(entry, driverOf), {
+      onNone: () => Effect.succeed(Option.none<string>()),
+      onSome: (driverId) =>
+        Effect.map(modelResolver.signedIn(driverId, registry), (signedIn) =>
+          Option.liftPredicate(driverId, () => !signedIn),
+        ),
+    }),
+  )
+  const unsignedAt = (index: number) =>
+    Option.flatten(Option.fromUndefinedOr(unsignedDriver[index]))
+  const candidates = listed.map((entry, index) =>
+    Option.filter(entry, () => Option.isNone(unsignedAt(index))),
   )
   const candidateAt = (index: number) => Option.flatten(Option.fromUndefinedOr(candidates[index]))
   const runnable = (index: number) => Option.isSome(candidateAt(index))
@@ -1809,8 +1828,13 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
       )
       decision = fallback(picked.failure)
     } else if (!Number.isInteger(picked.success.choice) || !runnable(picked.success.choice)) {
+      const pick = picked.success.choice
       decision = fallback(
-        `the router picked choice ${picked.success.choice}, which the turn cannot run`,
+        Option.match(unsignedAt(pick), {
+          onNone: () => `the router picked choice ${pick}, which the turn cannot run`,
+          onSome: (driverId) =>
+            `the router picked choice ${pick}, whose provider "${driverId}" has no sign-in`,
+        }),
       )
     } else {
       decision = atChoice(picked.success.choice, picked.success.reason, false)

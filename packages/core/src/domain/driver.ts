@@ -769,7 +769,8 @@ export interface ModelRouteInput {
   /**
    * Aligned with `model.choices`: the catalog entry each choice runs on (a
    * choice with no model, the current model's); none for a model the
-   * catalog does not list, which the turn cannot run.
+   * catalog does not list, or whose driver has no sign-in that `/auth`
+   * lists as ready: the turn cannot run it.
    */
   readonly candidates: ReadonlyArray<Option.Option<Model>>
   /** None on the branch's first request. */

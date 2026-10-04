@@ -652,6 +652,23 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
 })
 
 /**
+ * Whether `driverId`'s sign-in is ready, as `/auth` lists it: the row
+ * `listAuthProviders` marks required for the driver has a key. A driver that
+ * no row serves, or an auth store that fails to read, has none.
+ */
+export const signInReady = Effect.fn("signInReady")(function* (driverId: string) {
+  const rows = yield* listAuthProviders([driverId]).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("auth.sign-in-read-failed").pipe(
+        Effect.annotateLogs({ driver: driverId, error: error.message }),
+        Effect.as<ReadonlyArray<AuthProviderInfo>>([]),
+      ),
+    ),
+  )
+  return rows.some((row) => row.required && row.hasKey)
+})
+
+/**
  * The labels of the prompts `driver`'s API sign-in cannot run without that
  * `metadata` leaves unanswered and whose variable is not set: the driver
  * reads the variable when the stored key has no answer. A driver's API
@@ -2247,6 +2264,15 @@ interface ModelResolverService {
     ProviderError | ProviderAuthError,
     Scope.Scope | ExtensionRegistry
   >
+  /**
+   * Whether a turn can run on `driverId`'s models: its sign-in is ready, as
+   * `/auth` lists it (`signInReady`), in the profile of `registry`, the
+   * calling turn's. A resolver that serves a scripted model needs no sign-in.
+   */
+  readonly signedIn: (
+    driverId: string,
+    registry: ExtensionRegistryService,
+  ) => Effect.Effect<boolean>
 }
 
 const resolveModelDefect = (
@@ -2370,7 +2396,10 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
       ModelResolver,
       Effect.gen(function* () {
         const model = yield* LanguageModel.LanguageModel
-        return ModelResolver.of({ resolve: () => Effect.succeed(model) })
+        return ModelResolver.of({
+          resolve: () => Effect.succeed(model),
+          signedIn: () => Effect.succeed(true),
+        })
       }),
     ).pipe(Layer.provide(layer))
 
@@ -2389,6 +2418,12 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
           }).pipe(
             Effect.provideService(Auth, auth),
             Effect.provideService(ModelCatalogSource, catalogSource),
+          ),
+        signedIn: (driverId, registry) =>
+          signInReady(driverId).pipe(
+            Effect.provideService(Auth, auth),
+            Effect.provideService(ModelCatalogSource, catalogSource),
+            Effect.provideService(ExtensionRegistry, registry),
           ),
       })
     }),

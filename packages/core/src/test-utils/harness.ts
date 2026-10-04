@@ -1679,6 +1679,12 @@ interface E2ELayerOptions {
   readonly models?: ReadonlyArray<Model> | "catalog"
   /** The price of every model the test registry makes up. Default: free. */
   readonly modelPricing?: ModelPricing
+  /**
+   * `"checked"`: a turn reads each driver's sign-in as production does, so a
+   * route skips a model whose driver has none. Default: every driver counts
+   * as signed in, as a scripted model needs no sign-in.
+   */
+  readonly signIn?: "checked"
   /** Auth override. Use for public RPC auth failure-path tests. */
   readonly authLayer?: Layer.Layer<Auth>
   /**
@@ -1807,6 +1813,13 @@ const testModelRegistry = (
   return Option.some(ModelRegistry.Test(models, Option.fromUndefinedOr(config.modelPricing)))
 }
 
+/** The resolver of the test's model; `signIn: "checked"` reads sign-ins as production does. */
+const testModelResolver = (config: Pick<E2ELayerOptions, "providerLayer" | "signIn">) => {
+  if (config.signIn === "checked")
+    return LanguageModelLayers.signInCheckedResolver(config.providerLayer)
+  return LanguageModelLayers.resolver(config.providerLayer)
+}
+
 const e2eDependencies = <A>(
   config: E2ELayerWithFeature<A>,
   directories: { readonly cwd: string; readonly home: string },
@@ -1823,7 +1836,7 @@ const e2eDependencies = <A>(
     failOnExtensionFailure: config.allowFailedExtensions !== true,
     overrides: {
       modelRegistryLayer: Option.getOrUndefined(testModelRegistry(config)),
-      modelResolverLayer: LanguageModelLayers.resolver(config.providerLayer),
+      modelResolverLayer: testModelResolver(config),
       authLayer: config.authLayer ?? Auth.Test(),
       modelCatalogHttpLayer: config.modelCatalogHttpLayer ?? modelCatalogFixtureLayer,
       approvalLayer: config.approvalLayer ?? ApprovalService.Test(),

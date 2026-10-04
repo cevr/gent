@@ -813,7 +813,9 @@ Shape:
   extension), and a turn on it fails with `ErrorOccurred` naming why.
   The turn routes once, before its first request (`routeTurn`,
   `runtime/turn.ts`, model-routing section): it calls `route` with the
-  model-visible messages, each choice's catalog entry, and the model the
+  model-visible messages, each choice's catalog entry (none for a model the
+  catalog does not list or whose driver has no sign-in `/auth` lists as
+  ready: `ModelResolver.signedIn`, the `listAuthProviders` row), and the model the
   branch last ran on with whether its prompt cache is warm and the history
   tokens a switch writes again (`estimateHistoryTokens`, the estimate
   `coldHandoffPays` reads). It records the pick as `ModelRouted` (selected,
