@@ -543,11 +543,16 @@ export const removeSignIn = Effect.fn("removeSignIn")(function* (provider: strin
 /**
  * Store a credential for `provider`'s sign-in under its owner, in the profile
  * of the `ExtensionRegistry` in context. Reads try the owner's key first, so
- * a key stored under a sharing driver's own id would sit behind it.
+ * a key stored under a sharing driver's own id would sit behind it. An API
+ * key for a generic provider is stored only when its base URL answers pass
+ * the rule a turn applies (`checkBaseUrlAnswers`).
  */
 export const storeSignIn = Effect.fn("storeSignIn")(function* (provider: string, info: AuthInfo) {
   const auth = yield* Auth
   const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  if (info.type === "api" && !modelDrivers.has(provider)) {
+    yield* checkBaseUrlAnswers(provider, info)
+  }
   yield* auth.set(credentialOwner(modelDrivers, provider), info)
 })
 
@@ -1974,6 +1979,47 @@ const filledBaseUrl = (
       message: `${provider.name} base URL ${api} is no valid URL once ${names.join(", ")} is filled; sign in again with /auth`,
     })
   })
+
+/**
+ * Refuse an API sign-in to the catalog provider `providerId` whose answers a
+ * turn would refuse: each base URL with a variable (the provider's and each
+ * model's own) is filled as a turn fills it (`filledBaseUrl`), with the
+ * answers being signed in, so the sign-in fails with the turn's message. A
+ * URL with a variable that has no answer and no env var is not checked: the
+ * auth listing names that prompt as missing.
+ */
+const checkBaseUrlAnswers = Effect.fn("GenericProvider.checkBaseUrlAnswers")(function* (
+  providerId: string,
+  info: AuthApi,
+) {
+  const registry = yield* ExtensionRegistry
+  const config = yield* registry.providerConfig
+  const source = yield* (yield* ModelCatalogSource).read
+  const provider = configuredCatalog(source, config, registry.getResolved().apiClasses).provider(
+    providerId,
+  )
+  if (Option.isNone(provider)) return
+  const auth = Option.some(
+    ProviderAuthInfo.cases.Api.make({
+      key: info.key,
+      ...omitUndefined({ metadata: info.metadata }),
+    }),
+  )
+  const urls = new Set(
+    [provider.value.api, ...provider.value.models.map((model) => model.api)].filter(
+      (url): url is string => Predicate.isString(url) && urlVariables(url).length > 0,
+    ),
+  )
+  for (const url of urls) {
+    const values = yield* Effect.forEach(urlVariables(url), (name) =>
+      Option.match(storedPromptAnswer(auth, name), {
+        onSome: () => Effect.succeed(true),
+        onNone: () => Effect.map(envValue(name), Option.isSome),
+      }),
+    )
+    if (values.every(Boolean)) yield* filledBaseUrl(provider.value, url, auth)
+  }
+})
 
 /** Sends the config's `headers` with every request. */
 const withHeaders =

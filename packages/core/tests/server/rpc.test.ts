@@ -78,6 +78,7 @@ import {
   fixedSessionProfiles,
   createRpcClient,
   createRpcHarness,
+  modelCatalogFixture,
   registerContributions,
   testTurnExtension,
 } from "../../src/test-utils/harness"
@@ -922,6 +923,75 @@ describe("auth sign-in prompts", () => {
             sessionId,
           })
           expect(yield* listedName).toEqual(["pk-answered accountId=acct-7"])
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
+  )
+
+  // A turn fills a base URL's variables by one rule; a sign-in applies the
+  // same rule to the answers it stores, so the user learns of a bad answer
+  // on `/auth`, not on the first turn.
+  it.live(
+    "a base URL answer a turn would refuse is refused at sign-in with the turn's message, and nothing is stored",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const catalog = yield* modelCatalogFixture
+          // Base URLs as models.dev writes Neon's (a variable holds the origin)
+          // and Infomaniak's (one path segment).
+          const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+            gateway: {
+              id: "gateway",
+              name: "Gateway",
+              env: ["GATEWAY_BASE_URL", "GATEWAY_KEY"],
+              npm: "@ai-sdk/openai-compatible",
+              api: "${GATEWAY_BASE_URL}/v1",
+              models: { m: { name: "M", tool_call: true } },
+            },
+            product: {
+              id: "product",
+              name: "Product",
+              env: ["PRODUCT_ID", "PRODUCT_KEY"],
+              npm: "@ai-sdk/openai-compatible",
+              api: "https://product.test/2/ai/${PRODUCT_ID}/openai/v1",
+              models: { m: { name: "M", tool_call: true } },
+            },
+          })
+          yield* catalog.serve("api.json", body, '"generic-url-1"')
+          const store = Context.get(yield* Layer.build(Auth.Test()), Auth)
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              modelCatalogHttpLayer: catalog.layer,
+              authLayer: Layer.succeed(Auth, store),
+            }),
+          )
+          const { sessionId } = yield* client.session.create({})
+          const signIn = (provider: string, metadata: Record<string, string>) =>
+            client.auth.setKey({ provider, key: "sk-url", metadata, sessionId }).pipe(
+              Effect.as("saved"),
+              Effect.catch((error) => Effect.succeed(`${error._tag}: ${error.message}`)),
+            )
+          const signedIn = store.list
+
+          const gatewayRefused =
+            "ProviderAuthError: Gateway needs GATEWAY_BASE_URL as an https URL with no user, password, query or fragment; sign in again with /auth"
+          for (const value of ["http://insecure.gw.test/gw?x=1", "gw", "https://gw.test?"]) {
+            expect(yield* signIn("gateway", { GATEWAY_BASE_URL: value })).toBe(gatewayRefused)
+          }
+          expect(yield* signIn("product", { PRODUCT_ID: ".." })).toBe(
+            'ProviderAuthError: Product needs PRODUCT_ID as one URL component, not ".."; sign in again with /auth',
+          )
+          expect(yield* signedIn).toEqual([])
+
+          // What a turn takes, the sign-in takes: a path in a component is
+          // percent-encoded into that one component.
+          expect(yield* signIn("gateway", { GATEWAY_BASE_URL: "https://gw.test/team" })).toBe(
+            "saved",
+          )
+          expect(yield* signIn("product", { PRODUCT_ID: "12/../evil.example" })).toBe("saved")
+          expect(yield* signedIn).toEqual(["gateway", "product"])
         }).pipe(Effect.timeout("4 seconds")),
       ),
   )

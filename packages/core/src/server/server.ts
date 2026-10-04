@@ -1671,14 +1671,19 @@ const RpcHandlers = GentRpcs.toLayer(
         }).pipe(Effect.scoped),
 
       // A key typed for a driver that shares a sign-in is the owner's key.
-      // Its prompt answers go into the same record, written once.
+      // Its prompt answers go into the same record, written once. A refused
+      // answer fails with its own message; a store failure names the call.
       "auth.setKey": ({ provider, key, metadata, sessionId }: SetAuthKeyInput) =>
         inSessionProfile(
           sessionId,
           storeSignIn(
             provider,
             AuthApi.make({ type: "api", key, ...omitUndefined({ metadata }) }),
-          ).pipe(Effect.mapError((error) => authPersistenceError("set", provider, error))),
+          ).pipe(
+            Effect.catchTag("AuthError", (error) =>
+              Effect.fail(authPersistenceError("set", provider, error)),
+            ),
+          ),
         ),
 
       // A sign-in other drivers share removes every credential it reads.
