@@ -25,6 +25,7 @@ import {
   modelCatalogFromBodies,
   storedCredentialModel,
   textStep,
+  waitFor,
 } from "@gent/core/test-utils"
 import { resolveShipped, SHIPPED_API_CLASSES } from "./helpers/api-classes.js"
 import {
@@ -971,28 +972,41 @@ describe("OpenCode Zen classifiers", () => {
       }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
-  it.live("the shipped extensions list every route's classifier models over RPC", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-      const { client, sessionId } = yield* createRpcHarness({
-        agents: [],
-        modelCatalogHttpLayer: yield* catalogHttpLayer,
-        extensionInputs: BuiltinExtensions,
-        providerLayer,
-      })
-      const classifiers = (yield* client.model.list({ sessionId }))
-        .filter((model) => model.kind === "classifier")
-        .map((model) => model.id)
-      expect(classifiers.toSorted()).toEqual([
-        ModelId.make("cloudflare/@cf/cloudflare/clef"),
-        ModelId.make("cloudflare/@cf/cloudflare/clef-flash"),
-        ModelId.make("opencode/jev-1.13"),
-        ModelId.make("opencode/jev-1.13-free"),
-        ModelId.make("typesafe/jev-1.13.0"),
-        ModelId.make("typesafe/jev-latest"),
-        ModelId.make("typesafe/jev-preview"),
-      ])
-    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  it.live(
+    "the shipped extensions list every route's classifier models over RPC once the decision source is loaded",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId } = yield* createRpcHarness({
+          agents: [],
+          modelCatalogHttpLayer: yield* catalogHttpLayer,
+          extensionInputs: BuiltinExtensions,
+          providerLayer,
+        })
+        const classifierIds = client.model
+          .list({ sessionId })
+          .pipe(
+            Effect.map((models) =>
+              models.filter((model) => model.kind === "classifier").map((model) => model.id),
+            ),
+          )
+        // A list does not wait for the decision source: its models join once it is loaded.
+        const classifiers = yield* waitFor(
+          classifierIds,
+          (ids) => ids.length === 7,
+          10_000,
+          "the decision models",
+        )
+        expect(classifiers.toSorted()).toEqual([
+          ModelId.make("cloudflare/@cf/cloudflare/clef"),
+          ModelId.make("cloudflare/@cf/cloudflare/clef-flash"),
+          ModelId.make("opencode/jev-1.13"),
+          ModelId.make("opencode/jev-1.13-free"),
+          ModelId.make("typesafe/jev-1.13.0"),
+          ModelId.make("typesafe/jev-latest"),
+          ModelId.make("typesafe/jev-preview"),
+        ])
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 })
 

@@ -2405,6 +2405,8 @@ describe("models.dev catalog source", () => {
       const first = yield* source.read
       expect(providerModelIds(first, "anthropic")).toContain("claude-haiku-4-5")
       expect(Option.isNone(first.failure)).toBe(true)
+      // The read starts the decision source's load too; it does not wait for it.
+      yield* source.readWithDecisions
       expect(sourcesOf(yield* fixture.requests)).toEqual([CHAT, DECISION])
       expect((yield* fixture.requests).every((request) => Option.isNone(request.ifNoneMatch))).toBe(
         true,
@@ -2426,7 +2428,7 @@ describe("models.dev catalog source", () => {
     () =>
       Effect.gen(function* () {
         const { fixture, storage, source } = yield* catalogRoot
-        yield* source.read
+        yield* source.readWithDecisions
         yield* TestClock.adjust("2 hours")
 
         const stale = yield* source.read
@@ -2453,7 +2455,7 @@ describe("models.dev catalog source", () => {
   it.scoped("a 200 replaces the snapshot, and a body that does not parse is not stored", () =>
     Effect.gen(function* () {
       const { fixture, storage, source } = yield* catalogRoot
-      yield* source.read
+      yield* source.readWithDecisions
       const rows = Context.get(storage, ModelCatalogSnapshotStorage)
       const etag = rows.get(CHAT).pipe(Effect.map(Option.flatMap((stored) => stored.etag)))
 
@@ -2476,7 +2478,7 @@ describe("models.dev catalog source", () => {
   it.scoped("a new process reads the stored snapshot and fetches nothing", () =>
     Effect.gen(function* () {
       const { fixture, storage, source } = yield* catalogRoot
-      yield* source.read
+      yield* source.readWithDecisions
       const restarted = yield* catalogSourceOver(storage, fixture.layer)
 
       const catalog = yield* restarted.read
@@ -2493,7 +2495,7 @@ describe("models.dev catalog source", () => {
         const { fixture, source } = yield* catalogRoot
         yield* fixture.offline(true)
 
-        const offline = yield* source.read
+        const offline = yield* source.readWithDecisions
         expect(offline.failure).toEqual(
           Option.some(
             "models.dev catalog unavailable: no snapshot stored and models.dev unreachable",
@@ -2517,7 +2519,7 @@ describe("models.dev catalog source", () => {
   it.scoped("a snapshot no fetch has confirmed for a week reports its age", () =>
     Effect.gen(function* () {
       const { fixture, source } = yield* catalogRoot
-      yield* source.read
+      yield* source.readWithDecisions
       yield* fixture.offline(true)
       yield* TestClock.adjust("8 days")
 
@@ -2568,6 +2570,66 @@ describe("models.dev catalog source", () => {
         expect(providerModelIds(catalog, "anthropic")).toContain("claude-haiku-4-5")
         // The stopped read's fetch went on and served the next read.
         expect(yield* Ref.get(calls)).toBe(2)
+      }),
+  )
+
+  it.scoped(
+    "a stored chat snapshot serves a read at once while the decision source, with no row, is fetched; a decision read waits for it",
+    () =>
+      Effect.gen(function* () {
+        const storage = yield* catalogStorage
+        yield* Context.get(storage, ModelCatalogSnapshotStorage).put({
+          source: CHAT,
+          body: MODEL_CATALOG_FIXTURE[CHAT].body,
+          etag: Option.some(MODEL_CATALOG_FIXTURE[CHAT].etag),
+          fetched_at: 0,
+          checked_at: 0,
+        })
+        const requested = yield* Ref.make<ReadonlyArray<string>>([])
+        const reached = yield* Deferred.make<void>()
+        const answer = yield* Deferred.make<void>()
+        // models.dev does not answer the decision source until the test lets it.
+        const http = Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.gen(function* () {
+              const url = new URL(request.url)
+              yield* Ref.update(requested, (list) => [
+                ...list,
+                `${url.pathname.replace(/^\/+/, "")}${url.search}`,
+              ])
+              yield* Deferred.succeed(reached, void 0)
+              yield* Deferred.await(answer)
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response(MODEL_CATALOG_FIXTURE[DECISION].body, { status: 200 }),
+              )
+            }),
+          ),
+        )
+        const source = yield* catalogSourceOver(storage, http)
+
+        const chatRead = yield* Effect.forkChild(source.read)
+        yield* Deferred.await(reached)
+        const served = yield* settle(
+          Effect.sync(() => chatRead.pollUnsafe()),
+          Predicate.isNotUndefined,
+        )
+        const chat = yield* Option.getOrThrow(Option.fromUndefinedOr(served))
+        expect(providerModelIds(chat, "anthropic")).toContain("claude-haiku-4-5")
+        expect(providerModelIds(chat, "cloudflare-workers-ai")).not.toContain("@cf/cloudflare/clef")
+
+        const decisionRead = yield* Effect.forkChild(source.readWithDecisions)
+        yield* Effect.yieldNow
+        expect(decisionRead.pollUnsafe()).toBeUndefined()
+        yield* Deferred.succeed(answer, void 0)
+        const decided = yield* Fiber.join(decisionRead)
+        expect(providerModelIds(decided, "cloudflare-workers-ai")).toContain("@cf/cloudflare/clef")
+        expect(providerModelIds(yield* source.read, "cloudflare-workers-ai")).toContain(
+          "@cf/cloudflare/clef",
+        )
+        // The chat read started no second fetch of the source still loading.
+        expect(yield* Ref.get(requested)).toEqual([DECISION])
       }),
   )
 
@@ -2853,44 +2915,42 @@ describe("driver composition", () => {
 
 describe("generic providers", () => {
   /** Four catalog providers: two a class speaks, one it does not, one an adapter serves. */
-  const genericCatalog = modelCatalogFromBodies({
-    chat: encodeCatalogJson({
-      open: {
-        id: "open",
-        name: "Open",
-        env: ["OPEN_API_KEY"],
-        npm: "@ai-sdk/openai-compatible",
-        api: "https://open.test/v1",
-        models: {
-          big: { name: "Big", tool_call: true, limit: { context: 100_000, output: 8_000 } },
-          google: { name: "Google", tool_call: true, provider: { npm: "@ai-sdk/google" } },
-        },
+  const genericChat = encodeCatalogJson({
+    open: {
+      id: "open",
+      name: "Open",
+      env: ["OPEN_API_KEY"],
+      npm: "@ai-sdk/openai-compatible",
+      api: "https://open.test/v1",
+      models: {
+        big: { name: "Big", tool_call: true, limit: { context: 100_000, output: 8_000 } },
+        google: { name: "Google", tool_call: true, provider: { npm: "@ai-sdk/google" } },
       },
-      regional: {
-        id: "regional",
-        name: "Regional",
-        env: ["REGION_ID", "REGIONAL_KEY"],
-        npm: "@ai-sdk/openai-compatible",
-        api: "https://${REGION_ID}.regional.test/v1",
-        models: { small: { name: "Small", tool_call: true } },
-      },
-      unspoken: {
-        id: "unspoken",
-        name: "Unspoken",
-        env: ["UNSPOKEN_KEY"],
-        npm: "@ai-sdk/google",
-        models: { g: { name: "G", tool_call: true } },
-      },
-      adapted: {
-        id: "adapted",
-        name: "Adapted",
-        env: ["ADAPTED_KEY"],
-        npm: "@ai-sdk/openai-compatible",
-        models: { a: { name: "A", tool_call: true } },
-      },
-    }),
-    decision: "{}",
+    },
+    regional: {
+      id: "regional",
+      name: "Regional",
+      env: ["REGION_ID", "REGIONAL_KEY"],
+      npm: "@ai-sdk/openai-compatible",
+      api: "https://${REGION_ID}.regional.test/v1",
+      models: { small: { name: "Small", tool_call: true } },
+    },
+    unspoken: {
+      id: "unspoken",
+      name: "Unspoken",
+      env: ["UNSPOKEN_KEY"],
+      npm: "@ai-sdk/google",
+      models: { g: { name: "G", tool_call: true } },
+    },
+    adapted: {
+      id: "adapted",
+      name: "Adapted",
+      env: ["ADAPTED_KEY"],
+      npm: "@ai-sdk/openai-compatible",
+      models: { a: { name: "A", tool_call: true } },
+    },
   })
+  const genericCatalog = modelCatalogFromBodies({ chat: genericChat, decision: "{}" })
 
   const chatClass = (seen: Array<ApiClassRequest>): ApiClassContribution => ({
     id: "chat",
@@ -2923,11 +2983,26 @@ describe("generic providers", () => {
     readonly seen?: Array<ApiClassRequest>
     /** The catalog in place of `genericCatalog`. */
     readonly catalog?: LoadedModelCatalog
+    /** The catalog once the decision source is loaded too, in place of `catalog`. */
+    readonly withDecisions?: LoadedModelCatalog
+    /** Gets one entry each time a reader waits for the decision source. */
+    readonly decisionReads?: Array<string>
   }
 
   const inProfile =
     (setup: Setup) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) => {
+      const chat = setup.catalog ?? genericCatalog
+      const catalogSource = Layer.succeed(
+        ModelCatalogSource,
+        ModelCatalogSource.of({
+          read: Effect.succeed(chat),
+          readWithDecisions: Effect.sync(() => {
+            setup.decisionReads?.push("decisions")
+            return setup.withDecisions ?? chat
+          }),
+        }),
+      )
       const registry = ExtensionRegistry.fromResolved(
         resolveExtensions([
           {
@@ -2943,13 +3018,7 @@ describe("generic providers", () => {
         Effect.succeed(setup.config ?? {}),
       )
       const services = Layer.mergeAll(ModelResolver.Live, ModelCatalogRecord.Live).pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(
-            Auth.Test(setup.stored ?? {}),
-            registry,
-            ModelCatalogSource.fixed(setup.catalog ?? genericCatalog),
-          ),
-        ),
+        Layer.provideMerge(Layer.mergeAll(Auth.Test(setup.stored ?? {}), registry, catalogSource)),
         Layer.merge(ConfigProvider.layer(ConfigProvider.fromEnv({ env: setup.env ?? {} }))),
       )
       return Effect.provide(effect, services)
@@ -3254,6 +3323,33 @@ describe("generic providers", () => {
         yield* resolved("adapted/a", { env: { ADAPTED_KEY: "sk-env" }, seen })
         expect(seen.map((request) => Option.getOrNull(request.apiKey))).toEqual(["adapter-key"])
         expect(yield* searched({ env: { ADAPTED_KEY: "sk-env" } })).toEqual(["open", "regional"])
+      }),
+  )
+
+  it.live(
+    "a turn model the chat catalog lists resolves at once; one it lacks waits for the decision source, where a classifier runs no turn",
+    () =>
+      Effect.gen(function* () {
+        const withDecisions = modelCatalogFromBodies({
+          chat: genericChat,
+          decision: encodeCatalogJson({
+            adapted: {
+              id: "adapted",
+              name: "Adapted",
+              models: { judge: { name: "Judge", type: "decision", tool_call: false } },
+            },
+          }),
+        })
+        const decisionReads: Array<string> = []
+        const setup = { env: { ADAPTED_KEY: "sk-env" }, withDecisions, decisionReads }
+
+        yield* resolved("adapted/a", setup)
+        expect(decisionReads).toEqual([])
+
+        expect(yield* resolveFailure("adapted/judge", setup)).toContain(
+          "adapted/judge is a classifier model",
+        )
+        expect(decisionReads).toEqual(["decisions"])
       }),
   )
 })

@@ -1155,14 +1155,18 @@ export const modelCatalogFromBodies = (bodies: {
   return loadedModelCatalog({ sources, missingSince: {} }, 0)
 }
 
-/** A source to revalidate now: confirmed over an hour ago, or missing and last tried over a minute ago. */
+/**
+ * A source to revalidate now: confirmed over an hour ago, or missing and
+ * last tried over a minute ago. A source with neither a snapshot nor a failed
+ * try is still in its first load, which its own fetch serves.
+ */
 const sourceDue = (held: HeldCatalog, source: CatalogSourceName, now: number): boolean => {
   const kept = held.sources[source]
   if (Predicate.isNotUndefined(kept)) {
     return now - kept.checkedAt > Duration.toMillis(CATALOG_REVALIDATE_AFTER)
   }
   const missingSince = held.missingSince[source]
-  if (Predicate.isUndefined(missingSince)) return true
+  if (Predicate.isUndefined(missingSince)) return false
   return now - missingSince > Duration.toMillis(CATALOG_RETRY_MISSING_AFTER)
 }
 
@@ -1174,10 +1178,15 @@ interface ArrivedCatalogBody {
 
 interface ModelCatalogSourceService {
   /**
-   * The catalog. Never fails: with no snapshot and no network it is empty and
-   * says why in `failure`.
+   * The catalog once the chat source (`api.json`) is loaded: its snapshot at
+   * once, or with no row its first fetch. The decision source joins once its
+   * own load is done, so a stored chat snapshot never waits on it. Never
+   * fails: with no snapshot and no network it is empty and says why in
+   * `failure`.
    */
   readonly read: Effect.Effect<LoadedModelCatalog>
+  /** `read` once the decision source is loaded too: for a reader of decision models. */
+  readonly readWithDecisions: Effect.Effect<LoadedModelCatalog>
 }
 
 export class ModelCatalogSource extends Context.Service<
@@ -1195,9 +1204,9 @@ export class ModelCatalogSource extends Context.Service<
       const http = yield* HttpClient.HttpClient
       const origin = yield* catalogOrigin
       const scope = yield* Effect.scope
-      const held = yield* Ref.make(Option.none<HeldCatalog>())
+      const held = yield* Ref.make<HeldCatalog>({ sources: {}, missingSince: {} })
       const loadLock = yield* Semaphore.make(1)
-      const loading = yield* Ref.make(Option.none<Fiber.Fiber<HeldCatalog>>())
+      const loading = yield* Ref.make(Option.none<Record<CatalogSourceName, Fiber.Fiber<void>>>())
       const revalidating = yield* Ref.make(false)
 
       /** The source's body, or none on a 304; fails on any other answer or after 10 s. */
@@ -1343,25 +1352,22 @@ export class ModelCatalogSource extends Context.Service<
 
       const revalidate = Effect.gen(function* () {
         const before = yield* Ref.get(held)
-        if (Option.isNone(before)) return
         const now = yield* Clock.currentTimeMillis
-        const due = CATALOG_SOURCES.filter((source) => sourceDue(before.value, source, now))
+        const due = CATALOG_SOURCES.filter((source) => sourceDue(before, source, now))
         const outcomes = yield* Effect.forEach(
           due,
           (source) =>
             Effect.map(
-              refreshSource(source, Option.fromUndefinedOr(before.value.sources[source])),
+              refreshSource(source, Option.fromUndefinedOr(before.sources[source])),
               (outcome) => [source, outcome] as const,
             ),
           { concurrency: CATALOG_SOURCES.length },
         )
         const after = yield* Clock.currentTimeMillis
         yield* Ref.update(held, (current) =>
-          Option.map(current, (value) =>
-            outcomes.reduce(
-              (next, [source, outcome]) => holdSource(next, source, outcome, after),
-              value,
-            ),
+          outcomes.reduce(
+            (next, [source, outcome]) => holdSource(next, source, outcome, after),
+            current,
           ),
         )
       }).pipe(Effect.ensuring(Ref.set(revalidating, false)))
@@ -1372,62 +1378,69 @@ export class ModelCatalogSource extends Context.Service<
         if (start) yield* Effect.forkIn(revalidate, scope)
       })
 
-      /** Load the stored rows; a source with no row is fetched and waited for. */
-      const loadOnce = Effect.gen(function* () {
-        const outcomes = yield* Effect.forEach(
-          CATALOG_SOURCES,
-          (source) =>
-            Effect.gen(function* () {
-              const stored = yield* storedSource(source)
-              if (Option.isSome(stored)) return [source, stored] as const
-              return [source, yield* refreshSource(source, Option.none())] as const
-            }),
-          { concurrency: CATALOG_SOURCES.length },
-        )
-        const now = yield* Clock.currentTimeMillis
-        const empty: HeldCatalog = { sources: {}, missingSince: {} }
-        const loaded = outcomes.reduce(
-          (next, [source, outcome]) => holdSource(next, source, outcome, now),
-          empty,
-        )
-        yield* Ref.set(held, Option.some(loaded))
-        return loaded
-      })
+      /** Load one source's stored row, else fetch it, and hold the outcome. */
+      const loadSource = (source: CatalogSourceName) =>
+        Effect.gen(function* () {
+          let outcome = yield* storedSource(source)
+          if (Option.isNone(outcome)) outcome = yield* refreshSource(source, Option.none())
+          const now = yield* Clock.currentTimeMillis
+          yield* Ref.update(held, (current) => holdSource(current, source, outcome, now))
+        })
 
       /**
-       * The one load, started at most once as a fiber of the layer's scope.
-       * A reader that is stopped (an Esc during the first fetch) stops only
-       * its wait: the load goes on, and the next reader joins it.
+       * Each source's one load, started at most once as a fiber of the
+       * layer's scope; the two run apart, so a source with a row never waits
+       * on the other's fetch. A reader that is stopped (an Esc during the
+       * first fetch) stops only its wait: the load goes on, and the next
+       * reader joins it.
        */
-      const loadFiber = Effect.gen(function* () {
+      const startLoads = Effect.gen(function* () {
         const running = yield* Ref.get(loading)
         if (Option.isSome(running)) return running.value
-        const fiber = yield* Effect.forkIn(loadOnce, scope)
-        yield* Ref.set(loading, Option.some(fiber))
-        return fiber
-      }).pipe(loadLock.withPermits(1))
-      const load = Effect.flatMap(loadFiber, Fiber.join)
-
-      const read = Effect.fn("ModelCatalogSource.read")(function* () {
-        const current = yield* Ref.get(held)
-        const loaded = yield* Option.match(current, {
-          onSome: Effect.succeed,
-          onNone: () => load,
-        })
-        const now = yield* Clock.currentTimeMillis
-        if (CATALOG_SOURCES.some((source) => sourceDue(loaded, source, now))) {
-          yield* startRevalidation
+        const fibers: Record<CatalogSourceName, Fiber.Fiber<void>> = {
+          "api.json": yield* Effect.forkIn(loadSource("api.json"), scope),
+          "api.json?type=decision": yield* Effect.forkIn(
+            loadSource("api.json?type=decision"),
+            scope,
+          ),
         }
-        return loadedModelCatalog(loaded, now)
-      })
+        yield* Ref.set(loading, Option.some(fibers))
+        return fibers
+      }).pipe(loadLock.withPermits(1))
 
-      return ModelCatalogSource.of({ read: read() })
+      /** The catalog once the loads of `waitFor` are done; the other sources as far as they are. */
+      const readAfter = (waitFor: ReadonlyArray<CatalogSourceName>) =>
+        Effect.gen(function* () {
+          const fibers = yield* startLoads
+          yield* Effect.forEach(waitFor, (source) => Fiber.join(fibers[source]), {
+            discard: true,
+          })
+          const loaded = yield* Ref.get(held)
+          const now = yield* Clock.currentTimeMillis
+          if (CATALOG_SOURCES.some((source) => sourceDue(loaded, source, now))) {
+            yield* startRevalidation
+          }
+          return loadedModelCatalog(loaded, now)
+        })
+
+      return ModelCatalogSource.of({
+        read: readAfter(["api.json"]).pipe(Effect.withSpan("ModelCatalogSource.read")),
+        readWithDecisions: readAfter(CATALOG_SOURCES).pipe(
+          Effect.withSpan("ModelCatalogSource.readWithDecisions"),
+        ),
+      })
     }),
   )
 
   /** A catalog that never changes and fetches nothing: a host that brings its own snapshot. */
   static fixed = (catalog: LoadedModelCatalog): Layer.Layer<ModelCatalogSource> =>
-    Layer.succeed(ModelCatalogSource, ModelCatalogSource.of({ read: Effect.succeed(catalog) }))
+    Layer.succeed(
+      ModelCatalogSource,
+      ModelCatalogSource.of({
+        read: Effect.succeed(catalog),
+        readWithDecisions: Effect.succeed(catalog),
+      }),
+    )
 }
 
 // ── driver composition ──────────────────────────────────────────────────────
@@ -2190,7 +2203,8 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   // The registry of the running turn's profile: its cwd-scoped drivers resolve here.
   const extensionRegistry = yield* ExtensionRegistry
   const resolved = extensionRegistry.getResolved()
-  const source = yield* (yield* ModelCatalogSource).read
+  const catalogSource = yield* ModelCatalogSource
+  const source = yield* catalogSource.read
   // A registered driver, else the generic driver of a servable catalog
   // provider, active or not: one with no key fails and names /auth.
   const config = yield* extensionRegistry.providerConfig
@@ -2225,14 +2239,29 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
     ),
   )
 
+  // A model the chat catalog lacks can be a classifier: the decision source tells.
+  const driver = extensionProvider.value
+  const chatEntry = catalogModelEntry(
+    driverCatalogView(catalog, driver),
+    catalogProviderOf(driver),
+    currentModelName(driver, modelName),
+  )
+  const turnCatalog = yield* Option.match(chatEntry, {
+    onSome: () => Effect.succeed(catalog),
+    onNone: () =>
+      Effect.map(catalogSource.readWithDecisions, (full) =>
+        configuredCatalog(full, config, resolved.apiClasses),
+      ),
+  })
+
   return yield* Effect.suspend(() =>
     resolveDriverModel({
-      driver: extensionProvider.value,
+      driver,
       apiClasses: resolved.apiClasses,
       modelName,
       auth: authParam,
       hints: Option.fromUndefinedOr(request.hints),
-      catalog,
+      catalog: turnCatalog,
     }),
   ).pipe(
     Effect.catchTag("DriverError", (error) =>
@@ -2364,7 +2393,7 @@ const classifierCatalog = Effect.fn("DecisionModelResolver.catalog")(function* (
   allDrivers: ModelDrivers,
 ) {
   const drivers = classifierDrivers(allDrivers)
-  const source = yield* catalogSource.read
+  const source = yield* catalogSource.readWithDecisions
   // A classifier needs no API class: with none, core lists only the decision models.
   const profile: DriverProfile = { modelDrivers: drivers, apiClasses: new Map() }
   const catalog = yield* listModelCatalog(profile, source, (driverId) =>
