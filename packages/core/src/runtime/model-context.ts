@@ -37,7 +37,7 @@ import {
 import { readToolImage, type ToolImage, toolImageBase64Chars, toolImagesOf } from "./tool-image.js"
 import { omitUndefined } from "../domain/guards.js"
 import type { ToolCapability } from "../domain/capability.js"
-import type { TurnNotice } from "../domain/extension.js"
+import type { ExtensionContext, TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
 import type { ProviderAuthError, RunEffort } from "../domain/driver.js"
 import type { ProviderError, StorageError } from "../domain/errors.js"
@@ -1712,9 +1712,17 @@ const measuredUnits = (
  * none installed, or each one refusing, an overflowing transcript is simply
  * truncated. The loop owns the marker, its ids, and the transaction; the
  * extension owns the summary prompt and the notice text.
+ *
+ * A compactor runs with the `ExtensionContext` of the session and branch whose
+ * window it compacts, as a tool call on that branch does: `ctx.cwd` is the
+ * session's cwd, not the cwd its extension's setup saw, so one process
+ * resource serves the sessions of every profile that shares it.
  */
 
-/** Why a summary was not produced. Every failure degrades to a truncated window. */
+/**
+ * Why a summary was not produced. The window goes to the next compactor of
+ * the chain; when none is left, the loop truncates it.
+ */
 export class ModelCompactionError extends Schema.TaggedError<ModelCompactionError>()(
   "ModelCompactionError",
   {
@@ -1735,8 +1743,9 @@ export interface CompactionRequest {
   readonly modelId: ModelId
   /**
    * The agent whose window is compacted. A compactor that serves only some
-   * agents fails with `ModelCompactionError` for the others, and the loop
-   * truncates their window instead.
+   * agents fails with `ModelCompactionError` for the others: the window goes
+   * to the next compactor of the chain, and the loop truncates it only when
+   * no compactor is left.
    */
   readonly agentName: AgentName
   readonly sessionId: SessionId
@@ -1755,9 +1764,10 @@ export interface CompactionRequest {
 }
 
 interface ModelContextCompactorService {
+  /** Runs with the compacted branch's `ExtensionContext`. */
   readonly compact: (
     request: CompactionRequest,
-  ) => Effect.Effect<CompactionSummary, ModelCompactionError, Scope.Scope>
+  ) => Effect.Effect<CompactionSummary, ModelCompactionError, Scope.Scope | ExtensionContext>
 }
 
 /** Installed by an extension as a process resource; absent when nothing summarises. */
@@ -2259,8 +2269,9 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
     .pipe(
       Effect.asSome,
       Effect.catchTag("ModelCompactionError", (error) =>
-        // A summary that cannot be produced must not cost the turn: the window
-        // is truncated instead, with a visible notice.
+        // Every compactor of the chain refused. A summary that cannot be
+        // produced must not cost the turn: the window is truncated instead,
+        // with a visible notice.
         Effect.gen(function* () {
           let outcome = "the history before the kept messages is dropped"
           if (!params.overflowed) {

@@ -540,6 +540,68 @@ them from the same `host` value (`host.cwd`, `host.home`,
 `host.host.osInfo`, `host.host.homeDirectory`) before registering; the resource itself should
 still expose the smallest service Tag it needs.
 
+### Context compaction
+
+When a window hands off (it overflows, the model asks, or a turn starts on a
+large window whose prompt cache went cold), the loop asks a
+`ModelContextCompactor` for the summary the handoff marker carries. An
+extension installs one as a `process` Resource; the Tag, `CompactionRequest`,
+`CompactionSummary` and `ModelCompactionError` come from
+`@gent/core/extensions/branch-tools`. The installed compactors form one
+chain: project, then user, then builtin. The first summary wins. A compactor
+that fails with `ModelCompactionError` passes the window to the next one, and
+the loop truncates the window, with a visible notice, only when no compactor
+is left. `compact` runs with the `ExtensionContext` a tool call on the
+compacted branch gets: `ctx.cwd` is the session's cwd, not the cwd setup saw.
+
+```ts
+import {
+  defineExtension,
+  defineResource,
+  ExtensionContext,
+  ExtensionHost,
+} from "@gent/core/extensions/api"
+import {
+  CompactionSummary,
+  ModelCompactionError,
+  ModelContextCompactor,
+} from "@gent/core/extensions/branch-tools"
+import { Effect, Layer } from "effect"
+
+const ReviewCompactor = Layer.succeed(
+  ModelContextCompactor,
+  ModelContextCompactor.of({
+    compact: (request) =>
+      Effect.gen(function* () {
+        // Serve one agent; another agent's window goes to the next compactor.
+        if (request.agentName !== "review") {
+          return yield* new ModelCompactionError({ modelId: request.modelId, reason: "NotReview" })
+        }
+        const ctx = yield* ExtensionContext
+        return CompactionSummary.make({
+          notice: `${request.history.length} earlier messages of the review of ${ctx.cwd} left the window.`,
+          modelId: request.modelId,
+        })
+      }),
+  }),
+)
+
+export default defineExtension({
+  id: "review-compactor",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "review-compactor/compactor",
+        scope: "process",
+        layer: ReviewCompactor,
+      }),
+    )
+  }),
+})
+```
+
 ## Agent
 
 ```ts

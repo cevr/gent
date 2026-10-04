@@ -895,15 +895,19 @@ Shape:
   and with no `ModelContextCompactor` process resource installed it truncates
   and reports the omission. The `@gent/compaction` extension installs the
   summariser; core keeps only the window marker shape (`context-window`,
-  optional `summarized` range) that status and the TUI read. A compactor that
-  fails degrades to truncation with a visible notice. The request names the
+  optional `summarized` range) that status and the TUI read. A window that
+  every compactor fails degrades to truncation with a visible notice. The request names the
   agent whose window it compacts (`agentName`), so a project compactor can
   serve one agent and fail with `ModelCompactionError` for the others.
   Installed compactors form one chain in scope order, project, then user, then
   builtin (`chainCompactors`, joined where the host merges each extension's
   Resource services): the first summary wins, a `ModelCompactionError` hands
   the window to the next compactor, and with none left the window is
-  truncated. The marker's notice
+  truncated. A compactor runs with the `ExtensionContext` a tool call on the
+  compacted branch gets (`provideExtensionLeaf` over the turn's host context,
+  with the compacted agent): `ctx.cwd` is the session's cwd, so a user-scope
+  compactor or a process resource that profiles share needs no cwd captured
+  at setup, and the request carries no cwd. The marker's notice
   names the session id, the branch id, and the replaced id range so the model
   can page the replaced history from the cell.
 - Project instructions are an extension, not a profile field. `@gent/agents`

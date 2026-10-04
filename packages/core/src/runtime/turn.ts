@@ -2721,6 +2721,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // Set once a summary model is admitted: from then on its call may spend
   // tokens whether or not a summary comes back.
   const summaryAdmitted = yield* Ref.make(false)
+  const hostCtx = yield* CurrentExtensionHostContext
   const { durableMessages, compacted, summary } = yield* projectContextWindow({
     sessionId: params.sessionId,
     branchId: params.branchId,
@@ -2743,7 +2744,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         ...modelRequest,
         hints: { ...turnHints, maxTokens, reasoning: "none" },
       }).pipe(Effect.tap(() => Ref.set(summaryAdmitted, true))),
-  })
+  }).pipe(
+    // The compactor runs with the context a tool call on this branch gets:
+    // the session's cwd and facets, and the agent whose window it compacts.
+    provideExtensionLeaf({}),
+    provideCurrentHostCtx({ ...hostCtx, agentName: resolved.agent.name }),
+  )
 
   // A summary is priced by the model its receipt names, as a step is by its
   // own. A summary that failed after its model was admitted has no receipt,

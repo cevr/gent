@@ -73,10 +73,17 @@ import {
   type ReasoningEffort,
 } from "../../src/domain/agent"
 import { omitUndefined } from "../../src/domain/guards"
-import { defineExtension, defineResource, ExtensionHost, tool } from "../../src/extensions/api"
+import {
+  defineExtension,
+  defineResource,
+  ExtensionContext,
+  ExtensionHost,
+  tool,
+} from "../../src/extensions/api"
 import { rangeCompactorLayer } from "../helpers/test-preset"
 import {
   LanguageModelLayers,
+  makeTempDirectoryScoped,
   type SequenceStep,
   waitFor,
 } from "../../src/test-utils/language-model"
@@ -89,7 +96,12 @@ import {
   MessageStorage,
   SessionStorage,
 } from "../../src/storage/storage"
-import { baseLocalLayerWithProvider, createRpcHarness } from "../../src/test-utils/harness"
+import {
+  baseLocalLayerWithProvider,
+  createRpcHarness,
+  testLeafContext,
+  testToolContext,
+} from "../../src/test-utils/harness"
 import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
 import * as Response from "effect/ai/Response"
 
@@ -1254,6 +1266,110 @@ describe("provider overflow recovery", () => {
   )
 })
 
+// ── compactor host context ──────────────────────────────────────────────────
+
+/** What one compactor call read from its `ExtensionContext`. */
+interface CompactorContextRead {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly agentName: Option.Option<AgentName>
+  readonly cwd: string
+}
+
+/** A process-scope compactor that records the context each call runs with. */
+const contextReadingCompactorExtension = (reads: Array<CompactorContextRead>) =>
+  defineExtension({
+    id: "test-context-compactor",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "resource",
+        defineResource({
+          id: "test-context-compactor/compactor",
+          scope: "process",
+          layer: Layer.succeed(
+            ModelContextCompactor,
+            ModelContextCompactor.of({
+              compact: (request) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  reads.push({
+                    sessionId: ctx.sessionId,
+                    branchId: ctx.branchId,
+                    agentName: Option.fromUndefinedOr(ctx.agentName),
+                    cwd: ctx.cwd,
+                  })
+                  return { notice: "summary of the earlier work", modelId: request.modelId }
+                }),
+            }),
+          ),
+        }),
+      )
+    }),
+  })
+
+describe("compactor host context", () => {
+  it.live("a compactor runs with the context of the session whose window it compacts", () =>
+    Effect.gen(function* () {
+      const launchCwd = yield* makeTempDirectoryScoped("gent-compactor-launch-")
+      const otherCwd = yield* makeTempDirectoryScoped("gent-compactor-other-")
+      // Per session: a first turn, then a refused request that hands its history off.
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        textStep("first reply"),
+        overflowStep,
+        textStep("reply after handoff"),
+        textStep("first reply"),
+        overflowStep,
+        textStep("reply after handoff"),
+      ])
+      const reads: Array<CompactorContextRead> = []
+      const harness = yield* createRpcHarness({
+        cwd: launchCwd,
+        providerLayer,
+        agents: [wideAgent],
+        admission: { agent: wideAgent.name },
+        extensionInputs: [contextReadingCompactorExtension(reads)],
+        models: [wideModel],
+      })
+      const { client } = harness
+      const other = yield* client.session.create({
+        cwd: otherCwd,
+        admission: { agent: wideAgent.name },
+      })
+      const launch = { sessionId: harness.sessionId, branchId: harness.branchId }
+      for (const { sessionId, branchId } of [launch, other]) {
+        for (const content of ["first", "second"]) {
+          yield* client.message.send({ sessionId, branchId, content })
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (snapshot) =>
+              snapshot.runtime._tag === "Idle" &&
+              snapshot.messages.some(
+                (message) =>
+                  message.role === "user" &&
+                  message.parts.some((part) => part.type === "text" && part.text === content),
+              ) &&
+              snapshot.messages.at(-1)?.role === "assistant",
+            5_000,
+            "the turn settled",
+          )
+        }
+      }
+
+      // Each call reads the session, branch, agent and cwd of the window it compacts.
+      expect(reads).toEqual([
+        { ...launch, agentName: Option.some(wideAgent.name), cwd: launchCwd },
+        {
+          sessionId: other.sessionId,
+          branchId: other.branchId,
+          agentName: Option.some(wideAgent.name),
+          cwd: otherCwd,
+        },
+      ])
+    }).pipe(Effect.scoped, Effect.timeout("4 seconds")),
+  )
+})
+
 // ── cold prompt cache ───────────────────────────────────────────────────────
 
 const HOUR_MS = 60 * 60_000
@@ -2215,6 +2331,9 @@ const projectWith = (budget: ModelContextBudget) => (messages: ReadonlyArray<Mes
 const summaryModel: CompactionRequest["summaryModel"] = () =>
   Effect.die("the summary model is not resolved in these tests")
 
+/** The context a compactor runs with; the turn provides the branch's own. */
+const leafContext = Layer.succeed(ExtensionContext, testLeafContext(testToolContext()))
+
 describe("turn window projection", () => {
   it.scopedLive("a turn whose own steps overflow hands off at a step boundary", () =>
     Effect.gen(function* () {
@@ -2304,7 +2423,7 @@ describe("turn window projection", () => {
           return Effect.succeed(message)
         },
         summaryModel,
-      }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
+      }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(true)
       expect(requests).toHaveLength(1)
@@ -2427,7 +2546,7 @@ describe("turn window projection", () => {
         promptCache: Option.none(),
         persist: (message) => Effect.succeed(message),
         summaryModel,
-      }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
+      }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(true)
       const marker = durableMessages.find(
@@ -2488,7 +2607,7 @@ describe("turn window projection", () => {
             promptCache: Option.none(),
             persist: (message) => Effect.succeed(message),
             summaryModel,
-          }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
+          }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
         const first = yield* compact([
           line("recompact-old-0", "user", 0),
@@ -2571,7 +2690,7 @@ describe("turn window projection", () => {
           return Effect.succeed(message)
         },
         summaryModel,
-      }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer)))
+      }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(false)
       expect(persisted).toEqual([])
@@ -2647,7 +2766,7 @@ describe("turn window projection", () => {
           promptCache: Option.none(),
           persist: Effect.succeed,
           summaryModel,
-        }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer))),
+        }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer, leafContext))),
       )
 
       const notices = (yield* Ref.get(publisher.published)).filter(
