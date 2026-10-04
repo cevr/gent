@@ -90,8 +90,9 @@ updates this list in the same commit.
     original size recorded (`originalWidth`, `originalHeight`), which the
     image's line names with the factors that map coordinates back, one for
     each side when they differ. Every size is of the upright image (a JPEG
-    its EXIF orientation turns is stored turned), and a colour profile past
-    a quarter of the byte limit is left out, so only undecodable bytes fail
+    its EXIF orientation turns is stored turned), and a colour profile an
+    encode carries at more than a quarter of the byte limit is left out of
+    that encode, so only undecodable bytes fail
     (the prior arts' settled entry "Tool image scaling" holds why). Receipts:
     `toolImagePrompt`, `toolImagesToDrop` and `toPrompt` in
     `packages/core/src/runtime/model-context.ts`; `saveToolImage` in

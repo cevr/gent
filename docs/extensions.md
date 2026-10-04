@@ -367,9 +367,11 @@ label. It takes PNG, JPEG, GIF and WebP. An upright image within 3.75 MiB and
 2,000 pixels a side is stored byte for byte. A larger image is scaled to fit
 with its aspect ratio kept (Lanczos3) and keeps its format; a GIF becomes a
 PNG. An image still past 3.75 MiB is encoded as JPEG at quality 80, 60, 40 and
-20, then at three quarters of the side, until it fits. A colour profile larger
-than a quarter of the byte limit is left out before the encode (the image then
-reads as sRGB); an ordinary one stays. The blob and its `sha256` are the
+20, then at three quarters of the side, until it fits. A colour profile that
+an encode carries at more than a quarter of the byte limit is left out of that
+encode (the image then reads as sRGB); an ordinary one stays. A PNG deflates
+its profile, a JPEG or a WebP carries it whole, so the size is measured in each
+encode. The blob and its `sha256` are the
 scaled bytes, and `originalWidth` and `originalHeight` record the size before
 the scale, so a tool can map its coordinates back. Every size is of the
 upright image: a JPEG its EXIF orientation turns or mirrors is stored turned,
