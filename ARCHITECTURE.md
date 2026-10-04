@@ -405,7 +405,13 @@ directory. The cache keeps each entry's last build with a stat stamp and a
 content hash of every input (`buildEntry`, `ModuleGraphs`): a resolve with no
 input touched costs a stat of each (about 1.5 ms for the scan); a save of the
 same bytes reads and hashes the inputs and builds nothing; an edit builds again
-(about 10 ms; the first build of a process about 70 ms). A failed build is not
+(about 10 ms; the first build of a process about 70 ms). A build is kept only
+when it is coherent: it read the inputs whose stats and bytes were taken before
+it, and their bytes after it are the same, so a save during a build is never
+kept as the new version. A build that found an import not known before it, or
+that a save overlapped, builds again with what it found (the first build of an
+entry with relative imports builds twice); after three tries the build runs
+that resolve and is not kept. A failed build is not
 kept, so a relative module created later is found. An untrusted project's
 files are listed, not built. Project trust comes from
 `isProjectExtensionDirectoryTrusted` (`runtime/config.ts`), the reader the TUI's
@@ -430,10 +436,14 @@ extensions before it, and itself (id, source, file version). So a profile
 rebuilt for a config edit keeps the resources the edit leaves alone, and their
 state with them (an open `/btw` fork, the agents-view watchers, a running
 background job); a resource closes when the last profile that holds it
-retires. The build key of an extension's Resources (`resourceBuildKeys`) names
-that context: the place, then the identity (scope, id, source, file version
-from `LoadedExtension.version`) of each resource-bearing extension up to and
-including it. A reload (`SessionProfileCacheService.reload`, which the
+retires. The build key of an extension's process Resources names that context
+as it started: the place, then the identity (scope, id, source, file version
+from `LoadedExtension.version`) of each resource-bearing extension that
+started before it, then its own (`startProcessResources`). A last good
+version that runs in place of a version that failed to start is named by its
+own version, in its key and in the key of each build over it, so a Resource
+built over one version is never shared by a profile that runs another. Branch
+Resources key on what the profile declares (`resourceBuildKeys`). A reload (`SessionProfileCacheService.reload`, which the
 `Extensions` facet calls) adds a count per (place, extension id) to the file
 stamp, so the next resolve misses the cached profile, runs every setup again,
 and keeps each Resource whose build key it shares; the counts live in memory
@@ -443,8 +453,16 @@ A new version that fails `load`, `setup` or `validation`
 (`loadRuntimeProfileDeclarations`), or whose process Resources fail at
 `startup` (`buildScopeResources` `fallback`), runs that last good version in
 its place, marked with the failure (`LoadedExtension.reloadFailed`); it keeps
-the Resources the profile before it built, by their build key. The profile key
-names the version it runs. Health reports such an extension `Degraded` with an
+the Resources the profile before it built, by their build key. A last good
+version runs only in a set it is valid in: one whose contributions collide
+with the set's fails as its new version did, and the set validates again
+without it, so it never takes down an extension whose new version is good.
+The profile key names the version it runs: the declaration key
+(`profileKey`) holds a declaration-phase fallback, and the entry key adds the
+startup fallbacks the build chose. A profile that runs a last good version
+serves a resolve only while that version is still the last good one
+(`runsCurrentLastGood`), so a profile a turn still holds never brings an older
+version back. Health reports such an extension `Degraded` with an
 `ActivationFailed` issue that carries the optional `runningVersion`, and the
 facet reports it `Active` with the optional `reloadFailed`: both fields are
 optional on the wire, so an older client reads a failed activation. A deleted
@@ -456,9 +474,13 @@ The `Extensions` facet (`status`, `reload`) reads and reloads the session's
 profile. The shipped `@gent/extension-admin` gives both to the agent
 (`extensions.status`, `extensions.reload`), with four verbs over public entries
 only: `enable` and `disable` edit a scope's `disabledExtensions` under
-`FileLock` with `writeFileAtomic`, `add` copies a file or directory into a
-scope's extensions directory through a hidden staging name, and `remove` moves
-one to the data directory's `extension-trash`. The four ask once
+`FileLock` with `writeFileAtomic` and refuse a file that does not decode as a
+`UserConfig` (exported from the extension API for this), keeping every raw key;
+`add` copies a file or directory into a scope's extensions directory through a
+hidden staging directory, and `remove` moves one into its own new directory
+(an exclusive create) under the data directory's `extension-trash`, so no
+remove replaces another, and deletes the source only after a whole copy when
+a rename cannot cross file systems. The four ask once
 (`Interaction.approve`) after their reads and before their write, so the tool
 that runs again after the ask writes once; a headless run declines. `project`
 needs a trusted project; trust stays the user's step. `resume` queues one

@@ -170,6 +170,8 @@ export { maximumModelToolResultChars } from "../runtime/model-context.js"
 // Launched from home, the project's `.gent` is the user's; every reader of project files asks this.
 // A project file whose entries run commands or spend on models counts only in a trusted project.
 export { hasProjectScope, isProjectTrusted } from "../runtime/config.js"
+// A config file's schema: an extension that writes a config refuses a file gent would not read.
+export { UserConfig } from "../runtime/config.js"
 // ── Public API ──
 
 export { ExtensionHost, type ExtensionHostService } from "../domain/extension.js"

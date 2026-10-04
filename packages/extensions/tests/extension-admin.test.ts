@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, FileSystem, Layer, Option, Path, Ref, Schema, Stream } from "effect"
+import { Clock, Effect, Fiber, FileSystem, Layer, Option, Path, Ref, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { ExtensionStatus } from "@gent/core/extensions/api"
+import { ExtensionStatus, resolveDataDir } from "@gent/core/extensions/api"
 import { BunPlatformLive } from "@gent/core/host"
 import { messagePartsText } from "@gent/core/protocol"
 import {
@@ -211,6 +211,8 @@ const adminServer = (params: {
   readonly steps: Parameters<typeof LanguageModelLayers.sequence>[0]
   readonly cwd?: string
   readonly userConfig?: string
+  /** Only for a test about a config file the server reports failed. */
+  readonly allowFailedExtensions?: boolean
 }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
@@ -236,6 +238,7 @@ const adminServer = (params: {
       providerLayer,
       home,
       cwd,
+      allowFailedExtensions: params.allowFailedExtensions === true,
       approvalLayer: ApprovalService.Live,
       // The verbs write the config files; the server reads them as they are.
       configServiceLayer: ConfigService.Live.pipe(
@@ -370,6 +373,29 @@ describe("extension admin verbs", () => {
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
   )
 
+  it.live("a config file gent cannot decode is refused before any ask, and left as it is", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      // JSON, but `providers` is a record: the runtime rejects this file.
+      const before = '{"providers":[]}\n'
+      const server = yield* adminServer({
+        userConfig: before,
+        allowFailedExtensions: true,
+        steps: [
+          toolCallStep("extensions.disable", { id: "@test/probe", scope: "user" }),
+          textStep("refused"),
+        ],
+      })
+      const events = yield* server.run("turn it off", true)
+      yield* server.controls.assertDone
+      expect(events.some((event) => event._tag === "InteractionPresented")).toBe(false)
+      const failed = events.find((event) => event._tag === "ToolCallFailed")
+      if (failed?._tag !== "ToolCallFailed") return expect.unreachable()
+      expect([failed.summary, failed.output].join(" ")).toContain("does not decode")
+      expect(yield* fs.readFileString(server.userConfig)).toBe(before)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+  )
+
   it.live("a project the user does not trust is refused before any ask", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -457,5 +483,47 @@ describe("extension admin verbs", () => {
         const moved = /to (\S+extension-trash\S+): the/.exec(removed.detail)?.[1] ?? ""
         expect(yield* fs.readFileString(moved)).toContain("@test/draft")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("14 seconds")),
+  )
+
+  // Two removes of one file name can land in one millisecond (two projects,
+  // two sessions). The trash keeps each: none replaces another.
+  it.live(
+    "a remove never replaces an extension of the same name already in the trash",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const server = yield* adminServer({
+          steps: [toolCallStep("extensions.remove", { id: "@test/probe" }), textStep("removed")],
+        })
+        // An earlier `probe.ts` in the trash under every name a remove in the
+        // next seconds could take.
+        const trash = path.join(yield* resolveDataDir(server.home), "extension-trash")
+        yield* fs.makeDirectory(trash, { recursive: true })
+        const now = yield* Clock.currentTimeMillis
+        const earlier = Array.from({ length: 8000 }, (_, offset) => ({
+          file: path.join(trash, `${String(now + offset)}-probe.ts`),
+          text: `earlier ${String(offset)}`,
+        }))
+        yield* Effect.forEach(earlier, ({ file, text }) => fs.writeFileString(file, text), {
+          concurrency: 64,
+          discard: true,
+        })
+        const events = yield* server.run("remove the probe", true)
+        yield* server.controls.assertDone
+        const [output = ""] = succeededOutputs(events)
+        const removed = yield* decodeVerb(output)
+        expect(removed.applied).toBe(true)
+        const moved = /to (\S+extension-trash\S+): the/.exec(removed.detail)?.[1] ?? ""
+        expect(yield* fs.readFileString(moved)).toContain("@test/probe")
+        const kept = yield* Effect.forEach(
+          earlier,
+          ({ file, text }) =>
+            fs.readFileString(file).pipe(Effect.map((content) => content === text)),
+          { concurrency: 64 },
+        )
+        expect(kept.every(Boolean)).toBe(true)
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+    25_000,
   )
 })

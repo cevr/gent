@@ -8,6 +8,7 @@ import {
   isProjectTrusted,
   resolveDataDir,
   tool,
+  UserConfig,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
 
@@ -92,11 +93,14 @@ const scopePlace = Effect.fn("ExtensionAdmin.scopePlace")(function* (
 // ── config ──────────────────────────────────────────────────────────────────
 
 const RawConfigJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
-const decodeDisabled = Schema.decodeUnknownEffect(Schema.Array(Schema.String))
+const decodeUserConfig = Schema.decodeUnknownEffect(UserConfig)
 
 /**
  * A config file as it is now: every key, and its `disabledExtensions`. A file
- * that does not decode is refused, never replaced: a hand edit is the user's.
+ * gent would not read (not JSON, or not a `UserConfig`) is refused, never
+ * replaced: gent keeps running on the config before it, so a change written
+ * into it would not reach a turn, and a hand edit is the user's to fix. The
+ * write keeps every raw key, known to `UserConfig` or not.
  */
 const readConfig = Effect.fn("ExtensionAdmin.readConfig")(function* (configPath: string) {
   const fs = yield* FileSystem.FileSystem
@@ -111,11 +115,13 @@ const readConfig = Effect.fn("ExtensionAdmin.readConfig")(function* (configPath:
   const raw = yield* Schema.decodeEffect(RawConfigJson)(text).pipe(
     Effect.mapError((error) => broken(error.message)),
   )
-  const disabled = yield* Option.match(Option.fromUndefinedOr(raw["disabledExtensions"]), {
-    onNone: () => Effect.succeed<ReadonlyArray<string>>([]),
-    onSome: (value) =>
-      decodeDisabled(value).pipe(Effect.mapError((error) => broken(error.message))),
-  })
+  const config = yield* decodeUserConfig(raw).pipe(
+    Effect.mapError((error) => broken(error.message)),
+  )
+  const disabled: ReadonlyArray<string> = Option.getOrElse(
+    Option.fromUndefinedOr(config.disabledExtensions),
+    () => [],
+  )
   return { raw, disabled }
 })
 
@@ -380,15 +386,19 @@ const ExtensionsAddTool = tool({
         Effect.gen(function* () {
           if (yield* exists(target)) return yield* taken
           yield* fs.makeDirectory(place.extensionsDir, { recursive: true })
-          // A hidden sibling is never scanned, so the extension appears whole.
-          const staging = path.join(
-            place.extensionsDir,
-            `.adding-${String(yield* Clock.currentTimeMillis)}-${path.basename(source)}`,
-          )
-          yield* fs.copy(source, staging).pipe(
-            Effect.andThen(fs.rename(staging, target)),
-            Effect.onError(() => fs.remove(staging, { recursive: true }).pipe(Effect.ignore)),
-          )
+          // A hidden sibling is never scanned, so the extension appears
+          // whole; an exclusive create gives each add its own.
+          const staging = yield* fs.makeTempDirectory({
+            directory: place.extensionsDir,
+            prefix: ".adding-",
+          })
+          const staged = path.join(staging, path.basename(source))
+          yield* fs
+            .copy(source, staged)
+            .pipe(
+              Effect.andThen(fs.rename(staged, target)),
+              Effect.ensuring(fs.remove(staging, { recursive: true }).pipe(Effect.ignore)),
+            )
         }),
       )
       return yield* finish("add", true, `Added ${target}: the ${place.reach}.`, resume)
@@ -462,24 +472,29 @@ const ExtensionsRemoveTool = tool({
         target,
       )
       if (!approved) return yield* finish("remove", false, DECLINED, resume)
-      const destination = path.join(
-        trash,
-        `${String(yield* Clock.currentTimeMillis)}-${path.basename(target)}`,
-      )
-      yield* ctx.FileLock.withLock(
+      const destination = yield* ctx.FileLock.withLock(
         target,
         Effect.gen(function* () {
           yield* fs.makeDirectory(trash, { recursive: true })
-          // Another file system cannot take a rename: copy, then delete.
-          yield* fs
-            .rename(target, destination)
-            .pipe(
-              Effect.catch(() =>
-                fs
-                  .copy(target, destination)
-                  .pipe(Effect.andThen(fs.remove(target, { recursive: true }))),
+          // A directory of its own for each remove, made by an exclusive
+          // create: two removes of one name, even in one millisecond, never
+          // share a destination, so neither replaces the other.
+          const slot = yield* fs.makeTempDirectory({
+            directory: trash,
+            prefix: `${String(yield* Clock.currentTimeMillis)}-`,
+          })
+          const moved = path.join(slot, path.basename(target))
+          // Another file system cannot take a rename: copy, then delete the
+          // source only once the copy is whole.
+          yield* fs.rename(target, moved).pipe(
+            Effect.catch(() =>
+              fs.copy(target, moved).pipe(
+                Effect.onError(() => fs.remove(slot, { recursive: true }).pipe(Effect.ignore)),
+                Effect.andThen(fs.remove(target, { recursive: true })),
               ),
-            )
+            ),
+          )
+          return moved
         }),
       )
       const detail = `Moved ${target} to ${destination}: the ${place.reach}.`

@@ -44,8 +44,11 @@ same bytes changes nothing. Its top level runs once per version; setup runs
 again on each new profile. An edit that breaks an extension that ran (it does
 not build or import, its setup fails, it fails validation, or a process
 Resource fails to build) keeps the last good version running, and health
-reports the extension degraded with why the new version failed. Deleting the
-file or disabling the id removes the extension; nothing is kept after that.
+reports the extension degraded with why the new version failed. A last good
+version whose tool, request, agent or driver id collides with another
+extension's does not run: the extension is failed, and the other one runs.
+Deleting the file or disabling the id removes the extension; nothing is kept
+after that.
 
 For the smallest complete product loop, see
 `examples/extensions/session-notes.ts`. It is still one file, but covers the
@@ -137,10 +140,12 @@ shipped `@gent/extension-admin` extension (`packages/extensions/src/extension-ad
 gives the agent `extensions.status`, `extensions.reload`, and four verbs that
 change what the next turn loads: `extensions.enable` and `extensions.disable`
 edit `disabledExtensions` in the user or project `config.json` (every other key
-stays; a file that does not decode is refused, not replaced),
-`extensions.add` copies a file or directory into a scope's extensions
-directory (an existing name is refused), and `extensions.remove` moves one to
-`extension-trash` in the data directory. Each of the four asks the user once
+stays; a file that is not JSON or that gent would not read as a config is
+refused, not replaced), `extensions.add` copies a file or directory into a
+scope's extensions directory (an existing name is refused), and
+`extensions.remove` moves one into a new directory of its own under
+`extension-trash` in the data directory, so no remove replaces another. Each
+of the four asks the user once
 through `Interaction.approve`, naming the scope, the path and who it reaches;
 a headless run declines. The `project` scope needs a project the user trusts,
 and `user` is the default only when the session runs from home. A verb's

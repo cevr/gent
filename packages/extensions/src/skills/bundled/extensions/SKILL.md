@@ -52,9 +52,9 @@ When an edit breaks an extension that loaded before, gent keeps the last good ve
 
 Each of these asks the user once. A headless run declines. The change reaches the next turn of every session in the scope, not the running turn.
 
-- `tools.extensions.disable({ id, scope })` and `tools.extensions.enable({ id, scope })` edit `disabledExtensions` in the scope's `config.json`.
+- `tools.extensions.disable({ id, scope })` and `tools.extensions.enable({ id, scope })` edit `disabledExtensions` in the scope's `config.json`. A config file gent cannot read is refused: the user fixes it first.
 - `tools.extensions.add({ path, scope })` copies a file or directory into the scope's extensions directory. A name that exists is refused: edit that extension in place.
-- `tools.extensions.remove({ id, scope })` moves the extension's file or directory to `extension-trash` in gent's data directory, where the user can get it back. A shipped extension cannot be removed; disable it.
+- `tools.extensions.remove({ id, scope })` moves the extension's file or directory into a new directory under `extension-trash` in gent's data directory, where the user can get it back. A shipped extension cannot be removed; disable it.
 - `tools.extensions.reload({ id })` sets the extensions up again over the same files. It does not ask. A file edit needs no reload.
 
 Name the `scope` (`user` or `project`) unless the session runs from the home directory. Pass `resume: "<what to do next>"` to queue that message as your next turn once the change is made. Use `resume` only to go on with the task the user gave you.
