@@ -1184,10 +1184,21 @@ interface TuiExtensionLoader {
   readonly load: Effect.Effect<TuiExtensionLoad, never, ClientRuntimeServices>
   /**
    * Whether a load would change something: a client file came or went, a
-   * file a build read has another stat, or the disabled list changed. Reads
-   * stats and configs only.
+   * file a build read has another stat, or the disabled list changed, at the
+   * place it reads now (a move to a session in another project finds other
+   * files or other lists). Reads stats and configs only.
    */
   readonly stale: Effect.Effect<boolean, never, ClientRuntimeServices>
+}
+
+/**
+ * The project a load reads and the extension ids it skips (builtins and
+ * discovered alike): the place of the session in view, read again on each
+ * load and each look.
+ */
+interface TuiExtensionPlace {
+  readonly projectDir: string
+  readonly disabled: ReadonlyArray<string>
 }
 
 /** Where a builtin sits in the live set: its id names it, as a path names a file. */
@@ -1199,14 +1210,14 @@ const builtinKey = (module: AnyExtensionClientModule) => `builtin:${module.id}`
  * says which lifetimes to end.
  *
  * @param opts.builtins — pre-imported builtin modules (static imports for bundler reachability)
- * @param opts.readDisabled — the extension ids to skip, read again on each load (builtins and
- *   discovered alike). A discovered extension is imported to read its id, but its setup is skipped.
+ * @param opts.readPlace — the project directory and the extension ids to skip, read again on
+ *   each load and each look (`TuiExtensionPlace`). A discovered extension is imported to read
+ *   its id, but its setup is skipped.
  */
 export const makeTuiExtensionLoader = (opts: {
   readonly builtins?: ReadonlyArray<AnyExtensionClientModule>
   readonly userDir: string
-  readonly projectDir: string
-  readonly readDisabled: Effect.Effect<ReadonlyArray<string>, never, ClientRuntimeServices>
+  readonly readPlace: Effect.Effect<TuiExtensionPlace, never, ClientRuntimeServices>
   /** Bound on each import and each setup; a test shortens it. */
   readonly loadTimeout?: Duration.Input
 }): Effect.Effect<TuiExtensionLoader, never, ClientRuntimeServices> =>
@@ -1228,8 +1239,12 @@ export const makeTuiExtensionLoader = (opts: {
     let lastDisabled: ReadonlySet<string> = new Set()
 
     const load = Effect.gen(function* () {
-      const disabled = new Set(yield* opts.readDisabled)
-      const discovered = yield* discoverTuiExtensions(opts)
+      const place = yield* opts.readPlace
+      const disabled = new Set(place.disabled)
+      const discovered = yield* discoverTuiExtensions({
+        userDir: opts.userDir,
+        projectDir: place.projectDir,
+      })
       // Results, failures included, keep discovery order whatever order the imports finish in.
       const files = yield* Effect.forEach(
         discovered,
@@ -1320,10 +1335,14 @@ export const makeTuiExtensionLoader = (opts: {
     }).pipe(permit.withPermits(1))
 
     const stale = Effect.gen(function* () {
-      const disabled = new Set(yield* opts.readDisabled)
+      const place = yield* opts.readPlace
+      const disabled = new Set(place.disabled)
       if (disabled.size !== lastDisabled.size || [...disabled].some((id) => !lastDisabled.has(id)))
         return true
-      const discovered = yield* discoverTuiExtensions(opts)
+      const discovered = yield* discoverTuiExtensions({
+        userDir: opts.userDir,
+        projectDir: place.projectDir,
+      })
       if (discovered.length !== seen.size) return true
       for (const entry of discovered) {
         if (!seen.has(entry.filePath)) return true
@@ -1352,7 +1371,10 @@ export const loadTuiExtensions = (opts: {
   Effect.gen(function* () {
     const loader = yield* makeTuiExtensionLoader({
       ...opts,
-      readDisabled: Effect.succeed(Option.getOrElse(Option.fromNullishOr(opts.disabled), () => [])),
+      readPlace: Effect.succeed({
+        projectDir: opts.projectDir,
+        disabled: Option.getOrElse(Option.fromNullishOr(opts.disabled), () => []),
+      }),
     })
     return (yield* loader.load).resolved
   })
@@ -1371,16 +1393,35 @@ interface ExtensionUiLoader {
 }
 
 /**
+ * The place of the session in view: its project's extension directory and
+ * the disabled lists of the configs that hold it, from its cwd as the server
+ * reads it (resolved, `ClientWorkspace.sessionCwd`). The pane turns an
+ * extension off in that session's configs, and the server loads that
+ * session's project, so the client reads the same ones.
+ */
+const sessionPlace = (home: string) =>
+  Effect.gen(function* () {
+    const { workspace } = yield* ClientContext
+    const path = yield* Path.Path
+    const cwd = path.resolve(yield* workspace.sessionCwd)
+    const disabled = yield* readDisabledExtensions({ home, cwd })
+    return {
+      projectDir: path.join(cwd, ".gent", "extensions"),
+      disabled: [...disabled],
+    } satisfies TuiExtensionPlace
+  })
+
+/**
  * The one boundary where extension loading leaves Effect: `ExtensionUIProvider`
- * awaits each load and each staleness check. The loader reads the disabled
- * list on each load and runs every setup on the provider's client runtime.
+ * awaits each load and each staleness check. The loader reads the place of
+ * the session in view on each load and each look (`sessionPlace`), and runs
+ * every setup on the provider's client runtime.
  */
 export const extensionUiLoader = (
   clientRuntime: ClientRuntime,
   params: {
     readonly builtins: ReadonlyArray<AnyExtensionClientModule>
     readonly home: string
-    readonly cwd: string
   },
 ): ExtensionUiLoader => {
   // Made on the first load: the bindings and the build prefix last as long as the runtime.
@@ -1391,10 +1432,7 @@ export const extensionUiLoader = (
       makeTuiExtensionLoader({
         builtins: params.builtins,
         userDir: `${params.home}/.gent/extensions`,
-        projectDir: `${params.cwd}/.gent/extensions`,
-        readDisabled: readDisabledExtensions({ home: params.home, cwd: params.cwd }).pipe(
-          Effect.map((disabled) => [...disabled]),
-        ),
+        readPlace: sessionPlace(params.home),
       }),
     )
     made = Option.some(making)

@@ -42,6 +42,7 @@ import {
 import {
   loadTuiExtensions as _loadTuiExtensions,
   type LoadedTuiExtension,
+  extensionUiLoader,
   makeTuiExtensionLoader,
   type TuiExtensionLoad,
   type ResolvedTuiExtensions,
@@ -1933,7 +1934,10 @@ const reloadFixture = Effect.gen(function* () {
   const disabled = yield* Ref.make<ReadonlyArray<string>>([])
   const loader = yield* inRuntime(
     runtime,
-    makeTuiExtensionLoader({ userDir, projectDir, readDisabled: Ref.get(disabled) }),
+    makeTuiExtensionLoader({
+      userDir,
+      readPlace: Effect.map(Ref.get(disabled), (ids) => ({ projectDir, disabled: ids })),
+    }),
   )
   return {
     file: (name: string) => path.join(userDir, name),
@@ -2221,5 +2225,66 @@ export default { id: "@test/renamed", setup: Effect.fail(new Error("setup refuse
           { id: "@test/renamed", reason: "setup failed: Error: setup refused" },
         ])
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  // The pane turns an extension off in the config of the session in view,
+  // and the server loads that session's project: the client loads the same
+  // project and reads the same configs, whichever directory it was launched in.
+  it.scopedLive("the client loads the project and the disabled list of the session in view", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "gent-client-place-" }),
+      )
+      const home = path.join(root, "home")
+      const launch = path.join(root, "launch")
+      const first = path.join(root, "first")
+      const second = path.join(root, "second")
+      const write = (file: string, text: string) =>
+        fs
+          .makeDirectory(path.dirname(file), { recursive: true })
+          .pipe(Effect.andThen(fs.writeFileString(file, text)))
+      yield* fs.makeDirectory(launch, { recursive: true })
+      yield* write(
+        path.join(home, ".gent/config.json"),
+        encodeTrustGrant({ trustedProjects: [launch, first, second] }),
+      )
+      yield* write(
+        path.join(home, ".gent/extensions/mine.client.ts"),
+        commandModule("@test/mine", "mine"),
+      )
+      yield* write(
+        path.join(first, ".gent/extensions/first.client.ts"),
+        commandModule("@test/first", "first"),
+      )
+      yield* write(
+        path.join(first, ".gent/config.json"),
+        encode({ disabledExtensions: ["@test/mine"] }),
+      )
+      yield* write(
+        path.join(second, ".gent/extensions/second.client.ts"),
+        commandModule("@test/second", "second"),
+      )
+      const inView = yield* Ref.make(first)
+      const runtime = makeClientExtensionRuntime({
+        transport: makeUnreachableTransport(),
+        workspace: { cwd: launch, home, sessionCwd: Ref.get(inView) },
+      })
+      yield* Effect.addFinalizer(() => Effect.promise(() => runtime.dispose()))
+      const loader = extensionUiLoader(runtime, { builtins: [], home })
+      const load = Effect.promise(() => loader.load()).pipe(
+        Effect.tap((loaded) => Effect.promise(() => loaded.retire())),
+        Effect.map((loaded) => commandsOf(loaded.resolved).map((entry) => entry.id)),
+      )
+      const stale = Effect.promise(() => loader.stale())
+
+      expect(yield* load).toEqual(["first"])
+      expect(yield* stale).toBe(false)
+      yield* Ref.set(inView, second)
+      expect(yield* stale).toBe(true)
+      expect(yield* load).toEqual(["mine", "second"])
+      expect(yield* stale).toBe(false)
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
   )
 })

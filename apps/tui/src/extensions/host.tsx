@@ -447,7 +447,6 @@ export function ExtensionUIProvider(props: {
   const extensions = extensionUiLoader(clientRuntime, {
     builtins: props.builtins ?? builtinClientModules,
     home: workspace.home,
-    cwd: workspace.cwd,
   })
   function reloadExtensions(): Promise<void> {
     return extensions
@@ -483,6 +482,17 @@ export function ExtensionUIProvider(props: {
     if (envelope.event._tag === "TurnCompleted" && untrack(loaded)) reloadWhenStale()
   })
   onCleanup(unsubscribeTurns)
+  // The loader reads the place of the session in view: a move to a session
+  // in another directory is a look too, as its project and configs may differ.
+  createEffect(
+    on(
+      () => client.pathPlace().cwd,
+      () => {
+        if (untrack(loaded)) reloadWhenStale()
+      },
+      { defer: true },
+    ),
+  )
 
   // The contributed rows belong to the session, not to its name: a move to
   // another session clears them, a rename leaves the list up.

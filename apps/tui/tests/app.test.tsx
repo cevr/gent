@@ -6899,6 +6899,71 @@ export default defineClientExtension("@test/added", {
       expect(mounts).toBe(1)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
+  // The pane turns an extension off in the configs of the session in view,
+  // and the server loads that session's project: a move to a session rooted
+  // in another project loads that project's client files, with no turn.
+  it.scopedLive("a move to a session in another project loads that project's client files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "gent-session-place-" }),
+      )
+      const launch = `${root}/launch`
+      const project = `${root}/project`
+      yield* fs.makeDirectory(launch, { recursive: true })
+      yield* fs.makeDirectory(`${project}/.gent/extensions`, { recursive: true })
+      yield* fs.writeFileString(
+        `${project}/.gent/extensions/there.client.ts`,
+        `import { Effect } from "effect"
+import { clientCommandContribution, defineClientExtension } from "@gent/tui/extensions"
+export default defineClientExtension("@test/there", {
+  setup: Effect.succeed(clientCommandContribution({ id: "there", title: "there", onSelect: () => {} })),
+})
+`,
+      )
+      const there = SessionId.make("session-place-there")
+      let held = Option.none<{
+        readonly ext: ReturnType<typeof useExtensionUI>
+        readonly home: string
+      }>()
+      const Probe = () => {
+        held = Option.some({ ext: useExtensionUI(), home: useWorkspace().home })
+        return <box />
+      }
+      const { client } = yield* mountClient({
+        cwd: launch,
+        client: createMockClient({
+          session: {
+            get: (input: { readonly sessionId: SessionId }) =>
+              Effect.succeed({
+                ...sessionA,
+                id: input.sessionId,
+                cwd: Option.getOrElse(
+                  Option.as(
+                    Option.liftPredicate(input.sessionId, (id) => id === there),
+                    project,
+                  ),
+                  () => launch,
+                ),
+              }),
+          },
+        }),
+        initialSession: sessionNamed("session-place-here", "branch-place-here", "Here"),
+        view: () => <Probe />,
+      })
+      const { ext, home } = yield* Effect.fromOption(held)
+      yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
+      const grant = yield* Schema.encodeEffect(
+        Schema.fromJsonString(Schema.Struct({ trustedProjects: Schema.Array(Schema.String) })),
+      )({ trustedProjects: [launch, project] })
+      yield* fs.writeFileString(`${home}/.gent/config.json`, grant)
+      yield* waitUntil(() => ext.loaded(), "the first load")
+      const commandIds = () => ext.commands().map((command) => command.id)
+      expect(commandIds()).not.toContain("there")
+      client.switchSession(there, BranchId.make("branch-place-there"), "There")
+      yield* waitUntil(() => commandIds().includes("there"), "the project of the session in view")
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
   it.scopedLive("a turn's end in the session in view reads extension health again", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-health-turn")
