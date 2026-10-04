@@ -145,6 +145,42 @@ describe("terminal handover", () => {
         expect(heard).toEqual([...HELD])
       }).pipe(Effect.scoped, Effect.timeout("8 seconds"), Effect.provide(BunServices.layer)),
   )
+
+  it.live("a ctrl+c or ctrl+\\ that arrives as the program ends still passes gent by", () =>
+    Effect.gen(function* () {
+      const heard: Array<string> = []
+      const gent = (signal: string) => heard.push(signal)
+      // The renderer takes its own ctrl+\ listener off when it suspends and
+      // puts it back when it resumes, as OpenTUI's exit listener does.
+      const renderer = (signal: string) => heard.push(`renderer ${signal}`)
+      const handover = makeHandover({
+        suspend: () => process.removeListener("SIGQUIT", renderer),
+        resume: () => process.on("SIGQUIT", renderer),
+      })
+      yield* Effect.acquireRelease(
+        Effect.sync(() => process.on("SIGQUIT", renderer)),
+        () => Effect.sync(() => process.removeListener("SIGQUIT", renderer)),
+      )
+      yield* Effect.acquireRelease(
+        Effect.sync(() => HELD.forEach((signal) => process.on(signal, gent))),
+        () => Effect.sync(() => HELD.forEach((signal) => process.removeListener(signal, gent))),
+      )
+      // The program signals gent and ends while gent is busy (a synchronous
+      // run), as the terminal signals gent and a program the reader stops:
+      // gent has the signals, and their listeners run only after the
+      // program's end is seen. (The test's own group is the test runner's.)
+      yield* handover(
+        Effect.sync(() =>
+          // oxlint-disable-next-line effect/noGlobals -- only a synchronous run keeps gent busy until the program has ended
+          Bun.spawnSync(["sh", "-c", "kill -INT $PPID; kill -QUIT $PPID"]),
+        ),
+      )
+      // A signal raised after the terminal is back reaches gent, and runs
+      // after any signal that came before it.
+      yield* Effect.forEach(HELD, raise, { discard: true })
+      expect(heard.sort()).toEqual(["SIGINT", "SIGQUIT", "renderer SIGQUIT"])
+    }).pipe(Effect.scoped, Effect.timeout("8 seconds"), Effect.provide(BunServices.layer)),
+  )
 })
 
 /** The signals a terminal's keys send its foreground group: ctrl+c and ctrl+\. */

@@ -1,5 +1,6 @@
 import {
   Context,
+  Duration,
   Effect,
   FileSystem,
   Layer,
@@ -104,11 +105,44 @@ export type Handover = <A, E, R>(
  */
 const TERMINAL_SIGNALS = ["SIGINT", "SIGQUIT"] as const
 
+/** How long the handover waits for its own signal before it gives the listeners back regardless. */
+const SIGNAL_DRAIN_BOUND = Duration.seconds(1)
+
+/**
+ * The signal that marks the end of the terminal signals' turn. Its default
+ * is to be ignored, and nothing in gent listens for it, so a mark that comes
+ * late or without a listener does nothing.
+ */
+const DRAIN_MARK = "SIGURG"
+
+/**
+ * Wait until the listeners of every terminal signal the process got before
+ * now have run. The process takes a signal at once but runs its listeners
+ * later, in the order the signals came, so a ctrl+c the program ended on may
+ * still wait when the program's end is seen. The mark the process sends
+ * itself runs after those; its arrival at a listener of its own marks them
+ * as run. (A mark of the same signal would not: its listener would hear the
+ * waiting signal first, and the mark would reach gent.)
+ */
+const drainTerminalSignals = Effect.callback<void>((resume) => {
+  const heard = () => {
+    process.removeListener(DRAIN_MARK, heard)
+    resume(Effect.void)
+  }
+  process.on(DRAIN_MARK, heard)
+  // oxlint-disable-next-line effect/noGlobals -- the handover signals its own process, as no platform service can
+  process.kill(process.pid, DRAIN_MARK)
+  // On the bound: the listener comes off unheard.
+  return Effect.sync(() => process.removeListener(DRAIN_MARK, heard))
+}).pipe(Effect.timeoutOption(SIGNAL_DRAIN_BOUND), Effect.asVoid)
+
 /**
  * Take the process's listeners of the terminal signals off until `effect`
  * ends, however it ends, and let the signals pass meanwhile. The passing
  * listener goes on before the others come off: a signal with no listener
- * would end gent.
+ * would end gent. It comes off only after every signal that came while
+ * `effect` ran has passed it (`drainTerminalSignals`): a ctrl+c the program
+ * ended on never reaches gent late.
  */
 const passTerminalSignals = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.acquireUseRelease(
@@ -123,7 +157,8 @@ const passTerminalSignals = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     }),
     () => effect,
     (held) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        yield* drainTerminalSignals
         for (const { signal, listeners, pass } of held) {
           for (const listener of listeners) process.on(signal, listener)
           process.removeListener(signal, pass)
@@ -146,6 +181,11 @@ const inForeground = (command: ChildProcess.Command): ChildProcess.Command => {
  * One terminal, one holder: a handover asked for while another runs waits
  * for its resume, so two programs never draw at once and the renderer never
  * resumes under a program still running.
+ *
+ * The signals pass inside the suspended span: the renderer takes its own
+ * listeners off as it suspends and puts them back as it resumes (OpenTUI's
+ * exit listener on ctrl+\), so gent holds only its own, and every signal the
+ * program's span got has passed before the renderer listens again.
  */
 export const makeHandover = (terminal: {
   readonly suspend: () => void
@@ -153,15 +193,15 @@ export const makeHandover = (terminal: {
 }): Handover => {
   const holder = Semaphore.makeUnsafe(1)
   return (effect) =>
-    passTerminalSignals(
-      Effect.acquireUseRelease(
-        Effect.sync(terminal.suspend),
-        () =>
+    Effect.acquireUseRelease(
+      Effect.sync(terminal.suspend),
+      () =>
+        passTerminalSignals(
           Effect.updateService(effect, ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
             ChildProcessSpawner.make((command) => spawner.spawn(inForeground(command))),
           ),
-        () => Effect.sync(terminal.resume),
-      ),
+        ),
+      () => Effect.sync(terminal.resume),
     ).pipe(holder.withPermits(1))
 }
 
