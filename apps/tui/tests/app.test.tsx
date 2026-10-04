@@ -46,6 +46,7 @@ import {
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
   type QueueEntryInfo,
+  QueueSnapshot,
   userMessageIdForRequest,
 } from "@gent/core/protocol"
 import {
@@ -1284,7 +1285,7 @@ describe("App session view and fatal screen", () => {
     widgets: ["widget"],
     statusLabels: ["status label"],
     noticeRows: ["notice row"],
-    messageRenderers: ["message renderer", "message prompt"],
+    messageRenderers: ["message renderer", "message prompt", "message queue label"],
     renderers: ["tool renderer"],
     interactionRenderers: ["interaction renderer"],
     // A command runs on a key, outside the draw.
@@ -1314,6 +1315,8 @@ describe("App session view and fatal screen", () => {
     "autocomplete open": [],
     "message renderer": [breaksUserMessage],
     "message prompt": [breaksUserMessage],
+    // The queue label draws from the runtime's queue (`breaksRuntime`), not from an event.
+    "message queue label": [],
     "tool renderer": [
       AgentEvent.cases.MessageReceived.make({
         message: StoredMessage.cases.regular.make({
@@ -1356,9 +1359,28 @@ describe("App session view and fatal screen", () => {
         return Option.some("breaks_tool")
       case "interaction renderer":
         return Option.some("plain breaks question")
+      case "message queue label":
+        return Option.some("[steer 1] plain breaks queued")
       default:
         return Option.none<string>()
     }
+  }
+  // A turn runs with one steer waiting, of the custom type the queue label names.
+  const breaksRuntime = (surface: keyof typeof breaksEvents) => {
+    if (surface !== "message queue label") return Stream.never
+    const queue = new QueueSnapshot({
+      steering: [
+        {
+          _tag: "Steering",
+          id: MessageId.make("breaks-queued"),
+          content: "plain breaks queued",
+          createdAt: 1,
+          metadata: { customType: "breaks-row" },
+        },
+      ],
+      followUp: [],
+    })
+    return Stream.concat(Stream.make({ _tag: "Running" satisfies "Running", queue }), Stream.never)
   }
   for (const surface of Object.values(renderThrowCoverage).flat()) {
     it.scopedLive(
@@ -1411,6 +1433,13 @@ describe("App session view and fatal screen", () => {
                     return content
                   },
                 })
+              case "message queue label":
+                return messageRendererContribution("breaks-row", () => <text>breaks-row</text>, {
+                  queueLabel: () => {
+                    if (broken()) explode()
+                    return "breaks-drawn"
+                  },
+                })
               case "tool renderer":
                 return rendererContribution(["breaks_tool"], Breaks)
               case "interaction renderer":
@@ -1455,6 +1484,7 @@ describe("App session view and fatal screen", () => {
             initialSession: breaksSession,
             client: {
               session: {
+                watchRuntime: () => breaksRuntime(surface),
                 events: () =>
                   Stream.concat(
                     Stream.make(
@@ -5516,7 +5546,11 @@ describe("TUI renderer surfaces", () => {
         },
       ]
       const setup = yield* renderScoped(() => (
-        <QueueWidget queuedMessages={queuedMessages} steerMessages={steerMessages} />
+        <QueueWidget
+          queuedMessages={queuedMessages}
+          steerMessages={steerMessages}
+          messageRenderers={new Map()}
+        />
       ))
       const frame = renderFrame(setup)
       expect(frame).toContain("[steer 1] switch to secondary")

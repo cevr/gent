@@ -89,6 +89,12 @@ export function dropLastGrapheme(value: string): string {
   return value.slice(0, last)
 }
 
+/** The text less its first character as the reader sees it: one grapheme. */
+export function dropFirstGrapheme(value: string): string {
+  for (const { segment } of graphemes.segment(value)) return value.slice(segment.length)
+  return value
+}
+
 /** How many characters the reader sees: graphemes, not code units. */
 export const graphemeCount = (value: string): number => Array.from(graphemes.segment(value)).length
 

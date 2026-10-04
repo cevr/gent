@@ -712,8 +712,20 @@ const MessageRendererContribution = Schema.Struct({
    * reader's last prompt.
    */
   prompt: Schema.optional(contributed<(content: string) => string>()),
+  /**
+   * The one line the queue widget shows for a waiting message of this type
+   * (a background answer as `↳ answer · <question>`). Without it the widget
+   * shows the message's text; a restore takes the text either way.
+   */
+  queueLabel: Schema.optional(contributed<(message: QueuedMessage) => string>()),
 })
 type MessageRendererContribution = typeof MessageRendererContribution.Type
+
+/** A waiting message as a `queueLabel` reads it: its text and its metadata details. */
+export interface QueuedMessage {
+  readonly content: string
+  readonly details: unknown
+}
 
 /** A message row renderer as the host resolves it, keyed by its custom type. */
 export type MessageRendererEntry = Omit<MessageRendererContribution, "customType">
@@ -965,7 +977,10 @@ export const rendererContribution = (
 export const messageRendererContribution = (
   customType: string,
   component: MessageRenderer,
-  options: { readonly prompt?: (content: string) => string } = {},
+  options: {
+    readonly prompt?: (content: string) => string
+    readonly queueLabel?: (message: QueuedMessage) => string
+  } = {},
 ): ClientContributions => ({ messageRenderers: [{ customType, component, ...options }] })
 
 export const widgetContribution = (opts: {

@@ -2,7 +2,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
 import { createRoot, createSignal } from "solid-js"
-import type { OpenQuestionType } from "@gent/extensions/client"
+import { type OpenQuestionType, QUESTION_ANSWER_TYPE } from "@gent/extensions/client"
+import { MessageId } from "@gent/core/protocol"
+import { QueueWidget } from "../../src/app"
 import interactionToolsExtension, {
   answeredLabel,
   QuestionAnswerRows,
@@ -138,10 +140,11 @@ describe("QuestionPane", () => {
     const [questions, setQuestions] = createRoot(() =>
       createSignal<ReadonlyArray<OpenQuestionType>>([cache, database]),
     )
+    const [open, setOpen] = createRoot(() => createSignal(true))
     const setup = yield* renderScoped(
       () => (
         <QuestionPane
-          open={true}
+          open={open()}
           questions={questions}
           now={() => 1_120_000}
           onAnswer={(question, answer) => answered.push(`${question.id}=${answer}`)}
@@ -152,7 +155,7 @@ describe("QuestionPane", () => {
       { width: 120, height: 40 },
     )
     yield* waitForFrame(setup, (frame) => frame.includes("Question 1/2"), "the pane")
-    return { setup, answered, dismissed, closed: () => closed, setQuestions }
+    return { setup, answered, dismissed, closed: () => closed, setQuestions, setOpen }
   })
 
   it.scopedLive("enter answers with the assumed choice the cursor starts on", () =>
@@ -192,6 +195,44 @@ describe("QuestionPane", () => {
       expect(dismissed).toEqual(["call-1:0"])
       expect(answered).toEqual([])
     }).pipe(Effect.timeout("6 seconds")),
+  )
+
+  it.scopedLive(
+    "an armed dismiss stays with its question: a new question or a reopen starts unarmed",
+    () =>
+      Effect.gen(function* () {
+        const { setup, dismissed, setQuestions, setOpen } = yield* renderPane
+        setup.mockInput.pressKey("x", { ctrl: true })
+        yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again to dismiss"), "armed")
+        // Another client answers the first question: the second takes the pane.
+        setQuestions([database])
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("Question 1/1 · db"),
+          "the next question",
+        )
+        expect(renderFrame(setup)).not.toContain("ctrl+x again")
+        setup.mockInput.pressKey("x", { ctrl: true })
+        yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again to dismiss"), "re-armed")
+        expect(dismissed).toEqual([])
+        // A closed pane forgets the arm.
+        setOpen(false)
+        yield* waitForFrame(setup, (frame) => !frame.includes("Question 1/1"), "the pane closed")
+        setOpen(true)
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("Question 1/1 · db"),
+          "the pane reopened",
+        )
+        expect(renderFrame(setup)).not.toContain("ctrl+x again")
+        setup.mockInput.pressKey("x", { ctrl: true })
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("ctrl+x again to dismiss"),
+          "armed again",
+        )
+        expect(dismissed).toEqual([])
+      }).pipe(Effect.timeout("6 seconds")),
   )
 
   it.scopedLive("esc closes the pane and answers nothing; esc while armed only disarms", () =>
@@ -265,6 +306,55 @@ describe("QuestionAnswerRows", () => {
 })
 
 // ── extension wiring ────────────────────────────────────────────────────────
+
+describe("a waiting answer in the queue", () => {
+  it.scopedLive("shows as the question it answers, not as the answer text", () =>
+    Effect.gen(function* () {
+      const runtime = makeClientExtensionRuntime({
+        transport: { ...makeClientTestTransport(), client: createMockClient() },
+      })
+      const contributions = yield* runClientExtensionSetup(runtime, interactionToolsExtension)
+      const renderers = new Map(
+        (contributions.messageRenderers ?? []).map((entry) => [entry.customType, entry]),
+      )
+      const content = "Answer to your background question (asked …):\nQ: …\nA: Redis"
+      const setup = yield* renderScoped(
+        () => (
+          <QueueWidget
+            steerMessages={[
+              {
+                _tag: "Steering",
+                id: MessageId.make("answer-1"),
+                content,
+                createdAt: 0,
+                metadata: {
+                  customType: QUESTION_ANSWER_TYPE,
+                  details: {
+                    answers: [
+                      {
+                        id: cache.id,
+                        question: cache.question,
+                        assume: cache.assume,
+                        answer: "Redis",
+                      },
+                    ],
+                  },
+                },
+              },
+            ]}
+            queuedMessages={[]}
+            messageRenderers={renderers}
+          />
+        ),
+        { width: 120, height: 6 },
+      )
+      const frame = yield* waitForFrame(setup, (f) => f.includes("[steer 1]"), "the queue")
+      expect(frame).toContain(`┋ [steer 1] ↳ answer · ${cache.question}`)
+      expect(frame).not.toContain("Answer to your background question")
+      expect(frame).toContain("alt+up restore")
+    }).pipe(Effect.timeout("6 seconds")),
+  )
+})
 
 describe("/answer", () => {
   it.scopedLive("opens the pane, sends the answer, and brings a failed one back", () =>

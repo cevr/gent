@@ -60,7 +60,12 @@ import {
 } from "./session"
 import { ExtensionRenderBoundary, useExtensionUI } from "./extensions/host"
 import { Auth, providerLabel } from "./auth"
-import type { StatusLabelAnchor, StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js"
+import type {
+  MessageRendererEntry,
+  StatusLabelAnchor,
+  StatusLabelColor,
+  WidgetSlot,
+} from "./extensions/client-facets.js"
 
 // ── boot flow ───────────────────────────────────────────────────────────────
 
@@ -409,6 +414,8 @@ export function ConnectionWidget() {
 interface QueueWidgetProps {
   queuedMessages: readonly QueueEntryInfo[]
   steerMessages: readonly QueueEntryInfo[]
+  /** The message renderers, whose `queueLabel` names a waiting message of their type. */
+  messageRenderers: ReadonlyMap<string, MessageRendererEntry>
 }
 
 function summaryText(text: string): string {
@@ -416,6 +423,30 @@ function summaryText(text: string): string {
   const first = lines[0] ?? ""
   if (lines.length <= 1) return first
   return `${first} +${lines.length - 1} lines`
+}
+
+/**
+ * The line a waiting message shows: its type's `queueLabel` (a background
+ * answer as `↳ answer · <question>`), else the first line of its text.
+ */
+const queueEntryLine = (
+  entry: QueueEntryInfo,
+  renderers: ReadonlyMap<string, MessageRendererEntry>,
+): string => {
+  const metadata = Option.fromUndefinedOr(entry.metadata)
+  return metadata.pipe(
+    Option.flatMap((value) => Option.fromUndefinedOr(value.customType)),
+    Option.flatMap((type) => Option.fromUndefinedOr(renderers.get(type))),
+    Option.flatMap((renderer) => Option.fromUndefinedOr(renderer.queueLabel)),
+    Option.match({
+      onNone: () => summaryText(entry.content),
+      onSome: (label) =>
+        label({
+          content: entry.content,
+          details: Option.getOrUndefined(Option.map(metadata, (value) => value.details)),
+        }),
+    }),
+  )
 }
 
 export function QueueWidget(props: QueueWidgetProps) {
@@ -430,7 +461,10 @@ export function QueueWidget(props: QueueWidgetProps) {
           {(message, index) => (
             <text>
               <span style={{ fg: theme.textMuted }}>┋ [steer {index() + 1}]</span>
-              <span style={{ fg: theme.text }}> {summaryText(message.content)}</span>
+              <span style={{ fg: theme.text }}>
+                {" "}
+                {queueEntryLine(message, props.messageRenderers)}
+              </span>
             </text>
           )}
         </For>
@@ -438,7 +472,10 @@ export function QueueWidget(props: QueueWidgetProps) {
           {(message, index) => (
             <text>
               <span style={{ fg: theme.textMuted }}>┋ [queued {index() + 1}]</span>
-              <span style={{ fg: theme.text }}> {summaryText(message.content)}</span>
+              <span style={{ fg: theme.text }}>
+                {" "}
+                {queueEntryLine(message, props.messageRenderers)}
+              </span>
             </text>
           )}
         </For>
@@ -702,6 +739,7 @@ export function Session(props: SessionProps) {
           <QueueWidget
             queuedMessages={controller.queueState().followUp}
             steerMessages={controller.queueState().steering}
+            messageRenderers={ext.messageRenderers()}
           />
         </NativeTranscript>
 

@@ -10,7 +10,18 @@ import {
   useScopedKeyboard,
   useTerminalDimensions,
 } from "./terminal"
-import { keyHint, keyHintsLine, KeyHints, lineEdit, useInPickerFrame, usePickerBody } from "./ui"
+import {
+  CaretLine,
+  caretLineEdit,
+  caretWindow,
+  eraseKey,
+  keyHint,
+  keyHintsLine,
+  KeyHints,
+  useInPickerFrame,
+  usePickerBody,
+} from "./ui"
+import { textWidth } from "./bun-adapter"
 import type { InteractionRendererProps } from "./extensions/client-facets.js"
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "./workspace"
@@ -27,6 +38,8 @@ import { openExternalEditor, resolveEditor } from "./os"
  * The free-text row is a field the list reads through its keyboard scope, as
  * every docked field does (`typedKey`): typed text and a paste go to it from
  * any row, so the list works docked under a composer that keeps the focus.
+ * It keeps its own caret (`caretLineEdit`), and a line wider than the row
+ * scrolls so the caret stays in view (`caretWindow`).
  * In a `PickerFrame` the list fits the rows the frame gives it and leaves the
  * title and the key hints to the frame; out of one it sizes itself from the
  * terminal and draws its own hint row.
@@ -61,7 +74,9 @@ export function OptionList(props: OptionListProps): JSX.Element {
   const framed = useInPickerFrame()
 
   const [selected, setSelected] = createSignal<Set<string>>(new Set())
-  const [freeformText, setFreeformText] = createSignal("")
+  const [freeform, setFreeform] = createSignal<CaretLine>(CaretLine.empty)
+  const freeformText = () => freeform().text
+  const [freeformWidth, setFreeformWidth] = createSignal(dimensions().width)
   const [focusIndex, setFocusIndex] = createSignal(props.initialFocus ?? 0)
   const [documentHeight, setDocumentHeight] = createSignal(1)
   const [controlsChromeHeight, setControlsChromeHeight] = createSignal(0)
@@ -158,7 +173,7 @@ export function OptionList(props: OptionListProps): JSX.Element {
       // A paste is free text: it goes to the free-text row, on one line.
       paste: (text) => {
         focusFreeform()
-        setFreeformText((current) => current + pastedLine(text, " "))
+        setFreeform((line) => CaretLine.insert(line, pastedLine(text, " ")))
         return true
       },
     },
@@ -196,24 +211,31 @@ export function OptionList(props: OptionListProps): JSX.Element {
       submitAnswer()
       return true
     }
-    // Typed text is a free answer from any row; an erase key edits it.
-    const edit = lineEdit(e)
-    if (Option.isSome(edit)) {
-      setFreeformText(edit.value)
+    return freeformKey(e)
+  }
+
+  /**
+   * Typed text is a free answer from any row, and an erase key edits it at
+   * its caret. The caret keys work on the free-text row only.
+   */
+  const freeformKey = (e: ScopedKeyboardEvent): boolean => {
+    const edit = caretLineEdit(e)
+    if (Option.isSome(edit) && (isFreeformFocused() || Option.isSome(eraseKey(e)))) {
+      setFreeform(edit.value)
       return true
     }
     const typed = typedKey(e)
     if (Option.isNone(typed)) return false
     focusFreeform()
-    setFreeformText((current) => current + typed.value)
+    setFreeform((line) => CaretLine.insert(line, typed.value))
     return true
   }
 
   const submitAnswer = () => {
     const selections: string[] = [...selected()]
-    const freeform = freeformText().trim()
-    if (freeform.length > 0) {
-      selections.push(freeform)
+    const typedAnswer = freeformText().trim()
+    if (typedAnswer.length > 0) {
+      selections.push(typedAnswer)
     }
     if (selections.length === 0 && focusIndex() < options().length) {
       const option = Option.fromNullishOr(options()[focusIndex()])
@@ -229,6 +251,9 @@ export function OptionList(props: OptionListProps): JSX.Element {
   const isSelected = (label: string) => selected().has(label)
   const isFocused = (index: number) => focusIndex() === index
   const isFreeformFocused = () => focusIndex() === options().length
+  const freeformLabel = () => `${freeformPrefix()}Other: `
+  /** The free text that fits after the label, around the caret. */
+  const freeformShown = () => caretWindow(freeform(), freeformWidth() - textWidth(freeformLabel()))
   const optionMarker = (label: string): string => {
     if (isMultiple()) {
       if (isSelected(label)) return "[x] "
@@ -375,13 +400,16 @@ export function OptionList(props: OptionListProps): JSX.Element {
           flexShrink={0}
           onSizeChange={function () {
             setControlsChromeHeight(this.height)
+            setFreeformWidth(this.width)
           }}
         >
           <text wrapMode="none" marginTop={sectionSpacing()} style={{ fg: freeformColor() }}>
-            {freeformPrefix()}Other: <span style={{ fg: theme.text }}>{freeformText()}</span>
+            {freeformLabel()}
+            <span style={{ fg: theme.text }}>{freeformShown().before}</span>
             <Show when={isFreeformFocused()}>
               <span style={{ fg: theme.primary }}>│</span>
             </Show>
+            <span style={{ fg: theme.text }}>{freeformShown().after}</span>
           </text>
 
           <Show when={!framed}>

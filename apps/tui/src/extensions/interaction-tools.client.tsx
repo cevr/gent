@@ -28,6 +28,7 @@ import {
   OptionList,
   PickerFrame,
   PromptRenderer,
+  type QueuedMessage,
   sessionQuery,
   textWidth,
   TrayFrame,
@@ -242,7 +243,6 @@ export function QuestionPane(props: {
   readonly onDismiss: (question: OpenQuestionType) => void
   readonly onClose: () => void
 }) {
-  const [armed, setArmed] = createSignal(false)
   const current = () => Option.fromUndefinedOr(props.questions()[0])
   const title = (question: OpenQuestionType) =>
     [
@@ -253,17 +253,25 @@ export function QuestionPane(props: {
   return (
     <Show when={props.open && Option.getOrUndefined(current())}>
       {(question) => (
-        <PickerFrame
-          error={Option.none()}
-          title={title(question())}
-          keys={[KeyHints.move, KeyHints.submit, keyHint("ctrl+x", "dismiss"), KeyHints.close]}
-          detail={Option.liftPredicate(DISMISS_ARMED, armed)}
-        >
-          {/* Keyed by the question: the next one starts on a fresh list. */}
-          <Show when={question().id} keyed>
-            {(_id) => {
-              const choices = questionChoices(question())
-              return (
+        // Keyed by the question: the next one starts on a fresh list, and an
+        // armed dismiss lives in one question's subtree, so it never carries
+        // over to the next question or past a close.
+        <Show when={question().id} keyed>
+          {(_id) => {
+            const [armed, setArmed] = createSignal(false)
+            const choices = questionChoices(question())
+            return (
+              <PickerFrame
+                error={Option.none()}
+                title={title(question())}
+                keys={[
+                  KeyHints.move,
+                  KeyHints.submit,
+                  keyHint("ctrl+x", "dismiss"),
+                  KeyHints.close,
+                ]}
+                detail={Option.liftPredicate(DISMISS_ARMED, armed)}
+              >
                 <OptionList
                   question={question().question}
                   options={choices.options}
@@ -288,10 +296,10 @@ export function QuestionPane(props: {
                   onSubmit={(selections) => props.onAnswer(question(), selections.join("; "))}
                   onCancel={props.onClose}
                 />
-              )
-            }}
-          </Show>
-        </PickerFrame>
+              </PickerFrame>
+            )
+          }}
+        </Show>
       )}
     </Show>
   )
@@ -315,6 +323,20 @@ export const answeredLabel = (question: string, answer: string, width: number): 
   if (room >= QUESTION_MIN_COLUMNS) return `${ANSWERED}${truncate(question, room)}${tail}`
   return truncate(`${ANSWERED}${truncate(question, QUESTION_MIN_COLUMNS)}${tail}`, width)
 }
+
+/**
+ * A waiting answer in the queue widget: `↳ answer · <question>`, the
+ * questions it answers and not the answer text the model reads.
+ */
+const questionQueueLabel = (message: QueuedMessage): string =>
+  Option.match(decodeAnswerDetails(message.details), {
+    onNone: () => "↳ answer",
+    onSome: ({ answers }) => {
+      const questions = answers.map((entry) => entry.question)
+      if (questions.length === 1) return `↳ answer · ${questions.join("")}`
+      return [`↳ ${questions.length} answers`, ...questions].join(" · ")
+    },
+  })
 
 /** One collapsed row per answer: the question and what the user said. */
 export function QuestionAnswerRows(props: { readonly details: unknown }) {
@@ -418,9 +440,11 @@ export default defineClientExtension(INTERACTION_TOOLS_EXTENSION_ID, {
         onSelect: show,
         onSlash: show,
       }),
-      messageRendererContribution(QUESTION_ANSWER_TYPE, (props) => (
-        <QuestionAnswerRows details={props.details} />
-      )),
+      messageRendererContribution(
+        QUESTION_ANSWER_TYPE,
+        (props) => <QuestionAnswerRows details={props.details} />,
+        { queueLabel: questionQueueLabel },
+      ),
       widgetContribution({
         id: "questions.tray",
         slot: "below-input",
