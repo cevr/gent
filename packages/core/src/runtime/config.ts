@@ -152,8 +152,9 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    * before `tools` keeps its meaning: `modelId` is `model`, both tool lists
    * are `tools`, and one list alone edits the tools the entry lands on (a
    * deny list takes ids away from them). A key the entry does not name fails
-   * the file, naming the agent and the key (`AuthoredAgentPatch`); gent
-   * writes an entry an older gent reads (`StoredAgentPatch`).
+   * the file, naming the agent and the key (`AuthoredAgentPatch`). A config
+   * write leaves each entry as the user wrote it: no key is added for an
+   * older gent, as a stored row gets.
    */
   agents: Schema.optional(Schema.Record(AgentName, AuthoredAgentPatch)),
   /**
@@ -264,7 +265,8 @@ const mergeEntries = (raw: RawConfig, before: RawConfig, after: RawConfig): RawC
 /**
  * The record-of-struct fields a config write changes. Only `driverOverrides`
  * has a writer; a field no write changes never reaches the merge, because
- * `mergeChangedFields` skips an unchanged field. A new writer for another
+ * `mergeChangedFields` skips an unchanged field, so a write keeps each
+ * `agents` entry as the user wrote it. A new writer for another
  * record-of-struct field (`agents`) adds it here.
  */
 const ENTRY_FIELDS: ReadonlySet<string> = new Set(["driverOverrides"])

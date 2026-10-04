@@ -57,7 +57,7 @@ export {
   AgentName,
   ReasoningEffort,
   type RunSpec,
-  StoredRunOverrides,
+  RunOverrides,
 } from "../domain/agent.js"
 export {
   type GentExtension,

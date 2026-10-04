@@ -53,6 +53,7 @@ import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
  */
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("user configuration", () => {
   describe("in-memory reads and writes", () => {
@@ -574,6 +575,42 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    // A config file is the user's: a write leaves each agent entry as the
+    // user wrote it, with no key the stored-row codec adds for older readers.
+    it.scopedLive("a driver write leaves each agent entry as the user wrote it", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const agents = {
+          painter: {
+            model: "anthropic/claude-sonnet-4-6",
+            tools: ["film.*", "!film.check", "read"],
+            paths: ["films", { path: "skills", access: "read" }],
+          },
+          reviewer: { tools: ["read", "grep"] },
+          main: { deniedTools: ["bash"], modelId: "openai/gpt-5" },
+        }
+        const agentsText = (text: string) =>
+          Schema.decodeEffect(Schema.fromJsonString(Schema.Struct({ agents: Schema.Unknown })))(
+            text,
+          ).pipe(Effect.map((config) => encodeJson(config.agents)))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* fs.writeFileString(userConfigPath, encodeJson({ agents }))
+          yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
+          const written = yield* fs.readFileString(userConfigPath)
+          expect(yield* agentsText(written)).toBe(encodeJson(agents))
+          yield* cfg.clearDriverOverride(AgentName.make("main"))
+          expect(yield* agentsText(yield* fs.readFileString(userConfigPath))).toBe(
+            encodeJson(agents),
+          )
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive("a driver write keeps unknown keys inside the overrides it touches", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -943,6 +980,22 @@ describe("user configuration", () => {
         expect(roster.get(AgentName.make("main"))?.model).toBe(ModelId.make("openai/gpt-5"))
         expect(held("main")).toEqual(["film.look", "read"])
         expect(held("painter")).toEqual(["film.look", "read"])
+      }),
+    )
+
+    // A config file is the user's, not a row an older gent reads: an entry
+    // encodes with the keys it decoded from, never the ones a stored row adds.
+    it.live("a config agent entry encodes back with the keys it was written with", () =>
+      Effect.gen(function* () {
+        const ConfigJson = Schema.fromJsonString(UserConfig)
+        const agents = {
+          painter: { model: "anthropic/claude-sonnet-4-6", tools: ["film.*", "!film.check"] },
+          main: { deniedTools: ["bash"] },
+          helper: { allowedTools: ["read"] },
+        }
+        const config = yield* Schema.decodeEffect(ConfigJson)(encodeJson({ agents }))
+        const encoded = yield* Schema.encodeEffect(ConfigJson)(config)
+        expect(parseJson(encoded)).toEqual({ agents })
       }),
     )
 

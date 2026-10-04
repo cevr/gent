@@ -1,4 +1,4 @@
-import { Effect, Option, Predicate, Schema, SchemaGetter, Struct } from "effect"
+import { Effect, Option, Predicate, Schema, SchemaGetter, SchemaIssue, Struct } from "effect"
 import { omitUndefined } from "./guards.js"
 import { SessionId } from "./ids.js"
 
@@ -482,8 +482,10 @@ type AgentDefinitionInput = Schema.Struct.MakeIn<typeof agentDefinitionFields>
  * AgentDefinition.make(...))`, and JSON in a config file's `agents` key, an
  * `AgentPatch` by name that creates an agent or reshapes a registered one
  * (`resolveAgentRoster`). Per-run overrides are a part of the same patch, on
- * `RunSpec`. Stored rows and the wire carry it through `StoredAgentPatch`,
- * `StoredRunOverrides` and `StoredAgentDefinition`, which an older gent reads.
+ * `RunSpec`. A config entry keeps the keys its author wrote
+ * (`AuthoredAgentPatch`); stored rows and the wire also carry the old keys,
+ * for an older gent (`StoredRunOverrides`, `StoredAgentDefinition`). A
+ * `delegate.start` call sends the new keys only (`RunOverrides`).
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")(
   agentDefinitionFields,
@@ -682,42 +684,44 @@ const writeStoredPatch = (patch: StoredAgentPatch): StoredPatchFields => {
   const { legacyTools, ...fields } = patch
   const lists = Option.match(Option.fromUndefinedOr(fields.tools), {
     onSome: legacyToolLists,
-    onNone: (): LegacyToolLists =>
-      Option.match(Option.fromUndefinedOr(legacyTools), {
-        onNone: (): LegacyToolLists => ({}),
-        onSome: (edit) =>
-          LegacyToolEdit.match(edit, {
-            Deny: ({ denied }): LegacyToolLists => ({ deniedTools: denied }),
-            // The previous reader keeps the inherited denials of an allow
-            // list alone; the edit's own denials leave the list.
-            Allow: ({ allowed, denied }): LegacyToolLists => ({
-              allowedTools: allowed.filter((id) => !denied.includes(id)),
-            }),
-          }),
-      }),
+    onNone: () => editLists(Option.fromUndefinedOr(legacyTools)),
   })
   return omitUndefined({ ...fields, modelId: fields.model, ...lists })
 }
 
+/** An old edit as the list it was read from. */
+const editLists = (edit: Option.Option<LegacyToolEdit>): LegacyToolLists =>
+  Option.match(edit, {
+    onNone: (): LegacyToolLists => ({}),
+    onSome: (some) =>
+      LegacyToolEdit.match(some, {
+        Deny: ({ denied }): LegacyToolLists => ({ deniedTools: denied }),
+        // The previous reader keeps the inherited denials of an allow
+        // list alone; the edit's own denials leave the list.
+        Allow: ({ allowed, denied }): LegacyToolLists => ({
+          allowedTools: allowed.filter((id) => !denied.includes(id)),
+        }),
+      }),
+  })
+
 /**
- * An agent patch as config files and stored rows hold it (see
- * `readStoredPatch`, `writeStoredPatch`). It reads any key it does not name
- * as absent: a reader keeps rows a newer gent wrote.
+ * Write a config entry as its author wrote it: the new keys, and an old list
+ * only where the entry held one. A config file is the user's, not a row an
+ * older gent reads, so it gets none of the keys `writeStoredPatch` adds.
  */
-export const StoredAgentPatch = StoredPatchFields.pipe(
-  Schema.decodeTo(Schema.toType(PatchFields), {
-    decode: SchemaGetter.transform(readStoredPatch),
-    encode: SchemaGetter.transform(writeStoredPatch),
-  }),
-)
+const writeAuthoredPatch = (patch: StoredAgentPatch): StoredPatchFields => {
+  const { legacyTools, ...fields } = patch
+  return omitUndefined({ ...fields, ...editLists(Option.fromUndefinedOr(legacyTools)) })
+}
 
 /** Agent field names a config entry may write: the patch fields and the old keys. */
 const authoredKeys: ReadonlySet<string> = new Set(Object.keys(StoredPatchFields.fields))
 
 /**
- * A config `agents` entry: a stored patch that refuses a key it does not
- * name, since a misspelled field would leave an agent with every tool. The
- * error names the entry and the key.
+ * A config `agents` entry: read as a stored patch, old keys included, but a
+ * key it does not name fails, since a misspelled field would leave an agent
+ * with every tool. The error names the entry and the key. It writes back
+ * the keys its author used (`writeAuthoredPatch`).
  */
 export const AuthoredAgentPatch = Schema.StructWithRest(StoredPatchFields, [
   Schema.Record(
@@ -727,7 +731,7 @@ export const AuthoredAgentPatch = Schema.StructWithRest(StoredPatchFields, [
 ]).pipe(
   Schema.decodeTo(Schema.toType(PatchFields), {
     decode: SchemaGetter.transform(readStoredPatch),
-    encode: SchemaGetter.transform(writeStoredPatch),
+    encode: SchemaGetter.transform(writeAuthoredPatch),
   }),
 )
 
@@ -744,11 +748,12 @@ const RUN_OVERRIDE_KEYS = [
 ] as const
 
 /**
- * A run's overrides as `RunSpec` stores them and a `delegate.start` call
- * sends them: the run fields of `StoredAgentPatch`, through the same reader
- * and writer, so an old row or call keeps its meaning.
+ * A run's overrides as `RunSpec` stores them (`sessions.admission_json`):
+ * the run fields of a stored patch, through `readStoredPatch` and
+ * `writeStoredPatch`, so an old row keeps its meaning and an older gent
+ * reads a new one. A caller writes them as `RunOverrides`.
  */
-export const StoredRunOverrides = StoredPatchFields.mapFields(
+const StoredRunOverrides = StoredPatchFields.mapFields(
   Struct.pick([...RUN_OVERRIDE_KEYS, "modelId", "allowedTools", "deniedTools"] as const),
 ).pipe(
   Schema.decodeTo(
@@ -760,6 +765,57 @@ export const StoredRunOverrides = StoredPatchFields.mapFields(
       encode: SchemaGetter.transform(writeStoredPatch),
     },
   ),
+)
+
+const RunFields = AgentPatch.mapFields(Struct.pick(RUN_OVERRIDE_KEYS))
+const runKeys: ReadonlySet<string> = new Set(RUN_OVERRIDE_KEYS)
+
+/** What replaced each old run key, for the failure that refuses it. */
+const replacedRunKeys = new Map([
+  ["modelId", "model"],
+  ["allowedTools", 'tools, ordered patterns such as ["read", "grep"]'],
+  ["deniedTools", 'tools, ordered patterns such as ["*", "!bash"]'],
+])
+
+/** The run fields, and any other key, kept for the decode to refuse. */
+const RunOverridesInput = Schema.StructWithRest(RunFields, [
+  Schema.Record(
+    Schema.String.check(Schema.makeFilter((key: string) => !runKeys.has(key))),
+    Schema.Unknown,
+  ),
+])
+
+/** One line for each key of `input` that is not a run field. */
+const refusedRunKeys = (input: typeof RunOverridesInput.Type): ReadonlyArray<string> =>
+  Object.keys(input)
+    .filter((key) => !runKeys.has(key))
+    .map((key) =>
+      Option.match(Option.fromUndefinedOr(replacedRunKeys.get(key)), {
+        onSome: (replacement) => `${key} is gone: use ${replacement}`,
+        onNone: () => `${key} is not a run override`,
+      }),
+    )
+
+/**
+ * A run's overrides as a caller writes them (`delegate.start`): the new keys
+ * only, so the schema a model reads names nothing else. A call with another
+ * key fails, and the failure names it and, for an old key (`modelId`,
+ * `allowedTools`, `deniedTools`), the key that replaced it. A dropped key
+ * could give the child more than the caller asked, so none is dropped. The
+ * refusal is in the decode, not in the encoded form: a model's call decodes
+ * its encoded form as it streams, and the tool runner reports the decode
+ * failure to the model. The run spec stores the result through
+ * `StoredRunOverrides`.
+ */
+export const RunOverrides = RunOverridesInput.pipe(
+  Schema.decodeTo(Schema.toType(RunFields), {
+    decode: SchemaGetter.transformEffect((input) => {
+      const refused = refusedRunKeys(input)
+      if (refused.length === 0) return Effect.succeed(input)
+      return Effect.fail(new SchemaIssue.InvalidValue({ message: refused.join("; ") }, input))
+    }),
+    encode: SchemaGetter.transform((overrides) => overrides),
+  }),
 )
 
 // ── agent resolution ────────────────────────────────────────────────────────
