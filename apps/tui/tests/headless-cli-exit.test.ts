@@ -363,4 +363,25 @@ describe("compiled binary", () => {
       }).pipe(Effect.timeout("18 seconds"), Effect.provide(BunServices.layer)),
     20000,
   )
+
+  // An install links `gent` from a bin directory into the version directory
+  // that holds the pair; the link's directory has no worker. The host starts
+  // the worker beside its real executable, so each version keeps its own.
+  it.scopedLive(
+    "started through a symlink, runs cells with the worker beside its real executable",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const linkDir = yield* makeTempDir
+        const link = path.join(linkDir, "gent")
+        yield* fs.symlink(yield* compiledBinary, link)
+        // The scripted model's `debug tools` turn runs its steps as cells.
+        const { exitCode, stdout, stderr } = yield* runCompiled(link, "debug tools")
+        expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" })
+        expect(stdout).toContain("[tool done: cell]")
+        expect(stdout).not.toContain("[tool error: cell]")
+      }).pipe(Effect.timeout("18 seconds"), Effect.provide(BunServices.layer)),
+    20000,
+  )
 })

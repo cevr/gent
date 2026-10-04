@@ -1254,7 +1254,11 @@ and worker path. Turbo caches core's `dist` output and both TUI binaries. The
 TUI task hashes its build script. Run the root build for dependency ordering.
 This is a packaged worker, not a daemon or a new session owner.
 The cell owns where its worker lives: `cellWorkerLaunch` in `cell.ts` selects it
-without opening it. The compiled host runs its sibling `gent-cell`. A source run
+without opening it. The compiled host runs the `gent-cell` beside its real
+executable: `GentPlatform.execPath` is the real path, resolved once as the
+process starts, so a host launched through an install's link finds its own
+version's worker, and a link switched to another version while it runs does
+not pair it with that version's worker. A source run
 executes this checkout's `src/cell-worker-boundary.ts` with the running Bun, so it
 never launches a stale built worker and needs no build first. The two are the
 `Compiled` and `Script` cases of `CellWorker`. A script worker starts with

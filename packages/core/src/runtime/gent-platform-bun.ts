@@ -13,6 +13,8 @@
  * API. Surrounding runtime code yields `GentPlatform` and stays portable.
  */
 
+// oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter resolves its own executable once, before any Effect runs
+import { realpathSync } from "node:fs"
 import * as os from "node:os"
 import { Effect, Layer, Option, Result, Schema } from "effect"
 import { causeMessage } from "../domain/guards.js"
@@ -39,6 +41,17 @@ const thisBuild: GentBuild = Result.try(() => __GENT_BUILD__).pipe(
     onNone: () => GentBuild.cases.Source.make({}),
     onSome: (fields) => GentBuild.cases.Compiled.make(fields),
   }),
+)
+
+/**
+ * The real path of the running executable, resolved once as the process
+ * starts. An install links `gent` into a version directory and later switches
+ * the link to another version; the compiled host starts its `gent-cell` from
+ * beside this path, so a running gent keeps its own version's worker however
+ * the link moves. A path that does not resolve stays as the runtime gave it.
+ */
+const executablePath: string = Result.try(() => realpathSync(process.execPath)).pipe(
+  Result.getOrElse(() => process.execPath),
 )
 
 /** The specifiers bound in this process. Bun keeps a plugin for the process lifetime. */
@@ -91,7 +104,7 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
     pid: Effect.sync(() => process.pid),
 
-    execPath: Effect.sync(() => process.execPath),
+    execPath: Effect.succeed(executablePath),
 
     build: Effect.succeed(thisBuild),
 

@@ -33,7 +33,7 @@ import { causeMessage } from "../domain/guards.js"
  *   - `randomId`         — UUIDv7 string for runtime-owned identifiers
  *   - `osInfo`           — `{ platform, arch, release, hostname, type }`
  *   - `pid`              — current process id
- *   - `execPath`         — absolute path to the running executable
+ *   - `execPath`         — real path of the running executable, fixed at start
  *   - `build`            — the compiled build's id and version, or a source run
  *   - `homeDirectory`    — current user home directory
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
