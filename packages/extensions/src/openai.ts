@@ -50,6 +50,7 @@ import {
   type ProviderAuthorizationResult,
   type ProviderHints,
   type ReasoningEffort,
+  type RunEffort,
 } from "@gent/core/extensions/api"
 import {
   adapterEntry,
@@ -63,6 +64,7 @@ import {
   CredentialRefreshUnavailable,
   type EffortCarrier,
   effortCarrier,
+  keepsEffortPrefix,
   effortFor,
   endpointClient,
   EMPTY_CREDENTIAL_CELL,
@@ -1323,6 +1325,13 @@ const takesConfigurationUpdates = (modelId: string): boolean => {
   return Predicate.isNotNull(match) && Number(match[1]) >= 6
 }
 
+/** The effort a Responses request sends: the hint's level as the model takes it; none for no level. */
+const responsesEffort = (
+  entry: CatalogModel,
+  hints: Option.Option<ProviderHints>,
+): Option.Option<RunEffort> =>
+  Option.flatMap(reasoningHint(entry, hints), (level) => effortFor(entry, level))
+
 /**
  * The effort changes a Responses request carries, for a model that takes
  * `configuration_update`. Every effort the receipts name is one the model
@@ -1335,7 +1344,7 @@ const responsesEffortCarrier = (
   hints: Option.Option<ProviderHints>,
 ): Option.Option<EffortCarrier> => {
   if (!takesConfigurationUpdates(entry.id)) return Option.none()
-  const current = Option.flatMap(reasoningHint(entry, hints), (level) => effortFor(entry, level))
+  const current = responsesEffort(entry, hints)
   return effortCarrier(
     hints,
     current,
@@ -1976,14 +1985,16 @@ export const buildOpenAIModelDriver = (
         })
       }),
     // A model that takes `configuration_update` carries a change of level
-    // inside the conversation, from any level it accepts.
-    carriesEffort: (modelName, hints, catalog) =>
-      Option.isSome(
-        responsesEffortCarrier(
-          adapterEntry(Option.fromUndefinedOr(catalog), "openai", modelName),
-          Option.some(hints),
-        ),
-      ),
+    // inside the conversation where the request keeps the previous one's
+    // prefix: never after a run at the provider default, whose request named
+    // no top-level effort that a carrier could keep.
+    carriesEffort: (modelName, hints, catalog) => {
+      const entry = adapterEntry(Option.fromUndefinedOr(catalog), "openai", modelName)
+      return keepsEffortPrefix(hints, (planned) => ({
+        current: responsesEffort(entry, planned),
+        carrier: responsesEffortCarrier(entry, planned),
+      }))
+    },
     listModels: (catalog, authInfo) =>
       Effect.sync(() => {
         const models = catalogModels(catalog, "openai", RESPONSES_PROMPT_CACHE_TTL, RESPONSES_CLASS)

@@ -7,7 +7,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Context,
-  type Crypto,
+  Crypto,
   Effect,
   FileSystem,
   Layer,
@@ -34,6 +34,7 @@ import {
   ProviderId,
   type ProviderHints,
   ReasoningEffort,
+  type RunEffort,
   type SessionId,
 } from "@gent/core/extensions/api"
 import type { AgentEvent } from "@gent/core/protocol"
@@ -44,6 +45,8 @@ import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
   type SequenceStep,
+  testAgent,
+  testTurnExtension,
   textStep,
   waitFor,
 } from "@gent/core/test-utils"
@@ -52,10 +55,12 @@ import {
   buildAnthropicModelDriver,
   type ClaudeCredentials,
 } from "../src/anthropic.js"
+import { buildOpenAIModelDriver, type OpenAICredentials, OpenAIExtension } from "../src/openai.js"
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
 import { RouterExtension } from "../src/router.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { fakeFetchLayer, makeFakeFetchState } from "./helpers/fake-http-client.js"
+import { resolveShipped } from "./helpers/api-classes.js"
 import { e2ePreset } from "./helpers/test-preset.js"
 
 const LIGHT = ModelId.make("anthropic/claude-haiku-4-5")
@@ -866,15 +871,18 @@ const decodeMessages = Schema.decodeUnknownSync(
 )
 
 const OPUS = ModelId.make("anthropic/claude-opus-5")
+const SOL = ModelId.make("openai/gpt-6.1-sol")
 const MID_CONVERSATION_BETA = "mid-conversation-output-config-2026-07-01"
 
 const isReasoningEffort = Schema.is(ReasoningEffort)
+const isRunEffort = (value: string): value is RunEffort =>
+  value === "default" || isReasoningEffort(value)
 
 /** What one step of a turn sent: the hints it resolved its model with, and its prompt. */
 interface SentStep {
   readonly reasoning: Option.Option<ReasoningEffort>
   readonly maxTokens: Option.Option<number>
-  readonly reasoningHistory: ReadonlyArray<Option.Option<ReasoningEffort>>
+  readonly reasoningHistory: ReadonlyArray<Option.Option<RunEffort>>
   readonly prompt: Option.Option<Prompt.Prompt>
 }
 
@@ -934,7 +942,7 @@ const keepSentSteps = () => {
       sent.push({
         reasoning: Option.filter(Option.fromUndefinedOr(request.reasoning), isReasoningEffort),
         maxTokens: Option.fromUndefinedOr(request.maxTokens),
-        reasoningHistory: request.reasoningHistory.map(Option.filter(isReasoningEffort)),
+        reasoningHistory: request.reasoningHistory.map(Option.filter(isRunEffort)),
         prompt: Option.none(),
       })
     },
@@ -980,6 +988,80 @@ const replayOnOpus = Effect.fn("test.replayOnOpus")(function* (
   }
   return state.captured
 })
+
+/** The hints a kept step resolved its model with. */
+const sentHints = (step: SentStep, cacheKey: string): ProviderHints => ({
+  cacheKey,
+  supportsReasoning: true,
+  reasoningHistory: step.reasoningHistory,
+  ...Option.match(step.reasoning, { onNone: () => ({}), onSome: (reasoning) => ({ reasoning }) }),
+  ...Option.match(step.maxTokens, { onNone: () => ({}), onSome: (maxTokens) => ({ maxTokens }) }),
+})
+
+/** A Responses reply of one text message. */
+const responsesReply = () => ({
+  status: 200,
+  body: encodeExternalJson({
+    id: "resp-route",
+    object: "response",
+    created_at: 1_700_000_000,
+    model: "gpt-6.1-sol",
+    output: [
+      {
+        id: "msg-route",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "answer", annotations: [], logprobs: [] }],
+      },
+    ],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  }),
+})
+
+/** What the real OpenAI driver sends on GPT-6.1 Sol for each kept step, on an API key. */
+const replayOnSol = Effect.fn("test.replayOnSol")(function* (
+  sent: ReadonlyArray<SentStep>,
+  cacheKey: string,
+) {
+  const driver = buildOpenAIModelDriver(
+    yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL),
+    new Map(),
+    Option.none(),
+    yield* Crypto.Crypto,
+  )
+  const state = makeFakeFetchState()
+  for (const step of sent) {
+    const model = yield* resolveShipped(
+      driver,
+      fixtureModelCatalog(),
+      "gpt-6.1-sol",
+      Option.some(ProviderAuthInfo.cases.Api.make({ key: "route-test-key" })),
+      Option.some(sentHints(step, cacheKey)),
+    )
+    yield* LanguageModel.generateText({ prompt: Option.getOrThrow(step.prompt) }).pipe(
+      Effect.provide(Layer.provideMerge(model, fakeFetchLayer(state, responsesReply))),
+      Effect.scoped,
+    )
+  }
+  return state.captured.map((request) => decodeWireBody(request.body ?? ""))
+}, Effect.provide(BunServices.layer))
+
+/** A Responses body without its input. */
+const withoutInput = (body: Schema.JsonObject): Schema.Json =>
+  Object.fromEntries(Object.entries(body).filter(([key]) => key !== "input"))
+
+/** A Responses body's input, up to the trailing system and developer items the next request drops. */
+const conversationInput = (body: Schema.JsonObject): ReadonlyArray<Schema.Json> => {
+  const input = body["input"]
+  if (!Array.isArray(input)) return []
+  const items: ReadonlyArray<Schema.Json> = input
+  const instruction = (item: Schema.Json) =>
+    isJsonObject(item) && (item["role"] === "system" || item["role"] === "developer")
+  let end = items.length
+  while (end > 0 && items.slice(end - 1, end).some(instruction)) end -= 1
+  return items.slice(0, end)
+}
 
 /**
  * The bytes a cache keeps across an effort change carried inside the
@@ -1301,6 +1383,82 @@ describe("router on the wire", () => {
         expect(sent.map((step) => [step.reasoning, step.reasoningHistory])).toEqual([
           [Option.some("none"), []],
           [Option.some("none"), [Option.some("none")]],
+        ])
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+    30_000,
+  )
+  it.scopedLive(
+    "on GPT-6.1 Sol, high then the provider default then /effort auto holds the default: the third request keeps the second's bytes",
+    () =>
+      Effect.gen(function* () {
+        const { home, cwd } = yield* writeHome({})
+        const { sent, keep } = keepSentSteps()
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          keep("answer 1"),
+          keep("answer 2"),
+          keep("answer 3"),
+        ])
+        const calls: Array<JudgeCall> = []
+        // An agent with no level of its own: `/effort default` sends the provider default.
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          providerLayer,
+          home,
+          cwd,
+          models: [
+            Model.make({
+              id: SOL,
+              name: "GPT-6.1 Sol",
+              provider: ProviderId.make("openai"),
+              contextLength: 400_000,
+              reasoning: true,
+              efforts: ["low", "medium", "high", "xhigh"],
+              pricing: { input: 2, output: 10, cacheRead: 0.2 },
+            }),
+          ],
+          extensionInputs: [
+            testTurnExtension,
+            RouterExtension,
+            OpenAIExtension,
+            judgeExtension([{ label: "choice1", confidence: 0.9 }], calls),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(SOL),
+          reasoningLevel: Option.some("high"),
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* client.message.send({ sessionId, branchId, content: "first" })
+        yield* afterTurns(1)
+        // `/effort default`: the request names no effort, so the top level has none.
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.none() })
+        yield* client.message.send({ sessionId, branchId, content: "second" })
+        yield* afterTurns(2)
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some("auto") })
+        yield* client.message.send({ sessionId, branchId, content: "third" })
+        const events = yield* afterTurns(3)
+        yield* controls.assertDone
+
+        const bodies = yield* replayOnSol(sent, sessionId)
+        expect(bodies).toHaveLength(3)
+        const second = Option.getOrThrow(Option.fromUndefinedOr(bodies[1]))
+        const third = Option.getOrThrow(Option.fromUndefinedOr(bodies[2]))
+        // The cached prefix: the third request's top level and earlier input are the second's.
+        expect(withoutInput(third)).toEqual(withoutInput(second))
+        const earlier = conversationInput(second)
+        expect(earlier.length).toBeGreaterThan(0)
+        expect(conversationInput(third).slice(0, earlier.length)).toEqual([...earlier])
+        // A change after the default run would pin the top level again: the level holds,
+        // and no classifier is asked.
+        expect(calls).toEqual([])
+        const [held] = routedEvents(events)
+        expect(held?.reason).toContain("carries no change from default")
+        expect(sent.map((step) => step.reasoning)).toEqual([
+          Option.some("high"),
+          Option.none(),
+          Option.none(),
         ])
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
     30_000,

@@ -902,7 +902,11 @@ Shape:
   held level or where the driver carries the change from this history
   (`ModelDriverContribution.carriesEffort`: the Anthropic driver where
   `takesEffortMarkers` and the thinking plan stays the same, the OpenAI
-  driver where `takesConfigurationUpdates`); with no such choice the level
+  driver where `takesConfigurationUpdates`; both rebuild the previous
+  request's plan and admit the change only where the new request keeps its
+  top-level effort and its earlier changes, `keepsEffortPrefix` in
+  `packages/extensions/src/providers.ts`, so on OpenAI no change follows a
+  run at the provider default); with no such choice the level
   holds and no classifier is asked, and the receipt says why. A cold cache
   or a first turn offers every level (decided by the cache-rate north star:
   a driver fact asked per transition, with a receipt, over a static model

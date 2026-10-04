@@ -53,6 +53,7 @@ import {
   CredentialRefreshUnavailable,
   type EffortCarrier,
   effortCarrier,
+  keepsEffortPrefix,
   effortFor,
   EMPTY_CREDENTIAL_CELL,
   hasToggle,
@@ -2395,6 +2396,20 @@ const anthropicRequest = (
 }
 
 /**
+ * The effort a Messages request applies: the hint's level clamped to the
+ * model's levels; with no level, the model's default when it reasons.
+ */
+const messagesEffort = (
+  entry: CatalogModel,
+  hints: Option.Option<ProviderHints>,
+): Option.Option<RunEffort> =>
+  Option.match(reasoningHint(entry, hints), {
+    onNone: () =>
+      Option.some<RunEffort>("default").pipe(Option.filter(() => modelReasons(entry, hints))),
+    onSome: (level): Option.Option<RunEffort> => clampEffort(messagesEfforts(entry), level),
+  })
+
+/**
  * The effort changes a Messages request carries, for a model the Claude API
  * takes markers on. Every effort in the history must plan the thinking the
  * request sends and name itself as the effort: a change that turns thinking
@@ -2411,11 +2426,7 @@ const messagesEffortCarrier = (
   markers: EffortMarkers,
 ): Option.Option<EffortCarrier> => {
   if (markers === "none" || !takesEffortMarkers(entry.id)) return Option.none()
-  const current = Option.match(reasoningHint(entry, hints), {
-    onNone: () =>
-      Option.some<RunEffort>("default").pipe(Option.filter(() => modelReasons(entry, hints))),
-    onSome: (level): Option.Option<RunEffort> => clampEffort(messagesEfforts(entry), level),
-  })
+  const current = messagesEffort(entry, hints)
   return effortCarrier(hints, current, markerDefaultEffort(entry.id), (effort) => {
     if (effort === "default") {
       const planned = anthropicRequestPlan(entry, Option.none())
@@ -2797,12 +2808,16 @@ export const buildAnthropicModelDriver = (
   cacheWritesByLifetime: anthropicCacheWritesByLifetime,
   // A model the Claude API takes effort markers on carries a change of level
   // inside the conversation, where every run of the history plans the same thinking.
+  // The request must keep the previous one's prefix: the same top-level
+  // effort, and the same markers up to the reply it asks for.
   carriesEffort: (modelName, hints, catalog) => {
     const entry = adapterEntry(Option.fromUndefinedOr(catalog), "anthropic", modelName)
-    const sent = Option.some(hints)
-    return Option.isSome(
-      messagesEffortCarrier(entry, sent, anthropicRequestPlan(entry, sent), "claude-api"),
-    )
+    const carrier = (planned: Option.Option<ProviderHints>) =>
+      messagesEffortCarrier(entry, planned, anthropicRequestPlan(entry, planned), "claude-api")
+    return keepsEffortPrefix(hints, (planned) => ({
+      current: messagesEffort(entry, planned),
+      carrier: carrier(planned),
+    }))
   },
   retry: {
     ...DEFAULT_RETRY_POLICY,

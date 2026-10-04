@@ -31,7 +31,9 @@ import {
   ProviderAuthError,
   ProviderAuthInfo,
   type ProviderHints,
+  type ReasoningEffort,
   RequestId,
+  type RunEffort,
   type StoredOAuthCredentials,
   type UpdateStoredOAuth,
 } from "@gent/core/extensions/api"
@@ -231,6 +233,32 @@ describe("OpenAI catalog", () => {
         )
       expect([carries("gpt-6.1-sol"), carries("gpt-5.4")]).toEqual([true, false])
     }),
+  )
+
+  it.live(
+    "a run at the provider default holds: no change is carried after it, since its request named no top-level effort",
+    () =>
+      Effect.gen(function* () {
+        const { driver } = yield* makeDriver()
+        const carriesEffort = Option.getOrThrow(Option.fromUndefinedOr(driver.carriesEffort))
+        const carries = (history: ReadonlyArray<RunEffort>, reasoning: ReasoningEffort) =>
+          carriesEffort(
+            "gpt-6.1-sol",
+            {
+              reasoning,
+              reasoningHistory: history.map(Option.some),
+              cacheKey: "session",
+              supportsReasoning: true,
+            },
+            fixtureModelCatalog(),
+          )
+        expect([
+          carries(["high", "default"], "low"),
+          carries(["default"], "low"),
+          carries(["high", "low"], "medium"),
+          carries(["high", "high"], "low"),
+        ]).toEqual([false, false, true, true])
+      }),
   )
 })
 describe("OpenAI credential cache — initial seed from authInfo", () => {

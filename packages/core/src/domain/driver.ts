@@ -728,10 +728,13 @@ export interface ModelDriverContribution {
    * Whether the request `hints` describe carries its effort inside the
    * conversation: where `hints.reasoning` differs from the levels of the
    * earlier runs (`hints.reasoningHistory`), the request sends the change as
-   * an effort marker or a configuration update and the cached prefix stays
-   * byte-identical. False where the change would go at the top of the
-   * request (it rewrites the cache), or this history cannot carry it (a
-   * change that turns thinking on or off). Core asks it before `/effort auto`
+   * an effort marker or a configuration update and keeps the bytes the
+   * previous request (the last run's level over the runs before it) wrote
+   * to the cache: the same top-level effort and the same changes before the
+   * reply. False where the change would go at the top of the request (it
+   * rewrites the cache), or this history cannot carry it (a change that
+   * turns thinking on or off, or one after a run at a provider default the
+   * wire did not name). Core asks it before `/effort auto`
    * changes the level on a warm cache; a change it does not carry holds the
    * level. Absent: no change is carried. `catalog` is the driver's view, as
    * `resolveModel` gets it; a resolver with no catalog passes none.

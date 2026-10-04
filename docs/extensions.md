@@ -489,8 +489,9 @@ only the level the cache was written at and the levels whose change the
 model's driver carries inside the conversation: a driver says so with
 `carriesEffort(modelName, hints, catalog)` on its `ModelDriverContribution`,
 true where a change from the levels in `hints.reasoningHistory` to
-`hints.reasoning` rides as a marker or an update and the cached prefix stays
-the same. A driver without it carries no change, so its models change level
+`hints.reasoning` rides as a marker or an update and the request keeps the
+bytes the previous request wrote: the same top-level effort and the same
+changes before the reply. A driver without it carries no change, so its models change level
 only on a cold cache. The first registered router with an `effort` serves
 it. When the session runs on one of the same router's virtual models, the
 model route's input carries the effort choices too (`input.effort`, each

@@ -195,6 +195,7 @@ describe("driver catalog", () => {
           { id: "claude-opus-5", name: "Opus 5", reasoning: true, reasoningOptions },
           { id: "claude-sonnet-5", name: "Sonnet 5", reasoning: true, reasoningOptions },
           { id: "claude-sonnet-5-5", name: "Sonnet 5.5", reasoning: true, reasoningOptions },
+          { id: "claude-opus-5-5", name: "Opus 5.5", reasoning: true, reasoningOptions },
         )
         const carries = (model: string, history: ReadonlyArray<RunEffort>) =>
           carriesEffort(
@@ -214,7 +215,14 @@ describe("driver catalog", () => {
           carries("claude-opus-5", ["none"]),
           // No markers before Sonnet 5.5.
           carries("claude-sonnet-5", ["high"]),
-        ]).toEqual([true, true, false, false])
+          // A run at the model's default was carried as a marker of the
+          // level it runs at (high on Opus 5, medium on Opus 5.5): the top
+          // level stays the first run's, so a later change rides on.
+          carries("claude-opus-5", ["high", "default"]),
+          carries("claude-opus-5-5", ["high", "default"]),
+          // A first run at the default named no top level; the change keeps it unnamed.
+          carries("claude-opus-5", ["default"]),
+        ]).toEqual([true, true, false, false, true, true, true])
       }).pipe(Effect.provide(BunServices.layer)),
   )
 
