@@ -2689,6 +2689,10 @@ const DECIDE_DEADLINE_MS = 60_000
 const modelsError = (operation: string, message: string) =>
   new ExtensionServiceError({ service: "ExtensionModels", operation, message })
 
+/** A token count a provider bills: a whole, non-negative number; none otherwise. */
+const billableCount = (count: Option.Option<number>): Option.Option<number> =>
+  Option.filter(count, (value) => Number.isSafeInteger(value) && value >= 0)
+
 /**
  * The `ExtensionContext.Models` facet over the runtime's classifier models.
  * The resolver is the runtime's; the drivers are those of the caller's
@@ -2731,12 +2735,13 @@ export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect
           inputTokens: response.usage.inputTokens,
           outputTokens: response.usage.outputTokens,
         })
-        const costUsd = Option.map(Option.fromUndefinedOr(resolved.entry.pricing), (pricing) =>
-          calculateCost(
-            { inputTokens: usage.inputTokens ?? 0, outputTokens: usage.outputTokens ?? 0 },
-            Option.some(pricing),
-          ),
-        )
+        // A price needs both billable counts: a count the reply leaves out, or
+        // one no provider bills, leaves the price unknown, never a partial sum.
+        const costUsd = Option.all({
+          pricing: Option.fromUndefinedOr(resolved.entry.pricing),
+          inputTokens: billableCount(Option.fromUndefinedOr(usage.inputTokens)),
+          outputTokens: billableCount(Option.fromUndefinedOr(usage.outputTokens)),
+        }).pipe(Option.map(({ pricing, ...counts }) => calculateCost(counts, Option.some(pricing))))
         return {
           model: resolved.modelId,
           answers: response.answers,

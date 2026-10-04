@@ -956,7 +956,11 @@ interface ExtensionDecision<Decisions extends Record<string, Decision.Any>> {
   readonly model: ModelId
   readonly answers: Decision.Answers<Decisions>
   readonly usage: { readonly inputTokens?: number; readonly outputTokens?: number }
-  /** USD at the catalog's price; absent when the catalog does not price the model. */
+  /**
+   * USD at the catalog's price; absent when the catalog does not price the
+   * model, or the reply leaves a billable count out or reports one that is
+   * not a whole, non-negative number.
+   */
   readonly costUsd?: number
 }
 

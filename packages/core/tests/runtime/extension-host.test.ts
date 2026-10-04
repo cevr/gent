@@ -4821,6 +4821,25 @@ describe("models facet via RPC", () => {
       }),
     })
 
+  /**
+   * The usage the judge reports for an input: an input that names a missing
+   * count leaves that count out, as a provider that does not report it does.
+   */
+  const judgeCounts = (input: string): readonly [Option.Option<number>, Option.Option<number>] => {
+    if (input === "no counts") return [Option.none(), Option.none()]
+    if (input === "input only") return [Option.some(21), Option.none()]
+    if (input === "output only") return [Option.none(), Option.some(21)]
+    if (input === "fractional") return [Option.some(21.5), Option.some(0)]
+    return [Option.some(21), Option.some(0)]
+  }
+  const judgeUsage = (input: string) => {
+    const [inputTokens, outputTokens] = judgeCounts(input)
+    return {
+      inputTokens: Option.getOrUndefined(inputTokens),
+      outputTokens: Option.getOrUndefined(outputTokens),
+    }
+  }
+
   /** Three classifiers, listed dearest first; each answers the first label with 21 input tokens. */
   const judgeDriver: ModelDriverContribution = {
     id: "judge",
@@ -4857,7 +4876,12 @@ describe("models facet via RPC", () => {
                     ]
                   }),
                 ),
-                usage: { inputTokens: 21, outputTokens: 0 },
+                usage: judgeUsage(
+                  Option.getOrElse(
+                    Schema.decodeUnknownOption(Schema.String)(options.state),
+                    () => "",
+                  ),
+                ),
               }),
           }),
         ),
@@ -4866,7 +4890,10 @@ describe("models facet via RPC", () => {
 
   const Ask = request({
     id: "ask",
-    input: Schema.Struct({ model: Schema.optional(Schema.String) }),
+    input: Schema.Struct({
+      model: Schema.optional(Schema.String),
+      text: Schema.optional(Schema.String),
+    }),
     output: Schema.Struct({
       available: Schema.Boolean,
       classifiers: Schema.Array(Schema.String),
@@ -4886,7 +4913,7 @@ describe("models facet via RPC", () => {
             }),
           },
         }),
-        input: "charged twice",
+        input: input.text ?? "charged twice",
         ...omitUndefined({ model: input.model }),
       }).pipe(
         Effect.map(
@@ -4917,14 +4944,17 @@ describe("models facet via RPC", () => {
           providerLayer,
           extensionInputs: [...e2ePreset.extensionInputs, extension],
         })
-        const ask = (model: Option.Option<string>) =>
+        const ask = (model: Option.Option<string>, text?: string) =>
           harness.client.extension
             .request({
               sessionId: harness.sessionId,
               branchId: harness.branchId,
               extensionId,
               capabilityId: Ask.id,
-              input: Option.match(model, { onNone: () => ({}), onSome: (id) => ({ model: id }) }),
+              input: {
+                ...Option.match(model, { onNone: () => ({}), onSome: (id) => ({ model: id }) }),
+                ...omitUndefined({ text }),
+              },
             })
             .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Ask.output)))
 
@@ -4947,6 +4977,12 @@ describe("models facet via RPC", () => {
         expect(named.decided).toBe(`judge/jev-dear billing ${String((21 * 2) / 1_000_000)}`)
         const unpriced = yield* ask(Option.some("judge/jev-free"))
         expect(unpriced.decided).toBe("judge/jev-free billing undefined")
+        // A priced classifier whose reply leaves a billable count out, or
+        // reports one no provider bills, has no known price: never a partial sum.
+        for (const text of ["no counts", "input only", "output only", "fractional"]) {
+          const partial = yield* ask(Option.some("judge/jev-dear"), text)
+          expect([text, partial.decided]).toEqual([text, "judge/jev-dear billing undefined"])
+        }
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
