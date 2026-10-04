@@ -498,6 +498,11 @@ file, a disabled id and an untrusted project keep nothing. Branch Resources
 have no fallback yet. An extension the disabled list names is reported `disabled`
 (`resolveExtensions` takes it as a third list): `ExtensionHealth.Disabled` on
 the wire, in the optional `disabledExtensions` field of both snapshot cases.
+The TUI reads `extension.listStatus` again at each `TurnCompleted` of the
+session in view (the turn resolved the extensions from their files) and on an
+extension's pulse; the connection widget names a failed reload's running
+version (`<id>: <error>; version <12 hex> still runs`), and `gent doctor`
+names it too and lists the disabled ids (`Disabled: <ids>`).
 The `Extensions` facet (`status`, `reload`) reads and reloads the session's
 profile. The shipped `@gent/extension-admin` gives both to the agent
 (`extensions.status`, `extensions.reload`), with four verbs over public entries

@@ -6318,6 +6318,41 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("@gent/memory: startup boom")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  it.scopedLive("ConnectionWidget names the version a failed reload still runs", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />, {
+        width: 100,
+        client: createMockClient({
+          extension: {
+            listStatus: () =>
+              Effect.succeed({
+                _tag: "Degraded",
+                healthyExtensions: [],
+                degradedExtensions: [
+                  {
+                    manifest: { id: "@user/notes" },
+                    scope: "user",
+                    sourcePath: "/home/u/.gent/extensions/notes.ts",
+                    _tag: "Degraded",
+                    issues: [
+                      {
+                        _tag: "ActivationFailed",
+                        phase: "setup",
+                        error: "setup boom",
+                        runningVersion: "0123456789abcdef0123",
+                      },
+                    ],
+                  },
+                ],
+              }),
+          },
+        }),
+      })
+      const frame = renderFrame(setup)
+      expect(frame).toContain("1 extension failed")
+      expect(frame).toContain("@user/notes: setup boom; version 0123456789ab still runs")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("ConnectionWidget names a model catalog that did not load", () =>
     Effect.gen(function* () {
       const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />, {
@@ -6815,6 +6850,35 @@ export default defineClientExtension("@test/hello", {
           "the edit after the shell's reload",
         )
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+  it.scopedLive("a turn's end in the session in view reads extension health again", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-health-turn")
+      const branchId = BranchId.make("branch-health-turn")
+      let healthReads = 0
+      const { client } = yield* mountClient({
+        client: createMockClient({
+          extension: {
+            listStatus: () =>
+              Effect.sync(() => {
+                healthReads += 1
+                return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
+              }),
+          },
+        }),
+        initialSession: sessionNamed(sessionId, branchId, "Health"),
+      })
+      yield* waitUntil(() => healthReads >= 1, "the mount's health read")
+      const before = healthReads
+      client.applySessionEvent(
+        EventEnvelope.make({
+          id: EventId.make(1),
+          createdAt: 1,
+          event: AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }),
+        }),
+      )
+      yield* waitUntil(() => healthReads === before + 1, "the turn's health read")
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a /driver usage hint lands in the footer and never starts a model turn", () =>
     Effect.gen(function* () {
