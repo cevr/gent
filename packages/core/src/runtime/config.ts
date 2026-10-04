@@ -13,6 +13,8 @@ import {
 } from "effect"
 import {
   AgentName,
+  type AgentPatch,
+  mergeAgentPatches,
   StoredAgentPatch,
   type DriverRef,
   DriverOverridesFromConfig,
@@ -144,9 +146,9 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   /**
    * Agents by name, each an `AgentDefinition` without its `name` (an
    * `AgentPatch`). A name no extension registers creates an agent; one that
-   * names a registered agent replaces the fields it sets. Project config
-   * shadows user config key-by-key; a run's own `RunSpec.overrides` shadows
-   * both. An entry written before `tools` (`allowedTools`, `deniedTools`,
+   * names a registered agent replaces the fields it sets. A project entry
+   * replaces the fields it names over the user entry, and a run's own
+   * `RunSpec.overrides` over both (`resolveAgentRoster`). An entry written before `tools` (`allowedTools`, `deniedTools`,
    * `modelId`) decodes into `tools` and `model`.
    */
   agents: Schema.optional(Schema.Record(AgentName, StoredAgentPatch)),
@@ -188,11 +190,26 @@ const configUpdates = {
   },
 }
 
+/** User then project `agents` entries: a project entry replaces only the fields it names. */
+const mergeAgentEntries = (
+  user: Readonly<Record<AgentName, AgentPatch>>,
+  project: Readonly<Record<AgentName, AgentPatch>>,
+): Readonly<Record<AgentName, AgentPatch>> => {
+  const merged: Record<AgentName, AgentPatch> = { ...user }
+  for (const [key, patch] of Object.entries(project)) {
+    const name = AgentName.make(key)
+    merged[name] = mergeAgentPatches(merged[name] ?? {}, patch)
+  }
+  return merged
+}
+
 /**
  * Merge user + project configs. Per-field semantics:
  *   - disabledExtensions: concatenated (user first — historical order).
  *   - disabledProviders: concatenated, user first.
- *   - driverOverrides, agents, providers: object spread; project entries shadow user
+ *   - agents: by name, a project entry replaces the fields it names in the
+ *     user entry (`mergeAgentPatches`).
+ *   - driverOverrides, providers: object spread; project entries shadow user
  *     entries key-by-key. Idempotent set/clear is the load-bearing property —
  *     `Record<agent, DriverRef>` (vs `Array`) means `driver.set` / `clear`
  *     map directly to `record[name] = ref` / `delete record[name]`.
@@ -204,7 +221,7 @@ const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
       ...(project.disabledExtensions ?? []),
     ]),
     driverOverrides: nonEmptyRecord({ ...user.driverOverrides, ...project.driverOverrides }),
-    agents: nonEmptyRecord({ ...user.agents, ...project.agents }),
+    agents: nonEmptyRecord(mergeAgentEntries(user.agents ?? {}, project.agents ?? {})),
     providers: nonEmptyRecord({ ...user.providers, ...project.providers }),
     disabledProviders: nonEmpty([
       ...(user.disabledProviders ?? []),

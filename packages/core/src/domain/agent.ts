@@ -414,8 +414,11 @@ const toolPatternsAdmit = (patterns: Option.Option<ReadonlyArray<string>>, id: s
  *
  * Per `composability-not-flags`, agent specs carry only what makes the agent
  * what it is: name, description, model, prompt, tool patterns, sampling
- * defaults, and driver routing. A config file's `agents` entry patches one
- * by name (`AgentPatch`); per-run overrides are the same patch, on `RunSpec`.
+ * defaults, and driver routing. One schema, written two ways: TS through
+ * `host.register("agent", AgentDefinition.make(...))`, and JSON in a config
+ * file's `agents` key, an `AgentPatch` by name that creates an agent or
+ * reshapes a registered one (`resolveAgentRoster`). Per-run overrides are the
+ * same patch, on `RunSpec`.
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,
@@ -517,7 +520,7 @@ export const StoredAgentPatch = LegacyAgentPatch.pipe(
  * since an addendum adds to the agent's own prompt. User then project config
  * entries merge this way.
  */
-const mergeAgentPatches = (first: AgentPatch, second: AgentPatch): AgentPatch => {
+export const mergeAgentPatches = (first: AgentPatch, second: AgentPatch): AgentPatch => {
   const addenda = [first.systemPromptAddendum, second.systemPromptAddendum].filter(
     Predicate.isString,
   )
@@ -531,6 +534,30 @@ const mergeAgentPatches = (first: AgentPatch, second: AgentPatch): AgentPatch =>
 /** `agent` reshaped by `patch` as `mergeAgentPatches` merges: config entries, then a run's overrides. */
 export const applyAgentPatch = (agent: AgentDefinition, patch: AgentPatch): AgentDefinition =>
   AgentDefinition.make({ ...mergeAgentPatches(agent, patch), name: agent.name })
+
+/**
+ * The agents a session can run as: each extension agent with the config
+ * entry of its name applied, and each entry that names no extension agent
+ * as a new agent. The config entries come merged, user then project
+ * (`mergeAgentPatches`), so a field resolves project > user > extension.
+ */
+export const resolveAgentRoster = (
+  agents: Iterable<AgentDefinition>,
+  configAgents: Option.Option<Readonly<Record<AgentName, AgentPatch>>>,
+): ReadonlyMap<AgentName, AgentDefinition> => {
+  const roster = new Map<AgentName, AgentDefinition>()
+  for (const agent of agents) roster.set(agent.name, agent)
+  const entries = Option.getOrElse(configAgents, () => ({}))
+  for (const [key, patch] of Object.entries(entries)) {
+    const name = AgentName.make(key)
+    const agent = Option.match(Option.fromUndefinedOr(roster.get(name)), {
+      onNone: () => AgentDefinition.make({ ...patch, name }),
+      onSome: (registered) => applyAgentPatch(registered, patch),
+    })
+    roster.set(name, agent)
+  }
+  return roster
+}
 
 // Default model — used when an agent has no model set
 export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")

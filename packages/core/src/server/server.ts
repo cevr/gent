@@ -155,7 +155,7 @@ import {
   type SessionProfile,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { type AgentName, isReasoningEffort } from "../domain/agent.js"
+import { type AgentName, isReasoningEffort, resolveAgentRoster } from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import {
   type AgentLoopTurnProfile,
@@ -412,8 +412,10 @@ const makeSessionMutationsService: Effect.Effect<
   | GentPlatform
   | SessionProfileCache
   | RuntimeEnvironment
+  | ConfigService
 > = Effect.gen(function* () {
   const storageTransaction = yield* makeStorageTransaction
+  const configService = yield* ConfigService
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const messageStorage = yield* MessageStorage
@@ -719,7 +721,12 @@ const makeSessionMutationsService: Effect.Effect<
       Effect.provideService(SessionProfileCache, profileCache),
       Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
     )
-    if (registry.getResolved().agents.has(agent)) return
+    const config = yield* configService.get(input.cwd)
+    const roster = resolveAgentRoster(
+      registry.getResolved().agents.values(),
+      Option.fromUndefinedOr(config.agents),
+    )
+    if (roster.has(agent)) return
     return yield* new NotFoundError({ message: `Unknown agent: ${agent}` })
   })
 
@@ -1672,7 +1679,14 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.gen(function* () {
           const registry = yield* resolveSessionRegistry(sessionId)
           const resolved = registry.getResolved()
-          const agents = [...resolved.agents.values()]
+          const session = yield* loadSession(sessionId)
+          const config = yield* configService.get(session.cwd)
+          const agents = [
+            ...resolveAgentRoster(
+              resolved.agents.values(),
+              Option.fromUndefinedOr(config.agents),
+            ).values(),
+          ]
           const drivers = [...resolved.modelDrivers.values()].map((driver) =>
             DriverInfo.make({ id: driver.id }),
           )

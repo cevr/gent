@@ -7,6 +7,7 @@ import {
   Layer,
   Logger,
   Option,
+  Order,
   PlatformError,
   Path,
   Predicate,
@@ -25,6 +26,19 @@ import {
   UserConfig,
 } from "../../src/runtime/config"
 import { resolveSessionRoute } from "../../src/runtime/turn"
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
+import type { ProviderOptions } from "effect/ai/LanguageModel"
+import { createRpcHarness } from "../../src/test-utils/harness"
+import {
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  type SequenceStep,
+  systemTextOf,
+  waitFor,
+} from "../../src/test-utils/language-model"
+import { textStep } from "../../src/runtime/provider"
+import { messagePartsText } from "../../src/domain/message"
+import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 
 // ── user configuration ──────────────────────────────────────────────────────
 
@@ -861,7 +875,7 @@ describe("user configuration", () => {
   })
 
   describe("agents", () => {
-    it.scopedLive("project agent overrides shadow user overrides key by key", () =>
+    it.scopedLive("a project agent entry replaces only the fields it names", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
@@ -892,9 +906,10 @@ describe("user configuration", () => {
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
           const result = yield* cfg.get(project)
-          // The project entry replaces the user entry for `main` as a whole.
+          // The project entry names the model; the user entry's effort stays.
           expect(result.agents?.[AgentName.make("main")]).toEqual({
             model: ModelId.make("openai/gpt-5.6-sol"),
+            reasoningEffort: "low",
           })
           expect(result.agents?.[AgentName.make("helper")]).toEqual({ reasoningEffort: "minimal" })
         }).pipe(Effect.provide(live))
@@ -1107,5 +1122,165 @@ describe("configured driver override routing", () => {
       yield* cfg.clearDriverOverride(AgentName.make("primary"))
       expect(routedDriver(primary, yield* cfg.get())).toEqual(Option.some("anthropic"))
     }).pipe(Effect.provide(ConfigService.Test())),
+  )
+})
+
+// ── agents from config ──────────────────────────────────────────────────────
+
+/**
+ * An agent written as JSON in a config file, over the full RPC path: the
+ * session names it at creation, its turn runs on its model, prompt and tools.
+ * The extension registers the tools and, where named, the agent the config
+ * reshapes.
+ */
+const filmTools = (agents: ReadonlyArray<AgentDefinition>) =>
+  defineExtension({
+    id: "test/film-tools",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      if (agents.length > 0) yield* host.register("agent", ...agents)
+      for (const name of ["film.look", "film.check", "read", "bash"]) {
+        yield* host.register(
+          "tool",
+          tool({
+            id: name,
+            description: `Run ${name}`,
+            params: Schema.Struct({ value: Schema.String }),
+            output: Schema.String,
+            execute: ({ value }) => Effect.succeed(`${name}:${value}`),
+          }),
+        )
+      }
+    }),
+  })
+
+/** A config file as it is written: plain JSON, the old and new shapes alike. */
+type ConfigFile = typeof UserConfig.Encoded
+
+const writeConfig = (root: string, config: ConfigFile) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    yield* fs.makeDirectory(path.join(root, ".gent"), { recursive: true })
+    yield* fs.writeFileString(path.join(root, ".gent", "config.json"), encodeJson(config))
+  })
+
+/** The wire names a request advertises, sorted: each dot is `__` there. */
+const advertised = (options: ProviderOptions) =>
+  options.tools.map((entry) => entry.name).toSorted(Order.String)
+
+const runOneTurn = (params: {
+  readonly agents: ReadonlyArray<AgentDefinition>
+  readonly user: ConfigFile
+  readonly project: ConfigFile
+  readonly agent: Option.Option<AgentName>
+  readonly step: SequenceStep
+}) =>
+  Effect.gen(function* () {
+    const home = yield* makeTempDirectoryScoped("gent-agent-config-home-")
+    const cwd = yield* makeTempDirectoryScoped("gent-agent-config-cwd-")
+    yield* writeConfig(home, params.user)
+    yield* writeConfig(cwd, params.project)
+    const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([params.step])
+    const { client, sessionId, branchId } = yield* createRpcHarness({
+      agents: [],
+      extensionInputs: [filmTools(params.agents)],
+      providerLayer,
+      cwd,
+      home,
+      configServiceLayer: ConfigService.Live.pipe(
+        Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+        Layer.provide(BunPlatformLive),
+      ),
+      ...Option.match(params.agent, {
+        onNone: () => ({}),
+        onSome: (agent) => ({ admission: { agent } }),
+      }),
+    })
+    yield* client.message.send({ sessionId, branchId, content: "Paint the scene." })
+    yield* waitFor(
+      client.message.list({ branchId }),
+      (messages) =>
+        messages.some(
+          (message) => message.role === "assistant" && messagePartsText(message.parts) === "done",
+        ),
+      3000,
+      "reply",
+    )
+    yield* controls.assertDone
+    return { client, sessionId }
+  })
+
+describe("agents from config over RPC", () => {
+  it.scopedLive("a project config entry with a new name creates an agent a session runs as", () =>
+    Effect.gen(function* () {
+      const painter = AgentName.make("scene-painter")
+      const { client, sessionId } = yield* runOneTurn({
+        agents: [],
+        user: {},
+        project: {
+          agents: {
+            [painter]: {
+              description: "Paints one scene",
+              model: "test/painter-model",
+              systemPromptAddendum: "PAINTER-BRIEF",
+              tools: ["film.*", "!film.check", "read"],
+            },
+          },
+        },
+        agent: Option.some(painter),
+        step: {
+          ...textStep("done"),
+          assertRequest: (request) => expect(request.model).toBe("test/painter-model"),
+          assertOptions: (options) => {
+            expect(advertised(options)).toEqual(["film__look", "read"])
+            expect(systemTextOf(options.prompt)).toContain("PAINTER-BRIEF")
+          },
+        },
+      })
+      // The roster a client reads lists the agent with its fields.
+      const listed = (yield* client.driver.list({ sessionId })).agents.find(
+        (agent) => agent.name === painter,
+      )
+      expect(listed?.description).toBe("Paints one scene")
+      expect(listed?.tools).toEqual(["film.*", "!film.check", "read"])
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive(
+    "project config beats user config, and both beat the extension, field by field",
+    () =>
+      Effect.gen(function* () {
+        const main = AgentName.make("main")
+        yield* runOneTurn({
+          agents: [
+            AgentDefinition.make({
+              name: main,
+              model: ModelId.make("test/extension-model"),
+              reasoningEffort: "high",
+              tools: ["*"],
+              systemPromptAddendum: "EXTENSION-BRIEF",
+            }),
+          ],
+          user: {
+            agents: {
+              [main]: { model: "test/user-model", tools: ["read", "film.look"] },
+            },
+          },
+          project: { agents: { [main]: { model: "test/project-model" } } },
+          agent: Option.none(),
+          step: {
+            ...textStep("done"),
+            assertRequest: (request) => {
+              expect(request.model).toBe("test/project-model")
+              expect(request.reasoning).toBe("high")
+            },
+            assertOptions: (options) => {
+              expect(advertised(options)).toEqual(["film__look", "read"])
+              expect(systemTextOf(options.prompt)).toContain("EXTENSION-BRIEF")
+            },
+          },
+        })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
   )
 })
