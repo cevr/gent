@@ -322,12 +322,17 @@ describe("E2E: Scrollback ownership", () => {
         // The running turn animates, so a capture reads between two frames.
         // Commits land a few frames after the footer grows: the rows are read
         // until they match, then once more for the failure's diff. Blank rows
-        // count: a lost spacer joins two items.
+        // in history count: a lost spacer joins two items. A tail that shrinks
+        // (a tool run that folds) leaves blank rows above it on the screen
+        // only; those are not transcript rows.
         const rowsNow = settleAndCapture(ctx, { quietMs: 50, timeoutMs: 5_000 }).pipe(
           Effect.map((grid) => {
             const rows = allRows(grid)
             const start = rows.indexOf(before[0] ?? "")
-            return rows.slice(start, start + before.length)
+            return transcriptRead(rows.slice(start), grid.history.length - start, before).slice(
+              0,
+              before.length,
+            )
           }),
         )
         const during = yield* waitFor(
@@ -354,6 +359,25 @@ const transcriptRows = (grid: Parameters<typeof gridText>[0]): string[] => {
 /** Every row, history first, blank rows kept. */
 const allRows = (grid: Parameters<typeof gridText>[0]): string[] =>
   [...grid.history, ...grid.visible].map((row) => row.trimEnd())
+
+/**
+ * `rows` as they read against `expected`: a blank row on the screen (at or
+ * after `screenStart`) where `expected` holds a row is a row the region keeps
+ * above the live tail, so the read skips it. Blank rows in history stay.
+ */
+const transcriptRead = (
+  rows: ReadonlyArray<string>,
+  screenStart: number,
+  expected: ReadonlyArray<string>,
+): string[] => {
+  const read: string[] = []
+  rows.forEach((row, at) => {
+    const wantsRow = read.length < expected.length && expected[read.length] !== ""
+    if (row === "" && at >= screenStart && wantsRow) return
+    read.push(row)
+  })
+  return read
+}
 
 /** The seeded transcript's rows with the blank rows between them, from its first row to its last. */
 const transcriptBlock = (grid: Parameters<typeof gridText>[0]): string[] => {

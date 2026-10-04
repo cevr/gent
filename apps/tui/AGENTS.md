@@ -190,7 +190,8 @@ tail's last rows, and the footer's base stays as it was while one is open
 region holds over the footer's base as it is now: a base that grows (the
 activity row as a turn starts) moves the tail's top rows into history, and
 one that shrinks (the activity row going at a turn's end) leaves blank rows
-above the tail until it grows into them, never above the composer. The rows
+above the tail until it grows into them, never above the composer; so does a
+tail that shrinks after history took its top rows (a tool run that folds). The rows
 above the canvas go to native history in order, only from final items
 (`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits for
 its stored answer, a message waits while a call of it runs, and the head of
