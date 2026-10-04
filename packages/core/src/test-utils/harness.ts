@@ -21,6 +21,7 @@ import {
   type ExtensionContributions,
   extensionServicesFromHostContext,
   type ExtensionFileLockServiceApi,
+  type ExtensionExtensionsService,
   type ExtensionModelsService,
   ExtensionHost,
   type ExtensionHostContext,
@@ -208,6 +209,12 @@ const testExtensionState = (): ReturnType<ExtensionStateFacet> => ({
   changed: () => Effect.void,
 })
 
+/** A stub with no profile behind it: each verb dies. */
+const testExtensionExtensions = (): ExtensionExtensionsService => ({
+  status: die("Extensions.status"),
+  reload: () => die("Extensions.reload"),
+})
+
 /** A stub runtime with no classifier: none is available, and a decide dies. */
 const testExtensionModels = (): ExtensionModelsService => ({
   decide: () => die("Models.decide"),
@@ -228,6 +235,7 @@ export const testExtensionHostContext = (
   Interaction: { ...defaultInteraction(), ...overrides.Interaction },
   FileLock: overrides.FileLock ?? testExtensionFileLock(),
   Models: overrides.Models ?? testExtensionModels(),
+  Extensions: overrides.Extensions ?? testExtensionExtensions(),
   State: overrides.State ?? (() => testExtensionState()),
 })
 
@@ -329,6 +337,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     Interaction: resolvedInteraction,
     FileLock: resolvedFileLock,
     Models: overrides?.Models ?? testExtensionModels(),
+    Extensions: overrides?.Extensions ?? testExtensionExtensions(),
     ...overrides,
     State: () => resolvedState,
   }
@@ -1612,6 +1621,7 @@ export const fixedSessionProfiles = (
             cache.set(cwd, profile)
             return profile
           }),
+        reload: () => Effect.void,
       })
     }),
   )

@@ -39,6 +39,7 @@ import { NetworkToolsExtension } from "./network-tools.js"
 import { McpExtension } from "./mcp.js"
 import { RouterExtension } from "./router.js"
 import { SessionToolsExtension } from "./session-tools.js"
+import { ExtensionAdminExtension } from "./extension-admin.js"
 import { InteractionToolsExtension } from "./interaction-tools.js"
 
 // ── artifact-identity ───────────────────────────────────────────────────────
@@ -88,6 +89,7 @@ export const BuiltinExtensions: ReadonlyArray<
   DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,
+  ExtensionAdminExtension,
   AgentsExtension,
   AgentsViewExtension,
   WorkflowsExtension,

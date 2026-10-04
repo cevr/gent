@@ -376,16 +376,27 @@ export const ExtensionHealth = Schema.Union([
     ...ExtensionHealthIdentityFields,
     issues: Schema.NonEmptyArray(ExtensionHealthIssue),
   }),
+  /** Named by the config's `disabledExtensions`: found, and never set up. */
+  Schema.TaggedStruct("Disabled", {
+    ...ExtensionHealthIdentityFields,
+  }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ExtensionHealth = Schema.Schema.Type<typeof ExtensionHealth>
+
+// Optional, so a client built before the field decodes the snapshot as it did.
+const disabledExtensionsField = {
+  disabledExtensions: Schema.optional(Schema.Array(ExtensionHealth.cases.Disabled)),
+}
 
 export const ExtensionHealthSnapshot = Schema.Union([
   Schema.TaggedStruct("Healthy", {
     extensions: Schema.Array(ExtensionHealth.cases.Healthy),
+    ...disabledExtensionsField,
   }),
   Schema.TaggedStruct("Degraded", {
     healthyExtensions: Schema.Array(ExtensionHealth.cases.Healthy),
     degradedExtensions: Schema.NonEmptyArray(ExtensionHealth.cases.Degraded),
+    ...disabledExtensionsField,
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ExtensionHealthSnapshot = Schema.Schema.Type<typeof ExtensionHealthSnapshot>

@@ -117,7 +117,7 @@ updates this list in the same commit.
     relative paths against `ctx.cwd`; `runProcess` is the one command helper.
     No `ExtensionContext` facet duplicates an Effect platform service; the
     facets are host authority only (`Session`, `Interaction`,
-    `FileLock`, `Models`, `State`). An atomic write has one owner, `writeFileAtomic` in
+    `FileLock`, `Models`, `Extensions`, `State`). An atomic write has one owner, `writeFileAtomic` in
     `packages/core/src/runtime/gent-platform.ts`; core config, extensions
     (through `@gent/core/extensions/api`) and the TUI (through
     `@gent/core/host`) all call it. Host facts core cannot get from
@@ -400,7 +400,7 @@ same extensions, such as one that names an unknown id, finds the profile
 already built. Finding or building the profile, its lease and making it
 current are one step no interrupt can split. `resolve` takes a
 lease in the caller's scope: a turn and an extension request hold it until they
-end, a branch loop holds it while its branch Resources live, and a query holds
+end, a branch Resource built over it holds it while it lives, and a query holds
 it for its read. The newest profile of a (workspace, cwd) stays cached; a
 superseded one closes its scope when its last lease is released. It builds
 every extension's process-scope resources in resolution order, each in its own
@@ -411,7 +411,20 @@ extensions before it, and itself (id, source, file version). So a profile
 rebuilt for a config edit keeps the resources the edit leaves alone, and their
 state with them (an open `/btw` fork, the agents-view watchers, a running
 background job); a resource closes when the last profile that holds it
-retires. `buildSessionProfile` then stages the `ExtensionRegistry` and the base
+retires. The build key of an extension's Resources (`resourceBuildKeys`) names
+that context: the place, then the identity (scope, id, source, file version
+from `LoadedExtension.version`) of each resource-bearing extension up to and
+including it. A reload (`SessionProfileCacheService.reload`, which the
+`Extensions` facet calls) adds a count per (place, extension id) to the file
+stamp, so the next resolve misses the cached profile, runs every setup again,
+and keeps each Resource whose build key it shares; the counts live in memory
+only. An extension the disabled list names is reported `disabled`
+(`resolveExtensions` takes it as a third list): `ExtensionHealth.Disabled` on
+the wire, in the optional `disabledExtensions` field of both snapshot cases.
+The `Extensions` facet (`status`, `reload`) reads and reloads the session's
+profile; the shipped `@gent/extension-admin` gives `status` to the agent as
+the read-only `extensions.status` tool.
+`buildSessionProfile` then stages the `ExtensionRegistry` and the base
 prompt sections over the built resource context. The cache is a required
 service of the loop behavior and of the server's session wiring: every turn
 resolves its profile through it (`resolveTurnProfile`), so every turn has a
@@ -1915,11 +1928,24 @@ Other notes:
   what it acquired, is logged naming its extension
   (`extension.resource.failed`), and leaves every other extension's Resources
   live. A process Resource that fails rejects its extension: the profile
-  reports it failed at the `startup` phase. Branch resources come from the
-  session's profile (the extensions set up for the session's cwd) and build on
-  the loop's first turn or extension request, so a control-plane write never
-  resolves a profile. A branch Resource that fails, or that needs a service a
-  failed one would have built, is named once in the transcript (an
+  reports it failed at the `startup` phase. Branch resources follow the
+  session's profile (the extensions set up for the session's cwd): each run
+  of the loop (a turn, an extension request, the `loopOpen` hooks) resolves
+  the profile under the loop's `branchResourceLock` and builds the branch
+  Resources the profile needs and the loop does not have yet, so a
+  control-plane write never resolves a profile. One build of one extension's
+  branch Resources is a generation, named by its build key
+  (`resourceBuildKeys` over process and branch Resources): an edit to the
+  extension, or to one it builds over, gives a new generation, and an edit
+  elsewhere keeps it. A run holds the generations of its profile until it
+  ends, so a turn that started before an edit ends on the old services and
+  the next run reads the new ones; a generation the newest profile does not
+  use closes when its last run ends, outside the lock, newest first, and then
+  lets go of the profile lease it was built over. The branch services join
+  the run's capability context (`turnCapabilityContext`), so every extension
+  leaf of the run reads them. `loopOpen` does not run again for a rebuilt
+  extension. A branch Resource that fails, or that needs a service a
+  failed one would have built, is named once per build key in the transcript (an
   `ErrorOccurred` notice with the extension id) and suspends its extension
   for that loop the way a failed process Resource does for the profile
   (`suspendExtensions`): the loop's turns, requests and hooks read the

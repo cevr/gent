@@ -114,10 +114,19 @@ const program = Effect.gen(function* () {
 ```
 
 `ExtensionContext` is the host-owned facade. It exposes session,
-interaction, file lock, classifier, and state-pulse accessors
-(`Session`, `Interaction`, `FileLock`, `Models`, `State`)
+interaction, file lock, classifier, extension, and state-pulse accessors
+(`Session`, `Interaction`, `FileLock`, `Models`, `Extensions`, `State`)
 plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
-`home`. `Models.decide({ definition, input, model?, timeoutMs? })` asks a
+`home`. `Extensions.status` lists every extension of the session's profile
+as an `ExtensionStatus` (`Active` with its file version, `Failed` with the
+phase that stopped it, or `Disabled`), and each config file that did not
+load; it reads the extension files as they are now, so an extension an agent
+just wrote shows there. `Extensions.reload(id)` runs every setup of the
+profile again and returns the new statuses; an unchanged extension keeps its
+process and branch Resources, a run that is going on keeps its profile, and
+an id the profile does not name fails. Any extension gets this facet. The
+shipped `@gent/extension-admin` extension gives it to the agent as the
+read-only `extensions.status` tool (`packages/extensions/src/extension-admin.ts`). `Models.decide({ definition, input, model?, timeoutMs? })` asks a
 classifier model (System One: Jev, Clef) every `effect/ai/Decision` of the
 definition in one call and returns the answers, the model, the usage and the
 cost; `Models.available` and `Models.classifiers` say which classifiers have
@@ -576,5 +585,7 @@ builtin).
   storage Tags, event stores, and process helpers are not public extension API.
 - Tagged-union variant tags are PascalCase. Extension health reports
   `"Healthy"` or `"Degraded"`, and a degraded extension carries
-  `"ActivationFailed"` or `"ModelCatalogFailed"` issues. Match on the tag
+  `"ActivationFailed"` or `"ModelCatalogFailed"` issues. An extension the
+  disabled list names is `"Disabled"`, in the optional `disabledExtensions`
+  list of the snapshot. Match on the tag
   through the exported schema rather than a string literal where possible.

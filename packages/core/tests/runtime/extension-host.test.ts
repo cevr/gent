@@ -40,6 +40,7 @@ import {
   fixtureModelCatalog,
   fixtureModelCatalogSource,
   testSqliteStorage,
+  testTurnExtension,
 } from "../../src/test-utils/harness"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -49,6 +50,7 @@ import {
   defineResource,
   ExtensionContext,
   ExtensionHost,
+  ExtensionStatus,
   type GentExtension,
   getToolId,
   request,
@@ -1530,7 +1532,7 @@ describe("resolveTurnProfile", () => {
           baseSections: [],
           generationId: ProcessGenerationId.make("test"),
         }
-        const fakeProfileCache: SessionProfileCacheService = {
+        const fakeProfileCache: Pick<SessionProfileCacheService, "resolve"> = {
           resolve: () => Effect.succeed(fakeProfile),
         }
         const hostProvider = yield* makeExtensionHostContextProvider({
@@ -5504,4 +5506,186 @@ describe("live Profile", () => {
         expect(starts).toBe(2)
       }),
     ).pipe(Effect.provide(sharedLayer)))
+})
+
+describe("extensions facet via RPC", () => {
+  const ExtensionStatuses = Schema.Array(ExtensionStatus)
+  const statusTool = defineExtension({
+    id: "@test/extensions-status",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: "extension_status",
+          description: "List the session's extensions",
+          params: Schema.Struct({}),
+          output: ExtensionStatuses,
+          execute: () =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              return yield* ctx.Extensions.status
+            }),
+        }),
+      )
+    }),
+  })
+
+  it.live(
+    "a tool reads an extension added while gent runs as failed, at the phase that stopped it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-extensions-facet-home-" })
+        const project = yield* fs.makeTempDirectoryScoped({ prefix: "gent-extensions-facet-cwd-" })
+        const extensionsDir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(extensionsDir, { recursive: true })
+        yield* fs.makeDirectory(path.join(project, ".gent"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(project, ".gent", "config.json"),
+          encodeJson({ disabledExtensions: ["@test/switched-off"] }),
+        )
+        const switchedOff = defineExtension({ id: "@test/switched-off", setup: Effect.void })
+        yield* Effect.gen(function* () {
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            toolCallStep("extension_status", {}),
+            textStep("listed"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: [testAgent],
+            extensionInputs: [testTurnExtension, statusTool, switchedOff],
+            providerLayer,
+            home,
+            cwd: project,
+            configServiceLayer: ConfigService.Live.pipe(
+              Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+              Layer.provide(BunPlatformLive),
+            ),
+            // This test is about the failure report, so the turn must survive it.
+            allowFailedExtensions: true,
+          })
+          // Written after the server started: one fails its setup, one never imports.
+          yield* fs.writeFileString(
+            path.join(extensionsDir, "broken.ts"),
+            [
+              'import { Effect } from "effect";',
+              'import { defineExtension } from "@gent/core/extensions/api";',
+              'export default defineExtension({ id: "@test/broken", setup: Effect.die("setup boom") });',
+              "",
+            ].join("\n"),
+          )
+          yield* fs.writeFileString(path.join(extensionsDir, "half.ts"), "export default {\n")
+          const turn = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "list extensions" })
+          const events = Array.from(yield* Fiber.join(turn)).map(({ event }) => event)
+          yield* controls.assertDone
+          const succeeded = events.find((event) => event._tag === "ToolCallSucceeded")
+          if (succeeded?._tag !== "ToolCallSucceeded") return expect.unreachable()
+          // The model reads a tool's output as JSON text.
+          const statuses = yield* Schema.decodeUnknownEffect(
+            Schema.fromJsonString(ExtensionStatuses),
+          )(succeeded.output)
+          const byId = new Map(statuses.map((status) => [status.id, status]))
+          expect(byId.get("@test/broken")).toMatchObject({ _tag: "Failed", phase: "setup" })
+          expect(byId.get("half")).toMatchObject({ _tag: "Failed", phase: "load" })
+          expect(byId.get("@test/switched-off")).toMatchObject({
+            _tag: "Disabled",
+            scope: "builtin",
+          })
+          expect(byId.get("@test/extensions-status")).toMatchObject({ _tag: "Active" })
+
+          // Health lists the disabled extension apart from the others.
+          const health = yield* client.extension.listStatus({
+            scope: { _tag: "Session", id: sessionId },
+          })
+          expect(health.disabledExtensions?.map((entry) => entry.manifest.id)).toEqual([
+            "@test/switched-off",
+          ])
+        }).pipe(Effect.scoped, Effect.timeout("12 seconds"))
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    15_000,
+  )
+
+  it.live(
+    "a reload sets an extension up again and keeps its process Resource",
+    () =>
+      Effect.gen(function* () {
+        const setups = yield* Ref.make(0)
+        const acquired = yield* Ref.make(0)
+        const released = yield* Ref.make(0)
+        class Counter extends Context.Service<Counter, { readonly id: string }>()(
+          "@gent/core/tests/runtime/extension-host.test/Counter",
+        ) {}
+        const Reload = request({
+          id: "reload",
+          input: Schema.String,
+          output: Schema.String,
+          execute: (id) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              const statuses = yield* ctx.Extensions.reload(id)
+              return statuses.map((status) => `${status._tag}:${status.id}`).join(",")
+            }).pipe(Effect.catchEager((error) => Effect.succeed(error.message))),
+        })
+        const reloadable = defineExtension({
+          id: "@test/reloadable",
+          setup: Effect.gen(function* () {
+            yield* Ref.update(setups, (count) => count + 1)
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "@test/reloadable/counter",
+                scope: "process",
+                layer: Layer.effect(
+                  Counter,
+                  Effect.acquireRelease(
+                    Ref.update(acquired, (count) => count + 1).pipe(
+                      Effect.as(Counter.of({ id: "counter" })),
+                    ),
+                    () => Ref.update(released, (count) => count + 1),
+                  ),
+                ),
+              }),
+            )
+            yield* host.register("request", Reload)
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          extensionInputs: [testTurnExtension, reloadable],
+          providerLayer,
+        })
+        const reload = (id: string) =>
+          client.extension.request({
+            sessionId,
+            branchId,
+            extensionId: ExtensionId.make("@test/reloadable"),
+            capabilityId: "reload",
+            input: id,
+          })
+
+        // The first request resolves the session's profile.
+        yield* reload("@test/nope")
+        const setupsBefore = yield* Ref.get(setups)
+        expect(yield* Ref.get(acquired)).toBe(1)
+
+        const statuses = yield* reload("@test/reloadable")
+        expect(statuses).toContain("Active:@test/reloadable")
+        expect(yield* Ref.get(setups)).toBe(setupsBefore + 1)
+        expect(yield* Ref.get(acquired)).toBe(1)
+        expect(yield* Ref.get(released)).toBe(0)
+
+        // An id the profile does not name fails, and sets nothing up.
+        expect(yield* reload("@test/nope")).toContain('No extension "@test/nope"')
+        expect(yield* Ref.get(setups)).toBe(setupsBefore + 1)
+      }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+    10_000,
+  )
 })
