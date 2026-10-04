@@ -156,6 +156,8 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   lastEventId: Schema.NullOr(Schema.Finite),
   modelId: Schema.optional(ModelId),
   reasoningLevel: Schema.optional(ReasoningEffort),
+  /** `/effort auto`: the effort router picks each turn's level (`Session.reasoningAuto`). */
+  reasoningAuto: Schema.optional(Schema.Literal(true)),
   /** The agent every turn of the session runs as (its admission, or the default). */
   agent: AgentName,
   /** What the next turn would use once session settings, config, and the
@@ -217,10 +219,15 @@ export const RespondInteractionInput = Schema.Struct({
 })
 export type RespondInteractionInput = typeof RespondInteractionInput.Type
 
+/** What `/effort` sets: a level, or `auto` for the effort router's pick each turn. */
+const EffortSetting = Schema.Union([ReasoningEffort, Schema.Literal("auto")])
+
 /** The session's mutable settings as stored: an undefined field is unset. */
 export const SessionSettings = Schema.Struct({
   modelId: Schema.UndefinedOr(ModelId),
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
+  /** `/effort auto`; never with `reasoningLevel`. */
+  reasoningAuto: Schema.optional(Schema.Literal(true)),
 })
 export type SessionSettings = typeof SessionSettings.Type
 
@@ -229,11 +236,15 @@ export type SessionSettings = typeof SessionSettings.Type
  * merges the change into it: a field left out stays as stored, `Some` sets it,
  * and `None` clears it. A client never sends back a field it did not change,
  * so a stale copy of the other field cannot overwrite it.
+ *
+ * `reasoningLevel` takes `auto` beside the levels: the effort router picks
+ * each turn's level (`Session.reasoningAuto`). A level leaves auto, and
+ * `None` clears both.
  */
 export const UpdateSessionSettingsInput = Schema.Struct({
   sessionId: SessionId,
   modelId: Schema.optionalKey(Schema.OptionFromNullOr(ModelId)),
-  reasoningLevel: Schema.optionalKey(Schema.OptionFromNullOr(ReasoningEffort)),
+  reasoningLevel: Schema.optionalKey(Schema.OptionFromNullOr(EffortSetting)),
 })
 export type UpdateSessionSettingsInput = typeof UpdateSessionSettingsInput.Type
 

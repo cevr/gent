@@ -807,6 +807,18 @@ export interface ModelRouterContribution {
   readonly name: string
   readonly models: ReadonlyArray<VirtualModel>
   readonly problems?: ReadonlyArray<VirtualModelProblem>
+  /**
+   * The effort router `/effort auto` runs (`Session.reasoningAuto`): every
+   * choice sets an effort and names no model. Not a model id: it is not
+   * listed or selectable. Core routes it at a user turn's first step, after
+   * a model route, with each choice's candidate the turn's model (none for a
+   * level the model does not take), and records the pick as a `ModelRouted`
+   * with `effortOnly`. A spawned child is never routed. On a model whose
+   * driver carries no effort change inside the conversation
+   * (`Model.carriesEffort`), a warm cache keeps the effort it was written at
+   * and `route` is not asked. The first registered router with one serves it.
+   */
+  readonly effort?: VirtualModel
   readonly route: (
     input: ModelRouteInput,
   ) => Effect.Effect<ModelRouteDecision, ExtensionServiceError, ExtensionContext>

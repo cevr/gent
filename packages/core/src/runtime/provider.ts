@@ -2951,6 +2951,43 @@ const virtualModelProblem = (
   return Option.none()
 }
 
+/** Why a router's effort router (`ModelRouterContribution.effort`) cannot serve; none when it can. */
+const effortRouterProblem = (model: VirtualModel): Option.Option<string> => {
+  if (model.choices.length === 0) return Option.some("it has no choices")
+  const named = model.choices.findIndex((choice) => Predicate.isNotUndefined(choice.model))
+  if (named >= 0)
+    return Option.some(`choice ${named + 1} names a model; an effort choice sets only an effort`)
+  const unset = model.choices.findIndex((choice) => Predicate.isUndefined(choice.effort))
+  if (unset >= 0) return Option.some(`choice ${unset + 1} sets no effort`)
+  if (model.fallback < 0 || model.fallback >= model.choices.length)
+    return Option.some(`its default choice ${model.fallback} is not one of its choices`)
+  return Option.none()
+}
+
+/**
+ * The effort router `/effort auto` runs: the first router's of the profile
+ * that has one (a router whose id a model driver holds serves nothing), or
+ * why it cannot run; none when no router has one.
+ */
+export const servedEffortRouter = (
+  profile: Pick<ResolvedProfile, "modelDrivers" | "modelRouters">,
+): Option.Option<Result.Result<ServedVirtualModel, string>> =>
+  Option.fromUndefinedOr(
+    [...profile.modelRouters.values()].find(
+      (router) => Predicate.isNotUndefined(router.effort) && !profile.modelDrivers.has(router.id),
+    ),
+  ).pipe(
+    Option.flatMap((router) =>
+      Option.map(Option.fromUndefinedOr(router.effort), (model) =>
+        Option.match(effortRouterProblem(model), {
+          onNone: () => Result.succeed({ router, model }),
+          onSome: (problem) =>
+            Result.fail(`Effort router "${router.id}/${model.name}": ${problem}`),
+        }),
+      ),
+    ),
+  )
+
 /**
  * The profile's routers' virtual models as catalog entries (`kind:
  * "virtual"`), and each one refused as a catalog failure under its router.
@@ -2973,6 +3010,14 @@ const virtualModelCatalog = (profile: Pick<ResolvedProfile, "modelDrivers" | "mo
       failures.push({
         driverId: router.id,
         error: `${router.id}/${problem.name}: ${problem.reason}`,
+      })
+    // The effort router is not a model: listed only when it cannot serve.
+    const effort = Option.fromUndefinedOr(router.effort)
+    const effortProblem = Option.flatMap(effort, effortRouterProblem)
+    if (Option.isSome(effort) && Option.isSome(effortProblem))
+      failures.push({
+        driverId: router.id,
+        error: `${router.id}/${effort.value.name}: ${effortProblem.value}`,
       })
     for (const model of router.models) {
       if (!model.choices.some((choice) => Predicate.isNotUndefined(choice.model))) continue

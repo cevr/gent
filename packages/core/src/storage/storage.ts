@@ -54,6 +54,7 @@ import {
   BRANCH_COLUMNS,
   sessionFromRow,
   type SessionRow,
+  storedReasoningLevel,
   toSqlNull,
 } from "./schema.js"
 import {
@@ -155,7 +156,7 @@ export interface SessionStorageService {
   ) => Effect.Effect<void, StorageError>
   readonly updateSessionSettings: (
     id: SessionId,
-    settings: Pick<Session, "modelId" | "reasoningLevel">,
+    settings: Pick<Session, "modelId" | "reasoningLevel" | "reasoningAuto">,
     updatedAt: Date,
   ) => Effect.Effect<void, StorageError>
   readonly setActiveBranch: (
@@ -273,7 +274,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               name: toSqlNull(session.name),
               cwd: toSqlNull(session.cwd),
               model_id: toSqlNull(session.modelId),
-              reasoning_level: toSqlNull(session.reasoningLevel),
+              reasoning_level: toSqlNull(Option.getOrUndefined(storedReasoningLevel(session))),
               active_branch_id: toSqlNull(session.activeBranchId),
               parent_session_id: toSqlNull(session.parentSessionId),
               parent_branch_id: toSqlNull(session.parentBranchId),
@@ -327,7 +328,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
         updateSessionSettings: Effect.fn("SessionStorage.updateSessionSettings")(
           function* (id, settings, updatedAt) {
             const workspaceId = yield* CurrentWorkspaceId
-            yield* sql`UPDATE sessions SET model_id = ${toSqlNull(settings.modelId)}, reasoning_level = ${toSqlNull(settings.reasoningLevel)}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId}`
+            yield* sql`UPDATE sessions SET model_id = ${toSqlNull(settings.modelId)}, reasoning_level = ${toSqlNull(Option.getOrUndefined(storedReasoningLevel(settings)))}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId}`
           },
           Effect.mapError(storageError("Failed to update session settings")),
         ),
