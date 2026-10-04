@@ -2486,6 +2486,17 @@ const takesEffortMarkers = (modelId: string): boolean => {
   return Number(major) * 100 + Number(minor) >= row.first
 }
 
+/**
+ * The catalog entries with `carriesEffort` on each model the Claude API
+ * takes effort markers on: `/effort auto` changes its level each turn there
+ * and keeps the cached prefix.
+ */
+const withMarkerCarrier = (models: ReadonlyArray<Model>): ReadonlyArray<Model> =>
+  models.map((model) => {
+    if (!takesEffortMarkers(model.id)) return model
+    return Model.make({ ...model, carriesEffort: true })
+  })
+
 /** The first version of each family that takes effort markers, as `major * 100 + minor`. */
 const EFFORT_MARKER_FIRST_VERSIONS = [
   { family: "opus", first: 500 },
@@ -2793,6 +2804,7 @@ export const buildAnthropicModelDriver = (
     ).pipe(
       Effect.map(withChildPromptCacheLifetime(promptCacheTtl)),
       Effect.map(withPromptCacheWritePrice(promptCacheTtl)),
+      Effect.map(withMarkerCarrier),
     ),
   cacheWritesByLifetime: anthropicCacheWritesByLifetime,
   retry: {

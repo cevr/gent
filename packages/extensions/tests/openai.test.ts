@@ -213,6 +213,22 @@ const makeDriver = (
     return { driver, cellRef }
   })
 // ── Tests ──
+describe("OpenAI catalog", () => {
+  it.live("a model that takes a configuration update is listed as carrying an effort change", () =>
+    Effect.gen(function* () {
+      const { driver } = yield* makeDriver()
+      const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
+      const models = yield* listModels(fixtureModelCatalog())
+      const carries = (id: string) =>
+        Option.map(
+          Option.fromUndefinedOr(models.find((model) => model.id === id)),
+          (model) => model.carriesEffort === true,
+        )
+      expect(carries("openai/gpt-6.1-sol")).toEqual(Option.some(true))
+      expect(carries("openai/gpt-5.4")).toEqual(Option.some(false))
+    }),
+  )
+})
 describe("OpenAI credential cache — initial seed from authInfo", () => {
   it.live("seed creds from authInfo are returned without invoking refresh", () =>
     Effect.gen(function* () {

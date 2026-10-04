@@ -47,12 +47,47 @@ import {
  * `reason` fits the user's latest request, then holds a warm model unless
  * the switch pays: a stronger choice needs the classifier's confidence, a
  * cheaper one must save more than rewriting the prompt cache on it costs.
+ *
+ * The entry `effort` is not a model: it is the effort router `/effort auto`
+ * runs (`ModelRouterContribution.effort`), and each of its choices sets an
+ * effort and names no model. Without one, the built-in levels serve:
+ * low, medium, high (the default, the main agent's level) and xhigh, each
+ * offered only where the turn's model takes it.
  */
 
 // ── config ──────────────────────────────────────────────────────────────────
 
 /** The router id: the provider segment of every virtual model this extension serves. */
 const ROUTER_ID = "router"
+
+/** The `routers` entry that holds the effort router, not a model. */
+const EFFORT_ROUTER = "effort"
+
+/**
+ * The effort router when the config names none. Each reason is what the
+ * classifier reads; the default is the main agent's own level.
+ */
+const BUILTIN_EFFORT_ROUTER: VirtualModel = {
+  name: EFFORT_ROUTER,
+  label: "Effort",
+  choices: [
+    { effort: "low", reason: "quick questions, lookups, small mechanical edits and short answers" },
+    {
+      effort: "medium",
+      reason: "ordinary work: a focused change or an explanation in familiar code",
+    },
+    {
+      effort: "high",
+      reason: "hard work: design, debugging, changes across several files, careful reasoning",
+    },
+    {
+      effort: "xhigh",
+      reason:
+        "the hardest work: deep debugging, subtle correctness or concurrency, a large redesign",
+    },
+  ],
+  fallback: 2,
+}
 
 const ChoiceConfig = Schema.Struct({
   /** Absent: the choice keeps the model the branch runs on and sets only `effort`. */
@@ -207,8 +242,18 @@ const classifierInput = (messages: ReadonlyArray<Message>): string => {
 
 const choiceLabel = (index: number) => `choice${index + 1}`
 
-/** The decision: one label per choice, its `reason` the criterion. */
-const routeDecision = (model: VirtualModel) =>
+/** The choices the turn can run: those with a candidate (`ModelRouteInput.candidates`). */
+const runnableChoices = (input: ModelRouteInput): ReadonlyArray<number> =>
+  input.model.choices.flatMap((_, index) => {
+    if (Option.isNone(Option.flatten(Option.fromUndefinedOr(input.candidates[index])))) return []
+    return [index]
+  })
+
+/**
+ * The decision: one label per choice the turn can run, its `reason` the
+ * criterion. A label keeps its choice's place (`choice3` is the third).
+ */
+const routeDecision = (model: VirtualModel, runnable: ReadonlyArray<number>) =>
   Decision.make({
     input: Schema.String,
     decisions: {
@@ -216,7 +261,7 @@ const routeDecision = (model: VirtualModel) =>
         instructions:
           "Pick the choice whose description best fits the work the latest request asks for. Judge the work; do not answer the request.",
         criteria: Object.fromEntries(
-          model.choices.map((choice, index) => [choiceLabel(index), choice.reason]),
+          runnable.map((index) => [choiceLabel(index), model.choices[index]?.reason ?? ""]),
         ),
       }),
     },
@@ -330,7 +375,10 @@ const routeWith =
   (routers: ReadonlyMap<string, ConfiguredRouter>): ModelRouterContribution["route"] =>
   (input) =>
     Effect.gen(function* () {
-      if (input.model.choices.length === 1) return { choice: 0, reason: "the only choice" }
+      const runnable = runnableChoices(input)
+      // One choice to run, or none (core falls back): no classifier to ask.
+      if (runnable.length <= 1)
+        return { choice: runnable[0] ?? input.model.fallback, reason: "the only choice" }
       const ctx = yield* ExtensionContext
       const named = Option.flatMap(Option.fromUndefinedOr(routers.get(input.model.name)), (r) =>
         Option.map(r.classifier, String),
@@ -348,14 +396,15 @@ const routeWith =
           ),
       })
       const reply = yield* ctx.Models.decide({
-        definition: routeDecision(input.model),
+        definition: routeDecision(input.model, runnable),
         input: classifierInput(input.messages),
         model: classifier,
         timeoutMs: CLASSIFY_DEADLINE_MS,
       })
       const answer = reply.answers.choice
-      const picked = input.model.choices.findIndex(
-        (_, index) => choiceLabel(index) === answer.label,
+      const picked = Option.getOrElse(
+        Option.fromUndefinedOr(runnable.find((index) => choiceLabel(index) === answer.label)),
+        () => -1,
       )
       if (picked < 0) return yield* routeError(`the classifier answered "${answer.label}"`)
       const confidence = answer.confidence ?? answer.probabilities[answer.label] ?? 0
@@ -371,22 +420,32 @@ const routeWith =
 
 /**
  * @gent/router: every `routers` entry of the config files as a virtual model
- * `router/<name>`. An entry that cannot serve is reported as a catalog
- * failure, and a turn on it fails with why. The files are read when the
- * extensions load.
+ * `router/<name>`, and the effort router `/effort auto` runs: the `effort`
+ * entry, else the built-in levels. An entry that cannot serve is reported as
+ * a catalog failure, and a turn on it fails with why; an `effort` entry that
+ * cannot serve leaves `/effort auto` with no router, so its turns run at the
+ * agent's level. The files are read when the extensions load.
  */
 export const RouterExtension = defineExtension({
   id: "@gent/router",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     const { routers, problems } = yield* readRouters(host.home, host.cwd)
-    if (routers.size === 0 && problems.length === 0) return
+    const effortProblem = problems.some((problem) => problem.name === EFFORT_ROUTER)
+    const effort = Option.match(Option.fromUndefinedOr(routers.get(EFFORT_ROUTER)), {
+      onSome: (router) => Option.some(router.model),
+      onNone: () => Option.liftPredicate(BUILTIN_EFFORT_ROUTER, () => !effortProblem),
+    })
     yield* host.register("modelRouter", {
       id: ROUTER_ID,
       name: "Router",
-      models: [...routers.values()].map((router) => router.model),
+      models: [...routers.values()].flatMap((router) => {
+        if (router.model.name === EFFORT_ROUTER) return []
+        return [router.model]
+      }),
       problems,
       route: routeWith(routers),
+      ...omitUndefined({ effort: Option.getOrUndefined(effort) }),
     })
   }),
 })

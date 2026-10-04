@@ -1977,7 +1977,17 @@ export const buildOpenAIModelDriver = (
       }),
     listModels: (catalog, authInfo) =>
       Effect.sync(() => {
-        const models = catalogModels(catalog, "openai", RESPONSES_PROMPT_CACHE_TTL, RESPONSES_CLASS)
+        // A model that takes `configuration_update` carries an effort change
+        // inside the conversation: `/effort auto` keeps its cached prefix.
+        const models = catalogModels(
+          catalog,
+          "openai",
+          RESPONSES_PROMPT_CACHE_TTL,
+          RESPONSES_CLASS,
+        ).map((model) => {
+          if (!takesConfigurationUpdates(model.id)) return model
+          return Model.make({ ...model, carriesEffort: true })
+        })
         // When OAuth is active, filter to allowed models + zero pricing
         const auth = Option.fromNullishOr(authInfo)
         if (Option.isNone(auth) || auth.value._tag !== "Oauth") return models

@@ -181,6 +181,29 @@ describe("driver catalog", () => {
     })
   })
 
+  it.live(
+    "the Anthropic driver marks the models that take an effort marker as carrying an effort change",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* anthropicDriverIn("1h")
+        const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
+        const models = yield* listModels(
+          anthropicCatalog(
+            { id: "claude-opus-5", name: "Opus 5", reasoning: true },
+            { id: "claude-sonnet-5", name: "Sonnet 5", reasoning: true },
+            { id: "claude-sonnet-5-5", name: "Sonnet 5.5", reasoning: true },
+            { id: "claude-haiku-4-5", name: "Haiku 4.5", reasoning: true },
+          ),
+        )
+        expect(models.map((model) => [String(model.id), model.carriesEffort === true])).toEqual([
+          ["anthropic/claude-opus-5", true],
+          ["anthropic/claude-sonnet-5", false],
+          ["anthropic/claude-sonnet-5-5", true],
+          ["anthropic/claude-haiku-4-5", false],
+        ])
+      }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   test("a driver lists only its own provider's models a turn can drive", () => {
     const catalog = catalogOf(
       {
