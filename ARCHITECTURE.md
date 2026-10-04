@@ -97,12 +97,14 @@ updates this list in the same commit.
     (Fable 5, Mythos, Opus 5.5), `/effort off` sends the lowest effort with
     the adaptive thinking every other level sends: an effort change the
     conversation carries, which the status row and the receipt name. Under
-    `/effort auto` the level changes only where it keeps the cache: a model
-    whose driver lists it as a carrier (`Model.carriesEffort`) takes the
-    effort router's pick on each user turn, and any other model holds the
-    level it last ran at while its prompt cache is warm and asks the router
-    again only on a cold cache, which writes the prefix again anyway
-    (`routeEffort` in `packages/core/src/runtime/turn.ts`). Receipts: `modelChangeNotice` and
+    `/effort auto` the level changes only where it keeps the cache. On a
+    warm cache core asks the driver the turn dispatches through whether it
+    carries each change from this history (`ModelDriverContribution.carriesEffort`,
+    reached through `ModelResolver.carriesEffort`): the router is offered
+    only the held level and the levels the driver carries, and with none
+    of those the level holds and no classifier is asked. A cold cache
+    writes the prefix again anyway, so every level is offered
+    (`admitEfforts` and `routeEffort` in `packages/core/src/runtime/turn.ts`). Receipts: `modelChangeNotice` and
     `assistantRunEfforts` in `packages/core/src/runtime/model-context.ts`,
     `readKnownSteps` in `packages/core/src/runtime/turn.ts`, `effortCarrier`
     in `packages/extensions/src/providers.ts`, `withEffortMarkers` in
@@ -889,20 +891,41 @@ Shape:
   problem with it is a catalog failure under the router's extension, as for
   a virtual model. On a session on auto, the turn asks it once per user
   turn, at step 1, after a model route (`routeEffort`, `runtime/turn.ts`,
-  effort-routing section). It offers only the choices the turn's model runs
-  at their own level (`effectiveEffort` returns the level unchanged), so the
-  levels filter to what the model accepts. It never routes for a child (a
-  child keeps its own effort), nor on a history that ends on an assistant
-  message, nor on a model with no reasoning. A model with no carrier
-  (`Model.carriesEffort`, set by the Anthropic driver where
-  `takesEffortMarkers` and by the OpenAI driver where
-  `takesConfigurationUpdates`) holds the level of its last effort route
-  while its prompt cache is warm and asks no classifier; a cold cache or a
-  first turn asks (decided by the cache-rate north star). The pick is
-  recorded as `ModelRouted` with `effortOnly: true` (an additive, optional
-  field); a replay and a recovered turn reuse the recorded route by message
-  id and ask nothing. Its classifier cost lands on the event, the session's
-  cost and the turn's ledger, as a model route's does. The effort route's
+  effort-routing section). The model facts come from the model the turn
+  dispatches to (`modelDriver.contextModelId`: a `driverOverride` reads its
+  own catalog entry), and the receipts name the model the session asked
+  for. It offers only the choices that model runs at their own level
+  (`effectiveEffort` returns the level unchanged), so the levels filter to
+  what the model accepts. It never routes for a child (a child keeps its
+  own effort), nor on a history that ends on an assistant message, nor on a
+  model with no reasoning. On a warm cache a choice is offered only at the
+  held level or where the driver carries the change from this history
+  (`ModelDriverContribution.carriesEffort`: the Anthropic driver where
+  `takesEffortMarkers` and the thinking plan stays the same, the OpenAI
+  driver where `takesConfigurationUpdates`); with no such choice the level
+  holds and no classifier is asked, and the receipt says why. A cold cache
+  or a first turn offers every level (decided by the cache-rate north star:
+  a driver fact asked per transition, with a receipt, over a static model
+  flag). A hold is a decision, not a fallback; `fallback: true` marks only a
+  router that failed or picked a choice the turn cannot run, and then the
+  turn keeps the exact level the branch ran at, `max` and the model's
+  default included, though no choice names it. Under a virtual model whose
+  router also serves the effort router, the model route's call carries the
+  effort choices (`ModelRouteInput.effort`, each choice with a model of the
+  route's choices that takes it), and the router answers both in one
+  classifier call (`ModelRouteDecision.effort`): two receipts, one charge on
+  the model route (decided by the cost north star). A router that answers no
+  `effort` leaves core to ask the effort router alone; when a combined call
+  fails, the effort route falls back too, with the same reason, and nothing
+  is asked again. The pick is recorded as `ModelRouted` with `effortOnly: true` (an
+  additive, optional field). Once that receipt is stored, a replay and a
+  recovered turn run at it, charge it and ask nothing, whether or not an
+  effort router still serves. A process that dies after the classifier
+  answered and before the receipt was stored asks again on recovery, and the
+  first call's cost is not recorded. Its classifier cost lands on the event,
+  the session's cost and the turn's ledger, as a model route's does; the
+  ledger keys a route by turn, kind and router, so a model route and an
+  effort route of one name are each charged. The effort route's
   level wins over a model route choice's level: auto is the session's own
   setting (the `applyTurnRoute` order). With no effort router served, auto
   runs at the agent's level and records nothing. The shipped router serves
@@ -911,7 +934,9 @@ Shape:
   bad `effort` entry serves none and is reported. The session metrics keep
   the newest effort route apart from the model route
   (`SessionRuntimeMetrics.effortRouted`), and the TUI status row reads
-  `auto → high` (short form `auto→high`, the last label to give way).
+  `auto → high` (short form `auto→high`, the last label to give way). After
+  a route that fell back, the `/effort` picker's `auto` row reads
+  `routes fall back: <reason>` (no classifier signed in, a failed call).
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in
