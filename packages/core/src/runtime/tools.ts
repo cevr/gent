@@ -1286,14 +1286,20 @@ export const compileToolPolicy = (
  *
  * The loop knows a call was admitted and never recorded a result. It does not
  * know whether the tool kept a durable receipt it can settle from. A tool that
- * keeps such receipts answers here. Any other call is reported to the model as
- * interrupted and does not run again, unless its last run parked on an
- * interaction (the turn record marks it), in which case it runs again to take
- * the answer.
- *
- * Core defines the question. No implementation means every pending call that
- * did not park is reported as interrupted.
+ * keeps such receipts answers through its own `recover` (`tool({ recover })`),
+ * which runs as a leaf of the extension that registered it. Any other call is
+ * reported to the model as interrupted and does not run again, unless its last
+ * run parked on an interaction (the turn record marks it), in which case it
+ * runs again to take the answer.
  */
+
+/** The call a crash left in flight, as a tool's `recover` reads it. */
+export interface ToolRecoveryCall {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly assistantMessageId: MessageId
+  readonly toolCall: Prompt.ToolCallPart
+}
 
 /**
  * What recovering one pending call produced.
@@ -1320,12 +1326,9 @@ type ToolCallRecoveryServices =
 
 interface ToolCallRecoveryApi {
   /** Recover one pending call, or report that it is not recoverable here. */
-  readonly recover: (params: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly assistantMessageId: MessageId
-    readonly toolCall: Prompt.ToolCallPart
-  }) => Effect.Effect<ToolCallRecoveryOutcome, ToolCallRecoveryError, ToolCallRecoveryServices>
+  readonly recover: (
+    params: ToolRecoveryCall,
+  ) => Effect.Effect<ToolCallRecoveryOutcome, ToolCallRecoveryError, ToolCallRecoveryServices>
 }
 
 export class ToolCallRecoveryError extends Schema.TaggedError<ToolCallRecoveryError>()(

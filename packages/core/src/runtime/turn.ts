@@ -4339,27 +4339,47 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const recoveredResults: Array<Prompt.ToolResultPart> = []
       const nativeToolCalls: Array<Prompt.ToolCallPart> = []
       // A tool that keeps durable receipts can settle a call the crash left in
-      // flight. Which tools those are is not the loop's business; every other
-      // call is decided below by the parked mark.
+      // flight: its own `recover` answers, as a leaf of its extension. Every
+      // other call is decided below by the parked mark.
       const recovery = yield* Effect.serviceOption(ToolCallRecoveryService)
+      const recoverers = new Map(
+        staticToolEntries(turnRegistry(params.turnProfile)).flatMap((entry) => {
+          const recover = getToolMetadata(entry.capability).recover
+          if (Predicate.isUndefined(recover)) return []
+          return [
+            [String(getToolId(entry.capability)), { extensionId: entry.extensionId, recover }],
+          ]
+        }),
+      )
       for (const toolCall of pendingToolCalls) {
-        const outcome: ToolCallRecoveryOutcome = yield* Option.match(recovery, {
-          onNone: () =>
-            Effect.succeed<ToolCallRecoveryOutcome>(
-              ToolCallRecoveryOutcome.cases.NotRecovered.make({}),
+        const call = {
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          assistantMessageId: pendingAssistant.value.id,
+          toolCall,
+        }
+        const owned = Option.fromUndefinedOr(recoverers.get(toolCall.name))
+        const outcome: ToolCallRecoveryOutcome = yield* Option.match(owned, {
+          onSome: ({ extensionId, recover }) =>
+            recover(call).pipe(
+              provideExtensionLeaf({ extensionId, toolCallId: ToolCallId.make(toolCall.id) }),
+              runAgentLoopTurnProfile(params.turnProfile),
+              asAgentLoopError("Tool call recovery failed"),
             ),
-          onSome: (service) =>
-            service
-              .recover({
-                sessionId: scope.sessionId,
-                branchId: scope.branchId,
-                assistantMessageId: pendingAssistant.value.id,
-                toolCall,
-              })
-              .pipe(
-                runAgentLoopTurnProfile(params.turnProfile),
-                asAgentLoopError("Tool call recovery failed"),
-              ),
+          onNone: () =>
+            Option.match(recovery, {
+              onNone: () =>
+                Effect.succeed<ToolCallRecoveryOutcome>(
+                  ToolCallRecoveryOutcome.cases.NotRecovered.make({}),
+                ),
+              onSome: (service) =>
+                service
+                  .recover(call)
+                  .pipe(
+                    runAgentLoopTurnProfile(params.turnProfile),
+                    asAgentLoopError("Tool call recovery failed"),
+                  ),
+            }),
         })
         if (outcome._tag === "Suspended") {
           return {

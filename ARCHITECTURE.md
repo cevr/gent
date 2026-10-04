@@ -885,9 +885,14 @@ Shape:
   before a restart is taken; the mark clears before the call runs again. A mark
   or a clear that cannot be written fails the step. Any other pending call was cut
   short while it ran; the model reads a failed result with reason
-  `Interrupted` and the call does not run again (a cell with a receipt still
-  settles from it first). The binding replay rules then decide whether a
-  parked call can run again or fails.
+  `Interrupted` and the call does not run again. A tool that keeps durable
+  receipts settles its own pending calls first: `tool({ recover })` runs once
+  per pending call of that tool, as a leaf of its extension under the turn
+  profile, and answers `Settled` (the result its receipt gives), `Suspended`
+  (the turn parks on that request), or `NotRecovered` (the rules above). Each
+  tool answers only for its own calls, so tools of several extensions settle
+  in one step. The binding replay rules then decide whether a parked call can
+  run again or fails.
 - Narrow retry: `retryProviderCall` retries transient provider failures with
   bounded exponential backoff plus jitter, and only before observable output.
   The policy lives on the `ModelDriverContribution` (`retry: RetryPolicy`),

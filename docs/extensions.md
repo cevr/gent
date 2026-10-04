@@ -363,7 +363,12 @@ export default defineExtension({
   `tools[i] (id): runs on the branch-tool feature "…", which this root does not install (it installs "…")`.
 - Optional: `readonly`, `destructive`, `interactive`, `dispatches`,
   `promptSnippet`, `promptGuidelines`, `summary` (the one-line result summary
-  a client shows for a call)
+  a client shows for a call), `recover` (settles a call of this tool that a
+  crash left with no result: the loop calls it when the turn resumes, with the
+  services the body gets, and it answers `Settled`, `Suspended` or
+  `NotRecovered` from `ToolCallRecoveryOutcome` in
+  `@gent/core/extensions/branch-tools`; a tool without it is reported to the
+  model as interrupted)
 
 The body may yield only the services every root gives a tool: `ExtensionContext`,
 the platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`,

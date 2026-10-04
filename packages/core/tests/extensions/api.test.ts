@@ -40,6 +40,7 @@ import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
 
 import type { ChildProcessSpawner } from "effect/process"
 import { SqlClient } from "effect/sql"
+import { ToolCallRecoveryOutcome } from "../../src/runtime/tools"
 import type * as PublicExtensionApi from "@gent/core/extensions/api"
 
 // ── define extension ────────────────────────────────────────────────────────
@@ -1082,6 +1083,40 @@ describe("Capability factory-shape locks (compile-time)", () => {
       // @ts-expect-error -- `ReadOnlyService` is no tool service and no named resource provides it
       // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
       execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    expect(true).toBe(true)
+  })
+
+  test("a tool's recover reads the services its body may read, and no other", () => {
+    const reader = defineResource({
+      id: "recover/reader",
+      scope: "process",
+      layer: Layer.succeed(ReadOnlyService, ReadOnlyService.of({ read: Effect.succeed("x") })),
+    })
+    tool({
+      id: "recover-declared",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      resources: [reader],
+      execute: () => Effect.succeed("x"),
+      recover: () =>
+        Effect.gen(function* () {
+          yield* ExtensionContext
+          yield* ReadOnlyService
+          return ToolCallRecoveryOutcome.cases.NotRecovered.make({})
+        }),
+    })
+    tool({
+      id: "recover-undeclared",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      execute: () => Effect.succeed("x"),
+      // @ts-expect-error -- `ReadOnlyService` is no tool service and no named resource provides it
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
+      recover: () =>
+        Effect.map(ReadOnlyService, () => ToolCallRecoveryOutcome.cases.NotRecovered.make({})),
     })
     expect(true).toBe(true)
   })
