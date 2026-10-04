@@ -25,6 +25,7 @@ import {
 import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
 import {
+  type AgentName,
   cacheWriteRate,
   type ImageLimit,
   type Model,
@@ -1648,6 +1649,12 @@ export type CompactionSummary = typeof CompactionSummary.Type
 
 export interface CompactionRequest {
   readonly modelId: ModelId
+  /**
+   * The agent whose window is compacted. A compactor that serves only some
+   * agents fails with `ModelCompactionError` for the others, and the loop
+   * truncates their window instead.
+   */
+  readonly agentName: AgentName
   readonly sessionId: SessionId
   readonly branchId: BranchId
   /** The history leaving the window, oldest first, an earlier handoff marker included. */
@@ -1988,6 +1995,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly modelId: ModelId
+  readonly agentName: AgentName
   readonly messages: ReadonlyArray<Message>
   readonly budget: ModelContextBudget
   /** The provider's measure of the last step, if one was reported. */
@@ -2139,6 +2147,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   const summary = yield* compactor.value
     .compact({
       modelId: params.modelId,
+      agentName: params.agentName,
       sessionId: params.sessionId,
       branchId: params.branchId,
       history,

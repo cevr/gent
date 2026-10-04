@@ -1038,12 +1038,14 @@ describe("session metrics", () => {
       })
 
   /**
-   * Two turns on a small window, so the second turn's projection overflows
-   * and `compact` runs. Returns the stored events of the branch.
+   * Two turns of `agentName` on a small window, so the second turn's
+   * projection overflows and `compact` runs. Returns the stored events of the
+   * branch.
    */
   const runCompactingTurns = (
     compact: ModelContextCompactor["Service"]["compact"],
     summaryModels: readonly Model[],
+    agentName: AgentName = DEFAULT_AGENT_NAME,
   ) =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
@@ -1073,13 +1075,15 @@ describe("session metrics", () => {
       })
       const layer = createE2ELayer({
         providerLayer,
-        agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: smallWindow.id })],
+        agents: [AgentDefinition.make({ name: agentName, model: smallWindow.id })],
         extensionInputs: [compactor],
         models: [smallWindow, ...summaryModels],
       })
       return yield* Effect.gen(function* () {
         const { client } = yield* createRpcClient(layer)
-        const { sessionId, branchId } = yield* client.session.create({})
+        const { sessionId, branchId } = yield* client.session.create({
+          admission: { agent: agentName },
+        })
         for (const content of [`first ${"a".repeat(20_000)}`, `second ${"b".repeat(20_000)}`]) {
           yield* client.message.send({ sessionId, branchId, content })
           yield* waitFor(
@@ -1170,6 +1174,42 @@ describe("session metrics", () => {
       expect(first?._tag === "TurnCompleted" && first.costUsd).toBeGreaterThan(0)
       expect(second?._tag === "TurnCompleted" && second.usage).toBeDefined()
       expect(second?._tag === "TurnCompleted" && second.costUsd).toBeUndefined()
+    }),
+  )
+
+  it.live("a compactor that serves one agent summarizes its window and truncates the others", () =>
+    Effect.gen(function* () {
+      const film = AgentName.make("film")
+      const asked: Array<AgentName> = []
+      // A project compactor for the film agent only: any other agent's window falls back to truncation.
+      const filmOnly: ModelContextCompactor["Service"]["compact"] = (request) => {
+        asked.push(request.agentName)
+        if (request.agentName !== film) {
+          return Effect.fail(
+            new ModelCompactionError({ modelId: request.modelId, reason: "NotFilmAgent" }),
+          )
+        }
+        return Effect.succeed({ notice: "film summary", modelId: request.modelId })
+      }
+      type Events = Effect.Success<ReturnType<typeof runCompactingTurns>>
+      const compactedBy = (events: Events) =>
+        events.some((event) => event._tag === "ModelContextProjected" && event.compacted)
+      const notices = (events: Events) =>
+        events.flatMap((event) => {
+          if (event._tag !== "ErrorOccurred") return []
+          return [event.error]
+        })
+
+      const filmEvents = yield* runCompactingTurns(filmOnly, [], film)
+      expect(compactedBy(filmEvents)).toBe(true)
+      expect(notices(filmEvents)).toEqual([])
+
+      const otherEvents = yield* runCompactingTurns(filmOnly, [])
+      expect(compactedBy(otherEvents)).toBe(false)
+      expect(notices(otherEvents)).toEqual([
+        expect.stringContaining("Context compaction failed (NotFilmAgent)"),
+      ])
+      expect(asked).toEqual([film, DEFAULT_AGENT_NAME])
     }),
   )
 })

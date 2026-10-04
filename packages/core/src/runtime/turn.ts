@@ -2722,6 +2722,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     sessionId: params.sessionId,
     branchId: params.branchId,
     modelId: contextModelId,
+    agentName: resolved.agent.name,
     messages: resolved.messages,
     budget,
     measure: params.measure,

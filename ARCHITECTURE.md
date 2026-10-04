@@ -793,7 +793,10 @@ Shape:
   and reports the omission. The `@gent/compaction` extension installs the
   summariser; core keeps only the window marker shape (`context-window`,
   optional `summarized` range) that status and the TUI read. A compactor that
-  fails degrades to truncation with a visible notice. The marker's notice
+  fails degrades to truncation with a visible notice. The request names the
+  agent whose window it compacts (`agentName`), so a project compactor can
+  serve one agent and fail with `ModelCompactionError` for the others, whose
+  windows are then truncated. The marker's notice
   names the session id, the branch id, and the replaced id range so the model
   can page the replaced history from the cell.
 - Project instructions are an extension, not a profile field. `@gent/agents`

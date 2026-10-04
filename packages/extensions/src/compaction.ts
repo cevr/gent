@@ -392,7 +392,7 @@ const handoffNotice = (params: {
 
 /** Summarize the history leaving the window into the notice the handoff marker carries. */
 export const compactModelContext = Effect.fn("ModelCompaction.compactModelContext")(function* (
-  params: Omit<CompactionRequest, "summaryModel" | "kept"> & {
+  params: Omit<CompactionRequest, "summaryModel" | "kept" | "agentName"> & {
     readonly retainedBindings: ReadonlyArray<string>
     readonly summaryModel: Effect.Effect<
       LanguageModel.LanguageModel,
@@ -453,7 +453,8 @@ export const ModelContextCompactorLive = Layer.succeed(
             .list({ sessionId: request.sessionId, branchId: request.branchId })
             .pipe(Effect.catchTag("StorageError", () => Effect.succeed<ReadonlyArray<string>>([]))),
       })
-      const { summaryModel, kept, ...rest } = request
+      // The shipped compactor serves every agent.
+      const { summaryModel, kept, agentName: _everyAgent, ...rest } = request
       return yield* compactModelContext({
         ...rest,
         retainedBindings: referencedBindings(retainedBindings, kept),

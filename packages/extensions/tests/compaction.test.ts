@@ -5,6 +5,7 @@ import * as Prompt from "effect/ai/Prompt"
 import * as AiError from "effect/ai/AiError"
 import {
   BranchId,
+  DEFAULT_AGENT_NAME,
   MessageId,
   SessionId,
   dateFromMillis,
@@ -204,6 +205,7 @@ describe("context handoff", () => {
         const compactor = yield* ModelContextCompactor
         const result = yield* compactor.compact({
           modelId,
+          agentName: DEFAULT_AGENT_NAME,
           sessionId,
           branchId,
           history: history(),
@@ -536,6 +538,7 @@ describe("context handoff", () => {
       const compactor = yield* ModelContextCompactor
       const result = yield* compactor.compact({
         modelId,
+        agentName: DEFAULT_AGENT_NAME,
         sessionId,
         branchId,
         history: history(),
