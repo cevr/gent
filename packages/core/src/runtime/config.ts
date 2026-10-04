@@ -13,9 +13,9 @@ import {
 } from "effect"
 import {
   AgentName,
-  type AgentPatch,
+  AuthoredAgentPatch,
   mergeAgentPatches,
-  StoredAgentPatch,
+  type StoredAgentPatch,
   type DriverRef,
   DriverOverridesFromConfig,
   isRetiredDriverRef,
@@ -149,10 +149,13 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    * names a registered agent replaces the fields it sets. A project entry
    * replaces the fields it names over the user entry, and a run's own
    * `RunSpec.overrides` over both (`resolveAgentRoster`). An entry written
-   * before `tools` (`allowedTools`, `deniedTools`, `modelId`) decodes into
-   * `tools` and `model`.
+   * before `tools` keeps its meaning: `modelId` is `model`, both tool lists
+   * are `tools`, and one list alone edits the tools the entry lands on (a
+   * deny list takes ids away from them). A key the entry does not name fails
+   * the file, naming the agent and the key (`AuthoredAgentPatch`); gent
+   * writes an entry an older gent reads (`StoredAgentPatch`).
    */
-  agents: Schema.optional(Schema.Record(AgentName, StoredAgentPatch)),
+  agents: Schema.optional(Schema.Record(AgentName, AuthoredAgentPatch)),
   /**
    * models.dev providers to enable, patch or add, by provider id. A key that
    * names a catalog provider enables it and patches its entry; a new key adds
@@ -193,10 +196,10 @@ const configUpdates = {
 
 /** User then project `agents` entries: a project entry replaces only the fields it names. */
 const mergeAgentEntries = (
-  user: Readonly<Record<AgentName, AgentPatch>>,
-  project: Readonly<Record<AgentName, AgentPatch>>,
-): Readonly<Record<AgentName, AgentPatch>> => {
-  const merged: Record<AgentName, AgentPatch> = { ...user }
+  user: Readonly<Record<AgentName, StoredAgentPatch>>,
+  project: Readonly<Record<AgentName, StoredAgentPatch>>,
+): Readonly<Record<AgentName, StoredAgentPatch>> => {
+  const merged: Record<AgentName, StoredAgentPatch> = { ...user }
   for (const [key, patch] of Object.entries(project)) {
     const name = AgentName.make(key)
     merged[name] = mergeAgentPatches(merged[name] ?? {}, patch)

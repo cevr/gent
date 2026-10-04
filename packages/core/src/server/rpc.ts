@@ -1,12 +1,12 @@
 import { type Effect, Option, Predicate, Schema, Stream } from "effect"
 import { Headers } from "effect/http"
 import {
-  AgentDefinition,
   AgentName,
   Model,
   ModelId,
   ReasoningEffort,
   SessionDepthLimitError,
+  StoredAgentDefinition,
 } from "../domain/agent.js"
 import { InvalidStateError, NotFoundError, ProviderError, StorageError } from "../domain/errors.js"
 import { EventEnvelope, EventStoreError } from "../domain/event.js"
@@ -433,10 +433,11 @@ export const DriverInfo = Schema.Struct({
 })
 
 /** Snapshot returned by `driver.list`: every registered driver and the
- *  agent catalogue, as the session's profile sees them. */
+ *  agent catalogue, as the session's profile sees them. Each agent goes out
+ *  with the tool lists an older client reads (`StoredAgentDefinition`). */
 export class DriverListResult extends Schema.Class<DriverListResult>("DriverListResult")({
   drivers: Schema.Array(DriverInfo),
-  agents: Schema.Array(AgentDefinition),
+  agents: Schema.Array(StoredAgentDefinition),
 }) {}
 
 export const SetDriverOverrideInput = Schema.Struct({

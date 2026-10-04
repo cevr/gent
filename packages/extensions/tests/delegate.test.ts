@@ -5,6 +5,7 @@ import {
   Fiber,
   FileSystem,
   Option,
+  Order,
   Predicate,
   Record,
   Ref,
@@ -1407,6 +1408,44 @@ describe("a start nobody waits for", () => {
           })
           const childMessages = yield* client.message.list(child)
           expect(childMessages.filter((m) => m.role === "user")).toHaveLength(1)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  // A start written before `tools` (a replayed call, or a model that read
+  // the older guidance) names `modelId` and an allow list; both keep their meaning.
+  it.live(
+    "a start with the old override keys runs the child on that model with those tools",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const childTools: Array<ReadonlyArray<string>> = []
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            if (promptTexts(options.prompt)[0]?.endsWith(childTask) === true) {
+              childTools.push(options.tools.map((entry) => entry.name).toSorted(Order.String))
+              return Effect.succeed(reply("pong"))
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              const overrides = {
+                modelId: "test/old-model",
+                allowedTools: ["read", "delegate.start"],
+              }
+              return Effect.succeed(
+                toolStep("delegate.start", { todo: childTask, overrides }, "start-1"),
+              )
+            }
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "delegate with the old keys")
+          yield* afterCompletion(harness)
+          const child = yield* childOf(harness)
+          expect(yield* modelsOf(harness, child)).toEqual([ModelId.make("test/old-model")])
+          // The child still cannot delegate, whatever the old allow list named.
+          expect(childTools).toEqual([["read"]])
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,

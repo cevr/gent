@@ -434,18 +434,8 @@ const AgentPath = Schema.Union([
 
 // ── agent definition ────────────────────────────────────────────────────────
 
-/**
- * AgentDefinition — agent identity + defaults.
- *
- * Per `composability-not-flags`, agent specs carry only what makes the agent
- * what it is: name, description, model, prompt, tool patterns, the paths
- * its file tools may touch, sampling defaults, and driver routing. One schema, written two ways: TS through
- * `host.register("agent", AgentDefinition.make(...))`, and JSON in a config
- * file's `agents` key, an `AgentPatch` by name that creates an agent or
- * reshapes a registered one (`resolveAgentRoster`). Per-run overrides are the
- * same patch, on `RunSpec`.
- */
-export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
+/** The fields of `AgentDefinition`. */
+const agentDefinitionFields = {
   name: AgentName,
   description: Schema.optional(Schema.String),
   model: Schema.optional(ModelId),
@@ -477,24 +467,48 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
    */
   maxModelAttempts: Schema.optional(Schema.Natural),
   driver: Schema.optional(DriverRef),
-}) {
+}
+
+/** What `new AgentDefinition` and `AgentDefinition.make` take. */
+type AgentDefinitionInput = Schema.Struct.MakeIn<typeof agentDefinitionFields>
+
+/**
+ * AgentDefinition — agent identity + defaults.
+ *
+ * Per `composability-not-flags`, agent specs carry only what makes the agent
+ * what it is: name, description, model, prompt, tool patterns, the paths
+ * its file tools may touch, sampling defaults, and driver routing. One
+ * schema, written two ways: TS through `host.register("agent",
+ * AgentDefinition.make(...))`, and JSON in a config file's `agents` key, an
+ * `AgentPatch` by name that creates an agent or reshapes a registered one
+ * (`resolveAgentRoster`). Per-run overrides are a part of the same patch, on
+ * `RunSpec`. Stored rows and the wire carry it through `StoredAgentPatch`,
+ * `StoredRunOverrides` and `StoredAgentDefinition`, which an older gent reads.
+ */
+export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")(
+  agentDefinitionFields,
+) {
   /**
    * Builds an agent and refuses a key the schema does not name. The schema
-   * drops such a key, so an extension written before `tools` (`allowedTools`,
-   * `deniedTools`) would run with every tool; it fails to load instead.
+   * would drop such a key, so an extension written before `tools`
+   * (`allowedTools`, `deniedTools`) or with a misspelled field would run
+   * with every tool; it fails where it builds the agent instead. `make` is
+   * `new`, so the check has one owner.
    */
-  static override make(
-    input: (typeof AgentDefinition)["~type.make.in"],
-    options?: Schema.MakeOptions,
-  ): AgentDefinition {
-    const unknown = Object.keys(input).filter((key) => !Object.hasOwn(AgentDefinition.fields, key))
+  // @effect-diagnostics-next-line overriddenSchemaConstructor:off -- the check refuses only keys the schema does not name, and a decode passes only named keys; `new` must be as strict as `make`.
+  constructor(props: AgentDefinitionInput, options?: Schema.MakeOptions) {
+    const unknown = Object.keys(props).filter((key) => !Object.hasOwn(agentDefinitionFields, key))
     if (unknown.length > 0) {
       // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- A definition with a key the schema drops is programmer misuse; it must fail where the extension builds it.
       throw new Error(
-        `AgentDefinition "${input.name}" has keys the schema does not name: ${unknown.join(", ")}. Tool lists are \`tools\` patterns: allowedTools [a, b] is tools [a, b]; deniedTools [x] is tools ["*", "!x"].`,
+        `AgentDefinition "${props.name}" has keys the schema does not name: ${unknown.join(", ")}. Tool lists are \`tools\` patterns: allowedTools [a, b] is tools [a, b]; deniedTools [x] is tools ["*", "!x"].`,
       )
     }
-    return super.make(input, options)
+    super(props, options)
+  }
+
+  static override make(input: AgentDefinitionInput, options?: Schema.MakeOptions): AgentDefinition {
+    return new AgentDefinition(input, options)
   }
 
   /**
@@ -510,81 +524,302 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
 
 /**
  * An agent's fields but `name`, each optional (every field but `name` is
- * optional already): a config `agents` entry and a run's `RunSpec.overrides`.
- * Applied to an agent it replaces each field it names (`applyAgentPatch`).
+ * optional already): what a config `agents` entry and a run's overrides
+ * write. Applied to an agent it replaces each field it names
+ * (`mergeAgentPatches`).
  */
-export const AgentPatch = Schema.Struct(Struct.omit(AgentDefinition.fields, ["name"]))
-export type AgentPatch = typeof AgentPatch.Type
+const AgentPatch = Schema.Struct(Struct.omit(agentDefinitionFields, ["name"]))
+type AgentPatch = typeof AgentPatch.Type
 
-/** The fields an agent patch carried before `tools` and `model`. */
-const LegacyAgentPatch = Schema.Struct({
-  ...AgentPatch.fields,
-  modelId: Schema.optional(ModelId),
-  allowedTools: Schema.optional(Schema.Array(Schema.String)),
-  deniedTools: Schema.optional(Schema.Array(Schema.String)),
-})
-type LegacyAgentPatch = typeof LegacyAgentPatch.Type
+// ── old tool lists ──────────────────────────────────────────────────────────
 
 /**
- * The two old tool lists as one pattern list: the allowed ids, then each
- * denied id negated; a deny list alone starts from `*`.
+ * What an old patch's tool lists did to the tools of the agent it landed on,
+ * where one list alone did not replace them. `Deny` (a `deniedTools` list
+ * alone) takes the ids away from the inherited tools. `Allow` (an
+ * `allowedTools` list alone) replaces them with the ids and keeps the
+ * inherited denials, less its own `denied` (from a later deny list). Both
+ * lists together replace the tools, so they decode into `tools`. Internal to
+ * the stored codecs and the merge: no author writes it.
  */
-const legacyToolPatterns = (
-  allowed: Option.Option<ReadonlyArray<string>>,
-  denied: Option.Option<ReadonlyArray<string>>,
-): Option.Option<ReadonlyArray<string>> => {
-  if (Option.isNone(allowed) && Option.isNone(denied)) return Option.none()
-  const negated = Option.getOrElse(denied, () => []).map((id) => `!${id}`)
-  return Option.some([...Option.getOrElse(allowed, () => ["*"]), ...negated])
+const LegacyToolEdit = Schema.TaggedUnion({
+  Deny: { denied: Schema.Array(Schema.String) },
+  Allow: { allowed: Schema.Array(Schema.String), denied: Schema.Array(Schema.String) },
+})
+type LegacyToolEdit = typeof LegacyToolEdit.Type
+
+const negated = (ids: ReadonlyArray<string>): ReadonlyArray<string> => ids.map((id) => `!${id}`)
+
+/** The tools an old edit leaves on an agent whose patterns are `inherited`. */
+const applyLegacyToolEdit = (
+  inherited: Option.Option<ReadonlyArray<string>>,
+  edit: LegacyToolEdit,
+): ReadonlyArray<string> =>
+  LegacyToolEdit.match(edit, {
+    Deny: ({ denied }) => [...Option.getOrElse(inherited, () => ["*"]), ...negated(denied)],
+    Allow: ({ allowed, denied }) => [
+      ...allowed,
+      ...Option.getOrElse(inherited, () => []).filter((pattern) => pattern.startsWith("!")),
+      ...negated(denied),
+    ],
+  })
+
+/** `first` then `second` as one edit: what applying both in turn leaves. */
+const composeLegacyToolEdits = (first: LegacyToolEdit, second: LegacyToolEdit): LegacyToolEdit =>
+  LegacyToolEdit.match(second, {
+    Deny: ({ denied }) =>
+      LegacyToolEdit.match(first, {
+        Deny: (edit): LegacyToolEdit =>
+          LegacyToolEdit.cases.Deny.make({ denied: [...edit.denied, ...denied] }),
+        Allow: (edit): LegacyToolEdit =>
+          LegacyToolEdit.cases.Allow.make({
+            allowed: edit.allowed,
+            denied: [...edit.denied, ...denied],
+          }),
+      }),
+    Allow: ({ allowed, denied }) =>
+      LegacyToolEdit.cases.Allow.make({ allowed, denied: [...first.denied, ...denied] }),
+  })
+
+/**
+ * The two lists an older gent reads for `patterns`, when they say the same:
+ * plain ids are an allow list, `"*"` then negated ids a deny list, and plain
+ * ids then negated ids both. Any other wildcard or order cannot be said in
+ * two lists: it is an empty allow list, so an older reader holds no tool
+ * rather than every tool.
+ */
+interface LegacyToolLists {
+  readonly allowedTools?: ReadonlyArray<string>
+  readonly deniedTools?: ReadonlyArray<string>
 }
 
-const migrateAgentPatch = (stored: LegacyAgentPatch): AgentPatch => {
+const legacyToolLists = (patterns: ReadonlyArray<string>): LegacyToolLists => {
+  const plain = (pattern: string) => !pattern.includes("*") && !pattern.startsWith("!")
+  const denial = (pattern: string) => pattern.startsWith("!") && plain(pattern.slice(1))
+  const ids = (denials: ReadonlyArray<string>) => denials.map((pattern) => pattern.slice(1))
+  if (patterns[0] === "*" && patterns.slice(1).every(denial)) {
+    return { deniedTools: ids(patterns.slice(1)) }
+  }
+  let split = patterns.findIndex((pattern) => !plain(pattern))
+  if (split < 0) split = patterns.length
+  const rest = patterns.slice(split)
+  if (!rest.every(denial)) return { allowedTools: [] }
+  if (rest.length === 0) return { allowedTools: patterns }
+  return { allowedTools: patterns.slice(0, split), deniedTools: ids(rest) }
+}
+
+// ── stored agents ───────────────────────────────────────────────────────────
+
+/**
+ * The keys a stored or sent agent carried before `tools`: the two tool
+ * lists, and `modelId`, a run override's name for `model`.
+ */
+const LegacyAgentKeys = {
+  modelId: Schema.optional(ModelId).annotate({ description: "Older name of `model`." }),
+  allowedTools: Schema.optional(Schema.Array(Schema.String)).annotate({
+    description: "Older form of `tools`: exactly these tool ids.",
+  }),
+  deniedTools: Schema.optional(Schema.Array(Schema.String)).annotate({
+    description: "Older form of `tools`: every tool the agent holds but these ids.",
+  }),
+}
+
+/** A patch as stored rows, config files and old clients carry it. */
+const StoredPatchFields = Schema.Struct({ ...AgentPatch.fields, ...LegacyAgentKeys })
+type StoredPatchFields = typeof StoredPatchFields.Type
+
+/** A patch as resolution reads it: its fields, and the edit of old tool lists. */
+const PatchFields = Schema.Struct({
+  ...AgentPatch.fields,
+  legacyTools: Schema.optional(LegacyToolEdit),
+})
+export type StoredAgentPatch = typeof PatchFields.Type
+
+/**
+ * Read a stored patch. New keys win: `tools` over the two lists, `model` over
+ * `modelId`. Both lists together are `tools`; one list alone is a
+ * `LegacyToolEdit`, applied to the tools the patch lands on.
+ */
+const readStoredPatch = (stored: StoredPatchFields): StoredAgentPatch => {
   const { modelId, allowedTools, deniedTools, ...patch } = stored
   const model = Option.orElse(Option.fromUndefinedOr(patch.model), () =>
     Option.fromUndefinedOr(modelId),
   )
-  const tools = Option.orElse(Option.fromUndefinedOr(patch.tools), () =>
-    legacyToolPatterns(Option.fromUndefinedOr(allowedTools), Option.fromUndefinedOr(deniedTools)),
+  const allowed = Option.fromUndefinedOr(allowedTools)
+  const denied = Option.fromUndefinedOr(deniedTools)
+  const tools: Pick<StoredAgentPatch, "tools" | "legacyTools"> = Option.match(
+    Option.fromUndefinedOr(patch.tools),
+    {
+      onSome: (patterns) => ({ tools: patterns }),
+      onNone: () => {
+        if (Option.isSome(allowed) && Option.isSome(denied)) {
+          return { tools: [...allowed.value, ...negated(denied.value)] }
+        }
+        if (Option.isSome(allowed)) {
+          return {
+            legacyTools: LegacyToolEdit.cases.Allow.make({ allowed: allowed.value, denied: [] }),
+          }
+        }
+        if (Option.isSome(denied)) {
+          return { legacyTools: LegacyToolEdit.cases.Deny.make({ denied: denied.value }) }
+        }
+        return {}
+      },
+    },
   )
-  return {
-    ...patch,
-    ...omitUndefined({ model: Option.getOrUndefined(model), tools: Option.getOrUndefined(tools) }),
-  }
+  return omitUndefined({ ...patch, model: Option.getOrUndefined(model), ...tools })
 }
 
 /**
- * An agent patch as config files and stored rows hold it. A patch written
- * before `tools` (the `allowedTools`/`deniedTools` lists, `modelId`) decodes
- * into `tools` and `model`; `tools` or `model`, when present, win. It
- * encodes in the new shape only.
+ * Write a patch so an older gent reads it too. Every key is additive: `model`
+ * goes out under `model` and `modelId`; `tools` goes out with the two lists
+ * that say the same (`legacyToolLists`), or an empty allow list where they
+ * cannot, so an older reader never holds more tools than the patterns. An
+ * old edit goes back out as the list it was read from. `paths` has no older
+ * form: an older reader ignores it, and it is no sandbox.
  */
-export const StoredAgentPatch = LegacyAgentPatch.pipe(
-  Schema.decodeTo(Schema.toType(AgentPatch), {
-    decode: SchemaGetter.transform(migrateAgentPatch),
-    encode: SchemaGetter.transform((patch: AgentPatch): LegacyAgentPatch => patch),
+const writeStoredPatch = (patch: StoredAgentPatch): StoredPatchFields => {
+  const { legacyTools, ...fields } = patch
+  const lists = Option.match(Option.fromUndefinedOr(fields.tools), {
+    onSome: legacyToolLists,
+    onNone: (): LegacyToolLists =>
+      Option.match(Option.fromUndefinedOr(legacyTools), {
+        onNone: (): LegacyToolLists => ({}),
+        onSome: (edit) =>
+          LegacyToolEdit.match(edit, {
+            Deny: ({ denied }): LegacyToolLists => ({ deniedTools: denied }),
+            // The previous reader keeps the inherited denials of an allow
+            // list alone; the edit's own denials leave the list.
+            Allow: ({ allowed, denied }): LegacyToolLists => ({
+              allowedTools: allowed.filter((id) => !denied.includes(id)),
+            }),
+          }),
+      }),
+  })
+  return omitUndefined({ ...fields, modelId: fields.model, ...lists })
+}
+
+/**
+ * An agent patch as config files and stored rows hold it (see
+ * `readStoredPatch`, `writeStoredPatch`). It reads any key it does not name
+ * as absent: a reader keeps rows a newer gent wrote.
+ */
+export const StoredAgentPatch = StoredPatchFields.pipe(
+  Schema.decodeTo(Schema.toType(PatchFields), {
+    decode: SchemaGetter.transform(readStoredPatch),
+    encode: SchemaGetter.transform(writeStoredPatch),
   }),
 )
+
+/** Agent field names a config entry may write: the patch fields and the old keys. */
+const authoredKeys: ReadonlySet<string> = new Set(Object.keys(StoredPatchFields.fields))
+
+/**
+ * A config `agents` entry: a stored patch that refuses a key it does not
+ * name, since a misspelled field would leave an agent with every tool. The
+ * error names the entry and the key.
+ */
+export const AuthoredAgentPatch = Schema.StructWithRest(StoredPatchFields, [
+  Schema.Record(
+    Schema.String.check(Schema.makeFilter((key: string) => !authoredKeys.has(key))),
+    Schema.Unknown.check(Schema.makeFilter(() => false, { message: "is not an agent field" })),
+  ),
+]).pipe(
+  Schema.decodeTo(Schema.toType(PatchFields), {
+    decode: SchemaGetter.transform(readStoredPatch),
+    encode: SchemaGetter.transform(writeStoredPatch),
+  }),
+)
+
+/** The fields a run may override: the ones a model picks for one task. */
+const RUN_OVERRIDE_KEYS = [
+  "model",
+  "tools",
+  "paths",
+  "reasoningEffort",
+  "contextLength",
+  "maxSteps",
+  "maxModelAttempts",
+  "systemPromptAddendum",
+] as const
+
+/**
+ * A run's overrides as `RunSpec` stores them and a `delegate.start` call
+ * sends them: the run fields of `StoredAgentPatch`, through the same reader
+ * and writer, so an old row or call keeps its meaning.
+ */
+export const StoredRunOverrides = StoredPatchFields.mapFields(
+  Struct.pick([...RUN_OVERRIDE_KEYS, "modelId", "allowedTools", "deniedTools"] as const),
+).pipe(
+  Schema.decodeTo(
+    Schema.toType(
+      PatchFields.mapFields(Struct.pick([...RUN_OVERRIDE_KEYS, "legacyTools"] as const)),
+    ),
+    {
+      decode: SchemaGetter.transform(readStoredPatch),
+      encode: SchemaGetter.transform(writeStoredPatch),
+    },
+  ),
+)
+
+// ── agent resolution ────────────────────────────────────────────────────────
 
 /**
  * `first` then `second`: each field `second` names replaces the one in
  * `first`, except `systemPromptAddendum`, which appends after a blank line,
- * since an addendum adds to the agent's own prompt. User then project config
- * entries merge this way.
+ * since an addendum adds to the agent's own prompt, and an old tool edit,
+ * which applies to the tools `first` leaves. User then project config
+ * entries merge this way, and a run's overrides over both.
  */
-export const mergeAgentPatches = (first: AgentPatch, second: AgentPatch): AgentPatch => {
+export const mergeAgentPatches = (
+  first: StoredAgentPatch,
+  second: StoredAgentPatch,
+): StoredAgentPatch => {
   const addenda = [first.systemPromptAddendum, second.systemPromptAddendum].filter(
     Predicate.isString,
   )
   return {
-    ...first,
-    ...omitUndefined(second),
+    ...Struct.omit(first, ["tools", "legacyTools"]),
+    ...omitUndefined(Struct.omit(second, ["tools", "legacyTools"])),
+    ...mergeTools(first, second),
     ...(addenda.length > 0 && { systemPromptAddendum: addenda.join("\n\n") }),
   }
 }
 
+/** The tools `second` leaves over `first`: new patterns replace, an old edit applies. */
+const mergeTools = (
+  first: StoredAgentPatch,
+  second: StoredAgentPatch,
+): Pick<StoredAgentPatch, "tools" | "legacyTools"> => {
+  if (Predicate.isNotUndefined(second.tools)) return { tools: second.tools }
+  return Option.match(Option.fromUndefinedOr(second.legacyTools), {
+    onNone: () => omitUndefined({ tools: first.tools, legacyTools: first.legacyTools }),
+    onSome: (edit) =>
+      Option.match(Option.fromUndefinedOr(first.tools), {
+        onSome: (patterns) => ({ tools: applyLegacyToolEdit(Option.some(patterns), edit) }),
+        onNone: () => ({
+          legacyTools: Option.match(Option.fromUndefinedOr(first.legacyTools), {
+            onNone: () => edit,
+            onSome: (earlier) => composeLegacyToolEdits(earlier, edit),
+          }),
+        }),
+      }),
+  })
+}
+
+/** The agent `name` that `patch` describes; an old tool edit applies to every tool. */
+const agentFromPatch = (name: AgentName, patch: StoredAgentPatch): AgentDefinition => {
+  const { legacyTools, ...fields } = patch
+  const tools = Option.match(Option.fromUndefinedOr(legacyTools), {
+    onNone: () => fields.tools,
+    onSome: (edit) => applyLegacyToolEdit(Option.none(), edit),
+  })
+  return AgentDefinition.make({ ...fields, tools, name })
+}
+
 /** `agent` reshaped by `patch` as `mergeAgentPatches` merges: config entries, then a run's overrides. */
-const applyAgentPatch = (agent: AgentDefinition, patch: AgentPatch): AgentDefinition =>
-  AgentDefinition.make({ ...mergeAgentPatches(agent, patch), name: agent.name })
+const applyAgentPatch = (agent: AgentDefinition, patch: StoredAgentPatch): AgentDefinition =>
+  agentFromPatch(agent.name, mergeAgentPatches({ ...agent }, patch))
 
 /**
  * The agent a session runs as: `name` from the roster (`resolveAgentRoster`)
@@ -592,9 +827,9 @@ const applyAgentPatch = (agent: AgentDefinition, patch: AgentPatch): AgentDefini
  */
 export const resolveSessionAgent = (params: {
   readonly agents: Iterable<AgentDefinition>
-  readonly configAgents: Option.Option<Readonly<Record<AgentName, AgentPatch>>>
+  readonly configAgents: Option.Option<Readonly<Record<AgentName, StoredAgentPatch>>>
   readonly name: AgentName
-  readonly overrides: Option.Option<AgentPatch>
+  readonly overrides: Option.Option<StoredAgentPatch>
 }): Option.Option<AgentDefinition> =>
   Option.map(
     Option.fromUndefinedOr(resolveAgentRoster(params.agents, params.configAgents).get(params.name)),
@@ -613,7 +848,7 @@ export const resolveSessionAgent = (params: {
  */
 export const resolveAgentRoster = (
   agents: Iterable<AgentDefinition>,
-  configAgents: Option.Option<Readonly<Record<AgentName, AgentPatch>>>,
+  configAgents: Option.Option<Readonly<Record<AgentName, StoredAgentPatch>>>,
 ): ReadonlyMap<AgentName, AgentDefinition> => {
   const roster = new Map<AgentName, AgentDefinition>()
   for (const agent of agents) roster.set(agent.name, agent)
@@ -621,13 +856,35 @@ export const resolveAgentRoster = (
   for (const [key, patch] of Object.entries(entries)) {
     const name = AgentName.make(key)
     const agent = Option.match(Option.fromUndefinedOr(roster.get(name)), {
-      onNone: () => AgentDefinition.make({ ...patch, name }),
+      onNone: () => agentFromPatch(name, patch),
       onSome: (registered) => applyAgentPatch(registered, patch),
     })
     roster.set(name, agent)
   }
   return roster
 }
+
+/**
+ * An agent as the wire sends it: the definition, and the two tool lists an
+ * older client reads (`writeStoredPatch`). An old definition's lists read
+ * into `tools`; a definition inherits nothing, so one list alone applies to
+ * every tool.
+ */
+export const StoredAgentDefinition = Schema.Struct({
+  ...StoredPatchFields.fields,
+  name: AgentName,
+}).pipe(
+  Schema.decodeTo(Schema.toType(AgentDefinition), {
+    decode: SchemaGetter.transform(
+      ({ name, ...stored }: StoredPatchFields & { readonly name: AgentName }) =>
+        agentFromPatch(name, readStoredPatch(stored)),
+    ),
+    encode: SchemaGetter.transform((agent: AgentDefinition) => ({
+      ...writeStoredPatch({ ...agent }),
+      name: agent.name,
+    })),
+  }),
+)
 
 // Default model — used when an agent has no model set
 export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")
@@ -686,11 +943,11 @@ export const effectiveModelDriver = (
 
 /**
  * Rows written before `parentToolCallId` was dropped still carry it; a struct
- * decode ignores the extra key. Overrides written before `tools` decode
- * through `StoredAgentPatch`.
+ * decode ignores the extra key. Overrides go through `StoredRunOverrides`,
+ * which reads rows written before `tools` and writes rows an older gent reads.
  */
 export const RunSpecSchema = Schema.Struct({
-  overrides: Schema.optional(StoredAgentPatch),
+  overrides: Schema.optional(StoredRunOverrides),
 })
 export type RunSpec = typeof RunSpecSchema.Type
 

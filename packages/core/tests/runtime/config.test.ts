@@ -16,7 +16,13 @@ import {
   Schema,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { AgentDefinition, AgentName, DriverRef, ModelId } from "../../src/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  DriverRef,
+  ModelId,
+  resolveAgentRoster,
+} from "../../src/domain/agent"
 import {
   ConfigService,
   isProjectExtensionDirectoryTrusted,
@@ -547,14 +553,14 @@ describe("user configuration", () => {
             encodeJson({
               trustedProjects: ["/x"],
               futureField: { nested: [1, 2] },
-              agents: { main: { reasoningEffort: "high", futureOverride: true } },
+              agents: { main: { reasoningEffort: "high" } },
             }),
           )
           yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
           expect(yield* readRaw).toEqual({
             trustedProjects: ["/x"],
             futureField: { nested: [1, 2] },
-            agents: { main: { reasoningEffort: "high", futureOverride: true } },
+            agents: { main: { reasoningEffort: "high" } },
             driverOverrides: { main: { _tag: "Model", id: "anthropic" } },
           })
           // Clearing the last override removes the key it owns, and only that.
@@ -562,7 +568,7 @@ describe("user configuration", () => {
           expect(yield* readRaw).toEqual({
             trustedProjects: ["/x"],
             futureField: { nested: [1, 2] },
-            agents: { main: { reasoningEffort: "high", futureOverride: true } },
+            agents: { main: { reasoningEffort: "high" } },
           })
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),
@@ -929,13 +935,26 @@ describe("user configuration", () => {
             },
           }),
         )
-        expect(config.agents?.[AgentName.make("main")]).toEqual({
-          model: ModelId.make("openai/gpt-5"),
-          tools: ["*", "!bash"],
-        })
-        expect(config.agents?.[AgentName.make("painter")]).toEqual({
-          tools: ["film.look", "read"],
-        })
+        const roster = resolveAgentRoster([], Option.fromUndefinedOr(config.agents))
+        const held = (name: string) =>
+          ["film.look", "read", "bash"].filter((id) =>
+            roster.get(AgentName.make(name))?.admitsTool(id),
+          )
+        expect(roster.get(AgentName.make("main"))?.model).toBe(ModelId.make("openai/gpt-5"))
+        expect(held("main")).toEqual(["film.look", "read"])
+        expect(held("painter")).toEqual(["film.look", "read"])
+      }),
+    )
+
+    // A misspelled field would be dropped, and the entry would make an agent
+    // with every tool; the file fails to load instead.
+    it.live("a config agent entry with an unknown key fails, naming the agent and the key", () =>
+      Effect.gen(function* () {
+        const error = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
+          encodeJson({ agents: { painter: { toolz: ["read"] } } }),
+        ).pipe(Effect.flip)
+        expect(String(error)).toContain('["agents"]["painter"]["toolz"]')
+        expect(String(error)).toContain("is not an agent field")
       }),
     )
 
@@ -1282,6 +1301,22 @@ describe("agents from config over RPC", () => {
         { path: "apps/animations/src/films", access: "write" },
         { path: ".claude/skills/film", access: "read" },
       ])
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive("an old project deny list takes tools away from the user's allow list", () =>
+    Effect.gen(function* () {
+      const painter = AgentName.make("painter")
+      yield* runOneTurn({
+        agents: [],
+        user: { agents: { [painter]: { allowedTools: ["film.look", "film.check", "read"] } } },
+        project: { agents: { [painter]: { deniedTools: ["film.check"] } } },
+        agent: Option.some(painter),
+        step: {
+          ...textStep("done"),
+          assertOptions: (options) => expect(advertised(options)).toEqual(["film__look", "read"]),
+        },
+      })
     }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
   )
 

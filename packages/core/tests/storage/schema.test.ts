@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/sql"
 import {
   BranchStorage,
@@ -12,7 +12,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Database } from "bun:sqlite"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
-import { AgentName, ModelId } from "../../src/domain/agent"
+import { AgentName, ModelId, RunSpecSchema } from "../../src/domain/agent"
 import * as Prompt from "effect/ai/Prompt"
 import { BranchId, MessageId, SessionId, CurrentWorkspaceId } from "../../src/domain/ids"
 import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"
@@ -260,10 +260,14 @@ describe("session admission", () => {
           const sessions = yield* SessionStorage
           // The copied `interactive` key stays in the row and decodes away:
           // whether a turn can ask comes from its origin now.
-          // The old deny list decodes into tool patterns.
+          // The old deny list reads as the run spec reads it: an edit that
+          // takes the id away from the tools the agent inherits.
+          const readOldRunSpec = yield* Schema.decodeEffect(RunSpecSchema)({
+            overrides: { deniedTools: ["delegate.start"] },
+          })
           expect((yield* sessions.getSession(recorded))?.admission).toEqual({
             agent: AgentName.make("helper"),
-            runSpec: { overrides: { tools: ["*", "!delegate.start"] } },
+            runSpec: readOldRunSpec,
           })
           expect((yield* sessions.getSession(queued))?.admission).toEqual({
             agent: AgentName.make("helper"),

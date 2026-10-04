@@ -2999,6 +2999,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.",
   },
   {
+    // `new AgentDefinition` must be as strict as `make`: a key the schema
+    // drops would leave an agent with every tool.
+    file: "packages/core/src/domain/agent.ts",
+    text: "overriddenSchemaConstructor:off -- the check refuses only keys the schema does not name, and a decode passes only named keys; `new` must be as strict as `make`.",
+  },
+  {
     // The replay test runs the registered thread.start twice with one call id,
     // which no model turn can do; the tool it finds is the erased registration.
     file: "packages/extensions/tests/session-tools.test.ts",

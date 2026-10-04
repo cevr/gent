@@ -33,7 +33,6 @@ import {
   ActorCommandId,
   AGENT_PROMPT_PRIORITY,
   AgentDefinition,
-  AgentPatch,
   type AgentEvent,
   AgentName,
   BranchId,
@@ -43,6 +42,7 @@ import {
   ExtensionHost,
   ExtensionId,
   type ExtensionServiceError,
+  StoredRunOverrides,
   headChars,
   headTailChars,
   isRuntimeUserMessage,
@@ -1165,27 +1165,26 @@ const ownedChild = Effect.fn("Delegate.ownedChild")(function* (requestId: Reques
 /**
  * A call's `tools` replace the definition's, so the delegation tools are
  * taken back after them. A call that names no tools keeps the definition's,
- * as `agents.delegate` in config reshapes it.
+ * as `agents.delegate` in config reshapes it. A call written with the old
+ * `allowedTools` or `deniedTools` alone keeps the denials the definition
+ * holds (`StoredRunOverrides` reads it as an edit of the inherited tools),
+ * and one with both lists reads as `tools`.
  */
-const childOverrides = (overrides: (typeof StartParams.Type)["overrides"]) =>
-  Option.match(Option.fromUndefinedOr(overrides?.tools), {
+const childOverrides = (
+  overrides: typeof StoredRunOverrides.Type,
+): typeof StoredRunOverrides.Type =>
+  Option.match(Option.fromUndefinedOr(overrides.tools), {
     onNone: () => overrides,
     onSome: (tools) => ({ ...overrides, tools: [...tools, ...CHILD_TOOL_DENIALS] }),
   })
 
-/** The agent fields a call may override: the ones a model picks for one task. */
-const ChildOverrides = AgentPatch.mapFields(
-  Struct.pick([
-    "model",
-    "tools",
-    "paths",
-    "reasoningEffort",
-    "contextLength",
-    "maxSteps",
-    "maxModelAttempts",
-    "systemPromptAddendum",
-  ]),
-)
+/** A call's overrides as the run spec holds them; the old keys keep their meaning. */
+const readOverrides = (overrides: typeof StoredRunOverrides.Encoded) =>
+  Schema.decodeEffect(StoredRunOverrides)(overrides).pipe(
+    Effect.mapError(
+      (error) => new DelegateError({ message: `Invalid overrides: ${error.message}` }),
+    ),
+  )
 
 const StartParams = Schema.Struct({
   todo: Schema.String.annotate({
@@ -1198,7 +1197,9 @@ const StartParams = Schema.Struct({
         "`fresh` (default): the child sees only the todo. `fork`: the child also sees every message you see now, and can continue your work as it stands.",
     }),
   ),
-  overrides: Schema.optionalKey(ChildOverrides),
+  // The wire form: the tool runner hands `execute` the input as sent, and
+  // `readOverrides` reads it, old keys included.
+  overrides: Schema.optionalKey(Schema.toEncoded(StoredRunOverrides)),
 })
 
 export const StartChild = tool({
@@ -1223,6 +1224,9 @@ export const StartChild = tool({
     if (Predicate.isUndefined(ctx.toolCallId)) {
       return yield* new DelegateError({ message: "delegate.start requires a host-owned tool call" })
     }
+    const overrides = yield* Effect.transposeOption(
+      Option.map(Option.fromUndefinedOr(params.overrides), readOverrides),
+    )
     const entry = yield* admitChild({
       prompt: params.todo,
       ...Option.match(
@@ -1234,7 +1238,10 @@ export const StartChild = tool({
       ),
       requestId: RequestId.make(ctx.toolCallId),
       toolCallId: ctx.toolCallId,
-      runSpec: { overrides: childOverrides(params.overrides) },
+      runSpec: Option.match(overrides, {
+        onNone: () => ({}),
+        onSome: (read) => ({ overrides: childOverrides(read) }),
+      }),
     })
     return { requestId: entry.requestId, sessionId: entry.sessionId, branchId: entry.branchId }
   }),
