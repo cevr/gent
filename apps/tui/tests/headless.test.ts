@@ -125,6 +125,7 @@ const branchClient = (input: {
   readonly ownTurn: ReadonlyArray<AgentEvent>
   readonly sendAttempt?: (send: {
     readonly requestId?: string
+    readonly unattended?: boolean
   }) => Effect.Effect<void, RpcClientError>
   readonly sendFailure?: HeadlessRunnerTestError
   readonly respondInteraction?: (answer: {
@@ -168,7 +169,7 @@ const branchClient = (input: {
         ),
     },
     message: {
-      send: (send: { readonly requestId?: string }) =>
+      send: (send: { readonly requestId?: string; readonly unattended?: boolean }) =>
         Option.match(Option.fromUndefinedOr(input.sendAttempt), {
           onNone: () => Effect.void,
           onSome: (attempt) => attempt(send),
@@ -466,6 +467,21 @@ describe("runHeadless", () => {
       expect(new Set(observedRequestIds).size).toBe(1)
       // Never empty — runner must always supply an id.
       expect(observedRequestIds[0]).not.toBe("<missing>")
+    }),
+  )
+
+  // The server keeps the mark on the message: a usage limit the turn hits
+  // arms no auto-resume, since nobody would watch the turn it starts.
+  headlessTest("the run's message says no user watches the turn it opens", () =>
+    Effect.gen(function* () {
+      const sends: Array<boolean> = []
+      const client = branchClient({
+        ownTurn: [completed()],
+        sendAttempt: (send) => Effect.sync(() => sends.push(send.unattended === true)),
+      })
+      const exit = yield* Effect.exit(run(client))
+      expect(exit._tag).toBe("Success")
+      expect(sends).toEqual([true])
     }),
   )
 

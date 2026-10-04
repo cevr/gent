@@ -271,6 +271,15 @@ export const MessageMetadata = Schema.Struct({
    */
   fromClient: Schema.optional(Schema.Boolean),
   /**
+   * The client that sent this message has no user watching the turns it
+   * opens: a headless run, which exits once its turn ends. It rides only
+   * beside `fromClient`: `SendMessageInput.unattended` sets it, and an
+   * extension's `Session.send` removes it. Work that would start a turn
+   * later on the user's behalf (an auto-resume) reads it from the branch's
+   * newest client message and starts nothing.
+   */
+  unattended: Schema.optional(Schema.Boolean),
+  /**
    * The words the user wrote, when an extension delivered them inside its
    * own text (a `/btw` question the pane sends its fork). It carries no
    * authority: a turn's user comes from `fromClient` alone. A summary that
@@ -310,7 +319,8 @@ export const clientMetadata = (metadata?: MessageMetadata): MessageMetadata => {
 
 /**
  * The envelope of a message an extension sends: its own id as the author
- * over whatever it set, no client origin (only the server stamps one), and
+ * over whatever it set, no client origin (`fromClient`, `unattended`: only
+ * the server stamps one), and
  * none of the loop's marks: no `joinedTurn`, and no runtime custom type
  * (`RuntimeUserMessageType`). Either would make recovery skip the turn the
  * message opens. An extension keeps its own custom types.
@@ -321,6 +331,7 @@ export const extensionMetadata = (
 ): MessageMetadata => {
   const {
     fromClient: _origin,
+    unattended: _unattended,
     joinedTurn: _joined,
     customType,
     ...rest

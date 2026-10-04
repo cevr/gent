@@ -139,6 +139,11 @@ export const SendMessageInput = Schema.Struct({
   branchId: BranchId,
   content: Schema.String,
   requestId: Schema.optional(RequestId),
+  /**
+   * No user watches the turn this message opens (a headless run). The
+   * server keeps it on the message (`MessageMetadata.unattended`).
+   */
+  unattended: Schema.optional(Schema.Boolean),
 })
 export type SendMessageInput = typeof SendMessageInput.Type
 
