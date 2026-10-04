@@ -1076,32 +1076,42 @@ const extensionResourceIdentity = (extension: LoadedExtension): string => {
   return `${extension.scope}:${extension.manifest.id}:${source}`
 }
 
-/** The Resource scopes a scope's Resources build over, itself included. */
-const resourceScopesUnder: Record<ResourceScope, ReadonlyArray<ResourceScope>> = {
-  process: ["process"],
-  branch: ["process", "branch"],
-}
+const resourceScopesOf = (extension: LoadedExtension): ReadonlySet<ResourceScope> =>
+  new Set((extension.contributions.resources ?? []).map((resource) => resource.scope))
 
 /**
- * The build key of each extension's `scope` Resources: `root` and the
- * identities of the extensions, in resolution order up to and including it,
- * whose Resources it builds over. Two builds with one key build the same
- * code over the same services, so a later build can share an earlier one. An
- * edit changes the key of the edited extension and of each one after it, and
- * leaves the ones before it alone.
+ * The build key of each extension's `scope` Resources: `root`, then the
+ * identities of everything the build reads, in resolution order. Two builds
+ * with one key build the same code over the same services, so a later build
+ * can share an earlier one.
+ *
+ * A process Resource builds over the process Resources of the extensions
+ * before it, so its key is theirs and its own: an edit changes the key of
+ * the edited extension and of each one after it. A branch Resource builds
+ * over the whole process context, where a later extension can override a
+ * service an earlier one built, and over the branch Resources before it. So
+ * its key holds every process-bearing extension, then the branch-bearing
+ * ones up to and including it.
  */
 export const resourceBuildKeys = (
   extensions: ReadonlyArray<LoadedExtension>,
   scope: ResourceScope,
   root: string,
 ): ReadonlyMap<LoadedExtension, string> => {
+  const sorted = sortExtensionsByScope(extensions)
   const chain = [root]
+  if (scope === "branch") {
+    for (const extension of sorted) {
+      if (resourceScopesOf(extension).has("process")) {
+        chain.push(extensionResourceIdentity(extension))
+      }
+    }
+  }
   const keys = new Map<LoadedExtension, string>()
-  for (const extension of sortExtensionsByScope(extensions)) {
-    const scopes = new Set((extension.contributions.resources ?? []).map((r) => r.scope))
-    if (!resourceScopesUnder[scope].some((under) => scopes.has(under))) continue
+  for (const extension of sorted) {
+    if (!resourceScopesOf(extension).has(scope)) continue
     chain.push(extensionResourceIdentity(extension))
-    if (scopes.has(scope)) keys.set(extension, chain.join("\u0000"))
+    keys.set(extension, chain.join("\u0000"))
   }
   return keys
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
   Clock,
+  Context,
   DateTime,
   Deferred,
   Duration,
@@ -105,6 +106,7 @@ import {
 } from "../../src/domain/message"
 import {
   defineExtension,
+  defineResource,
   ExtensionContext,
   ExtensionHost,
   getToolId,
@@ -3047,6 +3049,112 @@ describe("branch resources follow the profile", () => {
         ])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
     20_000,
+  )
+})
+
+const SHARED_KEY = "@gent/core/tests/runtime/agent-loop.test/Shared"
+
+class Shared extends Context.Service<Shared, { readonly version: string }>()(
+  "@gent/core/tests/runtime/agent-loop.test/Shared",
+) {}
+
+class Captured extends Context.Service<Captured, { readonly version: string }>()(
+  "@gent/core/tests/runtime/agent-loop.test/Captured",
+) {}
+
+/** A user extension whose process Resource overrides the builtin's `Shared`. */
+const sharedOverrideSource = (version: string) => `import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class Shared extends Context.Service<Shared, { readonly version: string }>()(${encodeJsonText(SHARED_KEY)}) {}
+export default defineExtension({
+  id: "@test/shared-override",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "@test/shared-override/shared",
+      scope: "process",
+      layer: Layer.succeed(Shared, Shared.of({ version: ${encodeJsonText(version)} })),
+    }));
+  }),
+});
+`
+
+describe("branch resources over process services", () => {
+  // A builtin's branch Resource reads `Shared` when it builds. A user
+  // extension later in resolution order overrides `Shared`; editing it must
+  // build the branch Resource again over the new service.
+  const capturing = defineExtension({
+    id: "@test/captures-shared",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "resource",
+        defineResource({
+          id: "@test/captures-shared/shared",
+          scope: "process",
+          layer: Layer.succeed(Shared, Shared.of({ version: "builtin" })),
+        }),
+        defineResource({
+          id: "@test/captures-shared/captured",
+          scope: "branch",
+          layer: Layer.effect(
+            Captured,
+            Effect.gen(function* () {
+              const shared = yield* Shared
+              return Captured.of({ version: shared.version })
+            }),
+          ),
+        }),
+      )
+      yield* host.register(
+        "request",
+        request({
+          id: "read-captured",
+          input: Schema.String,
+          output: Schema.String,
+          answersDuringTurn: true,
+          execute: () =>
+            Effect.gen(function* () {
+              return (yield* Captured).version
+            }),
+        }),
+      )
+    }),
+  })
+
+  it.scopedLive(
+    "an edit to a later process service builds the branch Resource again",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTempDirectoryScoped("gent-branch-over-process-home-")
+        const extensionsDir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(extensionsDir, { recursive: true })
+        const overrideFile = path.join(extensionsDir, "override.ts")
+        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-one"))
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          extensionInputs: [testTurnExtension, capturing],
+          providerLayer,
+          home,
+        })
+        yield* client.session
+          .watchRuntime({ sessionId, branchId })
+          .pipe(Stream.runDrain, Effect.forkScoped)
+        const readCaptured = client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@test/captures-shared"),
+          capabilityId: "read-captured",
+          input: "read",
+        })
+        expect(yield* readCaptured).toBe("override-one")
+        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-two"))
+        expect(yield* readCaptured).toBe("override-two")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
   )
 })
 
