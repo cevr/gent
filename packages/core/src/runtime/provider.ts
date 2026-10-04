@@ -1916,11 +1916,12 @@ const hasCredentials = (url: URL): boolean => url.username !== "" || url.passwor
 /**
  * `api` with each `${VAR}` filled from the stored answer, then the variable.
  * A variable that begins the URL holds its origin and path prefix: an
- * absolute https URL with no user, password, query or fragment, kept as the
- * user typed it. Any other variable fills one component, percent-encoded, so
- * its value cannot add a host, a user, a path or a query: the key goes only
- * to a host the catalog and the user typed. The filled URL must parse, with
- * no user or password.
+ * absolute https URL with no user, password, query or fragment (no `?` or
+ * `#` at all, a bare one included), kept as the user typed it. Any other
+ * variable fills one component, percent-encoded, so its value cannot add a
+ * host, a user, a path or a query, and is never `.` or `..`, so it cannot
+ * leave the path: the key goes only to a host and path the catalog and the
+ * user typed. The filled URL must parse, with no user or password.
  */
 const filledBaseUrl = (
   provider: CatalogProvider,
@@ -1934,14 +1935,16 @@ const filledBaseUrl = (
     if (Option.isSome(leading)) {
       const [placeholder, name = ""] = leading.value
       const value = yield* urlVariableValue(provider, name, authInfo)
+      // A bare trailing `?` or `#` parses as an empty query or fragment, so
+      // the raw value must hold neither.
       const origin = yield* Effect.fromOption(
         Option.filter(
           parseUrl(value),
           (url) =>
             url.protocol === "https:" &&
             !hasCredentials(url) &&
-            url.search === "" &&
-            url.hash === "",
+            !value.includes("?") &&
+            !value.includes("#"),
         ),
       ).pipe(
         Effect.mapError(
@@ -1957,6 +1960,12 @@ const filledBaseUrl = (
     const names = urlVariables(rest)
     for (const name of names) {
       const value = yield* urlVariableValue(provider, name, authInfo)
+      // Percent-encoding leaves dots, and a `.` or `..` segment moves the path.
+      if (value === "." || value === "..") {
+        return yield* new ProviderAuthError({
+          message: `${provider.name} needs ${name} as one URL component, not "${value}"; sign in again with /auth`,
+        })
+      }
       rest = rest.replaceAll(`\${${name}}`, encodeURIComponent(value))
     }
     const filled = `${prefix}${rest}`

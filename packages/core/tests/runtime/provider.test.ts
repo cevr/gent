@@ -3397,6 +3397,40 @@ describe("generic providers", () => {
     }),
   )
 
+  // URL parsing reads a bare trailing `?` or `#` as an empty query or
+  // fragment, so the parsed URL alone cannot tell; `/v1` would land inside it.
+  it.live("a variable that begins a base URL with a bare ? or # fails", () =>
+    Effect.gen(function* () {
+      const gateway = (value: string) =>
+        baseUrlWith("gateway/m", "gateway", "GATEWAY_BASE_URL", value)
+      const refused =
+        "failed: Gateway needs GATEWAY_BASE_URL as an https URL with no user, password, query or fragment; sign in again with /auth"
+      for (const value of [
+        "https://gw.example.test?",
+        "https://gw.example.test/team#",
+        "https://gw.example.test/?#",
+      ]) {
+        expect(yield* gateway(value)).toBe(refused)
+      }
+      expect(yield* gateway("https://gw.example.test/team")).toBe("https://gw.example.test/team/v1")
+    }),
+  )
+
+  // encodeURIComponent leaves dots alone, and URL parsing collapses a `.` or
+  // `..` segment: `/2/ai/../openai/v1` would leave the product's path.
+  it.live("a variable inside a base URL that is . or .. fails", () =>
+    Effect.gen(function* () {
+      const product = (value: string) => baseUrlWith("product/m", "product", "PRODUCT_ID", value)
+      for (const value of [".", ".."]) {
+        expect(yield* product(value)).toBe(
+          `failed: Product needs PRODUCT_ID as one URL component, not "${value}"; sign in again with /auth`,
+        )
+      }
+      expect(yield* product("...")).toBe("https://product.test/2/ai/.../openai/v1")
+      expect(yield* product("team.1")).toBe("https://product.test/2/ai/team.1/openai/v1")
+    }),
+  )
+
   it.live(
     "a providers config entry adds a provider and patches a model's limits; disabledProviders hides one",
     () =>
