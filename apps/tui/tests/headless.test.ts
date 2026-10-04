@@ -559,6 +559,43 @@ describe("runHeadless", () => {
     }),
   )
 
+  // A headless run has no user: it records each background question and the
+  // assumption the model goes on with, and answers none of them.
+  headlessTest("a background question prints one line that says its assumption stands", () =>
+    Effect.sync(() => {
+      const rendered = renderHeadlessToolCall(
+        {
+          toolName: "ask_user_async",
+          status: "completed",
+          input: Option.some({
+            questions: [
+              { question: "Which cache backend?", assume: "in-memory LRU" },
+              { question: "Which port?", assume: "8080" },
+            ],
+          }),
+          output: Option.some(
+            encodeCellOutput({
+              asked: [
+                { id: "call_7:0", assume: "in-memory LRU" },
+                { id: "call_7:1", assume: "8080" },
+              ],
+              note: "Continue on your assumption.",
+            }),
+          ),
+          summary: Option.none(),
+        },
+        PLACE,
+      )
+
+      expect(rendered).toBe(
+        [
+          "[question call_7:0: Which cache backend? · assuming in-memory LRU · no user, the assumption stands]",
+          "[question call_7:1: Which port? · assuming 8080 · no user, the assumption stands]",
+        ].join("\n"),
+      )
+    }),
+  )
+
   headlessTest("renders cell operation receipts under the cell", () =>
     Effect.sync(() => {
       const rendered = renderHeadlessToolCall(

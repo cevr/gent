@@ -468,14 +468,24 @@ const fullLines = (lines: PickerBodyLines): number => lines.rows + lines.query
  * back, so the frame gives the detail line only rows the list does not need.
  */
 interface PickerBody {
+  /** True inside a frame: the frame draws the title and the key hints. */
+  readonly framed: boolean
   readonly rows: () => Option.Option<number>
   readonly report: (lines: Option.Option<PickerBodyLines>) => void
 }
 
 const PickerBodyContext = createContext<PickerBody>({
+  framed: false,
   rows: () => Option.none(),
   report: () => {},
 })
+
+/**
+ * Whether the body sits in a `PickerFrame`. A body that draws its own key
+ * hints out of a frame (the option list of an ask) leaves them to the frame
+ * inside one.
+ */
+export const useInPickerFrame = (): boolean => useContext(PickerBodyContext).framed
 
 /**
  * A frame body reports the lines it draws and reads back the rows the frame
@@ -670,7 +680,7 @@ export function PickerFrame(
       if (Option.isSome(shownNote())) return rows - 1
       return rows
     })
-  const body: PickerBody = { rows: listRows, report: setList }
+  const body: PickerBody = { framed: true, rows: listRows, report: setList }
   return (
     <box
       flexDirection="column"

@@ -3,8 +3,14 @@ import { createEffect, createSignal, createUniqueId, For, type JSX, Show } from 
 import { type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core"
 import { Effect, Option, Schema } from "effect"
 import { useTheme } from "./theme"
-import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
-import { keyHint, keyHintsLine, KeyHints } from "./ui"
+import {
+  pastedLine,
+  type ScopedKeyboardEvent,
+  typedKey,
+  useScopedKeyboard,
+  useTerminalDimensions,
+} from "./terminal"
+import { keyHint, keyHintsLine, KeyHints, lineEdit, useInPickerFrame, usePickerBody } from "./ui"
 import type { InteractionRendererProps } from "./extensions/client-facets.js"
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "./workspace"
@@ -17,6 +23,13 @@ import { openExternalEditor, resolveEditor } from "./os"
  * Shared option-list UI for interaction renderers, the host's and a client
  * extension's. Renders a question with options, optional markdown, freeform
  * input, and keyboard navigation.
+ *
+ * The free-text row is a field the list reads through its keyboard scope, as
+ * every docked field does (`typedKey`): typed text and a paste go to it from
+ * any row, so the list works docked under a composer that keeps the focus.
+ * In a `PickerFrame` the list fits the rows the frame gives it and leaves the
+ * title and the key hints to the frame; out of one it sizes itself from the
+ * terminal and draws its own hint row.
  */
 
 const markdownSyntaxStyle = SyntaxStyle.create()
@@ -34,6 +47,10 @@ interface OptionListProps {
   readonly options?: readonly OptionListChoice[]
   readonly multiple?: boolean
   readonly progress?: string
+  /** The row the cursor starts on; the free-text row is `options.length`. */
+  readonly initialFocus?: number
+  /** The pane's own keys, read before the list's (as `SelectList`'s `extraKeys`). */
+  readonly extraKeys?: (event: ScopedKeyboardEvent) => boolean
   readonly onSubmit: (selections: readonly string[]) => void
   readonly onCancel: () => void
 }
@@ -41,23 +58,41 @@ interface OptionListProps {
 export function OptionList(props: OptionListProps): JSX.Element {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
+  const framed = useInPickerFrame()
 
   const [selected, setSelected] = createSignal<Set<string>>(new Set())
   const [freeformText, setFreeformText] = createSignal("")
-  const [focusIndex, setFocusIndex] = createSignal(0)
+  const [focusIndex, setFocusIndex] = createSignal(props.initialFocus ?? 0)
   const [documentHeight, setDocumentHeight] = createSignal(1)
   const [controlsChromeHeight, setControlsChromeHeight] = createSignal(0)
   const [optionsHeight, setOptionsHeight] = createSignal(0)
   const optionId = createUniqueId()
   let documentViewport: Option.Option<ScrollBoxRenderable> = Option.none()
   let optionsViewport: Option.Option<ScrollBoxRenderable> = Option.none()
+  // In a frame the list reports every row it draws: the question, the
+  // options and the free-text row. The frame caps them and gives back its rows.
+  const frameRows = usePickerBody(() => ({
+    rows: documentHeight() + optionsHeight() + 1,
+    query: 0,
+    dressed: 2,
+    required: 1,
+  }))
   const sectionSpacing = () => {
-    if (dimensions().height < 18) return 0
+    if (framed || dimensions().height < 18) return 0
     return 1
   }
-  const contentRows = () =>
-    Math.max(2, dimensions().height - controlsChromeHeight() - 4 - sectionSpacing() * 3)
-  const optionsRows = () => Math.min(optionsHeight(), Math.max(1, Math.floor(contentRows() / 2)))
+  const contentRows = () => {
+    if (framed) {
+      const rows = Option.getOrElse(frameRows(), () => documentHeight() + optionsHeight() + 1)
+      return Math.max(2, rows - controlsChromeHeight())
+    }
+    return Math.max(2, dimensions().height - controlsChromeHeight() - 4 - sectionSpacing() * 3)
+  }
+  // A frame's few rows go to the options first; the question keeps one and scrolls.
+  const optionsRows = () => {
+    if (framed) return Math.min(optionsHeight(), Math.max(1, contentRows() - 1))
+    return Math.min(optionsHeight(), Math.max(1, Math.floor(contentRows() / 2)))
+  }
   const optionsScrollable = () => optionsHeight() > optionsRows()
   // Reserve the answer controls, panel padding, composer status, and one transcript row.
   const documentRows = () => Math.max(1, contentRows() - optionsRows())
@@ -67,6 +102,9 @@ export function OptionList(props: OptionListProps): JSX.Element {
   const hasOptions = () => options().length > 0
   const isMultiple = () => props.multiple === true
   const focusableCount = () => options().length + 1
+  const focusFreeform = () => {
+    if (focusIndex() !== options().length) moveFocus(options().length - focusIndex())
+  }
 
   const toggleFocusedOption = (): boolean => {
     const option = Option.fromNullishOr(options()[focusIndex()])
@@ -111,7 +149,22 @@ export function OptionList(props: OptionListProps): JSX.Element {
     }
   }
 
-  useScopedKeyboard((e) => {
+  useScopedKeyboard(
+    (e) => {
+      if (props.extraKeys && props.extraKeys(e)) return true
+      return listKey(e)
+    },
+    {
+      // A paste is free text: it goes to the free-text row, on one line.
+      paste: (text) => {
+        focusFreeform()
+        setFreeformText((current) => current + pastedLine(text, " "))
+        return true
+      },
+    },
+  )
+
+  const listKey = (e: ScopedKeyboardEvent): boolean => {
     if (e.name === "pageup") return scrollPage(-1, e.shift === true)
     if (e.name === "pagedown") return scrollPage(1, e.shift === true)
     if (e.name === "escape") {
@@ -143,8 +196,18 @@ export function OptionList(props: OptionListProps): JSX.Element {
       submitAnswer()
       return true
     }
-    return false
-  })
+    // Typed text is a free answer from any row; an erase key edits it.
+    const edit = lineEdit(e)
+    if (Option.isSome(edit)) {
+      setFreeformText(edit.value)
+      return true
+    }
+    const typed = typedKey(e)
+    if (Option.isNone(typed)) return false
+    focusFreeform()
+    setFreeformText((current) => current + typed.value)
+    return true
+  }
 
   const submitAnswer = () => {
     const selections: string[] = [...selected()]
@@ -314,19 +377,16 @@ export function OptionList(props: OptionListProps): JSX.Element {
             setControlsChromeHeight(this.height)
           }}
         >
-          <box flexDirection="row" marginTop={sectionSpacing()}>
-            <text style={{ fg: freeformColor() }}>{freeformPrefix()}Other: </text>
-            <box flexGrow={1}>
-              <input
-                focused={isFreeformFocused()}
-                onInput={setFreeformText}
-                backgroundColor="transparent"
-                focusedBackgroundColor="transparent"
-              />
-            </box>
-          </box>
+          <text wrapMode="none" marginTop={sectionSpacing()} style={{ fg: freeformColor() }}>
+            {freeformPrefix()}Other: <span style={{ fg: theme.text }}>{freeformText()}</span>
+            <Show when={isFreeformFocused()}>
+              <span style={{ fg: theme.primary }}>│</span>
+            </Show>
+          </text>
 
-          <text style={{ fg: theme.textMuted, marginTop: sectionSpacing() }}>{footer()}</text>
+          <Show when={!framed}>
+            <text style={{ fg: theme.textMuted, marginTop: sectionSpacing() }}>{footer()}</text>
+          </Show>
         </box>
       </box>
     </box>

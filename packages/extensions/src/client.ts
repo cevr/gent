@@ -9,7 +9,16 @@ export {
   DELEGATE_EXTENSION_ID,
   readChildCompletionHeadline,
 } from "./delegate.js"
-export { ASK_USER_INTERACTION_TYPE, AskUserAnswers, AskUserMetadata } from "./interaction-tools.js"
+export {
+  ASK_USER_INTERACTION_TYPE,
+  AskUserAnswers,
+  AskUserMetadata,
+  INTERACTION_TOOLS_EXTENSION_ID,
+  type OpenQuestion as OpenQuestionType,
+  QUESTION_ANSWER_TYPE,
+  QuestionAnswerDetails,
+  QuestionsRpc,
+} from "./interaction-tools.js"
 export { SkillsRpc } from "./skills.js"
 export { FilesRpc } from "./fs-tools.js"
 // The TUI file popup memoizes its finder's scan with the shape the catalog and the MCP prune use.

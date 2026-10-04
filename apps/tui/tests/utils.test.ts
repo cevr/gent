@@ -579,6 +579,21 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("read", {}, PLACE)).toBe("")
   })
 
+  test("ask_user_async: the first question's label, text and assumption, and how many more", () => {
+    const question = { header: "cache", question: "Which backend?", assume: "in-memory LRU" }
+    expect(toolArgSummary("ask_user_async", { questions: [question] }, PLACE)).toBe(
+      "cache · Which backend? · assuming in-memory LRU",
+    )
+    expect(
+      toolArgSummary(
+        "ask_user_async",
+        { questions: [question, { question: "Port?", assume: "8080" }] },
+        PLACE,
+      ),
+    ).toBe("cache · Which backend? · assuming in-memory LRU · +1 more")
+    expect(toolArgSummary("ask_user_async", {}, PLACE)).toBe("")
+  })
+
   test("read: shortens home paths", () => {
     expect(toolArgSummary("read", { path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
   })
@@ -790,6 +805,9 @@ describe("formatActivityHeader", () => {
     ).toBe("5 tools · 2 children · 1 search · 1 read · 1 mcp.query")
     expect(formatActivityHeader([cell([op("bash", "a"), op("bash", "b")])])).toBe(
       "2 tools · 2 commands",
+    )
+    expect(formatActivityHeader([cell([op("ask_user_async", "cache"), op("bash", "a")])])).toBe(
+      "2 tools · 1 question · 1 command",
     )
   })
 

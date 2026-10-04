@@ -523,6 +523,26 @@ function summarizeGrep(args: Schema.JsonObject, place: PathPlace): string {
   return `/${pattern}/ in ${displayPath(rawPath, place)}`
 }
 
+const decodeAskedQuestions = Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))
+
+/** A background question: `<header> · <question> · assuming <assume>`, and how many more the call asked. */
+function summarizeAskAsync(args: Schema.JsonObject): string {
+  const questions = Option.getOrElse(decodeAskedQuestions(args["questions"]), () => [])
+  return Option.match(Option.fromUndefinedOr(questions[0]), {
+    onNone: () => "",
+    onSome: (first) => {
+      const parts = [
+        getStringArg(first, "header"),
+        getStringArg(first, "question"),
+        `assuming ${getStringArg(first, "assume")}`,
+      ].filter((part) => part.length > 0)
+      const more = questions.length - 1
+      if (more > 0) parts.push(`+${more} more`)
+      return parts.join(" · ")
+    },
+  })
+}
+
 function summarizeDelegate(args: Schema.JsonObject): string {
   return truncate(getStringArg(args, "todo"), 40)
 }
@@ -550,6 +570,7 @@ const toolArgFormatters = {
   },
   grep: summarizeGrep,
   "delegate.start": summarizeDelegate,
+  ask_user_async: summarizeAskAsync,
   read_session: (args) => truncate(getStringArg(args, "sessionId"), 50),
   handoff: (args) => truncate(getStringArg(args, "reason"), 50),
 } satisfies Record<string, ToolArgFormatter>
@@ -909,6 +930,7 @@ const TOOL_KINDS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["write", ["edit", "edit"]],
   ["bash", ["command", "commands"]],
   ["delegate.start", ["child", "children"]],
+  ["ask_user_async", ["question", "questions"]],
 ])
 
 /**
@@ -967,6 +989,7 @@ const TOOL_VERBS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["bash", ["Ran", "Running"]],
   ["delegate.start", ["Started", "Starting"]],
   ["ask_user", ["Asked", "Asking"]],
+  ["ask_user_async", ["Asked", "Asking"]],
 ])
 
 /** One row of a group at the preview level: a run of ops of one tool and one outcome. */

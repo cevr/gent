@@ -154,10 +154,50 @@ const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall, place) => {
   return lines.join("\n")
 }
 
+/**
+ * The ids `ask_user_async` returns and the questions its input asked, in the
+ * same order. The shape is read here: the TUI host never imports the
+ * extension that owns it.
+ */
+const decodeAskedResult = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      asked: Schema.Array(Schema.Struct({ id: Schema.String, assume: Schema.String })),
+    }),
+  ),
+)
+const decodeAskedInput = Schema.decodeUnknownOption(
+  Schema.Struct({ questions: Schema.Array(Schema.Struct({ question: Schema.String })) }),
+)
+
+/**
+ * One line per background question. A headless run has no user and answers
+ * none: the question stays open for the TUI, and the model's assumption stands.
+ */
+const AskAsyncHeadlessToolRenderer: HeadlessToolRenderer = (toolCall, place) => {
+  if (toolCall.status !== "completed") return renderGeneric(toolCall, place)
+  const result = toolCall.output.pipe(Option.flatMap(decodeAskedResult))
+  if (Option.isNone(result)) return renderGeneric(toolCall, place)
+  const questions = Option.match(Option.flatMap(toolCall.input, decodeAskedInput), {
+    onNone: () => [],
+    onSome: (input) => input.questions,
+  })
+  return result.value.asked
+    .map((entry, index) => {
+      const question = questions[index]?.question ?? ""
+      const text = [question, `assuming ${entry.assume}`, "no user, the assumption stands"]
+        .filter((part) => part.length > 0)
+        .join(" · ")
+      return `[question ${entry.id}: ${text}]`
+    })
+    .join("\n")
+}
+
 /** Tools with a dedicated headless line; every other tool renders generically. */
 const HEADLESS_TOOL_RENDERERS: ReadonlyMap<string, HeadlessToolRenderer> = new Map([
   ["bash", BashHeadlessToolRenderer],
   ["cell", CellHeadlessToolRenderer],
+  ["ask_user_async", AskAsyncHeadlessToolRenderer],
 ])
 
 export const renderHeadlessToolCall = (toolCall: HeadlessToolCall, place: PathPlace): string => {

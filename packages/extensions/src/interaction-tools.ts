@@ -1,15 +1,21 @@
-import { Effect, FileSystem, Option, Path, Schema } from "effect"
+import { Clock, Crypto, DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
+import { Hex } from "effect/encoding"
 import {
   defineExtension,
+  defineRequests,
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
+  omitUndefined,
+  request,
   tool,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
+import { makeBranchStateStore } from "./branch-state-store.js"
 
-// Test seam: only tests read these exports. AskUserTool, PromptTool and
-// HandoffTool are the capabilities the tool and cell signature tests drive.
+// Test seam: only tests read these exports. AskUserTool, PromptTool,
+// HandoffTool and AskUserAsyncTool are the capabilities the tool and cell
+// signature tests drive.
 
 // ── ask-user ────────────────────────────────────────────────────────────────
 
@@ -305,14 +311,299 @@ export const HandoffTool = tool({
   }),
 })
 
-// ── extension ───────────────────────────────────────────────────────────────
+// ── background questions ────────────────────────────────────────────────────
 
-const INTERACTION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/interaction-tools")
+/**
+ * `ask_user_async`: a question the turn does not wait for. The call stores
+ * each question with the assumption the model works on until an answer
+ * comes, and returns at once; it never takes the branch's one interaction
+ * slot, so it never parks the turn. The user answers later through
+ * `questions.answer`, and the answer reaches the model as one user message:
+ * a steer that joins the running turn at its next step, or a turn of its own
+ * on an idle branch. It is appended, so the cached prefix stays the same.
+ *
+ * The store holds only the open questions, one file per branch under
+ * `<data dir>/questions`. An answered question is in the transcript as its
+ * answer message, and a dismissed one is gone, so no closed row is kept.
+ */
+
+export const INTERACTION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/interaction-tools")
+/** `metadata.customType` on the user message that carries the answers. */
+export const QUESTION_ANSWER_TYPE = "question-answer"
+
+/** At most this many questions stay open on a branch; a new one past it drops the oldest. */
+const MAX_OPEN_QUESTIONS = 8
+
+/** One open question as the store keeps it and the tray and pane read it. */
+export const OpenQuestion = Schema.Struct({
+  /** `<toolCallId>:<index>`: a replay of the same call writes the same row. */
+  id: Schema.String,
+  question: Schema.String,
+  header: Schema.optionalKey(Schema.String),
+  options: Schema.optionalKey(Schema.Array(AskUserOption)),
+  /** What the model does until an answer arrives. */
+  assume: Schema.String,
+  /** Epoch milliseconds. */
+  askedAt: Schema.Finite,
+})
+export type OpenQuestion = typeof OpenQuestion.Type
+
+/** What `questions.open` answers: the open questions of the branch, oldest first. */
+export const OpenQuestions = Schema.Struct({ questions: Schema.Array(OpenQuestion) })
+export type OpenQuestions = typeof OpenQuestions.Type
+
+/** `details` on an answer message; the transcript row reads it. */
+export const QuestionAnswerDetails = Schema.Struct({
+  answers: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      question: Schema.String,
+      header: Schema.optionalKey(Schema.String),
+      assume: Schema.String,
+      answer: Schema.String,
+    }),
+  ),
+})
+export type QuestionAnswerDetails = typeof QuestionAnswerDetails.Type
+
+class QuestionsError extends Schema.TaggedError<QuestionsError>()("QuestionsError", {
+  message: Schema.String,
+}) {}
+
+const questionStore = makeBranchStateStore({
+  name: "QuestionStore",
+  directory: "questions",
+  codec: Schema.fromJsonString(Schema.Array(OpenQuestion)),
+  empty: [],
+  invalid: (file, cause) =>
+    new QuestionsError({ message: `Question file ${file} is invalid: ${cause.message}` }),
+})
+
+/**
+ * The open questions with `asked` added: a row with an id already open is
+ * replaced (a replay of the same call), and so is an open row with the same
+ * question text (the model asked it again). Past the cap the oldest goes,
+ * with no message: the model already works on its assumption.
+ */
+export const addOpenQuestions = (
+  open: ReadonlyArray<OpenQuestion>,
+  asked: ReadonlyArray<OpenQuestion>,
+): ReadonlyArray<OpenQuestion> => {
+  const ids = new Set(asked.map((row) => row.id))
+  const texts = new Set(asked.map((row) => row.question))
+  const kept = open.filter((row) => !ids.has(row.id) && !texts.has(row.question))
+  const next = [...kept, ...asked]
+  return next.slice(Math.max(0, next.length - MAX_OPEN_QUESTIONS))
+}
+
+const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis))
+
+/** The answers as the model reads them: self-contained, so it needs no lookup. */
+export const questionAnswerText = (
+  answers: ReadonlyArray<{ readonly row: OpenQuestion; readonly answer: string }>,
+): string =>
+  answers
+    .map(({ row, answer }) =>
+      [
+        `Answer to your background question ${row.id} (asked ${isoOf(row.askedAt)}):`,
+        `Q: ${row.question}`,
+        `You assumed: ${row.assume}`,
+        `A: ${answer}`,
+      ].join("\n"),
+    )
+    .join("\n\n")
+
+/**
+ * The steer's request id names the questions it answers, so a repeat of the
+ * same answer sends nothing new. Hashed: tool call ids are long, and a
+ * request id holds at most 128 characters.
+ */
+const answerRequestId = (ids: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const digest = yield* crypto
+      .digest("SHA-256", new TextEncoder().encode([...ids].sort().join("\n")))
+      .pipe(Effect.orDie)
+    return `question-answer:${Hex.encode(digest)}`
+  })
+
+const AskUserAsyncQuestion = Schema.Struct({
+  question: Schema.String.annotate({ description: "The question, self-contained" }),
+  header: Schema.optionalKey(
+    Schema.String.check(Schema.isMaxLength(30)).annotate({
+      description: "Short label for the question (max 30 chars)",
+    }),
+  ),
+  options: Schema.optionalKey(
+    Schema.Array(AskUserOption)
+      .check(Schema.isMaxLength(4))
+      .annotate({ description: "Options for the user to choose from" }),
+  ),
+  assume: Schema.String.check(Schema.isMinLength(1)).annotate({
+    description: "What you do until an answer arrives; you continue on it now",
+  }),
+})
+
+const AskUserAsyncParams = Schema.Struct({
+  questions: Schema.Array(AskUserAsyncQuestion)
+    .check(Schema.isMinLength(1), Schema.isMaxLength(3))
+    .annotate({ description: "1-3 questions to ask in the background" }),
+})
+
+const AskUserAsyncResult = Schema.Struct({
+  asked: Schema.Array(Schema.Struct({ id: Schema.String, assume: Schema.String })),
+  note: Schema.String,
+})
+
+const ASKED_NOTE =
+  "Continue on your assumption. An answer arrives as a user message if the user gives one."
+
+/** What a client shows for the call: each question's label and what it assumed. */
+const askedSummary = (input: typeof AskUserAsyncParams.Encoded): string =>
+  input.questions
+    .map((question) => {
+      const label = Option.getOrElse(
+        Option.fromUndefinedOr(question.header),
+        () => question.question,
+      )
+      return `${label} · assuming ${question.assume}`
+    })
+    .join("; ")
+
+export const AskUserAsyncTool = tool({
+  id: "ask_user_async",
+  // A spawned child's turn has no user to answer; it uses `session.send`.
+  interactive: true,
+  description:
+    "Ask the user questions in the background and continue at once on a stated assumption. Returns immediately; the turn does not wait. An answer arrives later as a user message, if the user gives one.",
+  promptSnippet: "Ask the user questions without waiting; continue on an assumption",
+  promptGuidelines: [
+    "Use ask_user_async when you can continue on a reasonable assumption; use ask_user when you cannot",
+    "While a background question is open, state the assumption in your final answer",
+  ],
+  params: AskUserAsyncParams,
+  output: AskUserAsyncResult,
+  summary: (input) => askedSummary(input),
+  execute: Effect.fn("AskUserAsyncTool.execute")(function* (
+    params: typeof AskUserAsyncParams.Type,
+  ) {
+    const ctx = yield* ExtensionContext
+    const askedAt = yield* Clock.currentTimeMillis
+    // A call always has an id when the loop runs it; a direct run gets a fresh one.
+    const crypto = yield* Crypto.Crypto
+    const callId = yield* Option.match(Option.fromUndefinedOr(ctx.toolCallId), {
+      onNone: () => crypto.randomUUIDv7,
+      onSome: (id) => Effect.succeed(String(id)),
+    })
+    const asked = params.questions.map((question, index): OpenQuestion => ({
+      id: `${callId}:${index}`,
+      question: question.question,
+      ...omitUndefined({ header: question.header, options: question.options }),
+      assume: question.assume,
+      askedAt,
+    }))
+    yield* questionStore.update((open) => addOpenQuestions(open, asked))
+    return {
+      asked: asked.map((row) => ({ id: row.id, assume: row.assume })),
+      note: ASKED_NOTE,
+    }
+  }),
+})
+
+const AnswerQuestionsInput = Schema.Struct({
+  answers: Schema.Array(
+    Schema.Struct({ id: Schema.String, answer: Schema.String.check(Schema.isMinLength(1)) }),
+  ),
+  dismiss: Schema.optionalKey(Schema.Array(Schema.String)),
+})
+
+const AnswerQuestionsResult = Schema.Struct({
+  answered: Schema.Array(Schema.String),
+  dismissed: Schema.Array(Schema.String),
+})
+
+/**
+ * Answers and dismisses under the branch file's lock. The answers of one
+ * submit go as one steer before the rows leave the file: a failed write
+ * leaves them open, and a retry's steer carries the same request id, so it
+ * sends nothing new. An id that is not open (answered already, dismissed, or
+ * dropped past the cap) is skipped.
+ */
+const answerQuestions = Effect.fn("QuestionsRpc.answer")(function* (
+  input: typeof AnswerQuestionsInput.Type,
+) {
+  const ctx = yield* ExtensionContext
+  const dismiss = new Set(input.dismiss ?? [])
+  const result = yield* questionStore.modify((open) =>
+    Effect.gen(function* () {
+      const byId = new Map(open.map((row) => [row.id, row]))
+      const answers = input.answers.flatMap(({ id, answer }) =>
+        Option.match(Option.fromUndefinedOr(byId.get(id)), {
+          onNone: () => [],
+          onSome: (row) => [{ row, answer }],
+        }),
+      )
+      const answered = answers.map(({ row }) => row.id)
+      const dismissed = open
+        .filter((row) => dismiss.has(row.id) && !answered.includes(row.id))
+        .map((row) => row.id)
+      if (answers.length > 0) {
+        yield* ctx.Session.send({
+          delivery: "steer",
+          wake: true,
+          requestId: yield* answerRequestId(answered),
+          content: questionAnswerText(answers),
+          metadata: {
+            customType: QUESTION_ANSWER_TYPE,
+            details: {
+              answers: answers.map(({ row, answer }) => ({
+                id: row.id,
+                question: row.question,
+                ...omitUndefined({ header: row.header }),
+                assume: row.assume,
+                answer,
+              })),
+            } satisfies QuestionAnswerDetails,
+          },
+        })
+      }
+      const closed = new Set([...answered, ...dismissed])
+      if (closed.size === 0) return { next: open, result: { answered, dismissed } }
+      return { next: open.filter((row) => !closed.has(row.id)), result: { answered, dismissed } }
+    }),
+  )
+  if (result.answered.length > 0 || result.dismissed.length > 0) yield* ctx.State.changed()
+  return result
+})
+
+export const QuestionsRpc = defineRequests(INTERACTION_TOOLS_EXTENSION_ID, {
+  Open: request({
+    id: "questions.open",
+    description: "The background questions still open on the current branch, oldest first",
+    answersDuringTurn: true,
+    input: Schema.Struct({}),
+    output: OpenQuestions,
+    execute: () => questionStore.read().pipe(Effect.map((questions) => ({ questions }))),
+  }),
+  Answer: request({
+    id: "questions.answer",
+    description:
+      "Answer or dismiss open background questions; the answers reach the model as one user message",
+    answersDuringTurn: true,
+    input: AnswerQuestionsInput,
+    output: AnswerQuestionsResult,
+    execute: answerQuestions,
+  }),
+})
+
+// ── extension ───────────────────────────────────────────────────────────────
 
 export const InteractionToolsExtension = defineExtension({
   id: INTERACTION_TOOLS_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", AskUserTool, PromptTool, HandoffTool)
+    yield* host.register("tool", AskUserTool, PromptTool, HandoffTool, AskUserAsyncTool)
+    yield* host.register("request", QuestionsRpc.Open, QuestionsRpc.Answer)
+    yield* host.on("sessionDeleted", ({ branchIds }) => questionStore.removeBranches(branchIds))
   }),
 })
