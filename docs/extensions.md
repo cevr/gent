@@ -594,8 +594,9 @@ extension installs one as a `process` Resource; the Tag, `CompactionRequest`,
 chain: project, then user, then builtin. The first summary wins. A compactor
 that fails with `ModelCompactionError` passes the window to the next one, and
 the loop truncates the window, with a visible notice, only when no compactor
-is left. `compact` runs with the `ExtensionContext` a tool call on the
-compacted branch gets: `ctx.cwd` is the session's cwd, not the cwd setup saw.
+is left. `compact` runs with the `ExtensionContext` a tool call of the same
+extension on the compacted branch gets: `ctx.cwd` is the session's cwd, not
+the cwd setup saw, and `ctx.State.changed()` reports under the extension's id.
 
 ```ts
 import {

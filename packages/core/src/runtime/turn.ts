@@ -2747,6 +2747,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   }).pipe(
     // The compactor runs with the context a tool call on this branch gets:
     // the session's cwd and facets, and the agent whose window it compacts.
+    // An installed compactor runs as its owner's leaf (`ownedCompactor` in
+    // `extension-host.ts`); this frame serves one provided with no owner.
     provideExtensionLeaf({}),
     provideCurrentHostCtx({ ...hostCtx, agentName: resolved.agent.name }),
   )

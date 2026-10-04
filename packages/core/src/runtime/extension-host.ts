@@ -1140,20 +1140,49 @@ export const resourceBuildKeys = (
 }
 
 /**
- * `context` with an extension's Resource services `added` over it. A later
- * extension's service wins, except the compactor: a later one is chained in
- * front of the one before it (`chainCompactors`), so in resolution order the
- * project's compactor is asked first, then the user's, then the builtin one.
+ * An extension's compactor, run as that extension's leaf: the run's host
+ * context (session, branch, cwd, the compacted agent) under the owner's
+ * extension id, as a tool call of that extension runs, so its
+ * `State.changed` and `Session.send` name it. A call outside a run has no
+ * host context, and the caller's `ExtensionContext` stands.
+ */
+const ownedCompactor = (
+  extensionId: ExtensionId,
+  compactor: ModelContextCompactor["Service"],
+): ModelContextCompactor["Service"] =>
+  ModelContextCompactor.of({
+    compact: (request) =>
+      Effect.flatMap(
+        Effect.serviceOption(CurrentExtensionHostContext),
+        Option.match({
+          onNone: () => compactor.compact(request),
+          onSome: (host) =>
+            compactor
+              .compact(request)
+              .pipe(provideExtensionLeaf({ extensionId }), provideCurrentHostCtx(host)),
+        }),
+      ),
+  })
+
+/**
+ * `context` with the Resource services `added` by the extension `owner` over
+ * it. A later extension's service wins, except the compactor: it runs as its
+ * owner's leaf (`ownedCompactor`), and a later one is chained in front of the
+ * one before it (`chainCompactors`), so in resolution order the project's
+ * compactor is asked first, then the user's, then the builtin one.
  */
 const mergeResourceServices = (
   context: Context.Context<unknown>,
   added: Context.Context<unknown>,
+  owner: ExtensionId,
 ): Context.Context<unknown> => {
   const merged = Context.merge(context, added)
-  const before = Context.getOption(context, ModelContextCompactor)
   const after = Context.getOption(added, ModelContextCompactor)
-  if (Option.isNone(before) || Option.isNone(after)) return merged
-  return Context.add(merged, ModelContextCompactor, chainCompactors(after.value, before.value))
+  if (Option.isNone(after)) return merged
+  const owned = ownedCompactor(owner, after.value)
+  const before = Context.getOption(context, ModelContextCompactor)
+  if (Option.isNone(before)) return Context.add(merged, ModelContextCompactor, owned)
+  return Context.add(merged, ModelContextCompactor, chainCompactors(owned, before.value))
 }
 
 /**
@@ -1227,7 +1256,7 @@ export const buildScopeResources = (params: {
       }
       const built = yield* start(extension)
       if (Exit.isSuccess(built)) {
-        context = mergeResourceServices(context, built.value)
+        context = mergeResourceServices(context, built.value, extension.manifest.id)
         active.push(extension)
         continue
       }
@@ -1239,7 +1268,7 @@ export const buildScopeResources = (params: {
       if (Option.isSome(fallback)) {
         const previous = yield* start(fallback.value)
         if (Exit.isSuccess(previous)) {
-          context = mergeResourceServices(context, previous.value)
+          context = mergeResourceServices(context, previous.value, fallback.value.manifest.id)
           active.push(fallback.value)
           continue
         }

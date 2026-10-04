@@ -3,6 +3,7 @@ import {
   Clock,
   Duration,
   Effect,
+  Exit,
   Layer,
   Option,
   Predicate,
@@ -1270,22 +1271,32 @@ describe("provider overflow recovery", () => {
 
 /** What one compactor call read from its `ExtensionContext`. */
 interface CompactorContextRead {
+  readonly extensionId: ExtensionId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agentName: Option.Option<AgentName>
   readonly cwd: string
+  /** Whether its `State.changed()` pulse was published. */
+  readonly pulsed: boolean
 }
 
-/** A process-scope compactor that records the context each call runs with. */
-const contextReadingCompactorExtension = (reads: Array<CompactorContextRead>) =>
+/**
+ * A process-scope compactor that pulses its state and records the context
+ * each call runs with. A refusing one then fails with `ModelCompactionError`.
+ */
+const contextReadingCompactorExtension = (params: {
+  readonly id: string
+  readonly reads: Array<CompactorContextRead>
+  readonly refuse: boolean
+}) =>
   defineExtension({
-    id: "test-context-compactor",
+    id: params.id,
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
       yield* host.register(
         "resource",
         defineResource({
-          id: "test-context-compactor/compactor",
+          id: `${params.id}/compactor`,
           scope: "process",
           layer: Layer.succeed(
             ModelContextCompactor,
@@ -1293,12 +1304,21 @@ const contextReadingCompactorExtension = (reads: Array<CompactorContextRead>) =>
               compact: (request) =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
-                  reads.push({
+                  const pulse = yield* Effect.exit(ctx.State.changed())
+                  params.reads.push({
+                    extensionId: ctx.extensionId,
                     sessionId: ctx.sessionId,
                     branchId: ctx.branchId,
                     agentName: Option.fromUndefinedOr(ctx.agentName),
                     cwd: ctx.cwd,
+                    pulsed: Exit.isSuccess(pulse),
                   })
+                  if (params.refuse) {
+                    return yield* new ModelCompactionError({
+                      modelId: request.modelId,
+                      reason: "NotMine",
+                    })
+                  }
                   return { notice: "summary of the earlier work", modelId: request.modelId }
                 }),
             }),
@@ -1306,6 +1326,32 @@ const contextReadingCompactorExtension = (reads: Array<CompactorContextRead>) =>
         }),
       )
     }),
+  })
+
+const SUMMARIZING_COMPACTOR = ExtensionId.make("test-context-compactor")
+const REFUSING_COMPACTOR = ExtensionId.make("test-refusing-compactor")
+
+/** Send `content` and wait until its turn settles on an assistant reply. */
+const settledTurn = (
+  client: Effect.Success<ReturnType<typeof createRpcHarness>>["client"],
+  target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+  content: string,
+) =>
+  Effect.gen(function* () {
+    yield* client.message.send({ ...target, content })
+    yield* waitFor(
+      client.session.getSnapshot(target),
+      (snapshot) =>
+        snapshot.runtime._tag === "Idle" &&
+        snapshot.messages.some(
+          (message) =>
+            message.role === "user" &&
+            message.parts.some((part) => part.type === "text" && part.text === content),
+        ) &&
+        snapshot.messages.at(-1)?.role === "assistant",
+      3_000,
+      "the turn settled",
+    )
   })
 
 describe("compactor host context", () => {
@@ -1328,7 +1374,9 @@ describe("compactor host context", () => {
         providerLayer,
         agents: [wideAgent],
         admission: { agent: wideAgent.name },
-        extensionInputs: [contextReadingCompactorExtension(reads)],
+        extensionInputs: [
+          contextReadingCompactorExtension({ id: SUMMARIZING_COMPACTOR, reads, refuse: false }),
+        ],
         models: [wideModel],
       })
       const { client } = harness
@@ -1337,35 +1385,74 @@ describe("compactor host context", () => {
         admission: { agent: wideAgent.name },
       })
       const launch = { sessionId: harness.sessionId, branchId: harness.branchId }
-      for (const { sessionId, branchId } of [launch, other]) {
-        for (const content of ["first", "second"]) {
-          yield* client.message.send({ sessionId, branchId, content })
-          yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (snapshot) =>
-              snapshot.runtime._tag === "Idle" &&
-              snapshot.messages.some(
-                (message) =>
-                  message.role === "user" &&
-                  message.parts.some((part) => part.type === "text" && part.text === content),
-              ) &&
-              snapshot.messages.at(-1)?.role === "assistant",
-            5_000,
-            "the turn settled",
-          )
-        }
+      for (const target of [launch, other]) {
+        yield* settledTurn(client, target, "first")
+        yield* settledTurn(client, target, "second")
       }
 
-      // Each call reads the session, branch, agent and cwd of the window it compacts.
+      // Each call reads the session, branch, agent and cwd of the window it
+      // compacts, under its own extension id.
+      const owned = { extensionId: SUMMARIZING_COMPACTOR, pulsed: true }
       expect(reads).toEqual([
-        { ...launch, agentName: Option.some(wideAgent.name), cwd: launchCwd },
+        { ...owned, ...launch, agentName: Option.some(wideAgent.name), cwd: launchCwd },
         {
+          ...owned,
           sessionId: other.sessionId,
           branchId: other.branchId,
           agentName: Option.some(wideAgent.name),
           cwd: otherCwd,
         },
       ])
+    }).pipe(Effect.scoped, Effect.timeout("4 seconds")),
+  )
+
+  it.live("each compactor of a chain runs and pulses its state under its own extension id", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        textStep("first reply"),
+        overflowStep,
+        textStep("reply after handoff"),
+      ])
+      const reads: Array<CompactorContextRead> = []
+      // A later extension's compactor is asked first: the refusing one hands
+      // the window to the summarizing one.
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        providerLayer,
+        agents: [wideAgent],
+        admission: { agent: wideAgent.name },
+        extensionInputs: [
+          contextReadingCompactorExtension({ id: SUMMARIZING_COMPACTOR, reads, refuse: false }),
+          contextReadingCompactorExtension({ id: REFUSING_COMPACTOR, reads, refuse: true }),
+        ],
+        models: [wideModel],
+      })
+      const pulses = yield* Ref.make<ReadonlyArray<ExtensionId>>([])
+      yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.runForEach(({ event }) => {
+          if (event._tag !== "ExtensionStateChanged") return Effect.void
+          return Ref.update(pulses, (all) => [...all, event.extensionId])
+        }),
+        Effect.forkScoped,
+      )
+      yield* settledTurn(client, { sessionId, branchId }, "first")
+      yield* settledTurn(client, { sessionId, branchId }, "second")
+
+      expect(reads.map(({ extensionId, pulsed }) => ({ extensionId, pulsed }))).toEqual([
+        { extensionId: REFUSING_COMPACTOR, pulsed: true },
+        { extensionId: SUMMARIZING_COMPACTOR, pulsed: true },
+      ])
+      expect(
+        yield* waitFor(Ref.get(pulses), (all) => all.length >= 2, 1_000, "both pulses arrived"),
+      ).toEqual([REFUSING_COMPACTOR, SUMMARIZING_COMPACTOR])
+      // The summarizing compactor's summary is the handoff.
+      const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+      expect(
+        handoffMarkers(snapshot.messages).map((marker) =>
+          marker.parts.some(
+            (part) => part.type === "text" && part.text.includes("summary of the earlier work"),
+          ),
+        ),
+      ).toEqual([true])
     }).pipe(Effect.scoped, Effect.timeout("4 seconds")),
   )
 })

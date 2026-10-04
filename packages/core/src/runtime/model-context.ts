@@ -1714,9 +1714,10 @@ const measuredUnits = (
  * extension owns the summary prompt and the notice text.
  *
  * A compactor runs with the `ExtensionContext` of the session and branch whose
- * window it compacts, as a tool call on that branch does: `ctx.cwd` is the
- * session's cwd, not the cwd its extension's setup saw, so one process
- * resource serves the sessions of every profile that shares it.
+ * window it compacts, under its own extension's id, as a tool call of that
+ * extension on that branch does: `ctx.cwd` is the session's cwd, not the cwd
+ * its extension's setup saw, so one process resource serves the sessions of
+ * every profile that shares it.
  */
 
 /**

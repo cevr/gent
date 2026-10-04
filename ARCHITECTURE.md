@@ -903,11 +903,14 @@ Shape:
   builtin (`chainCompactors`, joined where the host merges each extension's
   Resource services): the first summary wins, a `ModelCompactionError` hands
   the window to the next compactor, and with none left the window is
-  truncated. A compactor runs with the `ExtensionContext` a tool call on the
-  compacted branch gets (`provideExtensionLeaf` over the turn's host context,
-  with the compacted agent): `ctx.cwd` is the session's cwd, so a user-scope
-  compactor or a process resource that profiles share needs no cwd captured
-  at setup, and the request carries no cwd. The marker's notice
+  truncated. A compactor runs with the `ExtensionContext` a tool call of its
+  extension on the compacted branch gets: the merge wraps each extension's
+  compactor before it joins the chain (`ownedCompactor`), and each call runs
+  `provideExtensionLeaf` with the owner's id over the turn's host context and
+  the compacted agent. So `ctx.State.changed()` and `ctx.Session.send` name
+  the owner, and `ctx.cwd` is the session's cwd: a user-scope compactor or a
+  process resource that profiles share needs no cwd captured at setup, and
+  the request carries no cwd. The marker's notice
   names the session id, the branch id, and the replaced id range so the model
   can page the replaced history from the cell.
 - Project instructions are an extension, not a profile field. `@gent/agents`
