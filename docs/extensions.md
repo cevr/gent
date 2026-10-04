@@ -480,6 +480,16 @@ through `ExtensionContext.Models`; `input.current` says whether the branch's
 prompt cache is warm and how many history tokens a switch writes again. The
 shipped `@gent/router` builds its routers from the `routers` config key.
 
+A router may also carry `effort`, the effort router that `/effort auto` asks:
+a virtual model whose choices each set an `effort` and name no model. It is
+not listed and not selectable. On a session on auto, core calls `route` with
+it once per user turn, after any model route, offering only the levels the
+turn's model accepts; it never asks for a child, and on a model whose effort
+change would break the prompt cache it asks only on a cold cache. The first
+registered router with an `effort` serves it. The shipped router serves the
+`routers.effort` config entry, else built-in low, medium, high and xhigh
+choices.
+
 ```ts
 import {
   defineExtension,

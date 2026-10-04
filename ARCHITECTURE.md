@@ -96,7 +96,13 @@ updates this list in the same commit.
     sends the plain request. On a Claude model whose thinking cannot turn off
     (Fable 5, Mythos, Opus 5.5), `/effort off` sends the lowest effort with
     the adaptive thinking every other level sends: an effort change the
-    conversation carries, which the status row and the receipt name. Receipts: `modelChangeNotice` and
+    conversation carries, which the status row and the receipt name. Under
+    `/effort auto` the level changes only where it keeps the cache: a model
+    whose driver lists it as a carrier (`Model.carriesEffort`) takes the
+    effort router's pick on each user turn, and any other model holds the
+    level it last ran at while its prompt cache is warm and asks the router
+    again only on a cold cache, which writes the prefix again anyway
+    (`routeEffort` in `packages/core/src/runtime/turn.ts`). Receipts: `modelChangeNotice` and
     `assistantRunEfforts` in `packages/core/src/runtime/model-context.ts`,
     `readKnownSteps` in `packages/core/src/runtime/turn.ts`, `effortCarrier`
     in `packages/extensions/src/providers.ts`, `withEffortMarkers` in
@@ -875,6 +881,37 @@ Shape:
   same order after the routed model's clamp, and reads the context gauge
   against the routed model's window. The effort picker lists the routed
   model's levels, and its `default` row names the route's level.
+- The effort router (`/effort auto`) is the same router concept, with no
+  second classifier verb. A `modelRouter` may carry `effort`: a virtual
+  model whose choices each set an effort and name no model. The catalog does
+  not list it and a session cannot select it; the first registered router
+  with one serves it (`servedEffortRouter`, `runtime/provider.ts`), and a
+  problem with it is a catalog failure under the router's extension, as for
+  a virtual model. On a session on auto, the turn asks it once per user
+  turn, at step 1, after a model route (`routeEffort`, `runtime/turn.ts`,
+  effort-routing section). It offers only the choices the turn's model runs
+  at their own level (`effectiveEffort` returns the level unchanged), so the
+  levels filter to what the model accepts. It never routes for a child (a
+  child keeps its own effort), nor on a history that ends on an assistant
+  message, nor on a model with no reasoning. A model with no carrier
+  (`Model.carriesEffort`, set by the Anthropic driver where
+  `takesEffortMarkers` and by the OpenAI driver where
+  `takesConfigurationUpdates`) holds the level of its last effort route
+  while its prompt cache is warm and asks no classifier; a cold cache or a
+  first turn asks (decided by the cache-rate north star). The pick is
+  recorded as `ModelRouted` with `effortOnly: true` (an additive, optional
+  field); a replay and a recovered turn reuse the recorded route by message
+  id and ask nothing. Its classifier cost lands on the event, the session's
+  cost and the turn's ledger, as a model route's does. The effort route's
+  level wins over a model route choice's level: auto is the session's own
+  setting (the `applyTurnRoute` order). With no effort router served, auto
+  runs at the agent's level and records nothing. The shipped router serves
+  the `routers.effort` config entry, else built-in choices (low, medium,
+  high, xhigh, each with a reason; default high, the main agent's level); a
+  bad `effort` entry serves none and is reported. The session metrics keep
+  the newest effort route apart from the model route
+  (`SessionRuntimeMetrics.effortRouted`), and the TUI status row reads
+  `auto → high` (short form `auto→high`, the last label to give way).
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in
@@ -1936,9 +1973,13 @@ Other notes:
   overrides, then config `agents[name]`, then the agent definition.
 - Effort follows the same order. `/effort <level>` (alias `/think`) stores the
   session's level: `off` stores `none`, and `default` clears it, so the run
-  overrides, config and agent decide again. The `/effort` picker lists
-  `default` and the levels the model accepts (its catalog `efforts`; none for
-  a model with no reasoning); the `default` row names the level without the
+  overrides, config and agent decide again. `/effort auto` stores `auto`
+  (the `reasoning_level` column holds `"auto"`; the session reads it as
+  `reasoningAuto: true` with no level, and an older binary reads no level),
+  and each user turn asks the effort router for its level (the effort router
+  bullet above); `/effort <level>` or `default` leaves auto. The `/effort`
+  picker lists `default`, then `auto` and the levels the model accepts (its
+  catalog `efforts`; neither for a model with no reasoning); the `default` row names the level without the
   session's own (`defaultReasoningLevel` on the snapshot and on
   `session.get`), so an override does not hide it. The status row shows the effort the model is
   sent, after the clamp to the levels it accepts (`effectiveEffort`,
@@ -1946,6 +1987,8 @@ Other notes:
   each `StreamStarted` names the level its step goes out at (the fields of
   the `StreamEnded` receipt), the metrics fold keeps it as `turnEffort` until
   `TurnCompleted`, and a level set meanwhile shows once the turn completes.
+  On auto the row reads `auto → <level>` with the newest effort route's
+  level, and `auto` before the first route.
   The change writes no notice and keeps the cache (rule 11).
 - `createSession` accepts optional `initialPrompt` + `admission` for atomic create-and-send.
 
