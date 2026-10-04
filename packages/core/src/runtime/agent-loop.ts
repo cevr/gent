@@ -1913,6 +1913,10 @@ const makeAgentLoopBehavior = (
       error: Option.none(),
     })
     const closed = yield* Deferred.make<void>()
+    // Set before the loop interrupts its turn (a close, or its scope's
+    // teardown), and never by a user's cancel: a turn the loop stops has not
+    // ended, so what it owns stays for the restart.
+    const stopping = yield* Deferred.make<void>()
     const startedRef = yield* Ref.make(false)
 
     const inbox = yield* makeLoopInbox({
@@ -1958,6 +1962,7 @@ const makeAgentLoopBehavior = (
       turnInterruption,
       inbox,
       branchContext,
+      loopStopping: Deferred.isDone(stopping),
     })
 
     const worker = makeAgentLoopWorker({
@@ -1998,13 +2003,23 @@ const makeAgentLoopBehavior = (
     })
 
     const turnWorkerFiber = yield* Ref.make(Option.none<Fiber.Fiber<void>>())
-    const startTurnWorker = Effect.forkIn(
-      provideAgentLoopRuntimeContext(runtimeContext)(worker.turnWorkerLoop),
-      loopScope,
-      {
-        startImmediately: true,
-      },
-    ).pipe(Effect.flatMap((fiber) => Ref.set(turnWorkerFiber, Option.some(fiber))))
+    /** The loop stops its turn: the mark first, so the turn knows it has not ended. */
+    const markStopping = Deferred.succeed(stopping, void 0)
+    const stopTurnWorker = Effect.gen(function* () {
+      yield* markStopping
+      const turn = yield* Ref.get(turnWorkerFiber)
+      if (Option.isSome(turn)) yield* Fiber.interrupt(turn.value)
+    })
+    // The worker is not a plain child of the loop scope, whose teardown would
+    // interrupt it unmarked: the scope stops it through `stopTurnWorker`.
+    const startTurnWorker = Effect.gen(function* () {
+      const fiber = yield* Effect.forkDetach(
+        provideAgentLoopRuntimeContext(runtimeContext)(worker.turnWorkerLoop),
+        { startImmediately: true },
+      )
+      yield* Ref.set(turnWorkerFiber, Option.some(fiber))
+      yield* Scope.addFinalizer(loopScope, stopTurnWorker)
+    }).pipe(Effect.uninterruptible)
 
     const start = Effect.suspend(
       Effect.fn("AgentLoop.start")(function* () {
@@ -2047,9 +2062,12 @@ const makeAgentLoopBehavior = (
 
     const close = Effect.suspend(
       Effect.fn("AgentLoop.close")(function* () {
-        yield* worker.interruptActiveStream
         // Closing stops the turn as a crash would: nothing it runs records an
-        // outcome. Branch tool work can hold the turn past a fiber interrupt
+        // outcome, and what it owns stays for the restart. The mark comes
+        // before anything that can stop the turn.
+        yield* markStopping
+        yield* worker.interruptActiveStream
+        // Branch tool work can hold the turn past a fiber interrupt
         // (a cell runs uninterruptibly so a cancel can report), so the turn is
         // interrupted first and its tool work is then stopped; without the
         // stop, closing the scope would wait for that work forever.

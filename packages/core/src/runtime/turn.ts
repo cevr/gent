@@ -3102,6 +3102,11 @@ type AgentLoopTurnExecutionContext = {
   readonly inbox: LoopInbox
   /** The branch's services a turn's hooks run with; see `AgentLoopBehavior.branchContext`. */
   readonly branchContext: Effect.Effect<Context.Context<never>, AgentLoopError>
+  /**
+   * True once the loop stops its turn (a close, or its scope's teardown).
+   * Set before the loop interrupts the turn, never by a user's cancel.
+   */
+  readonly loopStopping: Effect.Effect<boolean>
 }
 
 export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext) =>
@@ -4907,14 +4912,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
         .pipe(provideTurnContext)
         .pipe(
-          Effect.onExit((exit) =>
+          Effect.onExit(() =>
             Effect.gen(function* () {
               if (preserveReplayBindings) return
               yield* clearProcessLocalReplayBindingsForTurn(state.message.id)
               yield* clearProcessLocalToolResultsForTurn(state.message.id)
-              // A request lives no longer than its turn. A turn stopped by
-              // shutdown has not ended: it runs again after the restart.
-              if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) return
+              // A request lives no longer than its turn. A turn its loop
+              // stopped has not ended: it runs again after the restart, and
+              // its requests and answers stay for it. The loop says so; the
+              // exit's cause cannot, since a stop can land while a parked
+              // call's failure is still on its way out.
+              if (yield* scope.loopStopping) return
               const approval = yield* Effect.serviceOption(ApprovalService)
               if (Option.isSome(approval))
                 yield* approval.value.endTurn({
