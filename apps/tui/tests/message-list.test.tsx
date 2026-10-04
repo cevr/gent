@@ -5692,6 +5692,52 @@ describe("tool runs across steps", () => {
     15_000,
   )
 
+  // Each step after a run's head draws nothing: the head took its call. An
+  // item that draws nothing live writes no row to history either.
+  it.scopedLive(
+    "the tool-only steps of a run commit no blank rows to history",
+    () =>
+      Effect.gen(function* () {
+        const rows: string[] = []
+        const setup = yield* renderScoped(
+          () => (
+            <Transcript
+              items={[
+                clientPrompt("blank-prompt", "RUN-PROMPT"),
+                step("b1", ["git status"]),
+                step("b2", ["bun test"]),
+                step("b3", ["git diff"]),
+                step("b4", ["ls"]),
+                assistant("blank-answer", "AFTER-RUN"),
+                assistant("blank-tail", longBody("TAIL")),
+              ]}
+              onRenderer={(renderer) => {
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  // A commit ends on its last row: its rows, without the break after them.
+                  rows.push(...committedTextOf(event, true).replace(/\n$/, "").split("\n"))
+                })
+              }}
+            />
+          ),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => rows.some((row) => row.includes("TAIL line 1")),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("6 seconds"),
+          Effect.ignore,
+        )
+        const header = rows.findIndex((row) => row.includes("● 4 tools"))
+        const answer = rows.findIndex((row) => row.includes("AFTER-RUN"))
+        expect(header).toBeGreaterThanOrEqual(0)
+        // One blank row parts the run from the answer, as on screen.
+        expect(rows.slice(header + 1, answer).map((row) => row.trim())).toEqual([""])
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
   it.scopedLive("a run that grows after history took its head replays history", () =>
     Effect.gen(function* () {
       const stdout = Array.from({ length: 40 }, (_, index) => `OUT line ${index + 1}`).join("\n")

@@ -1861,6 +1861,17 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const [measurementVersion, setMeasurementVersion] = createSignal(0)
   const itemHeights = new Map<SessionItem, number>()
   /**
+   * Records the rows `box` draws for `item`. OpenTUI reports a box of no rows
+   * as one row and sends no size change between them, so the rows come from
+   * the Yoga layout: a step whose call its run's head took draws none.
+   */
+  const measureItem = (item: SessionItem, box: BoxRenderable) => {
+    const rows = Math.max(0, Math.round(box.getLayoutNode().getComputedHeight()))
+    if (itemHeights.get(item) === rows) return
+    itemHeights.set(item, rows)
+    setMeasurementVersion((version) => version + 1)
+  }
+  /**
    * How far the queue has been offered items. It runs ahead of `committed`
    * while commits are in flight, so a re-render cannot enqueue the same item
    * twice; a commit that does not land rewinds it to `committed.length`.
@@ -2108,6 +2119,14 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       // call's result in): rows drawn from the old item never land.
       const stillCurrent = () => commit.live() && canCommitNatively() && stillOffered()
       if (!stillCurrent()) return Effect.succeed("refused")
+      // The rows are the whole item, not its top rows or the rest of them.
+      const whole = rows.from === 0 && Option.isNone(rows.to) // A whole item the live view drew with no row (a step whose call its
+      // run's head took) lands with none. OpenTUI draws a surface at least
+      // one row high, so its commit would put a blank row in history.
+      if (whole && items.every((item) => itemHeights.get(item) === 0)) {
+        handOver(0)
+        return Effect.succeed("landed")
+      }
       // Settling is asynchronous. The screen may have changed hands and the
       // reader may have cleared the display while it ran, so both are
       // checked again before the rows are handed over.
@@ -2141,10 +2160,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       // top rows, or the rest once history holds them) come from the drawn
       // layout, so they start and end at the rows the live view cuts. They
       // wait no longer than a plain draw.
-      const plain = rows.from === 0 && Option.isNone(rows.to)
       const commitLast = Effect.scoped(
         Effect.gen(function* () {
-          const surface = yield* drawSurface(items, plain)
+          const surface = yield* drawSurface(items, whole)
           yield* Effect.tryPromise(() => surface.settle(PLAIN_SETTLE_MS)).pipe(Effect.ignore)
           return yield* commitDrawn(surface)
         }),
@@ -2770,9 +2788,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
                     flexShrink={0}
                     marginTop={-cutRows(index())}
                     onSizeChange={function () {
-                      if (itemHeights.get(item) === this.height) return
-                      itemHeights.set(item, this.height)
-                      setMeasurementVersion((version) => version + 1)
+                      measureItem(item, this)
+                    }}
+                    // A change between no row and one sends no size change.
+                    renderBefore={function () {
+                      measureItem(item, this)
                     }}
                   >
                     {props.renderItems([item])}
