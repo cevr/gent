@@ -2,7 +2,16 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Clock, Effect, Option } from "effect"
 import { createSignal, Show } from "solid-js"
-import { OptimizedBuffer, RGBA } from "@opentui/core"
+import {
+  type CliRenderer,
+  NativeSpanFeed,
+  OptimizedBuffer,
+  resolveRenderLib,
+  RGBA,
+  TextRenderable,
+} from "@opentui/core"
+import { createTestRenderer, ManualClock } from "@opentui/core/testing"
+import { Terminal } from "@xterm/headless"
 import {
   CaretLine,
   caretWindow,
@@ -22,7 +31,12 @@ import {
   usePickerGeometry,
 } from "../src/ui"
 import { useScopedKeyboard } from "../src/terminal"
-import { createMockClient, renderFrame, renderScoped } from "./render-harness-boundary"
+import {
+  createMockClient,
+  renderFrame,
+  renderScoped,
+  TerminalOutput,
+} from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import {
   BranchId,
@@ -1363,4 +1377,146 @@ describe("box borders under a scissor", () => {
       }).pipe(Effect.scoped),
     )
   }
+})
+
+// ── split region growth ─────────────────────────────────────────────────────
+
+/**
+ * A split region that grows at the terminal's bottom sends the rows it covers
+ * to scrollback with line feeds, and the native frame that moves the region
+ * counts those rows (`noteViewportScroll`). The line feeds and the count
+ * belong to one admitted native frame. Bytes an earlier write left in the
+ * output feed make the native frame skip; when the line feeds went out before
+ * that skip, a second growth before the retry counted too few rows, and the
+ * history rows after it did not join the rows before it (`patches/README.md`).
+ * Each case runs the same session, with and without the skip, and reads the
+ * whole terminal.
+ */
+describe("split region growth", () => {
+  const WIDTH = 45
+  const HEIGHT = 15
+
+  /** One history row, ended as gent ends a transcript row: no newline after it. */
+  const commit = (renderer: CliRenderer, text: string) =>
+    renderer.writeToScrollback(({ renderContext }) => ({
+      root: new TextRenderable(renderContext, { content: text, width: text.length, height: 1 }),
+      startOnNewLine: true,
+      trailingNewline: false,
+    }))
+
+  /**
+   * Leaves bytes in the renderer's output feed that no frame sent. The next
+   * native frame sends them first and is skipped, as when an earlier write is
+   * still pending.
+   */
+  const holdFeedBytes = (renderer: CliRenderer) =>
+    Effect.gen(function* () {
+      // OpenTUI keeps the feed private; the test reads it to hold bytes in it.
+      const feed: unknown = renderer["_feed"]
+      if (!(feed instanceof NativeSpanFeed)) {
+        return yield* Effect.die("a custom stdout gives the renderer an output feed")
+      }
+      resolveRenderLib().streamWrite(feed.streamPtr, "\u001b[0m")
+    })
+
+  /** Every row the terminal holds, scrollback first, each without its trailing spaces. */
+  const terminalRows = (bytes: string) =>
+    Effect.gen(function* () {
+      const emulator = new Terminal({
+        cols: WIDTH,
+        rows: HEIGHT,
+        scrollback: 1000,
+        allowProposedApi: true,
+      })
+      yield* Effect.callback<void>((resume) => {
+        emulator.write(bytes, () => resume(Effect.void))
+      })
+      const buffer = emulator.buffer.active
+      const rows: string[] = []
+      for (let y = 0; y < buffer.length; y++) {
+        rows.push(
+          Option.match(Option.fromNullishOr(buffer.getLine(y)), {
+            onNone: () => "",
+            onSome: (line) => line.translateToString(true).trimEnd(),
+          }),
+        )
+      }
+      emulator.dispose()
+      return rows
+    })
+
+  /**
+   * A session at 45x15: twenty history rows fill the rows above a four-row
+   * region, the region grows to six rows and then to seven, shrinks back to
+   * four, and two more rows commit.
+   */
+  const session = (skipFirstGrowthFrame: boolean) =>
+    Effect.gen(function* () {
+      const output = new TerminalOutput(WIDTH, HEIGHT)
+      const { renderer, renderOnce } = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          createTestRenderer({
+            width: WIDTH,
+            height: HEIGHT,
+            stdout: output.stdout(),
+            bufferedOutput: "stdout",
+            clock: new ManualClock(),
+          }),
+        ),
+        (setup) => Effect.sync(() => setup.renderer.destroy()),
+      )
+      const frame = Effect.promise(() => renderOnce())
+      yield* Effect.promise(() => renderer.setupTerminal())
+      renderer.footerHeight = 4
+      renderer.screenMode = "split-footer"
+      renderer.externalOutputMode = "capture-stdout"
+      yield* frame
+      for (let row = 1; row <= 20; row++) {
+        commit(renderer, `row-${row}`)
+        yield* frame
+      }
+      if (skipFirstGrowthFrame) yield* holdFeedBytes(renderer)
+      const beforeGrowth = output.written().length
+      renderer.footerHeight = 6
+      yield* frame
+      const growthFrameBytes = output.written().slice(beforeGrowth)
+      renderer.footerHeight = 7
+      yield* frame
+      yield* frame
+      renderer.footerHeight = 4
+      yield* frame
+      commit(renderer, "NEW-HISTORY")
+      yield* frame
+      commit(renderer, "SECOND-HISTORY")
+      yield* frame
+      return { growthFrameBytes, rows: yield* terminalRows(output.written()) }
+    })
+
+  // The shrink from seven rows to four freed three rows above the region; the
+  // two new rows take two of them, and the third stays blank.
+  const expectedRows = [
+    ...Array.from({ length: 20 }, (_, index) => `row-${index + 1}`),
+    "NEW-HISTORY",
+    "SECOND-HISTORY",
+    "",
+    ...Array.from({ length: 4 }, () => ""),
+  ]
+
+  it.live("a growth without a skipped frame keeps every history row once and in order", () =>
+    Effect.gen(function* () {
+      const { rows } = yield* session(false)
+      expect(rows).toEqual(expectedRows)
+    }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+  )
+
+  it.live(
+    "a growth whose frame is skipped and that grows again before the retry keeps every history row once and in order",
+    () =>
+      Effect.gen(function* () {
+        const { growthFrameBytes, rows } = yield* session(true)
+        // The skipped frame sends the held bytes and scrolls nothing.
+        expect(growthFrameBytes).toBe("\u001b[0m")
+        expect(rows).toEqual(expectedRows)
+      }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+  )
 })

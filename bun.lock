@@ -43,6 +43,9 @@
         "match-sorter": "^8.3.0",
         "solid-js": "catalog:",
       },
+      "devDependencies": {
+        "@xterm/headless": "^6.0.0",
+      },
       "peerDependencies": {
         "effect": "catalog:",
       },

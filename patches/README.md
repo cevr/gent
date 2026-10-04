@@ -71,6 +71,27 @@ line feeds (`ANSI.scrollIntoHistory`). Codex repairs the same fault this way
 long session's retried multiline prompt keeps every prompt and answer row
 once at 45x15" in `packages/e2e/tests/scrollback.test.ts` covers it.
 
+The line feeds and their count belong to one native frame. JS cannot write
+inside a native frame, so the line feeds go out only when the native frame
+after them is admitted (`splitFrameAdmitsViewportScroll`). A native frame is
+skipped only for its output feed (a custom stdout): when the feed holds bytes
+that no write committed, or when the queued and in-flight spans reach the
+feed's capacity (4096). The patch first commits held bytes, as the native
+frame would (`streamCommit`), and writes the line feeds only when the feed
+has no queued or in-flight span; one span then cannot reach the capacity.
+Otherwise it writes nothing, keeps the transition as it is, and retries once
+the feed is idle (`scheduleRenderAfterFeedIdle`). A later resize then
+replaces the transition from rows that did not move, as unpatched OpenTUI
+does. Before, the line feeds went out and the native frame could still skip:
+a resize before the retry counted only its own rows, and later history did
+not join the rows before it. A buffered stdout without a render thread (gent
+on Linux) admits every frame. With a render thread (the macOS default), a
+frame is skipped while the thread holds its lock; the line feed write waits
+for the thread's last write, so only the short hold before the thread waits
+again can skip the frame. "split region growth" in `apps/tui/tests/ui.test.tsx`
+(a growth frame skipped, a second growth before the retry, a shrink and two
+commits, read in xterm) covers it.
+
 Remove this patch when an OpenTUI release keeps the split's history state
 across the alternate screen, crops a box's border to the scissor and grows
 the split region without `CSI S`. Checked on 2026-10-04: `main` after 0.5.14
