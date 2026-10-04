@@ -20,6 +20,7 @@ import {
   ProviderAuthInfo as ProviderAuthInfoSchema,
   type ProviderHints,
   type ReasoningEffort,
+  type RunEffort,
 } from "@gent/core/extensions/api"
 import { modelCatalogFromBodies } from "@gent/core/test-utils"
 import {
@@ -832,13 +833,22 @@ const appliedEfforts = (body: Schema.JsonObject): ReadonlyArray<string> => {
 
 const sessionHints = (
   reasoning: ReasoningEffort,
-  history: ReadonlyArray<Option.Option<ReasoningEffort>>,
+  history: ReadonlyArray<Option.Option<RunEffort>>,
 ): ProviderHints => ({
   reasoning,
   cacheKey: "session-1",
   supportsReasoning: true,
   reasoningHistory: history,
 })
+
+/** A session request that names no level: the model runs at its default. */
+const defaultHints = (history: ReadonlyArray<Option.Option<RunEffort>>): ProviderHints => ({
+  cacheKey: "session-1",
+  supportsReasoning: true,
+  reasoningHistory: history,
+})
+
+const DEFAULT_RUN = Option.some<RunEffort>("default")
 
 const routeNamed = (label: string) =>
   Effect.map(routes, (all) =>
@@ -1090,6 +1100,124 @@ describe("effort changes", () => {
       }).pipe(Effect.timeout("30 seconds")),
   )
 
+  it.live(
+    "a change from runs sent at the model's default keeps the top level as sent and marks the change",
+    () =>
+      Effect.gen(function* () {
+        const route = yield* routeNamed("anthropic")
+        // Claude Opus 5.5 runs at `medium` when the request names no effort;
+        // the other models here at `high`.
+        const cases: ReadonlyArray<readonly [string, ReasoningEffort]> = [
+          ["claude-fable-5-1", "high"],
+          ["claude-opus-5-5", "medium"],
+          ["claude-sonnet-5-5", "high"],
+        ]
+        for (const [modelName, level] of cases) {
+          const steps: ReadonlyArray<readonly [number, ProviderHints]> = [
+            [2, defaultHints([])],
+            [4, defaultHints([DEFAULT_RUN])],
+            [6, sessionHints("low", [DEFAULT_RUN, DEFAULT_RUN])],
+            [8, defaultHints([DEFAULT_RUN, DEFAULT_RUN, Option.some("low")])],
+          ]
+          const bodies: Array<Schema.JsonObject> = []
+          for (const [messages, hints] of steps) {
+            bodies.push(
+              bodyOf(yield* captureRequest(route, modelName, hints, sessionPrompt(messages))),
+            )
+          }
+          for (const [index, body] of bodies.entries()) {
+            if (index === 0) continue
+            const earlier = Option.getOrThrow(Option.fromUndefinedOr(bodies[index - 1]))
+            expect([modelName, index, topLevelOf(body)]).toEqual([
+              modelName,
+              index,
+              topLevelOf(earlier),
+            ])
+            const kept = conversationOf(earlier)
+            expect([modelName, index, conversationOf(body).slice(0, kept.length)]).toEqual([
+              modelName,
+              index,
+              kept,
+            ])
+          }
+          expect([modelName, bodies.map(topLevelEffort)]).toEqual([modelName, ["-", "-", "-", "-"]])
+          const last = Option.getOrThrow(Option.fromUndefinedOr(bodies.at(-1)))
+          expect([modelName, itemKinds(last)]).toEqual([
+            modelName,
+            [
+              "user",
+              "assistant",
+              "user",
+              "assistant",
+              "effort:low",
+              "user",
+              "assistant",
+              `effort:${level}`,
+              "user",
+            ],
+          ])
+          // The top level names no effort: the model's default applies until a marker.
+          const applied = appliedEfforts(last).map((effort) => {
+            if (effort === "-") return level
+            return effort
+          })
+          expect([modelName, applied]).toEqual([modelName, [level, level, "low", level]])
+        }
+      }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live(
+    "a turn at the model's default after runs at that level keeps the top level as sent",
+    () =>
+      Effect.gen(function* () {
+        const route = yield* routeNamed("anthropic")
+        const high = Option.some<RunEffort>("high")
+        const first = yield* captureRequest(
+          route,
+          "claude-fable-5-1",
+          sessionHints("high", [high]),
+          sessionPrompt(4),
+        )
+        const atDefault = yield* captureRequest(
+          route,
+          "claude-fable-5-1",
+          defaultHints([high, high]),
+          sessionPrompt(6),
+        )
+        expect(topLevelOf(bodyOf(atDefault))).toEqual(topLevelOf(bodyOf(first)))
+        expect(itemKinds(bodyOf(atDefault))).toEqual([
+          "user",
+          "assistant",
+          "user",
+          "assistant",
+          "user",
+        ])
+        const beta = (Option.getOrThrow(atDefault).headers["anthropic-beta"] ?? "").split(",")
+        expect(beta.includes(MID_CONVERSATION_BETA)).toBe(false)
+        // Back from the default to an explicit level the default equals: no marker either.
+        const explicit = yield* captureRequest(
+          route,
+          "claude-fable-5-1",
+          sessionHints("high", [DEFAULT_RUN, DEFAULT_RUN]),
+          sessionPrompt(6),
+        )
+        const plainDefault = yield* captureRequest(
+          route,
+          "claude-fable-5-1",
+          defaultHints([DEFAULT_RUN]),
+          sessionPrompt(4),
+        )
+        expect(topLevelOf(bodyOf(explicit))).toEqual(topLevelOf(bodyOf(plainDefault)))
+        expect(itemKinds(bodyOf(explicit))).toEqual([
+          "user",
+          "assistant",
+          "user",
+          "assistant",
+          "user",
+        ])
+      }).pipe(Effect.timeout("30 seconds")),
+  )
+
   it.live("a Messages request names the effort beta only when it carries an effort marker", () =>
     Effect.gen(function* () {
       const requests = yield* sessionBodies("anthropic", "claude-fable-5-1")
@@ -1172,6 +1300,12 @@ describe("effort changes", () => {
           sessionHints("low", [Option.some("high")]),
         ],
         ["runs not aligned", "openai", "gpt-6.1-sol", sessionHints("low", [Option.some("high")])],
+        [
+          "default level unknown",
+          "openai",
+          "gpt-6.1-sol",
+          sessionHints("high", [DEFAULT_RUN, DEFAULT_RUN, DEFAULT_RUN]),
+        ],
         [
           "thinking turned off",
           "anthropic",

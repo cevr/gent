@@ -24,16 +24,11 @@ import {
 } from "../domain/message.js"
 import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
-import {
-  cacheWriteRate,
-  ModelId,
-  type ModelPricing,
-  type ReasoningEffort,
-} from "../domain/agent.js"
+import { cacheWriteRate, ModelId, type ModelPricing } from "../domain/agent.js"
 import type { ToolCapability } from "../domain/capability.js"
 import type { TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
-import type { ProviderAuthError } from "../domain/driver.js"
+import type { ProviderAuthError, RunEffort } from "../domain/driver.js"
 import type { ProviderError, StorageError } from "../domain/errors.js"
 import type { EventStorageError } from "../storage/storage.js"
 
@@ -316,9 +311,9 @@ export const toPromptMessages = (messages: ReadonlyArray<Message>): ReadonlyArra
  */
 export const assistantRunEfforts = (
   messages: ReadonlyArray<Message>,
-  effortOf: (message: Message) => Option.Option<ReasoningEffort>,
-): ReadonlyArray<Option.Option<ReasoningEffort>> => {
-  const runs: Array<Option.Option<ReasoningEffort>> = []
+  effortOf: (message: Message) => Option.Option<RunEffort>,
+): ReadonlyArray<Option.Option<RunEffort>> => {
+  const runs: Array<Option.Option<RunEffort>> = []
   let previousRole: Prompt.Message["role"] = "system"
   for (const [message, prompt] of promptEntries(messages)) {
     if (prompt.role === "assistant") {

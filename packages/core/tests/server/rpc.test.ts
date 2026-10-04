@@ -5789,6 +5789,55 @@ describe("effort receipt", () => {
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
+
+  it.live("a step that names no level records the model's default, not an unknown level", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const history: Array<ReadonlyArray<Option.Option<string>>> = []
+        const recorded = (text: string): SequenceStep => ({
+          ...textStep(text),
+          assertRequest: (request) => {
+            history.push(request.reasoningHistory)
+          },
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          recorded("first"),
+          recorded("second"),
+        ])
+        // The agent and the session name no level.
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          models: [effortModel],
+          providerLayer,
+        })
+        for (const [index, content] of ["first", "second"].entries()) {
+          const turnCompleted = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+            Stream.drop(index),
+            Stream.runHead,
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content })
+          yield* Fiber.join(turnCompleted)
+        }
+        yield* controls.assertDone
+        const receipt = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filterMap(({ event }) => {
+            if (event._tag === "StreamEnded") {
+              return Result.succeed([
+                Option.fromUndefinedOr(event.reasoningLevel),
+                Option.fromUndefinedOr(event.reasoningDefault),
+              ] as const)
+            }
+            return Result.failVoid
+          }),
+          Stream.runHead,
+        )
+        expect(receipt).toEqual(Option.some([Option.none(), Option.some(true)]))
+        expect(history).toEqual([[], [Option.some("default")]])
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
 })
 
 // ── rpc wide events ─────────────────────────────────────────────────────────

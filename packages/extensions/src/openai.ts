@@ -1325,6 +1325,8 @@ const takesConfigurationUpdates = (modelId: string): boolean => {
  * The effort changes a Responses request carries, for a model that takes
  * `configuration_update`. Every effort the receipts name is one the model
  * accepts (core clamps them over the same list), so each is sent as named.
+ * No receipt names a Responses model's default level, so a run sent at the
+ * default reads as unknown and a request with no level is plain.
  */
 const responsesEffortCarrier = (
   entry: CatalogModel,
@@ -1332,8 +1334,11 @@ const responsesEffortCarrier = (
 ): Option.Option<EffortCarrier> => {
   if (!takesConfigurationUpdates(entry.id)) return Option.none()
   const current = Option.flatMap(reasoningHint(entry, hints), (level) => effortFor(entry, level))
-  return effortCarrier(hints, current, (effort) =>
-    Option.contains(effortFor(entry, effort), effort),
+  return effortCarrier(
+    hints,
+    current,
+    Option.none(),
+    (effort) => effort !== "default" && Option.contains(effortFor(entry, effort), effort),
   )
 }
 
@@ -1389,11 +1394,12 @@ const withEffortUpdates =
     let reasoning: Schema.JsonObject = {}
     const current = body["reasoning"]
     if (Predicate.isNotUndefined(current) && isJsonObject(current)) reasoning = current
-    return {
-      ...body,
-      input: updated,
-      reasoning: { ...reasoning, effort: carrier.value.pinned },
-    }
+    // A first run at the model's default named no effort: neither does this request.
+    const { effort: _sent, ...unpinned } = reasoning
+    const pinned = carrier.value.pinned
+    let pinnedReasoning: Schema.JsonObject = unpinned
+    if (pinned !== "default") pinnedReasoning = { ...unpinned, effort: pinned }
+    return { ...body, input: updated, reasoning: pinnedReasoning }
   }
 
 /**

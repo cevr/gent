@@ -95,6 +95,7 @@ export type {
   VirtualModelProblem,
   ProviderAuthorizationResult,
   ProviderHints,
+  RunEffort,
   StoredOAuthCredentials,
   UpdateStoredOAuth,
 } from "../domain/driver.js"

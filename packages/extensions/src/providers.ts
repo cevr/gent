@@ -32,6 +32,7 @@ import {
   type ProviderHints,
   type ReasoningEffort,
   type ReasoningOption,
+  type RunEffort,
 } from "@gent/core/extensions/api"
 import {
   FetchHttpClient,
@@ -838,8 +839,11 @@ interface EffortChange {
 
 /** The effort changes a request carries inside its conversation. */
 export interface EffortCarrier {
-  /** The effort the top level names: the one before the first change. */
-  readonly pinned: ReasoningEffort
+  /**
+   * The effort the top level names: the one the first run was sent at.
+   * `"default"` names none, as that run's request did.
+   */
+  readonly pinned: RunEffort
   /** The number of assistant runs the request's conversation holds. */
   readonly runs: number
   /** In run order, never two at one run. */
@@ -848,36 +852,56 @@ export interface EffortCarrier {
 
 /**
  * The effort changes for a request that sends `current`, from the hints'
- * history. None, so the request is plain, when the request writes no prompt
- * cache (a compaction summary), sends no effort, has no history, or names no
- * change; or when `carries` refuses one of the efforts (the driver cannot send
- * it as a marker, for example when its plan changes the thinking too).
+ * history. `"default"` is a request that named no level; `defaultLevel` is
+ * the level the model then runs at, and a change is a change of the level
+ * applied, so a marker always names a level. None, so the request is plain,
+ * when the request writes no prompt cache (a compaction summary), sends no
+ * effort, or would send the same body plain (no change, and its top level
+ * already names the first run's effort); or when `carries` refuses one of the
+ * efforts (the driver cannot send it as a marker, for example when its plan
+ * changes the thinking too). With no change and a first run at another form
+ * of the same level (the default against that level named), the carrier keeps
+ * the first run's top level.
  *
  * A run with no receipt (a step on another model, a step stored before
- * receipts, a forked branch) takes the next known effort, else `current`. The
- * last marker so always equals `current`: a request whose history disagrees
- * with the receipts (a revert, a fork) gets no stale marker at its tail.
+ * receipts, a forked branch), or one at a default the driver does not know,
+ * takes the next known effort, else `current`. The last marker so always
+ * equals `current`: a request whose history disagrees with the receipts (a
+ * revert, a fork) gets no stale marker at its tail.
  */
 export const effortCarrier = (
   hints: Option.Option<ProviderHints>,
-  current: Option.Option<ReasoningEffort>,
-  carries: (effort: ReasoningEffort) => boolean,
+  current: Option.Option<RunEffort>,
+  defaultLevel: Option.Option<ReasoningEffort>,
+  carries: (effort: RunEffort) => boolean,
 ): Option.Option<EffortCarrier> => {
-  if (!writesPromptCache(hints) || Option.isNone(current)) return Option.none()
+  const known = (entry: Option.Option<RunEffort>): Option.Option<RunEffort> =>
+    Option.filter(entry, (effort) => effort !== "default" || Option.isSome(defaultLevel))
+  const now = known(current)
+  if (!writesPromptCache(hints) || Option.isNone(now)) return Option.none()
   const history = Option.getOrElse(
     Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.reasoningHistory)),
-    (): ReadonlyArray<Option.Option<ReasoningEffort>> => [],
+    (): ReadonlyArray<Option.Option<RunEffort>> => [],
   )
-  const sequence = history.reduceRight<ReadonlyArray<ReasoningEffort>>(
-    (later, entry) => [Option.getOrElse(entry, () => later[0] ?? current.value), ...later],
-    [current.value],
+  const sequence = history.reduceRight<ReadonlyArray<RunEffort>>(
+    (later, entry) => [Option.getOrElse(known(entry), () => later[0] ?? now.value), ...later],
+    [now.value],
   )
-  const changes = sequence.flatMap((effort, run): ReadonlyArray<EffortChange> => {
-    if (run === 0 || effort === sequence[run - 1]) return []
-    return [{ run, effort }]
+  const levelOf = (effort: RunEffort): Option.Option<ReasoningEffort> => {
+    if (effort === "default") return defaultLevel
+    return Option.some(effort)
+  }
+  return Option.flatMap(Option.all(sequence.map(levelOf)), (levels) => {
+    const changes = levels.flatMap((effort, run): ReadonlyArray<EffortChange> => {
+      if (run === 0 || effort === levels[run - 1]) return []
+      return [{ run, effort }]
+    })
+    const pinned = sequence[0] ?? now.value
+    if ((changes.length === 0 && pinned === now.value) || !sequence.every(carries)) {
+      return Option.none()
+    }
+    return Option.some({ pinned, runs: history.length, changes })
   })
-  if (changes.length === 0 || !sequence.every(carries)) return Option.none()
-  return Option.some({ pinned: sequence[0] ?? current.value, runs: history.length, changes })
 }
 
 /** OpenCode's own cap on a thinking budget (`OUTPUT_TOKEN_MAX - 1` in `provider/transform.ts`). */

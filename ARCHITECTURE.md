@@ -77,9 +77,16 @@ updates this list in the same commit.
     effort marker takes effect too (from the next user turn; a marker after a
     tool result would wait past the reply, so such a change sends the plain
     request). Each step's `StreamEnded.reasoningLevel` receipt
-    names the effort that step was sent at, after the clamp, and each request
+    names the effort that step was sent at, after the clamp; a step that
+    named no level to a model that reasons writes `reasoningDefault`
+    instead, so "sent at the model's default" reads apart from "unknown"
+    (a row with neither, as rows written before, is unknown). Each request
     hands the drivers those receipts per earlier assistant run
-    (`ProviderHints.reasoningHistory`). A driver whose wire can change the
+    (`ProviderHints.reasoningHistory`, `"default"` for a default run). A
+    driver that knows the model's default level (`markerDefaultEffort` on
+    the Claude models that take markers) reads a default run at that
+    level and keeps the top level as the first run sent it, no effort named
+    for a default run. A driver whose wire can change the
     effort inside the conversation rebuilds that change from the receipts on
     every request, so the cached prefix stays byte-identical: Claude models
     that take per-message effort get an `output_config` system marker under

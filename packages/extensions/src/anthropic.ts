@@ -38,6 +38,7 @@ import {
   clampEffort,
   ReasoningEffort,
   reportProviderStopReason,
+  type RunEffort,
   runProcess,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
@@ -57,6 +58,7 @@ import {
   hasToggle,
   lowestEffort,
   maxTokensOf,
+  modelReasons,
   reasoningHint,
   sdkApiKey,
   thinkingBudget,
@@ -2398,7 +2400,9 @@ const anthropicRequest = (
  * request sends and name itself as the effort: a change that turns thinking
  * off or to `between_tools` is a top-level change, and the request is plain.
  * The efforts are the receipts' (`messagesEfforts` clamps the level as core
- * does), so the current one is clamped the same way.
+ * does), so the current one is clamped the same way. A request with no level
+ * to a model that reasons runs at the model's default (`markerDefaultEffort`),
+ * and its plan names no effort.
  */
 const messagesEffortCarrier = (
   entry: CatalogModel,
@@ -2407,10 +2411,19 @@ const messagesEffortCarrier = (
   markers: EffortMarkers,
 ): Option.Option<EffortCarrier> => {
   if (markers === "none" || !takesEffortMarkers(entry.id)) return Option.none()
-  const current = Option.flatMap(reasoningHint(entry, hints), (level) =>
-    clampEffort(messagesEfforts(entry), level),
-  )
-  return effortCarrier(hints, current, (effort) => {
+  const current = Option.match(reasoningHint(entry, hints), {
+    onNone: () =>
+      Option.some<RunEffort>("default").pipe(Option.filter(() => modelReasons(entry, hints))),
+    onSome: (level): Option.Option<RunEffort> => clampEffort(messagesEfforts(entry), level),
+  })
+  return effortCarrier(hints, current, markerDefaultEffort(entry.id), (effort) => {
+    if (effort === "default") {
+      const planned = anthropicRequestPlan(entry, Option.none())
+      return (
+        Option.isNone(planned.effort) &&
+        Option.getOrUndefined(planned.thinking) === Option.getOrUndefined(plan.thinking)
+      )
+    }
     const planned = anthropicRequestPlan(entry, Option.some({ reasoning: effort }))
     return (
       Option.contains(planned.effort, effort) &&
@@ -2418,6 +2431,41 @@ const messagesEffortCarrier = (
     )
   })
 }
+
+/**
+ * The effort a model that takes markers runs at when the request names none:
+ * `medium` on Claude Opus 5.5, `high` on Claude Opus 5, Claude Sonnet 5.5,
+ * Claude Fable 5.1 and Claude Mythos 5.1 (claude-api skill `shared/models.md`
+ * and the SDK READMEs: "the default is `medium` on this model, where Claude
+ * Opus 5 defaults to `high`"; the effort doc's default for the others). None
+ * for a later version, whose default no receipt names yet: its runs at the
+ * default read as unknown.
+ */
+const markerDefaultEffort = (modelId: string): Option.Option<ReasoningEffort> => {
+  const match = /(opus|sonnet|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?=-|$)/.exec(modelId.toLowerCase())
+  if (Predicate.isNull(match)) return Option.none()
+  const [, family = "", major = "0", minor = "0"] = match
+  const version = Number(major) * 100 + Number(minor)
+  return Option.map(
+    Option.fromUndefinedOr(
+      MARKER_DEFAULT_EFFORTS.find((row) => row.family === family && row.version === version),
+    ),
+    (row) => row.effort,
+  )
+}
+
+/** The default effort of each model version that takes markers, as `major * 100 + minor`. */
+const MARKER_DEFAULT_EFFORTS: ReadonlyArray<{
+  readonly family: string
+  readonly version: number
+  readonly effort: ReasoningEffort
+}> = [
+  { family: "opus", version: 500, effort: "high" },
+  { family: "opus", version: 505, effort: "medium" },
+  { family: "sonnet", version: 505, effort: "high" },
+  { family: "fable", version: 501, effort: "high" },
+  { family: "mythos", version: 501, effort: "high" },
+]
 
 /**
  * Whether the Claude API takes an effort change inside the conversation for
@@ -2522,7 +2570,10 @@ const applyRequestPlan = (
     const marked = withEffortMarkers(messages, carrier.value)
     if (Option.isSome(marked)) {
       result = { ...result, messages: marked.value }
-      effort = Option.some(carrier.value.pinned)
+      // A first run at the model's default named no effort: neither does this request.
+      const pinned = carrier.value.pinned
+      effort = Option.none()
+      if (pinned !== "default") effort = Option.some(pinned)
     }
   }
   if (Option.isSome(effort)) {

@@ -101,6 +101,7 @@ import {
   type ProviderAuthError,
   type ProviderHints,
   ProviderStopReason,
+  type RunEffort,
 } from "../domain/driver.js"
 import {
   type AgentEvent,
@@ -549,6 +550,22 @@ interface StreamFailureNote {
 }
 
 /**
+ * The receipt fields (`StreamEnded`) for the effort a request sent: its
+ * level, or `reasoningDefault` for a request that named none to a model
+ * that reasons. Neither field when nothing is known.
+ */
+const effortReceipt = (
+  sent: Option.Option<RunEffort>,
+): { readonly reasoningLevel?: ReasoningEffort; readonly reasoningDefault?: true } =>
+  Option.match(sent, {
+    onNone: () => ({}),
+    onSome: (effort) => {
+      if (effort === "default") return { reasoningDefault: true }
+      return { reasoningLevel: effort }
+    },
+  })
+
+/**
  * Close the step on a stream failure: log it, end the stream, and surface the
  * error. The end names the model: the step ran on it, settled or not. A
  * `note` adds to the error; one the turn recovers from makes it a notice.
@@ -560,7 +577,7 @@ const reportStreamFailure = (
     sessionId: SessionId
     branchId: BranchId
     modelId: ModelIdType
-    reasoningLevel?: ReasoningEffort
+    reasoningLevel?: RunEffort
   },
   streamError: ProviderError,
   message: string,
@@ -576,7 +593,7 @@ const reportStreamFailure = (
         step: params.step,
         model: params.modelId,
         outcome: "Failed",
-        reasoningLevel: params.reasoningLevel,
+        ...effortReceipt(Option.fromUndefinedOr(params.reasoningLevel)),
       }),
     )
     const error = streamError.message
@@ -606,7 +623,7 @@ export const collectModelTurnResponse = (params: {
   branchId: BranchId
   modelId: ModelIdType
   /** The effort the step's request sent; its end names it. */
-  reasoningLevel?: ReasoningEffort
+  reasoningLevel?: RunEffort
   activeStream: ActiveStreamHandle
 }) =>
   Effect.gen(function* () {
@@ -666,7 +683,7 @@ export const collectFailedModelTurnResponse = (params: {
   branchId: BranchId
   modelId: ModelIdType
   /** The effort the step's request sent; its end names it. */
-  reasoningLevel?: ReasoningEffort
+  reasoningLevel?: RunEffort
   activeStream: ActiveStreamHandle
   /** The provider refused the request as too long, and the turn will hand off and retry. */
   contextOverflow: boolean
@@ -1895,7 +1912,7 @@ const toolCallsFromResponseParts = (
 /** What a step's receipt (`StreamEnded`) says its request sent: the model, and the effort. */
 interface StepEffort {
   readonly model: ModelIdType
-  readonly level: Option.Option<ReasoningEffort>
+  readonly level: Option.Option<RunEffort>
 }
 
 /**
@@ -1903,13 +1920,14 @@ interface StepEffort {
  * turn runs takes effect at the next turn, as an effort marker does
  * (Anthropic applies one from the next user turn, and a step after a tool
  * result has none before it), so each step's receipt names the level the
- * provider applies. A first step on another model, or one whose receipt
- * names no level, leaves the level as set.
+ * provider applies. A first step sent at the model's default sends no level
+ * after it either. A first step on another model, or one whose receipt is
+ * unknown, leaves the level as set.
  */
-const atTurnEffort = <Resolved extends ResolvedTurnContext>(
-  resolved: Resolved,
+const atTurnEffort = (
+  resolved: ResolvedTurnContext,
   firstStep: Option.Option<StepEffort>,
-): Resolved =>
+): ResolvedTurnContext =>
   Option.match(
     Option.flatMap(
       Option.filter(firstStep, (receipt) => receipt.model === resolved.modelId),
@@ -1917,7 +1935,11 @@ const atTurnEffort = <Resolved extends ResolvedTurnContext>(
     ),
     {
       onNone: () => resolved,
-      onSome: (level) => ({ ...resolved, reasoning: level }),
+      onSome: (level) => {
+        const { reasoning: _set, ...unnamed } = resolved
+        if (level === "default") return unnamed
+        return { ...unnamed, reasoning: level }
+      },
     },
   )
 
@@ -1926,8 +1948,11 @@ type ModelTurnSource = {
   readonly compaction: Option.Option<{ readonly costUsd: Option.Option<number> }>
   /** The chars/4 estimate of the system prompt, notices and tools this request carries. */
   readonly overheadTokens: number
-  /** The effort this request sends (`effectiveEffort`); none when it names no level. */
-  readonly reasoningLevel: Option.Option<ReasoningEffort>
+  /**
+   * The effort this request sends (`effectiveEffort`); `"default"` when it
+   * names no level to a model that reasons, none when the model does not.
+   */
+  readonly reasoningLevel: Option.Option<RunEffort>
   readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
@@ -2092,8 +2117,17 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     maxTokens: reservedOutputTokens,
   } satisfies ProviderHints
   // The receipt names what the driver sends: the same levels, the same clamp.
-  const reasoningLevel = Option.flatMap(Option.fromUndefinedOr(resolved.reasoning), (level) =>
-    effectiveEffort(modelOption.value, level),
+  // A request that names no level to a model the catalog says reasons runs
+  // at the model's default, which is not an unknown level.
+  const reasoningLevel: Option.Option<RunEffort> = Option.match(
+    Option.fromUndefinedOr(resolved.reasoning),
+    {
+      onNone: () =>
+        Option.some<RunEffort>("default").pipe(
+          Option.filter(() => modelOption.value.reasoning === true),
+        ),
+      onSome: (level) => effectiveEffort(modelOption.value, level),
+    },
   )
   const modelRequest: ResolveModelRequest = {
     modelId: resolved.modelId,
@@ -2616,7 +2650,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           ([messageId, step, model]) =>
             [
               stepAddress(messageId, step).assistant,
-              { model, level: Option.fromUndefinedOr(event.reasoningLevel) },
+              {
+                model,
+                level: Option.orElse(Option.fromUndefinedOr(event.reasoningLevel), () =>
+                  Option.some<RunEffort>("default").pipe(
+                    Option.filter(() => event.reasoningDefault === true),
+                  ),
+                ),
+              },
             ] as const,
         ),
       )
@@ -3153,7 +3194,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               Option.liftPredicate(cacheWritesByLifetime, (writes) => writes.length > 0),
             ),
             outcome: outcome._tag,
-            reasoningLevel: Option.getOrUndefined(source.reasoningLevel),
+            ...effortReceipt(source.reasoningLevel),
           }),
         )
         const { inputTokens, outputTokens } = Option.getOrElse(usage, () => ({
@@ -3259,7 +3300,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                   model: params.resolved.modelId,
                   interrupted: true,
                   outcome: "Interrupted",
-                  reasoningLevel: Option.getOrUndefined(source.reasoningLevel),
+                  ...effortReceipt(source.reasoningLevel),
                 }),
               )
               yield* persistCutStep("Interrupted")
@@ -3892,7 +3933,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // A line the loop writes at this boundary, after the messages this step
       // resolved: the step reads it too. Replay finds it by id, so it is
       // appended once.
-      let resolved = resolvedAtBoundary
+      let resolved: ResolvedTurnContext = resolvedAtBoundary
       const appendBoundaryLine = Effect.fn("AgentLoop.appendBoundaryLine")(function* (
         message: Message,
       ) {

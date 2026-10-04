@@ -122,6 +122,13 @@ export type ProviderResolution = Layer.Layer<
   readonly provider: string
 }
 
+/**
+ * The effort an assistant run was sent at: a level, or `default` for a
+ * request that named none to a model that reasons, which ran at the model's
+ * own default (`StreamEnded.reasoningDefault`).
+ */
+export type RunEffort = ReasoningEffort | "default"
+
 /** Hints passed from the agent loop into `resolveModel`. Drivers bake these
  *  into their provider Config layer (e.g. `AnthropicLanguageModel.Config.max_tokens`). */
 export interface ProviderHints {
@@ -148,14 +155,15 @@ export interface ProviderHints {
   /**
    * The effort each earlier assistant run of the request's prompt was sent
    * at, in prompt order: one entry per run of consecutive assistant
-   * messages, from the steps' receipts (`StreamEnded.reasoningLevel`). None
-   * where no receipt says: a step on another model, a step stored before
-   * receipts, a forked branch. A driver whose wire carries an effort change
+   * messages, from the steps' receipts (`StreamEnded.reasoningLevel`, or
+   * `default` by `StreamEnded.reasoningDefault`). None where no receipt says:
+   * a step on another model, a step stored before receipts, a forked branch.
+   * A driver whose wire carries an effort change
    * inside the conversation rebuilds the changes from it, so the request's
    * earlier bytes stay the same. Absent on a request with no conversation
    * history to keep (the compaction summary).
    */
-  readonly reasoningHistory?: ReadonlyArray<Option.Option<ReasoningEffort>>
+  readonly reasoningHistory?: ReadonlyArray<Option.Option<RunEffort>>
 }
 
 /**
