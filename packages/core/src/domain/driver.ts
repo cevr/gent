@@ -274,7 +274,9 @@ export interface RetryPolicy {
    * from the provider's own fields by schema (a header, the error body),
    * never from message text; none when the failure names no time.
    * `DEFAULT_RETRY_POLICY` reads the typed retry-after (`retryAfterAt`); a
-   * driver adds its own reset fields after it. A usage limit that resets in
+   * driver adds the reset fields of a rate-limited request
+   * (`rateLimitResponse`), and the latest time it knows wins, so a generic
+   * retry-after never shortens a usage limit's reset. A usage limit that resets in
    * hours names a time past `maxDelay`: the step fails at once, and the
    * turn's `ErrorOccurred.retryAt` and `TurnAfterInput.retryAt` carry it.
    */
@@ -291,7 +293,7 @@ export const retryAfterAt = (cause: unknown, nowMs: number): Option.Option<numbe
 }
 
 /**
- * The HTTP response a typed provider failure kept: its headers (lower-case
+ * The HTTP response a rate-limited request kept: its headers (lower-case
  * names, as the HTTP client gives them) and its raw body. A driver decodes
  * its reset fields from these.
  */
@@ -300,9 +302,13 @@ export interface FailureResponse {
   readonly body: Option.Option<string>
 }
 
-/** The response a typed provider failure kept, when it kept one. */
-export const failureResponse = (cause: unknown): Option.Option<FailureResponse> => {
-  if (!AiError.isAiError(cause) || !("http" in cause.reason)) return Option.none()
+/**
+ * The response of a request the provider refused for a rate or usage limit,
+ * when the failure kept one. Any other failure has none: a refused request
+ * can carry the same limit headers, and they say nothing about its retry.
+ */
+export const rateLimitResponse = (cause: unknown): Option.Option<FailureResponse> => {
+  if (!AiError.isAiError(cause) || cause.reason._tag !== "RateLimitError") return Option.none()
   const http = Option.fromUndefinedOr(cause.reason.http)
   return Option.map(http, (context) => ({
     headers: context.response?.headers ?? {},

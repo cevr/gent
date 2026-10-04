@@ -43,11 +43,11 @@ import {
   defineExtension,
   ExtensionHost,
   type FailureResponse,
-  failureResponse,
   isRecord,
   Model,
   type ModelDriverContribution,
   ProviderAuthError,
+  rateLimitResponse,
   retryAfterAt,
   type UpdateStoredOAuth,
   type StoredOAuthCredentials,
@@ -96,6 +96,7 @@ import {
   withHeaders,
   ResponsesTransientStreamEvent,
   ModelHttpClient,
+  latestReset,
   spentLimitsReset,
 } from "./providers.js"
 import type {
@@ -1774,20 +1775,21 @@ const apiLimitsReset = (
   })
 
 /**
- * When a retry of an OpenAI failure can succeed: the typed retry-after,
- * else ChatGPT's usage-limit body, else the reset of the API limits that are
- * spent. Each is decoded by schema from the response the failure kept.
+ * When a retry of an OpenAI failure can succeed: the latest of the typed
+ * retry-after and, for a rate-limited request only, ChatGPT's usage-limit
+ * body and the reset of the API limits that are spent. Each is decoded by
+ * schema from the response the failure kept.
  */
-const openAiRetryAt = (cause: unknown, nowMs: number): Option.Option<number> =>
-  retryAfterAt(cause, nowMs).pipe(
-    Option.orElse(() =>
-      Option.flatMap(failureResponse(cause), (response) =>
-        Option.flatMap(response.body, (body) => usageLimitReset(body, nowMs)).pipe(
-          Option.orElse(() => apiLimitsReset(response.headers, nowMs)),
-        ),
-      ),
+const openAiRetryAt = (cause: unknown, nowMs: number): Option.Option<number> => {
+  const response = rateLimitResponse(cause)
+  return latestReset([
+    retryAfterAt(cause, nowMs),
+    Option.flatMap(response, ({ body }) =>
+      Option.flatMap(body, (text) => usageLimitReset(text, nowMs)),
     ),
-  )
+    Option.flatMap(response, ({ headers }) => apiLimitsReset(headers, nowMs)),
+  ])
+}
 
 // ── Layer construction helpers ──
 

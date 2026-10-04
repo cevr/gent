@@ -27,7 +27,7 @@ import {
   defineExtension,
   ExtensionHost,
   type ExtensionHostService,
-  failureResponse,
+  type FailureResponse,
   isRecord,
   isRecordArray,
   type JsonRecord,
@@ -39,6 +39,7 @@ import {
   acceptedEfforts,
   clampEffort,
   ReasoningEffort,
+  rateLimitResponse,
   reportProviderStopReason,
   retryAfterAt,
   type RunEffort,
@@ -81,6 +82,7 @@ import {
   writesPromptCache,
   MessagesTransientStreamEvent,
   ModelHttpClient,
+  latestReset,
   spentLimitsReset,
 } from "./providers.js"
 import { ChildProcessSpawner } from "effect/process"
@@ -2196,46 +2198,44 @@ const AnthropicRateLimitHeaders = Schema.Struct({
   "anthropic-ratelimit-output-tokens-reset": LimitReset,
 })
 
+/** When the limits a rate-limited request's headers report spent are full again (`spentLimitsReset`). */
+const spentHeadersReset = (response: FailureResponse): Option.Option<number> =>
+  Option.flatMap(Schema.decodeOption(AnthropicRateLimitHeaders)(response.headers), (headers) => {
+    const limit = (remaining: Option.Option<number>, reset: Option.Option<DateTime.Utc>) => ({
+      remaining,
+      resetAt: Option.map(reset, DateTime.toEpochMillis),
+    })
+    return spentLimitsReset([
+      limit(
+        headers["anthropic-ratelimit-requests-remaining"],
+        headers["anthropic-ratelimit-requests-reset"],
+      ),
+      limit(
+        headers["anthropic-ratelimit-tokens-remaining"],
+        headers["anthropic-ratelimit-tokens-reset"],
+      ),
+      limit(
+        headers["anthropic-ratelimit-input-tokens-remaining"],
+        headers["anthropic-ratelimit-input-tokens-reset"],
+      ),
+      limit(
+        headers["anthropic-ratelimit-output-tokens-remaining"],
+        headers["anthropic-ratelimit-output-tokens-reset"],
+      ),
+    ])
+  })
+
 /**
- * When a retry of an Anthropic failure can succeed: the typed retry-after,
- * else the reset of the limits the rate-limit headers report spent
- * (`spentLimitsReset`). The Claude plan's own reset headers are not read:
- * no recorded plan 429 shows them yet.
+ * When a retry of an Anthropic failure can succeed: the latest of the typed
+ * retry-after and, for a rate-limited request only, the reset of the limits
+ * its headers report spent. The Claude plan's own reset headers are not
+ * read: no recorded plan 429 shows them yet.
  */
 const anthropicRetryAt = (cause: unknown, nowMs: number): Option.Option<number> =>
-  retryAfterAt(cause, nowMs).pipe(
-    Option.orElse(() =>
-      Option.flatMap(failureResponse(cause), (response) =>
-        Option.flatMap(
-          Schema.decodeOption(AnthropicRateLimitHeaders)(response.headers),
-          (headers) => {
-            const limit = (
-              remaining: Option.Option<number>,
-              reset: Option.Option<DateTime.Utc>,
-            ) => ({ remaining, resetAt: Option.map(reset, DateTime.toEpochMillis) })
-            return spentLimitsReset([
-              limit(
-                headers["anthropic-ratelimit-requests-remaining"],
-                headers["anthropic-ratelimit-requests-reset"],
-              ),
-              limit(
-                headers["anthropic-ratelimit-tokens-remaining"],
-                headers["anthropic-ratelimit-tokens-reset"],
-              ),
-              limit(
-                headers["anthropic-ratelimit-input-tokens-remaining"],
-                headers["anthropic-ratelimit-input-tokens-reset"],
-              ),
-              limit(
-                headers["anthropic-ratelimit-output-tokens-remaining"],
-                headers["anthropic-ratelimit-output-tokens-reset"],
-              ),
-            ])
-          },
-        ),
-      ),
-    ),
-  )
+  latestReset([
+    retryAfterAt(cause, nowMs),
+    Option.flatMap(rateLimitResponse(cause), spentHeadersReset),
+  ])
 
 // ── extension ───────────────────────────────────────────────────────────────
 

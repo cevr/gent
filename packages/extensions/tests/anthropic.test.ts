@@ -3442,22 +3442,23 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
 
 // ── reset time decode ───────────────────────────────────────────────────────
 
-/** The reset time the driver reads from a 429 with `headers`, counted from `nowMs`. */
-const rateLimitedResetAt = (headers: Record<string, string>, nowMs: number) =>
+/** The reset time the driver reads from a failed request's answer, counted from `nowMs`. */
+const failedResetAt = (
+  answer: { readonly status: number; readonly errorType: string },
+  headers: Record<string, string>,
+  nowMs: number,
+) =>
   Effect.gen(function* () {
     const credentialCellRef =
       yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
     const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
     const model = yield* driver.resolveModel("claude-sonnet-4-5", makeApiAuthInfo("test-key"))
     const reply = () => ({
-      status: 429,
+      status: answer.status,
       headers: { "content-type": "application/json", ...headers },
       body: encodeExternalJson({
         type: "error",
-        error: {
-          type: "rate_limit_error",
-          message: "Number of requests has exceeded your rate limit",
-        },
+        error: { type: answer.errorType, message: "The request failed" },
       }),
     })
     const error = yield* LanguageModel.streamText({ prompt: "hi" }).pipe(
@@ -3468,6 +3469,10 @@ const rateLimitedResetAt = (headers: Record<string, string>, nowMs: number) =>
     )
     return Option.getOrThrow(Option.fromUndefinedOr(driver.retry)).retryAt(error, nowMs)
   })
+
+/** The reset time the driver reads from a 429 with `headers`, counted from `nowMs`. */
+const rateLimitedResetAt = (headers: Record<string, string>, nowMs: number) =>
+  failedResetAt({ status: 429, errorType: "rate_limit_error" }, headers, nowMs)
 
 const RESET_NOW = Date.parse("2026-10-04T12:00:00Z")
 
@@ -3502,7 +3507,7 @@ describe("Anthropic reset time", () => {
     }),
   )
 
-  it.live("a retry-after wins over the reset headers", () =>
+  it.live("a short retry-after does not shorten a spent limit's reset", () =>
     Effect.gen(function* () {
       const resetAt = yield* rateLimitedResetAt(
         {
@@ -3512,7 +3517,21 @@ describe("Anthropic reset time", () => {
         },
         RESET_NOW,
       )
-      expect(resetAt).toEqual(Option.some(RESET_NOW + 3_000))
+      expect(resetAt).toEqual(Option.some(Date.parse("2026-10-04T12:05:00Z")))
+    }),
+  )
+
+  it.live("a refused request's limit headers name no reset", () =>
+    Effect.gen(function* () {
+      const resetAt = yield* failedResetAt(
+        { status: 400, errorType: "invalid_request_error" },
+        {
+          "anthropic-ratelimit-requests-remaining": "0",
+          "anthropic-ratelimit-requests-reset": "2026-10-04T12:05:00Z",
+        },
+        RESET_NOW,
+      )
+      expect(resetAt).toEqual(Option.none())
     }),
   )
 })

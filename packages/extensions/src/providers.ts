@@ -1222,25 +1222,36 @@ interface ReportedLimit {
 }
 
 /**
+ * The latest of the reset times a failure names; none when it names none.
+ * A retry before the latest meets a limit still spent, so a short generic
+ * retry-after never shortens a usage limit's own reset.
+ */
+export const latestReset = (resets: ReadonlyArray<Option.Option<number>>): Option.Option<number> =>
+  resets.reduce<Option.Option<number>>(
+    (latest, reset) =>
+      Option.match(reset, {
+        onNone: () => latest,
+        onSome: (at) =>
+          Option.some(
+            Math.max(
+              at,
+              Option.getOrElse(latest, () => at),
+            ),
+          ),
+      }),
+    Option.none(),
+  )
+
+/**
  * When a retry can succeed: once every spent limit (none left) is full
  * again, the latest of their resets. A limit with some left does not hold
  * the retry, so its reset does not count; none when no limit reports itself
  * spent with a reset.
  */
 export const spentLimitsReset = (limits: ReadonlyArray<ReportedLimit>): Option.Option<number> =>
-  limits.reduce<Option.Option<number>>((latest, limit) => {
-    if (!Option.contains(limit.remaining, 0)) return latest
-    return Option.match(limit.resetAt, {
-      onNone: () => latest,
-      onSome: (at) =>
-        Option.some(
-          Math.max(
-            at,
-            Option.getOrElse(latest, () => at),
-          ),
-        ),
-    })
-  }, Option.none())
+  latestReset(
+    limits.map((limit) => Option.filter(limit.resetAt, () => Option.contains(limit.remaining, 0))),
+  )
 
 // ── messages prompt cache ───────────────────────────────────────────────────
 //

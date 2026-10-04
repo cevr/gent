@@ -691,17 +691,22 @@ Shape:
   `AiError` says so, or a mid-stream error event matches the driver's
   `transientStreamEvent` schema (Anthropic names a `type`, OpenAI a `code`).
   The driver's `RetryPolicy.retryAt` says when a retry can succeed, in epoch
-  milliseconds, decoded by schema from the failure's HTTP answer
-  (`failureResponse`): the typed `retry-after` first (`retryAfterAt`, the
-  default), then the ChatGPT 429 `usage_limit_reached` body's `resets_at`
-  (or `resets_in_seconds`), then the latest reset among the spent limits the
-  `x-ratelimit-*` (OpenAI) or `anthropic-ratelimit-*` (Anthropic) headers
-  report (`spentLimitsReset`; a limit with some left does not hold the
-  retry). That time replaces the backoff; one more than the policy's
+  milliseconds: the latest of the times it knows (`latestReset`), so a short
+  generic retry-after never shortens a usage limit's own reset. The times are
+  the typed `retry-after` (`retryAfterAt`, the default) and, decoded by
+  schema from the answer of a rate-limited request only (`rateLimitResponse`;
+  a refused request can carry the same headers), the ChatGPT 429
+  `usage_limit_reached` body's `resets_at` (or `resets_in_seconds`) and the
+  latest reset among the spent limits the `x-ratelimit-*` (OpenAI) or
+  `anthropic-ratelimit-*` (Anthropic) headers report (`spentLimitsReset`; a
+  limit with some left does not hold the retry). That time replaces the
+  backoff; one more than the policy's
   `maxDelay` away (a usage limit that resets in hours) fails the step without
   a retry, and the turn reports it (`limitResetAt`): `ErrorOccurred.retryAt`
   (optional, so an older row decodes) and `TurnAfterInput.retryAt` (in
-  memory, for a turn that failed and was not interrupted). The TUI error row
+  memory, for a turn that failed and was not interrupted; a turn that fails
+  before it runs begins its own ledger, so it never names the turn before
+  it). The TUI error row
   ends its first line with the wall-clock reset. Nothing is inferred from
   message text.
   After partial output the partial assistant message stays, a durable
