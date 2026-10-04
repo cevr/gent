@@ -588,6 +588,13 @@ export interface ModelDriverContribution {
   /** Facts the driver knows better than models.dev, applied to its catalog entries. */
   readonly overrides?: ReadonlyArray<CatalogOverride>
   /**
+   * Model names the driver shipped before models.dev named the model, each
+   * to the name its catalog lists now. Core resolves an alias, for a turn and
+   * for `models.decide`, as the name it stands for; lists show only the
+   * current names.
+   */
+  readonly aliases?: Readonly<Record<string, string>>
+  /**
    * Where one model's requests go and how they are signed. A missing
    * credential fails with `ProviderAuthError`.
    */

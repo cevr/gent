@@ -163,6 +163,17 @@ const chatEntry = (catalog: Option.Option<ModelCatalogView>, modelName: string):
  * AI path. The TypeSafe client posts to `{apiUrl}/systemone`; the request
  * goes to `/run/{id}` under the account instead.
  */
+
+/**
+ * The Clef ids the driver shipped in Pass 30, before models.dev listed Clef:
+ * a stored session, config or cell that names `cloudflare/clef` reaches the
+ * catalog's model.
+ */
+const CLEF_ALIASES = {
+  clef: "@cf/cloudflare/clef",
+  "clef-flash": "@cf/cloudflare/clef-flash",
+} satisfies Readonly<Record<string, string>>
+
 const clefRunPath =
   (modelName: string) =>
   (client: HttpClient.HttpClient): HttpClient.HttpClient =>
@@ -310,6 +321,7 @@ export const buildCloudflareModelDriver = (env: CloudflareEnv): ModelDriverContr
   id: DRIVER_ID,
   name: "Cloudflare",
   catalogProvider: CATALOG_PROVIDER,
+  aliases: CLEF_ALIASES,
   envCredential: TOKEN_ENV,
   endpoint: (_modelName, authInfo) => chatEndpoint(Option.fromNullishOr(authInfo), env),
   resolveModel: (modelName, authInfo, hints, catalog) =>

@@ -821,6 +821,41 @@ describe("cell models host", () => {
     20000,
   )
 
+  // Pass 30 shipped Clef as `cloudflare/clef` and `cloudflare/clef-flash`;
+  // models.dev names them `@cf/cloudflare/clef…`. A cell that keeps the
+  // earlier id reaches the same model at its Workers AI path.
+  it.scopedLive(
+    "a cell that names Clef Flash by its earlier id cloudflare/clef-flash decides through the same model",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+        const state = makeFakeFetchState()
+        const { display } = yield* runJudgeCell({
+          calls,
+          storeKey: false,
+          extensions: [capturedCloudflare(state)],
+          signIns: [{ provider: "cloudflare", key: "cf-token", metadata: { accountId: "acct-1" } }],
+          code: [
+            "const reply = await models.decide({ text: 'late order' }, {",
+            "  urgent: models.probability({ instructions: 'Needs action today' }),",
+            "}, { model: 'cloudflare/clef-flash' })",
+            "JSON.stringify(reply)",
+          ].join("\n"),
+        })
+        expect(yield* decodeDecideJson(display)).toMatchObject({
+          model: "cloudflare/@cf/cloudflare/clef-flash",
+          answers: { urgent: { probability: 0.75 } },
+        })
+        expect(state.captured.map((request) => request.url)).toEqual([
+          "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clef-flash",
+        ])
+        expect(yield* Effect.forEach(state.captured, systemOneBody)).toMatchObject([
+          { model: "clef-flash" },
+        ])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    20000,
+  )
+
   it.scopedLive(
     "a classifier the call cannot resolve names each classifier catalog that failed",
     () =>

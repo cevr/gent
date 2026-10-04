@@ -501,6 +501,10 @@ describe("Cloudflare Clef decisions", () => {
       const driver = yield* fixtureDriver()
       const error = yield* Effect.flip(resolveOn(driver, CLEF, signedIn({ accountId: "a" })))
       expect(error).toMatchObject({ _tag: "DriverError", reason: expect.stringContaining(CLEF) })
+      // The earlier id names the same model, so it is refused the same way,
+      // never sent to Chat Completions.
+      const earlier = yield* Effect.flip(resolveOn(driver, "clef", signedIn({ accountId: "a" })))
+      expect(earlier).toMatchObject({ _tag: "DriverError", reason: expect.stringContaining(CLEF) })
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 })

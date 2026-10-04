@@ -1447,6 +1447,23 @@ interface DriverProfile {
 const catalogProviderOf = (driver: ModelDriverContribution): string =>
   driver.catalogProvider ?? driver.id
 
+/** The name `driver` lists now for `modelName`: the name its alias stands for, else itself. */
+const currentModelName = (driver: ModelDriverContribution, modelName: string): string =>
+  Option.fromUndefinedOr(driver.aliases).pipe(
+    Option.filter((aliases) => Object.hasOwn(aliases, modelName)),
+    Option.flatMap((aliases) => Option.fromUndefinedOr(aliases[modelName])),
+    Option.getOrElse(() => modelName),
+  )
+
+/** `provider/model` with the model name its driver lists now; an id no driver serves stays. */
+const currentModelId = (drivers: ModelDrivers, modelId: string): string =>
+  Option.flatMap(parseModelId(modelId), ([providerId, modelName]) =>
+    Option.map(
+      Option.fromUndefinedOr(drivers.get(providerId)),
+      (driver) => `${providerId}/${currentModelName(driver, modelName)}`,
+    ),
+  ).pipe(Option.getOrElse(() => modelId))
+
 /** The catalog as `driver` reads it: its catalog provider's entries with its overrides applied. */
 const driverCatalogView = (
   catalog: ModelCatalogView,
@@ -1542,9 +1559,10 @@ interface DriverModelRequest {
 }
 
 /**
- * Resolve one model of a driver: the driver's own `resolveModel` over its
- * catalog view, else core's composition: the catalog entry, the class that
- * speaks it and the driver's endpoint. A decision model fails with
+ * Resolve one model of a driver, an alias as the name it stands for: the
+ * driver's own `resolveModel` over its catalog view, else core's
+ * composition: the catalog entry, the class that speaks it and the driver's
+ * endpoint. A decision model fails with
  * `DriverError` on either path; with core's composition, so do a model with
  * no entry and a model no registered class speaks.
  */
@@ -1552,7 +1570,8 @@ export const resolveDriverModel = (
   request: DriverModelRequest,
 ): Effect.Effect<ProviderResolution, ProviderAuthError | DriverError> =>
   Effect.gen(function* () {
-    const { driver, modelName } = request
+    const { driver } = request
+    const modelName = currentModelName(driver, request.modelName)
     const view = driverCatalogView(request.catalog, driver)
     const entry = catalogModelEntry(view, catalogProviderOf(driver), modelName)
     if (Option.exists(entry, (value) => value.decision === true)) {
@@ -2348,19 +2367,25 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
     failed = `. Classifier catalogs that failed: ${failures.map((failure) => `${failure.driverId} (${failure.error})`).join(", ")}`
   const chosen = yield* Option.match(requested, {
     onSome: (id) =>
-      Option.match(Option.fromUndefinedOr(classifiers.find((entry) => entry.model.id === id)), {
-        onSome: Effect.succeed,
-        onNone: () => {
-          let known = "none"
-          if (classifiers.length > 0) known = classifiers.map((entry) => entry.model.id).join(", ")
-          return Effect.fail(
-            new DecisionModelError({
-              reason: "UnknownModel",
-              message: `Unknown classifier model "${id}". Classifier models: ${known}${failed}`,
-            }),
-          )
+      Option.match(
+        Option.fromUndefinedOr(
+          classifiers.find((entry) => entry.model.id === currentModelId(drivers, id)),
+        ),
+        {
+          onSome: Effect.succeed,
+          onNone: () => {
+            let known = "none"
+            if (classifiers.length > 0)
+              known = classifiers.map((entry) => entry.model.id).join(", ")
+            return Effect.fail(
+              new DecisionModelError({
+                reason: "UnknownModel",
+                message: `Unknown classifier model "${id}". Classifier models: ${known}${failed}`,
+              }),
+            )
+          },
         },
-      }),
+      ),
     onNone: () =>
       Effect.gen(function* () {
         const usable = yield* Effect.filter(classifiers, (entry) =>
