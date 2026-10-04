@@ -1333,9 +1333,14 @@ const validateResources = (contribs: ExtensionContributions): Option.Option<stri
   return Option.none()
 }
 
-/** Each resource a tool or a request names is one its own extension registers. */
+/**
+ * Each resource a tool or a request names is a definition its own extension
+ * registers. The check is by identity: a leaf yields the services of the
+ * definition it names, so another definition under the same id does not
+ * provide them.
+ */
 const validateLeafResources = (contribs: ExtensionContributions): Option.Option<string> => {
-  const registered = new Set((contribs.resources ?? []).map((resource) => String(resource.id)))
+  const registered = contribs.resources ?? []
   const leaves = [
     ...(contribs.tools ?? []).flatMap((capability, i) => {
       if (!isToolCapability(capability)) return []
@@ -1349,9 +1354,15 @@ const validateLeafResources = (contribs: ExtensionContributions): Option.Option<
   ]
   for (const leaf of leaves) {
     for (const resource of leaf.resources) {
-      if (registered.has(resource)) continue
+      if (registered.includes(resource)) continue
+      const sameId = registered.findIndex((candidate) => candidate.id === resource.id)
+      if (sameId >= 0) {
+        return Option.some(
+          `${leaf.label}: names resource "${resource.id}", but this extension registers resources[${sameId}] (${resource.id}), another definition under that id`,
+        )
+      }
       return Option.some(
-        `${leaf.label}: names resource "${resource}", which this extension does not register`,
+        `${leaf.label}: names resource "${resource.id}", which this extension does not register`,
       )
     }
   }

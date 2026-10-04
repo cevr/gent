@@ -16,7 +16,11 @@ import {
   type ToolInput,
 } from "@gent/core/extensions/api"
 import { ExtensionId } from "../../src/domain/ids"
-import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability"
+import {
+  type CapabilityError,
+  GentToolMetadataTag,
+  getToolMetadata,
+} from "../../src/domain/capability"
 import {
   ExtensionLoadError,
   type LoadedExtension,
@@ -612,6 +616,39 @@ describe("defineExtension", () => {
       expect(exit._tag).toBe("Success")
     }))
 
+  test("a tool whose resource id the extension registers under another definition fails package validation", () =>
+    Effect.gen(function* () {
+      const declared = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(
+          ReadOnlyService,
+          ReadOnlyService.of({ read: Effect.succeed("count") }),
+        ),
+      })
+      const registered = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(WriteCapableService, WriteCapableService.of({ write: Effect.void })),
+      })
+      const ext = defineExtension({
+        id: "named-resource",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("resource", registered)
+          yield* host.register("tool", readOnlyTool(declared))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(Cause.pretty(exit.cause)).toContain(
+          'tools[0] (read-only): names resource "named-resource/counter", but this extension registers resources[0] (named-resource/counter), another definition under that id',
+        )
+      }
+    }))
+
   test("a request that names a resource its extension does not register fails package validation", () =>
     Effect.gen(function* () {
       const counter = defineResource({
@@ -762,6 +799,13 @@ class ReadOnlyService extends Context.Service<ReadOnlyService, ReadOnlyApi>()(
 const NoInput = Schema.Struct({})
 const StringOutput = Schema.String
 
+type NoParams = typeof NoInput
+type StringOut = typeof StringOutput
+type Readers = readonly [ReturnType<typeof defineResource<ReadOnlyService, "process">>]
+type None = ReadonlyArray<never>
+type Reader = ReadOnlyService
+type Failure = CapabilityError
+
 /** A tool that reads `ReadOnlyService` from the resource it names. */
 const readOnlyTool = (resource: ReturnType<typeof defineResource<ReadOnlyService, "process">>) =>
   tool({
@@ -858,6 +902,78 @@ describe("Capability factory-shape locks (compile-time)", () => {
       // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
       execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
     })
+    expect(true).toBe(true)
+  })
+
+  test("a typed tool input or explicit type arguments cannot grant services without their declarations", () => {
+    // @ts-expect-error -- the type grants the reader's services, so `resources` is required
+    const typedResources: ToolInput<NoParams, StringOut, never, ReadOnlyService, Readers> = {
+      id: "typed-resources",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    }
+    // @ts-expect-error -- the type grants the feature's storage, so `branchTools` is required
+    const typedFeature: ToolInput<NoParams, StringOut, never, ReadOnlyService, None, Reader> = {
+      id: "typed-feature",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    }
+    // @ts-expect-error -- the type arguments grant the reader's services, so `resources` is required
+    tool<NoParams, StringOut, never, ReadOnlyService, Readers>({
+      id: "explicit-resources",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    // @ts-expect-error -- the type arguments grant the feature's storage, so `branchTools` is required
+    tool<NoParams, StringOut, never, ReadOnlyService, None, Reader>({
+      id: "explicit-feature",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    void typedResources
+    void typedFeature
+    expect(true).toBe(true)
+  })
+
+  test("a typed request input or explicit type arguments cannot grant services without their declarations", () => {
+    // @ts-expect-error -- the type grants the reader's services, so `resources` is required
+    const typedResources: RequestInput<{}, string, ReadOnlyService, Failure, Readers> = {
+      id: "typed-resources",
+      input: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    }
+    // @ts-expect-error -- the type grants the feature's storage, so `branchTools` is required
+    const typedFeature: RequestInput<{}, string, ReadOnlyService, Failure, None, Reader> = {
+      id: "typed-feature",
+      input: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    }
+    // @ts-expect-error -- the type arguments grant the reader's services, so `resources` is required
+    request<{}, string, ReadOnlyService, Failure, Readers>({
+      id: "explicit-resources",
+      input: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    // @ts-expect-error -- the type arguments grant the feature's storage, so `branchTools` is required
+    request<{}, string, ReadOnlyService, Failure, None, Reader>({
+      id: "explicit-feature",
+      input: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    void typedResources
+    void typedFeature
     expect(true).toBe(true)
   })
 

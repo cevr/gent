@@ -206,8 +206,8 @@ interface RequestCapabilityApi {
   readonly description?: string
   /** See `RequestInput.answersDuringTurn`. */
   readonly answersDuringTurn?: boolean
-  /** The ids of the resources the handler names; its extension must register each. */
-  readonly resources: ReadonlyArray<string>
+  /** The resources the handler names; its extension must register each of these definitions. */
+  readonly resources: ReadonlyArray<AnyResourceContribution>
   /** The branch-tool feature the handler names; its root must install it. */
   readonly branchTools?: BranchToolFeature<never>
 }
@@ -288,14 +288,36 @@ interface RequestFailure {
   readonly message: string
 }
 
+/**
+ * A leaf type that grants services makes the declaration that grants them
+ * required: a `Resources` argument other than the empty default requires
+ * `resources`, and a `Feature` other than `never` requires `branchTools`. So
+ * no typed input or explicit type argument grants a service without the value
+ * that provides it.
+ */
+type RequiredDeclarations<Resources, Feature> = ([Resources] extends [ReadonlyArray<never>]
+  ? unknown
+  : { readonly resources: Resources }) &
+  ([Feature] extends [never] ? unknown : { readonly branchTools: BranchToolFeature<Feature> })
+
 /** Author-facing input to `request({...})`. */
-export interface RequestInput<
+export type RequestInput<
   Input = unknown,
   Output = unknown,
   R = never,
   E extends RequestFailure = CapabilityError,
   Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
   Feature = never,
+> = RequestInputFields<Input, Output, R, E, Resources, Feature> &
+  RequiredDeclarations<Resources, Feature>
+
+interface RequestInputFields<
+  Input,
+  Output,
+  R,
+  E extends RequestFailure,
+  Resources extends ReadonlyArray<AnyResourceContribution>,
+  Feature,
 > {
   /** Stable id (capability-local). Used for routing. */
   readonly id: string
@@ -420,7 +442,7 @@ export function request(input: {
     slash: input.slash,
     description: input.description,
     answersDuringTurn: input.answersDuringTurn,
-    resources: (input.resources ?? []).map((resource) => String(resource.id)),
+    resources: input.resources ?? [],
     ...(Predicate.isNotUndefined(input.branchTools) && { branchTools: input.branchTools }),
     input: input.input,
     output: input.output,
@@ -505,8 +527,8 @@ interface GentToolMetadata<
   /** The author's one-line result summary over wire values; see `ToolInput.summary`. */
   // oxlint-disable-next-line effect/noUnknownParameters -- Stored results are wire values; the author's typed function reads them.
   readonly summary?: (input: unknown, output: unknown) => string
-  /** The ids of the resources the tool names; its extension must register each. */
-  readonly resources: ReadonlyArray<string>
+  /** The resources the tool names; its extension must register each of these definitions. */
+  readonly resources: ReadonlyArray<AnyResourceContribution>
   /** The branch-tool feature the tool names; its root must install it. */
   readonly branchTools?: BranchToolFeature<never>
 }
@@ -633,7 +655,7 @@ export const getToolPrompt = (
  *  `Params` is a `Schema.Codec<I, E, never, never>` — the tool adapter
  *  decodes JSON synchronously, and Effect AI encodes the streamed tool-call
  *  parameters, so neither direction may have a context requirement. */
-export interface ToolInput<
+export type ToolInput<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Params extends Schema.Codec<any, any, never, never> = Schema.Codec<any, any, never, never>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
@@ -642,6 +664,18 @@ export interface ToolInput<
   Deps = never,
   Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
   Feature = never,
+> = ToolInputFields<Params, Output, Error, Deps, Resources, Feature> &
+  RequiredDeclarations<Resources, Feature>
+
+interface ToolInputFields<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Params extends Schema.Codec<any, any, never, never>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Output extends Schema.Encoder<any, never>,
+  Error,
+  Deps,
+  Resources extends ReadonlyArray<AnyResourceContribution>,
+  Feature,
 > extends ToolDeclarations {
   /** Stable id (extension-local). Used by the LLM as the tool name. */
   readonly id: string
@@ -726,7 +760,7 @@ export const tool = <
       // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The bound on `Deps` admits only services every tool body gets; the runtime provides them at execution boundaries.
       return input.execute(decoded) as Effect.Effect<Schema.Schema.Type<Output>, Error, never>
     },
-    resources: (input.resources ?? []).map((resource) => String(resource.id)),
+    resources: input.resources ?? [],
     ...(Predicate.isNotUndefined(input.branchTools) && { branchTools: input.branchTools }),
   }
   Object.assign(metadata, declarationsOf(input))

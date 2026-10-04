@@ -300,23 +300,29 @@ updates this list in the same commit.
     `packages/extensions/src/compaction.ts`,
     `packages/extensions/src/anthropic.ts` (`PromptCacheTtl`),
     `apps/tui/src/extensions/cache.client.tsx`.
-18. **A leaf yields only the services it is given.** `tool` and `request`
+18. **A leaf requires only the services it is given.** `tool` and `request`
     bound the services their `execute` may require (`LeafServices`):
     `ExtensionContext`, `ExtensionPlatformServices`, the core services the
     branch-tools entry exports (`BranchToolHostServices`), the services of the
     resources the leaf names in `resources`, and the storage of the feature it
-    names in `branchTools`. A body that needs any other service does not
-    compile, so a leaf cannot reach a core service the root happens to hold.
-    The resource services derive from each `defineResource` value; there is
-    no hand-written list. Package validation fails an extension whose leaf
-    names a resource the extension does not register. Profile validation
+    names in `branchTools`. A body that requires any other service does not
+    compile. A type argument that grants services makes its declaration
+    required, so a typed input cannot grant a service without the value that
+    provides it. The bound is on the type: it limits the services `execute`
+    requires (its `R`). It does not hide the runtime context, so
+    `Effect.serviceOption` still reads a service the root holds
+    (`registry_probe` in `packages/core/tests/server/rpc.test.ts`). The
+    resource services derive from each `defineResource` value; there is no
+    hand-written list. Package validation fails an extension that does not
+    register the resource definition a leaf names; the check is by identity,
+    so another definition under the same id fails too. Profile validation
     fails an extension whose leaf names a branch-tool feature other than the
     one the root installs (`CurrentBranchToolFeature`, which the session
     profile cache reads once when the root builds it). The feature stays a
     root input, not an extension resource: its tables join core's migration
     chain and its storage builds over core's SQL client before any profile
     loads. Receipts: `packages/core/src/domain/capability.ts` (`tool`,
-    `request`), `packages/core/src/domain/extension.ts`
+    `request`, `RequiredDeclarations`), `packages/core/src/domain/extension.ts`
     (`validateLeafResources`), `packages/core/src/runtime/extension-host.ts`
     (`branchToolFeatureErrors`), `packages/core/tests/extensions/api.test.ts`,
     `packages/core/tests/runtime/extension-host.test.ts`.
@@ -338,6 +344,17 @@ names the decision that left it open.
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
   snapshot read per session per tick. Rejected as R6 in the same ledger.
+- **Only the root chooses a branch-tool feature.** A root installs one
+  feature (`createDependencies({ branchTools })`), and the shipped cell
+  declares it. A user extension cannot declare a feature of its own, and
+  the loader does not bind `@gent/extensions` for user files, so a user leaf
+  cannot name `CellBranchTools` either. This runs against the owner rule
+  that a shipped extension is never more privileged than a user extension.
+  Binding the value would only let a user leaf share the cell's private
+  storage; it would not let a user extension bring a feature. The fix that
+  removes the asymmetry is a root that composes the features its extensions
+  declare, which is a new concept, so it stays open until an extension
+  other than the cell needs branch state.
 - **Compaction is measured on long sessions only by hand.** The handoff
   count (`ModelContextProjected.compacted`) after the spill comes from gamut
   runs, not from a test; the receipt in

@@ -355,7 +355,10 @@ the platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`,
 the core services the branch-tools entry exports (`BranchToolHostServices`:
 `EventStore`, `MessageStorage`, `InteractionStorage`, `ToolRunner`), the
 services of its `resources`, and the storage of its `branchTools`. A body that
-needs any other service does not compile. A tool that keeps state names the
+requires any other service does not compile. The bound is on the services
+the body requires (its `R`), not on the runtime context:
+`Effect.serviceOption` still reads a service the root holds. A tool that
+keeps state names the
 resource that holds it:
 
 ```ts
@@ -532,7 +535,8 @@ services; authors import the smallest service Tag they need rather than
 declaring capability labels. A handler yields the same services a tool body
 does, with the same two declarations: `resources` names the `defineResource`
 values whose services it yields, and `branchTools` the feature whose storage
-it yields. A handler that needs any other service does not compile, and the
+it yields. A handler that requires any other service does not compile (the
+same type bound), and the
 loader checks both declarations as it checks a tool's, reporting
 `requests[i] (id): …`. The loader binds every registered request to the
 enclosing `defineExtension({ id })`, so the extension id is written once. Client-only protocol modules that export refs before server setup can use
