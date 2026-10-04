@@ -8,6 +8,7 @@ import {
   Effect,
   Exit,
   FileSystem,
+  type JsonSchema,
   Layer,
   Option,
   Order,
@@ -144,6 +145,7 @@ import {
   SessionStorage,
 } from "../storage/storage.js"
 import { SqlClient } from "effect/sql"
+import * as AiTool from "effect/ai/Tool"
 import * as Prompt from "effect/ai/Prompt"
 import * as EffectEntry from "effect"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
@@ -2214,7 +2216,8 @@ export interface SessionProfile {
   readonly generationId: ProcessGenerationId
   /**
    * A short hash of what the profile's extensions show the model
-   * (`modelSurface`): their tools and agents, not their code. A turn names it
+   * (`modelSurface`): their tools in request order and their agents, not
+   * their code nor a hook's per-turn output. A turn names it
    * on each request (`StreamStarted.profileRevision`), so a cache miss is
    * blamed on an extension change only when the model read another surface.
    * Absent on a profile no cache built (a fixed test profile).
@@ -2480,26 +2483,46 @@ export interface SessionProfileCacheService {
 }
 
 /**
- * What a profile's extensions show the model, as one text: each tool's name,
- * description, parameter schema and prompt lines, and each agent's
- * definition, in name order. The code behind them is not in it: a body edit
- * or a reload of the same code shows the model the same, so the request
- * names the same revision and no cache miss is blamed on it.
+ * A tool's result type as JSON Schema, or `{}` when its schema has none (a
+ * symbol-keyed struct): the cell catalog renders that one as `unknown`.
  */
-const modelSurface = (resolved: ResolvedExtensions): string =>
-  encodeToolOutput({
-    tools: [...resolved.modelCapabilities.values()]
-      .map(({ capability }) => ({
-        name: capability.name,
-        description: capability.description,
-        parameters: Schema.toJsonSchemaDocument(capability.parametersSchema),
-        ...getToolPrompt(capability),
-      }))
-      .toSorted((left, right) => Order.String(left.name, right.name)),
-    agents: [...resolved.agents.values()].toSorted((left, right) =>
-      Order.String(left.name, right.name),
-    ),
-  })
+const outputJsonSchema = (capability: ToolCapability) =>
+  Effect.try({
+    try: () => AiTool.getJsonSchemaFromSchema(getToolMetadata(capability).output),
+    catch: () => "underivable",
+  }).pipe(Effect.orElseSucceed((): JsonSchema.JsonSchema => ({})))
+
+/**
+ * What a profile's extensions put in a request's prefix, as one text, in the
+ * order the request holds it: each model tool in registration order with
+ * its name, description, input and result JSON Schemas, prompt lines and
+ * whether it asks the user (the catalogs render these: the request's tool
+ * list, the cell catalog's typed signatures), then each agent's definition.
+ * The code behind them is not in it: a body edit or a reload of the same
+ * code shows the model the same, so the request names the same revision and
+ * no cache miss is blamed on it.
+ *
+ * What a hook computes for a turn (a turn projection's prompt sections and
+ * notices, a system-prompt rewrite) is not a property of the profile and is
+ * not in it: such a hook can change the prefix from turn to turn with the
+ * same profile, and the cache fold names that miss `PrefixChanged`.
+ */
+const modelSurface = Effect.fn("SessionProfileCache.modelSurface")(function* (
+  resolved: ResolvedExtensions,
+) {
+  const tools = []
+  for (const { capability } of resolved.modelCapabilities.values()) {
+    tools.push({
+      name: capability.name,
+      description: capability.description,
+      parameters: AiTool.getJsonSchema(capability),
+      result: yield* outputJsonSchema(capability),
+      ...getToolPrompt(capability),
+      interactive: getToolMetadata(capability).interactive === true,
+    })
+  }
+  return encodeToolOutput({ tools, agents: [...resolved.agents.values()] })
+})
 
 /** Hex digits of a profile revision: enough to tell the profiles of one branch apart. */
 const PROFILE_REVISION_LENGTH = 12
@@ -2982,7 +3005,7 @@ export class SessionProfileCache extends Context.Service<
             const profile: SessionProfile = {
               ...built.profile,
               revision: platform
-                .hash("sha256", modelSurface(built.profile.resolved))
+                .hash("sha256", yield* modelSurface(built.profile.resolved))
                 .slice(0, PROFILE_REVISION_LENGTH),
             }
             const entry: ProfileEntry = { key, declarationKey, consulted, place, ...built, profile }

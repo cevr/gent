@@ -725,7 +725,11 @@ const markerExtension = (id: string, value: string, stop: Effect.Effect<void> = 
   })
 
 /** A user extension file that registers `ids` as tools; `reply` is their body. */
-const probeSource = (reply: string, ids: ReadonlyArray<string>) =>
+const probeSource = (
+  reply: string,
+  ids: ReadonlyArray<string>,
+  surface: { readonly output?: string; readonly guideline?: string } = {},
+) =>
   [
     'import { Effect, Schema } from "effect";',
     'import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api";',
@@ -734,7 +738,11 @@ const probeSource = (reply: string, ids: ReadonlyArray<string>) =>
     "    id,",
     "    description: `Probe ${id}`,",
     "    params: Schema.Struct({ text: Schema.String }),",
-    "    output: Schema.String,",
+    `    output: ${Option.getOrElse(Option.fromUndefinedOr(surface.output), () => "Schema.String")},`,
+    ...Option.match(Option.fromUndefinedOr(surface.guideline), {
+      onNone: () => [],
+      onSome: (guideline) => [`    promptGuidelines: [${encodeJson(guideline)}],`],
+    }),
     `    execute: () => Effect.succeed(${encodeJson(reply)}),`,
     "  });",
     "export default defineExtension({",
@@ -6850,7 +6858,7 @@ describe("profile revision via RPC", () => {
   }
 
   it.live(
-    "each request names what its extensions show the model: a body edit or a reload keeps it, an added tool or a disabled extension changes it",
+    "each request names what its extensions show the model: a body edit or a reload keeps it; an added, reordered or retyped tool, a changed prompt line or a disabled extension changes it",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -6929,6 +6937,21 @@ describe("profile revision via RPC", () => {
           const bodyEdit = yield* turn("body edit")
           yield* fs.writeFileString(probeFile, probeSource("v2", ["probe_one", "probe_two"]))
           const added = yield* turn("added tool")
+          yield* fs.writeFileString(probeFile, probeSource("v2", ["probe_two", "probe_one"]))
+          const reordered = yield* turn("reordered tools")
+          yield* fs.writeFileString(
+            probeFile,
+            probeSource("v2", ["probe_two", "probe_one"], { guideline: "Probe with care." }),
+          )
+          const guided = yield* turn("prompt line")
+          yield* fs.writeFileString(
+            probeFile,
+            probeSource(`2`, ["probe_two", "probe_one"], {
+              guideline: "Probe with care.",
+              output: "Schema.Number",
+            }),
+          )
+          const retyped = yield* turn("output schema")
           yield* fs.writeFileString(
             path.join(home, ".gent", "config.json"),
             encodeJson({ disabledExtensions: ["@test/switchable"] }),
@@ -6936,13 +6959,14 @@ describe("profile revision via RPC", () => {
           const disabled = yield* turn("disabled")
 
           const requests = yield* Ref.get(captured)
-          expect(requests).toHaveLength(6)
-          const [a, b, , c, d, e] = requests
+          expect(requests).toHaveLength(9)
+          const [a, b, , c, d, r, , , e] = requests
           if (
             Predicate.isUndefined(a) ||
             Predicate.isUndefined(b) ||
             Predicate.isUndefined(c) ||
             Predicate.isUndefined(d) ||
+            Predicate.isUndefined(r) ||
             Predicate.isUndefined(e)
           ) {
             return expect.unreachable()
@@ -6961,7 +6985,13 @@ describe("profile revision via RPC", () => {
           expect(added).not.toBe(bodyEdit)
           expect(d.toolNames).toContain("probe_two")
           expect(d.tools).not.toBe(c.tools)
-          expect(disabled).not.toBe(added)
+          // The request keeps the registration order, so an order change is
+          // a change the model reads; so are a prompt line and a result type.
+          expect(r.toolNames.indexOf("probe_two")).toBeLessThan(r.toolNames.indexOf("probe_one"))
+          expect(reordered).not.toBe(added)
+          expect(guided).not.toBe(reordered)
+          expect(retyped).not.toBe(guided)
+          expect(disabled).not.toBe(retyped)
           expect(e.toolNames).not.toContain("switchable_tool")
           expect(e.tools).not.toBe(d.tools)
         }).pipe(Effect.scoped, Effect.timeout("20 seconds"))
