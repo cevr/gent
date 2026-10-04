@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import {
+  Config,
   Duration,
   Effect,
   Fiber,
@@ -10,7 +11,7 @@ import {
   Schema,
   Stream,
 } from "effect"
-import type { ChildProcessSpawner } from "effect/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { createEffect, createMemo, createRoot, type JSX, on, Show } from "solid-js"
 import { lineCount } from "@gent/core/protocol"
 import { runProcess } from "@gent/core/extensions/api"
@@ -46,8 +47,8 @@ import {
  *
  * Client-only: it reads git in the session's directory and sends nothing to
  * the model, stores nothing and asks the server nothing. Every git read
- * passes `--no-optional-locks`, so a read never takes `index.lock` from the
- * agent's own `git commit`, and every diff passes `--no-ext-diff
+ * passes `READ_ONLY`, so a read never writes the index or takes `index.lock`
+ * from the agent's own `git commit`, and every diff passes `--no-ext-diff
  * --no-textconv`, so repository config chooses no program to run.
  *
  * A read runs on a session or branch move, on a write git makes in the
@@ -336,6 +337,15 @@ const UNTRACKED_READ_FILES = 200
 const firstLine = (text: string): string => text.trim().split("\n")[0] ?? ""
 
 /**
+ * What makes a git command read only. `--no-optional-locks` keeps `status`
+ * from writing the index it refreshes. `git diff` refreshes the stat data of
+ * a file whose time moved and writes the index (with `post-index-change`)
+ * even under `--no-optional-locks`; `diff.autoRefreshIndex=false` stops that
+ * write, and the diff still leaves such a file out.
+ */
+const READ_ONLY = ["--no-optional-locks", "-c", "diff.autoRefreshIndex=false"]
+
+/**
  * One git command in `cwd`, answered with its output. `None`: git cannot run
  * there (no git on `PATH`, or the directory is gone), which reads as no
  * checkout. A git that times out or exits non-zero fails with its first line.
@@ -343,11 +353,10 @@ const firstLine = (text: string): string => text.trim().split("\n")[0] ?? ""
 const git = (
   cwd: string,
   args: ReadonlyArray<string>,
-  env: Record<string, string> = {},
 ): Effect.Effect<Option.Option<string>, GitReadError, ChildProcessSpawner.ChildProcessSpawner> =>
-  runProcess("git", ["--no-optional-locks", ...args], {
+  runProcess("git", [...READ_ONLY, ...args], {
     cwd,
-    env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", ...env },
+    env: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
     extendEnv: true,
     timeout: LOCAL_TIMEOUT,
   }).pipe(
@@ -706,24 +715,20 @@ export const reviewTarget = (args: string, cwd: string): ReviewTarget => {
   return ReviewTarget.cases.WorkTree.make({ cwd, pathspecs: words })
 }
 
+/** A program and its arguments. */
+type Command = readonly [string, ReadonlyArray<string>]
+
 /**
- * The program that shows the work tree against `base`, as the pane counts
- * it: staged and unstaged changes, untracked files too. `hunk diff --watch
- * <base>` follows the agent's edits while it is open, and adds the untracked
- * files itself (with no base, hunk would compare the index with the work tree
- * and leave a staged change out). Without hunk, `git --paginate diff <base>`
- * runs the reader's own pager (`core.pager`, `$PAGER`, `less`);
- * `pageWorkTree` gives it the untracked files.
+ * hunk shows the work tree against `base`, as the pane counts it: staged and
+ * unstaged changes, untracked files too. `hunk diff --watch <base>` follows
+ * the agent's edits while it is open, and adds the untracked files itself
+ * (with no base, hunk would compare the index with the work tree and leave a
+ * staged change out).
  */
-export const workTreeCommand = (
-  target: WorkTree,
-  viewer: "hunk" | "pager",
-  base: string,
-): readonly [string, ReadonlyArray<string>] => {
+export const workTreeCommand = (target: WorkTree, base: string): Command => {
   let paths: ReadonlyArray<string> = []
   if (target.pathspecs.length > 0) paths = ["--", ...target.pathspecs]
-  if (viewer === "hunk") return ["hunk", ["diff", "--watch", base, ...paths]]
-  return ["git", ["--no-optional-locks", "--paginate", "diff", base, ...paths]]
+  return ["hunk", ["diff", "--watch", base, ...paths]]
 }
 
 /** One review: its note for the status row, or the reason it did not run to its end. */
@@ -764,82 +769,273 @@ const endedOnSignal = (cause: unknown): boolean =>
 /** The status row's note when `/diff` first finds no hunk. */
 const HUNK_MISSING = "hunk not found · using the git pager"
 
-/** Run a program on the terminal a handover gives it, in `cwd`, with `env` over gent's own. */
+/**
+ * How a program on the terminal ended, as a review reads it: 0 or 141 is the
+ * reader's end, a signal is the reader's stop (`endedOnSignal`), no program
+ * by the name is `ProgramMissing`, anything else fails the review.
+ */
+const programEnded = <R,>(
+  program: string,
+  ended: Effect.Effect<number, PlatformError.PlatformError, R>,
+): Effect.Effect<void, ProgramMissing | ReviewFailed, R> =>
+  ended.pipe(
+    Effect.flatMap((code) => {
+      if (code === 0 || code === QUIT_EARLY) return Effect.void
+      return Effect.fail(new ReviewFailed({ message: `${program} exited with ${code}` }))
+    }),
+    Effect.catchTag(
+      "PlatformError",
+      (error): Effect.Effect<void, ProgramMissing | ReviewFailed> => {
+        if (commandNotFound(error)) return Effect.fail(new ProgramMissing({ program }))
+        if (endedOnSignal(error)) return Effect.void
+        return Effect.fail(new ReviewFailed({ message: `${program}: ${error.message}` }))
+      },
+    ),
+  )
+
+/** How long a stopped review program has after SIGTERM before SIGKILL. */
+const FORCE_KILL_AFTER = Duration.seconds(2)
+
+/** Run a program on the terminal a handover gives it, in `cwd`. */
 const onTerminal = (
   cwd: string,
-  [command, args]: readonly [string, ReadonlyArray<string>],
-  env: Record<string, string> = {},
+  [program, args]: Command,
 ): Effect.Effect<void, ProgramMissing | ReviewFailed, ChildProcessSpawner.ChildProcessSpawner> =>
-  runProcess(command, args, {
-    cwd,
-    env,
-    extendEnv: true,
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
-  }).pipe(
-    Effect.flatMap((result) => {
-      if (result.exitCode === 0 || result.exitCode === QUIT_EARLY) return Effect.void
-      return Effect.fail(new ReviewFailed({ message: `${command} exited with ${result.exitCode}` }))
-    }),
-    Effect.catchTag("ProcessError", (error): Effect.Effect<void, ProgramMissing | ReviewFailed> => {
-      if (commandNotFound(error.cause)) return Effect.fail(new ProgramMissing({ program: command }))
-      if (endedOnSignal(error.cause)) return Effect.void
-      return Effect.fail(new ReviewFailed({ message: `${command}: ${error.message}` }))
-    }),
+  ChildProcessSpawner.ChildProcessSpawner.use((spawner) =>
+    programEnded(
+      program,
+      spawner
+        .exitCode(
+          ChildProcess.make(program, args, {
+            cwd,
+            stdin: "inherit",
+            stdout: "inherit",
+            stderr: "inherit",
+            forceKillAfter: FORCE_KILL_AFTER,
+          }),
+        )
+        .pipe(Effect.map(Number)),
+    ),
   )
 
 /**
- * Page the work tree against `base` with the reader's git pager, its
- * untracked files as new ones. `git diff` shows only paths the index
- * tracks, so the untracked paths go into a copy of the index as
- * intent-to-add entries (`git add --intent-to-add`, which writes no object),
- * and the paged diff reads the copy (`GIT_INDEX_FILE`). The reader's index
- * never changes.
+ * A pager setting with one of these characters is shell syntax: git runs it
+ * through `sh -c` (`prepare_shell_cmd` in `run-command.c`, whose set adds the
+ * blank, which only parts words).
  */
-const pageWorkTree = (target: WorkTree, base: string) =>
+const SHELL_SYNTAX = /[|&;<>()$`\\"'\n*?[#~=%]/
+
+/**
+ * The command a pager setting runs. Words run as the program the first one
+ * names, the argv `sh -c` would give it, so the pager is a child of gent's
+ * own and an interrupt stops it. Shell syntax runs in `sh -c`, as git runs
+ * it; a program that shell starts is the shell's child, out of gent's reach.
+ */
+export const pagerCommand = (pager: string): Command => {
+  if (SHELL_SYNTAX.test(pager)) return ["sh", ["-c", pager, pager]]
+  const [program = "cat", ...args] = pager.split(/[ \t]+/).filter((word) => word.length > 0)
+  return [program, args]
+}
+
+/** A boolean as `git config --type=bool-or-str` prints it; any other answer names a pager. */
+const GIT_BOOLEAN = new Set(["true", "false"])
+
+/**
+ * The pager `git diff` runs on a terminal, as git picks it: `GIT_PAGER`,
+ * then `pager.diff` when it names a program, then `core.pager`, `PAGER`, and
+ * git's default (`git var GIT_PAGER` reads all but `pager.diff`, which goes
+ * in as `core.pager`). `pager.diff=false`, or a pager of `cat` or nothing,
+ * pages nothing: `cat` then copies the patch to the terminal.
+ */
+const diffPager = (cwd: string) =>
   Effect.gen(function* () {
-    const command = workTreeCommand(target, "pager", base)
-    let pathspecs: ReadonlyArray<string> = [":/"]
-    if (target.pathspecs.length > 0) pathspecs = target.pathspecs
-    const listed = yield* git(target.cwd, [
-      "ls-files",
-      "--others",
-      "--exclude-standard",
-      "-z",
-      "--",
-      ...pathspecs,
+    const setting = yield* git(cwd, [
+      "config",
+      "--type=bool-or-str",
+      "--default=true",
+      "--get",
+      "pager.diff",
     ])
-    const untracked = Option.getOrElse(listed, () => "").split("\0")
-    if (untracked.every((name) => name.length === 0)) return yield* onTerminal(target.cwd, command)
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-diff-" })
-    const index = path.join(dir, "index")
-    const own = yield* git(target.cwd, ["rev-parse", "--git-path", "index"])
-    if (Option.isSome(own)) {
-      const from = path.resolve(target.cwd, own.value.trim())
-      if (yield* fs.exists(from)) yield* fs.copyFile(from, index)
-    }
-    const list = path.join(dir, "untracked")
-    yield* fs.writeFileString(
-      list,
-      Option.getOrElse(listed, () => ""),
-    )
-    const env = { GIT_INDEX_FILE: index }
-    yield* git(
-      target.cwd,
+    const own = Option.getOrElse(setting, () => "true").trim()
+    if (own === "false") return "cat"
+    let named: ReadonlyArray<string> = []
+    if (!GIT_BOOLEAN.has(own)) named = ["-c", `core.pager=${own}`]
+    const pager = Option.getOrElse(yield* git(cwd, [...named, "var", "GIT_PAGER"]), () => "")
+    const chosen = pager.replace(/\n$/, "")
+    if (chosen.length === 0) return "cat"
+    return chosen
+  })
+
+/**
+ * Whether git colors a diff it pages: `color.diff` (or `color.ui`) as for a
+ * terminal, `--get-colorbool` with a terminal assumed, which turns `auto`
+ * off for `TERM=dumb`; a pager also needs `color.pager` (on by default).
+ */
+const diffColors = (cwd: string, paged: boolean) =>
+  Effect.gen(function* () {
+    const [diff, pager] = yield* Effect.all(
       [
-        "--literal-pathspecs",
-        "add",
-        "--intent-to-add",
-        `--pathspec-from-file=${list}`,
-        "--pathspec-file-nul",
+        git(cwd, ["config", "--get-colorbool", "color.diff", "true"]),
+        git(cwd, ["config", "--type=bool", "--default=true", "--get", "color.pager"]),
       ],
-      env,
+      { concurrency: "unbounded" },
     )
-    return yield* onTerminal(target.cwd, command, env)
+    const on = (answer: Option.Option<string>) =>
+      Option.exists(answer, (text) => text.trim() === "true")
+    return on(diff) && (!paged || on(pager))
+  })
+
+/** The reader's git pager for a diff, and the color flag git's choice gives a patch program. */
+const diffViewer = (cwd: string) =>
+  Effect.gen(function* () {
+    const pager = yield* diffPager(cwd)
+    let color = "--color=never"
+    if (yield* diffColors(cwd, pager !== "cat")) color = "--color=always"
+    return { pager, color }
+  })
+
+/** The environment git gives its pager: `LESS=FRX` and `LV=-c`, each when it is unset. */
+const PAGER_ENV = { LESS: "FRX", LV: "-c" }
+
+const pagerEnv = Effect.gen(function* () {
+  const env: Record<string, string> = {}
+  for (const [name, value] of Object.entries(PAGER_ENV)) {
+    const set = yield* Config.option(Config.String(name)).pipe(
+      Effect.orElseSucceed(() => Option.none<string>()),
+    )
+    if (Option.isNone(set)) env[name] = value
+  }
+  return env
+})
+
+/** A patch on its way to the pager. */
+type Patch = Stream.Stream<Uint8Array, PlatformError.PlatformError>
+
+/**
+ * Page `patch` with `pager` on the terminal a handover gives it, in `cwd`.
+ * The pager is a child of gent's own, as is each program that writes the
+ * patch, so an interrupt stops them all and waits for them before the
+ * handover gives the terminal back. (`git --paginate` or `gh pr diff` on a
+ * terminal would start the pager as their own child, out of gent's reach.)
+ */
+const pagePatch = (cwd: string, pager: string, patch: Patch) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    const [program, args] = pagerCommand(pager)
+    const env = yield* pagerEnv
+    yield* programEnded(
+      program,
+      spawner
+        .spawn(
+          ChildProcess.make(program, args, {
+            cwd,
+            env,
+            extendEnv: true,
+            stdin: patch,
+            stdout: "inherit",
+            stderr: "inherit",
+            forceKillAfter: FORCE_KILL_AFTER,
+          }),
+        )
+        .pipe(
+          Effect.flatMap((handle) => handle.exitCode),
+          Effect.map(Number),
+        ),
+    )
   }).pipe(Effect.scoped)
+
+/**
+ * The output of `git` with `args` in `cwd`, its errors with it, as `git
+ * --paginate` sends both to the pager. Its exit code is not read: a reader
+ * who quits the pager early stops it with a closed pipe.
+ */
+const gitPatch =
+  (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
+  ({ cwd, args }: { readonly cwd: string; readonly args: ReadonlyArray<string> }): Patch =>
+    spawner
+      .spawn(
+        ChildProcess.make("git", args, { cwd, stdin: "ignore", forceKillAfter: FORCE_KILL_AFTER }),
+      )
+      .pipe(
+        Effect.map((handle) =>
+          Stream.concat(handle.all, Stream.fromEffectDrain(Effect.ignore(handle.exitCode))),
+        ),
+        Stream.unwrap,
+      )
+
+/**
+ * Page the work tree against `base` with the reader's git pager, its
+ * untracked files as new ones: `git diff <base> [-- paths]` in the session's
+ * directory, then for each untracked file `git diff --no-index -- /dev/null
+ * <path>` at the checkout's root (the path as `ls-files --full-name` gives
+ * it, so it reads as the tracked ones do), one after the other into the
+ * pager. Each passes `READ_ONLY`, git's color choice and `--no-ext-diff
+ * --no-textconv`: no object, no index write, no hook, no program from config.
+ */
+export const pageWorkTree = (target: WorkTree, base: string) =>
+  Effect.gen(function* () {
+    let pathspecs: ReadonlyArray<string> = [":/"]
+    let paths: ReadonlyArray<string> = []
+    if (target.pathspecs.length > 0) {
+      pathspecs = target.pathspecs
+      paths = ["--", ...target.pathspecs]
+    }
+    const [top, listed, viewer] = yield* Effect.all(
+      [
+        git(target.cwd, ["rev-parse", "--show-toplevel"]),
+        git(target.cwd, [
+          "ls-files",
+          "--others",
+          "--exclude-standard",
+          "--full-name",
+          "-z",
+          "--",
+          ...pathspecs,
+        ]),
+        diffViewer(target.cwd),
+      ],
+      { concurrency: "unbounded" },
+    )
+    // A directory in the list is a repository of its own: no file to show.
+    const untracked = Option.getOrElse(listed, () => "")
+      .split("\0")
+      .filter((name) => name.length > 0 && !name.endsWith("/"))
+    const root = Option.getOrElse(top, () => target.cwd).trim()
+    const diff = [
+      "--no-pager",
+      ...READ_ONLY,
+      "diff",
+      viewer.color,
+      "--no-ext-diff",
+      "--no-textconv",
+    ]
+    const parts = [
+      { cwd: target.cwd, args: [...diff, base, ...paths] },
+      ...untracked.map((file) => ({
+        cwd: root,
+        args: [...diff, "--no-index", "--", "/dev/null", file],
+      })),
+    ]
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    yield* pagePatch(
+      target.cwd,
+      viewer.pager,
+      Stream.fromIterable(parts).pipe(Stream.flatMap(gitPatch(spawner))),
+    )
+  })
+
+/**
+ * The pull request's patch for the reader's git pager: `gh pr diff` with
+ * git's color choice. It asks the network, so it is read before the
+ * terminal is handed over to `pagePatch`.
+ */
+const pullRequestPatch = (cwd: string) =>
+  Effect.gen(function* () {
+    const viewer = yield* diffViewer(cwd)
+    const patch = yield* ghPr(cwd, ["diff", viewer.color])
+    const bytes = new TextEncoder().encode(Option.getOrElse(patch, () => ""))
+    return { pager: viewer.pager, patch: Stream.make(bytes) }
+  })
 
 // ── pane ────────────────────────────────────────────────────────────────────
 
@@ -1151,7 +1347,7 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
       shell.handover(
         Effect.gen(function* () {
           if (!hunkMissing) {
-            const ran = yield* onTerminal(target.cwd, workTreeCommand(target, "hunk", base())).pipe(
+            const ran = yield* onTerminal(target.cwd, workTreeCommand(target, base())).pipe(
               Effect.as(true),
               Effect.catchTag("ProgramMissing", () => Effect.succeed(false)),
             )
@@ -1162,10 +1358,13 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
           return note
         }),
       )
-    // `gh pr diff` pages itself without hunk; with it, its patch goes to a
-    // file for `hunk patch`, so the reader's `gh` sign-in reads a private one.
+    // The reader's `gh` sign-in reads the patch, so a private request shows:
+    // with hunk, from a file for `hunk patch`; without, into the git pager.
     const pagedPullRequest = (cwd: string) =>
-      shell.handover(onTerminal(cwd, ["gh", ["pr", "diff"]]))
+      Effect.gen(function* () {
+        const { pager, patch } = yield* pullRequestPatch(cwd)
+        yield* shell.handover(pagePatch(cwd, pager, patch))
+      })
     const showPullRequest = (cwd: string): ReviewRun =>
       Effect.gen(function* () {
         if (hunkMissing) {

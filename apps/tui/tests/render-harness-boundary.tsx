@@ -80,12 +80,10 @@ const makeRenderHome = Effect.gen(function* () {
 export interface TestTools {
   readonly gh?: string
   readonly hunk?: string
-  /** A stand-in for `git`; by default the real one runs. */
-  readonly git?: string
 }
 
 /** No test reaches the real `gh` or `hunk`: each runs as a program that is not there. */
-const MISSING_TOOLS: Required<Omit<TestTools, "git">> = {
+const MISSING_TOOLS: Required<TestTools> = {
   gh: "/nonexistent/loop-probe-gh",
   hunk: "/nonexistent/loop-probe-hunk",
 }
@@ -102,7 +100,6 @@ export const testPlatformLayer = (tools: TestTools = {}) => {
   const programFor = (command: string): Option.Option<string> => {
     if (command === "gh") return Option.some(stand.gh)
     if (command === "hunk") return Option.some(stand.hunk)
-    if (command === "git") return Option.fromUndefinedOr(stand.git)
     return Option.none()
   }
   return Layer.mergeAll(

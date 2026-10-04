@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Option, Result, Schedule } from "effect"
+import { Clock, Effect, Fiber, FileSystem, Option, Result, Schedule } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { BunServices } from "@effect/platform-bun"
 import { RendererControlState } from "@opentui/core"
@@ -12,6 +12,7 @@ import {
   SessionId,
   ToolCallId,
 } from "@gent/core/protocol"
+import { runProcess } from "@gent/core/extensions/api"
 import { EventId, makeTempDirectoryScoped } from "@gent/core/test-utils"
 import gitExtension, {
   branchText,
@@ -23,6 +24,8 @@ import gitExtension, {
   readCheckout,
   readPullRequest,
   reviewTarget,
+  pageWorkTree,
+  pagerCommand,
   workTreeCommand,
 } from "../../src/extensions/git.client"
 import type { StatusLabelItem } from "../../src/extensions/client-facets"
@@ -38,6 +41,7 @@ import {
   renderFrame,
 } from "../render-harness-boundary"
 import { waitForFrame, waitUntil } from "../helpers-boundary"
+import { makeHandover } from "../../src/os"
 
 const sessionId = SessionId.make("git-session")
 const branchId = BranchId.make("git-branch")
@@ -625,28 +629,34 @@ describe("git review commands", () => {
     expect(reviewTarget("pr", "/r")).toEqual({ _tag: "PullRequest", cwd: "/r" })
   })
 
-  test("hunk and the reader's git pager review the work tree against the checkout's base", () => {
+  test("hunk reviews the work tree against the checkout's base", () => {
     const all = { _tag: "WorkTree" as const, cwd: "/r", pathspecs: [] }
     const one = { ...all, pathspecs: ["a.ts"] }
     // Against HEAD, so a staged change shows as the pane counts it.
-    expect(workTreeCommand(all, "hunk", "HEAD")).toEqual(["hunk", ["diff", "--watch", "HEAD"]])
-    expect(workTreeCommand(one, "hunk", "HEAD")).toEqual([
+    expect(workTreeCommand(all, "HEAD")).toEqual(["hunk", ["diff", "--watch", "HEAD"]])
+    expect(workTreeCommand(one, "HEAD")).toEqual([
       "hunk",
       ["diff", "--watch", "HEAD", "--", "a.ts"],
     ])
-    expect(workTreeCommand(one, "pager", "HEAD")).toEqual([
-      "git",
-      ["--no-optional-locks", "--paginate", "diff", "HEAD", "--", "a.ts"],
-    ])
     // An unborn branch has no HEAD: its base is the empty tree.
-    expect(workTreeCommand(all, "hunk", SHA1_EMPTY_TREE)).toEqual([
+    expect(workTreeCommand(all, SHA1_EMPTY_TREE)).toEqual([
       "hunk",
       ["diff", "--watch", SHA1_EMPTY_TREE],
     ])
-    expect(workTreeCommand(all, "pager", SHA1_EMPTY_TREE)).toEqual([
-      "git",
-      ["--no-optional-locks", "--paginate", "diff", SHA1_EMPTY_TREE],
-    ])
+  })
+
+  test("a pager setting of words runs as that program, and one with shell syntax runs in sh as git runs it", () => {
+    expect(pagerCommand("less")).toEqual(["less", []])
+    expect(pagerCommand("less  -R\t-S")).toEqual(["less", ["-R", "-S"]])
+    for (const pager of [
+      "delta | less",
+      "LESS=R less",
+      "less '-R'",
+      "$HOME/bin/pager",
+      "~/pager",
+    ]) {
+      expect(pagerCommand(pager)).toEqual(["sh", ["-c", pager, pager]])
+    }
   })
 })
 
@@ -840,15 +850,32 @@ describe("git pane", () => {
   )
 
   it.live(
-    "without hunk, /diff pages the untracked files' lines too, leaves the index alone, and says hunk was not found",
+    "without hunk, /diff pages the untracked files' lines too in git's colors, writes nothing to the repository, and says hunk was not found",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const repo = yield* makeRepo("gent-git-pager-")
         yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\nthree\n")
         yield* fs.writeFileString(`${repo}/new.txt`, "brand new line\n")
-        const pager = yield* fakePagedGit
-        const setup = yield* renderApp(repo, 100, { git: pager.program })
+        // A tracked file whose time moved but not its lines: a diff that may
+        // write would refresh its index entry.
+        yield* fs.writeFileString(`${repo}/same.txt`, "same\n")
+        yield* git(repo, "add", "same.txt")
+        yield* git(repo, "commit", "-q", "-m", "same")
+        const seconds = (yield* Clock.currentTimeMillis) / 1000
+        yield* fs.utimes(`${repo}/same.txt`, seconds, seconds + 60)
+        const pager = yield* fakeProgram("pager", (dir) => [`cat > '${dir}/log'`])
+        yield* git(repo, "config", "core.pager", pager.program)
+        yield* git(repo, "config", "color.diff", "always")
+        // A hook that writes: the review must never give it a reason to run.
+        yield* fs.writeFileString(
+          `${repo}/.git/hooks/post-index-change`,
+          `#!/bin/sh\ntouch '${pager.dir}/hook-ran'\n`,
+        )
+        yield* fs.chmod(`${repo}/.git/hooks/post-index-change`, 0o755)
+        const objects = yield* gitOutput(repo, "count-objects", "-v")
+        const index = yield* fs.readFile(`${repo}/.git/index`)
+        const setup = yield* renderApp(repo, 100, {})
         yield* waitForFrame(setup, (frame) => frame.includes("2 files +2 -0"), "the checkout")
         yield* slash(setup, "/diff")
         yield* waitForFrame(
@@ -856,12 +883,113 @@ describe("git pane", () => {
           (frame) => frame.includes("hunk not found · using the git pager"),
           "the note",
         )
-        const paged = yield* waitForLog(pager.log, (log) => log.includes("+three"))
-        expect(paged).toContain("+++ b/new.txt")
-        expect(paged).toContain("+brand new line")
-        // The reader's index never learns of the untracked file.
-        const status = yield* gitOutput(repo, "status", "--porcelain")
-        expect(status).toContain("?? new.txt")
+        const paged = yield* waitForLog(pager.log, (log) => plain(log).includes("+brand new line"))
+        expect(plain(paged)).toContain("+three")
+        expect(plain(paged)).toContain("+++ b/new.txt")
+        // color.diff=always: the pager gets git's colors, as `git diff` would give it.
+        expect(paged).toContain("\u001b[")
+        // No object, no index write, no hook; the untracked file stays untracked.
+        expect(yield* gitOutput(repo, "count-objects", "-v")).toBe(objects)
+        expect(yield* fs.readFile(`${repo}/.git/index`)).toEqual(index)
+        expect(yield* fs.exists(`${pager.dir}/hook-ran`)).toBe(false)
+        expect(yield* gitOutput(repo, "--no-optional-locks", "status", "--porcelain")).toContain(
+          "?? new.txt",
+        )
+
+        // Where git would not color for a terminal, the pager gets no colors.
+        yield* waitUntil(
+          () => setup.renderer.controlState !== RendererControlState.EXPLICIT_SUSPENDED,
+          "the terminal back",
+        )
+        yield* git(repo, "config", "color.diff", "false")
+        yield* fs.remove(`${pager.dir}/log`)
+        yield* slash(setup, "/diff")
+        const uncolored = yield* waitForLog(pager.log, (log) => log.includes("+brand new line"))
+        expect(uncolored).not.toContain("\u001b[")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    12_000,
+  )
+
+  it.live(
+    "without hunk, /diff pr pages gh's patch with the git pager",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* makeRepo("gent-git-pr-pager-")
+        const pager = yield* fakeProgram("pager", (dir) => [`cat > '${dir}/log'`])
+        yield* git(repo, "config", "core.pager", pager.program)
+        const gh = yield* fakePullRequestGh(PR_JSON, PATCH)
+        const setup = yield* renderApp(repo, 100, { gh: gh.program })
+        yield* waitForFrame(setup, (frame) => frame.includes("#7 ✓"), "the pull request label")
+        yield* slash(setup, "/diff pr")
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("hunk not found · using the git pager"),
+          "the note",
+        )
+        yield* waitForLog(pager.log, (log) => log.includes(PATCH))
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    12_000,
+  )
+
+  it.live(
+    "an interrupted page stops the patch and the pager before gent takes the terminal back",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* makeRepo("gent-git-stop-")
+        // More patch than a pipe holds: git waits on a pager that never reads.
+        yield* fs.writeFileString(
+          `${repo}/big.txt`,
+          "a line of the untracked file\n".repeat(40_000),
+        )
+        // The pager ignores SIGPIPE and sleeps as one process, as `less` waits for a key.
+        const pager = yield* fakeProgram("pager", (dir) => [
+          `echo $$ > '${dir}/log'`,
+          "trap '' PIPE",
+          "exec sleep 600",
+        ])
+        yield* git(repo, "config", "core.pager", pager.program)
+        const watched: Array<number> = []
+        let aliveAtResume: ReadonlyArray<number> = [-1]
+        const handover = makeHandover({
+          suspend: () => {},
+          resume: () => {
+            aliveAtResume = watched.filter(isAlive)
+          },
+        })
+        const review = yield* Effect.forkChild(
+          handover(pageWorkTree({ _tag: "WorkTree", cwd: repo, pathspecs: [] }, "HEAD")),
+        )
+        const pagerPid = Number((yield* waitForLog(pager.log, (log) => log.endsWith("\n"))).trim())
+        watched.push(pagerPid)
+        // A test that fails leaves no sleeper behind.
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => watched.filter(isAlive).forEach((pid) => process.kill(pid, "SIGKILL"))),
+        )
+        const producer = yield* waitForLog(childGits, (pids) => pids.length > 0)
+        watched.push(...producer.split("\n").map(Number))
+        yield* Fiber.interrupt(review)
+        expect(aliveAtResume).toEqual([])
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    12_000,
+  )
+
+  it.live(
+    "a pager the reader quits before the patch ends closes the review with no failure and no git left",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* makeRepo("gent-git-quit-")
+        yield* fs.writeFileString(
+          `${repo}/big.txt`,
+          "a line of the untracked file\n".repeat(40_000),
+        )
+        // The reader reads a screen and quits: the pager closes the pipe under the patch.
+        const pager = yield* fakeProgram("pager", () => ["exec head -c 4096 > /dev/null"])
+        yield* git(repo, "config", "core.pager", pager.program)
+        const handover = makeHandover({ suspend: () => {}, resume: () => {} })
+        yield* handover(pageWorkTree({ _tag: "WorkTree", cwd: repo, pathspecs: [] }, "HEAD"))
+        expect(yield* childGits).toBe("")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     12_000,
   )
@@ -893,14 +1021,20 @@ describe("git pane", () => {
   )
 })
 
-/**
- * A `git` that runs the real one, and writes what a paged command would show
- * the reader to its log: a test has no terminal for the pager.
- */
-const fakePagedGit = fakeProgram("git", (dir) => [
-  `case " $* " in *" --paginate "*) exec git "$@" > '${dir}/log' ;; esac`,
-  'exec git "$@"',
-])
+/** `text` without its color escapes. */
+const plain = (text: string) => {
+  const [first = "", ...escaped] = text.split("\u001b")
+  return [first, ...escaped.map((part) => part.replace(/^\[[0-9;]*m/, ""))].join("")
+}
+
+/** The process is there: signal 0 finds it. */
+const isAlive = (pid: number) => Result.isSuccess(Result.try(() => process.kill(pid, 0)))
+
+/** The ids of the `git` processes this test process runs, one per line. */
+const childGits = runProcess("pgrep", ["-P", String(process.pid), "-x", "git"]).pipe(
+  Effect.map((result) => result.stdout.trim()),
+  Effect.orElseSucceed(() => ""),
+)
 
 /** What a git command in `cwd` prints. */
 const gitOutput = (cwd: string, ...args: ReadonlyArray<string>) =>
@@ -912,7 +1046,7 @@ const gitOutput = (cwd: string, ...args: ReadonlyArray<string>) =>
   })
 
 /** Poll a stand-in's log until `done` holds, and answer it. */
-const waitForLog = (log: Effect.Effect<string>, done: (text: string) => boolean) =>
+const waitForLog = <R,>(log: Effect.Effect<string, never, R>, done: (text: string) => boolean) =>
   log.pipe(
     Effect.filterOrFail(done),
     // 250 polls 20 ms apart: five seconds.

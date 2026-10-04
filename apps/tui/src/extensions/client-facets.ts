@@ -408,7 +408,10 @@ export interface ClientShell {
    * handover runs at a time, the host's editor included; a second waits.
    * Keys go to the program while it runs, ctrl+c and ctrl+\ included (each
    * process the effect spawns joins the terminal's foreground group), and
-   * transcript rows a running turn commits meanwhile land on the return.
+   * transcript rows a running turn commits meanwhile land on the return. An
+   * interrupt stops and awaits each process the effect spawned before the
+   * renderer resumes; a process such a child starts is out of reach, so the
+   * effect spawns each program it runs itself.
    */
   readonly handover: Handover
   /**
