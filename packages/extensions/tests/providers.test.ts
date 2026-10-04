@@ -22,6 +22,7 @@ import {
   type ModelCatalogView,
   ModelId,
   ProviderAuthError,
+  type RunEffort,
 } from "@gent/core/extensions/api"
 import {
   createRpcHarness,
@@ -182,25 +183,38 @@ describe("driver catalog", () => {
   })
 
   it.live(
-    "the Anthropic driver marks the models that take an effort marker as carrying an effort change",
+    "the Anthropic driver carries an effort change on a model that takes markers, while thinking stays planned the same",
     () =>
       Effect.gen(function* () {
         const driver = yield* anthropicDriverIn("1h")
-        const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
-        const models = yield* listModels(
-          anthropicCatalog(
-            { id: "claude-opus-5", name: "Opus 5", reasoning: true },
-            { id: "claude-sonnet-5", name: "Sonnet 5", reasoning: true },
-            { id: "claude-sonnet-5-5", name: "Sonnet 5.5", reasoning: true },
-            { id: "claude-haiku-4-5", name: "Haiku 4.5", reasoning: true },
-          ),
+        const carriesEffort = Option.getOrThrow(Option.fromUndefinedOr(driver.carriesEffort))
+        const reasoningOptions: CatalogModel["reasoningOptions"] = [
+          { type: "effort", values: ["low", "medium", "high", "xhigh", "max"] },
+        ]
+        const catalog = anthropicCatalog(
+          { id: "claude-opus-5", name: "Opus 5", reasoning: true, reasoningOptions },
+          { id: "claude-sonnet-5", name: "Sonnet 5", reasoning: true, reasoningOptions },
+          { id: "claude-sonnet-5-5", name: "Sonnet 5.5", reasoning: true, reasoningOptions },
         )
-        expect(models.map((model) => [String(model.id), model.carriesEffort === true])).toEqual([
-          ["anthropic/claude-opus-5", true],
-          ["anthropic/claude-sonnet-5", false],
-          ["anthropic/claude-sonnet-5-5", true],
-          ["anthropic/claude-haiku-4-5", false],
-        ])
+        const carries = (model: string, history: ReadonlyArray<RunEffort>) =>
+          carriesEffort(
+            model,
+            {
+              reasoning: "low",
+              reasoningHistory: history.map(Option.some),
+              cacheKey: "session",
+              supportsReasoning: true,
+            },
+            catalog,
+          )
+        expect([
+          carries("claude-opus-5", ["high"]),
+          carries("claude-sonnet-5-5", ["high"]),
+          // `none` turns thinking off on Opus 5: a move to low turns it on, at the top level.
+          carries("claude-opus-5", ["none"]),
+          // No markers before Sonnet 5.5.
+          carries("claude-sonnet-5", ["high"]),
+        ]).toEqual([true, true, false, false])
       }).pipe(Effect.provide(BunServices.layer)),
   )
 

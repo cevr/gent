@@ -90,14 +90,6 @@ export class Model extends Schema.Class<Model>("Model")({
    */
   efforts: Schema.optional(Schema.Array(ReasoningEffort)),
   /**
-   * True when the model's driver carries an effort change inside the
-   * conversation (an Anthropic effort marker, an OpenAI configuration
-   * update): a request may change its effort and keep the cached prefix.
-   * Absent, a new effort goes at the top of the request and rewrites the
-   * cache, so `/effort auto` holds the effort of a warm cache.
-   */
-  carriesEffort: Schema.optional(Schema.Boolean),
-  /**
    * How long the provider keeps a request's prompt cached after the request,
    * in milliseconds, as the model's driver says. A turn that starts on a large
    * window after it lapsed hands the window off first (`projectContextWindow`),

@@ -2273,7 +2273,63 @@ interface ModelResolverService {
     driverId: string,
     registry: ExtensionRegistryService,
   ) => Effect.Effect<boolean>
+  /**
+   * Whether the driver `request` dispatches through, in the profile of
+   * `registry`, carries the effort change its hints name inside the
+   * conversation (`ModelDriverContribution.carriesEffort`). False for a
+   * driver that does not say, or a failure to read the catalog.
+   */
+  readonly carriesEffort: (
+    request: ResolveModelRequest,
+    registry: ExtensionRegistryService,
+  ) => Effect.Effect<boolean>
 }
+
+/**
+ * `ModelResolver.carriesEffort` for any resolver: the registered driver the
+ * request dispatches through (its `driverId`, else the provider segment),
+ * asked over its catalog view when `catalogSource` serves one, by the name
+ * the driver serves the model as. A generic catalog provider carries none.
+ */
+export const driverCarriesEffort = (
+  request: ResolveModelRequest,
+  registry: ExtensionRegistryService,
+  catalogSource: Option.Option<ModelCatalogSourceService>,
+): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    const parsed = parseModelId(request.modelId)
+    if (Option.isNone(parsed)) return false
+    const [provider, modelName] = parsed.value
+    const resolved = registry.getResolved()
+    const driver = Option.fromUndefinedOr(
+      resolved.modelDrivers.get(
+        Option.getOrElse(Option.fromUndefinedOr(request.driverId), () => provider),
+      ),
+    )
+    if (Option.isNone(driver)) return false
+    const carries = driver.value.carriesEffort
+    if (Predicate.isUndefined(carries)) return false
+    const hints = Option.getOrElse(Option.fromUndefinedOr(request.hints), (): ProviderHints => ({}))
+    if (Option.isNone(catalogSource)) return carries(modelName, hints)
+    const catalog = configuredCatalog(
+      yield* catalogSource.value.read,
+      yield* registry.providerConfig,
+      resolved.apiClasses,
+    )
+    return carries(
+      currentModelName(catalog, driver.value, modelName),
+      hints,
+      driverCatalogView(catalog, driver.value),
+    )
+  }).pipe(
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+      return Effect.logWarning("model-resolver.carries-effort-failed").pipe(
+        Effect.annotateLogs({ model: String(request.modelId), error: String(Cause.squash(cause)) }),
+        Effect.as(false),
+      )
+    }),
+  )
 
 const resolveModelDefect = (
   // oxlint-disable-next-line effect/noUnknownParameters -- Provider factories can defect with any thrown value.
@@ -2396,9 +2452,14 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
       ModelResolver,
       Effect.gen(function* () {
         const model = yield* LanguageModel.LanguageModel
+        // The drivers still say what their wire carries, over the catalog
+        // when the host serves one.
+        const catalogSource = yield* Effect.serviceOption(ModelCatalogSource)
         return ModelResolver.of({
           resolve: () => Effect.succeed(model),
           signedIn: () => Effect.succeed(true),
+          carriesEffort: (request, registry) =>
+            driverCarriesEffort(request, registry, catalogSource),
         })
       }),
     ).pipe(Layer.provide(layer))
@@ -2425,6 +2486,8 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
             Effect.provideService(ModelCatalogSource, catalogSource),
             Effect.provideService(ExtensionRegistry, registry),
           ),
+        carriesEffort: (request, registry) =>
+          driverCarriesEffort(request, registry, Option.some(catalogSource)),
       })
     }),
   )

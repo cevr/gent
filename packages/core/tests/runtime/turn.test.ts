@@ -87,6 +87,7 @@ import {
   MessageReceived,
   ModelRouted,
   SessionSettingsUpdated,
+  StreamEnded,
   ToolCallSucceeded,
   UsageSchema,
   TurnCompleted,
@@ -3953,7 +3954,7 @@ const effortRouter: VirtualModel = {
   fallback: 2,
 }
 
-/** A reasoning model whose driver carries an effort change inside the conversation. */
+/** A reasoning model on the `carrier` driver (`carrierDriver`), warm for five minutes. */
 const CARRIER_MODEL = new Model({
   id: ModelId.make("carrier/thinker"),
   name: "Carrier Thinker",
@@ -3961,8 +3962,20 @@ const CARRIER_MODEL = new Model({
   contextLength: 200_000,
   reasoning: true,
   efforts: ["low", "medium", "high"],
-  carriesEffort: true,
   promptCacheTtlMs: 300_000,
+})
+
+/**
+ * The driver of `CARRIER_MODEL`: its wire carries an effort change inside
+ * the conversation where `carries` says so for the request's hints.
+ */
+const carrierDriver = (
+  carries: (hints: ProviderHints) => boolean = () => true,
+): ModelDriverContribution => ({
+  id: "carrier",
+  name: "Carrier",
+  resolveModel: () => Effect.die("the scripted model answers every request"),
+  carriesEffort: (_modelName, hints) => carries(hints),
 })
 
 /**
@@ -4027,7 +4040,11 @@ describe("effort auto", () => {
           providerLayer,
           models: [CARRIER_MODEL],
           extensionInputs: [
-            routingExtension({ effort: effortRouter, route: pickEfforts(inputs, [2, 0]) }),
+            routingExtension({
+              effort: effortRouter,
+              route: pickEfforts(inputs, [2, 0]),
+              drivers: [carrierDriver()],
+            }),
           ],
         })
         const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
@@ -4114,8 +4131,10 @@ describe("effort auto", () => {
           expect([ttlMs, (yield* Ref.get(inputs)).length]).toEqual([ttlMs, asked])
           const second = effortRoutes(events)[1]
           if (asked === 1) {
-            // The held route says why, and asked no classifier.
-            expect(second).toMatchObject({ effort: "high", fallback: true })
+            // The held route says why, and asked no classifier. A hold is a
+            // decision, not a fallback: the router did not fail.
+            expect(second).toMatchObject({ effort: "high" })
+            expect(second?.fallback).toBeUndefined()
             expect(second?.reason).toContain("warm")
             expect(second?.classifier).toBeUndefined()
           }
@@ -4215,6 +4234,7 @@ describe("effort auto", () => {
                 extensionInputs: [
                   routingExtension({
                     effort: effortRouter,
+                    drivers: [carrierDriver()],
                     route: (input) =>
                       Ref.update(asked, (all) => [...all, userTexts(input)]).pipe(
                         Effect.as({ choice: 0, reason: "quick" }),
@@ -4382,6 +4402,390 @@ describe("effort auto", () => {
         expect(snapshot.metrics.effortRouted).toMatchObject({ effort: "low" })
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
+  )
+
+  it.scopedLive(
+    "under a virtual model on auto, a combined call that fails is not asked again for the effort: both routes fall back with its reason",
+    () =>
+      Effect.gen(function* () {
+        const asks = yield* Ref.make(0)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("fell back"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [
+            routingExtension({
+              effort: effortRouter,
+              route: () =>
+                Ref.update(asks, (count) => count + 1).pipe(
+                  Effect.andThen(Effect.die("no classifier model has a credential")),
+                ),
+            }),
+          ],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* selectEffortAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "route both" })
+        const events = yield* afterTurns(1)
+        expect(yield* Ref.get(asks)).toBe(1)
+        const routes = routedEvents(events)
+        expect(routes.map((event) => [event.selected, event.fallback])).toEqual([
+          [AUTO_MODEL, true],
+          [EFFORT_ROUTE, true],
+        ])
+        expect(routes[1]?.reason).toContain("no classifier model has a credential")
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "under a virtual model on auto, a router that answers both picks the model and the effort in one call: two receipts, one charge",
+    () =>
+      Effect.gen(function* () {
+        const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          {
+            ...textStep("strong and quick"),
+            assertRequest: (request: { readonly model: string; readonly reasoning?: string }) => {
+              expect([request.model, request.reasoning]).toEqual([STRONG_MODEL, "low"])
+            },
+          },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          modelPricing: { input: 1, output: 1 },
+          extensionInputs: [
+            routingExtension({
+              drivers: [routeJudgeDriver],
+              effort: effortRouter,
+              route: (input) =>
+                Effect.gen(function* () {
+                  yield* Ref.update(inputs, (all) => [...all, input])
+                  const ctx = yield* ExtensionContext
+                  yield* ctx.Models.decide({
+                    definition: Decision.make({
+                      input: Schema.String,
+                      decisions: {
+                        choice: Decision.classify({
+                          instructions: "Which model",
+                          criteria: { choice1: "light", choice2: "strong" },
+                        }),
+                        effort: Decision.classify({
+                          instructions: "Which effort",
+                          criteria: { choice1: "quick", choice2: "ordinary", choice3: "hard" },
+                        }),
+                      },
+                    }),
+                    input: "route both",
+                  })
+                  return {
+                    choice: 1,
+                    reason: "strong",
+                    effort: { choice: 0, reason: "quick" },
+                  }
+                }),
+            }),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* selectEffortAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "route both" })
+        const events = yield* afterTurns(1)
+        // One call, which read the effort router's choices too.
+        const asked = yield* Ref.get(inputs)
+        expect(asked).toHaveLength(1)
+        expect(asked[0]?.model.name).toBe("auto")
+        expect(asked[0]?.effort?.model.name).toBe("effort")
+        const routes = routedEvents(events)
+        expect(routes.map((event) => [event.selected, event.model, event.effort])).toEqual([
+          [AUTO_MODEL, STRONG_MODEL, "high"],
+          [EFFORT_ROUTE, STRONG_MODEL, "low"],
+        ])
+        // The model route's receipt holds the call and its price; the effort route adds none.
+        expect(routes[0]?.costUsd).toBeCloseTo(21 / 1_000_000, 12)
+        expect(routes[1]).toMatchObject({ effortOnly: true, reason: "quick" })
+        expect(routes[1]?.costUsd).toBeUndefined()
+        expect(routes[1]?.classifier).toBeUndefined()
+        const stepCost = events.reduce((sum, event) => {
+          if (event._tag !== "StreamEnded") return sum
+          return sum + Option.getOrElse(Option.fromUndefinedOr(event.costUsd), () => 0)
+        }, 0)
+        const [completed] = events.filter(Schema.is(TurnCompleted))
+        expect(completed?.costUsd).toBeCloseTo(stepCost + 21 / 1_000_000, 12)
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "effort routing reads the driver the turn dispatches through: its levels, its cache lifetime, and whether it carries a change",
+    () =>
+      Effect.gen(function* () {
+        const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+        // As listed, the model carries a change and its cache is cold by the
+        // next turn; the driver the agent names takes no `medium`, carries
+        // no change, and never goes cold.
+        const listed = new Model({ ...CARRIER_MODEL, promptCacheTtlMs: 1 })
+        const dispatched = new Model({
+          id: ModelId.make("plain/thinker"),
+          name: "Plain Thinker",
+          provider: ProviderId.make("plain"),
+          contextLength: 200_000,
+          reasoning: true,
+          efforts: ["low", "high"],
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("first"),
+          textStep("second"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [
+            AgentDefinition.make({
+              ...testAgent,
+              model: listed.id,
+              driver: DriverRef.make({ id: "plain" }),
+            }),
+          ],
+          providerLayer,
+          models: [listed, dispatched],
+          extensionInputs: [
+            routingExtension({
+              effort: effortRouter,
+              route: pickEfforts(inputs, [2, 0]),
+              drivers: [carrierDriver()],
+            }),
+          ],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectEffortAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "first" })
+        yield* afterTurns(1)
+        yield* client.message.send({ sessionId, branchId, content: "second" })
+        const events = yield* afterTurns(2)
+        const asked = yield* Ref.get(inputs)
+        // The dispatched model takes no `medium`.
+        expect(asked[0]?.candidates.map(Option.isSome)).toEqual([true, false, true])
+        // Its cache is warm and its driver carries no change: the second turn holds.
+        expect(asked).toHaveLength(1)
+        expect(stepLevels(events)).toEqual(levelsOf(["high", "high"]))
+        // The receipts keep the model the session asked for.
+        expect(effortRoutes(events).map((event) => event.model)).toEqual([listed.id, listed.id])
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "on a warm cache the router is offered only the levels the driver carries from this history, and a change it carries on none holds the level",
+    () =>
+      Effect.gen(function* () {
+        // A stand-in for a wire that cannot carry some changes: no move to
+        // `medium`, and no change at all after a run at `low`.
+        const carries = (hints: ProviderHints) =>
+          hints.reasoning !== "medium" &&
+          !(hints.reasoningHistory ?? []).some((run) => Option.contains(run, "low"))
+        const cases: ReadonlyArray<{
+          readonly picks: ReadonlyArray<number>
+          readonly levels: ReadonlyArray<ReasoningEffort>
+          readonly asked: number
+        }> = [
+          { picks: [2, 0], levels: ["high", "low"], asked: 2 },
+          { picks: [0, 2], levels: ["low", "low"], asked: 1 },
+        ]
+        for (const { picks, levels, asked } of cases) {
+          const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("first"),
+            textStep("second"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: agentOn(CARRIER_MODEL),
+            providerLayer,
+            models: [CARRIER_MODEL],
+            extensionInputs: [
+              routingExtension({
+                effort: effortRouter,
+                route: pickEfforts(inputs, picks),
+                drivers: [carrierDriver(carries)],
+              }),
+            ],
+          })
+          const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+          yield* selectEffortAuto(client, sessionId)
+          yield* client.message.send({ sessionId, branchId, content: "first" })
+          yield* afterTurns(1)
+          yield* client.message.send({ sessionId, branchId, content: "second" })
+          const events = yield* afterTurns(2)
+          const all = yield* Ref.get(inputs)
+          expect([picks, stepLevels(events)]).toEqual([picks, levelsOf(levels)])
+          expect([picks, all.length]).toEqual([picks, asked])
+          if (asked === 2) {
+            // Warm on `high`: the driver carries `low`, not `medium`.
+            expect(all[1]?.candidates.map(Option.isSome)).toEqual([true, false, true])
+          } else {
+            const held = effortRoutes(events)[1]
+            expect(held).toMatchObject({ effort: "low" })
+            expect(held?.reason).toContain("carries no change")
+            expect(held?.fallback).toBeUndefined()
+          }
+        }
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a router that fails keeps the exact level the branch runs at, max and the model's default included",
+    () =>
+      Effect.gen(function* () {
+        // Cold by the next turn: the router is asked, and fails.
+        const withMax = new Model({
+          ...CARRIER_MODEL,
+          efforts: ["low", "medium", "high", "max"],
+          promptCacheTtlMs: 1,
+        })
+        const cases: ReadonlyArray<{
+          readonly set: Option.Option<ReasoningEffort>
+          readonly levels: ReadonlyArray<Option.Option<ReasoningEffort>>
+        }> = [
+          { set: Option.some("max"), levels: levelsOf(["max", "max"]) },
+          // No level named: the model's default, and still none after the failure.
+          { set: Option.none(), levels: [Option.none(), Option.none()] },
+        ]
+        for (const { set, levels } of cases) {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("first"),
+            textStep("second"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: agentOn(withMax),
+            providerLayer,
+            models: [withMax],
+            extensionInputs: [
+              routingExtension({
+                effort: effortRouter,
+                route: () => Effect.die("no classifier model has a credential"),
+                drivers: [carrierDriver()],
+              }),
+            ],
+          })
+          const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+          if (Option.isSome(set))
+            yield* client.session.updateSettings({ sessionId, reasoningLevel: set })
+          yield* client.message.send({ sessionId, branchId, content: "first" })
+          yield* afterTurns(1)
+          yield* selectEffortAuto(client, sessionId)
+          yield* client.message.send({ sessionId, branchId, content: "second" })
+          const events = yield* afterTurns(2)
+          expect([set, stepLevels(events)]).toEqual([set, [...levels]])
+          const [route] = effortRoutes(events)
+          expect([set, route?.fallback, route?.effort]).toEqual([
+            set,
+            true,
+            Option.getOrUndefined(set),
+          ])
+        }
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a recovered turn runs at and charges its stored effort route when the effort router is gone",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-effort-gone-")
+        const dbPath = `${tempDir}/gent.db`
+        // Priced, so the turn's cost is known.
+        const priced = new Model({ ...CARRIER_MODEL, pricing: { input: 1, output: 1 } })
+        // The agent's own level, which a turn that lost its route would send.
+        const agents = [
+          AgentDefinition.make({ ...testAgent, model: priced.id, reasoningEffort: "low" }),
+        ]
+        // First process: a priced classifier routes the turn to high; the
+        // process dies while step 1 waits on the model, after the route is stored.
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          { ...textStep("never emitted"), gated: true },
+        ])
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                agents,
+                providerLayer: firstProvider.layer,
+                models: [priced],
+                modelPricing: { input: 1, output: 1 },
+                extensionInputs: [
+                  routingExtension({
+                    effort: effortRouter,
+                    drivers: [routeJudgeDriver, carrierDriver()],
+                    route: () =>
+                      Effect.gen(function* () {
+                        const ctx = yield* ExtensionContext
+                        yield* ctx.Models.decide({
+                          definition: Decision.make({
+                            input: Schema.String,
+                            decisions: {
+                              choice: Decision.classify({
+                                instructions: "Which effort",
+                                criteria: { choice1: "quick", choice2: "hard" },
+                              }),
+                            },
+                          }),
+                          input: "route me",
+                        })
+                        return { choice: 2, reason: "hard" }
+                      }),
+                  }),
+                ],
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({})
+            yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+            yield* selectEffortAuto(client, sessionId)
+            yield* client.message
+              .send({ sessionId, branchId, content: "FIRST-TURN" })
+              .pipe(Effect.forkScoped)
+            yield* firstProvider.controls.waitForCall(0)
+            return { sessionId, branchId }
+          }).pipe(Effect.timeout("10 seconds")),
+        )
+
+        // Second process: no effort router at all. The recovered step still
+        // runs at the stored level, and the turn's cost holds its route.
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep("RECOVERED")])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                agents,
+                providerLayer: secondProvider.layer,
+                models: [priced],
+                modelPricing: { input: 1, output: 1 },
+                extensionInputs: [
+                  routingExtension({ route: () => Effect.succeed({ choice: 0, reason: "any" }) }),
+                ],
+                storagePath: dbPath,
+              }),
+            )
+            const afterTurns = yield* recordBranchEvents(client, started)
+            yield* client.session.getSnapshot(started)
+            const events = yield* afterTurns(1)
+            expect(stepLevels(events)).toEqual(levelsOf(["high"]))
+            const [route] = effortRoutes(events)
+            const [completed] = events.filter(Schema.is(TurnCompleted))
+            const recoveredStep = Option.getOrThrow(
+              Option.fromUndefinedOr(events.filter(Schema.is(StreamEnded)).at(-1)?.costUsd),
+            )
+            expect(route?.costUsd).toBeCloseTo(21 / 1_000_000, 12)
+            expect(completed?.costUsd).toBeCloseTo(recoveredStep + 21 / 1_000_000, 12)
+          }).pipe(Effect.timeout("20 seconds")),
+        )
+      }).pipe(Effect.timeout("40 seconds")),
+    60_000,
   )
 })
 
@@ -6013,6 +6417,27 @@ describe("turn ledger", () => {
         })
       }
       expect((yield* ledger.total).costUsd).toEqual(Option.some(0.875))
+    }),
+  )
+
+  it.effect("a model route and an effort route of one name are each charged", () =>
+    Effect.gen(function* () {
+      const ledger = yield* makeTurnLedger
+      const messageId = MessageId.make("ledger-two-routes")
+      yield* ledger.beginTurn(messageId)
+      const route = {
+        sessionId,
+        branchId,
+        messageId,
+        selected: ModelId.make("router/auto"),
+        model: ModelId.make("test/priced"),
+        reason: "hard",
+        classifier: ModelId.make("judge/jev"),
+        durationMs: 1,
+      }
+      yield* ledger.noteRoute(ModelRouted.make({ ...route, costUsd: 0.25 }))
+      yield* ledger.noteRoute(ModelRouted.make({ ...route, costUsd: 0.5, effortOnly: true }))
+      expect((yield* ledger.total).costUsd).toEqual(Option.some(0.75))
     }),
   )
 })

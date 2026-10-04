@@ -29,6 +29,7 @@ import {
   Model,
   ModelId,
   type ModelDriverContribution,
+  omitUndefined,
   ProviderAuthInfo,
   ProviderId,
   type ProviderHints,
@@ -68,6 +69,8 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 interface JudgeAnswer {
   readonly label: string
   readonly confidence: number
+  /** The label for the effort decision, where the call asks one. */
+  readonly effort?: string
 }
 
 /** What the judge was asked: the classifier model, the encoded input and the labels offered. */
@@ -75,6 +78,8 @@ interface JudgeCall {
   readonly model: string
   readonly state: string
   readonly labels: ReadonlyArray<string>
+  /** The effort decision's labels, where the call asks one. */
+  readonly effortLabels?: ReadonlyArray<string>
 }
 
 /**
@@ -105,21 +110,37 @@ const judgeExtension = (answers: ReadonlyArray<JudgeAnswer>, calls: Array<JudgeC
             decide: (options) =>
               Effect.sync(() => {
                 const answer = answers[calls.length] ?? answers.at(-1)
-                const decision = options.decisions["choice"]
-                let labels: ReadonlyArray<string> = []
-                if (decision?._tag === "Classify") labels = Object.keys(decision.criteria)
-                calls.push({ model: modelName, state: encodeJson(options.state), labels })
-                const label = answer?.label ?? ""
+                const labelsOf = (key: string) =>
+                  Option.flatMap(Option.fromUndefinedOr(options.decisions[key]), (decision) => {
+                    if (decision._tag !== "Classify") return Option.none()
+                    return Option.some(Object.keys(decision.criteria))
+                  })
+                const classified = (labels: ReadonlyArray<string>, label: string) => ({
+                  _tag: "Classify" as const,
+                  label,
+                  probabilities: Object.fromEntries(
+                    labels.map((entry) => [entry, Number(entry === label)]),
+                  ),
+                  confidence: answer?.confidence ?? 0,
+                })
+                const choice = labelsOf("choice")
+                const effort = labelsOf("effort")
+                calls.push({
+                  model: modelName,
+                  state: encodeJson(options.state),
+                  labels: Option.getOrElse(choice, () => []),
+                  ...omitUndefined({ effortLabels: Option.getOrUndefined(effort) }),
+                })
                 return {
                   answers: {
-                    choice: {
-                      _tag: "Classify" as const,
-                      label,
-                      probabilities: Object.fromEntries(
-                        labels.map((entry) => [entry, Number(entry === label)]),
-                      ),
-                      confidence: answer?.confidence ?? 0,
-                    },
+                    ...Option.match(choice, {
+                      onNone: () => ({}),
+                      onSome: (labels) => ({ choice: classified(labels, answer?.label ?? "") }),
+                    }),
+                    ...Option.match(effort, {
+                      onNone: () => ({}),
+                      onSome: (labels) => ({ effort: classified(labels, answer?.effort ?? "") }),
+                    }),
                   },
                   usage: { inputTokens: 21, outputTokens: 0 },
                 }
@@ -547,7 +568,6 @@ const thinkerOf = (efforts: ReadonlyArray<ReasoningEffort>) =>
     contextLength: 200_000,
     reasoning: true,
     efforts,
-    carriesEffort: true,
   })
 
 /** A session on `/effort auto` with the shipped extensions, the judge, and the scripted model. */
@@ -687,6 +707,58 @@ describe("effort auto", () => {
         expect(stepLevels(unrouted.events)).toEqual(["high"])
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
     25_000,
+  )
+
+  it.scopedLive(
+    "under router/auto on /effort auto, one classifier call picks the model and the effort: two receipts, one charge",
+    () =>
+      Effect.gen(function* () {
+        const { home, cwd } = yield* writeHome(autoRouter(Option.none()))
+        const calls: Array<JudgeCall> = []
+        const thinking = (model: Model) =>
+          Model.make({ ...model, reasoning: true, efforts: ["low", "medium", "high"] })
+        const session = yield* routedSession({
+          home,
+          cwd,
+          answers: [{ label: "choice2", confidence: 0.9, effort: "choice3" }],
+          calls,
+          replies: 1,
+          models: pricedModels.map(thinking),
+        })
+        yield* session.client.session.updateSettings({
+          sessionId: session.sessionId,
+          reasoningLevel: Option.some("auto"),
+        })
+        yield* session.send("debug the flaky scheduler")
+        const events = yield* session.afterTurns(1)
+        // One call: the model's labels and the built-in levels both models take.
+        expect(calls.map((call) => [call.labels, call.effortLabels])).toEqual([
+          [
+            ["choice1", "choice2"],
+            ["choice1", "choice2", "choice3"],
+          ],
+        ])
+        const [modelRoute, effortRoute] = routedEvents(events)
+        expect(modelRoute).toMatchObject({ selected: AUTO, model: STRONG, choice: 1 })
+        expect(String(modelRoute?.classifier)).toBe("route-judge/jev-cheap")
+        expect(effortRoute).toMatchObject({
+          selected: EFFORT,
+          model: STRONG,
+          effort: "high",
+          choice: 2,
+          effortOnly: true,
+        })
+        expect(effortRoute?.reason).toContain("hard work")
+        // The call is charged on the model route; the effort route names no classifier.
+        expect(
+          [effortRoute?.classifier, effortRoute?.costUsd].map((field) =>
+            Option.fromUndefinedOr(field),
+          ),
+        ).toEqual([Option.none(), Option.none()])
+        expect(stepModels(events)).toEqual([STRONG])
+        expect(stepLevels(events)).toEqual(["high"])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunServices.layer)),
+    20_000,
   )
 })
 
@@ -1133,7 +1205,6 @@ describe("router on the wire", () => {
               contextLength: 1_000_000,
               reasoning: true,
               efforts: ["low", "medium", "high", "xhigh", "max"],
-              carriesEffort: true,
               pricing: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
             }),
           ],
@@ -1172,6 +1243,65 @@ describe("router on the wire", () => {
           [Option.some("high"), [Option.some("low")]],
         ])
         expectEffortRidesInside(yield* replayOnOpus(sent, sessionId), "low", "high")
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+    30_000,
+  )
+  it.scopedLive(
+    "on Opus 5 a turn after /effort off keeps thinking off on /effort auto: no level carries over it, so no classifier is asked",
+    () =>
+      Effect.gen(function* () {
+        const { home, cwd } = yield* writeHome({})
+        const { sent, keep } = keepSentSteps()
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          keep("answer 1"),
+          keep("answer 2"),
+        ])
+        const calls: Array<JudgeCall> = []
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          home,
+          cwd,
+          models: [
+            Model.make({
+              id: OPUS,
+              name: "Opus 5",
+              provider: ProviderId.make("anthropic"),
+              contextLength: 1_000_000,
+              reasoning: true,
+              efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+              pricing: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+            }),
+          ],
+          extensionInputs: [
+            ...e2ePreset.extensionInputs,
+            judgeExtension([{ label: "choice3", confidence: 0.9 }], calls),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(OPUS),
+          reasoningLevel: Option.some("none"),
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* client.message.send({ sessionId, branchId, content: "hello" })
+        yield* afterTurns(1)
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some("auto") })
+        yield* client.message.send({ sessionId, branchId, content: "now the hard part" })
+        const events = yield* afterTurns(2)
+        yield* controls.assertDone
+
+        // A move from none turns thinking on at the top level, which rewrites the cache.
+        expect(calls).toEqual([])
+        const [held] = routedEvents(events)
+        expect(held).toMatchObject({ model: OPUS, effort: "none", effortOnly: true })
+        expect(held?.reason).toContain("carries no change from none")
+        expect(held?.fallback).toBeUndefined()
+        expect(sent.map((step) => [step.reasoning, step.reasoningHistory])).toEqual([
+          [Option.some("none"), []],
+          [Option.some("none"), [Option.some("none")]],
+        ])
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
     30_000,
   )

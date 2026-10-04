@@ -1975,19 +1975,18 @@ export const buildOpenAIModelDriver = (
             "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",
         })
       }),
+    // A model that takes `configuration_update` carries a change of level
+    // inside the conversation, from any level it accepts.
+    carriesEffort: (modelName, hints, catalog) =>
+      Option.isSome(
+        responsesEffortCarrier(
+          adapterEntry(Option.fromUndefinedOr(catalog), "openai", modelName),
+          Option.some(hints),
+        ),
+      ),
     listModels: (catalog, authInfo) =>
       Effect.sync(() => {
-        // A model that takes `configuration_update` carries an effort change
-        // inside the conversation: `/effort auto` keeps its cached prefix.
-        const models = catalogModels(
-          catalog,
-          "openai",
-          RESPONSES_PROMPT_CACHE_TTL,
-          RESPONSES_CLASS,
-        ).map((model) => {
-          if (!takesConfigurationUpdates(model.id)) return model
-          return Model.make({ ...model, carriesEffort: true })
-        })
+        const models = catalogModels(catalog, "openai", RESPONSES_PROMPT_CACHE_TTL, RESPONSES_CLASS)
         // When OAuth is active, filter to allowed models + zero pricing
         const auth = Option.fromNullishOr(authInfo)
         if (Option.isNone(auth) || auth.value._tag !== "Oauth") return models

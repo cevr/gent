@@ -2560,7 +2560,6 @@ describe("App status and activity rows", () => {
             contextLength: 200_000,
             reasoning: true,
             efforts: ["low", "medium", "high"],
-            carriesEffort: true,
           })
           const effortRouter = defineExtension({
             id: "test-effort-router",

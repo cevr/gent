@@ -214,18 +214,22 @@ const makeDriver = (
   })
 // ── Tests ──
 describe("OpenAI catalog", () => {
-  it.live("a model that takes a configuration update is listed as carrying an effort change", () =>
+  it.live("a model that takes a configuration update carries an effort change", () =>
     Effect.gen(function* () {
       const { driver } = yield* makeDriver()
-      const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
-      const models = yield* listModels(fixtureModelCatalog())
-      const carries = (id: string) =>
-        Option.map(
-          Option.fromUndefinedOr(models.find((model) => model.id === id)),
-          (model) => model.carriesEffort === true,
+      const carriesEffort = Option.getOrThrow(Option.fromUndefinedOr(driver.carriesEffort))
+      const carries = (model: string) =>
+        carriesEffort(
+          model,
+          {
+            reasoning: "low",
+            reasoningHistory: [Option.some("high")],
+            cacheKey: "session",
+            supportsReasoning: true,
+          },
+          fixtureModelCatalog(),
         )
-      expect(carries("openai/gpt-6.1-sol")).toEqual(Option.some(true))
-      expect(carries("openai/gpt-5.4")).toEqual(Option.some(false))
+      expect([carries("gpt-6.1-sol"), carries("gpt-5.4")]).toEqual([true, false])
     }),
   )
 })

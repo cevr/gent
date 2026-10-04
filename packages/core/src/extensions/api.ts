@@ -87,6 +87,7 @@ export type {
   CatalogProvider,
   ModelCatalogView,
   ModelDriverContribution,
+  ModelRouteChoice,
   ModelRouteCurrent,
   ModelRouteDecision,
   ModelRouteInput,
