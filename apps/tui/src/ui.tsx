@@ -146,6 +146,8 @@ interface ChromePanelBodyProps {
   ref?: (el: ScrollBoxRenderable) => void
   /** Hold the view on the last row as rows arrive, so a squeezed body shows the newest. */
   stickToBottom?: boolean
+  /** Told the body's laid-out rows each time a draw changes them. */
+  onRows?: (rows: number) => void
   paddingLeft?: number
   paddingRight?: number
   children: JSX.Element
@@ -175,7 +177,10 @@ function ChromePanelBody(props: ChromePanelBodyProps) {
       }}
       renderBefore={function () {
         const laidOut = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
-        if (!Option.contains(rows(), laidOut)) setRows(Option.some(laidOut))
+        if (!Option.contains(rows(), laidOut)) {
+          setRows(Option.some(laidOut))
+          if (props.onRows) props.onRows(laidOut)
+        }
       }}
       flexGrow={1}
       stickyScroll={sticky()}
@@ -1488,12 +1493,14 @@ export function SelectList<A>(props: SelectListProps<A>) {
     required: 1,
   })
   const bodyRows = usePickerBody(lines)
-  // The frame's rows can change after the cursor settles (a note row, a
-  // squeezed dock, a resize): the cursor's row is kept in view at each.
+  // The body's rows can change after the cursor settles (a note row laid out
+  // a draw later, a squeezed dock, a resize): the cursor's row is kept in
+  // view at each, by the rows the body was laid out with.
+  const [viewportRows, setViewportRows] = createSignal(Option.none<number>())
   useScrollSync(
     () => `${props.id}-row-${state().selectedIndex}`,
     () => scrollRef,
-    bodyRows,
+    viewportRows,
   )
   const fits = (needed: number) =>
     Option.match(bodyRows(), {
@@ -1531,7 +1538,10 @@ export function SelectList<A>(props: SelectListProps<A>) {
         </ChromePanel.Section>
       </Show>
 
-      <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
+      <ChromePanel.Body
+        ref={(value) => (scrollRef = Option.some(value))}
+        onRows={(rows) => setViewportRows(Option.some(rows))}
+      >
         <Show when={values().length > 0} fallback={emptyRow()}>
           <For each={indexed()}>
             {(entry) =>
