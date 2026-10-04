@@ -186,16 +186,18 @@ last rows. OpenTUI draws only the region, and a region that grows at the
 terminal's bottom pushes rows into scrollback that cannot come back, so
 growing UI never grows it: the suggestions and the docked panes cover the
 tail's last rows, and the footer's base stays as it was while one is open
-(`paneOpen`, from `useDockPaneOpen` in `ui.tsx`). The tail keeps the rows the
-region shows at the smallest base since the last replay (`footerFloor`), so
-the activity row going at a turn's end shows kept rows, not blank ones; rows
-the tail does not fill sit above it, never above the composer. The rows above
-the canvas go to native history in order: during a turn only whole final
-items (`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits
-for its stored answer, a message waits while a call of it runs, and the head
-of a tool run waits until the run ends); at idle
-an item's top rows too (`partialRows`; the live view cuts them off), so each
-row is in history or on screen, once. A commit shrinks the region by its rows
+(`paneOpen`, from `useDockPaneOpen` in `ui.tsx`). The tail shows the rows the
+region holds over the footer's base as it is now: a base that grows (the
+activity row as a turn starts) moves the tail's top rows into history, and
+one that shrinks (the activity row going at a turn's end) leaves blank rows
+above the tail until it grows into them, never above the composer. The rows
+above the canvas go to native history in order, only from final items
+(`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits for
+its stored answer, a message waits while a call of it runs, and the head of
+a tool run waits until the run ends): an item whole, or its top rows
+(`partialRows`; the live view cuts them off), during a turn too, so each
+final row is in history or on screen, once. Patched OpenTUI clips a box's
+border to the boxes around it, so a cut prompt draws no rail above the tail. A commit shrinks the region by its rows
 first and then writes them, so they land where they were drawn; a write
 OpenTUI refuses, or rows drawn from an item that changed while they settled
 (`stillOffered`), give the rows back to the live view; an item that changes

@@ -1993,14 +1993,15 @@ interface NativeTranscriptProps {
  * the region pushes up when it grows at the terminal's bottom go to the
  * terminal's scrollback for good; a shrink there leaves the freed rows
  * empty. So the tail keeps the transcript's last `canvas` rows: the rows the
- * region can show when the footer is at its smallest. Rows above them move
- * into history, a final item's rows in order, the top rows of an item first
- * when the session is idle. In a long session the region then takes every
- * row it may at once and keeps them: the footer's base (composer, status, the
- * activity row while a turn runs) and the tail share them, and growing UI
- * docked in the footer covers the tail's last rows rather than growing the
- * region. Closing it shows those rows again, and a smaller footer shows the
- * tail rows it kept above.
+ * region shows over the footer's base as it is now. Rows above them move into
+ * history, a final item's rows in order, its top rows first when the rest
+ * still fits. In a long session the region then takes every row it may at
+ * once and keeps them: the footer's base (composer, status, the activity row
+ * while a turn runs) and the tail share them. A base that grows moves the
+ * tail's top rows into history; one that shrinks leaves its rows above the
+ * tail until the tail grows into them. Growing UI docked in the footer covers
+ * the tail's last rows rather than growing the region, and closing it shows
+ * those rows again.
  */
 export function NativeTranscript(props: NativeTranscriptProps) {
   const renderer = useRenderer()
@@ -2061,11 +2062,10 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   /** Rows offered to history whose commit has not landed. The live view still shows them. */
   let pendingRows = 0
   /**
-   * The smallest footer base since the transcript was last laid out from the
-   * start. The live tail keeps the rows the region shows at that base, so a
-   * base that shrinks back (a turn that ends) shows kept rows, never blank ones.
+   * The canvas the last pass offered rows for, since the transcript was last
+   * laid out from the start. A taller canvas gives back rows still in flight.
    */
-  let footerFloor = Option.none<number>()
+  let offeredCanvas = Option.none<number>()
   /**
    * The fingerprints history was last checked against as a prefix. A commit
    * lands only while the item it drew still has the fingerprint these hold at
@@ -2128,7 +2128,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     // A commit still settling was drawn for the screen the replay clears:
     // it comes back, and the replay offers its item again.
     commits.take()
-    footerFloor = Option.none()
+    offeredCanvas = Option.none()
     batch(() => {
       setNativeOutputReady(false)
       setReplayPending(true)
@@ -2641,10 +2641,14 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   // Scrollback is immutable, so nothing commits until every client renderer
   // has loaded and every notice-row source has answered; the live view draws
   // the rows it has meanwhile. The live tail keeps the transcript's last
-  // `canvas` rows: the rows the region shows when the footer is at its
-  // smallest. Rows above them move into history in transcript order. While a
-  // turn runs only a whole final item moves; once the session is idle the
-  // top rows of an item move too, so every row is in history or on screen.
+  // `canvas` rows: the rows the region shows under the pinned prompt and over
+  // the footer's base as they are now. Rows above them move into history in
+  // transcript order, a final item's top rows too, so a base that grows (the
+  // activity row as a turn starts) moves the rows it takes from the tail into
+  // history: every final row is in history or on screen. Only an item that is
+  // not final yet (a streamed answer, a run still going) keeps rows the tail
+  // cannot show. A base that shrinks leaves its rows above the tail, under
+  // history, until the tail grows into them; a turn's end adds its own rows.
   // A measurement runs it again: what it reads per item it reads from the
   // memos below, so a growing tail costs the same in a session of any length.
   const fingerprints = createMemo(() => historyFingerprints(displayedItems(), toolRuns()))
@@ -2682,18 +2686,15 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         requestReplay()
         return
       }
-      const floor = Option.match(footerFloor, {
-        onNone: () => base,
-        onSome: (rows) => Math.min(rows, base),
-      })
-      // A lower floor makes the canvas taller. Rows offered for the old one
+      const canvas = maximum - base - pinnedRows
+      // A taller canvas shows more of the tail. Rows offered for the old one
       // and not landed would leave the tail short of it: they come back, and
       // this pass offers again for the new canvas.
-      if (Option.exists(footerFloor, (rows) => floor < rows) && pendingRows > 0) rewind()
-      footerFloor = Option.some(floor)
+      if (Option.exists(offeredCanvas, (rows) => canvas > rows) && pendingRows > 0) rewind()
+      offeredCanvas = Option.some(canvas)
       // The rows the tail holds above the canvas, less those already offered.
       offerRows(items, next, {
-        excess: tailRows - (maximum - floor - pinnedRows) - pendingRows,
+        excess: tailRows - canvas - pendingRows,
         unfinished,
         turnRunning,
         runs,
@@ -2724,9 +2725,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   }
 
   /**
-   * Offers the transcript's rows above the canvas to history, in order. A
-   * whole final item moves at any time; the top rows of an item move only
-   * while no turn runs.
+   * Offers the transcript's rows above the canvas to history, in order: a
+   * final item whole, or its top rows when the rest still fits. An item that
+   * is not final stops the offer, with every item after it.
    */
   const offerRows = (
     items: ReadonlyArray<SessionItem>,
@@ -2754,7 +2755,6 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         excess -= rest
         continue
       }
-      if (plan.turnRunning) return
       offer(item, value, Option.some(queuedRows + excess))
       return
     }

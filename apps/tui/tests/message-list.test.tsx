@@ -3663,7 +3663,7 @@ describe("native transcript rows under the footer", () => {
  */
 
 interface BottomSetup {
-  readonly items: () => ListMessage[]
+  readonly items: () => SessionItem[]
   readonly streaming: () => boolean
   readonly footer: () => number
   readonly paneOpen: () => boolean
@@ -3693,6 +3693,18 @@ const bottomTranscript = (
     </box>
   )
 }
+
+/**
+ * The row a turn's end adds to the transcript (`● Worked for …`), with its
+ * spacer: as many rows as the activity row and its spacer give back.
+ */
+const turnEnded = (seq: number): SessionItem => ({
+  _tag: "turn-ended",
+  durationSeconds: 5,
+  steps: emptyTurnSteps,
+  createdAt: seq,
+  seq,
+})
 
 /** The blank rows right above the composer row of `frame`. */
 const blankRowsAboveComposer = (frame: string): number => {
@@ -3911,11 +3923,9 @@ describe("native transcript region at the terminal's bottom", () => {
                 setFooter(5)
               })
               yield* waitForStableFrame(setup)
-              // The growing activity footer may cover earlier live rows until
-              // turn end. The visible rows stay unique while it covers them.
-              for (const [row, count] of bodyRowCounts(terminalText(setup))) {
-                expect(["stream", row, count]).toEqual(["stream", row, 1])
-              }
+              // The growing activity footer takes the tail's top rows: history
+              // has them, so every row stays in one place while the turn runs.
+              assertRows("stream")
               batch(() => {
                 setItems([...base, answer])
                 setStreaming(false)
@@ -4078,6 +4088,44 @@ describe("native transcript region at the terminal's bottom", () => {
     25_000,
   )
 
+  // History holds a prompt's top rows, and the live tail cuts them off. A
+  // footer that shrinks then leaves rows above the tail: they are blank. The
+  // prompt's rail goes only on the rows its text is on, never on the rows
+  // above the tail or over history.
+  it.scopedLive(
+    "a prompt cut by history draws its rail only beside its own rows",
+    () =>
+      Effect.gen(function* () {
+        const [footer, setFooter] = createSignal(3)
+        const prompt = Array.from({ length: 6 }, (_, index) => `PROMPT-0 line ${index + 1}`)
+        const answer = Array.from({ length: 16 }, (_, index) => `ANSWER-0 line ${index + 1}`)
+        const { setup } = yield* settledLongSession(
+          {
+            items: () => [
+              ...longSession(),
+              clientPrompt("ask", prompt.join("\n")),
+              assistant("answer", answer.join("\n\n")),
+            ],
+            streaming: () => false,
+            footer,
+            paneOpen: () => false,
+            overlayOpen: () => false,
+          },
+          (text) => bodyRowCounts(text).has("ANSWER-0 line 16"),
+        )
+        const railRows = (frame: string) =>
+          frame.split("\n").filter((row) => row.startsWith("┃") && !row.includes("PROMPT-0"))
+        setFooter(1)
+        const shrunk = yield* waitForStableFrame(setup)
+        // History took the prompt's top rows: the tail shows the rest of it.
+        expect(shrunk).not.toContain("PROMPT-0 line 1")
+        expect(shrunk).toContain("PROMPT-0 line 6")
+        expect(railRows(shrunk)).toEqual([])
+        expect(railRows(terminalText(setup))).toEqual([])
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
   // A footer row that goes (an activity row a resumed turn drew, a status
   // row) leaves the region a row the tail does not fill. The row sits above
   // the tail, under history: the tail and the composer stay together.
@@ -4140,11 +4188,63 @@ describe("native transcript region at the terminal's bottom", () => {
     25_000,
   )
 
+  // A turn starts from idle: its prompt joins the tail, and the footer grows
+  // by the activity row and its spacer, then by a tray row. The region has
+  // all its rows already, so the tail shows fewer of them. The rows it no
+  // longer shows go to history: no row is left above the tail's view, where
+  // neither the screen nor scrollback has it.
+  it.scopedLive(
+    "a turn that starts at the bottom keeps every row in history or on screen as its footer grows",
+    () =>
+      Effect.gen(function* () {
+        const settledItems = [...longSession(), assistant("tail", longBody("TAIL-0"))]
+        const [items, setItems] = createSignal<ListMessage[]>(settledItems)
+        const [streaming, setStreaming] = createSignal(false)
+        const [footer, setFooter] = createSignal(3)
+        const { setup } = yield* settledLongSession({
+          items,
+          streaming,
+          footer,
+          paneOpen: () => false,
+          overlayOpen: () => false,
+        })
+        const expectRowsOnce = (step: string) => {
+          const expected = [
+            ...bodyRowCounts(
+              items()
+                .map((item) => item.content)
+                .join("\n"),
+            ).keys(),
+          ].sort()
+          const actual = [...bodyRowCounts(terminalText(setup))].sort(([a], [b]) =>
+            Order.String(a, b),
+          )
+          expect([step, actual]).toEqual([step, expected.map((row) => [row, 1])])
+        }
+        expectRowsOnce("idle")
+        batch(() => {
+          setItems([
+            ...settledItems,
+            clientPrompt("ask", "ASK-0 line 1"),
+            { ...assistant("answer", "ANSWER-0 line 1"), draft: true },
+          ])
+          setStreaming(true)
+          setFooter(5)
+        })
+        yield* waitForStableFrame(setup)
+        expectRowsOnce("turn start")
+        setFooter(6)
+        yield* waitForStableFrame(setup)
+        expectRowsOnce("tray row")
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
   it.scopedLive(
     "a turn that ends leaves no blank row above the composer",
     () =>
       Effect.gen(function* () {
-        const [items, setItems] = createSignal<ListMessage[]>([
+        const [items, setItems] = createSignal<SessionItem[]>([
           ...longSession(),
           { ...assistant("answer", longBody("ANSWER-0")), draft: true },
         ])
@@ -4158,8 +4258,10 @@ describe("native transcript region at the terminal's bottom", () => {
           paneOpen: () => false,
           overlayOpen: () => false,
         })
+        // The turn ends: the activity row and its spacer go, and the turn's
+        // end row and its spacer join the transcript.
         batch(() => {
-          setItems([...longSession(), assistant("answer", longBody("ANSWER-0"))])
+          setItems([...longSession(), assistant("answer", longBody("ANSWER-0")), turnEnded(1)])
           setStreaming(false)
           setFooter(3)
         })
@@ -4186,7 +4288,7 @@ describe("native transcript region at the terminal's bottom", () => {
             id,
             Array.from({ length: rows }, (_, index) => `- ${label}-${index + 10} row`).join("\n"),
           )
-        const [items, setItems] = createSignal<ListMessage[]>([
+        const [items, setItems] = createSignal<SessionItem[]>([
           clientPrompt("p1", "FIRST-ASK"),
           listAnswer("a1", "ROWA", 60),
         ])
@@ -4202,7 +4304,9 @@ describe("native transcript region at the terminal's bottom", () => {
           },
           (text) => text.includes("ROWA-10 row"),
         )
-        // A short turn runs and ends, with the activity row in the footer.
+        // A short turn runs and ends, with the activity row in the footer:
+        // history takes the answer's rows the taller footer covers, and the
+        // turn's end row takes the rows the footer gives back.
         batch(() => {
           setItems([
             clientPrompt("p1", "FIRST-ASK"),
@@ -4220,9 +4324,10 @@ describe("native transcript region at the terminal's bottom", () => {
             listAnswer("a1", "ROWA", 60),
             clientPrompt("p2", "SECOND-ASK"),
             listAnswer("a2", "ROWB", 4),
+            turnEnded(1),
           ])
           setStreaming(false)
-          setFooter(3)
+          setFooter(4)
         })
         yield* waitForStableFrame(setup)
         const rows = terminalText(setup).split("\n")
@@ -4268,13 +4373,20 @@ describe("native transcript region at the terminal's bottom", () => {
       Effect.gen(function* () {
         const [streaming, setStreaming] = createSignal(true)
         const [footer, setFooter] = createSignal(5)
+        // The answer streams, taller than the region: history takes none of
+        // its rows until the turn ends.
+        const tall = Array.from({ length: 30 }, (_, index) => `TALL line ${index + 1}`).join("\n\n")
+        const [items, setItems] = createSignal<SessionItem[]>([
+          ...longSession(),
+          { ...assistant("tall", tall), draft: true },
+        ])
         let screen = Option.none<CliRenderer>()
         const sizes: Array<{ readonly shrunk: number; readonly after: number }> = []
         let grows = 0
         const setup = yield* renderScoped(
           () =>
             bottomTranscript({
-              items: () => [...longSession(), assistant("tall", longBody("TALL"))],
+              items,
               streaming,
               footer,
               paneOpen: () => false,
@@ -4303,8 +4415,11 @@ describe("native transcript region at the terminal's bottom", () => {
         // The turn ends: history takes the tall answer's top rows, and the
         // footer shrinks while those commits are queued.
         grows = 1
-        setStreaming(false)
-        setFooter(3)
+        batch(() => {
+          setItems([...longSession(), assistant("tall", tall)])
+          setStreaming(false)
+          setFooter(3)
+        })
         yield* waitUntil(() => sizes.length > 0, "a commit after the turn's end", 6_000)
         const [size] = sizes
         expect(size?.after).toBe(size?.shrunk)
@@ -5162,7 +5277,9 @@ describe("sticky last prompt", () => {
             clientPrompt("p1", "ASK-ONE"),
             reply("r1", 20),
             extensionSent("w1", "PARENT-SAYS"),
-            reply("r2", 20),
+            // Still streaming: a finished reply would leave its top rows to
+            // history, and a cut item pins nothing.
+            { ...reply("r2", 20), draft: true },
           ],
           { streaming: true },
         )

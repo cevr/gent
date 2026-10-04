@@ -182,3 +182,163 @@ index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..4a04e58214f5cd0b102e3883baa00473
      if (this._terminalIsSetup && this._controlState !== "explicit_suspended" /* EXPLICIT_SUSPENDED */ && !this.isSplitCursorSeedFrameBlocked()) {
        this.flushPendingSplitOutputBeforeTransition();
      }
+diff --git a/chunk-bun-sjw2d9bq.js b/chunk-bun-sjw2d9bq.js
+index a28320a281f82eea0833ad1f5868d0f8c74c9602..8cea88d6b6022dc48988efa48dc86352292f6fb1 100644
+--- a/chunk-bun-sjw2d9bq.js
++++ b/chunk-bun-sjw2d9bq.js
+@@ -11386,6 +11386,39 @@ function packDrawOptions(border, shouldFill, titleAlignment, bottomTitleAlignmen
+   return packed;
+ }
+ 
++function intersectScissorRect(rect, parent) {
++  if (parent === undefined)
++    return rect;
++  const x = Math.max(rect.x, parent.x);
++  const y = Math.max(rect.y, parent.y);
++  const right = Math.min(rect.x + rect.width, parent.x + parent.width);
++  const bottom = Math.min(rect.y + rect.height, parent.y + parent.height);
++  if (right <= x || bottom <= y)
++    return { x: 0, y: 0, width: 0, height: 0 };
++  return { x, y, width: right - x, height: bottom - y };
++}
++function clipBoxToScissor(options, scissor) {
++  const box = { x: options.x, y: options.y, width: options.width, height: options.height, border: options.border, title: options.title, bottomTitle: options.bottomTitle };
++  if (scissor === undefined)
++    return box;
++  const clipped = intersectScissorRect(box, scissor);
++  if (clipped.width === 0 || clipped.height === 0)
++    return null;
++  const top = clipped.y === box.y;
++  const bottom = clipped.y + clipped.height === box.y + box.height;
++  const left = clipped.x === box.x;
++  const right = clipped.x + clipped.width === box.x + box.width;
++  if (top && bottom && left && right)
++    return box;
++  const sides = box.border === true ? ["top", "right", "bottom", "left"] : Array.isArray(box.border) ? box.border : [];
++  return {
++    ...clipped,
++    border: sides.filter((side) => side === "top" ? top : side === "bottom" ? bottom : side === "left" ? left : right),
++    title: top ? box.title : undefined,
++    bottomTitle: bottom ? box.bottomTitle : undefined
++  };
++}
++
+ class OptimizedBuffer2 {
+   static fbIdCounter = 0;
+   id;
+@@ -11397,6 +11430,7 @@ class OptimizedBuffer2 {
+   respectAlpha = false;
+   _rawBuffers = null;
+   _destroyed = false;
++  _scissorRects = [];
+   get ptr() {
+     return this.bufferPtr;
+   }
+@@ -11637,19 +11671,25 @@ class OptimizedBuffer2 {
+     this.guard();
+     const style = parseBorderStyle2(options.borderStyle, "single");
+     const borderChars = options.customBorderChars ?? BorderCharArrays2[style];
+-    const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
+-    this.lib.bufferDrawBox(this.bufferPtr, options.x, options.y, options.width, options.height, borderChars, packedOptions, options.borderColor, options.backgroundColor, options.titleColor ?? options.borderColor, options.title ?? null, options.bottomTitle ?? null);
++    const box = clipBoxToScissor(options, this._scissorRects.at(-1));
++    if (box === null)
++      return;
++    const packedOptions = packDrawOptions(box.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
++    this.lib.bufferDrawBox(this.bufferPtr, box.x, box.y, box.width, box.height, borderChars, packedOptions, options.borderColor, options.backgroundColor, options.titleColor ?? options.borderColor, box.title ?? null, box.bottomTitle ?? null);
+   }
+   pushScissorRect(x, y, width, height) {
+     this.guard();
++    this._scissorRects.push(intersectScissorRect({ x, y, width, height }, this._scissorRects.at(-1)));
+     this.lib.bufferPushScissorRect(this.bufferPtr, x, y, width, height);
+   }
+   popScissorRect() {
+     this.guard();
++    this._scissorRects.pop();
+     this.lib.bufferPopScissorRect(this.bufferPtr);
+   }
+   clearScissorRects() {
+     this.guard();
++    this._scissorRects.length = 0;
+     this.lib.bufferClearScissorRects(this.bufferPtr);
+   }
+   pushOpacity(opacity) {
+diff --git a/chunk-node-80p7e6t6.js b/chunk-node-80p7e6t6.js
+index 82915fa04684c45affab3b7297e8917f89dc5dc6..7136402aae1862fcd17212df5c4f10f039d006c0 100644
+--- a/chunk-node-80p7e6t6.js
++++ b/chunk-node-80p7e6t6.js
+@@ -11368,6 +11368,39 @@ function packDrawOptions(border, shouldFill, titleAlignment, bottomTitleAlignmen
+   return packed;
+ }
+ 
++function intersectScissorRect(rect, parent) {
++  if (parent === undefined)
++    return rect;
++  const x = Math.max(rect.x, parent.x);
++  const y = Math.max(rect.y, parent.y);
++  const right = Math.min(rect.x + rect.width, parent.x + parent.width);
++  const bottom = Math.min(rect.y + rect.height, parent.y + parent.height);
++  if (right <= x || bottom <= y)
++    return { x: 0, y: 0, width: 0, height: 0 };
++  return { x, y, width: right - x, height: bottom - y };
++}
++function clipBoxToScissor(options, scissor) {
++  const box = { x: options.x, y: options.y, width: options.width, height: options.height, border: options.border, title: options.title, bottomTitle: options.bottomTitle };
++  if (scissor === undefined)
++    return box;
++  const clipped = intersectScissorRect(box, scissor);
++  if (clipped.width === 0 || clipped.height === 0)
++    return null;
++  const top = clipped.y === box.y;
++  const bottom = clipped.y + clipped.height === box.y + box.height;
++  const left = clipped.x === box.x;
++  const right = clipped.x + clipped.width === box.x + box.width;
++  if (top && bottom && left && right)
++    return box;
++  const sides = box.border === true ? ["top", "right", "bottom", "left"] : Array.isArray(box.border) ? box.border : [];
++  return {
++    ...clipped,
++    border: sides.filter((side) => side === "top" ? top : side === "bottom" ? bottom : side === "left" ? left : right),
++    title: top ? box.title : undefined,
++    bottomTitle: bottom ? box.bottomTitle : undefined
++  };
++}
++
+ class OptimizedBuffer2 {
+   static fbIdCounter = 0;
+   id;
+@@ -11379,6 +11412,7 @@ class OptimizedBuffer2 {
+   respectAlpha = false;
+   _rawBuffers = null;
+   _destroyed = false;
++  _scissorRects = [];
+   get ptr() {
+     return this.bufferPtr;
+   }
+@@ -11619,19 +11653,25 @@ class OptimizedBuffer2 {
+     this.guard();
+     const style = parseBorderStyle2(options.borderStyle, "single");
+     const borderChars = options.customBorderChars ?? BorderCharArrays2[style];
+-    const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
+-    this.lib.bufferDrawBox(this.bufferPtr, options.x, options.y, options.width, options.height, borderChars, packedOptions, options.borderColor, options.backgroundColor, options.titleColor ?? options.borderColor, options.title ?? null, options.bottomTitle ?? null);
++    const box = clipBoxToScissor(options, this._scissorRects.at(-1));
++    if (box === null)
++      return;
++    const packedOptions = packDrawOptions(box.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
++    this.lib.bufferDrawBox(this.bufferPtr, box.x, box.y, box.width, box.height, borderChars, packedOptions, options.borderColor, options.backgroundColor, options.titleColor ?? options.borderColor, box.title ?? null, box.bottomTitle ?? null);
+   }
+   pushScissorRect(x, y, width, height) {
+     this.guard();
++    this._scissorRects.push(intersectScissorRect({ x, y, width, height }, this._scissorRects.at(-1)));
+     this.lib.bufferPushScissorRect(this.bufferPtr, x, y, width, height);
+   }
+   popScissorRect() {
+     this.guard();
++    this._scissorRects.pop();
+     this.lib.bufferPopScissorRect(this.bufferPtr);
+   }
+   clearScissorRects() {
+     this.guard();
++    this._scissorRects.length = 0;
+     this.lib.bufferClearScissorRects(this.bufferPtr);
+   }
+   pushOpacity(opacity) {

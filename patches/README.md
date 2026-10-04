@@ -34,9 +34,23 @@ changed. The PTY tests in `packages/e2e/tests/scrollback.test.ts` ("a picker
 closed over …") and the picker tests in
 `apps/tui/tests/message-list.test.tsx` cover it.
 
+The patch also clips a box's border to the scissor of the boxes around it.
+The native `drawBox` checks only that the box overlaps the scissor. Its fast
+path for an opaque border on a clear background then writes the border cells
+straight into the buffer, past the scissor. A prompt's left rail that the
+live tail cuts off at its top (history holds the prompt's top rows) then
+draws on the rows above the tail. `OptimizedBuffer` keeps a copy of the
+native scissor stack (`_scissorRects`, intersected as the native stack is),
+and `drawBox` draws only the part of the box inside the top scissor, with
+the border sides and titles the scissor cuts off removed. The Bun and Node
+buffer bundles (`chunk-bun-sjw2d9bq.js`, `chunk-node-80p7e6t6.js`) get the
+same change. "a prompt cut by history draws its rail only beside its own
+rows" in `apps/tui/tests/message-list.test.tsx` covers it.
+
 Remove this patch when an OpenTUI release keeps the split's history state
-across the alternate screen. Checked on 2026-10-04: `main` after 0.5.14
-still resets it.
+across the alternate screen and clips a box's border to the scissor.
+Checked on 2026-10-04: `main` after 0.5.14 still resets the state, and its
+`drawVisibleBox` border fast path still writes past the scissor.
 
 ## `@effect/ai-anthropic@4.0.0`
 
