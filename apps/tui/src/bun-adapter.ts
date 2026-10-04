@@ -68,15 +68,17 @@ const loadSolidPlugin = Effect.tryPromise({
 })
 
 /**
- * One client file built: the module text, its version (the text's sha256, so
- * two builds of the same code share one), and the files the build read, as
+ * One client file built: the module text and the files the build read, as
  * absolute paths.
  */
 interface ClientBuild {
   readonly code: string
-  readonly version: string
   readonly inputs: ReadonlyArray<string>
 }
+
+/** The sha256 of `input`, in hex: a build's version and its inputs' content hash. */
+export const sha256Hex = (input: Uint8Array | string): string =>
+  new Bun.CryptoHasher("sha256").update(input).digest("hex")
 
 /**
  * Compile a client file and the relative modules it imports as the build
@@ -132,7 +134,6 @@ export const buildClientExtension = (
             }).pipe(
               Effect.map((code): ClientBuild => ({
                 code,
-                version: new Bun.CryptoHasher("sha256").update(code).digest("hex"),
                 inputs: Object.keys(result.metafile?.inputs ?? {}).map((input) =>
                   path.resolve(process.cwd(), input),
                 ),

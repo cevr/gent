@@ -23,10 +23,13 @@ import {
 } from "@gent/core/protocol"
 import {
   bindBunModules,
+  buildExtensionModule,
   extensionEntryModules,
-  fileVersion,
+  extensionModuleChanged,
   hasProjectScope,
   isProjectExtensionDirectoryTrusted,
+  makeModuleGraphs,
+  type ModuleGraphs,
   readDisabledExtensions,
   type RuntimeModuleSource,
 } from "@gent/core/host"
@@ -55,7 +58,12 @@ import {
   type WidgetSlot,
   decodeContributions,
 } from "./client-facets.js"
-import { bindModuleSource, buildClientExtension, type ClientBuildNames } from "../bun-adapter"
+import {
+  bindModuleSource,
+  buildClientExtension,
+  type ClientBuildNames,
+  sha256Hex,
+} from "../bun-adapter"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
 
@@ -888,89 +896,68 @@ const importBoundClientModule = (moduleId: string) => import(moduleId)
  * Bind the names every extension file reads (the two authoring entries and
  * `effect`) under their own names, and the client names under a prefix drawn
  * once per loader, so every build of the same files gives the same code and
- * the same version. Return the two steps for a client file: `build` compiles
+ * the same version. Return the two steps for a client file: `module` compiles
  * it and the relative modules it imports as the build compiles the shipped
- * ones (Solid JSX), rewriting each client name to its prefixed binding;
- * `importBuild` binds the output under a fresh prefixed name and imports it.
- * A bound name stays an import of the running module. The server root binds
- * the other `effect` modules the shipped extensions read.
+ * ones (Solid JSX), rewriting each client name to its prefixed binding, within
+ * the load timeout (the server's coherent build, `buildExtensionModule`, runs
+ * it); `importBuild` binds the output under a fresh prefixed name and imports
+ * it. A bound name stays an import of the running module. The server root
+ * binds the other `effect` modules the shipped extensions read.
  */
-const provideClientExtensionModules = Effect.gen(function* () {
-  const prefix = `gent-client-${(yield* Random.nextInt).toString(36)}${(yield* Random.nextInt).toString(36)}:`
-  const clientModuleId = (specifier: string) => `${prefix}${specifier}`
-  yield* bindBunModules(
-    new Map<string, RuntimeModuleSource>([
-      ...extensionEntryModules,
-      ...[...clientOnlyModules].map(([specifier, source]): [string, RuntimeModuleSource] => [
-        clientModuleId(specifier),
-        source,
+const provideClientExtensionModules = (timeout: Duration.Input) =>
+  Effect.gen(function* () {
+    const prefix = `gent-client-${(yield* Random.nextInt).toString(36)}${(yield* Random.nextInt).toString(36)}:`
+    const clientModuleId = (specifier: string) => `${prefix}${specifier}`
+    yield* bindBunModules(
+      new Map<string, RuntimeModuleSource>([
+        ...extensionEntryModules,
+        ...[...clientOnlyModules].map(([specifier, source]): [string, RuntimeModuleSource] => [
+          clientModuleId(specifier),
+          source,
+        ]),
       ]),
-    ]),
-  )
-  const names: ClientBuildNames = {
-    external: [...extensionEntryModules.keys(), `${prefix}*`],
-    rename: (specifier) =>
-      Option.map(
-        Option.liftPredicate(specifier, (name: string) => clientOnlyModules.has(name)),
-        clientModuleId,
-      ),
-    solidRuntime: clientModuleId("@opentui/solid"),
-  }
-  const imports = yield* Ref.make(0)
-  return {
-    build: (filePath: string) =>
-      buildClientExtension(filePath, names).pipe(
-        Effect.mapError(
-          (error) =>
-            new TuiExtensionImportError({
-              message: `Failed to build ${filePath}`,
-              cause: error.cause,
-            }),
-        ),
-      ),
-    importBuild: (filePath: string, code: string) =>
-      Effect.gen(function* () {
-        const name = clientModuleId(
-          `file:${filePath}#${yield* Ref.updateAndGet(imports, (n) => n + 1)}`,
-        )
-        yield* bindModuleSource(name, code)
-        return yield* Effect.tryPromise({
-          try: () => importBoundClientModule(name),
-          catch: (cause) =>
-            new TuiExtensionImportError({ message: `Failed to load ${filePath}`, cause }),
-        })
-      }),
-  }
-})
-
-type ClientModuleBuilder = Effect.Success<typeof provideClientExtensionModules>
-
-/** A file's stat stamp (`fileVersion`), or `missing` when it is gone. */
-const statStamp = (file: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    return yield* fs.stat(file).pipe(
-      Effect.map(fileVersion),
-      Effect.orElseSucceed(() => "missing"),
     )
-  })
-
-/** Each file's stat stamp. */
-const statAll = (files: Iterable<string>) =>
-  Effect.gen(function* () {
-    const stamps = new Map<string, string>()
-    for (const file of files) stamps.set(file, yield* statStamp(file))
-    return stamps
-  })
-
-/** Whether every file still has the stamp it had. */
-const unchanged = (stamps: ReadonlyMap<string, string>) =>
-  Effect.gen(function* () {
-    for (const [file, stamp] of stamps) {
-      if ((yield* statStamp(file)) !== stamp) return false
+    const names: ClientBuildNames = {
+      external: [...extensionEntryModules.keys(), `${prefix}*`],
+      rename: (specifier) =>
+        Option.map(
+          Option.liftPredicate(specifier, (name: string) => clientOnlyModules.has(name)),
+          clientModuleId,
+        ),
+      solidRuntime: clientModuleId("@opentui/solid"),
     }
-    return true
+    const imports = yield* Ref.make(0)
+    return {
+      module: {
+        bundle: (filePath: string) =>
+          buildClientExtension(filePath, names).pipe(
+            Effect.mapError((error) => ({ message: String(error.cause) })),
+            Effect.timeoutOrElse({
+              duration: timeout,
+              orElse: () =>
+                Effect.fail({
+                  message: `timed out after ${Duration.format(Duration.fromInputUnsafe(timeout))}`,
+                }),
+            }),
+          ),
+        hash: sha256Hex,
+      },
+      importBuild: (filePath: string, code: string) =>
+        Effect.gen(function* () {
+          const name = clientModuleId(
+            `file:${filePath}#${yield* Ref.updateAndGet(imports, (n) => n + 1)}`,
+          )
+          yield* bindModuleSource(name, code)
+          return yield* Effect.tryPromise({
+            try: () => importBoundClientModule(name),
+            catch: (cause) =>
+              new TuiExtensionImportError({ message: `Failed to load ${filePath}`, cause }),
+          })
+        }),
+    }
   })
+
+type ClientModuleBuilder = Effect.Success<ReturnType<typeof provideClientExtensionModules>>
 
 const LiveHandle = Schema.declare<LiveExtension>((value): value is LiveExtension =>
   Predicate.hasProperty(value, "lifetime"),
@@ -981,8 +968,9 @@ const ImportedHandle = Schema.declare<ImportedExtension>((value): value is Impor
 
 /**
  * What a load found for one discovered file: the extension it keeps (with
- * the failure of a new version that did not load, if one did not), or the
- * new version to set up.
+ * the failure of a new version that did not load, if one did not: the load
+ * reports it over the kept one, or alone when the kept one does not stay), or
+ * the new version to set up.
  */
 const FileOutcome = Schema.TaggedUnion({
   Keep: {
@@ -997,15 +985,21 @@ type FileOutcome = typeof FileOutcome.Type
 const keep = (live: LiveExtension): FileOutcome =>
   FileOutcome.cases.Keep.make({ live, failure: Option.none() })
 
-/**
- * One discovered file's outcome, and the stat of each file the last build of
- * it read, taken before that build, so a save during the build shows as a
- * change on the next look.
- */
+/** One discovered file's outcome. */
 interface FileResult {
   readonly filePath: string
   readonly outcome: Result.Result<FileOutcome, ClientExtensionFailure>
-  readonly stamps: ReadonlyMap<string, string>
+}
+
+/**
+ * A version of a file that failed to import or to set up, and why. The
+ * failure stands while the file builds to that version: a load does not
+ * import or set it up again, and reports the failure again, until the file
+ * builds to another version, is removed or its extension is disabled.
+ */
+interface FailedAttempt {
+  readonly version: string
+  readonly failure: ClientExtensionFailure
 }
 
 /** The failure of a new version, while the last good version runs on. */
@@ -1018,80 +1012,89 @@ const keptOver = (
 })
 
 /**
- * Build and import one discovered file, or keep its live extension: a file
- * whose stamps are unchanged is not read; one that builds to the same code is
- * not imported again. A build or import that fails keeps the live extension
- * of the same file.
+ * The failures of the new versions behind kept extensions: each over the
+ * kept one when it stays, or alone when the kept one is disabled or lost its
+ * id to another file. A disabled id's failure is not reported.
+ */
+const keptFailures = (
+  outcomes: ReadonlyArray<FileOutcome>,
+  staying: ReadonlySet<FileOutcome>,
+  disabled: ReadonlySet<string>,
+): ReadonlyArray<ClientExtensionFailure> =>
+  outcomes.flatMap((outcome) => {
+    if (outcome._tag !== "Keep" || Option.isNone(outcome.failure)) return []
+    if (staying.has(outcome)) return [keptOver(outcome.live, outcome.failure.value)]
+    if (disabled.has(outcome.failure.value.id)) return []
+    return [outcome.failure.value]
+  })
+
+/** A failed version's failure ends with its file, and with its disabled id. */
+const forgetEndedAttempts = (
+  attempts: Map<string, FailedAttempt>,
+  seen: ReadonlySet<string>,
+  disabled: ReadonlySet<string>,
+) => {
+  for (const [filePath, attempt] of attempts) {
+    if (!seen.has(filePath) || disabled.has(attempt.failure.id)) attempts.delete(filePath)
+  }
+}
+
+/**
+ * Build and import one discovered file, or keep its live extension. The
+ * build is the server's coherent build (`buildExtensionModule`): a file whose
+ * inputs' stats are unchanged is not read, and one that builds to the
+ * running version is not imported again. A version that failed before is not
+ * imported again either: its failure stands (`FailedAttempt`). A build or
+ * import that fails keeps the live extension of the same file.
  */
 const loadFile = (
   builder: ClientModuleBuilder,
+  graphs: ModuleGraphs,
+  attempts: Map<string, FailedAttempt>,
   entry: DiscoveredTuiExtension,
   previous: Option.Option<LiveExtension>,
-  seen: Option.Option<ReadonlyMap<string, string>>,
   timeout: Duration.Input,
 ): Effect.Effect<FileResult, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
-    if (Option.isSome(previous) && Option.isSome(seen) && (yield* unchanged(seen.value))) {
-      return {
-        filePath: entry.filePath,
-        outcome: Result.succeed(keep(previous.value)),
-        stamps: seen.value,
-      } satisfies FileResult
-    }
-    const before = yield* statAll([
-      entry.filePath,
-      ...Option.match(seen, { onNone: () => [], onSome: (stamps) => stamps.keys() }),
-    ])
-    const built = yield* builder.build(entry.filePath).pipe(
-      Effect.mapError((err) => ({
-        id: entry.filePath,
-        reason: `import failed: ${String(err.cause)}`,
-      })),
-      withinLoadTimeout(entry.filePath, "import", timeout),
-      Effect.result,
-    )
-    const stampsOf = (inputs: ReadonlyArray<string>) =>
-      Effect.gen(function* () {
-        const stamps = new Map<string, string>()
-        for (const input of [entry.filePath, ...inputs]) {
-          stamps.set(
-            input,
-            yield* Option.match(Option.fromUndefinedOr(before.get(input)), {
-              onNone: () => statStamp(input),
-              onSome: Effect.succeed,
-            }),
-          )
-        }
-        return stamps
-      })
-    const stamps = yield* stampsOf(
-      Result.match(built, { onSuccess: (build) => build.inputs, onFailure: () => [] }),
-    )
+    const built = yield* buildExtensionModule(entry.filePath, graphs, builder.module)
     const outcome = yield* Effect.gen(function* () {
-      const build = yield* Effect.fromResult(built)
-      if (Option.isSome(previous) && previous.value.version === build.version) {
+      const code = yield* Effect.fromResult(built.build).pipe(
+        Effect.mapError((error) => ({ id: entry.filePath, reason: `import failed: ${error}` })),
+      )
+      if (Option.isSome(previous) && previous.value.version === built.version) {
+        attempts.delete(entry.filePath)
         return keep(previous.value)
       }
-      const mod = yield* builder.importBuild(entry.filePath, build.code).pipe(
+      const attempt = Option.filter(
+        Option.fromUndefinedOr(attempts.get(entry.filePath)),
+        (failed) => failed.version === built.version,
+      )
+      if (Option.isSome(attempt)) return yield* Effect.fail(attempt.value.failure)
+      const mod = yield* builder.importBuild(entry.filePath, code).pipe(
         Effect.mapError((err) => ({
           id: entry.filePath,
           reason: `import failed: ${String(err.cause)}`,
         })),
         withinLoadTimeout(entry.filePath, "import", timeout),
+        Effect.tapError((failure) =>
+          Effect.sync(() => attempts.set(entry.filePath, { version: built.version, failure })),
+        ),
       )
       const candidate = Option.getOrElse(Option.fromNullishOr(mod.default), () => mod)
       if (!isExtensionClientModule(candidate)) {
-        return yield* Effect.fail({
+        const failure = {
           id: entry.filePath,
           reason: Option.getOrElse(clientModuleProblem(candidate), () => "invalid module shape"),
-        })
+        }
+        attempts.set(entry.filePath, { version: built.version, failure })
+        return yield* Effect.fail(failure)
       }
       return FileOutcome.cases.Fresh.make({
         imported: {
           module: candidate,
           scope: entry.scope,
           filePath: entry.filePath,
-          version: build.version,
+          version: built.version,
         },
       })
     }).pipe(
@@ -1104,14 +1107,12 @@ const loadFile = (
         Option.match(previous, {
           onNone: () => Effect.fail(failure),
           onSome: (live) =>
-            Effect.succeed(
-              FileOutcome.cases.Keep.make({ live, failure: Option.some(keptOver(live, failure)) }),
-            ),
+            Effect.succeed(FileOutcome.cases.Keep.make({ live, failure: Option.some(failure) })),
         }),
       ),
       Effect.result,
     )
-    return { filePath: entry.filePath, outcome, stamps } satisfies FileResult
+    return { filePath: entry.filePath, outcome } satisfies FileResult
   })
 
 /**
@@ -1191,11 +1192,15 @@ export const makeTuiExtensionLoader = (opts: {
       () => EXTENSION_LOAD_TIMEOUT,
     )
     const builtins = Option.getOrElse(Option.fromNullishOr(opts.builtins), () => [])
-    const builder = yield* provideClientExtensionModules
+    const builder = yield* provideClientExtensionModules(timeout)
     const permit = yield* Semaphore.make(1)
     let live = new Map<string, LiveExtension>()
-    /** Each discovered file of the last load, loaded or failed, with its stamps. */
-    let seen = new Map<string, ReadonlyMap<string, string>>()
+    /** Each discovered file's build, as the server keeps its own (`buildExtensionModule`). */
+    const graphs = makeModuleGraphs()
+    /** The version of each file that failed to import or set up, while it stands. */
+    const attempts = new Map<string, FailedAttempt>()
+    /** Each discovered file of the last load, loaded or failed. */
+    let seen: ReadonlySet<string> = new Set()
     let lastDisabled: ReadonlySet<string> = new Set()
 
     const load = Effect.gen(function* () {
@@ -1207,9 +1212,10 @@ export const makeTuiExtensionLoader = (opts: {
         (entry) =>
           loadFile(
             builder,
+            graphs,
+            attempts,
             entry,
             Option.fromUndefinedOr(live.get(entry.filePath)),
-            Option.fromUndefinedOr(seen.get(entry.filePath)),
             timeout,
           ),
         { concurrency: EXTENSION_IMPORT_CONCURRENCY },
@@ -1218,12 +1224,7 @@ export const makeTuiExtensionLoader = (opts: {
       const outcomes: Array<FileOutcome> = []
       for (const file of files) {
         if (Result.isFailure(file.outcome)) importFailures.push(file.outcome.failure)
-        else {
-          outcomes.push(file.outcome.success)
-          if (file.outcome.success._tag === "Keep") {
-            Option.map(file.outcome.success.failure, (failure) => importFailures.push(failure))
-          }
-        }
+        else outcomes.push(file.outcome.success)
       }
       const builtinOutcomes = builtins.map((module): FileOutcome => {
         const previous = Option.fromUndefinedOr(live.get(builtinKey(module)))
@@ -1244,6 +1245,13 @@ export const makeTuiExtensionLoader = (opts: {
       const next = new Map<string, LiveExtension>()
       const setUp = new Set<string>()
       const setupFailures: Array<ClientExtensionFailure> = []
+      importFailures.push(
+        ...keptFailures(
+          candidates.map(({ outcome }) => outcome),
+          new Set(enabled.unique.map(({ outcome }) => outcome)),
+          disabled,
+        ),
+      )
       for (const { outcome } of enabled.unique) {
         if (outcome._tag === "Keep") {
           next.set(outcome.live.loaded.filePath, outcome.live)
@@ -1254,7 +1262,14 @@ export const makeTuiExtensionLoader = (opts: {
         if (Result.isSuccess(set)) {
           next.set(outcome.imported.filePath, set.success)
           setUp.add(set.success.loaded.id)
-        } else if (Option.isSome(previous)) {
+          attempts.delete(outcome.imported.filePath)
+          continue
+        }
+        attempts.set(outcome.imported.filePath, {
+          version: outcome.imported.version,
+          failure: set.failure,
+        })
+        if (Option.isSome(previous)) {
           next.set(outcome.imported.filePath, previous.value)
           setupFailures.push(keptOver(previous.value, set.failure))
         } else setupFailures.push(set.failure)
@@ -1262,7 +1277,8 @@ export const makeTuiExtensionLoader = (opts: {
       const kept = new Set(next.values())
       const retired = [...live.values()].filter((ext) => !kept.has(ext))
       live = next
-      seen = new Map(files.map((file) => [file.filePath, file.stamps]))
+      seen = new Set(files.map((file) => file.filePath))
+      forgetEndedAttempts(attempts, seen, disabled)
       lastDisabled = disabled
       return {
         resolved: resolveTuiExtensions(
@@ -1283,8 +1299,8 @@ export const makeTuiExtensionLoader = (opts: {
       const discovered = yield* discoverTuiExtensions(opts)
       if (discovered.length !== seen.size) return true
       for (const entry of discovered) {
-        const stamps = Option.fromUndefinedOr(seen.get(entry.filePath))
-        if (Option.isNone(stamps) || !(yield* unchanged(stamps.value))) return true
+        if (!seen.has(entry.filePath)) return true
+        if (yield* extensionModuleChanged(entry.filePath, graphs)) return true
       }
       return false
     })

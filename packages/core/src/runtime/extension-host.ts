@@ -102,7 +102,12 @@ import type {
   ModelRouterContribution,
 } from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
-import { GentPlatform, type RuntimeModuleSource, SERVED_MODULE_QUERY } from "./gent-platform.js"
+import {
+  GentPlatform,
+  type ModuleBundle,
+  type RuntimeModuleSource,
+  SERVED_MODULE_QUERY,
+} from "./gent-platform.js"
 import {
   type ConfigLoadError,
   ConfigService,
@@ -1274,7 +1279,7 @@ const isExtensionFile = (entry: string): boolean =>
 
 /**
  * An extension file found on disk, its version, and its build: one module of
- * the file and every module it imports by a relative path (`buildEntry`).
+ * the file and every module it imports by a relative path (`buildExtensionModule`).
  */
 interface DiscoveredFile {
   readonly path: string
@@ -1298,13 +1303,36 @@ interface ModuleGraph {
 }
 
 /**
- * The module graphs of the extension entries this process built, by entry
- * path. The session profile cache owns one for the process, so a stat of
- * each input is all an unchanged extension costs a resolve. A failed build
- * is not kept: it builds again on the next resolve, so a relative module
- * created later is found.
+ * The module graphs of the extension entries a loader built, by entry path:
+ * the last good build of each, and the stats of the inputs a failed build
+ * was known to read (the entry and the modules of its last good build),
+ * taken before that build. The server's session profile cache owns one for
+ * the process and the client loader one for its runtime, so a stat of each
+ * input is all an unchanged extension costs a load.
+ *
+ * A failed build keeps the last good graph and the modules it knew: a
+ * failure in a module the entry imports is fixed in that module, so its
+ * stat must still be looked at. A failed build is never reused: the next
+ * build of the entry runs the bundler again, so a relative module created
+ * later is found.
  */
-type ModuleGraphs = Map<string, ModuleGraph>
+export interface ModuleGraphs {
+  readonly good: Map<string, ModuleGraph>
+  readonly failed: Map<string, ReadonlyMap<string, string>>
+}
+
+/** No entry built yet. */
+export const makeModuleGraphs = (): ModuleGraphs => ({ good: new Map(), failed: new Map() })
+
+/**
+ * What builds an extension entry into one module: the bundler and the hash.
+ * The server takes both from `GentPlatform`; a client brings its own bundler,
+ * which binds its own module names.
+ */
+interface ModuleBuilder<R> {
+  readonly bundle: (entry: string) => Effect.Effect<ModuleBundle, { readonly message: string }, R>
+  readonly hash: (input: Uint8Array | string) => string
+}
 
 /** A file's stat stamp, or `missing` when it is gone. */
 const statStamp = (fs: FileSystem.FileSystem, file: string) =>
@@ -1313,41 +1341,55 @@ const statStamp = (fs: FileSystem.FileSystem, file: string) =>
     Effect.orElseSucceed(() => "missing"),
   )
 
+/** Each file's stat stamp. */
+const statAll = Effect.fn("ExtensionLoader.statInputs")(function* (
+  fs: FileSystem.FileSystem,
+  files: Iterable<string>,
+) {
+  const stamps = new Map<string, string>()
+  for (const input of files) stamps.set(input, yield* statStamp(fs, input))
+  return stamps
+})
+
+const sameStamps = (left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>) =>
+  left.size === right.size && [...left].every(([input, stamp]) => right.get(input) === stamp)
+
 /**
  * The content hash of a build's inputs: each input's path and bytes, in path
  * order. A file that cannot be read hashes as missing, so it never matches.
  */
 const contentHash = Effect.fn("ExtensionLoader.contentHash")(function* (
+  fs: FileSystem.FileSystem,
+  hash: (input: Uint8Array | string) => string,
   inputs: ReadonlyArray<string>,
 ) {
-  const fs = yield* FileSystem.FileSystem
-  const platform = yield* GentPlatform
   const parts: string[] = []
   for (const input of inputs.toSorted(Order.String)) {
     const bytes = yield* fs.readFile(input).pipe(Effect.option)
     const digest = Option.match(bytes, {
       onNone: () => "missing",
-      onSome: (content) => platform.hash("sha256", content),
+      onSome: (content) => hash(content),
     })
     parts.push(`${input}\u0000${digest}`)
   }
-  return platform.hash("sha256", parts.join("\u0000"))
+  return hash(parts.join("\u0000"))
 })
 
 /**
- * How many times one resolve builds an entry before it gives up on a
- * coherent build: each try after the first follows an import the last try
- * found, or a save during the last try.
+ * How many times one load builds an entry before it gives up on a coherent
+ * build: each try after the first follows an import the last try found, or a
+ * save during the last try.
  */
 const COHERENT_BUILD_TRIES = 3
 
 /**
- * Build an extension entry into one module, or reuse its last build. Each
- * resolve stats the entry and the modules its last build read: no stat
- * changed, the last build stands. A stat changed but no byte did (a save of
- * the same bytes, a `touch`), the last build stands and the new stats are
- * kept. Otherwise the entry builds again. The version is the built module's
- * hash, so two builds of the same code share one version.
+ * Build an extension entry into one module, or reuse its last good build.
+ * Each load stats the entry and the modules its last good build read: no
+ * stat changed, the last build stands. A stat changed but no byte did (a save
+ * of the same bytes, a `touch`, a broken edit undone), the last build stands
+ * and the new stats are kept. Otherwise the entry builds again. The version
+ * is the built module's hash, so two builds of the same code share one
+ * version; a failed build's version is `!` and its error's hash.
  *
  * A build is kept only when it is coherent: it read the files whose stats
  * and bytes were taken before it, and neither changed while it ran. A save
@@ -1356,73 +1398,85 @@ const COHERENT_BUILD_TRIES = 3
  * a new mtime. A build that read a module not known before it, or that a save
  * overlapped, builds again with the inputs it found, so the first build of
  * an entry with relative imports builds twice. A build still not coherent
- * after `COHERENT_BUILD_TRIES` runs this resolve and is not kept, so the
- * next resolve builds again.
+ * after `COHERENT_BUILD_TRIES` runs this load and is not kept, so the next
+ * load builds again.
  */
-const buildEntry = Effect.fn("ExtensionLoader.buildEntry")(function* (
+export const buildExtensionModule = Effect.fn("ExtensionLoader.buildModule")(function* <R>(
   entry: string,
   graphs: ModuleGraphs,
+  builder: ModuleBuilder<R>,
 ) {
   const fs = yield* FileSystem.FileSystem
-  const platform = yield* GentPlatform
-  const known = Option.fromNullishOr(graphs.get(entry))
+  const known = Option.fromNullishOr(graphs.good.get(entry))
   let inputs = Option.match(known, {
     onNone: () => [entry],
     onSome: (graph) => [...graph.stamps.keys()],
   })
-  const statAll = Effect.fn("ExtensionLoader.statInputs")(function* (files: ReadonlyArray<string>) {
-    const stamps = new Map<string, string>()
-    for (const input of files) stamps.set(input, yield* statStamp(fs, input))
-    return stamps
-  })
-  const sameStamps = (left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>) =>
-    left.size === right.size && [...left].every(([input, stamp]) => right.get(input) === stamp)
-  let stamps = yield* statAll(inputs)
+  let stamps = yield* statAll(fs, inputs)
   // An unchanged stat reads no input: only a changed one is hashed.
   if (Option.isSome(known) && sameStamps(stamps, known.value.stamps)) {
+    graphs.failed.delete(entry)
     return { version: known.value.version, build: Result.succeed(known.value.code) }
   }
-  let content = yield* contentHash(inputs)
+  let content = yield* contentHash(fs, builder.hash, inputs)
   if (Option.isSome(known) && content === known.value.content) {
-    graphs.set(entry, { ...known.value, stamps })
+    graphs.good.set(entry, { ...known.value, stamps })
+    graphs.failed.delete(entry)
     return { version: known.value.version, build: Result.succeed(known.value.code) }
   }
   for (let attempt = 1; ; attempt++) {
-    const built = yield* platform.bundleModule(entry).pipe(Effect.result)
+    const built = yield* builder.bundle(entry).pipe(Effect.result)
     if (Result.isFailure(built)) {
       const error = `Failed to build ${entry}: ${built.failure.message}`
-      graphs.delete(entry)
-      return {
-        version: `!${platform.hash("sha256", error)}`,
-        build: Result.fail(error),
-      }
+      // The stats of every module the entry was known to read, so a fix to
+      // any of them is a change to look at.
+      graphs.failed.set(entry, stamps)
+      return { version: `!${builder.hash(error)}`, build: Result.fail(error) }
     }
-    const version = platform.hash("sha256", built.success.code)
+    const version = builder.hash(built.success.code)
     const read = new Set(built.success.inputs)
     const sameInputs = read.size === inputs.length && inputs.every((input) => read.has(input))
     // The stats and bytes after the build match the ones before it, so no
     // save landed while it read them.
-    const statsAfter = yield* statAll(built.success.inputs)
-    const after = yield* contentHash(built.success.inputs)
+    const statsAfter = yield* statAll(fs, built.success.inputs)
+    const after = yield* contentHash(fs, builder.hash, built.success.inputs)
     if (sameInputs && sameStamps(statsAfter, stamps) && after === content) {
-      const graph: ModuleGraph = { stamps, content, version, code: built.success.code }
-      graphs.set(entry, graph)
-      return { version, build: Result.succeed(graph.code) }
+      graphs.good.set(entry, { stamps, content, version, code: built.success.code })
+      graphs.failed.delete(entry)
+      return { version, build: Result.succeed(built.success.code) }
     }
     if (attempt >= COHERENT_BUILD_TRIES) {
-      graphs.delete(entry)
+      graphs.good.delete(entry)
+      graphs.failed.delete(entry)
       return { version, build: Result.succeed(built.success.code) }
     }
     inputs = [...built.success.inputs]
-    stamps = yield* statAll(inputs)
-    content = yield* contentHash(inputs)
+    stamps = yield* statAll(fs, inputs)
+    content = yield* contentHash(fs, builder.hash, inputs)
   }
 })
 
 /**
+ * Whether the next build of an entry may differ from its last: a file its
+ * last build read, or a failed build was known to read, has another stat, or
+ * the entry has no build to compare. Reads stats only.
+ */
+export const extensionModuleChanged = Effect.fn("ExtensionLoader.moduleChanged")(function* (
+  entry: string,
+  graphs: ModuleGraphs,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const known = Option.orElse(Option.fromNullishOr(graphs.failed.get(entry)), () =>
+    Option.map(Option.fromNullishOr(graphs.good.get(entry)), (graph) => graph.stamps),
+  )
+  if (Option.isNone(known)) return true
+  return !sameStamps(yield* statAll(fs, known.value.keys()), known.value)
+})
+
+/**
  * The extension files in a directory, sorted by path, each built
- * (`buildEntry`) when `graphs` is given, and the entries that could not be
- * read (a dangling symlink, a permission error). A directory whose code may
+ * (`buildExtensionModule`) when `graphs` is given, and the entries that could
+ * not be read (a dangling symlink, a permission error). A directory whose code may
  * not load (an untrusted project) is listed, not built. It reports nothing;
  * `discoverDir` turns the unreadable entries into failures and the loader the
  * failed builds.
@@ -1433,6 +1487,7 @@ const scanDir = Effect.fn("ExtensionLoader.scanDir")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  const platform = yield* GentPlatform
   const paths: DiscoveredFile[] = []
   const unreadable: Array<{ readonly path: string; readonly error: PlatformError.PlatformError }> =
     []
@@ -1477,7 +1532,13 @@ const scanDir = Effect.fn("ExtensionLoader.scanDir")(function* (
       paths.push({ path: entryPath, version: "unbuilt", build: Result.fail("not built") })
       continue
     }
-    paths.push({ path: entryPath, ...(yield* buildEntry(entryPath, graphs.value)) })
+    paths.push({
+      path: entryPath,
+      ...(yield* buildExtensionModule(entryPath, graphs.value, {
+        bundle: platform.bundleModule,
+        hash: (input) => platform.hash("sha256", input),
+      })),
+    })
   }
 
   // Code-unit order, not the locale's: load order decides service conflicts.
@@ -1620,7 +1681,7 @@ const provideExtensionModules: Effect.Effect<void, never, GentPlatform> = GentPl
 const importExtensionModule = (filePath: string) => import(filePath)
 
 /**
- * Load a single extension from its build (`buildEntry`). The platform serves
+ * Load a single extension from its build (`buildExtensionModule`). The platform serves
  * the built module at the file's path with its version in the query, so a
  * new version is imported afresh and the same version comes from Bun's module
  * cache: its top level runs once. The build holds every module the file
@@ -2576,7 +2637,7 @@ export class SessionProfileCache extends Context.Service<
         const reloads = new Map<string, Map<string, number>>()
         // Each extension entry's last good build, shared by every place: an
         // unchanged extension costs a resolve a stat of each file it built from.
-        const graphs: ModuleGraphs = new Map()
+        const graphs = makeModuleGraphs()
         // The last version of each user and project extension of a place
         // that ran, by place, scope and source path. A newer version that
         // fails runs this one in its place (`loadRuntimeProfileDeclarations`,

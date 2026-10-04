@@ -1941,6 +1941,9 @@ const reloadFixture = Effect.gen(function* () {
     disabled,
     write: (name: string, text: string) => fs.writeFileString(path.join(userDir, name), text),
     load: inRuntime(runtime, loader.load),
+    /** A load whose file reads go through `wrap`, so a save can land inside it. */
+    loadWith: (wrap: (live: FileSystem.FileSystem) => FileSystem.FileSystem) =>
+      inRuntime(runtime, loader.load.pipe(Effect.updateService(FileSystem.FileSystem, wrap))),
     stale: inRuntime(runtime, loader.stale),
     readLog: fs
       .readFileString(log)
@@ -2080,5 +2083,105 @@ export default { id: "@test/logged", setup: Effect.fail(new Error("setup refused
       expect(yield* fixture.stale).toBe(false)
       expect(yield* fixture.readLog).toEqual(["setup:v1"])
     }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a fix to a broken module the file imports makes the loader stale, and the reload builds it",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        yield* fixture.write("_lib/label.ts", `export const label = "first"\n`)
+        yield* fixture.write(
+          "logged.client.ts",
+          loggedModule(fixture.log, "v1", { import: 'import { label } from "./_lib/label"' }),
+        )
+        expect(commandIds(yield* fixture.load)).toEqual(["logged-v1-first"])
+        yield* fixture.write("_lib/label.ts", `export const label = {{ broken\n`)
+        expect(yield* fixture.stale).toBe(true)
+        const broken = yield* fixture.load
+        expect(commandIds(broken)).toEqual(["logged-v1-first"])
+        expect(broken.resolved.failures[0]?.reason).toMatch(/^import failed: .* still runs$/s)
+        expect(yield* fixture.stale).toBe(false)
+        yield* fixture.write("_lib/label.ts", `export const label = "fixed"\n`)
+        expect(yield* fixture.stale).toBe(true)
+        const fixed = yield* fixture.load
+        expect(commandIds(fixed)).toEqual(["logged-v1-fixed"])
+        expect(fixed.resolved.failures).toEqual([])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  // Bun reads a module the file imports, then a save lands before the loader
+  // looks at that module: the build holds the old bytes, so it is no build
+  // of the files as they are.
+  it.scopedLive(
+    "a save to a module the first build finds, made as the build ends, reaches the load",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        const fs = yield* FileSystem.FileSystem
+        const label = fixture.file("_lib/label.ts")
+        yield* fixture.write("_lib/label.ts", `export const label = "first"\n`)
+        yield* fixture.write(
+          "logged.client.ts",
+          loggedModule(fixture.log, "v1", { import: 'import { label } from "./_lib/label"' }),
+        )
+        const saved = yield* Ref.make(false)
+        const saveOnFirstLook = (live: FileSystem.FileSystem): FileSystem.FileSystem => ({
+          ...live,
+          stat: (file) =>
+            Effect.gen(function* () {
+              if (file === label && !(yield* Ref.getAndSet(saved, true))) {
+                yield* fs.writeFileString(label, `export const label = "second!"\n`)
+              }
+              return yield* live.stat(file)
+            }),
+        })
+        yield* fixture.loadWith(saveOnFirstLook)
+        expect(yield* Ref.get(saved)).toBe(true)
+        expect(commandIds(yield* fixture.load)).toEqual(["logged-v1-second!"])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a new version that failed stays reported over reloads, until a fix, a removal or a disable",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        const fs = yield* FileSystem.FileSystem
+        const refused = `import { appendFileSync } from "node:fs"
+import { Effect } from "effect"
+export default {
+  id: "@test/logged",
+  setup: Effect.suspend(() => {
+    appendFileSync(${encode(fixture.log)}, "refused\\n")
+    return Effect.fail(new Error("setup refused"))
+  }),
+}`
+        const reasons = (load: TuiExtensionLoad) =>
+          load.resolved.failures.map((failure) => failure.reason)
+        yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+        yield* fixture.load
+        yield* fixture.write("logged.client.ts", refused)
+        const first = yield* fixture.load
+        expect(reasons(first)).toEqual([expect.stringMatching(/^setup failed: .* still runs$/)])
+        // An unchanged reload reports it again, and runs the refused setup no more.
+        const again = yield* fixture.load
+        expect(commandIds(again)).toEqual(["logged-v1-plain"])
+        expect(reasons(again)).toEqual(reasons(first))
+        expect(yield* fixture.readLog).toEqual(["setup:v1", "refused"])
+        // A disable ends it; an enable tries the file again.
+        yield* Ref.set(fixture.disabled, ["@test/logged"])
+        const disabled = yield* fixture.load
+        expect(commandIds(disabled)).toEqual([])
+        expect(reasons(disabled)).toEqual([])
+        yield* Ref.set(fixture.disabled, [])
+        const enabled = yield* fixture.load
+        expect(reasons(enabled)).toEqual(["setup failed: Error: setup refused"])
+        expect(reasons(yield* fixture.load)).toEqual(["setup failed: Error: setup refused"])
+        // A removal ends it.
+        yield* fs.remove(fixture.file("logged.client.ts"))
+        expect(reasons(yield* fixture.load)).toEqual([])
+        expect(yield* fixture.readLog).toEqual(["setup:v1", "refused", "refused"])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
   )
 })

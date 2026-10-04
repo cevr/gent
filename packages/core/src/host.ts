@@ -12,12 +12,17 @@ export {
 } from "./runtime/gent-platform.js"
 export { bindBunModules, BunPlatformLive } from "./runtime/gent-platform-bun.js"
 export {
-  fileVersion,
   hasProjectScope,
   isProjectExtensionDirectoryTrusted,
   readDisabledExtensions,
 } from "./runtime/config.js"
-export { extensionEntryModules } from "./runtime/extension-host.js"
+export {
+  buildExtensionModule,
+  extensionEntryModules,
+  extensionModuleChanged,
+  makeModuleGraphs,
+  type ModuleGraphs,
+} from "./runtime/extension-host.js"
 export { ModelRegistry, ModelResolver, ScriptedLanguageModel } from "./runtime/provider.js"
 export { BranchStorage, MessageStorage, SessionStorage } from "./storage/storage.js"
 export {

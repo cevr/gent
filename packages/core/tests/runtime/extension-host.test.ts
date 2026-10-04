@@ -81,6 +81,7 @@ import {
   setupExtensions,
   validateLoadedExtensions,
   loadRuntimeProfileDeclarations,
+  makeModuleGraphs,
   scanRuntimeProfileExtensions,
   type RuntimeProfileInputs,
 } from "../../src/runtime/extension-host"
@@ -2639,7 +2640,7 @@ const fsLayer = Layer.provideMerge(
  */
 const discoverProfileExtensions = (dirs: { readonly home: string; readonly cwd: string }) =>
   Effect.gen(function* () {
-    const scan = yield* scanRuntimeProfileExtensions(dirs, new Map())
+    const scan = yield* scanRuntimeProfileExtensions(dirs, makeModuleGraphs())
     const declarations = yield* loadRuntimeProfileDeclarations(
       { ...dirs, platform: "test", extensions: [] },
       scan,
@@ -6348,7 +6349,7 @@ describe("live Profile", () => {
         }
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs, new Map()),
+          yield* scanRuntimeProfileExtensions(inputs, makeModuleGraphs()),
         )
         expect(events).toEqual([])
         expect(declarations.extensionDeclarations.failed).toContainEqual(
@@ -6398,7 +6399,7 @@ describe("live Profile", () => {
 
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs, new Map()),
+          yield* scanRuntimeProfileExtensions(inputs, makeModuleGraphs()),
         )
         expect(declarations.extensionDeclarations.failed).toEqual([
           expect.objectContaining({
@@ -6423,7 +6424,7 @@ describe("live Profile", () => {
         // A disabled id silences its file.
         const quiet = yield* loadRuntimeProfileDeclarations(
           { ...inputs, disabledExtensions: ["broken", "folder-broken", "local"] },
-          yield* scanRuntimeProfileExtensions(inputs, new Map()),
+          yield* scanRuntimeProfileExtensions(inputs, makeModuleGraphs()),
         )
         expect(quiet.extensionDeclarations.failed).toEqual([])
 
