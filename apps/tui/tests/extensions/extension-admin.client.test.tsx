@@ -78,7 +78,7 @@ describe("extensions pane rows", () => {
 })
 
 /** The pane's requests as the server answers them, each one recorded. */
-const paneServer = () => {
+const paneServer = (extensions: ReadonlyArray<ExtensionStatus> = statuses) => {
   const requests: Array<{ readonly capabilityId: string; readonly input: unknown }> = []
   let reloads = 0
   return {
@@ -95,7 +95,7 @@ const paneServer = () => {
           if (request.capabilityId === "extensions.pane.reload") {
             detail = "Set @user/notes up again; the next turn runs the new setup."
           }
-          return { detail, extensions: statuses }
+          return { detail, extensions }
         }),
       shell: {
         pane: makePaneSlot(),
@@ -108,17 +108,21 @@ const paneServer = () => {
 }
 
 /** The pane as the extension contributes it, open, at `width` columns. */
-const openPane = (width: number) =>
+const openPane = (
+  width: number,
+  extensions: ReadonlyArray<ExtensionStatus> = statuses,
+  height = 30,
+) =>
   Effect.gen(function* () {
-    const server = paneServer()
+    const server = paneServer(extensions)
     const contributions = yield* provideClientServices(extensionAdminClient.setup, server.options)
     const command = Option.getOrThrow(Option.fromUndefinedOr(contributions.commands?.[0]))
     const widget = Option.getOrThrow(Option.fromUndefinedOr(contributions.widgets?.[0]))
     expect(command.slash).toBe("extensions")
     const Pane = widget.component
-    const setup = yield* renderScoped(() => <Pane />, { width, height: 30 })
+    const setup = yield* renderScoped(() => <Pane />, { width, height })
     command.onSelect()
-    yield* waitForFrame(setup, (frame) => frame.includes("@project/off"), "the extensions pane")
+    yield* waitForFrame(setup, (frame) => frame.includes("Extensions ·"), "the extensions pane")
     return { setup, server }
   })
 
@@ -179,5 +183,28 @@ describe("extensions pane", () => {
       setup.resize(120, 30)
       yield* waitForFrame(setup, (text) => text.includes("0123456789ab"), "the wide row")
     }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "a failed extension past the first screen of rows opens in view, and stays in view as the terminal shortens",
+    () =>
+      Effect.gen(function* () {
+        const builtins = Array.from({ length: 23 }, (_, index): ExtensionStatus => ({
+          ...builtin,
+          id: `@gent/builtin-${String(index).padStart(2, "0")}`,
+        }))
+        const { setup } = yield* openPane(120, [...builtins, reloadFailed, disabled], 20)
+        yield* waitForFrame(
+          setup,
+          (text) => text.includes("@user/notes") && text.includes("new version failed"),
+          "the failed row in view",
+        )
+        setup.resize(120, 12)
+        yield* waitForFrame(
+          setup,
+          (text) => text.includes("@user/notes  ") && !text.includes("builtin-00"),
+          "the failed row in view on a short terminal",
+        )
+      }).pipe(Effect.timeout("10 seconds")),
   )
 })

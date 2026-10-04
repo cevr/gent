@@ -70,12 +70,13 @@ const SCROLL_SYNC_INTERVAL_MS = 30
 
 /**
  * Keeps the row with the selected id in the scrollbox's viewport, scrolling
- * the least that shows it. The scrollbox is absent before it attaches and
- * after cleanup.
+ * the least that shows it, when the selection or the viewport's rows change.
+ * The scrollbox is absent before it attaches and after cleanup.
  */
 function useScrollSync(
   selectedId: Accessor<string>,
   getRef: () => Option.Option<ScrollBoxRenderable>,
+  viewportRows: Accessor<Option.Option<number>>,
 ) {
   const renderer = useRenderer()
 
@@ -101,6 +102,8 @@ function useScrollSync(
 
   createEffect(() => {
     const id = selectedId()
+    // Read for its change only: a viewport that shrank can hide the row.
+    viewportRows()
     let fiber = Option.none<Fiber.Fiber<void>>()
     const afterLayout = () => {
       fiber = Option.some(
@@ -1370,11 +1373,6 @@ export function SelectList<A>(props: SelectListProps<A>) {
     }),
   )
 
-  useScrollSync(
-    () => `${props.id}-row-${state().selectedIndex}`,
-    () => scrollRef,
-  )
-
   // Report the cursor, closed panes included: a pane that fetches for the
   // selected row has to be told to stop when it closes. A pane that unmounts
   // instead of closing is covered by the cleanup above.
@@ -1490,6 +1488,13 @@ export function SelectList<A>(props: SelectListProps<A>) {
     required: 1,
   })
   const bodyRows = usePickerBody(lines)
+  // The frame's rows can change after the cursor settles (a note row, a
+  // squeezed dock, a resize): the cursor's row is kept in view at each.
+  useScrollSync(
+    () => `${props.id}-row-${state().selectedIndex}`,
+    () => scrollRef,
+    bodyRows,
+  )
   const fits = (needed: number) =>
     Option.match(bodyRows(), {
       onNone: () => true,
