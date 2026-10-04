@@ -207,7 +207,12 @@ a committed row, which takes a full-width row's last cell (a table's right
 border). A whole item whose highlight does not settle, and every whole item
 at exit, commits as plain text (`PlainHistoryContext`); the plain layout has
 other rows, so rows of an item the live view shows in part commit as drawn. Closing the palette or a
-picker replays nothing, so the shell's lines above gent stay. A replay (a
+picker replays nothing, so the shell's lines above gent stay. The region
+takes back the rows it left, and after the return's first frame
+(`afterReturnFrame`) the rows the footer and the tail want: the tail keeps its
+measure behind an overlay, so a turn that ended there shows its last rows. A
+region that left from the screen's top row starts there again
+(`resetSplitFooterForReplay`). A replay (a
 resize, a disclosure change, an item changed in history, `/clear`, another
 session or branch) writes history again, so its reset clears the terminal's
 saved lines first (`resetHistory`): the old copy would show each row twice.

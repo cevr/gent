@@ -3282,6 +3282,143 @@ describe("native transcript rows under the footer", () => {
     15_000,
   )
 
+  // A short session's region starts on the screen's top row. A picker draws
+  // on the alternate screen; its return gives the region back on that row,
+  // as it was. A region put a row lower, or at the bottom rows the picker's
+  // screen mode pinned, leaves its old rows on screen above it, and the
+  // rows of the next turn go where the terminal does not show them.
+  it.scopedLive(
+    "a picker that closes over a short session gives the region back on the screen's top row",
+    () =>
+      Effect.gen(function* () {
+        const [items, setItems] = createSignal<ListMessage[]>([
+          clientPrompt("ask", "FIRST-ASK"),
+          assistant("short", "SHORT-ANSWER"),
+        ])
+        const [footer, setFooter] = createSignal(3)
+        const [paneOpen, setPaneOpen] = createSignal(false)
+        const [overlayOpen, setOverlayOpen] = createSignal(false)
+        let screen = Option.none<CliRenderer>()
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items,
+              streaming: () => false,
+              footer,
+              paneOpen,
+              overlayOpen,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+              },
+            }),
+          { width: 60, height: 30 },
+        )
+        yield* waitForFrame(setup, (next) => next.includes("SHORT-ANSWER"), "the short session")
+        const renderer = Option.getOrThrow(screen)
+        const flush = Effect.promise(() => setup.flush())
+        yield* flush
+        const rowsAbove = () => Schema.decodeUnknownSync(RegionPlace)(renderer).renderOffset
+        const regionRows = renderer.footerHeight
+        expect(rowsAbove()).toBe(0)
+        expect(rowsUnderRegion(renderer)).toBeGreaterThan(0)
+        // The command suggestions grow the footer, then the picker opens.
+        batch(() => {
+          setPaneOpen(true)
+          setFooter(9)
+        })
+        yield* flush
+        yield* flush
+        setOverlayOpen(true)
+        yield* flush
+        yield* flush
+        // The picker closes; the footer's next measure is its base again.
+        batch(() => {
+          setPaneOpen(false)
+          setOverlayOpen(false)
+        })
+        yield* flush
+        setFooter(3)
+        yield* flush
+        yield* flush
+        expect([rowsAbove(), renderer.footerHeight]).toEqual([0, regionRows])
+        // The next turn grows the region down from the same top row.
+        setItems([
+          ...items(),
+          clientPrompt("next", "NEXT-ASK"),
+          assistant("turn", Array.from({ length: 6 }, (_, at) => `TURN-${at + 1}`).join("\n\n")),
+        ])
+        const frame = yield* waitForFrame(setup, (next) => next.includes("TURN-6"), "the turn")
+        yield* flush
+        expect(rowsAbove()).toBe(0)
+        for (const text of ["FIRST-ASK", "SHORT-ANSWER", "NEXT-ASK", "TURN-1", "TURN-6"]) {
+          expect([text, frame.includes(text)]).toEqual([text, true])
+        }
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // A slash command opens a picker while a turn runs, and the turn ends
+  // behind it. Once the picker closes, the region takes the tail's rows:
+  // the turn's last rows show under its first ones.
+  it.scopedLive(
+    "a turn that ends behind a picker shows its last rows once the picker closes",
+    () =>
+      Effect.gen(function* () {
+        const turn = (rows: number) =>
+          assistant("turn", Array.from({ length: rows }, (_, at) => `TURN-${at + 1}`).join("\n\n"))
+        const [items, setItems] = createSignal<ListMessage[]>([
+          clientPrompt("ask", "FIRST-ASK"),
+          { ...turn(2), draft: true },
+        ])
+        const [streaming, setStreaming] = createSignal(true)
+        const [footer, setFooter] = createSignal(5)
+        const [overlayOpen, setOverlayOpen] = createSignal(false)
+        let screen = Option.none<CliRenderer>()
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items,
+              streaming,
+              footer,
+              paneOpen: () => false,
+              overlayOpen,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+              },
+            }),
+          { width: 60, height: 30 },
+        )
+        yield* waitForFrame(setup, (next) => next.includes("TURN-2"), "the running turn")
+        const renderer = Option.getOrThrow(screen)
+        const flush = Effect.promise(() => setup.flush())
+        const rowsAbove = () => Schema.decodeUnknownSync(RegionPlace)(renderer).renderOffset
+        yield* flush
+        setOverlayOpen(true)
+        yield* flush
+        yield* flush
+        // The turn ends while the picker holds the screen.
+        batch(() => {
+          setItems([clientPrompt("ask", "FIRST-ASK"), turn(8)])
+          setStreaming(false)
+          setFooter(3)
+        })
+        yield* flush
+        yield* flush
+        setOverlayOpen(false)
+        yield* flush
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => next.includes("TURN-8") && next.includes("COMPOSER"),
+          "the turn's last rows",
+        )
+        expect(rowsAbove()).toBe(0)
+        for (const text of ["FIRST-ASK", "TURN-1", "TURN-8"]) {
+          expect([text, frame.includes(text)]).toEqual([text, true])
+        }
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
   it.scopedLive(
     "a turn's final items reach history while it runs, once the tail holds more than the region shows",
     () =>
