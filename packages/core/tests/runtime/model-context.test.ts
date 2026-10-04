@@ -336,12 +336,12 @@ describe("projectModelContext", () => {
     const imageCost = (cost: Option.Option<ImageCost>, width: number, height: number) =>
       estimateTokens([holding("ToolImage", width, height)], cost) -
       estimateTokens([holding("ToolImagX", width, height)], cost)
-    // Anthropic: w*h/750, up to the 1,600 a scaled image costs.
-    const pixels = Option.some(
-      ImageCost.cases.Pixels.make({ pixelsPerToken: 750, maxTokens: 1_600 }),
-    )
+    // Anthropic: w*h/750 with no cap, so a high-resolution model's cost is bounded:
+    // Anthropic counts 3,888 for a 2000x1500 image on Claude 4.7 and later.
+    const pixels = Option.some(ImageCost.cases.Pixels.make({ pixelsPerToken: 750 }))
     expect(imageCost(pixels, 150, 100)).toBe(20)
-    expect(imageCost(pixels, 1500, 1000)).toBe(1_600)
+    expect(imageCost(pixels, 1500, 1000)).toBe(2_000)
+    expect(imageCost(pixels, 2000, 1500)).toBeGreaterThanOrEqual(3_888)
     // OpenAI tiles: 1024x1024 cuts to 768x768, four 512-pixel tiles.
     const gpt4o = Option.some(ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 }))
     expect(imageCost(gpt4o, 1024, 1024)).toBe(85 + 4 * 170)
@@ -351,9 +351,9 @@ describe("projectModelContext", () => {
     )
     expect(imageCost(patches, 1024, 1024)).toBe(Math.ceil(1024 * 1.2))
     expect(imageCost(patches, 2000, 2000)).toBe(3_000)
-    // An unknown API class counts the highest known cost: here OpenAI's one tile.
+    // An unknown API class counts the highest known cost: OpenAI's one tile, then uncapped pixels.
     expect(imageCost(Option.none(), 150, 100)).toBe(85 + 170)
-    expect(imageCost(Option.none(), 1500, 1000)).toBe(Math.ceil(47 * 32 * 1.2))
+    expect(imageCost(Option.none(), 1500, 1000)).toBe(2_000)
   })
 
   test("five 1024x1024 images on an OpenAI tile model count at OpenAI's cost and leave the window", () => {
@@ -375,10 +375,7 @@ describe("projectModelContext", () => {
     const budgetAt = (imageCost: ImageCost) => ({ ...budget(111_616), imageCost })
 
     const anthropic = success(
-      projectModelContext(
-        window,
-        budgetAt(ImageCost.cases.Pixels.make({ pixelsPerToken: 750, maxTokens: 1_600 })),
-      ),
+      projectModelContext(window, budgetAt(ImageCost.cases.Pixels.make({ pixelsPerToken: 750 }))),
     )
     expect(anthropic.estimatedTokens).toBeLessThan(10_000)
     const mini = ImageCost.cases.Tiles.make({ baseTokens: 2_833, tileTokens: 5_667 })

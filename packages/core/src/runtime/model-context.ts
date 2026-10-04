@@ -294,8 +294,7 @@ const scaledDown = (width: number, height: number, factor: number) => {
 /** The tokens one `width` x `height` image costs at `cost` (`ImageCost`). */
 const tokensAtCost = (cost: ImageCost, width: number, height: number): number =>
   ImageCost.match(cost, {
-    Pixels: ({ pixelsPerToken, maxTokens }) =>
-      Math.min(Math.ceil((width * height) / pixelsPerToken), maxTokens),
+    Pixels: ({ pixelsPerToken }) => Math.ceil((width * height) / pixelsPerToken),
     Tiles: ({ baseTokens, tileTokens }) => {
       // Fit in 2048x2048, then cut the short side to 768, as OpenAI's `high` detail does.
       const fit = scaledDown(width, height, 2_048 / Math.max(width, height))
@@ -325,7 +324,7 @@ const tokensAtCost = (cost: ImageCost, width: number, height: number): number =>
  * detail of its newest models. Such a model counts each image at the highest.
  */
 const KNOWN_IMAGE_COSTS: ReadonlyArray<ImageCost> = [
-  ImageCost.cases.Pixels.make({ pixelsPerToken: 750, maxTokens: 1_600 }),
+  ImageCost.cases.Pixels.make({ pixelsPerToken: 750 }),
   ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 }),
   ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 2_500 }),
 ]

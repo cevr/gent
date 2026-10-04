@@ -74,7 +74,7 @@ const PositiveCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
 /**
  * How a model counts the tokens of one image, as its API class says
  * (`imageTokens` in `model-context.ts`):
- * - `Pixels`: `width * height / pixelsPerToken`, up to `maxTokens` (Anthropic).
+ * - `Pixels`: `width * height / pixelsPerToken`, with no cap (Anthropic).
  * - `Tiles`: OpenAI's tiles at the `high` detail: the image fit in 2048x2048,
  *   its short side cut to 768, then `baseTokens` and `tileTokens` for each
  *   512-pixel tile.
@@ -82,7 +82,7 @@ const PositiveCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
  *   each patch at `multiplier` tokens.
  */
 export const ImageCost = Schema.TaggedUnion({
-  Pixels: { pixelsPerToken: PositiveCount, maxTokens: PositiveCount },
+  Pixels: { pixelsPerToken: PositiveCount },
   Tiles: { baseTokens: PositiveCount, tileTokens: PositiveCount },
   Patches: { multiplier: Schema.Finite, maxPatches: PositiveCount },
 })

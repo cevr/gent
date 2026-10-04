@@ -74,7 +74,7 @@ updates this list in the same commit.
     depends only on the image, its tool and the model, so a request prefix
     stays the same bytes. The estimate counts each image at the cost the
     model's API class names (`Model.imageCost`): Anthropic's
-    `min(w*h/750, 1600)`, OpenAI's tiles or 32-pixel patches by model at the
+    `w*h/750` with no cap (it bounds the high-resolution models), OpenAI's tiles or 32-pixel patches by model at the
     `high` detail, which each OpenAI image part names
     (`Model.imagePartOptions`) so the estimate and the request agree. A model
     of an unknown class counts the highest of the known costs. Images are

@@ -2829,8 +2829,10 @@ export const MESSAGES_CLASS: ApiClassContribution = {
   protocols: [],
   promptCacheTtl: Option.some(PROMPT_CACHE_LIFETIME[MESSAGES_PROMPT_CACHE_TTL]),
   efforts: messagesEfforts,
-  // An image costs width x height / 750 tokens; Anthropic scales a larger one down to about 1,600.
-  imageCost: () => ({ _tag: "Pixels", pixelsPerToken: 750, maxTokens: 1_600 }),
+  // An image costs width x height / 750 tokens. Claude 4.7 and later keep high resolution
+  // (3,888 tokens for 2000x1500) where older models scale down to about 1,600, so no cap
+  // applies: every model is bounded, and an older one is overcounted (compaction comes early).
+  imageCost: () => ({ _tag: "Pixels", pixelsPerToken: 750 }),
   resolveModel: (request) =>
     Effect.map(loadAnthropicSdk, (sdk) =>
       AiModel.make(

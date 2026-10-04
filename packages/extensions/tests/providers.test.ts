@@ -209,7 +209,7 @@ describe("driver catalog", () => {
     ])
     // Anthropic counts pixels and needs no part option.
     expect(costOf("claude-sonnet-4-5", MESSAGES_CLASS)).toEqual([
-      [{ _tag: "Pixels", pixelsPerToken: 750, maxTokens: 1_600 }, Option.none()],
+      [{ _tag: "Pixels", pixelsPerToken: 750 }, Option.none()],
     ])
   })
 
