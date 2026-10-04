@@ -10,6 +10,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  FileSystem,
   Layer,
   Logger,
   Option,
@@ -21,6 +22,7 @@ import {
   Stream,
 } from "effect"
 import { Base64 } from "effect/encoding"
+import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { RpcClientError } from "effect/rpc/RpcClientError"
 import { SocketCloseError } from "effect/socket/Socket"
@@ -83,6 +85,7 @@ import {
   createMockRuntime,
   createMutableRuntime,
   holdingReplies,
+  mountClient,
   renderFrame,
   renderScoped,
   TerminalOutput,
@@ -107,6 +110,7 @@ import {
   waitUntilAdvancing,
 } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
+import { useWorkspace } from "../src/workspace"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
@@ -6752,6 +6756,65 @@ describe("client extension status", () => {
       yield* waitForFrame(setup, () => true)
       expect(healthReads).toBe(3)
     }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive(
+    "a turn's end loads a client file written since the last load, and the shell's reload loads an edit at once",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const sessionId = SessionId.make("session-client-reload")
+        const branchId = BranchId.make("branch-client-reload")
+        let shell = Option.none<ClientContext["Service"]["shell"]>()
+        const shellProbe = defineClientExtension("@test/shell-probe", {
+          setup: Effect.gen(function* () {
+            shell = Option.some((yield* ClientContext).shell)
+            return {}
+          }),
+        })
+        let held = Option.none<{
+          readonly ext: ReturnType<typeof useExtensionUI>
+          readonly home: string
+        }>()
+        const Probe = () => {
+          const ext = useExtensionUI()
+          const workspace = useWorkspace()
+          held = Option.some({ ext, home: workspace.home })
+          return <box />
+        }
+        const { client } = yield* mountClient({
+          builtins: [shellProbe],
+          initialSession: sessionNamed(sessionId, branchId, "Reload"),
+          view: () => <Probe />,
+        })
+        const { ext, home } = yield* Effect.fromOption(held)
+        yield* waitUntil(() => ext.loaded(), "the first load")
+        const commandIds = () => ext.commands().map((command) => command.id)
+        const dir = `${home}/.gent/extensions`
+        yield* fs.makeDirectory(dir, { recursive: true })
+        const hello = (command: string) =>
+          `import { Effect } from "effect"
+import { clientCommandContribution, defineClientExtension } from "@gent/tui/extensions"
+export default defineClientExtension("@test/hello", {
+  setup: Effect.succeed(clientCommandContribution({ id: "${command}", title: "${command}", onSelect: () => {} })),
+})
+`
+        yield* fs.writeFileString(`${dir}/hello.client.ts`, hello("hello-v1"))
+        expect(commandIds()).not.toContain("hello-v1")
+        client.applySessionEvent(
+          EventEnvelope.make({
+            id: EventId.make(1),
+            createdAt: 1,
+            event: AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }),
+          }),
+        )
+        yield* waitUntil(() => commandIds().includes("hello-v1"), "the new file after the turn")
+        yield* fs.writeFileString(`${dir}/hello.client.ts`, hello("hello-v22"))
+        ;(yield* Effect.fromOption(shell)).reloadExtensions()
+        yield* waitUntil(
+          () => commandIds().includes("hello-v22") && !commandIds().includes("hello-v1"),
+          "the edit after the shell's reload",
+        )
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
   it.scopedLive("a /driver usage hint lands in the footer and never starts a model turn", () =>
     Effect.gen(function* () {

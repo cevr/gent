@@ -94,6 +94,7 @@ export const testClientContextDeps = (
       // A test has no terminal to hand over: the effect runs as it is.
       handover: (effect) => effect,
       pane: makePaneSlot(),
+      reloadExtensions: () => {},
       ...deps.shell,
     },
     activity: Option.getOrElse(

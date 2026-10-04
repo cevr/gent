@@ -12,6 +12,7 @@ export {
 } from "./runtime/gent-platform.js"
 export { bindBunModules, BunPlatformLive } from "./runtime/gent-platform-bun.js"
 export {
+  fileVersion,
   hasProjectScope,
   isProjectExtensionDirectoryTrusted,
   readDisabledExtensions,
