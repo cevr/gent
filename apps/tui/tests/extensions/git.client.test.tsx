@@ -35,6 +35,7 @@ import {
   type TestTools,
   testPlatformLayer,
   testPlatformServices,
+  renderFrame,
 } from "../render-harness-boundary"
 import { waitForFrame, waitUntil } from "../helpers-boundary"
 
@@ -861,6 +862,32 @@ describe("git pane", () => {
         // The reader's index never learns of the untracked file.
         const status = yield* gitOutput(repo, "status", "--porcelain")
         expect(status).toContain("?? new.txt")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    12_000,
+  )
+
+  it.live(
+    "a review the reader stops with a signal names no failure",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* makeRepo("gent-git-stopped-")
+        yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\nthree\n")
+        // ctrl+c in a cooked terminal reaches the program, which ends on the signal.
+        const hunk = yield* fakeProgram("hunk", (dir) => [
+          `echo "$*" >> '${dir}/log'`,
+          "kill -TERM $$",
+        ])
+        const setup = yield* renderApp(repo, 100, { hunk: hunk.program })
+        yield* waitForFrame(setup, (frame) => frame.includes("1 file +1 -0"), "the checkout")
+        yield* slash(setup, "/diff")
+        yield* waitForLog(hunk.log, (log) => log.includes("diff --watch HEAD"))
+        yield* waitUntil(
+          () => setup.renderer.controlState !== RendererControlState.EXPLICIT_SUSPENDED,
+          "the terminal back",
+        )
+        yield* Effect.promise(() => setup.renderOnce())
+        expect(renderFrame(setup)).not.toContain("failed")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     12_000,
   )

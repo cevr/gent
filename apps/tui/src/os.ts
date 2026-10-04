@@ -1,4 +1,13 @@
-import { Context, Effect, FileSystem, Layer, Option, Schema, Semaphore } from "effect"
+import {
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  PlatformError,
+  Schema,
+  Semaphore,
+} from "effect"
 import { GentPlatform } from "@gent/core/host"
 import { runProcess } from "@gent/core/extensions/api"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
@@ -197,6 +206,12 @@ const EditorResult = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 type EditorResult = Schema.Schema.Type<typeof EditorResult>
 
+/** The program ended on a signal: the spawner fails the exit code read of a program with none. */
+const endedOnSignal = (cause: unknown): boolean =>
+  PlatformError.isPlatformError(cause) &&
+  cause.reason.module === "ChildProcess" &&
+  cause.reason.method === "exitCode"
+
 export const openExternalEditor = (
   currentContent: string,
   handover: Handover,
@@ -239,11 +254,14 @@ export const openExternalEditor = (
         Effect.map((result): Option.Option<EditorResult> =>
           Option.liftPredicate(EditorResult.cases.cancelled.make({}), () => result.exitCode !== 0),
         ),
-        Effect.catchTag("ProcessError", (e) =>
-          Effect.succeedSome(
-            EditorResult.cases.error.make({ message: `Editor failed: ${e.message}` }),
-          ),
-        ),
+        Effect.catchTag("ProcessError", (e) => {
+          // An editor that ended on a signal (the reader's ctrl+c reaches it) has no exit code.
+          let result: EditorResult = EditorResult.cases.error.make({
+            message: `Editor failed: ${e.message}`,
+          })
+          if (endedOnSignal(e.cause)) result = EditorResult.cases.cancelled.make({})
+          return Effect.succeedSome(result)
+        }),
       )
       if (Option.isSome(settled)) return settled.value
 

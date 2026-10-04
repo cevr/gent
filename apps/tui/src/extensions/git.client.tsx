@@ -751,6 +751,16 @@ class ReviewFailed extends Schema.TaggedError<ReviewFailed>()("ReviewFailed", {
 /** A pager exits 141 (SIGPIPE) when the reader quits it before the end: not a failure. */
 const QUIT_EARLY = 141
 
+/**
+ * The program ended on a signal, with no exit code: the spawner fails its
+ * exit code read. On a handed-over terminal that is the reader's ctrl+c or
+ * ctrl+\ (the handover gives the program those keys), so not a failure.
+ */
+const endedOnSignal = (cause: unknown): boolean =>
+  PlatformError.isPlatformError(cause) &&
+  cause.reason.module === "ChildProcess" &&
+  cause.reason.method === "exitCode"
+
 /** The status row's note when `/diff` first finds no hunk. */
 const HUNK_MISSING = "hunk not found · using the git pager"
 
@@ -768,17 +778,14 @@ const onTerminal = (
     stdout: "inherit",
     stderr: "inherit",
   }).pipe(
-    Effect.catchTag(
-      "ProcessError",
-      (error): Effect.Effect<never, ProgramMissing | ReviewFailed> => {
-        if (commandNotFound(error.cause))
-          return Effect.fail(new ProgramMissing({ program: command }))
-        return Effect.fail(new ReviewFailed({ message: `${command}: ${error.message}` }))
-      },
-    ),
     Effect.flatMap((result) => {
       if (result.exitCode === 0 || result.exitCode === QUIT_EARLY) return Effect.void
       return Effect.fail(new ReviewFailed({ message: `${command} exited with ${result.exitCode}` }))
+    }),
+    Effect.catchTag("ProcessError", (error): Effect.Effect<void, ProgramMissing | ReviewFailed> => {
+      if (commandNotFound(error.cause)) return Effect.fail(new ProgramMissing({ program: command }))
+      if (endedOnSignal(error.cause)) return Effect.void
+      return Effect.fail(new ReviewFailed({ message: `${command}: ${error.message}` }))
     }),
   )
 

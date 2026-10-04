@@ -1,7 +1,8 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Exit, Fiber, Option } from "effect"
+import { Deferred, Effect, Exit, Fiber, FileSystem, Option } from "effect"
 import { runProcess } from "@gent/core/extensions/api"
+import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import { makeHandover, openExternalEditor, parseEditorCommand, resolveEditor } from "../src/os"
 
 // ── external editor ─────────────────────────────────────────────────────────
@@ -37,7 +38,7 @@ describe("external editor", () => {
   })
 
   it.live(
-    "the editor's exit decides the result: zero applies the file, non-zero cancels, no program fails",
+    "the editor's exit decides the result: zero applies the file, non-zero or a signal cancels, no program fails",
     () =>
       Effect.gen(function* () {
         const steps: Array<string> = []
@@ -49,12 +50,19 @@ describe("external editor", () => {
         const applied = yield* run("true")
         const cancelled = yield* run("false")
         const failed = yield* run("/nonexistent/gent-probe-x")
+        // An editor the reader stops (ctrl+c reaches it) ends on a signal, with no exit code.
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* makeTempDirectoryScoped("gent-editor-signal-")
+        yield* fs.writeFileString(`${dir}/editor`, "#!/bin/sh\nkill -TERM $$\n")
+        yield* fs.chmod(`${dir}/editor`, 0o755)
+        const stopped = yield* run(`${dir}/editor`)
         expect(applied).toEqual({ _tag: "applied", content: "draft" })
         expect(cancelled).toEqual({ _tag: "cancelled" })
         expect(failed._tag).toBe("error")
+        expect(stopped).toEqual({ _tag: "cancelled" })
         // Each run hands the terminal over once and takes it back, a failed one too.
-        expect(steps).toEqual(["suspend", "resume", "suspend", "resume", "suspend", "resume"])
-      }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
+        expect(steps).toEqual([...Array.from({ length: 4 }, () => ["suspend", "resume"])].flat())
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
   )
 })
 
