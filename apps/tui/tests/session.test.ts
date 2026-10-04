@@ -1846,6 +1846,37 @@ describe("useSessionFeed", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.live("a usage limit's error row keeps the reset time the event names", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("limit-session")
+      const branchId = BranchId.make("limit-branch")
+      const retryAt = Date.parse("2026-10-04T17:05:00Z")
+      const { feed, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: [
+          makeEnvelope(
+            1,
+            AgentEvent.cases.ErrorOccurred.make({
+              sessionId,
+              branchId,
+              error: "Rate limit exceeded",
+              retryAt,
+            }),
+          ),
+        ],
+      })
+      yield* waitUntil(
+        () => Option.isSome(feed) && feed.value.items().some((item) => item._tag === "error"),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        const error = feed.value.items().find((item) => item._tag === "error")
+        expect(error?._tag === "error" && error.retryAt).toBe(retryAt)
+        dispose()
+      })
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.live("a retry row sits above the answer of the attempt it waited for, and says why", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("retry-order-session")
