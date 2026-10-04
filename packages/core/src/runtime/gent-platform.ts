@@ -1,6 +1,7 @@
 import {
   Config,
   Context,
+  Crypto,
   Duration,
   Effect,
   Exit,
@@ -15,7 +16,7 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { ChildProcess, type ChildProcessSpawner } from "effect/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { causeMessage } from "../domain/guards.js"
 
 // ── gent-platform ───────────────────────────────────────────────────────────
@@ -245,6 +246,41 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
       }),
     )
 }
+
+// ── extension-platform ──────────────────────────────────────────────────────
+
+/**
+ * The platform services an extension yields directly, in `setup` and in every
+ * leaf: files, paths, processes, random bytes, and gent's own platform (the
+ * image codec's owner). Every root provides them once.
+ */
+export type ExtensionPlatformServices =
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
+  | GentPlatform
+
+/**
+ * `ExtensionPlatformServices`, and only them, re-provided from the context
+ * that holds them. The server root and the tool test harness give an
+ * extension its platform through this one layer, so the two cannot drift and
+ * a root that lacks one of them does not compile.
+ */
+export const extensionPlatformServicesLive: Layer.Layer<
+  ExtensionPlatformServices,
+  never,
+  ExtensionPlatformServices
+> = Layer.mergeAll(
+  Layer.effect(FileSystem.FileSystem, Effect.service(FileSystem.FileSystem)),
+  Layer.effect(Path.Path, Effect.service(Path.Path)),
+  Layer.effect(
+    ChildProcessSpawner.ChildProcessSpawner,
+    Effect.service(ChildProcessSpawner.ChildProcessSpawner),
+  ),
+  Layer.effect(Crypto.Crypto, Effect.service(Crypto.Crypto)),
+  Layer.effect(GentPlatform, Effect.service(GentPlatform)),
+)
 
 // ── run-process ─────────────────────────────────────────────────────────────
 

@@ -1,8 +1,6 @@
 import {
   Context,
-  type Crypto,
   Effect,
-  type FileSystem,
   HashMap,
   Layer,
   Option,
@@ -39,8 +37,7 @@ import type {
   ModelDriverContribution,
   ModelRouterContribution,
 } from "./driver.js"
-import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
-import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
+import type { ExtensionPlatformServices, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import {
   ActorCommandId,
   BranchId,
@@ -630,16 +627,8 @@ export interface ExtensionHostPlatform extends ExtensionHostFacts {
   readonly randomId: Effect.Effect<string>
 }
 
-/** Platform services the loader itself runs against. */
-export type ExtensionLoaderServices =
-  | FileSystem.FileSystem
-  | Path.Path
-  | ChildProcessSpawner
-  | Crypto.Crypto
-  | GentPlatform
-
-/** Services available to every `setup` Effect: the loader platform plus the registration host. */
-export type ExtensionSetupServices = ExtensionLoaderServices | ExtensionHost
+/** Services available to every `setup` Effect: the extension platform plus the registration host. */
+export type ExtensionSetupServices = ExtensionPlatformServices | ExtensionHost
 
 export interface GentExtension<R = ExtensionSetupServices> {
   readonly manifest: ExtensionManifest

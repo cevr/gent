@@ -135,7 +135,7 @@ import {
 } from "../storage/storage.js"
 import { type AgentEvent, EventStore, type EventStoreService } from "../domain/event.js"
 import { type LanguageModel, Model as AiModel } from "effect/ai"
-import { GentPlatform } from "../runtime/gent-platform.js"
+import { extensionPlatformServicesLive, GentPlatform } from "../runtime/gent-platform.js"
 import { BunCrypto, BunHttpServer } from "@effect/platform-bun"
 import type { FeatureMigrations } from "../storage/schema.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
@@ -343,17 +343,31 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
   }
 }
 
+/** The platform a tool body yields in production, built on the Bun platform the roots run. */
+const toolTestPlatform = extensionPlatformServicesLive.pipe(Layer.provide(BunPlatformLive))
+
 /**
  * Runs a tool's effect over a stub host context, wired through
  * `provideExtensionServices` as production wires a tool call, so a test
- * reads the stub's recorded calls.
+ * reads the stub's recorded calls. The body also gets the platform services
+ * production gives it (`ExtensionPlatformServices`); a service the caller
+ * provides replaces the harness one, so a test can swap in a fake.
  */
 export const runToolWithCtx = <Input, Output, Error>(
   tool: ToolCapability<Input, Output, Error>,
   input: Input,
   ctx: Omit<TestToolContext, "toolCallId"> & { readonly toolCallId?: ToolCallId },
 ): Effect.Effect<Output, Error, never> =>
-  provideExtensionServices(ctx, getToolMetadata(tool).effect(input))
+  Effect.flatMap(Effect.context<never>(), (caller) =>
+    Effect.scoped(
+      Effect.flatMap(Layer.build(toolTestPlatform), (platform) =>
+        provideExtensionServices(ctx, getToolMetadata(tool).effect(input)).pipe(
+          // The caller's services sit over the harness platform.
+          Effect.provideContext(Context.merge(platform, caller)),
+        ),
+      ),
+    ),
+  )
 
 /**
  * The leaf view of a test host context, derived the way production derives it.

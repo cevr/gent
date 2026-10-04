@@ -33,7 +33,6 @@ import {
   type ExtensionHostContext,
   type ExtensionHostPlatform,
   ExtensionLoadError,
-  type ExtensionLoaderServices,
   type ExtensionScope,
   extensionServiceError,
   ExtensionServiceError,
@@ -101,7 +100,12 @@ import type {
   ModelRouterContribution,
 } from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
-import { GentPlatform, type RuntimeModuleSource, SERVED_MODULE_QUERY } from "./gent-platform.js"
+import {
+  type ExtensionPlatformServices,
+  GentPlatform,
+  type RuntimeModuleSource,
+  SERVED_MODULE_QUERY,
+} from "./gent-platform.js"
 import {
   type ConfigLoadError,
   ConfigService,
@@ -1971,7 +1975,7 @@ export const setupExtensions = (params: {
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>
-}): Effect.Effect<ExtensionSetupResult, never, ExtensionLoaderServices> =>
+}): Effect.Effect<ExtensionSetupResult, never, ExtensionPlatformServices> =>
   Effect.gen(function* () {
     const active: LoadedExtension[] = []
     const failed: FailedExtension[] = []
@@ -2250,7 +2254,7 @@ export const loadRuntimeProfileDeclarations = (
   inputs: RuntimeProfileInputs,
   scan: ExtensionScan,
   lastGood: LastGoodLookup = () => Option.none(),
-): Effect.Effect<RuntimeProfileDeclarations, never, ExtensionLoaderServices> =>
+): Effect.Effect<RuntimeProfileDeclarations, never, ExtensionPlatformServices> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
     const fs = yield* FileSystem.FileSystem
