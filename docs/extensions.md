@@ -363,19 +363,24 @@ export const ScreenshotTool = tool({
 ```
 
 `saveToolImage` takes `{ bytes }` or `{ path }`, and an optional `source`
-label. It takes PNG, JPEG, GIF and WebP. An image within 3.75 MiB and 2,000
-pixels a side is stored byte for byte. A larger image is scaled to fit with
-its aspect ratio kept (Lanczos3) and keeps its format; a GIF becomes a PNG.
-An image still past 3.75 MiB is encoded as JPEG at quality 80, 60, 40 and
-20, then at three quarters of the side, until it fits. The blob and its
-`sha256` are the scaled bytes, and `originalWidth` and `originalHeight` record
-the size before the scale, so a tool can map its coordinates back. Only bytes
-no codec decodes fail, with `ToolImageError`, so an image the model API would
-refuse never enters a session. The stored tool result stays ordinary JSON.
-Each request reads the bytes back and sends the image right after the tool
-result, under the line `Image from <tool> <source> <width>x<height>:`; a
-scaled image's line adds `scaled from <W>x<H> (multiply coordinates by <f> to
-map to the original)`. A model
+label. It takes PNG, JPEG, GIF and WebP. An upright image within 3.75 MiB and
+2,000 pixels a side is stored byte for byte. A larger image is scaled to fit
+with its aspect ratio kept (Lanczos3) and keeps its format; a GIF becomes a
+PNG. An image still past 3.75 MiB is encoded as JPEG at quality 80, 60, 40 and
+20, then at three quarters of the side, until it fits. A colour profile larger
+than a quarter of the byte limit is left out before the encode (the image then
+reads as sRGB); an ordinary one stays. The blob and its `sha256` are the
+scaled bytes, and `originalWidth` and `originalHeight` record the size before
+the scale, so a tool can map its coordinates back. Every size is of the
+upright image: a JPEG its EXIF orientation turns or mirrors is stored turned,
+and its original size is the turned size. Only bytes no codec decodes fail,
+with `ToolImageError`, so an image the model API would refuse never enters a
+session. The stored tool result stays ordinary JSON. Each request reads the
+bytes back and sends the image right after the tool result, under the line
+`Image from <tool> <source> <width>x<height>:`; a scaled image's line adds
+`scaled from <W>x<H> (multiply coordinates by <f> to map to the original)`,
+or `multiply x by <fx> and y by <fy>` when the two factors differ at three
+decimals. A model
 the catalog says reads no images gets a line that names the image instead. A
 request sends at most the newest 20 images (5 on Chat Completions); past that
 it leaves out the oldest five at a time, each as a line that names it, and

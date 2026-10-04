@@ -88,8 +88,11 @@ updates this list in the same commit.
     to one fixed profile when a tool saves it, not to each model: 2,000
     pixels a side and 3.75 MiB, scaled with its aspect ratio kept and its
     original size recorded (`originalWidth`, `originalHeight`), which the
-    image's line names with the factor that maps coordinates back (the
-    prior arts' settled entry "Tool image scaling" holds why). Receipts:
+    image's line names with the factors that map coordinates back, one for
+    each side when they differ. Every size is of the upright image (a JPEG
+    its EXIF orientation turns is stored turned), and a colour profile past
+    a quarter of the byte limit is left out, so only undecodable bytes fail
+    (the prior arts' settled entry "Tool image scaling" holds why). Receipts:
     `toolImagePrompt`, `toolImagesToDrop` and `toPrompt` in
     `packages/core/src/runtime/model-context.ts`; `saveToolImage` in
     `packages/core/src/runtime/tool-image.ts`.
