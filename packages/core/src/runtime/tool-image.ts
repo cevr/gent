@@ -67,6 +67,9 @@ const TOOL_IMAGE_MAX_BYTES = (5 * 1024 * 1024 * 3) / 4
 /** The longest side the store takes, in pixels: Anthropic refuses a larger image. */
 const TOOL_IMAGE_MAX_SIDE = 8_000
 
+/** The base64 characters an image of `bytes` takes in a request. */
+export const toolImageBase64Chars = (bytes: number): number => Math.ceil(bytes / 3) * 4
+
 const decodeToolImage = Schema.decodeUnknownOption(ToolImage)
 
 /**

@@ -1028,13 +1028,14 @@ export const thinkingBudget = (
  * A model without tool calling is dropped: every gent turn sends tools. Each
  * model carries `promptCacheTtl`, how long the provider keeps a request's
  * prompt cached; models.dev does not say. `apiClass` is the class the
- * driver plans its requests with: its effort levels are the model's.
+ * driver plans its requests with: its effort levels and its tool-image bound
+ * are the model's.
  */
 export const catalogModels = (
   catalog: ModelCatalogView,
   providerId: string,
   promptCacheTtl: Duration.Duration,
-  apiClass: Pick<ApiClassContribution, "efforts">,
+  apiClass: Pick<ApiClassContribution, "efforts" | "imageLimit">,
 ): ReadonlyArray<Model> =>
   Option.match(catalog.provider(providerId), {
     onNone: () => [],
@@ -1043,7 +1044,7 @@ export const catalogModels = (
         .filter((entry) => entry.toolCall !== false && entry.decision !== true)
         .map((entry) =>
           Model.make({
-            ...modelFromCatalog(providerId, entry, apiClass.efforts),
+            ...modelFromCatalog(providerId, entry, apiClass),
             promptCacheTtlMs: Duration.toMillis(promptCacheTtl),
           }),
         ),
@@ -1142,12 +1143,17 @@ const reasoningInField =
  * upstreams cache implicitly with no write price, so a model on it has no
  * cache lifetime and never goes cold: a cold handoff there would cost more
  * than the warm resend it replaces, and lose detail.
+ *
+ * Its upstreams take fewer images than the Messages and Responses APIs (Groq
+ * takes 5 a request and 4 MB of base64 an image), so its requests keep within
+ * that tighter bound.
  */
 export const CHAT_COMPLETIONS_CLASS: ApiClassContribution = {
   id: "openai-chat",
   npm: ["@ai-sdk/openai-compatible"],
   protocols: ["completions"],
   promptCacheTtl: Option.none(),
+  imageLimit: { images: 5, base64Chars: 4_000_000 },
   resolveModel: (request) =>
     Effect.map(loadChatSdk, ({ OpenAiClient, OpenAiLanguageModel }) => {
       const reasoningField = Option.fromUndefinedOr(request.model.reasoningField)

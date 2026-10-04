@@ -416,7 +416,7 @@ const imageTurn = Effect.fn("test.imageTurn")(function* (params: {
   yield* Fiber.join(turn)
   yield* controls.assertDone
   const stored = yield* client.message.list({ branchId })
-  return { prompts, stored }
+  return { prompts, stored, home }
 })
 
 /** The message after the last tool message of `prompt`, and that tool message. */
@@ -663,5 +663,75 @@ describe("tool images in a request", () => {
         ])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     15_000,
+  )
+})
+
+// ── bound ───────────────────────────────────────────────────────────────────
+
+const encodeMessage = Schema.encodeSync(Schema.fromJsonString(Prompt.Message))
+const encodeResult = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Json))
+
+/** The prompt's messages as JSON text, the bytes a cache compares. */
+const messageTexts = (prompt: Prompt.Prompt) =>
+  prompt.content.map((message) => encodeMessage(message))
+
+/** The text parts of the user messages that carry tool images, in prompt order. */
+const imageTexts = (prompt: Prompt.Prompt) =>
+  prompt.content.flatMap((message) => {
+    if (message.role !== "user") return []
+    return message.content.flatMap((part) => {
+      if (part.type !== "text" || !/^(Image from|\[earlier image)/.test(part.text)) return []
+      return [part.text]
+    })
+  })
+
+describe("tool image bound in a turn", () => {
+  it.scopedLive(
+    "the oldest images leave five at a time, each request between drops keeps the prefix, and the session keeps every image",
+    () =>
+      Effect.gen(function* () {
+        const paths = Array.from({ length: 26 }, (_, index) => `shot-${index + 1}.png`)
+        const { prompts, stored, home } = yield* imageTurn({ paths })
+        // One request before any image, then one after each.
+        expect(prompts).toHaveLength(27)
+
+        // 20 images go whole; the 21st leaves the oldest five as lines; the 26th, ten.
+        const dropped = prompts.map(
+          (prompt) => imageTexts(prompt).filter((text) => text.startsWith("[earlier")).length,
+        )
+        expect(dropped.slice(19, 27)).toEqual([0, 0, 5, 5, 5, 5, 5, 10])
+        expect(imageTexts(prompts[21] ?? Prompt.empty).slice(0, 6)).toEqual([
+          "[earlier image left out to keep the request small: save_image shot-1.png 64x32]",
+          "[earlier image left out to keep the request small: save_image shot-2.png 64x32]",
+          "[earlier image left out to keep the request small: save_image shot-3.png 64x32]",
+          "[earlier image left out to keep the request small: save_image shot-4.png 64x32]",
+          "[earlier image left out to keep the request small: save_image shot-5.png 64x32]",
+          "Image from save_image shot-6.png 64x32:",
+        ])
+
+        // Each request starts with the one before it, byte for byte, except
+        // where a drop changed an earlier image: at the 21st and the 26th.
+        const changedPrefix = prompts.flatMap((prompt, index) => {
+          const before = messageTexts(prompts[index - 1] ?? Prompt.empty)
+          const now = messageTexts(prompt).slice(0, before.length)
+          if (index === 0 || now.every((text, at) => text === before[at])) return []
+          return [index]
+        })
+        expect(changedPrefix).toEqual([21, 26])
+
+        // The stored session keeps all 26 references, and the store all 26 blobs.
+        const references = stored.flatMap((message) =>
+          message.parts.flatMap((part) => {
+            if (part.type !== "tool-result") return []
+            return [decodeSaved(encodeResult(part.result)).image]
+          }),
+        )
+        expect(references).toHaveLength(26)
+        const fs = yield* FileSystem.FileSystem
+        for (const image of references) {
+          expect(yield* fs.exists(`${home}/.gent/blobs/${image.sha256}.png`)).toBe(true)
+        }
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("40 seconds")),
+    45_000,
   )
 })

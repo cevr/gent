@@ -55,6 +55,7 @@ import {
   projectModelContext,
   toPrompt,
   toPromptMessages,
+  toolImagesToDrop,
   windowDetails,
   settledMessages,
   windowMarkerMessage,
@@ -512,6 +513,38 @@ describe("projectModelContext", () => {
       ),
     )
     expect(resultError._tag).toBe("ToolResultWrongRole")
+  })
+})
+
+// ── tool image bound ────────────────────────────────────────────────────────
+
+describe("tool image bound", () => {
+  const limit = { images: 20, base64Chars: 12_000_000 }
+  const small = (count: number) => Array.from({ length: count }, () => 1_000)
+
+  test("past the image count, the oldest leave five at a time", () => {
+    expect(
+      [0, 1, 20, 21, 25, 26, 30, 31].map((count) => toolImagesToDrop(small(count), limit)),
+    ).toEqual([0, 0, 0, 5, 5, 10, 10, 15])
+  })
+
+  test("past the character bound, the oldest leave five at a time and the newest stays", () => {
+    const twoMillion = Array.from({ length: 8 }, () => 2_000_000)
+    // 16M chars: two must go for 12M; the step makes it five.
+    expect(toolImagesToDrop(twoMillion, limit)).toBe(5)
+    // Three 5M images: one must go, the step asks five, the newest stays.
+    expect(toolImagesToDrop([5_000_000, 5_000_000, 5_000_000], limit)).toBe(2)
+  })
+
+  test("a newest image no request can carry leaves too, with every older one", () => {
+    expect(toolImagesToDrop([1_000, 13_000_000], limit)).toBe(2)
+    expect(toolImagesToDrop([13_000_000], limit)).toBe(1)
+    expect(toolImagesToDrop([], limit)).toBe(0)
+  })
+
+  test("a tighter class bound leaves more out", () => {
+    expect(toolImagesToDrop(small(6), { images: 5, base64Chars: 4_000_000 })).toBe(5)
+    expect(toolImagesToDrop(small(11), { images: 5, base64Chars: 4_000_000 })).toBe(10)
   })
 })
 

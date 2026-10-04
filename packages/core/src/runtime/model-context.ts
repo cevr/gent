@@ -24,8 +24,14 @@ import {
 } from "../domain/message.js"
 import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
-import { cacheWriteRate, type Model, ModelId, type ModelPricing } from "../domain/agent.js"
-import { readToolImage, type ToolImage, toolImagesOf } from "./tool-image.js"
+import {
+  cacheWriteRate,
+  type ImageLimit,
+  type Model,
+  ModelId,
+  type ModelPricing,
+} from "../domain/agent.js"
+import { readToolImage, type ToolImage, toolImageBase64Chars, toolImagesOf } from "./tool-image.js"
 import type { ToolCapability } from "../domain/capability.js"
 import type { TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
@@ -326,24 +332,81 @@ const toolImageName = (entry: PromptToolImage): string =>
   ].join(" ")
 
 /**
+ * The tool images a request carries when the model's API class names no
+ * bound (`Model.imageLimit`): the newest 20, and about 12 MB of base64. Both
+ * sit well inside what the Messages and Responses APIs take in one request.
+ */
+const DEFAULT_IMAGE_LIMIT: ImageLimit = { images: 20, base64Chars: 12_000_000 }
+
+/**
+ * A request past its image bound leaves out this many more of its oldest
+ * images at a time: its prefix changes once each time, not at every image.
+ */
+const IMAGE_DROP_STEP = 5
+
+const roundUpToStep = (count: number) => Math.ceil(count / IMAGE_DROP_STEP) * IMAGE_DROP_STEP
+
+/**
+ * How many of a request's oldest tool images it leaves out, given each
+ * image's base64 size, oldest first: enough to keep at most `limit.images`
+ * images and `limit.base64Chars` characters, rounded up to a multiple of
+ * `IMAGE_DROP_STEP`. The newest image stays unless it alone is past the
+ * character bound. The count grows only when the images pass a bound again,
+ * so every request between two drops sends the same prefix.
+ */
+export const toolImagesToDrop = (sizes: ReadonlyArray<number>, limit: ImageLimit): number => {
+  const total = sizes.length
+  const byCount = roundUpToStep(Math.max(0, total - limit.images))
+  let chars = sizes.reduce((sum, size) => sum + size, 0)
+  let first = 0
+  while (first < total && chars > limit.base64Chars) {
+    chars -= sizes[first] ?? 0
+    first += 1
+  }
+  const byChars = roundUpToStep(first)
+  // The newest image stays, unless no request could carry it.
+  let most = Math.max(0, total - 1)
+  if ((sizes[total - 1] ?? 0) > limit.base64Chars) most = total
+  return Math.min(Math.max(byCount, byChars), most)
+}
+
+/**
  * What stands for each tool image in the window `messages`, for `model`, read
  * from the blob store under `directory`. A model the catalog says reads no
- * images gets a line for each; an image whose blob is gone gets a line.
+ * images gets a line for each. Past the model's image bound
+ * (`toolImagesToDrop`), the oldest images get a line each; so does an image
+ * whose blob is gone. The stored session never changes: only the request
+ * leaves an image out.
  */
 export const toolImagePrompt = Effect.fn("ModelContext.toolImagePrompt")(function* (params: {
   readonly messages: ReadonlyArray<Message>
-  readonly model: Pick<Model, "imageInput">
+  readonly model: Pick<Model, "imageInput" | "imageLimit">
   readonly directory: string
 }) {
   const images = promptToolImages(params.messages)
+  const limit = params.model.imageLimit ?? DEFAULT_IMAGE_LIMIT
+  const sizes = images.map((entry) => toolImageBase64Chars(entry.image.bytes))
+  const dropped = toolImagesToDrop(sizes, limit)
   const contents = yield* Effect.forEach(
     images,
-    (entry) =>
+    (entry, index) =>
       Effect.gen(function* () {
         const name = toolImageName(entry)
         if (params.model.imageInput === false) {
           return ToolImageContent.cases.Line.make({
             text: `[image not shown: this model takes no image input: ${name}]`,
+          })
+        }
+        // Each line depends on the image alone, so it stays the same bytes
+        // in every later request.
+        if ((sizes[index] ?? 0) > limit.base64Chars) {
+          return ToolImageContent.cases.Line.make({
+            text: `[image left out: larger than one request to this model takes: ${name}]`,
+          })
+        }
+        if (index < dropped) {
+          return ToolImageContent.cases.Line.make({
+            text: `[earlier image left out to keep the request small: ${name}]`,
           })
         }
         return Option.match(yield* readToolImage(params.directory, entry.image), {

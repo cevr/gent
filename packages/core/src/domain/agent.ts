@@ -57,6 +57,18 @@ export const ReasoningEffort = Schema.Literals([
 export type ReasoningEffort = typeof ReasoningEffort.Type
 export const isReasoningEffort = Schema.is(ReasoningEffort)
 
+/**
+ * The tool images one request may carry: how many, and how many base64
+ * characters in all. A request past either leaves out its oldest images, a
+ * fixed number at a time, so its prefix changes only when the count of left
+ * out images does (`toolImagesToDrop` in `model-context.ts`).
+ */
+export const ImageLimit = Schema.Struct({
+  images: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  base64Chars: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+})
+export type ImageLimit = typeof ImageLimit.Type
+
 // Model - individual model from a provider (built-in or custom)
 
 export class Model extends Schema.Class<Model>("Model")({
@@ -95,6 +107,12 @@ export class Model extends Schema.Class<Model>("Model")({
    * the catalog does not say: the request sends the images.
    */
   imageInput: Schema.optional(Schema.Boolean),
+  /**
+   * The tool images one request may carry, as the model's API class says
+   * (`ApiClassContribution.imageLimit`). Absent: the default bound
+   * (`toolImagesToDrop` in `model-context.ts`).
+   */
+  imageLimit: Schema.optional(ImageLimit),
   /**
    * How long the provider keeps a request's prompt cached after the request,
    * in milliseconds, as the model's driver says. A turn that starts on a large

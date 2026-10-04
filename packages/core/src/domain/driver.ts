@@ -23,7 +23,14 @@ import {
   type Model as AiModel,
   type Response,
 } from "effect/ai"
-import { type CacheWriteByLifetime, Model, ModelId, ProviderId, ReasoningEffort } from "./agent.js"
+import {
+  type CacheWriteByLifetime,
+  type ImageLimit,
+  Model,
+  ModelId,
+  ProviderId,
+  ReasoningEffort,
+} from "./agent.js"
 import { omitUndefined } from "./guards.js"
 import type { SessionId } from "./ids.js"
 import type { ExtensionContext, ExtensionServiceError } from "./extension.js"
@@ -527,16 +534,16 @@ export const acceptedEfforts = (entry: CatalogModel): ReadonlyArray<ReasoningEff
 /**
  * A catalog model as gent's `Model`, under `providerId` (a driver id, which
  * may differ from the catalog provider's). A decision model is a classifier.
- * `efforts` are the levels its requests name (`Model.efforts`): by default
- * the catalog's effort list; an API class that plans a level otherwise
- * passes its own (`ApiClassContribution.efforts`).
+ * `apiClass` is the class that speaks it: its requests name the class's
+ * effort levels (`Model.efforts`; by default the catalog's effort list) and
+ * carry at most the class's tool images (`Model.imageLimit`).
  */
 export const modelFromCatalog = (
   providerId: string,
   entry: CatalogModel,
-  efforts: (entry: CatalogModel) => ReadonlyArray<ReasoningEffort> = acceptedEfforts,
+  apiClass: Pick<ApiClassContribution, "efforts" | "imageLimit"> = {},
 ): Model => {
-  const levels = efforts(entry)
+  const levels = (apiClass.efforts ?? acceptedEfforts)(entry)
   const model = Model.make({
     id: ModelId.make(`${providerId}/${entry.id}`),
     name: entry.name,
@@ -555,6 +562,7 @@ export const modelFromCatalog = (
       releaseDate: entry.releaseDate,
       reasoning: entry.reasoning,
       imageInput: entry.imageInput,
+      imageLimit: apiClass.imageLimit,
       efforts: Option.getOrUndefined(Option.liftPredicate(levels, (each) => each.length > 0)),
     }),
   })
@@ -640,6 +648,11 @@ export interface ApiClassContribution {
    * catalog's list (`acceptedEfforts`).
    */
   readonly efforts?: (entry: CatalogModel) => ReadonlyArray<ReasoningEffort>
+  /**
+   * The tool images one request of this class may carry, when its servers
+   * take fewer than the default bound (`Model.imageLimit`).
+   */
+  readonly imageLimit?: ImageLimit
   readonly resolveModel: (
     request: ApiClassRequest,
   ) => Effect.Effect<ProviderResolution, DriverError>

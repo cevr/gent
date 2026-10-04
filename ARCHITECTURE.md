@@ -73,7 +73,13 @@ updates this list in the same commit.
     gone, gets one fixed line instead. Every text that stands for an image
     depends only on the image, its tool and the model, so a request prefix
     stays the same bytes. The estimate counts each image at
-    `min(w*h/750, 1600)` tokens. Receipts: `toolImagePrompt` and `toPrompt` in
+    `min(w*h/750, 1600)` tokens. Images are bounded too: a request carries
+    at most the newest 20 and about 12 MB of base64 (`Model.imageLimit`, from
+    the API class: Chat Completions takes 5 and 4 MB), and past either it
+    leaves out its oldest images five at a time, each as a fixed line. So
+    the prefix changes only at the 21st and 26th image, never at each
+    one, and the stored session never changes. Receipts: `toolImagePrompt`,
+    `toolImagesToDrop` and `toPrompt` in
     `packages/core/src/runtime/model-context.ts`.
 11. **A model change is a durable user-role notice the loop writes.** The
     settings update only records the choice. At each step boundary the loop

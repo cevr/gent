@@ -20,6 +20,7 @@ import {
   type CatalogProvider,
   type Model,
   type ModelCatalogView,
+  type ModelDriverContribution,
   ModelId,
   ProviderAuthError,
   type RunEffort,
@@ -42,6 +43,7 @@ import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/process"
 import {
   catalogModels,
+  CHAT_COMPLETIONS_CLASS,
   type CredentialCacheCell,
   type CredentialFailure,
   type CredentialStore,
@@ -136,6 +138,50 @@ describe("driver catalog", () => {
 
     expect(models.map((model) => model.promptCacheTtlMs)).toEqual([5 * 60_000])
   })
+
+  it.live("a model takes the tool-image bound of the API class that speaks it", () =>
+    Effect.gen(function* () {
+      const compat: ModelDriverContribution = {
+        id: "compat",
+        name: "Compat",
+        endpoint: () =>
+          Effect.succeed({
+            apiKey: Option.some("compat-key"),
+            baseUrl: Option.none(),
+            transformClient: Option.none(),
+          }),
+      }
+      const catalog = catalogOf({
+        id: "compat",
+        name: "Compat",
+        env: [],
+        models: [
+          { id: "chat-model", name: "Chat", npm: "@ai-sdk/openai-compatible" },
+          { id: "messages-model", name: "Messages", npm: "@ai-sdk/anthropic" },
+        ],
+      })
+      const listed = yield* listModelCatalog(
+        { modelDrivers: new Map([[compat.id, compat]]), apiClasses: SHIPPED_API_CLASSES },
+        { ...catalog, providerIds: ["compat"], failure: Option.none() },
+      )
+      // Chat Completions upstreams take fewer images; the Messages API keeps the default bound.
+      expect(
+        listed.models.map((model) => [String(model.id), Option.fromUndefinedOr(model.imageLimit)]),
+      ).toEqual([
+        ["compat/chat-model", Option.some({ images: 5, base64Chars: 4_000_000 })],
+        ["compat/messages-model", Option.none()],
+      ])
+      const driverListed = catalogModels(
+        catalogOf({ id: "compat", name: "Compat", env: [], models: [{ id: "x", name: "X" }] }),
+        "compat",
+        Duration.minutes(5),
+        CHAT_COMPLETIONS_CLASS,
+      )
+      expect(driverListed.map((model) => model.imageLimit)).toEqual([
+        { images: 5, base64Chars: 4_000_000 },
+      ])
+    }),
+  )
 
   test("a model lists the effort levels its API class sends", () => {
     const efforts: CatalogModel["reasoningOptions"] = [
