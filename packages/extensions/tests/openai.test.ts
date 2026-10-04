@@ -1472,6 +1472,57 @@ describe("OpenAI cache routing", () => {
       ).toEqual(cacheKeys)
     }),
   )
+
+  // An effort change rides as a `configuration_update` item; the top level
+  // keeps the effort the conversation ran at before the change.
+  it.live(
+    "OAuth requests carry an effort change as a configuration update before the turn notice",
+    () =>
+      Effect.gen(function* () {
+        const { driver } = yield* makeDriver({
+          cell: makeDurableCell({
+            access: "effort-test-token",
+            refresh: "r",
+            expires: FAR_FUTURE_MS,
+            accountId: Option.none(),
+          }),
+        })
+        const model = yield* driver.resolveModel("gpt-6.1-sol", makeOAuthInfo(), {
+          cacheKey: "session-1",
+          reasoning: "low",
+          reasoningHistory: [Option.some("high")],
+        })
+        const fetchState = makeFakeFetchState()
+        yield* oneGenerate(model, fetchState, openaiResponsesHappyResponse, [
+          { role: "system", content: "You are terse." },
+          { role: "user", content: "hi" },
+          { role: "assistant", content: [{ type: "text", text: "hello" }] },
+          { role: "user", content: "again" },
+          { role: "system", content: "Host status for this turn." },
+        ]).pipe(Effect.orDie)
+        const codec = Schema.fromJsonString(
+          Schema.Struct({
+            instructions: Schema.String,
+            reasoning: Schema.Struct({ effort: Schema.String }),
+            input: Schema.Array(
+              Schema.Struct({
+                type: Schema.optional(Schema.String),
+                role: Schema.optional(Schema.String),
+                reasoning: Schema.optional(Schema.Struct({ effort: Schema.String })),
+              }),
+            ),
+          }),
+        )
+        const body = yield* Schema.decodeEffect(codec)(
+          Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured[0]?.body)),
+        )
+        expect(body.instructions).toBe("You are terse.")
+        expect(body.reasoning.effort).toBe("high")
+        expect(
+          body.input.map((item) => item.role ?? `${item.type}:${item.reasoning?.effort ?? "-"}`),
+        ).toEqual(["user", "assistant", "user", "configuration_update:low", "developer"])
+      }),
+  )
 })
 
 const ReadTool = Tool.make("read", {

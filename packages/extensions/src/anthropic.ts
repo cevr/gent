@@ -35,6 +35,7 @@ import {
   type ProviderAuthorizationResult,
   type ProviderHints,
   acceptedEfforts,
+  clampEffort,
   ReasoningEffort,
   reportProviderStopReason,
   runProcess,
@@ -49,6 +50,8 @@ import {
   type CredentialFailure,
   checkCredentials,
   CredentialRefreshUnavailable,
+  type EffortCarrier,
+  effortCarrier,
   effortFor,
   EMPTY_CREDENTIAL_CELL,
   hasToggle,
@@ -1484,7 +1487,9 @@ export const transformPayload = (
  *      sends as a `<host-context-update>` user message: the runtime's turn
  *      notices) takes no marker. It changes from turn to turn, so a marker
  *      on it would write an entry no later request reads, and the next step
- *      would find no entry at the conversation's end;
+ *      would find no entry at the conversation's end. An effort marker
+ *      (`effortMarker`) has no content to mark, so the marker goes on the
+ *      message before it;
  *   3. the end of the shared part of the system prompt: the runtime sends
  *      the prompt as two system blocks, the part a session shares with its
  *      children and then the agent's own part (the children guidance, the
@@ -1815,7 +1820,7 @@ const markCacheBreakpoints = (
   })
   spend(markLastCacheable(prompt.read(), marker), prompt.write)
   markMessage(
-    messages.findLastIndex((message) => !isHostContextUpdate(message)),
+    messages.findLastIndex((message) => !isHostContextUpdate(message) && !isEffortMarker(message)),
     (content) => markLastCacheable(content, marker),
   )
   const promptBlocks = prompt.read()
@@ -1966,7 +1971,7 @@ const reportStopReason = (event: AnthropicClient.MessageStreamEvent): Effect.Eff
  */
 const anthropicClientLayer = <R>(
   { AnthropicClient }: AnthropicSdk,
-  plan: AnthropicRequestPlan,
+  { plan, effortCarrier: carrier }: Pick<AnthropicRequest, "plan" | "effortCarrier">,
   path: ClientPath<R>,
   sdkLayer: SdkClientLayer,
 ): Layer.Layer<AnthropicClient.AnthropicClient, never, HttpClient.HttpClient | R> =>
@@ -1978,12 +1983,15 @@ const anthropicClientLayer = <R>(
           Option.match(requestJsonObject(request), {
             onNone: () => Effect.succeed(request),
             onSome: (payload) =>
-              path.payload(applyRequestPlan(payload, plan)).pipe(
+              path.payload(applyRequestPlan(payload, plan, carrier)).pipe(
                 Effect.provideContext(pathContext),
                 Effect.map((body) => {
-                  const rewritten = HttpClientRequest.bodyJsonUnsafe(request, body)
-                  if (!bindsThinking(body)) return rewritten
-                  return withBeta(rewritten, THINKING_BINDING_BETA)
+                  let rewritten = HttpClientRequest.bodyJsonUnsafe(request, body)
+                  if (bindsThinking(body)) rewritten = withBeta(rewritten, THINKING_BINDING_BETA)
+                  if (carriesEffortMarker(body)) {
+                    rewritten = withBeta(rewritten, MID_CONVERSATION_EFFORT_BETA)
+                  }
+                  return rewritten
                 }),
               ),
           }),
@@ -2319,17 +2327,19 @@ const anthropicRequestPlan = (
  * The effort levels a Messages request names for the entry
  * (`Model.efforts`): the effort each level's plan sends, and `none` where
  * the plan for `none` turns reasoning off instead of sending its lowest
- * effort (a family on by default, an `Off` or `Budget` family, a toggle).
- * Empty without an effort list: a level then picks a budget or a toggle.
+ * effort (a family on by default, an `Off` or `Budget` family, a toggle) or
+ * limits it to `between_tools` (Claude Sonnet 5.5). Empty without an effort
+ * list: a level then picks a budget or a toggle.
  */
 const messagesEfforts = (entry: CatalogModel): ReadonlyArray<ReasoningEffort> => {
   if (acceptedEfforts(entry).length === 0) return []
-  const sent = ReasoningEffort.literals.map((level) =>
-    Option.getOrElse(
-      anthropicRequestPlan(entry, Option.some({ reasoning: level })).effort,
-      (): ReasoningEffort => "none",
-    ),
-  )
+  const sent = ReasoningEffort.literals.map((level): ReasoningEffort => {
+    const plan = anthropicRequestPlan(entry, Option.some({ reasoning: level }))
+    if (Option.exists(plan.thinking, (thinking) => thinking === THINKING_CONFIG.betweenTools)) {
+      return "none"
+    }
+    return Option.getOrElse(plan.effort, (): ReasoningEffort => "none")
+  })
   return ReasoningEffort.literals.filter((level) => sent.includes(level))
 }
 
@@ -2342,7 +2352,12 @@ interface AnthropicRequest {
   readonly plan: AnthropicRequestPlan
   /** None when the hints carry no `cacheKey`: the request writes no cache. */
   readonly cacheLifetimes: Option.Option<CacheLifetimes>
+  /** The effort changes the conversation carries as markers; none sends the plan's effort at the top level. */
+  readonly effortCarrier: Option.Option<EffortCarrier>
 }
+
+/** Whether a request may carry effort markers: only the Claude API's own (`takesEffortMarkers`). */
+type EffortMarkers = "claude-api" | "none"
 
 /**
  * One model's requests. A `temperature` goes only to a model that takes one
@@ -2353,6 +2368,7 @@ const anthropicRequest = (
   entry: CatalogModel,
   hints: Option.Option<ProviderHints>,
   promptCacheTtl: PromptCacheTtl,
+  markers: EffortMarkers,
 ): AnthropicRequest => {
   const plan = anthropicRequestPlan(entry, hints)
   let config: AnthropicConfig = {}
@@ -2369,8 +2385,63 @@ const anthropicRequest = (
     config,
     plan,
     cacheLifetimes: Option.liftPredicate(lifetimes, () => writesPromptCache(hints)),
+    effortCarrier: messagesEffortCarrier(entry, hints, plan, markers),
   }
 }
+
+/**
+ * The effort changes a Messages request carries, for a model the Claude API
+ * takes markers on. Every effort in the history must plan the thinking the
+ * request sends and name itself as the effort: a change that turns thinking
+ * off or to `between_tools` is a top-level change, and the request is plain.
+ * The efforts are the receipts' (`messagesEfforts` clamps the level as core
+ * does), so the current one is clamped the same way.
+ */
+const messagesEffortCarrier = (
+  entry: CatalogModel,
+  hints: Option.Option<ProviderHints>,
+  plan: AnthropicRequestPlan,
+  markers: EffortMarkers,
+): Option.Option<EffortCarrier> => {
+  if (markers === "none" || !takesEffortMarkers(entry.id)) return Option.none()
+  const current = Option.flatMap(reasoningHint(entry, hints), (level) =>
+    clampEffort(messagesEfforts(entry), level),
+  )
+  return effortCarrier(hints, current, (effort) => {
+    const planned = anthropicRequestPlan(entry, Option.some({ reasoning: effort }))
+    return (
+      Option.contains(planned.effort, effort) &&
+      Option.getOrUndefined(planned.thinking) === Option.getOrUndefined(plan.thinking)
+    )
+  })
+}
+
+/**
+ * Whether the Claude API takes an effort change inside the conversation for
+ * the model: Claude Fable 5.1, Claude Mythos 5.1, Claude Opus 5.5, Claude
+ * Opus 5 and Claude Sonnet 5.5, and the later versions of each family
+ * (platform.claude.com/docs/en/build-with-claude/effort, "Change effort
+ * mid-conversation", read 2026-10-04; opencode
+ * `packages/ai/src/protocols/anthropic-messages.ts`, Opus 5 and later,
+ * Fable/Mythos 5.1 and later). Any other model returns a 400 for the marker.
+ * The version is `<family>-<major>[-<minor>]`; a date suffix is not a minor.
+ */
+const takesEffortMarkers = (modelId: string): boolean => {
+  const match = /(opus|sonnet|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?=-|$)/.exec(modelId.toLowerCase())
+  if (Predicate.isNull(match)) return false
+  const [, family = "", major = "0", minor = "0"] = match
+  const row = EFFORT_MARKER_FIRST_VERSIONS.find((value) => value.family === family)
+  if (Predicate.isUndefined(row)) return false
+  return Number(major) * 100 + Number(minor) >= row.first
+}
+
+/** The first version of each family that takes effort markers, as `major * 100 + minor`. */
+const EFFORT_MARKER_FIRST_VERSIONS = [
+  { family: "opus", first: 500 },
+  { family: "fable", first: 501 },
+  { family: "mythos", first: 501 },
+  { family: "sonnet", first: 505 },
+] as const
 
 /**
  * The thinking object for each plan value. Adaptive thinking asks for `display:
@@ -2429,17 +2500,106 @@ const withBeta = (
   return HttpClientRequest.setHeader(request, "anthropic-beta", [...current, beta].join(","))
 }
 
-/** The payload with the plan's effort and thinking; any `output_config` the SDK set is kept. */
-const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): JsonRecord => {
+/**
+ * The payload with the plan's effort and thinking; any `output_config` the
+ * SDK set is kept. With effort changes to carry, and a conversation they fit,
+ * the top level names the pinned effort and each change is a marker
+ * (`withEffortMarkers`).
+ */
+const applyRequestPlan = (
+  payload: JsonRecord,
+  plan: AnthropicRequestPlan,
+  carrier: Option.Option<EffortCarrier>,
+): JsonRecord => {
   let result = payload
   if (Option.isSome(plan.thinking)) result = { ...result, thinking: plan.thinking.value }
-  if (Option.isSome(plan.effort)) {
+  let effort = plan.effort
+  const messages = result["messages"]
+  if (Option.isSome(carrier) && isRecordArray(messages)) {
+    const marked = withEffortMarkers(messages, carrier.value)
+    if (Option.isSome(marked)) {
+      result = { ...result, messages: marked.value }
+      effort = Option.some(carrier.value.pinned)
+    }
+  }
+  if (Option.isSome(effort)) {
     const current = result["output_config"]
     let outputConfig: JsonRecord = {}
     if (isRecord(current)) outputConfig = current
-    result = { ...result, output_config: { ...outputConfig, effort: plan.effort.value } }
+    result = { ...result, output_config: { ...outputConfig, effort: effort.value } }
   }
   return result
+}
+
+/**
+ * The beta an effort marker needs (platform.claude.com/docs/en/build-with-claude/effort,
+ * "Change effort mid-conversation"). A request carries it only with a marker.
+ */
+const MID_CONVERSATION_EFFORT_BETA = "mid-conversation-output-config-2026-07-01"
+
+/**
+ * The Messages effort marker: a system message with no content and the
+ * effort the conversation runs at from the next user turn.
+ */
+const effortMarker = (effort: ReasoningEffort): JsonRecord => ({
+  role: "system",
+  content: [],
+  output_config: { effort },
+})
+
+/** True for an effort marker (`effortMarker`). */
+const isEffortMarker = (message: JsonRecord): boolean =>
+  message["role"] === "system" && "output_config" in message
+
+/** True for a user message that answers a tool call. */
+const carriesToolResult = (message: JsonRecord): boolean => {
+  const content = message["content"]
+  return isRecordArray(content) && content.some((block) => block["type"] === "tool_result")
+}
+
+/**
+ * The messages with a marker at each effort change. A change at run `k` goes
+ * before the user turn after run `k - 1`, where the new effort takes effect;
+ * a user turn that answers a tool call keeps its place right after the call,
+ * so the marker goes after it. The place depends only on the messages up to
+ * that turn, so the next request has the marker at the same place. None when
+ * the assistant turns do not match the receipts' runs (the SDK merged or
+ * dropped one), or a change has no user turn after its run.
+ */
+const withEffortMarkers = (
+  messages: ReadonlyArray<JsonRecord>,
+  carrier: EffortCarrier,
+): Option.Option<ReadonlyArray<JsonRecord>> => {
+  const assistants = messages.flatMap((message, index) => {
+    if (message["role"] === "assistant") return [index]
+    return []
+  })
+  if (assistants.length !== carrier.runs) return Option.none()
+  const places = new Map<number, ReasoningEffort>()
+  for (const change of carrier.changes) {
+    const previous = assistants[change.run - 1]
+    if (Predicate.isUndefined(previous)) return Option.none()
+    const turn = messages[previous + 1]
+    if (Predicate.isUndefined(turn)) return Option.none()
+    let place = previous + 1
+    if (carriesToolResult(turn)) place = previous + 2
+    places.set(place, change.effort)
+  }
+  const result: Array<JsonRecord> = []
+  for (const [index, message] of messages.entries()) {
+    const effort = places.get(index)
+    if (Predicate.isNotUndefined(effort)) result.push(effortMarker(effort))
+    result.push(message)
+  }
+  const last = places.get(messages.length)
+  if (Predicate.isNotUndefined(last)) result.push(effortMarker(last))
+  return Option.some(result)
+}
+
+/** Whether the payload carries an effort marker. */
+const carriesEffortMarker = (payload: JsonRecord): boolean => {
+  const messages = payload["messages"]
+  return isRecordArray(messages) && messages.some(isEffortMarker)
 }
 
 // ── Layer construction helpers ──
@@ -2461,7 +2621,7 @@ const makeApiKeyAnthropicLayer = (
   const apiUrl = Option.map(endpoint.baseUrl, (url) => url.replace(/\/v1\/?$/, ""))
   const clientLayer = anthropicClientLayer(
     sdk,
-    request.plan,
+    request,
     apiKeyClientPath(request.cacheLifetimes),
     (rewriteBody) =>
       AnthropicClient.layer({
@@ -2503,7 +2663,7 @@ const makeOauthAnthropicLayer = (
   const keychain = buildKeychainTransformClient(creds, Context.get(services, AnthropicPlatform).env)
   const wrappedClient = anthropicClientLayer(
     sdk,
-    request.plan,
+    request,
     claudeCodeClientPath(sdk, creds, request.cacheLifetimes),
     (rewriteBody) =>
       AnthropicClient.layer({ transformClient: (client) => keychain(rewriteBody(client)) }),
@@ -2540,7 +2700,8 @@ export const MESSAGES_CLASS: ApiClassContribution = {
         makeApiKeyAnthropicLayer(
           sdk,
           request.model.id,
-          anthropicRequest(request.model, request.hints, MESSAGES_PROMPT_CACHE_TTL),
+          // A gateway names no receipt that it passes the effort marker on.
+          anthropicRequest(request.model, request.hints, MESSAGES_PROMPT_CACHE_TTL, "none"),
           request,
         ),
       ),
@@ -2579,7 +2740,12 @@ export const buildAnthropicModelDriver = (
     Effect.gen(function* () {
       const auth = Option.fromNullishOr(authInfo)
       const entry = adapterEntry(Option.fromUndefinedOr(catalog), "anthropic", modelName)
-      const request = anthropicRequest(entry, Option.fromNullishOr(hints), promptCacheTtl)
+      const request = anthropicRequest(
+        entry,
+        Option.fromNullishOr(hints),
+        promptCacheTtl,
+        "claude-api",
+      )
 
       // Precedence, the same as OpenAI: stored Claude Code sign-in, then
       // stored API key, then ANTHROPIC_API_KEY. A user who chooses Claude

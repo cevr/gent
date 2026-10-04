@@ -2869,6 +2869,19 @@ const CachedRequest = Schema.fromJsonString(
     ),
   }),
 )
+/** A request's top-level effort and each message's role and effort marker. */
+const EffortRequest = Schema.fromJsonString(
+  Schema.Struct({
+    output_config: Schema.Struct({ effort: Schema.String }),
+    messages: Schema.Array(
+      Schema.Struct({
+        role: Schema.String,
+        content: Schema.Array(Schema.Unknown),
+        output_config: Schema.optional(Schema.Struct({ effort: Schema.String })),
+      }),
+    ),
+  }),
+)
 const ReadTool = Tool.make("read", {
   description: "Read a file.",
   parameters: Schema.Struct({ path: Schema.String }),
@@ -3035,6 +3048,47 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
           expect(noticed.system).toEqual(plain.system)
           expect(markerCount(noticed)).toBe(2)
         }
+      }),
+  )
+
+  // An effort change rides inside the conversation as an effort marker; the
+  // top level keeps the effort the conversation ran at before the change.
+  it.live(
+    "a Claude Code request carries an effort change as a marker after the tool result, before the turn notice",
+    () =>
+      Effect.gen(function* () {
+        const notice = Prompt.makeMessage("system", {
+          content: Option.getOrThrow(
+            turnNoticesText([{ id: "stopped", content: "# Stopped", keys: [] }]),
+          ),
+        })
+        const request = yield* sentThroughSignedInDriver(
+          "claude-opus-5",
+          makeOAuthInfo(),
+          {
+            cacheKey: "session-cache-key",
+            reasoning: "low",
+            reasoningHistory: [Option.some("high")],
+          },
+          (model, state) => runCachingRequest(model, state, {}, [notice]),
+        )
+        const body = Option.getOrThrow(Option.fromUndefinedOr(request.body))
+        const sent = yield* Schema.decodeEffect(EffortRequest)(body)
+        expect(sent.output_config.effort).toBe("high")
+        expect(
+          sent.messages.map((message) =>
+            Option.match(Option.fromUndefinedOr(message.output_config), {
+              onNone: () => message.role,
+              onSome: (config) => `${message.role}:${config.effort}`,
+            }),
+          ),
+        ).toEqual(["user", "assistant", "user", "system:low", "user"])
+        expect(sent.messages[3]?.content).toEqual([])
+        const cached = yield* Schema.decodeEffect(CachedRequest)(body)
+        expect(lastMarked(cached.messages[2]?.content ?? [])).toBe(true)
+        const betas = (request.headers["anthropic-beta"] ?? "").split(",")
+        expect(betas).toContain("mid-conversation-output-config-2026-07-01")
+        expect(betas).toContain("oauth-2025-04-20")
       }),
   )
 

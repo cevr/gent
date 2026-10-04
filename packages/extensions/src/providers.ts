@@ -817,6 +817,69 @@ export const sampledTemperature = (
     Option.flatMap((value) => Option.fromNullishOr(value.temperature)),
   )
 
+// ── effort carrier ──────────────────────────────────────────────────────────
+//
+// A change of the top-level effort invalidates the provider's prompt cache
+// (Anthropic: `output_config.effort` invalidates the cached messages; OpenAI:
+// `reasoning.effort` can change the hidden instructions). Two wires carry a
+// change inside the conversation instead: the Messages effort marker and the
+// Responses `configuration_update` item. A driver that sends one keeps the
+// top level at the effort before the first change and puts one marker at each
+// change. It rebuilds them from the steps' receipts on every request
+// (`ProviderHints.reasoningHistory`), so request `n + 1` repeats request `n`'s
+// bytes and adds after them. Nothing about the carrier is stored.
+
+/** One effort change inside the conversation. */
+interface EffortChange {
+  /** The assistant run the change starts at; `EffortCarrier.runs` names the reply the request asks for. */
+  readonly run: number
+  readonly effort: ReasoningEffort
+}
+
+/** The effort changes a request carries inside its conversation. */
+export interface EffortCarrier {
+  /** The effort the top level names: the one before the first change. */
+  readonly pinned: ReasoningEffort
+  /** The number of assistant runs the request's conversation holds. */
+  readonly runs: number
+  /** In run order, never two at one run. */
+  readonly changes: ReadonlyArray<EffortChange>
+}
+
+/**
+ * The effort changes for a request that sends `current`, from the hints'
+ * history. None, so the request is plain, when the request writes no prompt
+ * cache (a compaction summary), sends no effort, has no history, or names no
+ * change; or when `carries` refuses one of the efforts (the driver cannot send
+ * it as a marker, for example when its plan changes the thinking too).
+ *
+ * A run with no receipt (a step on another model, a step stored before
+ * receipts, a forked branch) takes the next known effort, else `current`. The
+ * last marker so always equals `current`: a request whose history disagrees
+ * with the receipts (a revert, a fork) gets no stale marker at its tail.
+ */
+export const effortCarrier = (
+  hints: Option.Option<ProviderHints>,
+  current: Option.Option<ReasoningEffort>,
+  carries: (effort: ReasoningEffort) => boolean,
+): Option.Option<EffortCarrier> => {
+  if (!writesPromptCache(hints) || Option.isNone(current)) return Option.none()
+  const history = Option.getOrElse(
+    Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.reasoningHistory)),
+    (): ReadonlyArray<Option.Option<ReasoningEffort>> => [],
+  )
+  const sequence = history.reduceRight<ReadonlyArray<ReasoningEffort>>(
+    (later, entry) => [Option.getOrElse(entry, () => later[0] ?? current.value), ...later],
+    [current.value],
+  )
+  const changes = sequence.flatMap((effort, run): ReadonlyArray<EffortChange> => {
+    if (run === 0 || effort === sequence[run - 1]) return []
+    return [{ run, effort }]
+  })
+  if (changes.length === 0 || !sequence.every(carries)) return Option.none()
+  return Option.some({ pinned: sequence[0] ?? current.value, runs: history.length, changes })
+}
+
 /** OpenCode's own cap on a thinking budget (`OUTPUT_TOKEN_MAX - 1` in `provider/transform.ts`). */
 const BUDGET_CEILING = 31_999
 

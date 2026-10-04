@@ -49,6 +49,7 @@ import {
   type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
   type ProviderHints,
+  type ReasoningEffort,
 } from "@gent/core/extensions/api"
 import {
   adapterEntry,
@@ -60,6 +61,8 @@ import {
   type CredentialFailure,
   checkCredentials,
   CredentialRefreshUnavailable,
+  type EffortCarrier,
+  effortCarrier,
   effortFor,
   endpointClient,
   EMPTY_CREDENTIAL_CELL,
@@ -1302,6 +1305,112 @@ const responsesConfig = (
   return config
 }
 
+// ── effort updates ──
+
+/**
+ * Whether a Responses model takes the `configuration_update` input item:
+ * GPT-6 and later. Receipts: opencode `packages/ai/src/protocols/openai-responses.ts`
+ * (`supportsEffortUpdates`, @1549712761: "GPT-6 and later default to
+ * `configuration_update` support"), and Codex, which appends the item on the
+ * ChatGPT backend (`core/src/session/reasoning_effort.rs`). Gent sends no
+ * `context_management` and no `reasoning.mode`, the two cases opencode leaves
+ * out.
+ */
+const takesConfigurationUpdates = (modelId: string): boolean => {
+  const match = /(?:^|\/)gpt-(\d+)(?:\.\d+)?(?:-|$)/i.exec(modelId)
+  return Predicate.isNotNull(match) && Number(match[1]) >= 6
+}
+
+/**
+ * The effort changes a Responses request carries, for a model that takes
+ * `configuration_update`. Every effort the receipts name is one the model
+ * accepts (core clamps them over the same list), so each is sent as named.
+ */
+const responsesEffortCarrier = (
+  entry: CatalogModel,
+  hints: Option.Option<ProviderHints>,
+): Option.Option<EffortCarrier> => {
+  if (!takesConfigurationUpdates(entry.id)) return Option.none()
+  const current = Option.flatMap(reasoningHint(entry, hints), (level) => effortFor(entry, level))
+  return effortCarrier(hints, current, (effort) =>
+    Option.contains(effortFor(entry, effort), effort),
+  )
+}
+
+/** An input item the model wrote: an assistant message, a reasoning item, a tool call. */
+const isModelItem = (item: Schema.Json): boolean => {
+  if (!isJsonObject(item)) return false
+  const role = item["role"]
+  if (Predicate.isString(role)) return role === "assistant"
+  const type = item["type"]
+  return Predicate.isString(type) && !type.endsWith("_output") && type !== "configuration_update"
+}
+
+/**
+ * The Responses body with a `configuration_update` item at each effort
+ * change and the top-level `reasoning.effort` at the pinned effort. A change
+ * at an earlier run goes right before the run's first item, so after the
+ * tool outputs or the user turn before it, never between a call and its
+ * output. A change for the reply the request asks for goes at the end of the
+ * conversation, before the trailing system and developer items (the turn
+ * notices, which the next request does not repeat). The item holds until a
+ * later one overrides it. The body is unchanged when its model runs do not
+ * match the receipts' runs.
+ */
+const withEffortUpdates =
+  (carrier: Option.Option<EffortCarrier>) =>
+  (body: Schema.JsonObject): Schema.JsonObject => {
+    const input = body["input"]
+    if (Option.isNone(carrier) || !Array.isArray(input)) return body
+    const items: ReadonlyArray<Schema.Json> = input
+    const fromModel = items.map(isModelItem)
+    const starts = fromModel.flatMap((model, index) => {
+      if (!model || fromModel[index - 1] === true) return []
+      return [index]
+    })
+    if (starts.length !== carrier.value.runs) return body
+    let tail = items.length
+    while (tail > 0 && isInstructionItem(items[tail - 1])) tail -= 1
+    const places = new Map(
+      carrier.value.changes.map((change) => [starts[change.run] ?? tail, change.effort] as const),
+    )
+    const update = (effort: ReasoningEffort): Schema.JsonObject => ({
+      type: "configuration_update",
+      reasoning: { effort },
+    })
+    const updated: Array<Schema.Json> = []
+    for (const [index, item] of items.entries()) {
+      const effort = places.get(index)
+      if (Predicate.isNotUndefined(effort)) updated.push(update(effort))
+      updated.push(item)
+    }
+    const last = places.get(items.length)
+    if (Predicate.isNotUndefined(last)) updated.push(update(last))
+    let reasoning: Schema.JsonObject = {}
+    const current = body["reasoning"]
+    if (Predicate.isNotUndefined(current) && isJsonObject(current)) reasoning = current
+    return {
+      ...body,
+      input: updated,
+      reasoning: { ...reasoning, effort: carrier.value.pinned },
+    }
+  }
+
+/**
+ * The body rewrite of a request on the OpenAI driver's own paths: the
+ * encrypted reasoning (`withEncryptedReasoning`) and the effort updates.
+ */
+const openAiBody = (
+  entry: CatalogModel,
+  hints: Option.Option<ProviderHints>,
+): ((body: Schema.JsonObject) => Schema.JsonObject) => {
+  const reasons = modelReasons(entry, hints)
+  const carrier = responsesEffortCarrier(entry, hints)
+  const encrypted = withEncryptedReasoning(reasons)
+  const updates = withEffortUpdates(carrier)
+  return (body) => updates(encrypted(body))
+}
+
 /**
  * The OpenAI Responses API, for any provider whose models.dev entry names
  * `@ai-sdk/openai` or the `responses` shape (the OpenCode gateways' GPT
@@ -1545,15 +1654,17 @@ const rejectionCheck = (
 }
 
 /**
- * The client both auth paths run over, next to the transport: asks for the
- * encrypted reasoning (`withEncryptedReasoning`), leaves rejected reasoning
- * out, and on a rejection records it and retries once.
+ * The client both auth paths run over, next to the transport: rewrites the
+ * body (`openAiBody`: the encrypted reasoning and the effort updates), leaves
+ * rejected reasoning out, and on a rejection records it and retries once. The
+ * rewrite runs after rejected reasoning is left out, so the effort updates
+ * count the runs the request sends.
  */
 const reasoningReplayClient =
-  (rejected: RejectedReasoning, reasons: boolean) =>
+  (rejected: RejectedReasoning, body: (body: Schema.JsonObject) => Schema.JsonObject) =>
   (client: HttpClient.HttpClient): HttpClient.HttpClient =>
     client.pipe(
-      rewriteJsonBody(withEncryptedReasoning(reasons)),
+      rewriteJsonBody(body),
       HttpClient.mapRequestEffect((req) =>
         Effect.map(Ref.get(rejected), (ids) => withoutRejectedReasoning(req, ids)),
       ),
@@ -1580,7 +1691,7 @@ const makeApiKeyOpenAIResolution = (
   apiKey: string,
   refusedKeys: RefusedKeys,
   rejectedReasoning: RejectedReasoning,
-  reasons: boolean,
+  body: (body: Schema.JsonObject) => Schema.JsonObject,
 ) => {
   const { OpenAiClient: OpenAiResponsesClient, OpenAiLanguageModel: OpenAiResponsesLanguageModel } =
     sdk
@@ -1590,7 +1701,7 @@ const makeApiKeyOpenAIResolution = (
       summaryRefusalClient(
         refusedKeys,
         apiKey,
-      )(reasoningReplayClient(rejectedReasoning, reasons)(client)),
+      )(reasoningReplayClient(rejectedReasoning, body)(client)),
     ),
   ).pipe(Layer.provide(ModelHttpClient))
   const clientLayer = OpenAiResponsesClient.layer({ apiKey: Redacted.make(apiKey) }).pipe(
@@ -1624,7 +1735,7 @@ const makeOauthOpenAILayer = (
   config: OpenAiResponsesConfig,
   creds: CredentialCache<OpenAICredentials>,
   rejectedReasoning: RejectedReasoning,
-  reasons: boolean,
+  body: (body: Schema.JsonObject) => Schema.JsonObject,
 ) => {
   const { OpenAiClient: OpenAiResponsesClient, OpenAiLanguageModel: OpenAiResponsesLanguageModel } =
     sdk
@@ -1632,7 +1743,7 @@ const makeOauthOpenAILayer = (
     HttpClient.HttpClient,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
-      return buildCodexClient(creds)(reasoningReplayClient(rejectedReasoning, reasons)(client))
+      return buildCodexClient(creds)(reasoningReplayClient(rejectedReasoning, body)(client))
     }),
   ).pipe(Layer.provide(ModelHttpClient))
   const clientLayer = OpenAiResponsesClient.layer({
@@ -1803,7 +1914,7 @@ export const buildOpenAIModelDriver = (
         const auth = Option.fromNullishOr(authInfo)
         const hints = Option.fromNullishOr(hintsInput)
         const entry = adapterEntry(Option.fromUndefinedOr(catalog), "openai", modelName)
-        const reasons = modelReasons(entry, hints)
+        const body = openAiBody(entry, hints)
         const config = responsesConfig(entry, hints)
         // Stored OAuth — handle inline with token refresh. Both paths speak the
         // Responses API through @effect/ai-openai; OAuth adds the Codex rewrite.
@@ -1828,7 +1939,7 @@ export const buildOpenAIModelDriver = (
               config,
               creds,
               rejectedReasoning,
-              reasons,
+              body,
             ),
           )
         }
@@ -1844,7 +1955,7 @@ export const buildOpenAIModelDriver = (
             apiKey.value,
             refusedKeys,
             rejectedReasoning,
-            reasons,
+            body,
           )
         }
 
