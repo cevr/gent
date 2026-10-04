@@ -95,6 +95,21 @@ export function dropFirstGrapheme(value: string): string {
   return value
 }
 
+/**
+ * The first grapheme boundary of `value` at or after `index`. An edit can
+ * join its neighbours into one character (a ZWJ between two emoji, two
+ * regional indicators that meet), so an index that was a boundary before the
+ * edit can fall inside a character after it.
+ */
+export function graphemeBoundaryFrom(value: string, index: number): number {
+  for (const { index: start, segment } of graphemes.segment(value)) {
+    const end = start + segment.length
+    if (index <= start) return start
+    if (index < end) return end
+  }
+  return value.length
+}
+
 /** How many characters the reader sees: graphemes, not code units. */
 export const graphemeCount = (value: string): number => Array.from(graphemes.segment(value)).length
 

@@ -27,6 +27,7 @@ import { useTheme } from "./theme"
 import {
   dropFirstGrapheme,
   dropLastGrapheme,
+  graphemeBoundaryFrom,
   truncate,
   truncateStart,
   useRequiredContext,
@@ -843,12 +844,21 @@ const caretSplit = (line: CaretLine): readonly [string, string] => [
   line.text.slice(line.caret),
 ]
 
+/**
+ * The line with its caret on a boundary of the whole text: after an edit
+ * that joined two characters into one, the caret goes after that character.
+ */
+const onBoundary = (line: CaretLine): CaretLine => ({
+  text: line.text,
+  caret: graphemeBoundaryFrom(line.text, line.caret),
+})
+
 export const CaretLine = {
   empty: { text: "", caret: 0 } satisfies CaretLine,
   /** `text` typed or pasted at the caret; the caret goes after it. */
   insert: (line: CaretLine, text: string): CaretLine => {
     const [before, after] = caretSplit(line)
-    return { text: before + text + after, caret: before.length + text.length }
+    return onBoundary({ text: before + text + after, caret: before.length + text.length })
   },
 }
 
@@ -913,13 +923,14 @@ const CARET_KEYS: ReadonlyArray<{
  */
 export const caretLineEdit = (event: ScopedKeyboardEvent): Option.Option<CaretEdit> => {
   const erase = eraseKey(event)
-  if (Option.isSome(erase)) return Option.some(eraseAtCaret(erase.value))
+  if (Option.isSome(erase))
+    return Option.some((line) => onBoundary(eraseAtCaret(erase.value)(line)))
   if (event.meta === true || event.option === true || event.super === true) return Option.none()
   return Option.fromUndefinedOr(
     CARET_KEYS.find(
       (binding) => binding.name === event.name && binding.ctrl === (event.ctrl === true),
     ),
-  ).pipe(Option.map((binding) => binding.edit))
+  ).pipe(Option.map((binding) => (line: CaretLine) => onBoundary(binding.edit(line))))
 }
 
 /** The part of a caret line a row shows: the text on each side of the caret. */

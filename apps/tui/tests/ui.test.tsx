@@ -83,6 +83,12 @@ describe("caret line", () => {
     expect(caretWindow({ text: "short", caret: 2 }, 21)).toEqual({ before: "sh", after: "ort" })
   })
 
+  test("an insert that joins two characters into one puts the caret after the whole character", () => {
+    // A ZWJ between two women makes one grapheme, 👩‍👩, with boundaries 0 and 5.
+    const line = CaretLine.insert({ text: "👩👩", caret: "👩".length }, "\u200d")
+    expect(line).toEqual({ text: "👩\u200d👩", caret: "👩\u200d👩".length })
+  })
+
   test("an insert at the caret lands between whole characters", () => {
     const line = CaretLine.insert({ text: "a👍🏽b", caret: "a👍🏽".length }, "c")
     expect(line).toEqual({ text: "a👍🏽cb", caret: "a👍🏽c".length })

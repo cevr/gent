@@ -267,6 +267,23 @@ describe("AskUserRenderer answers", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.scopedLive("an erase that joins two characters into one leaves the caret after it", () =>
+    Effect.gen(function* () {
+      const { setup, results } = yield* ask([color])
+      // Two regional indicators with an x between them: deleting the x makes the 🇨🇺 flag.
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("\u{1F1E8}x\u{1F1FA}"))
+      setup.mockInput.pressArrow("left")
+      setup.mockInput.pressBackspace()
+      // The caret is after the flag, so a backspace takes the flag whole.
+      setup.mockInput.pressBackspace()
+      yield* Effect.promise(() => setup.mockInput.typeText("a"))
+      yield* waitForFrame(setup, (f) => f.includes("Other: a│"), "the flag erased whole")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([{ approved: true, notes: '[["a"]]' }])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("an answer wider than the row scrolls so the caret stays in view", () =>
     Effect.gen(function* () {
       const { setup } = yield* ask([color], 40)
