@@ -164,6 +164,11 @@ const spawnWithDir = (
         GENT_DATA_DIR: tempDir,
         GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
         GENT_MODEL_CATALOG_URL: catalogOrigin,
+        // The `@gent/git` client runs `gh` when it is on PATH: an empty
+        // config and no token keep it signed out, so it never reaches GitHub.
+        GH_CONFIG_DIR: `${tempDir}/gh`,
+        GH_TOKEN: "",
+        GITHUB_TOKEN: "",
         ...extraEnv,
       },
       size,

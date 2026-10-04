@@ -21,7 +21,6 @@ import {
   Stream,
 } from "effect"
 import { Base64 } from "effect/encoding"
-import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { RpcClientError } from "effect/rpc/RpcClientError"
 import { SocketCloseError } from "effect/socket/Socket"
@@ -88,6 +87,7 @@ import {
   renderScoped,
   TerminalOutput,
   snapshotNaming,
+  testPlatformLayer,
 } from "./render-harness-boundary"
 import { LinkOpener, LinkOpenerError } from "../src/os"
 import { createSignal, onMount, Show, type Signal } from "solid-js"
@@ -5526,7 +5526,7 @@ describe("App clipboard", () => {
     Effect.gen(function* () {
       const built = yield* Layer.build(
         Layer.mergeAll(
-          BunServices.layer,
+          testPlatformLayer(),
           LinkOpener.Test({
             open: (url) => Effect.fail(new LinkOpenerError({ message: `no browser for ${url}` })),
           }),
@@ -5581,7 +5581,7 @@ describe("App clipboard", () => {
             }).pipe(Effect.orDie)
           })
         }),
-      ).pipe(Layer.provide(BunServices.layer)),
+      ).pipe(Layer.provide(testPlatformLayer())),
     )
 
   /** The bytes an OSC 52 copy of `text` to the clipboard sends the terminal. */

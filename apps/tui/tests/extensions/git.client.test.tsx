@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Option } from "effect"
+import { Effect, FileSystem, Option, Result } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { BunServices } from "@effect/platform-bun"
 import {
@@ -16,14 +16,22 @@ import gitExtension, {
   branchText,
   type Checkout,
   checkoutLabels,
+  checksVerdict,
   parseNumstat,
   parseStatus,
   readCheckout,
+  readPullRequest,
 } from "../../src/extensions/git.client"
 import type { StatusLabelItem } from "../../src/extensions/client-facets"
 import { App } from "../../src/app"
 import { provideClientServices } from "../extension-test-harness-boundary"
-import { createMockClient, createMockRuntime, renderScoped } from "../render-harness-boundary"
+import {
+  createMockClient,
+  createMockRuntime,
+  renderScoped,
+  type TestTools,
+  testPlatformLayer,
+} from "../render-harness-boundary"
 import { waitForFrame, waitUntil } from "../helpers-boundary"
 
 const sessionId = SessionId.make("git-session")
@@ -239,7 +247,7 @@ describe("git checkout read", () => {
 // ── refresh ─────────────────────────────────────────────────────────────────
 
 /** The extension's labels for `cwd`, with the event feed a test drives. */
-const mountLabels = (cwd: string) =>
+const mountLabels = (cwd: string, tools: TestTools = {}) =>
   Effect.gen(function* () {
     const subscribers = new Set<(envelope: EventEnvelope) => void>()
     const cleanups: Array<() => void> = []
@@ -249,6 +257,7 @@ const mountLabels = (cwd: string) =>
       sessionEventSubscribers: subscribers,
       currentSession: () => ({ sessionId, branchId }),
       lifecycle: { addCleanup: (cleanup) => cleanups.push(cleanup) },
+      tools,
     })
     const produce = contributions.statusLabels?.[0]?.produce ?? (() => [])
     let ids = 0
@@ -258,8 +267,51 @@ const mountLabels = (cwd: string) =>
       for (const subscriber of subscribers) subscriber(envelope)
     }
     const texts = () => labelTexts(produce())
-    return { texts, emit }
+    const labels = () => produce()
+    return { texts, labels, emit }
   })
+
+/**
+ * A stand-in `gh` in its own directory: it appends a line to `calls` on each
+ * run, then prints `stdout` with `CALLS` replaced by the count of runs so
+ * far, prints `stderr` to its error stream and exits with `code`.
+ */
+const fakeGh = (reply: {
+  readonly stdout?: string
+  readonly stderr?: string
+  readonly code?: number
+}) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const dir = yield* makeTempDirectoryScoped("gent-fake-gh-")
+    const program = `${dir}/gh`
+    yield* fs.writeFileString(`${dir}/stdout`, reply.stdout ?? "")
+    yield* fs.writeFileString(`${dir}/stderr`, reply.stderr ?? "")
+    yield* fs.writeFileString(
+      program,
+      [
+        "#!/bin/sh",
+        `echo "$*" >> '${dir}/calls'`,
+        `n=$(wc -l < '${dir}/calls' | tr -d ' ')`,
+        `sed "s/CALLS/$n/" '${dir}/stdout'`,
+        `cat '${dir}/stderr' >&2`,
+        `exit ${reply.code ?? 0}`,
+        "",
+      ].join("\n"),
+    )
+    yield* fs.chmod(program, 0o755)
+    const calls = fs.readFileString(`${dir}/calls`).pipe(
+      Effect.map((text) => text.split("\n").filter((line) => line.length > 0).length),
+      Effect.orElseSucceed(() => 0),
+    )
+    return { program, calls }
+  })
+
+/** `gh pr view --json` for open pull request 7, whose one check passed. */
+const PR_JSON =
+  '{"number":7,"title":"Show the branch","url":"https://github.invalid/o/r/pull/7",' +
+  '"state":"OPEN","isDraft":false,"reviewDecision":"",' +
+  '"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}'
 
 describe("git refresh", () => {
   it.live("a tool call reads the checkout again once the burst settles", () =>
@@ -328,6 +380,128 @@ const renderRow = (cwd: string, width: number) =>
   })
 
 const statusLine = (frame: string) => frame.split("\n").find((line) => line.includes("ready")) ?? ""
+
+describe("git pull request", () => {
+  test("checks fail on any failure, then wait on any running check, then pass", () => {
+    expect(checksVerdict([])).toBe("none")
+    expect(
+      checksVerdict([
+        { status: "COMPLETED", conclusion: "SUCCESS" },
+        { status: "IN_PROGRESS", conclusion: "" },
+        { state: "FAILURE" },
+      ]),
+    ).toBe("fail")
+    expect(
+      checksVerdict([{ status: "COMPLETED", conclusion: "SUCCESS" }, { state: "PENDING" }]),
+    ).toBe("pending")
+    expect(
+      checksVerdict([{ status: "COMPLETED", conclusion: "SKIPPED" }, { state: "SUCCESS" }]),
+    ).toBe("pass")
+  })
+
+  test("the label names the request with its checks, or says it is a draft, merged or closed", () => {
+    const checkout: Checkout = {
+      root: "/r",
+      gitDir: "/r/.git",
+      head: {
+        branch: Option.some("main"),
+        oid: Option.some("1a2b3c4"),
+        upstream: Option.none(),
+        ahead: 0,
+        behind: 0,
+      },
+      files: [],
+    }
+    const pr = {
+      number: 7,
+      title: "t",
+      url: "u",
+      state: "OPEN",
+      isDraft: false,
+      statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+    }
+    const labelOf = (fields: Partial<typeof pr>) => {
+      const labels = checkoutLabels(checkout, Option.some({ ...pr, ...fields }))
+      return [labels[1]?.text, labels[1]?.color]
+    }
+    expect(labelOf({})).toEqual(["#7 ✓", "success"])
+    expect(
+      labelOf({ statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }] }),
+    ).toEqual(["#7 ✗", "error"])
+    expect(labelOf({ statusCheckRollup: [{ status: "QUEUED", conclusion: "" }] })).toEqual([
+      "#7 …",
+      "warning",
+    ])
+    expect(labelOf({ statusCheckRollup: [] })).toEqual(["#7", "textMuted"])
+    expect(labelOf({ isDraft: true })).toEqual(["#7 draft", "textMuted"])
+    expect(labelOf({ state: "MERGED" })).toEqual(["#7 merged", "textMuted"])
+    expect(labelOf({ state: "CLOSED" })).toEqual(["#7 closed", "textMuted"])
+  })
+
+  it.live("gh answers a request, no request, a sign-in failure, or is not there", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDirectoryScoped("gent-git-gh-")
+      const readWith = (tools: TestTools) =>
+        readPullRequest(cwd).pipe(Effect.result, Effect.provide(testPlatformLayer(tools)))
+      const open = yield* fakeGh({ stdout: PR_JSON })
+      const found = yield* readWith({ gh: open.program })
+      expect(Result.isSuccess(found) && Option.getOrNull(found.success)?.number).toBe(7)
+      expect(yield* open.calls).toBe(1)
+      const none = yield* fakeGh({
+        stderr: 'no pull requests found for branch "trunk"\n',
+        code: 1,
+      })
+      const absent = yield* readWith({ gh: none.program })
+      expect(Result.isSuccess(absent) && Option.isNone(absent.success)).toBe(true)
+      const signedOut = yield* fakeGh({
+        stderr: "To get started with GitHub CLI, please run:  gh auth login\n",
+        code: 4,
+      })
+      const refused = yield* readWith({ gh: signedOut.program })
+      expect(Result.isFailure(refused) && refused.failure._tag).toBe("GhReadError")
+      const missing = yield* readWith({})
+      expect(Result.isFailure(missing) && missing.failure._tag).toBe("GhMissing")
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.live("the pull request label follows a commit and leaves gh alone for an edit", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* makeRepo("gent-git-pr-")
+      yield* git(repo, "branch", "base")
+      yield* git(repo, "branch", "-q", "--set-upstream-to=base")
+      // The stand-in names its request by the count of asks, so the label
+      // says how many times gh ran.
+      const gh = yield* fakeGh({ stdout: PR_JSON.replace('"number":7', '"number":CALLS') })
+      const { texts, emit } = yield* mountLabels(repo, { gh: gh.program })
+      yield* waitUntil(() => texts().join("|") === "trunk|#1 ✓", "the pull request")
+      // A commit moves the branch ahead of its upstream: the request is asked again.
+      yield* fs.writeFileString(`${repo}/kept.txt`, "one\n")
+      yield* git(repo, "commit", "-q", "-am", "ahead")
+      yield* waitUntil(() => texts().join("|") === "trunk ↑1|#2 ✓", "the commit", 1_500)
+      // An edit changes no branch fact: the labels move, gh is not asked.
+      yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\n")
+      emit(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }))
+      yield* waitUntil(() => texts().join("|") === "trunk ↑1|#2 ✓|1 file +1 -0", "the edit")
+      // The next commit is the third ask; an ask for the edit would make it the fourth.
+      yield* git(repo, "commit", "-q", "-am", "ahead again")
+      yield* waitUntil(() => texts().join("|") === "trunk ↑2|#3 ✓", "the next commit", 1_500)
+      expect(yield* gh.calls).toBe(3)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.live("with no gh on the path the labels show no pull request", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* makeRepo("gent-git-nogh-")
+      yield* fs.writeFileString(`${repo}/kept.txt`, "one\n")
+      const { texts } = yield* mountLabels(repo)
+      yield* waitUntil(() => texts().join("|") === "trunk|1 file +0 -1", "the checkout")
+      yield* git(repo, "checkout", "-q", "-b", "next")
+      yield* waitUntil(() => texts().join("|") === "next|1 file +0 -1", "the branch move", 1_500)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
 
 describe("git status row", () => {
   it.live(

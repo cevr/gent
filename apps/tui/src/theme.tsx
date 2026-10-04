@@ -70,6 +70,7 @@ export type Theme = ThemeColors
 /** A theme color an extension names; the host draws it in the active theme. */
 export const NamedThemeColor = Schema.Literals([
   "warning",
+  "error",
   "info",
   "success",
   "primary",

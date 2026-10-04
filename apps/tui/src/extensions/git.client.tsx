@@ -1,6 +1,17 @@
 /** @jsxImportSource @opentui/solid */
-import { Duration, Effect, Fiber, FileSystem, Option, Path, Schema, Stream } from "effect"
+import {
+  Duration,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Path,
+  PlatformError,
+  Schema,
+  Stream,
+} from "effect"
 import type { ChildProcessSpawner } from "effect/process"
+import { createEffect, createMemo, createRoot, on } from "solid-js"
 import { lineCount } from "@gent/core/protocol"
 import { runProcess } from "@gent/core/extensions/api"
 import {
@@ -228,6 +239,7 @@ export const parseNumstat = (output: string): ReadonlyMap<string, Option.Option<
  * branch after the model shortens and before the idle phase word.
  */
 const RANK = {
+  pullRequest: STATUS_YIELD.cwd - 0.5,
   changes: STATUS_YIELD.cwd + 0.5,
   branch: STATUS_YIELD.model + 0.5,
 }
@@ -261,12 +273,19 @@ const changeTotals = (files: ReadonlyArray<ChangedFile>): LineCounts =>
 /** `+120 -31` */
 const lineDelta = (lines: LineCounts): string => `+${lines.added} -${lines.deleted}`
 
-/** The status row's labels for one checkout: the branch, then the change count. */
-export const checkoutLabels = (checkout: Checkout): ReadonlyArray<StatusLabelItem> => {
+/**
+ * The status row's labels for one checkout: the branch, the branch's pull
+ * request when there is one, then the change count.
+ */
+export const checkoutLabels = (
+  checkout: Checkout,
+  pullRequest: Option.Option<PullRequest> = Option.none(),
+): ReadonlyArray<StatusLabelItem> => {
   const labels: Array<StatusLabelItem> = []
   Option.map(branchText(checkout.head), (text) =>
     labels.push({ text, color: "textMuted", short: { text: "", rank: RANK.branch } }),
   )
+  Option.map(pullRequest, (pr) => labels.push(pullRequestLabel(pr)))
   if (checkout.files.length > 0) {
     const delta = lineDelta(changeTotals(checkout.files))
     labels.push({
@@ -436,6 +455,177 @@ export const readCheckout = (
     return Option.some({ ...location.value, head, files })
   })
 
+// ── pull request ────────────────────────────────────────────────────────────
+
+/**
+ * One check of a pull request as `gh` names it: a check run has a `status`
+ * and, once completed, a `conclusion`; a commit status has a `state`.
+ */
+const PullRequestCheck = Schema.Struct({
+  status: Schema.optional(Schema.NullOr(Schema.String)),
+  conclusion: Schema.optional(Schema.NullOr(Schema.String)),
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+})
+
+/** The fields of `gh pr view --json` the label and the pane read. */
+const PullRequest = Schema.Struct({
+  number: Schema.Finite,
+  title: Schema.String,
+  url: Schema.String,
+  state: Schema.String,
+  isDraft: Schema.Boolean,
+  reviewDecision: Schema.optional(Schema.NullOr(Schema.String)),
+  statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(PullRequestCheck))),
+})
+type PullRequest = typeof PullRequest.Type
+
+const decodePullRequest = Schema.decodeUnknownOption(Schema.fromJsonString(PullRequest))
+
+/** The fields `gh pr view` answers with. */
+const PULL_REQUEST_FIELDS = "number,title,url,state,isDraft,reviewDecision,statusCheckRollup"
+
+const FAILED_CHECK = new Set([
+  "FAILURE",
+  "ERROR",
+  "CANCELLED",
+  "TIMED_OUT",
+  "ACTION_REQUIRED",
+  "STARTUP_FAILURE",
+])
+const PENDING_CHECK = new Set(["PENDING", "EXPECTED"])
+
+/** Where a pull request's checks stand: any failure fails them, then any check still running. */
+export const checksVerdict = (
+  checks: ReadonlyArray<typeof PullRequestCheck.Type>,
+): "none" | "pass" | "fail" | "pending" => {
+  if (checks.length === 0) return "none"
+  const named = (value: (typeof PullRequestCheck.Type)["status"]): string =>
+    Option.getOrElse(Option.fromNullishOr(value), () => "")
+  if (checks.some((c) => FAILED_CHECK.has(named(c.conclusion)) || FAILED_CHECK.has(named(c.state))))
+    return "fail"
+  const running = (c: typeof PullRequestCheck.Type) =>
+    (named(c.status).length > 0 && named(c.status) !== "COMPLETED") ||
+    PENDING_CHECK.has(named(c.state))
+  if (checks.some(running)) return "pending"
+  return "pass"
+}
+
+/**
+ * `#123 ✓` (checks pass), `#123 ✗` (a check failed), `#123 …` (checks
+ * running), `#123` (no checks); a draft, a merged and a closed request say
+ * so. It gives way first on a narrow row.
+ */
+const pullRequestLabel = (pr: PullRequest): StatusLabelItem => {
+  const short = { text: "", rank: RANK.pullRequest }
+  const muted = (word: string): StatusLabelItem => ({
+    text: `#${pr.number}${word}`,
+    color: "textMuted",
+    short,
+  })
+  if (pr.state === "MERGED") return muted(" merged")
+  if (pr.state === "CLOSED") return muted(" closed")
+  if (pr.isDraft) return muted(" draft")
+  switch (checksVerdict(pr.statusCheckRollup ?? [])) {
+    case "fail":
+      return { text: `#${pr.number} ✗`, color: "error", short }
+    case "pending":
+      return { text: `#${pr.number} …`, color: "warning", short }
+    case "pass":
+      return { text: `#${pr.number} ✓`, color: "success", short }
+    case "none":
+      return muted("")
+  }
+}
+
+/**
+ * The spawn found no program by the command's name. A directory that is gone
+ * fails the spawn too, but at its `FileSystem.access`, so it is not this.
+ */
+const commandNotFound = (cause: unknown): boolean =>
+  PlatformError.isPlatformError(cause) &&
+  cause.reason._tag === "NotFound" &&
+  "module" in cause.reason &&
+  cause.reason.module === "ChildProcess"
+
+/** No `gh` on `PATH`: the pull request is never asked for again. */
+class GhMissing extends Schema.TaggedError<GhMissing>()("GhMissing", {}) {}
+
+/** A `gh` read that did not answer; the last value stays and the pane names the reason. */
+class GhReadError extends Schema.TaggedError<GhReadError>()("GhReadError", {
+  message: Schema.String,
+}) {}
+
+/** `gh` asks the network; a read that takes longer fails and the last value stays. */
+const GH_TIMEOUT = Duration.seconds(8)
+
+/** `gh` answers that the checkout has no pull request to name: none, not a failure. */
+const NO_PULL_REQUEST = [
+  "no pull requests found",
+  "no git remotes found",
+  "none of the git remotes configured for this repository",
+]
+
+/**
+ * The pull request of the branch checked out in `cwd`, as `gh pr view`
+ * names it. None when the branch has none, or the checkout has no GitHub
+ * remote. `GhMissing` when `gh` cannot run.
+ */
+export const readPullRequest = (
+  cwd: string,
+): Effect.Effect<
+  Option.Option<PullRequest>,
+  GhMissing | GhReadError,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
+  runProcess("gh", ["pr", "view", "--json", PULL_REQUEST_FIELDS], {
+    cwd,
+    env: { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_SPINNER_DISABLED: "1" },
+    extendEnv: true,
+    timeout: GH_TIMEOUT,
+  }).pipe(
+    Effect.catchTag("ProcessError", (error): Effect.Effect<never, GhMissing | GhReadError> => {
+      if (error.timedOut === true)
+        return Effect.fail(new GhReadError({ message: "gh pr view timed out" }))
+      if (commandNotFound(error.cause)) return Effect.fail(new GhMissing())
+      return Effect.fail(new GhReadError({ message: error.message }))
+    }),
+    Effect.flatMap((result) => {
+      if (result.exitCode === 0) {
+        return Option.match(decodePullRequest(result.stdout), {
+          onNone: () => Effect.fail(new GhReadError({ message: "gh pr view: unreadable answer" })),
+          onSome: (pr) => Effect.succeedSome(pr),
+        })
+      }
+      const said = result.stderr.toLowerCase()
+      if (NO_PULL_REQUEST.some((phrase) => said.includes(phrase))) return Effect.succeedNone
+      if (said.includes("gh auth login"))
+        return Effect.fail(new GhReadError({ message: "gh is not signed in · gh auth login" }))
+      return Effect.fail(new GhReadError({ message: `gh pr view: ${firstLine(result.stderr)}` }))
+    }),
+  )
+
+/**
+ * What the pull request read follows: the checkout's root, branch, upstream
+ * and ahead/behind counts. A push, a pull, a fetch or a branch move changes
+ * it; an edit does not. Empty for no checkout, a detached head and an
+ * unborn branch, which have no pull request to ask for.
+ */
+const pullRequestKey = (checkout: Option.Option<Checkout>): string =>
+  Option.match(
+    Option.filter(checkout, (value) => Option.isSome(value.head.oid)),
+    {
+      onNone: () => "",
+      onSome: ({ root, head }) =>
+        Option.match(head.branch, {
+          onNone: () => "",
+          onSome: (branch) =>
+            [root, branch, Option.getOrElse(head.upstream, () => ""), head.ahead, head.behind].join(
+              "\0",
+            ),
+        }),
+    },
+  )
+
 // ── refresh ─────────────────────────────────────────────────────────────────
 
 /** The files git writes when the checkout's branch, index, merge or upstream moves. */
@@ -527,9 +717,55 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
       watch(Option.none(), () => {})
     })
 
+    // The branch's pull request, through `gh`, read again only when the
+    // branch, its upstream or its ahead/behind counts move: a push, a pull, a
+    // fetch, a checkout. No `gh` on `PATH` hides it for the extension's life.
+    // Each answer keeps the key it was asked for, so a branch move never
+    // shows the last branch's request while the next read is out.
+    let ghMissing = false
+    const pullRequest = yield* sessionQuery({
+      initial: Option.none<{ readonly key: string; readonly pr: Option.Option<PullRequest> }>(),
+      follow: true,
+      fetch: () => {
+        const key = pullRequestKey(local.value())
+        if (ghMissing || key.length === 0) return Effect.succeedNone
+        return workspace.sessionCwd.pipe(
+          Effect.flatMap(readPullRequest),
+          Effect.map((pr) => Option.some({ key, pr })),
+          Effect.catchTag("GhMissing", () =>
+            Effect.sync(() => {
+              ghMissing = true
+              return Option.none<{
+                readonly key: string
+                readonly pr: Option.Option<PullRequest>
+              }>()
+            }),
+          ),
+          Effect.provideContext(services),
+        )
+      },
+    })
+    lifecycle.addCleanup(
+      createRoot((dispose) => {
+        // A memo, so a read that changes no branch fact asks nothing.
+        const key = createMemo(() => pullRequestKey(local.value()))
+        createEffect(on(key, pullRequest.refresh, { defer: true }))
+        return dispose
+      }),
+    )
+    const currentPullRequest = (): Option.Option<PullRequest> =>
+      pullRequest.value().pipe(
+        Option.filter((answer) => answer.key === pullRequestKey(local.value())),
+        Option.flatMap((answer) => answer.pr),
+      )
+
     return statusLabelContribution({
       priority: 20,
-      produce: () => Option.match(local.value(), { onNone: () => [], onSome: checkoutLabels }),
+      produce: () =>
+        Option.match(local.value(), {
+          onNone: () => [],
+          onSome: (checkout) => checkoutLabels(checkout, currentPullRequest()),
+        }),
     })
   }),
 })

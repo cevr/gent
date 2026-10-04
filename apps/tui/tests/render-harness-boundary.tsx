@@ -17,6 +17,7 @@ import {
 import type { CliRenderer, CliRendererExternalOutputEvent, TerminalColors } from "@opentui/core"
 import { render } from "@opentui/solid"
 import { createTestRenderer, type TestRendererOptions } from "@opentui/core/testing"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { onMount, type JSX } from "solid-js"
 import { KeyboardScopeProvider, TerminalDimensionsProvider } from "../src/terminal"
 import { SpinnerClockProvider } from "../src/ui"
@@ -72,6 +73,53 @@ const makeRenderHome = Effect.gen(function* () {
   yield* fs.makeDirectory(root, { recursive: true })
   return yield* fs.makeTempDirectory({ directory: root, prefix: "home-" })
 }).pipe(Effect.provide(BunServices.layer), Effect.orDie)
+
+// ── platform ────────────────────────────────────────────────────────────────
+
+/** Stand-ins for the optional tools a client extension runs; each names a program path. */
+export interface TestTools {
+  readonly gh?: string
+  readonly hunk?: string
+}
+
+/** No test reaches the real `gh` or `hunk`: each runs as a program that is not there. */
+const MISSING_TOOLS: Required<TestTools> = {
+  gh: "/nonexistent/loop-probe-gh",
+  hunk: "/nonexistent/loop-probe-hunk",
+}
+
+/**
+ * The Bun platform a test renders on, with a process spawner that runs `gh`
+ * and `hunk` from `tools`, by default from a path that does not exist, so a
+ * test sees them missing. The real `gh` would read the reader's sign-in and
+ * reach GitHub, and the real `hunk` would take the terminal. Every other
+ * command runs for real.
+ */
+export const testPlatformLayer = (tools: TestTools = {}) => {
+  const stand: Required<TestTools> = { ...MISSING_TOOLS, ...tools }
+  const programFor = (command: string): Option.Option<string> => {
+    if (command === "gh") return Option.some(stand.gh)
+    if (command === "hunk") return Option.some(stand.hunk)
+    return Option.none()
+  }
+  return Layer.mergeAll(
+    BunServices.layer,
+    Layer.effect(
+      ChildProcessSpawner.ChildProcessSpawner,
+      Effect.gen(function* () {
+        const real = yield* ChildProcessSpawner.ChildProcessSpawner
+        return ChildProcessSpawner.make((command) => {
+          if (!ChildProcess.isStandardCommand(command)) return real.spawn(command)
+          return Option.match(programFor(command.command), {
+            onNone: () => real.spawn(command),
+            onSome: (program) =>
+              real.spawn(ChildProcess.make(program, command.args, command.options)),
+          })
+        })
+      }),
+    ).pipe(Layer.provide(BunServices.layer)),
+  )
+}
 
 let sharedServices: Option.Option<Context.Context<unknown>> = Option.none()
 
@@ -368,7 +416,7 @@ const getServices = (): Promise<Context.Context<unknown>> => {
   return Effect.runPromise(
     Effect.gen(function* () {
       const scope = yield* Scope.make()
-      const context = yield* Layer.buildWithScope(BunServices.layer, scope)
+      const context = yield* Layer.buildWithScope(testPlatformLayer(), scope)
       const services = Context.makeUnsafe<unknown>(
         Context.add(context, Scope.Scope, scope).mapUnsafe,
       )
