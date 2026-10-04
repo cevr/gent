@@ -17,7 +17,7 @@ import {
   questionAnswerText,
   QuestionRow,
 } from "../src/interaction-tools.js"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
+import { BranchId, SessionId, SteerCommand, ToolCallId } from "@gent/core/protocol"
 import {
   createRpcHarness,
   runToolWithCtx,
@@ -38,9 +38,11 @@ import {
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   defineExtension,
+  ExtensionContext,
   ExtensionHost,
   type ExtensionContextService,
   LoadedArtifactIdentity,
+  RequestId,
   tool,
 } from "@gent/core/extensions/api"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset"
@@ -697,6 +699,40 @@ const holdFixture = (release: Deferred.Deferred<void>) => ({
   artifactIdentity: LoadedArtifactIdentity.make("hold-fixture-source"),
 })
 
+/**
+ * A tool that asks the user first (the turn parks on it), then, on the run
+ * that resumes it, signals `resumed` and holds until the test releases it.
+ */
+const askThenHoldFixture = (
+  resumed: Deferred.Deferred<void>,
+  release: Deferred.Deferred<void>,
+) => ({
+  ...defineExtension({
+    id: "ask-then-hold-fixture",
+    setup: Effect.gen(function* () {
+      yield* (yield* ExtensionHost).register(
+        "tool",
+        tool({
+          id: "ask_then_hold",
+          interactive: true,
+          description: "Ask to go on, then wait until the test releases the step",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: () =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Interaction.approve({ text: "Go on?" })
+              yield* Deferred.succeed(resumed, void 0)
+              yield* Deferred.await(release)
+              return "released"
+            }),
+        }),
+      )
+    }),
+  }),
+  artifactIdentity: LoadedArtifactIdentity.make("ask-then-hold-fixture-source"),
+})
+
 /** The input of `questions.open` (empty) and `questions.answer`. */
 interface QuestionsInput {
   readonly answers?: ReadonlyArray<{ readonly id: string; readonly answer: string }>
@@ -964,6 +1000,72 @@ describe("ask_user_async", () => {
           const last = conversationOf(first).at(-1)
           expect(last?.role).toBe("user")
           expect(jsonText(last)).toContain("A: Redis")
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  // An interrupt while the resumed tool still runs ends the turn with no model
+  // request: the answer that waited must not join it, or no model reads it.
+  it.live(
+    "an interrupt while a resumed tool runs leaves the background answer for a turn of its own",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const resumed = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const prompts: Array<Prompt.Prompt> = []
+          const record = (options: { readonly prompt: Prompt.Prompt }) => {
+            prompts.push(options.prompt)
+          }
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("ask_user_async", cacheQuestion, { toolCallId: ToolCallId.make("ask-i") }),
+            toolCallStep("ask_then_hold", {}, { toolCallId: ToolCallId.make("hold-i") }),
+            { ...textStep("Switching the cache to Redis."), assertOptions: record },
+          ])
+          const harness = yield* questionsHarness(
+            providerLayer,
+            [askThenHoldFixture(resumed, release)],
+            { approvalLayer: ApprovalService.Live },
+          )
+          const presented = yield* harness.client.session.events(harness.target).pipe(
+            Stream.map((envelope) => envelope.event),
+            Stream.filter((event) => event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* harness.client.message.send({ ...harness.target, content: "add a cache" })
+          const [ask] = Array.from(yield* Fiber.join(presented))
+          if (ask?._tag !== "InteractionPresented") return yield* Effect.die("no ask presented")
+          yield* harness.answer({ answers: [{ id: "ask-i:0", answer: "Redis" }] })
+          yield* harness.client.interaction.respondInteraction({
+            ...harness.target,
+            requestId: ask.requestId,
+            approved: true,
+          })
+          yield* Deferred.await(resumed)
+          yield* harness.client.steer.command({
+            command: SteerCommand.make({
+              _tag: "Cancel",
+              ...harness.target,
+              requestId: RequestId.make("cancel-resumed-hold"),
+            }),
+          })
+          yield* Deferred.succeed(release, void 0)
+          const woken = yield* waitFor(
+            harness.snapshot,
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              lastAssistantText(current.messages) === "Switching the cache to Redis.",
+            5_000,
+            "the answer opened a turn of its own",
+          )
+          const first = Option.getOrThrow(Option.fromUndefinedOr(prompts[0]))
+          const last = conversationOf(first).at(-1)
+          expect(last?.role).toBe("user")
+          expect(jsonText(last)).toContain("A: Redis")
+          expect(answerMessages(woken.messages)).toHaveLength(1)
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,

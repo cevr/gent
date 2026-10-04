@@ -3333,8 +3333,18 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      *
      * The inbox decides *which* items a step may take and when none may be
      * taken at all; this supplies only the transcript write.
+     *
+     * An interrupted turn makes no further model request, so it holds
+     * steering back as a final step does: a joined message would be marked
+     * answered by a turn that never reads it. It stays queued and opens the
+     * next turn.
      */
     const deliverSteeringAtStepBoundary = (options: { readonly finalStep: boolean }) =>
+      Effect.gen(function* () {
+        const interrupted = yield* scope.turnInterruption.interrupted
+        return yield* deliverSteeringUnlessLast({ finalStep: options.finalStep || interrupted })
+      })
+    const deliverSteeringUnlessLast = (options: { readonly finalStep: boolean }) =>
       scope.inbox.deliverSteering({
         finalStep: options.finalStep,
         // The message joins the transcript now. Its admission time could sort it

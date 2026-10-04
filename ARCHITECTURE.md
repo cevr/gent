@@ -611,7 +611,9 @@ Shape:
   as a transcript message before the next model call, so the same turn continues.
   A turn that resumes from a parked step (a blocking ask) is at such a boundary
   once the resumed tool results are stored: steering that arrived while it was
-  parked joins before the first resumed model request (`resumeTurn`).
+  parked joins before the first resumed model request (`resumeTurn`). An
+  interrupted turn makes no further model request, so it holds steering back
+  as a final step does: the item stays queued and opens the next turn.
 - Follow-up admission from inside a held side-mutation permit (a running turn, a
   tool invocation, an extension request) only appends to the durable queue. The
   turn starts from a wake that runs after the permit is released, or at the next
