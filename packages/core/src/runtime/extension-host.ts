@@ -69,7 +69,6 @@ import {
   type BranchId,
   ClientRequestGrant,
   ExtensionId,
-  type InteractionRequestId,
   MessageId,
   ProcessGenerationId,
   RequestId,
@@ -2987,12 +2986,6 @@ export class SessionProfileCache extends Context.Service<
  * Tools reach it through `ctx.Interaction.approve()` on `ExtensionContext`.
  */
 
-const logStoreFailure =
-  (write: "resolve" | "take", requestId: InteractionRequestId) => (error: StorageError) =>
-    Effect.logWarning(`interaction.${write}-failed`).pipe(
-      Effect.annotateLogs({ requestId, error: String(error) }),
-    )
-
 const makeApprovalInteractionService: Effect.Effect<
   InteractionService,
   never,
@@ -3008,12 +3001,26 @@ const makeApprovalInteractionService: Effect.Effect<
             new EventStoreError({ message: "Failed to persist interaction request", cause }),
         ),
       ),
-    // A failed resolve or take leaves the row open, so the startup recovery
-    // asks it again; the call goes on, and the log names the request.
+    // A failed resolve or take leaves the row open. The interaction owner
+    // logs it, keeps the branch's slot for the row, and writes it again.
     resolve: (requestId) =>
-      store.resolve(requestId).pipe(Effect.catchEager(logStoreFailure("resolve", requestId))),
+      store
+        .resolve(requestId)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EventStoreError({ message: "Failed to resolve interaction request", cause }),
+          ),
+        ),
     take: (requestId) =>
-      store.take(requestId).pipe(Effect.catchEager(logStoreFailure("take", requestId))),
+      store
+        .take(requestId)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EventStoreError({ message: "Failed to mark interaction answer taken", cause }),
+          ),
+        ),
     decide: (branch, requestId, decisionJson) =>
       store
         .decide(branch, requestId, decisionJson)

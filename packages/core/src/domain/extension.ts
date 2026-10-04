@@ -447,6 +447,14 @@ export interface TurnAfterInput {
    * hooks once, after its receipt.
    */
   readonly streamFailed: boolean
+  /**
+   * When the usage limit the turn failed on resets, in epoch milliseconds:
+   * the same time as the turn's `ErrorOccurred.retryAt`, which the driver
+   * read past its retry cap (`RetryPolicy.retryAt`). Some only for a
+   * `streamFailed` turn that was not interrupted and whose last step failed
+   * so. It is held in memory, not stored.
+   */
+  readonly retryAt: Option.Option<number>
   /** The turn spent its continuations and never answered. */
   readonly unanswered: boolean
   /** What the turn's model calls spent, and whether that is all of it. */

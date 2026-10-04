@@ -72,8 +72,10 @@ export {
   DriverError,
   ProviderAuthError,
   ProviderAuthInfo,
+  rateLimitResponse,
   ReasoningOption,
   reportProviderStopReason,
+  retryAfterAt,
   modelFromCatalog,
   catalogModelEntry,
 } from "../domain/driver.js"
@@ -85,6 +87,7 @@ export type {
   CatalogModel,
   CatalogOverride,
   CatalogProvider,
+  FailureResponse,
   ModelCatalogView,
   ModelDriverContribution,
   ModelRouteChoice,

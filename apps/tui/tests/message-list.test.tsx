@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Deferred, Effect, Fiber, Option, Order, Schedule, Schema } from "effect"
+import { DateTime, Deferred, Effect, Fiber, Option, Order, Schedule, Schema } from "effect"
 import {
   type CliRenderer,
   type CliRendererExternalOutputEvent,
@@ -226,6 +226,38 @@ describe("session event labels", () => {
       "Retried 1/3 · overloaded (529)",
     )
     expect(getSessionEventLabel({ ...event, reason: "" }, createdAt)).toBe("Retrying in 2s... 1/3")
+  })
+
+  test("an error with a reset time names the wall-clock reset after its first line", () => {
+    const utc = () => DateTime.zoneMakeOffset(0)
+    const now = Date.parse("2026-10-04T12:00:00Z")
+    const event: SessionEvent = {
+      _tag: "error",
+      error: "Rate limit exceeded\nThe usage limit has been reached",
+      retryAt: Date.parse("2026-10-04T17:05:00Z"),
+      createdAt: now,
+      seq: 1,
+    }
+    expect(getSessionEventLabel(event, now, utc)).toBe(
+      "Rate limit exceeded · resets 17:05\nThe usage limit has been reached",
+    )
+    const nextDay = { ...event, retryAt: Date.parse("2026-10-05T09:30:00Z") }
+    expect(getSessionEventLabel(nextDay, now, utc)).toBe(
+      "Rate limit exceeded · resets 2026-10-05 09:30\nThe usage limit has been reached",
+    )
+    // The wall clock is the viewer's zone, not UTC.
+    expect(
+      getSessionEventLabel(event, now, () => DateTime.zoneMakeOffset(2 * 60 * 60 * 1000)),
+    ).toBe("Rate limit exceeded · resets 19:05\nThe usage limit has been reached")
+    // A row with no reset never asks for the zone.
+    let zoneReads = 0
+    const counted = () => {
+      zoneReads += 1
+      return DateTime.zoneMakeOffset(0)
+    }
+    const plain: SessionEvent = { _tag: "error", error: event.error, createdAt: now, seq: 1 }
+    expect(getSessionEventLabel(plain, now, counted)).toBe(event.error)
+    expect(zoneReads).toBe(0)
   })
 
   test("an interruption row joins its parts with the separator every row uses", () => {
