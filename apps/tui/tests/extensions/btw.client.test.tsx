@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Option, Schema } from "effect"
+import { Deferred, Effect, Option, Queue, Schema } from "effect"
 import { createRoot, createSignal } from "solid-js"
 import type { TextareaRenderable } from "@opentui/core"
 import { BranchId, MessageId, SessionId } from "@gent/core/extensions/api"
@@ -17,6 +17,7 @@ import { waitForFrame, waitUntil } from "../helpers-boundary"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
+  makePaneSlot,
   provideClientServices,
   runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
@@ -733,7 +734,129 @@ describe("ForkMergeRow", () => {
       const text = forkMergeText(yield* Schema.decodeEffect(ForkMergeDetails)(mergeDetails))
       expect(merge?.prompt?.(text)).toBe("merged btw: why?")
       expect(merge?.prompt?.("plain")).toBe("plain")
+      // A name a question over several lines gave is written on one line.
+      const multiline = forkMergeText(
+        yield* Schema.decodeEffect(ForkMergeDetails)({
+          ...mergeDetails,
+          fork: { ...mergeDetails.fork, name: "btw: why?\nwhat next?" },
+        }),
+      )
+      expect(merge?.prompt?.(multiline)).toBe("merged btw: why? what next?")
       yield* Effect.promise(() => runtime.dispose())
+    }).pipe(Effect.timeout("6 seconds")),
+  )
+})
+
+describe("a merge response that lands late", () => {
+  /**
+   * The btw extension on a mock server where every session has an answered
+   * fork named after it and each merge waits for the test to release it.
+   */
+  const lateMerge = Effect.gen(function* () {
+    const sessionA = { sessionId: SessionId.make("a"), branchId: BranchId.make("a-branch") }
+    const sessionB = { sessionId: SessionId.make("b"), branchId: BranchId.make("b-branch") }
+    const [current, setCurrent] = createRoot(() => createSignal(sessionA))
+    const mergeAsked = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    let held = true
+    let casts = 0
+    const client = createMockClient({
+      extension: {
+        request: (input: { sessionId: string; capabilityId: string }) =>
+          Effect.gen(function* () {
+            if (input.capabilityId === "btw.merge") {
+              if (held) {
+                yield* Deferred.succeed(mergeAsked, void 0)
+                yield* Deferred.await(release)
+              }
+              return { merged: true }
+            }
+            const fork = {
+              ...view([{ question: `${input.sessionId}?`, answer: "because" }], false),
+              name: `btw: ${input.sessionId}?`,
+            }
+            return { fork }
+          }),
+      },
+    })
+    // Each cast runs on the test's scope, counted once it ends.
+    const castQueue = yield* Queue.unbounded<Effect.Effect<void>>()
+    yield* Queue.take(castQueue).pipe(
+      Effect.flatMap((effect) =>
+        Effect.forkScoped(effect.pipe(Effect.ensuring(Effect.sync(() => (casts += 1))))),
+      ),
+      Effect.forever,
+      Effect.forkScoped,
+    )
+    const pane = makePaneSlot()
+    const runtime = makeClientExtensionRuntime({
+      transport: { ...makeClientTestTransport({ currentSession: () => current() }), client },
+      shell: {
+        pane,
+        cast: (effect) => {
+          Queue.offerUnsafe(castQueue, Effect.ignore(effect))
+        },
+      },
+    })
+    const contributions = yield* runClientExtensionSetup(runtime, btwExtension)
+    const command = Option.getOrThrow(
+      Option.fromUndefinedOr(contributions.commands?.find((entry) => entry.id === "btw")),
+    )
+    const widget = Option.getOrThrow(Option.fromUndefinedOr(contributions.widgets?.[0]))
+    const setup = yield* renderScoped(() => widget.component())
+    return {
+      setup,
+      pane,
+      show: () => command.onSelect?.(),
+      switchTo: () => setCurrent(sessionB),
+      mergeAsked,
+      /** Lets the held merge answer and waits for its cast to end. */
+      releaseMerge: Effect.gen(function* () {
+        const before = casts
+        held = false
+        yield* Deferred.succeed(release, void 0)
+        yield* waitUntil(() => casts > before, "the merge answered")
+      }),
+      dispose: Effect.promise(() => runtime.dispose()),
+    }
+  })
+
+  it.scopedLive("a merge asked in one session never closes the pane of the next", () =>
+    Effect.gen(function* () {
+      const late = yield* lateMerge
+      late.show()
+      yield* waitForFrame(late.setup, (frame) => frame.includes("ctrl+s merge"), "a's fork")
+      late.setup.mockInput.pressKey("s", { ctrl: true })
+      yield* Deferred.await(late.mergeAsked).pipe(Effect.timeout("2 seconds"))
+      late.switchTo()
+      late.show()
+      yield* waitForFrame(late.setup, (frame) => frame.includes("btw: b?"), "b's fork")
+      yield* late.releaseMerge
+      yield* Effect.yieldNow
+      expect(late.pane.isOpen("btw.pane")).toBe(true)
+      expect(renderFrame(late.setup)).toContain("btw: b?")
+      yield* late.dispose
+    }).pipe(Effect.timeout("6 seconds")),
+  )
+
+  it.scopedLive("a merge answered after its pane closed and opened again leaves the new pane", () =>
+    Effect.gen(function* () {
+      const late = yield* lateMerge
+      late.show()
+      yield* waitForFrame(late.setup, (frame) => frame.includes("ctrl+s merge"), "the fork")
+      late.setup.mockInput.pressKey("s", { ctrl: true })
+      yield* Deferred.await(late.mergeAsked).pipe(Effect.timeout("2 seconds"))
+      late.setup.mockInput.pressEscape()
+      yield* waitUntil(() => !late.pane.isOpen("btw.pane"), "the pane closed")
+      late.show()
+      yield* waitForFrame(late.setup, (frame) => frame.includes("ctrl+s merge"), "reopened")
+      yield* late.releaseMerge
+      yield* Effect.yieldNow
+      expect(late.pane.isOpen("btw.pane")).toBe(true)
+      // A merge this pane asked for still closes it.
+      late.setup.mockInput.pressKey("s", { ctrl: true })
+      yield* waitUntil(() => !late.pane.isOpen("btw.pane"), "the merge closed its pane")
+      yield* late.dispose
     }).pipe(Effect.timeout("6 seconds")),
   )
 })

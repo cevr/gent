@@ -312,8 +312,11 @@ const forkTurns = (
 const PREVIEW_CHARS = 120
 
 /** One line of at most `PREVIEW_CHARS` characters, for a row or a sentence. */
+/** The text on one line: each run of whitespace, line breaks included, as one space. */
+const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim()
+
 const previewLine = (text: string): string => {
-  const line = text.replace(/\s+/g, " ").trim()
+  const line = oneLine(text)
   if ([...line].length <= PREVIEW_CHARS) return line
   return `${headChars(line, PREVIEW_CHARS)}…`
 }
@@ -353,12 +356,13 @@ const FORK_MERGE_NAME_END = '" (session '
  * reads the fork's own turns with `read_session` from `fromMessageId` when it
  * needs them, so the merge appends a few lines to the branch, and no summary
  * call runs. The question is named so the model can judge whether to read.
+ * The fork's name goes on one line: `forkMergePrompt` reads it from the first.
  */
 export const forkMergeText = (details: ForkMergeDetails): string => {
   let questions = `${details.turns} questions`
   if (details.turns === 1) questions = "1 question"
   return [
-    `${FORK_MERGE_PREFIX}${details.fork.name}${FORK_MERGE_NAME_END}${details.fork.sessionId}, branch ${details.fork.branchId}).`,
+    `${FORK_MERGE_PREFIX}${oneLine(details.fork.name)}${FORK_MERGE_NAME_END}${details.fork.sessionId}, branch ${details.fork.branchId}).`,
     "The fork began as a copy of this branch and ran beside it in the same directory; what it said is not in this conversation.",
     `Its own messages start at ${details.fromMessageId}: ${questions}, the last "${details.question}", answered in message ${details.replyId}.`,
     `Before you go on, read them with read_session (sessionId ${details.fork.sessionId}, fromMessageId ${details.fromMessageId}).`,
@@ -391,8 +395,9 @@ const mergeRequestId = Effect.fn("Btw.mergeRequestId")(function* (details: ForkM
   return `btw-merge:${Hex.encode(digest).slice(0, 32)}`
 })
 
+/** The fork's name, on one line: it titles the pane and the session, and a merge's first line. */
 const forkName = (question: string): string => {
-  const text = question.trim()
+  const text = oneLine(question)
   if (text.length === 0) return "btw"
   if (text.length <= FORK_NAME_CHARS) return `btw: ${text}`
   return `btw: ${headChars(text, FORK_NAME_CHARS)}…`

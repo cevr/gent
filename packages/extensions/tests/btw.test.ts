@@ -29,7 +29,7 @@ import {
 import {
   AgentName,
   BranchId,
-  type MessageId,
+  MessageId,
   ModelId,
   RequestId,
   SessionId,
@@ -43,6 +43,8 @@ import {
   BTW_QUESTION_TYPE,
   ForkProgress,
   foldForkEvent,
+  forkMergePrompt,
+  forkMergeText,
   forkQuestionBody,
   makeThrottledPulse,
 } from "../src/btw.js"
@@ -851,6 +853,58 @@ describe("btw merge", () => {
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
+
+  // The pinned label reads the fork's name from the merge's first line, so
+  // the name is one line: a question typed over several lines names its fork
+  // with spaces, and the label still reads it.
+  it.live(
+    "a question over several lines names its fork on one line, and its merge pins that name",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const providerLayer = LanguageModelLayers.testStream(() => replyStream("Both."))
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const { client, sessionId, branchId } = harness
+          const pane = btw(harness)
+          yield* pane.fork("why?\nwhat next?")
+          const replied = yield* pane.replied(1)
+          expect(Option.map(replied, (fork) => fork.name)).toEqual(
+            Option.some("btw: why? what next?"),
+          )
+          expect(yield* pane.merge).toEqual({ merged: true })
+          const merged = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.messages.some((message) => message.metadata?.customType === BTW_MERGE_TYPE),
+            5_000,
+            "the merge lands",
+          )
+          const merge = merged.messages.find(
+            (message) => message.metadata?.customType === BTW_MERGE_TYPE,
+          )
+          expect(forkMergePrompt(textOfMessage(merge ?? { parts: [] }))).toBe(
+            "merged btw: why? what next?",
+          )
+          yield* sourceIdle(harness, "the merge turn ends")
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+  )
+
+  test("the merge text writes any fork name on one line, and the label reads it back", () => {
+    const details = {
+      fork: {
+        sessionId: SessionId.make("fork"),
+        branchId: BranchId.make("fork-branch"),
+        name: "btw: why?\n\twhat next?",
+      },
+      fromMessageId: MessageId.make("m-1"),
+      replyId: MessageId.make("m-2"),
+      turns: 1,
+      question: "why? what next?",
+      reply: "Both.",
+    }
+    expect(forkMergePrompt(forkMergeText(details))).toBe("merged btw: why? what next?")
+  })
 
   // A busy branch takes the merge into the turn it runs, at its next step:
   // one appended message and no turn of its own.

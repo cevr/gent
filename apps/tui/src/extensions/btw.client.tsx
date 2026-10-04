@@ -27,6 +27,7 @@ import {
   lineEdit,
   PickerFrame,
   type QueuedMessage,
+  repliesInView,
   sessionQuery,
   textWidth,
   truncate,
@@ -65,7 +66,10 @@ interface ForkPaneController {
   readonly refresh: () => void
   /** The fork answered and nothing is on its way to it: a merge can land. */
   readonly mergeable: () => boolean
-  /** Merges the fork's last reply into the branch in view; `done` runs once it is there. */
+  /**
+   * Merges the fork's last reply into the branch in view. `done` runs once it
+   * is there, and only while that branch is still in view.
+   */
   readonly merge: (done: () => void) => void
 }
 
@@ -185,19 +189,24 @@ export const makeForkPane = (
       Option.exists(view.value(), (current) => (current.turns.at(-1)?.answer.length ?? 0) > 0)
     const waiting = () => Option.isSome(outgoing) || Option.isSome(pending()) || replying()
     const mergeable = () => answered() && !waiting()
+    const merges = repliesInView(transport.currentSession, sameSession)
     // The reasons the server gives too; said here, the key costs no round trip.
     const merge = (done: () => void): void => {
       if (Option.isNone(view.value())) return shell.notify("btw: no fork to merge")
       if (waiting()) return shell.notify("btw: the fork is still answering; merge when it is done")
       if (!answered()) return shell.notify("btw: the fork has no reply to merge yet")
+      // A late answer for a session the reader left touches nothing in view.
+      const reply = merges.take()
       shell.cast(
         actions.merge(transport.currentSession()).pipe(
           Effect.match({
+            // A failure is said out loud wherever the reader is: the merge is not there.
             onFailure: (failure) => shell.notify(`btw: not merged: ${failure.message}`),
-            onSuccess: ({ merged }) => {
-              if (!merged) shell.notify("btw: this reply is already merged")
-              done()
-            },
+            onSuccess: ({ merged }) =>
+              reply.write(() => {
+                if (!merged) shell.notify("btw: this reply is already merged")
+                done()
+              }),
           }),
         ),
       )
@@ -426,9 +435,17 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
         controller.refresh()
       }),
     )
+    // Each opening of the pane is its own: a merge closes the pane it was
+    // asked from, never one opened after it.
+    const openings = repliesInView(transport.currentSession, sameSession)
     const show = () => {
+      openings.take()
       shell.pane.open(BTW_PANE)
       controller.refresh()
+    }
+    const merge = () => {
+      const opening = openings.newest()
+      controller.merge(() => opening.write(() => shell.pane.close(BTW_PANE)))
     }
     return clientContributions(
       clientCommandContribution({
@@ -475,7 +492,7 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
             controller={controller}
             onClose={() => shell.pane.close(BTW_PANE)}
             // The fork stays open: `/btw` reopens it, and a later reply merges again.
-            onMerge={() => controller.merge(() => shell.pane.close(BTW_PANE))}
+            onMerge={merge}
             onOpen={() => {
               Option.map(controller.fork(), (fork) => {
                 shell.pane.close(BTW_PANE)
