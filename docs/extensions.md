@@ -335,6 +335,38 @@ export default defineExtension({
 grants. Host authority still comes from `ExtensionContext` or an
 extension-owned service.
 
+A tool that fails reaches the model as a failed tool result that holds only
+its error's message text (`{ "error": "Tool 'verse' failed: NotFound: …" }`);
+the error's other fields do not reach the model. A tool whose failure the
+model should read field by field fails with
+`ToolResultFailure({ message, result })` from `@gent/core/extensions/api`:
+its JSON `result` is the failed tool result the model reads, and `message`
+names the failure in logs.
+
+```ts
+import { tool, ToolResultFailure } from "@gent/core/extensions/api"
+import { Effect, Option, Schema } from "effect"
+
+const verses = new Map([["John 3:16", "For God so loved the world…"]])
+
+export const VerseTool = tool({
+  id: "verse",
+  description: "Read one verse by its reference",
+  params: Schema.Struct({ reference: Schema.String }),
+  output: Schema.String,
+  execute: ({ reference }) =>
+    Effect.fromOption(Option.fromUndefinedOr(verses.get(reference))).pipe(
+      Effect.mapError(
+        () =>
+          new ToolResultFailure({
+            message: `no verse ${reference}`,
+            result: { error: "NotFound", reference, known: [...verses.keys()] },
+          }),
+      ),
+    ),
+})
+```
+
 #### Tool images
 
 A tool hands the model an image by reference. `saveToolImage` stores the
