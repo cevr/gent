@@ -15,6 +15,7 @@ import {
   sessionThread,
   tailChars,
 } from "@gent/core/extensions/api"
+import { DELEGATE_AGENT_NAME } from "./delegate.js"
 
 // Test seam: only tests read these exports. The row shapes (LiveAgentRow,
 // DurableAgentRow, AgentRow) and the row functions (rowKey, sectionOf,
@@ -83,6 +84,8 @@ export interface DurableAgentRow {
   readonly sideThread: boolean
   /** The thread key (`sessionThread`): a handoff chain shares its first session's id. */
   readonly thread: SessionId
+  /** A delegate child: its completion lands in its parent's transcript. */
+  readonly delegate: boolean
 }
 
 /** One reconciled row, ready for display. */
@@ -107,6 +110,8 @@ export interface AgentRow {
   readonly sideThread: boolean
   /** The thread key, from the durable row; `None` for a loop with no session row yet. */
   readonly thread: Option.Option<SessionId>
+  /** From the durable row; a loop with no session row yet is not marked. */
+  readonly delegate: boolean
   /**
    * The loops this row stands for, oldest first. One for a loop; a thread's
    * sessions after `buildRowTree` folds them, the row's own ids the newest's.
@@ -189,6 +194,7 @@ export const reconcileAgentRows = (params: {
       depth: 0,
       sideThread: Option.exists(durable, (row) => row.sideThread),
       thread: Option.map(durable, (row) => row.thread),
+      delegate: Option.exists(durable, (row) => row.delegate),
       members: [identity.value],
     })
   }
@@ -587,6 +593,11 @@ export const AgentRowEntry = Schema.Struct({
   /** The session opened a thread of its own under a parent; a handoff shares its parent's. */
   sideThread: Schema.Boolean,
   /**
+   * A delegate child, whose completion lands in its parent's transcript; the
+   * TUI gives it no done row. Absent for any other session.
+   */
+  delegate: Schema.optional(Schema.Literal(true)),
+  /**
    * The sessions of this row's thread, oldest first, when it holds more than
    * one (a handoff chain). The row's own ids are the newest's.
    */
@@ -672,6 +683,7 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (root: Option.
         // A session that names its parent without a branch gets no `parent`.
         sideThread: isSpawnedSession(session),
         thread: sessionThread(session),
+        delegate: session.admission?.agent === DELEGATE_AGENT_NAME,
       },
     ]
   })
@@ -728,6 +740,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
             Option.map(row.parent, (parent) => parent.sessionId),
           ),
           sideThread: row.sideThread,
+          delegate: Option.getOrUndefined(Option.liftPredicate(true as const, () => row.delegate)),
           sessions: Option.getOrUndefined(
             Option.liftPredicate(
               row.members.map((member) => member.sessionId),

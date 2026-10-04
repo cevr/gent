@@ -1039,8 +1039,9 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   returned session/branch IDs. The session is the only copy of a child's
   output; the completion message carries the outcome and a preview.
 - The TUI agents pane lists children through `AgentsViewRpc.ListAgents` and
-  refreshes on the delegate's `ExtensionStateChanged` pulses, matched by
-  `DELEGATE_EXTENSION_ID`. Completion rows read the completion message's
+  refreshes on the delegate's and session-tools' `ExtensionStateChanged`
+  pulses (`thread.start` sends the second), matched by
+  `DELEGATE_EXTENSION_ID` and `SESSION_TOOLS_EXTENSION_ID`. Completion rows read the completion message's
   details. Core publishes no `AgentRun*` events.
 - `ListAgents` lists one row per thread: `buildRowTree` folds the sessions of
   one `sessionThread` key (a handoff chain) into one row with the newest
@@ -1053,6 +1054,13 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   first), marks the row current when the shell is on any of its sessions,
   and a second Ctrl+X deletes each session of the thread, newest first, since
   a session delete keeps a same-thread handoff.
+- The tray adds `done · <name>` after its `working` rows (three rows at most,
+  the rest counted) for a side thread that a listing showed running and a
+  later one idle while the shell was not on it. The controller keeps that
+  state outside any component, keyed by session id; opening the thread or its
+  next turn clears it. A delegate child gets none: its completion lands in
+  its parent's transcript, and its row carries the additive `delegate` flag
+  (its admission names the `delegate` agent).
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
   root depth; a parent at the depth limit cannot spawn. Only spawn edges count:

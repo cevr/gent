@@ -6,6 +6,7 @@ import {
   AgentsViewRpc,
   DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
+  SESSION_TOOLS_EXTENSION_ID,
 } from "@gent/extensions/client"
 import {
   type ActiveExtensionSession,
@@ -127,19 +128,35 @@ const inStartOrder = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<AgentRo
     )
   })
 
+/**
+ * The tray's rows: `working · <name>` per running child, then `done ·
+ * <name>` per finished thread (`done`, oldest first), up to the cap; the rest
+ * collapse into one count line.
+ */
 export const trayLines = (
   running: ReadonlyArray<AgentRowEntry>,
   width: number,
+  done: ReadonlyArray<AgentRowEntry> = [],
 ): ReadonlyArray<{ readonly pulse: boolean; readonly text: string }> => {
-  const shown = inStartOrder(running).slice(0, TRAY_MAX_ROWS)
-  const lines = shown.map((row) => ({
-    pulse: true,
-    text: trayText(row, width),
-  }))
-  const rest = running.length - shown.length
-  if (rest > 0) lines.push({ pulse: false, text: `+${rest} more working` })
+  const working = inStartOrder(running).slice(0, TRAY_MAX_ROWS)
+  const finished = done.slice(0, TRAY_MAX_ROWS - working.length)
+  const lines = [
+    ...working.map((row) => ({ pulse: true, text: trayText(row, width) })),
+    ...finished.map((row) => ({ pulse: false, text: truncate(`done · ${nameFor(row)}`, width) })),
+  ]
+  const rest: Array<string> = []
+  if (running.length > working.length) rest.push(`${running.length - working.length} more working`)
+  if (done.length > finished.length) rest.push(`${done.length - finished.length} more done`)
+  if (rest.length > 0) lines.push({ pulse: false, text: `+${rest.join(", ")}` })
   return lines
 }
+
+/**
+ * A finished side thread reports to no one: its starter is not woken, so the
+ * tray says it is done. A delegate child's completion lands in its parent's
+ * transcript, so it gets no done row.
+ */
+const finishesSilently = (row: AgentRowEntry): boolean => row.sideThread && row.delegate !== true
 
 export function SubagentTray(props: { controller: AgentsController }) {
   const { theme } = useTheme()
@@ -149,6 +166,9 @@ export function SubagentTray(props: { controller: AgentsController }) {
     subtreeRows(props.controller.rows(), props.controller.current()).filter(
       (row) => row.section === "running",
     )
+  // A done thread the shell is on is shown, so it leaves the tray at once.
+  const finished = () =>
+    props.controller.done().filter((row) => !holds(row, props.controller.current().sessionId))
   // Switching sessions changes whose subtree the tray lists; refetch for it.
   createEffect(
     on(
@@ -158,13 +178,13 @@ export function SubagentTray(props: { controller: AgentsController }) {
   )
   // Two columns of padding, the pulse and its space, and the hint on the first line.
   const rowWidth = () => Math.max(8, dimensions().width - 4 - textWidth(TRAY_HINT) - 2)
-  const lines = () => trayLines(running(), rowWidth())
+  const lines = () => trayLines(running(), rowWidth(), finished())
   const glyph = (pulse: boolean): string => {
     if (pulse) return workingIconFrame(tick())
     return " "
   }
   return (
-    <Show when={running().length > 0}>
+    <Show when={running().length > 0 || finished().length > 0}>
       <TrayFrame>
         <For each={lines()}>
           {(line, index) => (
@@ -226,6 +246,11 @@ interface AgentsController {
   readonly select: (row: Option.Option<AgentRowEntry>) => void
   /** Whether the pane is showing: the host's pane slot names it. */
   readonly open: () => boolean
+  /**
+   * Side threads seen running that went idle while the shell was not on
+   * them, oldest first. Opening one, or its next turn, clears it.
+   */
+  readonly done: () => ReadonlyArray<AgentRowEntry>
 }
 
 /** The agents pane's name in the host's one pane slot. */
@@ -298,6 +323,31 @@ export const makeAgentsController = (
       readDetail()
     }
 
+    // Each row's section at the last listing, and the side threads that
+    // finished since, keyed by session id. They live here, outside any
+    // component, so the tray keeps them while it hides for the pane.
+    const lastSection = new Map<string, AgentRowEntry["section"]>()
+    const [done, setDone] = createSignal<ReadonlyArray<AgentRowEntry>>([])
+    const noteFinished = (rows: ReadonlyArray<AgentRowEntry>): void => {
+      const here = transport.currentSession().sessionId
+      const listed = new Map(rows.map((row) => [row.sessionId, row]))
+      const kept = done().flatMap((entry) => {
+        const now = listed.get(entry.sessionId) ?? entry
+        if (now.section === "running" || holds(now, here)) return []
+        return [now]
+      })
+      const fresh = rows.filter(
+        (row) =>
+          lastSection.get(row.sessionId) === "running" &&
+          row.section !== "running" &&
+          finishesSilently(row) &&
+          !holds(row, here) &&
+          !kept.some((entry) => entry.sessionId === row.sessionId),
+      )
+      for (const row of rows) lastSection.set(row.sessionId, row.section)
+      setDone([...kept, ...fresh])
+    }
+
     // The pane refetches across session switches (on `current()` changing and on
     // the poll), so the session query owns the guard that drops a reply for the
     // session the shell already left.
@@ -312,7 +362,15 @@ export const makeAgentsController = (
     const listing = yield* sessionQuery({
       initial: empty,
       follow: false,
-      fetch: () => read().pipe(Effect.tap((rows) => Effect.sync(() => detailAfterListing(rows)))),
+      fetch: () =>
+        read().pipe(
+          Effect.tap((rows) =>
+            Effect.sync(() => {
+              noteFinished(rows)
+              detailAfterListing(rows)
+            }),
+          ),
+        ),
     })
     const refresh = (next: string): void => {
       query = next
@@ -349,10 +407,16 @@ export const makeAgentsController = (
       listing.refresh()
     }
 
-    // A delegate pulse in the current session means its subtree changed.
+    // A delegate pulse in the current session means its subtree changed; so
+    // does a session-tools pulse, which `thread.start` sends.
     lifecycle.addCleanup(
       transport.onExtensionStateChanged((pulse) => {
-        if (pulse.extensionId === DELEGATE_EXTENSION_ID) tick()
+        if (
+          pulse.extensionId === DELEGATE_EXTENSION_ID ||
+          pulse.extensionId === SESSION_TOOLS_EXTENSION_ID
+        ) {
+          tick()
+        }
       }),
     )
     // A child's own turns raise no event in this session, so while the pane is
@@ -382,6 +446,7 @@ export const makeAgentsController = (
       detail,
       select,
       open,
+      done,
     }
   })
 

@@ -8,6 +8,7 @@ import {
   type AgentRowEntry,
   DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
+  SESSION_TOOLS_EXTENSION_ID,
 } from "@gent/extensions/client"
 import {
   default as agentsExtension,
@@ -578,6 +579,7 @@ describe("Agents pane navigation", () => {
             reload: () => {},
             detail: () => Option.none(),
             select: () => {},
+            done: () => [],
             open: () => true,
           }}
           onSelect={(value) => {
@@ -616,6 +618,7 @@ describe("Agents pane navigation", () => {
             reload: () => {},
             detail: () => Option.none(),
             select: () => {},
+            done: () => [],
             open: () => true,
           }}
           onSelect={() => {}}
@@ -665,6 +668,7 @@ describe("Agents pane navigation", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open: () => true,
             }}
             onSelect={(value) => {
@@ -714,6 +718,7 @@ describe("Agents pane navigation", () => {
             refresh: () => {},
             reload: () => {},
             detail,
+            done: () => [],
             select: (selection) => {
               Option.match(selection, {
                 onNone: () => {},
@@ -782,6 +787,7 @@ describe("Agents pane navigation", () => {
                 omittedMessages: 0,
               }),
             select: () => {},
+            done: () => [],
             open: () => true,
           }}
           onSelect={() => {}}
@@ -841,6 +847,7 @@ describe("Agents pane delete", () => {
             reload: () => {},
             detail: () => Option.none(),
             select: () => {},
+            done: () => [],
             open: () => true,
           }}
           onSelect={() => {}}
@@ -962,6 +969,7 @@ describe("Agents pane framing", () => {
                     omittedMessages: 0,
                   }),
                 select: () => {},
+                done: () => [],
                 open: () => true,
               }}
               onSelect={() => {}}
@@ -1022,6 +1030,7 @@ describe("Agents pane framing", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open: () => true,
             }}
             onSelect={() => {}}
@@ -1071,6 +1080,7 @@ describe("Agents pane framing", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open: () => true,
             }}
             onSelect={() => {}}
@@ -1126,6 +1136,7 @@ describe("Agents pane framing", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open: () => true,
             }}
             onSelect={() => {}}
@@ -1200,6 +1211,7 @@ describe("agents pane rows", () => {
             reload: () => {},
             detail: () => Option.none(),
             select: () => {},
+            done: () => [],
             open: () => true,
           }}
           onSelect={() => {}}
@@ -1366,6 +1378,7 @@ describe("idle middle parent", () => {
     reload: () => {},
     detail: () => Option.none(),
     select: () => {},
+    done: () => [],
     open,
   })
 
@@ -1425,6 +1438,7 @@ describe("thread rows", () => {
     reload: () => {},
     detail: () => Option.none(),
     select: () => {},
+    done: () => [],
     open: () => true,
   })
   const paneAt = (listed: ReadonlyArray<AgentRowEntry>, current: string, width: number) =>
@@ -1542,6 +1556,166 @@ describe("thread rows", () => {
   )
 })
 
+describe("done threads", () => {
+  const starter = { sessionId: SessionId.make("starter"), branchId: BranchId.make("starter-b") }
+  const threadRow = (id: string, section: AgentRowEntry["section"]): AgentRowEntry => ({
+    ...root(id, section),
+    name: `${id} notes`,
+    sideThread: true,
+    parentSessionId: starter.sessionId,
+  })
+
+  /** A controller over a listing the test changes, with the shell on `here()`. */
+  const controllerOver = (listed: () => ReadonlyArray<AgentRowEntry>, here: () => RowKeyOf) =>
+    Effect.gen(function* () {
+      const pulses = new Set<
+        (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void
+      >()
+      let listings = 0
+      const clock = yield* TestClock.make()
+      const controller = yield* provideClientServices(
+        makeAgentsController(
+          () =>
+            Effect.sync(() => {
+              listings += 1
+              return listed()
+            }),
+          () => Effect.succeed(detail(1)),
+        ).pipe(Effect.provideService(Clock.Clock, clock)),
+        {
+          currentSession: here,
+          transport: {
+            ...makeClientTestTransport({ currentSession: here }),
+            onExtensionStateChanged: (cb) => {
+              pulses.add(cb)
+              return () => {
+                pulses.delete(cb)
+              }
+            },
+          },
+        },
+      )
+      const read = (label: string) =>
+        Effect.gen(function* () {
+          const before = listings
+          controller.refresh("")
+          yield* waitUntil(() => listings > before && !controller.loading(), label)
+        })
+      const pulse = (extensionId: string) => {
+        for (const cb of pulses) cb({ ...here(), extensionId })
+      }
+      return { controller, read, pulse, listings: () => listings }
+    })
+  type RowKeyOf = { readonly sessionId: SessionId; readonly branchId: BranchId }
+
+  it.scopedLive(
+    "a thread seen running that goes idle while the shell is elsewhere is done until opened",
+    () =>
+      Effect.gen(function* () {
+        let section: AgentRowEntry["section"] = "running"
+        let here: RowKeyOf = starter
+        const { controller, read } = yield* controllerOver(
+          () => [threadRow("notes", section)],
+          () => here,
+        )
+        yield* read("running")
+        expect(controller.done()).toEqual([])
+
+        section = "idle"
+        yield* read("idle")
+        expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("notes")])
+        // Later listings keep it until the reader opens it.
+        yield* read("idle again")
+        expect(controller.done()).toHaveLength(1)
+
+        here = { sessionId: SessionId.make("notes"), branchId: BranchId.make("notes-branch") }
+        yield* read("opened")
+        expect(controller.done()).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "a delegate child, a thread the shell is on, and a thread that runs again get no done row",
+    () =>
+      Effect.gen(function* () {
+        let section: AgentRowEntry["section"] = "running"
+        const here = { sessionId: SessionId.make("watched"), branchId: BranchId.make("w") }
+        const { controller, read } = yield* controllerOver(
+          () => [
+            { ...threadRow("child", section), delegate: true },
+            threadRow("watched", section),
+            threadRow("again", section),
+          ],
+          () => here,
+        )
+        yield* read("running")
+        section = "idle"
+        yield* read("idle")
+        expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("again")])
+        section = "running"
+        yield* read("running again")
+        expect(controller.done()).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a session-tools pulse re-reads the tray, so a started thread shows at once", () =>
+    Effect.gen(function* () {
+      const { pulse, listings } = yield* controllerOver(
+        () => [],
+        () => starter,
+      )
+      const before = listings()
+      pulse(SESSION_TOOLS_EXTENSION_ID)
+      yield* waitUntil(() => listings() > before, "pulse read")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("done rows follow the working rows inside the cap, and the rest are counted", () =>
+    Effect.sync(() => {
+      const running = ["a", "b"].map((id) => child(id, "running", "root"))
+      const done = ["x", "y"].map((id) => threadRow(id, "idle"))
+      expect(trayLines(running, 80, done).map((line) => line.text)).toEqual([
+        "working · delegate: a task",
+        "working · delegate: b task",
+        "done · x notes",
+        "+1 more done",
+      ])
+      expect(trayLines([], 80, done).map((line) => line.pulse)).toEqual([false, false])
+    }),
+  )
+
+  it.scopedLive("the tray shows a done thread, and hides it while the shell is on it", () =>
+    Effect.gen(function* () {
+      const [here, setHere] = createSignal<RowKeyOf>(starter)
+      const finished = threadRow("release", "idle")
+      const setup = yield* renderScoped(
+        () => (
+          <SubagentTray
+            controller={{
+              rows: () => [finished],
+              current: here,
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              done: () => [finished],
+              open: () => false,
+            }}
+          />
+        ),
+        { width: 80, height: 10 },
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("done ·"), "done row")
+      expect(frame).toContain("done · release notes")
+      expect(frame).toContain("ctrl+t sessions")
+      setHere({ sessionId: finished.sessionId, branchId: finished.branchId })
+      yield* waitForFrame(setup, (next) => !next.includes("done ·"), "opened thread")
+    }),
+  )
+})
+
 describe("trayLines", () => {
   it.live("one line per running child by name, the rest counted", () =>
     Effect.sync(() => {
@@ -1622,6 +1796,7 @@ describe("Subagent tray", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open,
             }}
           />
@@ -1668,6 +1843,7 @@ describe("Subagent tray", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open: () => false,
             }}
           />
@@ -1693,6 +1869,7 @@ describe("Subagent tray", () => {
             reload: () => {},
             detail: () => Option.none(),
             select: () => {},
+            done: () => [],
             open: () => false,
           }}
         />
