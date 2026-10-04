@@ -448,6 +448,19 @@ const pickableEfforts = (model: Option.Option<Model>): ReadonlyArray<ReasoningEf
     },
   })
 
+/** The row id that puts the session on `/effort auto`. */
+export const AUTO_ROW_ID = "auto"
+
+/** `auto` before the levels, when the model takes any level to pick between. */
+const levelRows = (levels: ReadonlyArray<ReasoningEffort>): readonly PickerRow[] => {
+  const rows = levels.map((level) => ({ id: level, name: level, detail: "" }))
+  if (levels.length === 0) return rows
+  return [
+    { id: AUTO_ROW_ID, name: AUTO_ROW_ID, detail: "the router picks each turn's level" },
+    ...rows,
+  ]
+}
+
 /** The `default` row's note: the level the session falls back to, and what the model is sent for it. */
 const defaultEffortDetail = (
   model: Option.Option<Model>,
@@ -472,7 +485,8 @@ const defaultEffortDetail = (
   })
 
 /**
- * `default`, then the levels `model` accepts (`pickableEfforts`). `fallback`
+ * `default`, then `auto` and the levels `model` accepts (`pickableEfforts`);
+ * a model that takes no level has neither. `fallback`
  * is the level without the session's own (`defaultReasoningLevel`); under a
  * virtual model, `route` is the newest route's level, which the turn asks
  * for before the fallback (`applyTurnRoute`), and `model` is the routed one.
@@ -490,7 +504,7 @@ export const reasoningRows = (
       onSome: (level) => defaultEffortDetail(model, Option.some(level), "the route's choice"),
     }),
   },
-  ...pickableEfforts(model).map((level) => ({ id: level, name: level, detail: "" })),
+  ...levelRows(pickableEfforts(model)),
 ]
 
 const filterRows = (rows: readonly PickerRow[], query: string): readonly PickerRow[] => {

@@ -15,6 +15,7 @@ import {
   type Branch,
 } from "@gent/core/protocol"
 import {
+  AUTO_ROW_ID,
   BranchPicker,
   DEFAULT_ROW_ID,
   MessagePicker,
@@ -309,16 +310,20 @@ describe("Settings picker", () => {
             onClose={() => {}}
           />
         ))
-        yield* waitForFrame(setup, () => renderFrame(setup).includes("Effort · 4"), "pane")
+        yield* waitForFrame(setup, () => renderFrame(setup).includes("Effort · 5"), "pane")
         // The agent's `max` is past the model's highest level: the row names what is sent.
         expect(renderFrame(setup)).toContain("agent or config default (max, sends high)")
         expect(renderFrame(setup)).toContain("● medium")
         expect(renderFrame(setup)).not.toContain("xhigh")
-        // The current row is preselected; the top row is `default`.
+        // `auto` sits under `default`: the router picks each turn's level.
+        expect(renderFrame(setup)).toContain("the router picks each turn's level")
+        // The current row is preselected; above it are `auto`, then `default`.
         setup.mockInput.pressArrow("up")
         setup.mockInput.pressArrow("up")
         setup.mockInput.pressEnter()
-        expect(selected).toEqual([DEFAULT_ROW_ID])
+        setup.mockInput.pressArrow("up")
+        setup.mockInput.pressEnter()
+        expect(selected).toEqual([AUTO_ROW_ID, DEFAULT_ROW_ID])
       }),
   )
 
@@ -326,7 +331,13 @@ describe("Settings picker", () => {
     Effect.sync(() => {
       const ids = (rowsModel: Option.Option<Model>) =>
         reasoningRows(rowsModel, Option.none()).map((row) => row.id)
-      expect(ids(Option.some(effortModel))).toEqual([DEFAULT_ROW_ID, "low", "medium", "high"])
+      expect(ids(Option.some(effortModel))).toEqual([
+        DEFAULT_ROW_ID,
+        AUTO_ROW_ID,
+        "low",
+        "medium",
+        "high",
+      ])
       // A model that reasons with no effort list takes every level as named.
       const anyLevel = new Model({
         id: effortModel.id,
@@ -336,6 +347,7 @@ describe("Settings picker", () => {
       })
       expect(ids(Option.some(anyLevel))).toEqual([
         DEFAULT_ROW_ID,
+        AUTO_ROW_ID,
         "none",
         "minimal",
         "low",
@@ -344,11 +356,11 @@ describe("Settings picker", () => {
         "xhigh",
         "max",
       ])
-      // A model that does not reason takes no level.
+      // A model that does not reason takes no level: there is none to pick, by hand or by router.
       const noReasoning = new Model({ ...effortModel, reasoning: false })
       expect(ids(Option.some(noReasoning))).toEqual([DEFAULT_ROW_ID])
       // Before the catalog names the model, every level shows.
-      expect(ids(Option.none())).toHaveLength(8)
+      expect(ids(Option.none())).toHaveLength(9)
     }),
   )
 

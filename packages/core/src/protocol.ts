@@ -82,6 +82,7 @@ export {
   BranchTreeNode,
   ConnectionState,
   CreateSessionInput,
+  EffortSetting,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
   GentConnectionError,

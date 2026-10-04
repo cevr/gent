@@ -5,7 +5,7 @@ import {
   type BranchId,
   type Model,
   ModelId,
-  ReasoningEffort,
+  EffortSetting,
   type SessionAdmission,
   SessionId,
   type GentClientRpcError,
@@ -39,6 +39,7 @@ import {
 } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
+  AUTO_ROW_ID,
   BranchPicker,
   DEFAULT_ROW_ID,
   MessagePicker,
@@ -524,8 +525,8 @@ export const activityLine = (label: string, elapsed: string, width: number): str
   return truncate(label, Math.max(1, width - textWidth(hint))) + hint
 }
 
-/** A reasoning row id; `default` decodes to `None` and clears the override. */
-const parseReasoningRow = Schema.decodeUnknownOption(ReasoningEffort)
+/** A reasoning row id; `default` decodes to `None` and clears the override, `auto` routes each turn. */
+const parseReasoningRow = Schema.decodeUnknownOption(EffortSetting)
 
 export function Session(props: SessionProps) {
   const { theme } = useTheme()
@@ -614,6 +615,7 @@ export function Session(props: SessionProps) {
         model: client.turnModel(),
         theme,
         debugMode: props.debugMode === true,
+        auto: client.reasoningAuto(),
       }),
     )
   }
@@ -806,7 +808,10 @@ export function Session(props: SessionProps) {
             )}
             current={Option.some(
               Option.getOrElse(
-                Option.fromUndefinedOr(client.session().reasoningLevel),
+                Option.orElse(
+                  Option.liftPredicate(AUTO_ROW_ID, () => client.reasoningAuto()),
+                  () => Option.fromUndefinedOr(client.session().reasoningLevel),
+                ),
                 () => DEFAULT_ROW_ID,
               ),
             )}

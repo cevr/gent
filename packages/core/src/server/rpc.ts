@@ -220,7 +220,8 @@ export const RespondInteractionInput = Schema.Struct({
 export type RespondInteractionInput = typeof RespondInteractionInput.Type
 
 /** What `/effort` sets: a level, or `auto` for the effort router's pick each turn. */
-const EffortSetting = Schema.Union([ReasoningEffort, Schema.Literal("auto")])
+export const EffortSetting = Schema.Union([ReasoningEffort, Schema.Literal("auto")])
+export type EffortSetting = typeof EffortSetting.Type
 
 /** The session's mutable settings as stored: an undefined field is unset. */
 export const SessionSettings = Schema.Struct({
