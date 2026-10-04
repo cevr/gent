@@ -38,7 +38,16 @@ import {
   waitFor,
   systemTextOf,
 } from "@gent/core/test-utils"
-import { ExtensionId, getToolId, type ToolCapability } from "@gent/core/extensions/api"
+import {
+  AgentDefinition,
+  AgentName,
+  defineExtension,
+  ExtensionHost,
+  ExtensionId,
+  getToolId,
+  type ToolCapability,
+  ToolImage,
+} from "@gent/core/extensions/api"
 import { messagePartsText } from "@gent/core/protocol"
 import {
   HostEnvironment,
@@ -70,6 +79,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment;
  * `MCP_FIXTURE_MALFORMED` adds four entries the spec's tool schema refuses, one named `a.b`, and `a_b`;
  * `MCP_FIXTURE_BINARY` adds `image`, which returns an image and a blob;
+ * `MCP_FIXTURE_PNG` adds `png`, which returns a caption and that base64 PNG;
  * `MCP_FIXTURE_MANY=n` adds `n` tools `bulk_<i>`, each with a 2 KB input schema;
  * `MCP_FIXTURE_TYPED` adds `stats` and `badstats`, which declare an output
  * schema, and only `stats` keeps it;
@@ -146,6 +156,9 @@ if (process.env.MCP_FIXTURE_MALFORMED) {
 if (process.env.MCP_FIXTURE_BINARY) {
   tools.push({ name: "image", description: "Return an image and a blob.", inputSchema: { type: "object" } })
 }
+if (process.env.MCP_FIXTURE_PNG) {
+  tools.push({ name: "png", description: "Return a real PNG.", inputSchema: { type: "object" } })
+}
 if (process.env.MCP_FIXTURE_MANY) {
   const padding = "p".repeat(2000)
   for (let index = 0; index < Number(process.env.MCP_FIXTURE_MANY); index++) {
@@ -205,6 +218,8 @@ const answer = (request) => {
           ],
         },
       }
+    case "png":
+      return { result: { content: [{ type: "text", text: "a dot" }, { type: "image", data: process.env.MCP_FIXTURE_PNG, mimeType: "image/png" }] } }
     case "stats":
       return { result: { content: [{ type: "text", text: "3 open" }], structuredContent: { open: 3, labels: ["bug"] } } }
     case "badstats":
@@ -2396,13 +2411,13 @@ describe("mcp binary content", () => {
           Effect.provideService(FileSystem.FileSystem, heldListing),
         )
         const block = { type: "image", data: Base64.encode("PNGDATA"), mimeType: "image/png" }
-        const first = yield* Effect.forkChild(store.save([block]))
+        const first = yield* Effect.forkChild(store.save(block))
         yield* Deferred.await(reached)
         yield* Fiber.interrupt(first)
 
-        const next = yield* Effect.forkChild(store.save([block]))
+        const next = yield* Effect.forkChild(store.save(block))
         yield* Deferred.succeed(listed, void 0)
-        const saved = (yield* Fiber.join(next))[0] ?? Option.none<string>()
+        const saved = yield* Fiber.join(next)
         expect(Option.isSome(saved)).toBe(true)
         expect(yield* fs.readFileString(Option.getOrElse(saved, () => ""))).toBe("PNGDATA")
         // The stopped save's prune went on to its end, and the next save joined it.
@@ -2413,6 +2428,133 @@ describe("mcp binary content", () => {
 })
 
 // ── results ─────────────────────────────────────────────────────────────────
+
+/** A 1x1 PNG, base64. */
+const DOT_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+describe("mcp images", () => {
+  test("an image block the tool image store took is a tool image, not an omitted block", () => {
+    const image = ToolImage.make({
+      sha256: "a".repeat(64),
+      mediaType: "image/png",
+      width: 1,
+      height: 1,
+      bytes: 70,
+    })
+    expect(
+      projectCallResult(
+        {
+          content: [
+            { type: "text", text: "a dot" },
+            { type: "image", data: DOT_PNG, mimeType: "image/png" },
+            { type: "audio", data: "AAAA", mimeType: "audio/wav" },
+          ],
+        },
+        [Option.none(), Option.none(), Option.some("/nonexistent/gent-probe-x/a.wav")],
+        [Option.none(), Option.some(image), Option.none()],
+      ),
+    ).toEqual({
+      text: "a dot",
+      images: [
+        {
+          _tag: "ToolImage",
+          sha256: "a".repeat(64),
+          mediaType: "image/png",
+          width: 1,
+          height: 1,
+          bytes: 70,
+        },
+      ],
+      omitted: [
+        { type: "audio", mimeType: "audio/wav", bytes: 3, path: "/nonexistent/gent-probe-x/a.wav" },
+      ],
+      note: "1 binary block saved to files: read each one from its path",
+    })
+  })
+
+  it.scopedLive(
+    "an MCP image reaches the model after the call's result, through the tool image store",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-images-" })
+        // An agent that lists the MCP tool calls it natively, beside the shipped cell.
+        const pictureAgent = defineExtension({
+          id: "@test/picture-agent",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "agent",
+              AgentDefinition.make({
+                name: AgentName.make("picture"),
+                description: "looks at pictures",
+                allowedTools: ["mcp.fixture.png"],
+              }),
+            )
+          }),
+        })
+        const prompts: Array<Prompt.Prompt> = []
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("mcp.fixture.png", {}),
+          {
+            ...textStep("done"),
+            assertOptions: (options) => {
+              prompts.push(options.prompt)
+            },
+          },
+        ])
+        const result = yield* Effect.gen(function* () {
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...shippedPreset,
+            extensionInputs: [
+              ...shippedWithoutMcp,
+              pictureAgent,
+              McpServers("@test/mcp-png", {
+                fixture: fixture.stdio({ MCP_FIXTURE_PNG: DOT_PNG }),
+              }),
+            ],
+            providerLayer,
+            admission: { agent: AgentName.make("picture") },
+          })
+          yield* client.message.send({ sessionId, branchId, content: "look" })
+          return yield* cellResultAfterDone(client, branchId)
+        }).pipe(
+          Effect.provide(
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: dataDir })),
+          ),
+        )
+        yield* controls.assertDone
+        // The stored result holds the image by reference; its bytes are one blob file.
+        const reference = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            text: Schema.String,
+            images: Schema.Tuple([ToolImage]),
+          }),
+        )(result?.result)
+        expect(reference.text).toBe("a dot")
+        expect(reference.images[0]).toMatchObject({ mediaType: "image/png", width: 1, height: 1 })
+        expect(
+          yield* fs.exists(path.join(dataDir, "blobs", `${reference.images[0].sha256}.png`)),
+        ).toBe(true)
+        // The next request carries the image in a user message right after the tool message.
+        const prompt = prompts[0]?.content ?? []
+        const index = prompt.findLastIndex((message) => message.role === "tool")
+        const next = prompt.slice(index + 1, index + 2)
+        expect(next.map((message) => message.role)).toEqual(["user"])
+        const parts = next.flatMap((message) => {
+          if (message.role !== "user") return []
+          return message.content
+        })
+        expect(parts.map((part) => part.type)).toEqual(["text", "file"])
+        expect(parts[0]).toMatchObject({ text: "Image from mcp.fixture.png 1x1:" })
+        expect(parts[1]).toMatchObject({ data: `data:image/png;base64,${DOT_PNG}` })
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    25_000,
+  )
+})
 
 describe("mcp results", () => {
   test("structured content alone when its text only repeats it; text joins", () => {

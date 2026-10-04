@@ -1797,8 +1797,12 @@ so the host checks input and the catalog shows its types. A tool with an
 fails the call. A result of text alone is its joined text, and one of
 `structuredContent` alone (its text only repeating it) is that value; any
 other result is an object of `structuredContent`, `text`, the other blocks as
-`content`, and `omitted`, beside a `note`. `omitted` names each image, audio,
-or blob block with its MIME type and size; the cell never receives the bytes.
+`content`, `images`, and `omitted`, beside a `note`. An image block the tool
+image store takes (`saveToolImage`: PNG, JPEG, GIF or WebP within its limits)
+is a `ToolImage` in `images`, so the model sees it after the call's result as
+it sees any tool image; a typed tool returns only its `structuredContent`, so
+its images are dropped. `omitted` names each other image, audio, or blob
+block with its MIME type and size; the cell never receives the bytes.
 Each such block is written once to `<data dir>/mcp-blobs/<sha256>.<ext>` (the
 extension from its MIME type, else `bin`) and its entry gains that `path`; a
 block over 20 MiB is not written and has no path. A save that finds its file
