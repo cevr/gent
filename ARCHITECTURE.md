@@ -642,6 +642,36 @@ Shape:
   terminal columns on a grapheme) over the text; `sessionMessageBody` removes
   the header, with or without the child line, so older rows render the same.
   Full detail shows the header the model reads.
+- A thread is the sessions that share one thread key (`sessionThread`:
+  `sessions.thread_id`, else the session's own id), in creation order; its
+  key is its first session's id and its current session is the newest. A
+  handoff (`continueThread`) joins its parent's thread and every other create
+  starts one; no table, registry or field records a thread. The model opens
+  unrelated work with `thread.start` (`@gent/session-tools`, `── threads ──`):
+  a session spawned under the starter (so spawn depth applies) with its own
+  key, the starter's agent, admission, model and reasoning, a run spec of at
+  most 32 model attempts, and fresh context, whose task is its first turn
+  (`Session.send` `turn`, `completion: "admission"`, metadata `customType:
+"thread-task"`, a first line that says its replies go to the user and not
+  to the starter). The ids come from the tool call (`thread:<id>` for the
+  create, `thread-start:<id>` for the send), so a repeated call is one
+  thread. A thread never reports to its starter: nothing lands on the
+  starter's branch, so its cached prefix holds and no paid turn reads a
+  result it did not ask for; work whose result the starter needs is a
+  delegate child. `thread.list` derives the threads a session started from
+  its subtree (`listSessions({ root })`) grouped by key, keeping the groups
+  whose first session it spawned, with each one's status from
+  `listActiveLoops`, its current session, and the current session's latest
+  reply (one line, or 4,000 characters head and tail for one named thread);
+  `read_session` reads the rest and `session.send` messages the current
+  session. `thread.stop` stops each working loop of a thread the session
+  started and refuses any other. One session runs at most four threads: the
+  count and the start it admits hold one process permit (`ThreadStarts`), and
+  a start past the cap deletes the session it made and names the four. The
+  starter's interrupt does not stop a thread, and a thread's unattended turns
+  decline their asks (`turnCanAsk`). A delegate child is denied
+  `thread.start`. The `# Sessions` prompt section shows its `thread.*` lines
+  only to an agent that may call `thread.start`.
 - A session takes its name from its first user message: at a turn end,
   `@gent/session-tools` renames a session that still has
   `DEFAULT_SESSION_NAME` to the first line of its branch's first user
@@ -1003,8 +1033,9 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   making the fork, is left out with its step, and a result whose call the
   window cut away is left out too, or the child's first projection would
   reject the group. `delegate.start` always denies the child the delegation
-  tools: fan-out is the caller's decision, and a project prompt that
-  addresses "the orchestrator" reaches children too. Parents read child output through `read_session` on the
+  tools and `thread.start`: fan-out is the caller's decision, a project prompt that
+  addresses "the orchestrator" reaches children too, and a child does bounded
+  work for its parent, not unrelated work of its own. Parents read child output through `read_session` on the
   returned session/branch IDs. The session is the only copy of a child's
   output; the completion message carries the outcome and a preview.
 - The TUI agents pane lists children through `AgentsViewRpc.ListAgents` and

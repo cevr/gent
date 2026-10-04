@@ -128,6 +128,7 @@ export {
   isSpawnedSession,
   latestAssistantText,
   messagePartsDisplayText,
+  sessionThread,
 } from "../domain/message.js"
 export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
