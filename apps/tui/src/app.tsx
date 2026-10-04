@@ -492,20 +492,26 @@ function ActivityRow(props: { children: JSX.Element }) {
   )
 }
 
+/** The narrowest status row whose routed model keeps its provider's label. */
+const STATUS_PROVIDER_COLUMNS = 80
+
 /**
  * The model as the status row names it: its name, and its provider's label
  * (`providerLabel`) when another provider's model has the same name, so the
- * row says which provider runs, and bills, the next turn.
+ * row says which provider runs, and bills, the next turn. A row narrower
+ * than `STATUS_PROVIDER_COLUMNS` names a routed model without it: the pair
+ * `Auto → Sonnet 5` must fit beside the effort and the gauge.
  */
 export const statusModelName = (
   model: Model,
   models: ReadonlyArray<Model>,
   providers: ReadonlyArray<AuthProviderInfo>,
+  options: { readonly provider: boolean } = { provider: true },
 ): string => {
   const shared = models.some(
     (other) => other.name === model.name && other.provider !== model.provider,
   )
-  if (!shared) return model.name
+  if (!shared || !options.provider) return model.name
   return `${model.name} (${providerLabel(providers, model.provider)})`
 }
 
@@ -583,13 +589,14 @@ export function Session(props: SessionProps) {
     const model = client.modelInfo()
     const routed = client.routedModel()
     const items: StatusRowLabel[] = []
-    const name = (entry: Model) =>
-      statusModelName(entry, client.models(), controller.authProviders())
+    const name = (entry: Model, provider = true) =>
+      statusModelName(entry, client.models(), controller.authProviders(), { provider })
     if (Option.isSome(model))
       items.push({
         text: Option.match(routed, {
           onNone: () => name(model.value),
-          onSome: (route) => `${name(model.value)} → ${name(route.model)}`,
+          onSome: (route) =>
+            `${name(model.value)} → ${name(route.model, dimensions().width >= STATUS_PROVIDER_COLUMNS)}`,
         }),
         color: theme.textMuted,
       })

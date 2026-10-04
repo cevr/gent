@@ -843,11 +843,16 @@ Shape:
   stronger choice needs confidence 0.6; a cheaper one must cost less on the
   turn with the history written to its cache (the cache-write rate of the
   lifetime it asks for) than staying costs with the history read. A pick on
-  the current model is no switch, whatever its effort. The session metrics
-  keep the newest route (`SessionRuntimeMetrics.routed`); while the session
-  runs on that virtual model the TUI status row names both (`Auto → Sonnet
-5`), shows the route's effort unless the session sets one, and reads the
-  context gauge against the routed model's window.
+  the current model is no switch, whatever its effort: the route's effort
+  is the turn's requested level (`applyTurnRoute`: the session's own level,
+  else the route's, else the agent's), the step's receipt records it after
+  the clamp, and a change of it alone rides the in-conversation effort
+  carrier like any other effort change. The session metrics keep the newest
+  route (`SessionRuntimeMetrics.routed`); while the session runs on that
+  virtual model the TUI status row names both (`Auto → Sonnet 5`; under 80
+  columns the routed half drops its provider label), shows the level in the
+  same order after the routed model's clamp, and reads the context gauge
+  against the routed model's window.
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in

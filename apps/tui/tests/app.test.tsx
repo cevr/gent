@@ -2164,6 +2164,82 @@ describe("App status and activity rows", () => {
         }).pipe(Effect.timeout("4 seconds")),
     )
   }
+  // A routed model whose name another provider shares carries the provider's
+  // label on a wide row; a narrow row drops it so the pair stays whole.
+  for (const [width, routedName] of [
+    [120, "Auto → Claude Sonnet 5 (anthropic)"],
+    [60, "Auto → Claude Sonnet 5"],
+  ] as const) {
+    it.scopedLive(
+      `a routed model's provider label shows at ${width} columns only when the row is wide`,
+      () =>
+        Effect.gen(function* () {
+          const sessionId = SessionId.make(`session-routed-shared-${width}`)
+          const branchId = BranchId.make(`branch-routed-shared-${width}`)
+          const auto = new Model({
+            id: ModelId.make("router/auto"),
+            name: "Auto",
+            provider: ProviderId.make("router"),
+            kind: "virtual",
+          })
+          const sonnet = (provider: string) =>
+            new Model({
+              id: ModelId.make(`${provider}/claude-sonnet-5`),
+              name: "Claude Sonnet 5",
+              provider: ProviderId.make(provider),
+              contextLength: 1_000_000,
+              inputLimit: 100_000,
+              outputLimit: 8_000,
+            })
+          const { setup } = yield* mountApp({
+            client: {
+              model: {
+                list: () => Effect.succeed([sonnet("anthropic"), sonnet("opencode"), auto]),
+              },
+              session: {
+                getSnapshot: () =>
+                  Effect.succeed({
+                    sessionId,
+                    branchId,
+                    messages: [],
+                    lastEventId: nullValue,
+                    reasoningLevel: absent,
+                    resolvedModelId: auto.id,
+                    agent: AgentName.make("main"),
+                    runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                    metrics: {
+                      turns: 1,
+                      durationMs: 0,
+                      costUsd: 0.42,
+                      lastInputTokens: 50_000,
+                      routed: {
+                        selected: auto.id,
+                        model: ModelId.make("anthropic/claude-sonnet-5"),
+                        effort: "high",
+                        reason: "choice 2: difficult work",
+                      },
+                    },
+                  }),
+              },
+            },
+            app: { debugMode: true },
+            width,
+            initialSession: sessionNamed(sessionId, branchId, "Routed shared"),
+          })
+          const frame = yield* waitForFrame(
+            setup,
+            (next) => next.includes(routedName) && next.includes("high"),
+            "the routed model in the status row",
+          )
+          const row = Option.getOrThrow(
+            Option.fromUndefinedOr(frame.split("\n").find((line) => line.includes(routedName))),
+          )
+          // The pair and its effort stay whole; the debug mark yields first.
+          expect(row).toContain(`${routedName} · high`)
+          if (width < 80) expect(row).not.toContain("(anthropic)")
+        }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
   // The route belongs to the virtual model: once the session leaves it, the
   // row names the concrete model alone.
   it.scopedLive("a route of a virtual model the session left is not named", () =>
