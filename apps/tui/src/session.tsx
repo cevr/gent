@@ -285,35 +285,27 @@ export function buildModelLabels(input: {
   return items
 }
 
-/** `repo/sub/dir (branch)`: the cwd relative to the git root, else its last segment. */
-export function formatCwdGit(
-  cwd: string,
-  gitRoot: Option.Option<string>,
-  branch: Option.Option<string>,
-): string {
-  let label: string
-  if (Option.isSome(gitRoot)) {
-    const repoParts = gitRoot.value.split("/")
-    const repoName = Option.getOrElse(
-      Option.fromNullishOr(repoParts[repoParts.length - 1]),
-      () => "",
-    )
-    if (cwd === gitRoot.value) {
-      label = repoName
-    } else if (cwd.startsWith(gitRoot.value + "/")) {
-      label = repoName + "/" + cwd.slice(gitRoot.value.length + 1)
-    } else {
-      label = Option.getOrElse(Option.fromNullishOr(repoParts[repoParts.length - 1]), () => cwd)
-    }
-  } else {
-    const parts = cwd.split("/")
-    label = Option.getOrElse(Option.fromNullishOr(parts[parts.length - 1]), () => cwd)
-  }
+/** A directory without its trailing slashes; `/` stays `/`. */
+const withoutTrailingSlash = (dir: string): string => dir.replace(/(.)\/+$/, "$1")
 
-  if (Option.isSome(branch) && branch.value.length > 0) {
-    return `${label} (${branch.value})`
-  }
-  return label
+/** The last segment of a directory; the directory itself when it has none. */
+const lastSegment = (dir: string): string => dir.slice(dir.lastIndexOf("/") + 1) || dir
+
+/**
+ * `repo/sub/dir`: the cwd under its project root, named from the root's last
+ * segment; with no root, or a root that does not hold the cwd, the cwd's last
+ * segment. A trailing slash names the same directory.
+ */
+export function formatCwd(cwd: string, projectRoot: Option.Option<string>): string {
+  const dir = withoutTrailingSlash(cwd)
+  return Option.match(Option.map(projectRoot, withoutTrailingSlash), {
+    onNone: () => lastSegment(dir),
+    onSome: (root) => {
+      if (dir === root) return lastSegment(root)
+      if (dir.startsWith(root + "/")) return lastSegment(root) + dir.slice(root.length)
+      return lastSegment(dir)
+    },
+  })
 }
 
 // ── model query ─────────────────────────────────────────────────────────────

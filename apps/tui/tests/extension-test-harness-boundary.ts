@@ -46,6 +46,11 @@ interface ClientExtensionHarnessOptions {
    * file. The session's directory defaults to `cwd`.
    */
   readonly workspace?: TestWorkspace
+  /**
+   * Where the setup's cleanups go; by default nothing keeps them. A test
+   * whose extension forks a watch or a timer runs them when its scope ends.
+   */
+  readonly lifecycle?: ClientContextDeps["lifecycle"]
 }
 
 type TestWorkspace = Omit<ClientContextDeps["workspace"], "sessionCwd"> &

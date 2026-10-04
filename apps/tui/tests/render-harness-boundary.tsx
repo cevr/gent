@@ -528,7 +528,7 @@ export const renderWithProviders = (
                         }}
                       >
                         <CommandProvider>
-                          <WorkspaceProvider cwd={cwd} home={home} services={services}>
+                          <WorkspaceProvider cwd={cwd} home={home}>
                             <ClientProvider
                               client={client}
                               runtime={runtime}

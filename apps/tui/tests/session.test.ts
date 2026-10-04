@@ -23,7 +23,7 @@ import {
   ComposerInteractionState,
   failAuthCheck,
   filterModels,
-  formatCwdGit,
+  formatCwd,
   initialSessionControllerState,
   nextDisclosure,
   queuedDraftText,
@@ -846,30 +846,28 @@ describe("shortModelName", () => {
   })
 })
 
-describe("formatCwdGit", () => {
-  test("cwd at the git root shows the repo name", () => {
-    expect(formatCwdGit("/home/u/repo", Option.some("/home/u/repo"), Option.none())).toBe("repo")
+describe("formatCwd", () => {
+  test("cwd at the project root shows the project name", () => {
+    expect(formatCwd("/home/u/repo", Option.some("/home/u/repo"))).toBe("repo")
   })
 
-  test("cwd under the git root shows the path relative to the repo", () => {
-    expect(formatCwdGit("/home/u/repo/apps/tui", Option.some("/home/u/repo"), Option.none())).toBe(
-      "repo/apps/tui",
-    )
+  test("cwd under the project root shows the path relative to the project", () => {
+    expect(formatCwd("/home/u/repo/apps/tui", Option.some("/home/u/repo"))).toBe("repo/apps/tui")
   })
 
-  test("cwd outside the git root falls back to the repo name", () => {
-    expect(formatCwdGit("/elsewhere", Option.some("/home/u/repo"), Option.none())).toBe("repo")
+  test("a root that does not hold the cwd names the cwd by its last segment", () => {
+    expect(formatCwd("/elsewhere/dir", Option.some("/home/u/repo"))).toBe("dir")
   })
 
-  test("no git root shows the last cwd segment", () => {
-    expect(formatCwdGit("/home/u/scratch", Option.none(), Option.none())).toBe("scratch")
+  test("no project root shows the last cwd segment", () => {
+    expect(formatCwd("/home/u/scratch", Option.none())).toBe("scratch")
   })
 
-  test("a non-empty branch is appended in parentheses", () => {
-    expect(formatCwdGit("/home/u/repo", Option.some("/home/u/repo"), Option.some("main"))).toBe(
-      "repo (main)",
-    )
-    expect(formatCwdGit("/home/u/repo", Option.some("/home/u/repo"), Option.some(""))).toBe("repo")
+  test("a cwd with a trailing slash reads as the same directory", () => {
+    expect(formatCwd("/home/u/repo/", Option.some("/home/u/repo"))).toBe("repo")
+    expect(formatCwd("/home/u/repo/apps/", Option.some("/home/u/repo"))).toBe("repo/apps")
+    expect(formatCwd("/home/u/scratch/", Option.none())).toBe("scratch")
+    expect(formatCwd("/", Option.none())).toBe("/")
   })
 })
 

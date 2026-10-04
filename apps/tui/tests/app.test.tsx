@@ -10,7 +10,6 @@ import {
   Effect,
   Exit,
   Fiber,
-  FileSystem,
   Layer,
   Logger,
   Option,
@@ -6566,75 +6565,6 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("1 extension failed")
       expect(frame).toContain("@gent/plan")
     }).pipe(Effect.timeout("10 seconds")),
-  )
-  it.live("the status row names an unborn branch, and a detached head by its commit", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const cwd = yield* makeTempDirectoryScoped("gent-test-branch-")
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-        const git = (...args: ReadonlyArray<string>) =>
-          spawner.exitCode(
-            ChildProcess.make(
-              "git",
-              ["-c", "user.email=probe@gent.test", "-c", "user.name=probe", ...args],
-              { cwd, forceKillAfter: "2 seconds" },
-            ),
-          )
-        const statusRow = Effect.gen(function* () {
-          const { setup } = yield* mountApp({
-            initialSession: sessionNamed("session-a", "branch-a", "Session A"),
-            cwd,
-          })
-          const frame = yield* waitForFrame(setup, (next) => /\(.+\)/.test(next), "the branch")
-          setup.renderer.destroy()
-          return frame.split("\n").find((line) => line.startsWith("ready ·")) ?? ""
-        })
-        yield* git("init", "-q", "-b", "trunk")
-        expect(yield* statusRow).toContain("(trunk)")
-        yield* git("commit", "-q", "--allow-empty", "-m", "first")
-        yield* git("checkout", "-q", "--detach")
-        const row = yield* statusRow
-        expect(row).toMatch(/\(detached @[0-9a-f]{7,}\)/)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
-    ),
-  )
-  // The branch label watches the repository's own git directory, found by
-  // git: a launch in a subdirectory, or in a worktree whose `.git` is a file,
-  // follows a checkout as soon as git writes HEAD, well inside the 2 s poll
-  // that stands in when no watch can start.
-  it.scopedLive("the status row follows a checkout from a subdirectory and from a worktree", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const root = yield* makeTempDirectoryScoped("gent-test-watch-")
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-        const fs = yield* FileSystem.FileSystem
-        const git = (cwd: string, ...args: ReadonlyArray<string>) =>
-          spawner.exitCode(
-            ChildProcess.make(
-              "git",
-              ["-c", "user.email=probe@gent.test", "-c", "user.name=probe", ...args],
-              { cwd, forceKillAfter: "2 seconds" },
-            ),
-          )
-        const repo = `${root}/repo`
-        yield* fs.makeDirectory(`${repo}/sub`, { recursive: true })
-        yield* git(repo, "init", "-q", "-b", "trunk")
-        yield* git(repo, "commit", "-q", "--allow-empty", "-m", "first")
-        yield* git(repo, "worktree", "add", "-q", "-b", "side", `${root}/worktree`)
-        const follows = (cwd: string, before: string, after: string) =>
-          Effect.gen(function* () {
-            const { setup } = yield* mountApp({
-              initialSession: sessionNamed("session-a", "branch-a", "Session A"),
-              cwd,
-            })
-            yield* waitForFrame(setup, (frame) => frame.includes(`(${before})`), before)
-            yield* git(cwd, "checkout", "-q", "-b", after)
-            yield* waitForFrame(setup, (frame) => frame.includes(`(${after})`), after, 1_500)
-          })
-        yield* follows(`${repo}/sub`, "trunk", "feature")
-        yield* follows(`${root}/worktree`, "side", "side-next")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
-    ),
   )
 })
 

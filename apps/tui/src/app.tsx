@@ -13,11 +13,20 @@ import {
   type QueueEntryInfo,
   Session as DomainSession,
 } from "@gent/core/protocol"
-import { type Session as ClientSession, useClient } from "./client"
+import { type Session as ClientSession, useClient, useRuntime } from "./client"
 import { formatCost, formatDuration, isConversation, plural, randomId, truncate } from "./utils"
 import type { DisclosureLevel } from "./extensions/client-facets"
 import { textWidth } from "./bun-adapter"
-import { createMemo, createSignal, ErrorBoundary, For, type JSX, Show } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  ErrorBoundary,
+  For,
+  type JSX,
+  on,
+  Show,
+} from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import {
   KeyboardScopeProvider,
@@ -49,13 +58,13 @@ import {
   reasoningRows,
   SettingsPicker,
 } from "./pickers"
-import { useWorkspace } from "./workspace"
+import { projectRoot } from "./workspace"
 import {
   type StatusRowLabel,
   buildContextLabels,
   buildModelLabels,
   createSessionController,
-  formatCwdGit,
+  formatCwd,
   overlayHoldsComposer,
   SessionControllerContext,
   shortModelName,
@@ -580,10 +589,34 @@ export function Session(props: SessionProps) {
   const { theme } = useTheme()
   const command = useCommand()
   const dimensions = useTerminalDimensions()
-  const workspace = useWorkspace()
   const controller = createSessionController(props)
   const client = useClient()
+  const runtime = useRuntime()
   const ext = useExtensionUI()
+
+  // The project that holds the session's directory, by a stat walk for
+  // `.git`; it names the cwd label `repo/sub`. Keyed by the cwd it was found
+  // for, so a session move never shows the last session's root, and a walk
+  // still out when the cwd moves is interrupted.
+  const [root, setRoot] = createSignal(
+    Option.none<{ readonly cwd: string; readonly root: Option.Option<string> }>(),
+  )
+  createEffect(
+    on(
+      () => client.pathPlace().cwd,
+      (cwd) =>
+        runtime.call(
+          projectRoot(cwd).pipe(
+            Effect.tap((found) => Effect.sync(() => setRoot(Option.some({ cwd, root: found })))),
+          ),
+        ),
+    ),
+  )
+  const rootOf = (cwd: string): Option.Option<string> =>
+    root().pipe(
+      Option.filter((known) => known.cwd === cwd),
+      Option.flatMap((known) => known.root),
+    )
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
   const [footerHeight, setFooterHeight] = createSignal(4)
@@ -724,17 +757,11 @@ export function Session(props: SessionProps) {
     // debug flag. A reader running several sessions at once cannot tell them
     // apart from the model and cost alone, and the cwd is the thing that
     // distinguishes them.
-    // The git facts are the launch directory's; a session rooted elsewhere
-    // shows its directory alone rather than borrow them. A narrow row leaves
-    // it out before it shortens the model.
+    // The branch and the changes are the `@gent/git` extension's labels. A
+    // narrow row leaves the cwd out before it shortens the model.
     const sessionCwd = client.pathPlace().cwd
-    const atLaunchCwd = sessionCwd === workspace.cwd
     items.push({
-      text: formatCwdGit(
-        sessionCwd,
-        Option.filter(workspace.gitRoot(), () => atLaunchCwd),
-        Option.filter(workspace.gitBranch(), () => atLaunchCwd),
-      ),
+      text: formatCwd(sessionCwd, rootOf(sessionCwd)),
       color: theme.textMuted,
       short: { text: "", rank: STATUS_YIELD.cwd },
     })

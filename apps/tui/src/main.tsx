@@ -356,7 +356,7 @@ const runGent = ({
       render(
         () => (
           <EnvProvider env={envWithShutdown}>
-            <WorkspaceProvider cwd={cwd} home={home} services={uiServices}>
+            <WorkspaceProvider cwd={cwd} home={home}>
               <ClientProvider
                 client={bundle.client}
                 runtime={bundle.runtime}
