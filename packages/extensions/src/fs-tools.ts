@@ -1840,7 +1840,9 @@ export const GrepTool = tool({
     if (Option.isSome(target)) {
       basePath = path.resolve(ctx.cwd, target.value)
     }
-    // Only the search root is checked: a link under it is followed unchecked.
+    // The root check covers every file grep reads: the listing skips each
+    // symbolic link, and each git-listed path under a linked directory.
+    // A link that changes between the check and the read is not refused.
     yield* requirePathAccess(basePath, "read")
     const limit = params.limit ?? 100
     const contextLines = params.context ?? 0
