@@ -135,7 +135,8 @@ running: a newer version of its file failed at that phase. It reads the extensio
 just wrote shows there. `Extensions.reload(id)` runs every setup of the
 profile again and returns the new statuses; an unchanged extension keeps its
 process and branch Resources, a run that is going on keeps its profile, and
-an id the profile does not name fails. Any extension gets this facet. The
+an id the profile does not name fails, as does one a config turns off (it is
+never set up). Any extension gets this facet. The
 shipped `@gent/extension-admin` extension (`packages/extensions/src/extension-admin.ts`)
 gives the agent `extensions.status`, `extensions.reload`, and four verbs that
 change what the next turn loads: `extensions.enable` and `extensions.disable`

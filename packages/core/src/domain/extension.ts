@@ -1098,7 +1098,8 @@ export interface ExtensionExtensionsService {
    * Run the setup of every extension of the profile again, then report as
    * `status` does. The process and branch Resources of an unchanged
    * extension stay up, with their state. A run that is going on keeps the
-   * profile it started with. An id the profile does not name fails.
+   * profile it started with. An id the profile does not name fails, and so
+   * does one a config turns off: it is never set up.
    */
   readonly reload: (
     id: string,

@@ -660,21 +660,33 @@ describe("extension admin pane requests", () => {
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("14 seconds")),
   )
 
-  it.live("the pane refuses an id the session does not have, and reloads one it has", () =>
-    Effect.gen(function* () {
-      const server = yield* adminServer({ steps: [] })
-      const refused = yield* paneRequest(server, "extensions.pane.set-enabled", {
-        id: "@test/missing",
-        enabled: false,
-      }).pipe(Effect.flip)
-      expect(String(refused.message)).toContain("@test/missing")
-      expect(yield* disabledIn(server.userConfig)).toEqual([])
+  it.live(
+    "the pane refuses an id the session does not have and one that is off, and reloads one it has",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* adminServer({ steps: [] })
+        const refused = yield* paneRequest(server, "extensions.pane.set-enabled", {
+          id: "@test/missing",
+          enabled: false,
+        }).pipe(Effect.flip)
+        expect(String(refused.message)).toContain("@test/missing")
+        expect(yield* disabledIn(server.userConfig)).toEqual([])
 
-      const reloaded = yield* paneRequest(server, "extensions.pane.reload", { id: "@test/probe" })
-      expect(reloaded.detail).toContain("@test/probe")
-      expect(reloaded.extensions).toContainEqual(
-        expect.objectContaining({ _tag: "Active", id: "@test/probe" }),
-      )
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("14 seconds")),
+        const reloaded = yield* paneRequest(server, "extensions.pane.reload", { id: "@test/probe" })
+        expect(reloaded.detail).toContain("@test/probe")
+        expect(reloaded.extensions).toContainEqual(
+          expect.objectContaining({ _tag: "Active", id: "@test/probe" }),
+        )
+
+        // An extension that is off is never set up: a reload of it would do nothing.
+        yield* paneRequest(server, "extensions.pane.set-enabled", {
+          id: "@test/probe",
+          enabled: false,
+        })
+        const off = yield* paneRequest(server, "extensions.pane.reload", {
+          id: "@test/probe",
+        }).pipe(Effect.flip)
+        expect(String(off.message)).toContain("@test/probe is off")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("14 seconds")),
   )
 })

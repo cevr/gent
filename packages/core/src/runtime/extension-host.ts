@@ -3352,11 +3352,20 @@ export const makeExtensionHostContextProvider = (
       reload: (id) =>
         Effect.gen(function* () {
           const before = yield* extensionStatuses(cwd)
-          if (!before.some((status) => status.id === id)) {
+          const named = before.filter((status) => status.id === id)
+          if (named.length === 0) {
             return yield* new ExtensionServiceError({
               service: "ExtensionExtensions",
               operation: "reload",
               message: `No extension "${id}" in the profile of ${cwd}`,
+            })
+          }
+          // A disabled extension is never set up: a reload of it does nothing.
+          if (named.every(Predicate.isTagged("Disabled"))) {
+            return yield* new ExtensionServiceError({
+              service: "ExtensionExtensions",
+              operation: "reload",
+              message: `${id} is off in a config: turn it on to set it up`,
             })
           }
           yield* profiles((cache) => cache.reload(cwd, ExtensionId.make(id))).pipe(inWorkspace)
