@@ -524,8 +524,10 @@ const startRedirectServer = (
   deferred: Deferred.Deferred<PendingCallbackPayload, OAuthError>,
 ): Effect.Effect<void, OAuthError, Scope.Scope> => {
   const HttpLive = HttpRouter.serve(buildCallbackRoutes(expectedState, deferred)).pipe(
+    // Loopback only, as the MCP redirect listener: the browser on this machine
+    // reaches `localhost`, and no other machine may hand the login a code.
     // oxlint-disable-next-line effect/noPlatformLayerOutsideEntry -- the OAuth redirect listener binds the fixed port OpenAI registers, for one sign-in; no entry provides an HTTP server, and a user extension may start its own listener
-    Layer.provide(BunHttpServer.layerServer({ port })),
+    Layer.provide(BunHttpServer.layerServer({ port, hostname: "127.0.0.1" })),
   )
   return Layer.launch(HttpLive).pipe(
     Effect.catchCause((cause) =>

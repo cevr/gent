@@ -1601,6 +1601,7 @@ Production rule:
 - `apps/tui/src/main.tsx` resolves a server via `Gent.server()` + `Gent.client()`
 - `--connect <url>` attaches to a remote server via `Gent.client({ url })`
 - `gent server start` (`apps/tui/src/ops.ts`) runs a standalone durable server in the foreground. Its flags (`--port`, `--isolate`, `--mock`) are the one way to choose how it launches; the environment names only where its data lives (`GENT_DATA_DIR`, `GENT_AUTH_DIRECTORY`). A signal stops it with exit 130 (SIGINT) or 143 (SIGTERM).
+- Every listener gent opens binds `127.0.0.1`, never every interface (Bun's default when no hostname is given): the server's RPC (`LISTEN_HOST` in `packages/sdk/src/server.ts`, the address it binds and the url it names), the OpenAI browser login's redirect listener (`packages/extensions/src/openai.ts`) and the MCP one (`packages/extensions/src/mcp.ts`). The RPC has no auth and runs bash, so a peer on the LAN or the tailnet that reached it would run commands as the owner. A server on another machine is reached only through a tunnel: `ssh -L 3000:127.0.0.1:3000 <host>`, then `--connect http://127.0.0.1:3000/rpc`. Receipts: "the owned server listens on loopback only" in `packages/sdk/tests/server.test.ts` and "the redirect listener answers on loopback and refuses another address" in `packages/extensions/tests/openai.test.ts`; each also sends a request to the host's own non-loopback IPv4 address (the test preload lets a request to this machine's interface addresses through) and expects it refused.
 
 ## Shared Server Discovery
 

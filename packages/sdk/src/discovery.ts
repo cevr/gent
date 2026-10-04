@@ -541,7 +541,7 @@ export interface GentServerOptions {
    */
   readonly seed?: Effect.Effect<void, never, ServerSeedServices>
   /**
-   * Bind this TCP port instead of an ephemeral one. A SQLite server still
+   * Bind this TCP port on 127.0.0.1 instead of an ephemeral one. A SQLite server still
    * takes the database lock and writes its entry, so other clients find it;
    * a fixed port only means it never attaches to another server.
    */

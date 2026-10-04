@@ -65,6 +65,13 @@ const resolveLanguageModelLayer = (
 
 // ── Build owned server (in-process + HTTP listener) ──
 
+/**
+ * The one address the listener binds and clients dial. The RPC has no auth and
+ * runs bash, so no other machine may reach it: a remote client tunnels in
+ * (`ssh -L`). Bun binds every interface when no hostname is given.
+ */
+const LISTEN_HOST = "127.0.0.1"
+
 export const buildOwnedServer = (
   options: GentServerOptions,
   stateSpec: StateSpec,
@@ -79,7 +86,7 @@ export const buildOwnedServer = (
     const homeDirectory = yield* platform.homeDirectory
     const requestedPort = Option.getOrElse(Option.fromNullishOr(options.port), () => 0)
     const httpServerCtx = yield* Layer.buildWithScope(
-      BunHttpServer.layer({ port: requestedPort, idleTimeout: 0 }),
+      BunHttpServer.layer({ hostname: LISTEN_HOST, port: requestedPort, idleTimeout: 0 }),
       scope,
     ).pipe(
       Effect.mapError(
@@ -96,7 +103,7 @@ export const buildOwnedServer = (
         message: "server listener did not bind a concrete TCP port",
       })
     }
-    const url = `http://127.0.0.1:${port}/rpc`
+    const url = `http://${LISTEN_HOST}:${port}/rpc`
     const workspaceHeaders = workspaceHeadersForCwd(options.cwd)
     const home = resolveHome(stateSpec, homeDirectory)
     const serverId = yield* platform.randomId

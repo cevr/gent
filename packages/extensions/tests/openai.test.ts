@@ -15,6 +15,7 @@ import {
   SynchronizedRef,
 } from "effect"
 import { TestClock } from "effect/testing"
+import { networkInterfaces } from "node:os"
 import {
   authorizeOpenAIDevice,
   buildCodexClient,
@@ -1999,7 +2000,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
   const heldPort = Effect.acquireRelease(
     Effect.sync(() =>
       // oxlint-disable-next-line effect/noGlobals -- Plays a foreign process that already holds the port.
-      Bun.serve({ port: 0, fetch: () => new Response("busy") }),
+      Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("busy") }),
     ),
     (held) => Effect.promise(() => held.stop(true)),
   )
@@ -2054,7 +2055,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
             const rebound = yield* Effect.acquireRelease(
               Effect.sync(() =>
                 // oxlint-disable-next-line effect/noGlobals -- Real isolated port ownership proves the redirect listener closed.
-                Bun.serve({ port, fetch: () => new Response("rebound") }),
+                Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("rebound") }),
               ),
               (server) => Effect.promise(() => server.stop(true)),
             )
@@ -2113,6 +2114,35 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       // The provider's error fails the browser wait; the login stays for a pasted code.
       yield* Effect.exit(callback(authContext(0, "escaped")))
       yield* dropLogin(pending, "escaped")
+    }),
+  )
+
+  it.live("the redirect listener answers on loopback and refuses another address", () =>
+    Effect.gen(function* () {
+      const port = yield* freePort
+      const pending: PendingCallbacks = new Map()
+      const { authorize } = yield* loginHooks(pending)
+      yield* authorize(authContext(0, "loopback")).pipe(
+        Effect.provideService(OAuthRedirectPort, port),
+      )
+      const visit = (host: string) =>
+        HttpClient.get(`http://${host}:${port}/auth/callback?state=foreign`).pipe(
+          Effect.map((response) => response.status),
+          Effect.provide(FetchHttpClient.layer),
+        )
+      // The redirect server starts on its own fiber; retry until it listens.
+      const status = yield* waitFor(visit("127.0.0.1"), () => true, 2_000, "redirect server")
+      expect(status).toBe(400)
+      // A host with no address but loopback has no peer to refuse: that half is skipped.
+      const external = Option.fromUndefinedOr(
+        Object.values(networkInterfaces())
+          .flatMap((addresses) => addresses ?? [])
+          .find((address) => address.family === "IPv4" && !address.internal)?.address,
+      )
+      if (Option.isSome(external)) {
+        expect(Exit.isFailure(yield* Effect.exit(visit(external.value)))).toBe(true)
+      }
+      yield* dropLogin(pending, "loopback")
     }),
   )
 
