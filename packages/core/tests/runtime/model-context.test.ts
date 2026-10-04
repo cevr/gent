@@ -1165,66 +1165,66 @@ const WIDE_BUDGET_TOKENS = 968_000
 const SMALL_BUDGET_TOKENS = 110_000
 
 describe("cold handoff cost rule", () => {
-  test("a cold window hands off only above the floor and when the handoff costs at most half the resend", () => {
+  test("a cold history hands off only above the floor and when the handoff costs at most half the resend", () => {
     const table: ReadonlyArray<{
       readonly name: string
-      readonly windowTokens: number
+      readonly historyTokens: number
       readonly availableInputTokens: number
       readonly pricing: Option.Option<ModelPricing>
       readonly handsOff: boolean
     }> = [
       {
         name: "below the 150k floor, however much cheaper",
-        windowTokens: 120_000,
+        historyTokens: 120_000,
         availableInputTokens: WIDE_BUDGET_TOKENS,
         pricing: Option.some(OPUS_PRICING),
         handsOff: false,
       },
       {
         name: "above the floor and cheaper",
-        windowTokens: 200_000,
+        historyTokens: 200_000,
         availableInputTokens: WIDE_BUDGET_TOKENS,
         pricing: Option.some(OPUS_PRICING),
         handsOff: true,
       },
       {
         name: "above the floor, but the summary output costs more than half the resend",
-        windowTokens: 200_000,
+        historyTokens: 200_000,
         availableInputTokens: WIDE_BUDGET_TOKENS,
         pricing: Option.some({ input: 1, output: 1_000, cacheWrite: 1 }),
         handsOff: false,
       },
       {
         name: "unpriced, below the floor",
-        windowTokens: 149_999,
+        historyTokens: 149_999,
         availableInputTokens: WIDE_BUDGET_TOKENS,
         pricing: Option.none(),
         handsOff: false,
       },
       {
         name: "unpriced, at the floor",
-        windowTokens: 150_000,
+        historyTokens: 150_000,
         availableInputTokens: WIDE_BUDGET_TOKENS,
         pricing: Option.none(),
         handsOff: true,
       },
       {
         name: "small window, below half its budget",
-        windowTokens: 50_000,
+        historyTokens: 50_000,
         availableInputTokens: SMALL_BUDGET_TOKENS,
         pricing: Option.some(SMALL_WINDOW_PRICING),
         handsOff: false,
       },
       {
         name: "small window, above half its budget but the summary call is most of the resend",
-        windowTokens: 60_000,
+        historyTokens: 60_000,
         availableInputTokens: SMALL_BUDGET_TOKENS,
         pricing: Option.some(SMALL_WINDOW_PRICING),
         handsOff: false,
       },
       {
         name: "small window, near full and cheaper",
-        windowTokens: 100_000,
+        historyTokens: 100_000,
         availableInputTokens: SMALL_BUDGET_TOKENS,
         pricing: Option.some(SMALL_WINDOW_PRICING),
         handsOff: true,
@@ -1233,7 +1233,7 @@ describe("cold handoff cost rule", () => {
     const actual = table.map((row) => ({
       name: row.name,
       handsOff: coldHandoffPays({
-        windowTokens: row.windowTokens,
+        historyTokens: row.historyTokens,
         availableInputTokens: row.availableInputTokens,
         pricing: row.pricing,
         cacheTtlMs: HOUR_MS,
@@ -1247,6 +1247,8 @@ describe("cold handoff cost rule", () => {
 const MID_WINDOW_TOKENS = 120_000
 /** A cold window the cost rule hands off: past the floor, and the summary is cheaper. */
 const LARGE_WINDOW_TOKENS = 200_000
+/** A new prompt past the 150k floor on its own. */
+const HUGE_PROMPT_TOKENS = 160_000
 
 /**
  * A 1M window at Opus prices whose provider keeps a prompt cached for
@@ -1324,6 +1326,7 @@ const measuredReply = (text: string, inputTokens: number): SequenceStep => ({
  * With `switchModel`, the session moves to another model with the same
  * lifetime before the second turn. With `spawned`, the turns run in a child
  * session of the harness session, whose lifetime is `childPromptCacheTtlMs`.
+ * With `secondPrompt`, the second turn sends that text.
  */
 const runColdCacheTurns = (params: {
   readonly promptCacheTtlMs: Option.Option<number>
@@ -1335,8 +1338,10 @@ const runColdCacheTurns = (params: {
   readonly switchModel?: boolean
   readonly childPromptCacheTtlMs?: number
   readonly spawned?: boolean
+  readonly secondPrompt?: string
 }) =>
   Effect.gen(function* () {
+    const secondPrompt = params.secondPrompt ?? "second prompt"
     const hold = Option.fromUndefinedOr(params.firstReplyHoldMs)
     const rateLimit = Option.fromUndefinedOr(params.firstCallRateLimitedMs)
     const requests: Array<string> = []
@@ -1408,8 +1413,8 @@ const runColdCacheTurns = (params: {
       })
     }
     const { sessionId, branchId } = target
-    for (const content of [`${FIRST_PROMPT_MARK} one`, "second prompt"]) {
-      if (content === "second prompt" && params.switchModel === true) {
+    for (const content of [`${FIRST_PROMPT_MARK} one`, secondPrompt]) {
+      if (content === secondPrompt && params.switchModel === true) {
         yield* client.session.updateSettings({
           sessionId,
           modelId: Option.some(otherModel.id),
@@ -1417,7 +1422,7 @@ const runColdCacheTurns = (params: {
         })
       }
       yield* client.message.send({ sessionId, branchId, content })
-      if (content !== "second prompt" && Option.isSome(hold)) {
+      if (content !== secondPrompt && Option.isSome(hold)) {
         const holdMs = hold.value
         yield* controls.waitForCall(0)
         const requestedAt = yield* Clock.currentTimeMillis
@@ -1509,6 +1514,48 @@ describe("cold prompt cache", () => {
       expect(result.calls).toBe(2)
       expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
       expect(handoffMarkers(result.durable)).toHaveLength(0)
+    }),
+  )
+
+  it.live(
+    "a cold turn prices only the history: a huge new prompt on a small history is sent whole",
+    () =>
+      Effect.gen(function* () {
+        // The new prompt alone is past the floor; the handoff would keep it, so
+        // it is sent either way and only the small history counts.
+        const result = yield* runColdCacheTurns({
+          promptCacheTtlMs: Option.some(0),
+          firstInputTokens: 1_000,
+          compactor: true,
+          steps: [textStep("second reply"), textStep("spare reply")],
+          secondPrompt: "p".repeat(HUGE_PROMPT_TOKENS * 4),
+        })
+
+        expect(result.calls).toBe(2)
+        expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+        expect(handoffMarkers(result.durable)).toHaveLength(0)
+        const projected = secondProjection(result.events)
+        expect(projected?._tag === "ModelContextProjected" && projected.compacted).toBe(false)
+        expect(
+          projected?._tag === "ModelContextProjected" && projected.estimatedTokens,
+        ).toBeGreaterThan(HUGE_PROMPT_TOKENS)
+      }),
+  )
+
+  it.live("a cold turn with a large history and a huge new prompt hands the history off", () =>
+    Effect.gen(function* () {
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(0),
+        firstInputTokens: LARGE_WINDOW_TOKENS,
+        compactor: true,
+        steps: [textStep("the summary of the first turn"), textStep("second reply")],
+        secondPrompt: "p".repeat(HUGE_PROMPT_TOKENS * 4),
+      })
+
+      expect(result.calls).toBe(3)
+      expect(result.requests[1]).toContain("summarize")
+      expect(result.requests[2]).not.toContain(FIRST_PROMPT_MARK)
+      expect(handoffMarkers(result.durable)).toHaveLength(1)
     }),
   )
 

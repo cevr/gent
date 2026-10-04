@@ -813,6 +813,12 @@ export class ModelContextProjectionError extends Schema.TaggedError<ModelContext
 export interface ModelContextProjection {
   readonly messages: ReadonlyArray<Message>
   readonly estimatedTokens: number
+  /**
+   * The part of `estimatedTokens` before the anchor (the turn's prompt, else
+   * the newest handoff marker): the history a handoff at the anchor replaces.
+   * The anchor and what follows it stay in the window either way.
+   */
+  readonly historyTokens: number
   readonly availableInputTokens: number
   readonly omittedMessageIds: ReadonlyArray<MessageId>
 }
@@ -1229,12 +1235,22 @@ const projectUnits = (
   ]
   const selectedMessages = selectedUnits.flatMap((unit) => unit.messages)
   const omittedMessageIds = messageIds(earlier.filter((unit) => !isWindowMarkerUnit(unit)))
+  // The selected units before the anchor, each at the estimate the total took.
+  const historyTokens = Option.match(anchor, {
+    onNone: () => 0,
+    onSome: (anchorIndex) =>
+      units
+        .slice(0, anchorIndex)
+        .filter((unit, index) => index >= selected.success.start || isWindowMarkerUnit(unit))
+        .reduce((sum, unit) => sum + unit.estimatedTokens, 0),
+  })
   // The stored message objects, not copies: `make` would decode each message
   // again, and the prompt reads the tool-result bounds the estimate took by
   // part object (`modelToolResult`).
   const projection: ModelContextProjection = {
     messages: selectedMessages,
     estimatedTokens: selected.success.estimatedTokens,
+    historyTokens,
     availableInputTokens,
     omittedMessageIds,
   }
@@ -1644,21 +1660,25 @@ const COLD_HANDOFF_MARGIN = 0.5
  * first. The one cost rule: the loop's cold check and the TUI's cache label
  * (`@gent/core/protocol`) both read it, so the label never disagrees.
  *
- * - The window is at least the floor: 150k, or half the budget when that is
- *   smaller.
+ * Both sides price only the history the handoff replaces: N tokens, the
+ * window before the new prompt, at the projection's estimate. The new
+ * prompt and what follows it are sent either way, so neither side counts it.
+ *
+ * - The history is at least the floor: 150k, or half the budget when that
+ *   is smaller.
  * - The resend is N tokens at the cache-write price of the lifetime the
  *   request asks for (`cacheWriteRate`: 2× input for Anthropic's one hour,
  *   the input price where no write is priced).
  * - The handoff is the summary call (min(N, its input cap) at the input
  *   price, its output cap at the output price; it names no cache key, so it
  *   writes no cache) plus the marker written to the cache in place of the
- *   history. The new prompt is sent either way, so neither side counts it.
+ *   history.
  * - It hands off when the handoff costs at most half the resend. An
  *   unpriced model hands off on the floor alone.
  */
 export const coldHandoffPays = (params: {
-  /** The estimated size of the window the turn would send. */
-  readonly windowTokens: number
+  /** The estimated size of the history before the new prompt: what a handoff replaces. */
+  readonly historyTokens: number
   /** The input budget the window is projected against. */
   readonly availableInputTokens: number
   readonly pricing: Option.Option<ModelPricing>
@@ -1666,14 +1686,14 @@ export const coldHandoffPays = (params: {
   readonly cacheTtlMs: number
 }): boolean => {
   const floor = Math.min(COLD_HANDOFF_FLOOR_TOKENS, Math.floor(params.availableInputTokens / 2))
-  if (params.windowTokens < floor) return false
+  if (params.historyTokens < floor) return false
   return Option.match(params.pricing, {
     onNone: () => true,
     onSome: (pricing) => {
       const write = cacheWriteRate(pricing, Option.some(params.cacheTtlMs))
-      const resend = params.windowTokens * write
+      const resend = params.historyTokens * write
       const handoff =
-        Math.min(params.windowTokens, COMPACTION_SUMMARY_INPUT_TOKENS) * pricing.input +
+        Math.min(params.historyTokens, COMPACTION_SUMMARY_INPUT_TOKENS) * pricing.input +
         COMPACTION_SUMMARY_OUTPUT_TOKENS * pricing.output +
         HANDOFF_MARKER_TOKENS * write
       return handoff <= (1 - COLD_HANDOFF_MARGIN) * resend
@@ -1764,9 +1784,10 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   const requested = params.directive.pipe(Option.exists((value) => value._tag === "Compact"))
   const overflowing = plan.overflowing
   // A turn that starts after the provider's prompt cache lapsed resends the
-  // whole window as a cache write. Past the floor, where a summary call plus
-  // a small window cost at most half that (`coldHandoffPays`), the window
-  // hands off first, anchored at the new prompt. Only the turn's first call
+  // whole window as a cache write. When the history before the new prompt is
+  // past the floor, and a summary call plus a marker cost at most half its
+  // resend (`coldHandoffPays`), the window hands off first, anchored at the
+  // new prompt. The prompt is sent either way. Only the turn's first call
   // hands off: a later step continues the work of the step before it,
   // whatever its tools took. The first projection holds no directive, since
   // the loop discards what an earlier turn left. Keeping the cache warm with
@@ -1781,7 +1802,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
       (cache) =>
         now.getTime() - cache.lastCallAtMillis >= cache.ttlMs &&
         coldHandoffPays({
-          windowTokens: fit.success.estimatedTokens,
+          historyTokens: fit.success.historyTokens,
           availableInputTokens: fit.success.availableInputTokens,
           pricing: cache.pricing,
           cacheTtlMs: cache.ttlMs,

@@ -180,9 +180,15 @@ updates this list in the same commit.
     tokens or something its better to compact, or measure against the amount
     of tokens the handoff would generate as well". One cost rule decides,
     `coldHandoffPays` (`@gent/core/protocol`, read by the loop and the TUI's
-    label): the window is at least 150k tokens (half the budget when that is
-    smaller, so a small-window model still can), and the handoff costs at
-    most half the resend. The resend is N tokens at the catalog cache-write
+    label). It prices only the history the handoff replaces: N tokens, the
+    window before the new prompt, at the projection's estimate
+    (`ModelContextProjection.historyTokens`). The new prompt is sent either
+    way, so neither side counts it. The history is at least 150k tokens (half
+    the budget when that is smaller, so a small-window model still can), and
+    the handoff costs at most half the resend. The label reads the history
+    as the last step's projected window, at least that step's reported
+    input less its request overhead, as the loop counts the same messages;
+    it leaves out that step's reply. The resend is N tokens at the catalog cache-write
     price of the lifetime the request asks for (`cacheWriteRate`; the input
     price where no write is priced). The handoff is the summary call,
     `min(N, 32,768)` input tokens (`COMPACTION_SUMMARY_INPUT_TOKENS`, prompt
@@ -195,9 +201,9 @@ updates this list in the same commit.
     loses and the reads the model makes back by id. An unpriced model hands
     off on the floor alone. Both numbers are constants: no config surface
     holds a per-session cost policy. At Opus prices (1-hour write 2× input)
-    a cold 150k window resends for $1.50 and hands off for $0.19, so the
+    a cold 150k history resends for $1.50 and hands off for $0.19, so the
     floor binds; on a 128k GPT-5.2 Chat window (no write price, output 8×
-    input) a 60k window keeps its cache-less resend, since the summary call
+    input) a 60k history keeps its cache-less resend, since the summary call
     is most of it.
     The model catalog names the cache lifetime (`Model.promptCacheTtlMs`, which
     each driver fills in `listModels`): Anthropic asks for the 1-hour cache on

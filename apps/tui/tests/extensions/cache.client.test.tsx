@@ -1,13 +1,15 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Clock, Deferred, Effect, Option, Stream } from "effect"
+import { Clock, Deferred, Effect, Layer, Option, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal } from "solid-js"
 import {
+  AgentDefinition,
   AgentEvent,
   AgentName,
   BranchId,
   dateFromMillis,
+  DEFAULT_AGENT_NAME,
   EventEnvelope,
   Message,
   MessageId,
@@ -17,8 +19,23 @@ import {
   SessionId,
   ToolCallId,
 } from "@gent/core/protocol"
-import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
-import { emptyQueueSnapshot, EventId, testAgent } from "@gent/core/test-utils"
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
+import {
+  CompactionSummary,
+  InteractionRequestId,
+  ModelContextCompactor,
+} from "@gent/core/extensions/branch-tools"
+import {
+  createRpcHarness,
+  emptyQueueSnapshot,
+  EventId,
+  finishPart,
+  LanguageModelLayers,
+  testAgent,
+  textDeltaPart,
+  textStep,
+  waitFor,
+} from "@gent/core/test-utils"
 import { CHILD_COMPLETION_TYPE, WAKE_MESSAGE_TYPE } from "@gent/extensions/client"
 import cacheExtension, {
   CacheClock,
@@ -1276,6 +1293,112 @@ const labelAt = (
     },
   })
 
+/** A 1M window at Sonnet prices whose prompt cache lapses at once. */
+const coldWindowModel = new Model({
+  id: ModelId.make("cold-label/wide-window"),
+  name: "Wide window, cache lapses at once",
+  provider: ProviderId.make("cold-label"),
+  contextLength: 1_000_000,
+  pricing: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+  promptCacheTtlMs: 0,
+})
+
+/** A compactor that summarizes with no model call, so a handoff is only the loop's decision. */
+const fixedSummaryCompactor = defineExtension({
+  id: "test-cold-label-compactor",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "test-cold-label-compactor/compactor",
+        scope: "process",
+        layer: Layer.succeed(
+          ModelContextCompactor,
+          ModelContextCompactor.of({
+            compact: (request) =>
+              Effect.succeed(
+                CompactionSummary.make({ notice: "Summary.", modelId: request.modelId }),
+              ),
+          }),
+        ),
+      }),
+    )
+  }),
+})
+
+/** A new prompt past the 150k floor on its own. */
+const HUGE_PROMPT = "p".repeat(160_000 * 4)
+
+/**
+ * Two turns on a real loop: the first reports a request of `firstInputTokens`,
+ * the second sends a huge prompt after the cache lapsed. `label` is what the
+ * cache label says after the first turn, from the events it folds; `loop` is
+ * whether the second turn handed the window off.
+ */
+const coldTurnDecisions = (firstInputTokens: number) =>
+  Effect.gen(function* () {
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      {
+        parts: [
+          textDeltaPart("first reply"),
+          finishPart({
+            finishReason: "stop",
+            usage: { inputTokens: firstInputTokens, outputTokens: 10 },
+          }),
+        ],
+      },
+      textStep("second reply"),
+    ])
+    const harness = yield* createRpcHarness({
+      providerLayer,
+      agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: coldWindowModel.id })],
+      extensionInputs: [fixedSummaryCompactor],
+      models: [coldWindowModel],
+    })
+    const { client, sessionId, branchId } = harness
+    const envelopes = Effect.gen(function* () {
+      const all = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),
+        Stream.runCollect,
+      )
+      return Array.from(all)
+    })
+    const turn = (content: string) =>
+      Effect.gen(function* () {
+        yield* client.message.send({ sessionId, branchId, content })
+        yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some(
+              (message) =>
+                message.role === "user" &&
+                message.parts.some((part) => part.type === "text" && part.text === content),
+            ) &&
+            snapshot.messages.at(-1)?.role === "assistant",
+          8_000,
+          "the turn settled",
+        )
+      })
+
+    yield* turn("first prompt")
+    const scan = makeCacheScan()
+    for (const envelope of yield* envelopes) scan.fold(envelope)
+    const label = handsOffCold(
+      scan.window(),
+      Option.fromUndefinedOr(coldWindowModel.pricing),
+      coldWindowModel.promptCacheTtlMs ?? 0,
+    )
+
+    yield* turn(HUGE_PROMPT)
+    const projections = (yield* envelopes).flatMap(({ event }) => {
+      if (event._tag !== "ModelContextProjected") return []
+      return [event]
+    })
+    return { label, loop: projections.at(1)?.compacted ?? false }
+  }).pipe(Effect.scoped, Effect.timeout("20 seconds"))
+
 describe("cache clock", () => {
   test("reads the time left by the lifetime and the model in view", () => {
     const hour = Option.some(HOUR)
@@ -1323,8 +1446,8 @@ describe("cache clock", () => {
   })
 
   test("the next turn compacts where the loop's cold cost rule hands off", () => {
-    const window = (estimatedTokens: number, availableInputTokens: number) =>
-      Option.some({ estimatedTokens, availableInputTokens })
+    const window = (historyTokens: number, availableInputTokens: number) =>
+      Option.some({ historyTokens, availableInputTokens })
     const sonnet = priceOf(SONNET)
     // A 1M window hands off from the 150k floor, where the summary costs far
     // less than half the resend; a smaller budget from half of it.
@@ -1344,6 +1467,20 @@ describe("cache clock", () => {
     )
     expect(handsOffCold(Option.none(), sonnet, CACHE_LIFETIME_MS)).toBe(false)
   })
+
+  it.live(
+    "the label and the loop agree on a cold turn: a large history hands off, a huge prompt does not",
+    () =>
+      Effect.gen(function* () {
+        const decisions = yield* Effect.forEach([1_000, 200_000], (firstInputTokens) =>
+          coldTurnDecisions(firstInputTokens),
+        )
+        expect(decisions).toEqual([
+          { label: false, loop: false },
+          { label: true, loop: true },
+        ])
+      }),
+  )
 
   test("the clock tags are the schema's", () => {
     expect(CacheClock.cases.Expired.make({})._tag).toBe("Expired")

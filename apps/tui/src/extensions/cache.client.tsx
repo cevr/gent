@@ -215,9 +215,16 @@ export interface CacheRefresh {
   readonly estimated: boolean
 }
 
-/** The last window the loop projected: its size and the input budget it fits. */
+/**
+ * What a turn that starts now would hand off, and the input budget. The
+ * history is the window of the branch's last step: everything before the
+ * next prompt but that step's reply (one step's output). It counts at least
+ * that step's reported input less the system and tool size its request
+ * carried (`StreamEnded.requestOverheadTokens`), as the loop's projection
+ * counts the same messages.
+ */
 interface CacheWindow {
-  readonly estimatedTokens: number
+  readonly historyTokens: number
   readonly availableInputTokens: number
 }
 
@@ -235,7 +242,7 @@ export interface CacheScan {
    * the next request goes out: the old prefix is gone.
    */
   readonly refresh: () => Option.Option<CacheRefresh>
-  /** The window of the last projection; `None` before one. */
+  /** The history the next turn would hand off; `None` before a projection. */
   readonly window: () => Option.Option<CacheWindow>
 }
 
@@ -270,7 +277,13 @@ export const makeCacheScan = (): CacheScan => {
   let cacheReported = false
   /** A compaction since the last request went out: the prefix that request cached is gone. */
   let compactedSince = false
-  let lastWindow = Option.none<CacheWindow>()
+  /** The last projection's estimate and budget. */
+  let lastWindow = Option.none<{
+    readonly estimatedTokens: number
+    readonly availableInputTokens: number
+  }>()
+  /** The reported input of the step that projection shaped, less its system and tool size. */
+  let lastMeasured = Option.none<number>()
 
   const reset = () => {
     previous = Option.none()
@@ -411,6 +424,8 @@ export const makeCacheScan = (): CacheScan => {
           estimatedTokens: event.estimatedTokens,
           availableInputTokens: event.availableInputTokens,
         })
+        // A new step's projection: the last measure belongs to the step before it.
+        lastMeasured = Option.none()
         // A compaction rewrote the context: the next prompt is new content, not a re-bill.
         if (event.compacted) {
           reset()
@@ -455,8 +470,15 @@ export const makeCacheScan = (): CacheScan => {
         })
         return Option.none()
       }
-      case "StreamEnded":
+      case "StreamEnded": {
+        // The loop's step measure: a row with no recorded overhead measures nothing.
+        const measured = Option.all([
+          Option.fromUndefinedOr(event.usage),
+          Option.fromUndefinedOr(event.requestOverheadTokens),
+        ]).pipe(Option.map(([usage, overheadTokens]) => usage.inputTokens - overheadTokens))
+        if (Option.isSome(measured)) lastMeasured = measured
         return settle(envelope, event)
+      }
       default:
         return Option.none()
     }
@@ -477,7 +499,16 @@ export const makeCacheScan = (): CacheScan => {
     }))
   }
 
-  return { fold, refresh, window: () => lastWindow }
+  const window = (): Option.Option<CacheWindow> =>
+    Option.map(lastWindow, (projected) => ({
+      historyTokens: Math.max(
+        projected.estimatedTokens,
+        Option.getOrElse(lastMeasured, () => 0),
+      ),
+      availableInputTokens: projected.availableInputTokens,
+    }))
+
+  return { fold, refresh, window }
 }
 
 // ── cache timer ─────────────────────────────────────────────────────────────
@@ -550,8 +581,9 @@ export const cacheClockLabel = (
 
 /**
  * Whether a turn that starts now on this lapsed window hands it off first:
- * the loop's own cost rule (`coldHandoffPays`), over the model's catalog
- * price and the lifetime its requests ask for.
+ * the loop's own cost rule (`coldHandoffPays`), over the history that turn
+ * would hand off, the model's catalog price and the lifetime its requests
+ * ask for. The new prompt is not known yet, and the rule does not count it.
  */
 export const handsOffCold = (
   window: Option.Option<CacheWindow>,
@@ -560,7 +592,7 @@ export const handsOffCold = (
 ): boolean =>
   Option.exists(window, (value) =>
     coldHandoffPays({
-      windowTokens: value.estimatedTokens,
+      historyTokens: value.historyTokens,
       availableInputTokens: value.availableInputTokens,
       pricing,
       cacheTtlMs,
