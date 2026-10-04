@@ -276,6 +276,17 @@ Within each directory:
 **Scope precedence**: Higher scope wins for same-key contributions. Project
 overrides User overrides Builtin.
 
+An extension file resolves `@gent/core/extensions/api`,
+`@gent/core/extensions/branch-tools`, `effect`, and each `effect/*` module a
+shipped extension imports (`effect/ai`, `effect/http`, `effect/process`,
+`effect/sql` and the others `extensionEntryModules` in
+`packages/core/src/runtime/extension-host.ts` lists). Core binds them to the
+modules gent runs, so a Tag or Schema class the file imports is the one core
+uses, in tests as in the binary. The gent server also binds the `@effect/*`
+packages the shipped extensions import (the provider SDKs and
+`@effect/platform-bun`). Any other package import resolves from the file's
+own directory.
+
 ## Disabling Extensions
 
 List the extension ids under the `disabledExtensions` key of `.gent/config.json`:

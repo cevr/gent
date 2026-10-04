@@ -140,6 +140,16 @@ import {
 import { SqlClient } from "effect/sql"
 import * as Prompt from "effect/ai/Prompt"
 import * as EffectEntry from "effect"
+import * as EffectAi from "effect/ai"
+import * as EffectAiError from "effect/ai/AiError"
+import * as EffectResponse from "effect/ai/Response"
+import * as EffectTool from "effect/ai/Tool"
+import * as EffectEncoding from "effect/encoding"
+import * as EffectHttp from "effect/http"
+import * as EffectHttpClientError from "effect/http/HttpClientError"
+import * as EffectProcess from "effect/process"
+import * as EffectChildProcessSpawner from "effect/process/ChildProcessSpawner"
+import * as EffectSql from "effect/sql"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
 import {
   type Branch,
@@ -1583,12 +1593,14 @@ const extensionDirectories = (
  * entry. A bound specifier also gives a user extension the same module
  * instances as a shipped one: the same Tags and the same Schema classes.
  *
- * The loader binds the two authoring entries and `effect`. The host that
- * composes the shipped extensions binds the other `effect/*` and `@effect/*`
- * modules they import (`BuiltinExtensionModules` in `@gent/extensions`).
- * `@gent/core/protocol` is a client entry; the TUI binds it for client files
- * only. An internal path such as `@gent/core/host` is not bound, and it does
- * not resolve outside the repository.
+ * The loader binds the two authoring entries, `effect`, and each `effect/*`
+ * module a shipped extension imports: `effect` is core's own dependency, so
+ * every loader that binds this map (the server's, the test harness's, the
+ * TUI's) resolves them alike. The host that composes the shipped extensions
+ * binds the `@effect/*` packages they import (`BuiltinExtensionModules` in
+ * `@gent/extensions`). `@gent/core/protocol` is a client entry; the TUI binds
+ * it for client files only. An internal path such as `@gent/core/host` is not
+ * bound, and it does not resolve outside the repository.
  *
  * The gent entries re-export this module, so they are read on first use: a
  * static import here would evaluate them inside their own import cycle.
@@ -1605,6 +1617,17 @@ export const extensionEntryModules: ReadonlyMap<string, RuntimeModuleSource> = n
   ["@gent/core/extensions/api", loadExtensionApiEntry],
   ["@gent/core/extensions/branch-tools", loadBranchToolsEntry],
   ["effect", () => EffectEntry],
+  ["effect/ai", () => EffectAi],
+  ["effect/ai/AiError", () => EffectAiError],
+  ["effect/ai/Prompt", () => Prompt],
+  ["effect/ai/Response", () => EffectResponse],
+  ["effect/ai/Tool", () => EffectTool],
+  ["effect/encoding", () => EffectEncoding],
+  ["effect/http", () => EffectHttp],
+  ["effect/http/HttpClientError", () => EffectHttpClientError],
+  ["effect/process", () => EffectProcess],
+  ["effect/process/ChildProcessSpawner", () => EffectChildProcessSpawner],
+  ["effect/sql", () => EffectSql],
 ])
 
 /** Bind the extension entries before an extension file is imported. */

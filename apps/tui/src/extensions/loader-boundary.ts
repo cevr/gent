@@ -809,14 +809,14 @@ const clientOnlyModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
 const importBoundClientModule = (moduleId: string) => import(moduleId)
 
 /**
- * Bind the names every extension file reads (the two authoring entries and
- * `effect`) under their own names, and the client names under a prefix drawn
- * for this load. Return the loader for client files: it compiles a file and
+ * Bind the names every extension file reads (the two authoring entries,
+ * `effect` and its modules) under their own names, and the client names under
+ * a prefix drawn for this load. Return the loader for client files: it compiles a file and
  * the relative modules it imports as the build compiles the shipped ones
  * (Solid JSX), rewrites each client name to its prefixed binding, binds the
  * output under a fresh prefixed name, and imports it. A bound name stays an
- * import of the running module. The server root binds the other `effect`
- * modules the shipped extensions read.
+ * import of the running module. The server root binds the `@effect/*`
+ * packages the shipped extensions read.
  */
 const provideClientExtensionModules = Effect.gen(function* () {
   const prefix = `gent-client-${(yield* Random.nextInt).toString(36)}${(yield* Random.nextInt).toString(36)}:`

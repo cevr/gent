@@ -2101,15 +2101,19 @@ and Schema classes as a shipped extension, and an unbound specifier is never
 fetched from npm. The bound specifiers are exact:
 
 - Every extension file: `@gent/core/extensions/api`,
-  `@gent/core/extensions/branch-tools` and `effect`, bound by the server loader
-  (`extensionEntryModules`, `runtime/extension-host.ts`) and by the TUI loader.
-- The peers the shipped extensions import: `BuiltinExtensionModules` in
-  `@gent/extensions`, bound by the SDK server root before it loads extensions.
-  It holds each `effect/*` and `@effect/*` specifier that
+  `@gent/core/extensions/branch-tools`, `effect`, and each `effect/*` module
+  that `packages/extensions/src/` or `examples/extensions/` imports, bound by
+  the server loader (`extensionEntryModules`, `runtime/extension-host.ts`) and
+  by the TUI loader. `effect` is core's own dependency, so the test harness,
+  which binds only core's map, resolves them as production does.
+- The `@effect/*` packages the shipped extensions import:
+  `BuiltinExtensionModules` in `@gent/extensions`, bound by the SDK server
+  root before it loads extensions. It holds each `@effect/*` specifier that
   `packages/extensions/src/` or `examples/extensions/` imports, and no other.
-  `packages/extensions/tests/index.test.ts` derives that set from the sources
-  and fails when the map differs, so a shipped extension never reads a module
-  a user extension cannot. A user extension is as capable as a shipped one.
+  `packages/extensions/tests/index.test.ts` derives both sets from the sources
+  and fails when core's `effect` entries or this map differ, so a shipped
+  extension never reads a module a user extension cannot. A user extension is
+  as capable as a shipped one.
   The provider SDKs (`@effect/ai-anthropic`, `-openai`, `-openai-compat`,
   `-typesafe`) bind lazily: a shipped driver imports its SDK at its first model
   build, and a user extension's import loads it then too, so a launch does not
