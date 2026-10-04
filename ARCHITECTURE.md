@@ -1935,13 +1935,24 @@ Other notes:
   Resources the profile needs and the loop does not have yet, so a
   control-plane write never resolves a profile. One build of one extension's
   branch Resources is a generation, named by its build key
-  (`resourceBuildKeys` over process and branch Resources): an edit to the
-  extension, or to one it builds over, gives a new generation, and an edit
-  elsewhere keeps it. A run holds the generations of its profile until it
+  (`resourceBuildKeys`): a branch key names every extension with process
+  Resources, since a branch build reads the whole process context, then the
+  extensions with branch Resources up to its own. An edit to the extension,
+  or to one it builds over, gives a new generation, and an edit elsewhere
+  keeps it. A run holds the generations of its profile until it
   ends, so a turn that started before an edit ends on the old services and
   the next run reads the new ones; a generation the newest profile does not
   use closes when its last run ends, outside the lock, newest first, and then
-  lets go of the profile lease it was built over. The branch services join
+  lets go of the profile lease it was built over. That close
+  (`closeBranchGenerations`) is the generation's only one, so it cannot stop
+  part way: it is uninterruptible, it closes every retired scope though one
+  before it fails, and it lets go of each lease whatever the close ends in.
+  The last hold on a lease closes it on a fiber of the loop scope, so a run
+  does not wait for the profile cache's place lock to end.
+  A run's profile-cache lease joins the run's lease scope (it is provided
+  inside the loop's runtime context, which carries the Scope of the fiber
+  that built the loop), so the old profile retires when the last run and
+  generation over it end. The branch services join
   the run's capability context (`turnCapabilityContext`), so every extension
   leaf of the run reads them. `loopOpen` does not run again for a rebuilt
   extension. A branch Resource that fails, or that needs a service a
