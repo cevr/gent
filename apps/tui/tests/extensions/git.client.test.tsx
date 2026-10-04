@@ -995,6 +995,34 @@ describe("git pane", () => {
   )
 
   it.live(
+    "a ctrl+c that stops the patch ends the page there, as it ends git --paginate",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* makeRepo("gent-git-ctrlc-")
+        yield* fs.writeFileString(
+          `${repo}/a-long.txt`,
+          "a line of the untracked file\n".repeat(40_000),
+        )
+        yield* fs.writeFileString(`${repo}/z-after.txt`, "the file after the long one\n")
+        // The reader's ctrl+c reaches the git that writes the patch (it is in
+        // the terminal's group); the pager ignores it and reads on to the end.
+        const pager = yield* fakeProgram("pager", (dir) => [
+          `head -c 4096 > '${dir}/log'`,
+          "kill -INT $(pgrep -P $PPID -x git)",
+          `cat >> '${dir}/log'`,
+        ])
+        yield* git(repo, "config", "core.pager", pager.program)
+        const handover = makeHandover({ suspend: () => {}, resume: () => {} })
+        yield* handover(pageWorkTree({ _tag: "WorkTree", cwd: repo, pathspecs: [] }, "HEAD"))
+        const paged = plain(yield* pager.log)
+        expect(paged).toContain("+a line of the untracked file")
+        expect(paged).not.toContain("z-after.txt")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    12_000,
+  )
+
+  it.live(
     "a review the reader stops with a signal names no failure",
     () =>
       Effect.gen(function* () {

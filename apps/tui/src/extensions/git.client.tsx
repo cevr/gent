@@ -8,6 +8,7 @@ import {
   Option,
   Path,
   PlatformError,
+  Ref,
   Schema,
   Stream,
 } from "effect"
@@ -944,24 +945,50 @@ const pagePatch = (cwd: string, pager: string, patch: Patch) =>
     )
   }).pipe(Effect.scoped)
 
+/** One program that writes part of the patch: `git` with `args` in `cwd`. */
+interface PatchPart {
+  readonly cwd: string
+  readonly args: ReadonlyArray<string>
+}
+
 /**
- * The output of `git` with `args` in `cwd`, its errors with it, as `git
- * --paginate` sends both to the pager. Its exit code is not read: a reader
- * who quits the pager early stops it with a closed pipe.
+ * The output of each part's `git` in turn, its errors with it, as `git
+ * --paginate` sends both to the pager. A part that exits with a code is done,
+ * whatever the code (one the reader's quit stopped writes to a closed pipe).
+ * A part that ends on a signal (the reader's ctrl+c reaches it, in the
+ * terminal's group) ends the patch there, as it ends `git --paginate`: no
+ * later part runs, and the pager reads to the end.
  */
-const gitPatch =
-  (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
-  ({ cwd, args }: { readonly cwd: string; readonly args: ReadonlyArray<string> }): Patch =>
-    spawner
-      .spawn(
-        ChildProcess.make("git", args, { cwd, stdin: "ignore", forceKillAfter: FORCE_KILL_AFTER }),
-      )
-      .pipe(
-        Effect.map((handle) =>
-          Stream.concat(handle.all, Stream.fromEffectDrain(Effect.ignore(handle.exitCode))),
-        ),
-        Stream.unwrap,
-      )
+const gitPatch = (
+  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+  parts: ReadonlyArray<PatchPart>,
+): Patch =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const stopped = yield* Ref.make(false)
+      const part = ({ cwd, args }: PatchPart): Patch =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            if (yield* Ref.get(stopped)) return Stream.empty
+            const handle = yield* spawner.spawn(
+              ChildProcess.make("git", args, {
+                cwd,
+                stdin: "ignore",
+                forceKillAfter: FORCE_KILL_AFTER,
+              }),
+            )
+            const ended = handle.exitCode.pipe(
+              Effect.catchTag("PlatformError", (error) => {
+                if (endedOnSignal(error)) return Ref.set(stopped, true)
+                return Effect.void
+              }),
+            )
+            return Stream.concat(handle.all, Stream.fromEffectDrain(ended))
+          }),
+        )
+      return Stream.fromIterable(parts).pipe(Stream.flatMap(part))
+    }),
+  )
 
 /**
  * Page the work tree against `base` with the reader's git pager, its
@@ -1017,11 +1044,7 @@ export const pageWorkTree = (target: WorkTree, base: string) =>
       })),
     ]
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-    yield* pagePatch(
-      target.cwd,
-      viewer.pager,
-      Stream.fromIterable(parts).pipe(Stream.flatMap(gitPatch(spawner))),
-    )
+    yield* pagePatch(target.cwd, viewer.pager, gitPatch(spawner, parts))
   })
 
 /**
