@@ -4057,6 +4057,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const completeFailedTurn = Effect.fn("AgentLoop.completeFailedTurn")(function* (
       state: RunningState,
     ) {
+      // A turn that failed before it ran (the worker's agent read) never began
+      // its ledger: begin it here, so the receipt and hooks read this turn's
+      // record, not the turn before it. A turn that ran keeps its own.
+      yield* scope.turnLedger.beginTurn(state.message.id)
       const end: TurnEnd = {
         messageId: state.message.id,
         startedAtMs: state.startedAtMs,
