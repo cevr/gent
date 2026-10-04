@@ -245,8 +245,22 @@ describe("E2E: Scrollback ownership", () => {
           ctx.pty.write("/model")
           yield* settlePty(ctx, TYPED)
           ctx.pty.write(keys.enter)
-          yield* settlePty(ctx, SETTLE)
+          yield* screenWaitFor(
+            ctx,
+            (visible) => visible.some((row) => row.startsWith("Model · ")),
+            {
+              timeout: 10_000,
+              label: "the model picker open",
+            },
+          )
           ctx.pty.write(keys.esc)
+          yield* screenWaitFor(
+            ctx,
+            (visible) =>
+              !visible.some((row) => row.startsWith("Model · ")) &&
+              visible.some((row) => row.startsWith("ready")),
+            { timeout: 10_000, label: "the model picker closed" },
+          )
           yield* settlePty(ctx, SETTLE)
           if (turn) {
             ctx.pty.write("hello")
