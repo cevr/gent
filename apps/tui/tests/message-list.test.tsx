@@ -6298,6 +6298,64 @@ describe("collapse ladder", () => {
       }),
   )
 
+  // A cell catches a failed read and goes on, then throws its own error. Only
+  // a cell failure that is the op's own text folds into the op's row.
+  it.scopedLive(
+    "a cell that caught a failed read and threw its own error shows both, at 120 and 60",
+    () =>
+      Effect.gen(function* () {
+        const readError = "Tool 'read' failed: ENOENT: no such file or directory, open 'missing.ts'"
+        const cellCall = (id: string, message: string): ToolCall => ({
+          id,
+          toolName: "cell",
+          status: "error",
+          input: { code: "try { await tools.read({ path: 'missing.ts' }) } catch {}; throw x" },
+          summary: message,
+          output: encodeJson({
+            _tag: "CellEvaluationError",
+            phase: "execute",
+            message,
+            output: "",
+          }),
+          operations: [
+            {
+              id: `${id}-read`,
+              toolName: "read",
+              status: "error",
+              input: { path: "missing.ts" },
+              summary: readError,
+              output: encodeJson({ error: readError }),
+            },
+          ],
+        })
+        const caught = [
+          assistantToolMessage(
+            "caught",
+            cellCall("caught-cell", "Error: independent cell failure"),
+          ),
+        ]
+        for (const width of [120, 60]) {
+          const collapsed = yield* draw(caught, "collapsed", width)
+          const header = lines(collapsed).find((line) => line.includes("✗ "))
+          expect(header).toContain("· 2 failed")
+          const rows = groupRows(collapsed)
+          expect(rows).toHaveLength(2)
+          expect(rows[0]).toStartWith("  ├ Read missing.ts · failed · ENOENT")
+          expect(rows[1]).toStartWith("  └ cell · failed · Error: independent")
+          const preview = groupRows(yield* draw(caught, "preview", width))
+          expect(preview[0]).toStartWith("  ├ Read missing.ts · failed")
+          expect(preview.some((row) => row.startsWith("  └ cell · failed"))).toBe(true)
+          expect(preview.at(-1)).toStartWith("    │ Error: independent cell failure")
+          expect(lines(collapsed).every((line) => line.length <= width - 1)).toBe(true)
+        }
+        // The read's failure went up uncaught: the cell's failure is its text, one row.
+        const uncaught = [assistantToolMessage("uncaught", cellCall("uncaught-cell", readError))]
+        const folded = yield* draw(uncaught, "collapsed", 120)
+        expect(lines(folded).find((line) => line.includes("✗ "))).toContain("· 1 failed")
+        expect(groupRows(folded)).toHaveLength(1)
+      }),
+  )
+
   it.scopedLive("preview heads the failed row with its own output, never the cell's display", () =>
     Effect.gen(function* () {
       const wide = yield* draw(debugTurn(), "preview", 120)

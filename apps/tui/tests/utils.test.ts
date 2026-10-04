@@ -821,15 +821,25 @@ describe("formatActivityHeader", () => {
     )
   })
 
-  test("a cell that failed with its op counts one failure", () => {
-    // An interrupted cell: live its op is settled to failed when the cell ends,
-    // and a reload projects the same op as failed.
-    expect(formatActivityHeader([cell([op("bash", "git checkout", "failed")], "error")])).toBe(
-      "1 tool · 1 command · 1 failed",
+  test("a cell that failed with its op's own failure counts one failure", () => {
+    // The op's failure went up uncaught: the cell's failure is its text.
+    const thrown = { ...op("read", "gone.ts", "failed"), failure: "ENOENT: gone.ts" }
+    expect(formatActivityHeader([{ ...cell([thrown], "error"), failure: "ENOENT: gone.ts" }])).toBe(
+      "1 tool · 1 read · 1 failed",
     )
     expect(
-      formatActivityHeader([cell([op("bash", "a", "failed"), op("bash", "b", "failed")], "error")]),
-    ).toBe("2 tools · 2 commands · 2 failed")
+      formatActivityHeader([
+        { ...cell([op("bash", "a", "failed"), thrown], "error"), failure: "ENOENT: gone.ts" },
+      ]),
+    ).toBe("2 tools · 1 command · 1 read · 2 failed")
+  })
+
+  test("a cell whose failure cannot be shown to be its op's counts both", () => {
+    // An interrupted cell settles its running op to failed: the cell's
+    // failure has no text of the op's, so both count.
+    expect(formatActivityHeader([cell([op("bash", "git checkout", "failed")], "error")])).toBe(
+      "1 tool · 1 command · 2 failed",
+    )
   })
 
   test("a cell that failed while its ops succeeded is one failure and no extra tool", () => {
@@ -843,7 +853,7 @@ describe("formatActivityHeader", () => {
         cell([op("read", "c.ts")], "error"),
         cell([], "error"),
       ]),
-    ).toBe("3 tools · 1 command · 1 read · 3 failed")
+    ).toBe("3 tools · 1 command · 1 read · 4 failed")
   })
 
   test("a finished group carries the sum of its call durations", () => {
@@ -1279,6 +1289,24 @@ describe("failure rows", () => {
       "cell · failed · TypeError: y",
     ])
     expect(formatActivityHeader(calls)).toBe("2 tools · 1 read · 1 command · 2 failed")
+  })
+
+  // A cell can catch a failed op and go on: a later throw of its own is
+  // another failure, and both show.
+  test("a cell that caught a failed op and threw its own error shows both failures", () => {
+    const read = { ...op("read", "missing.ts", "failed"), reason: "ENOENT", failure: "ENOENT" }
+    const calls = [
+      {
+        ...cell([read], "error"),
+        reason: "Error: independent cell failure",
+        failure: "Error: independent cell failure",
+      },
+    ]
+    expect(failedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+      "Read missing.ts · failed · ENOENT",
+      "cell · failed · Error: independent cell failure",
+    ])
+    expect(formatActivityHeader(calls)).toBe("1 tool · 1 read · 2 failed")
   })
 
   test("a narrow row cuts the reason first, then drops it, then cuts the subject", () => {

@@ -767,6 +767,13 @@ const withoutRunnerPrefix = (reason: string): string =>
   reason.replace(/^Tool '[^']*' failed:\s*/, "")
 
 /**
+ * The whole error text of a call that failed with an error, without the
+ * runner's lead; none for any other call.
+ */
+export const failureText = (call: ToolCall): Option.Option<string> =>
+  Option.map(failureReason(call), (reason) => withoutRunnerPrefix(reason).trim())
+
+/**
  * Why a failed call failed, in one line: the reason it gives, or for a
  * command that exited nonzero its first line of output, stderr first.
  */
@@ -794,6 +801,11 @@ export const callOperation = (call: ToolCall, place: PathPlace): ActivityOperati
     source: call,
   }
   if (outcome === "failed") operation = { ...operation, reason: failureLine(call) }
+  const base = operation
+  operation = Option.match(failureText(call), {
+    onNone: () => base,
+    onSome: (failure) => ({ ...base, failure }),
+  })
   if (Option.isSome(exit)) operation = { ...operation, exit: exit.value }
   if (call.toolName !== "edit") return operation
   return Option.match(getEditUnifiedDiff(call.input), {

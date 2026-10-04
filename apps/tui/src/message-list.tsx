@@ -84,6 +84,7 @@ import {
   callOperation,
   cellOperations,
   failureLine,
+  failureText,
   FoldOperationsProvider,
   GenericToolRenderer,
   type OutputHead,
@@ -365,6 +366,7 @@ const toActivityCall = (call: ToolCall, place: PathPlace): ActivityCall => {
     status: call.status,
     durationMs: call.durationMs,
     reason: failureLine(call),
+    failure: Option.getOrUndefined(failureText(call)),
     source: call,
   }
   if (call.toolName !== "cell") {

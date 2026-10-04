@@ -767,6 +767,11 @@ export interface ActivityOperation {
   readonly exit?: number
   /** The first line of why a failed op failed; empty when it gives none. */
   readonly reason?: string
+  /**
+   * The whole error text of an op that failed with an error, without the
+   * runner's lead: a failed cell whose own error is this text failed with it.
+   */
+  readonly failure?: string
   /** The call the op was read from: none for a saved receipt. A preview head reads its output. */
   readonly source?: ToolCall
 }
@@ -785,6 +790,8 @@ export interface ActivityCall {
   readonly durationMs?: number
   /** The first line of why the call itself failed, as its failure row says it. */
   readonly reason?: string
+  /** The whole error text of the call's own failure, without the runner's lead. */
+  readonly failure?: string
   /** The call itself: its own failure's preview head reads it. */
   readonly source?: ToolCall
 }
@@ -929,21 +936,28 @@ const opLessDetail = (call: ActivityCall): string => {
 }
 
 /**
- * Whether a failed cell's failure is its last op's: an op that failed with
- * no exit status threw or was cut off, and that ended the cell. An op that
- * exited non-zero returned its result, so the cell ran on and any later
- * failure is the cell's own.
+ * Whether a failed cell's failure is shown to be one of its ops' failures:
+ * the cell's error is that op's error text. A host failure the cell did not
+ * catch leaves the cell with the op's message unchanged; a cell that caught
+ * it and threw its own error, or a cut or cancelled cell, gives another text.
+ * With no such proof both failures show: a row said twice costs less than a
+ * failure hidden.
  */
-const endedByLastOp = (call: ActivityCall): boolean => {
-  const last = call.operations.at(-1)
-  return Predicate.isNotUndefined(last) && isFailedOp(last) && Predicate.isUndefined(last.exit)
-}
+const failedWithOp = (call: ActivityCall): boolean =>
+  Option.match(
+    Option.filter(Option.fromUndefinedOr(call.failure), (text) => text.length > 0),
+    {
+      onNone: () => false,
+      onSome: (text) =>
+        call.operations.some((operation) => isFailedOp(operation) && operation.failure === text),
+    },
+  )
 
 /**
  * The tools of a group in call order. A cell with no ops is one tool that
  * names its source's verbs. A cell that failed adds its own failure after
- * its ops (a throw after its ops, or a restart), unless its last op's
- * failure ended it (`endedByLastOp`): that is the same failure, said once.
+ * its ops (a throw after its ops, or a restart), unless its error is shown
+ * to be an op's (`failedWithOp`): that is the same failure, said once.
  */
 const activityEntries = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<ActivityEntry> =>
   calls.flatMap((call): ReadonlyArray<ActivityEntry> => {
@@ -958,7 +972,7 @@ const activityEntries = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<Acti
       return [{ operation, tool: true }]
     }
     const entries = call.operations.map((operation) => ({ operation, tool: true }))
-    if (call.status !== "error" || endedByLastOp(call)) return entries
+    if (call.status !== "error" || failedWithOp(call)) return entries
     const failure: ActivityOperation = {
       tool: call.toolName,
       outcome: "failed",
