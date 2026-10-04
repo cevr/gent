@@ -5,7 +5,7 @@
  *   - process-scoped extension state (a Ref behind the extension's own Tag).
  *     One Ref serves the whole process, so the notes are keyed by
  *     `ExtensionContext.sessionId`: each session reads only its own.
- *   - one model-callable tool
+ *   - one model-callable tool, which names the state resource it reads
  *   - one slash-presented request
  *   - one turn projection hook, showing the notes as a per-step notice
  *   - one sessionDeleted hook: a deleted session's notes leave the Ref
@@ -35,6 +35,13 @@ const currentNotes = Effect.gen(function* () {
   return Option.getOrElse(HashMap.get(state, ctx.sessionId), (): ReadonlyArray<string> => [])
 })
 
+/** The process-scoped notes: one Ref for every session. */
+const SessionNotesResource = defineResource({
+  id: "example/session-notes/state",
+  scope: "process",
+  layer: Layer.effect(SessionNotesState, Ref.make<NotesState>(HashMap.empty())),
+})
+
 const NoteInput = Schema.Struct({
   text: Schema.String.annotate({ description: "Note text to remember" }),
 })
@@ -50,6 +57,7 @@ const AddNoteTool = tool({
   params: NoteInput,
   output: NoteOutput,
   promptSnippet: "Remember notes that may help later turns.",
+  resources: [SessionNotesResource],
   execute: ({ text }) =>
     Effect.gen(function* () {
       const ctx = yield* ExtensionContext
@@ -86,14 +94,7 @@ export default defineExtension({
   id: "session-notes",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register(
-      "resource",
-      defineResource({
-        id: "example/session-notes/state",
-        scope: "process",
-        layer: Layer.effect(SessionNotesState, Ref.make<NotesState>(HashMap.empty())),
-      }),
-    )
+    yield* host.register("resource", SessionNotesResource)
     yield* host.register("tool", AddNoteTool)
     yield* host.register("request", SessionNotesSummary)
     yield* host.on("turnProjection", () =>

@@ -49,6 +49,7 @@ import {
   type AgentLoopTurnProfile,
   ApprovalDecisionSchema,
   type BranchToolFeature,
+  type BranchToolHostServices,
   type BranchToolLayerFactory,
   BranchToolWork,
   ContextDirective,
@@ -57,7 +58,6 @@ import {
   CurrentInteractionOwner,
   CurrentToolCall,
   eraseResourceLayer,
-  type EventStore,
   EventStoreError,
   type FeatureMigrations,
   GentPlatform,
@@ -2240,7 +2240,7 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
  * Runtime services a host call reads beyond the turn profile. The host is made
  * inside the turn, so they are captured there and provided to each call.
  */
-type CellToolHostServices = CellStorage | EventStore | GentPlatform | MessageStorage | ToolRunner
+type CellToolHostServices = CellStorage | GentPlatform | BranchToolHostServices
 
 /**
  * The services a host call reads, and the extension context whose `Models`
@@ -2864,47 +2864,6 @@ export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
   )
 })
 
-// ── tool ────────────────────────────────────────────────────────────────────
-
-/** The model-facing name of the cell tool. */
-const CELL_TOOL_ID = "cell"
-
-/** Declaration only. The turn dispatcher still owns identity, permissions, and execution scope. */
-export const CellTool = tool({
-  id: CELL_TOOL_ID,
-  description: "Run TypeScript in this branch's Bun process. Bindings persist across cells.",
-  // The cell calls host tools from inside itself, so recovery must restore
-  // host bindings for it, not just its own.
-  dispatches: true,
-  params: CellInput,
-  output: Schema.Json,
-  promptGuidelines: [
-    "Top-level variables stay bound in later cells on this branch. A result's bindings names only those the cell added or bound to another value; bindingCount counts them all. The host saves them after each cell and restores them after a worker restart; a result then carries restored (names) and omitted (functions, class instances, cycles, oversized values). They also carry into a /handoff session, which continues the thread: its first cell starts with the previous session's saved values, and restored.previousSession names that session. Keep a scratchpad for long work in a binding.",
-    "Call a host tool through its id path: await tools.read({ path }), await tools.delegate.start({ todo }). Run independent calls concurrently with Promise.all; chain dependent calls with sequential awaits.",
-    "The cell is a full Bun process in the working directory with your user's privileges; nothing is sandboxed. Bun (Bun.file, Bun.write, Bun.$, Bun.spawn), bun:sqlite, fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory are all available. Use it directly to read, search, parse, and transform data.",
-    "Network reads are plain fetch in the cell; parse HTML or JSON there. Past sessions live in data.db under process.env.GENT_DATA_DIR, else ~/.gent (bun:sqlite; tables sessions, messages, message_chunks, content_chunks, events), so search them with SQL instead of a host tool.",
-    "Shell that changes state (git, installs, deletes, network writes) goes through tools.bash({ command }), so the command and its output stay in the session record. Bun.$ and Bun.spawn are for short reads: queries, parsers, quick checks. Use host tools for work that needs permissions, durable records, and child agents.",
-    `A cell gets ${CELL_COMPUTE_DEADLINE_MS / 1000} seconds of its own compute; past that the worker is killed and bindings not yet saved are lost. An awaited host call stops that clock, so run builds, test suites, and other long commands through tools.bash({ command, timeout }) (timeout up to 600000 ms) and parse its stdout and stderr in the cell.`,
-    "console output, process.stdout and process.stderr writes, and inherited output of spawned processes return with the cell result, before the value of the last expression. Output a spawned process writes after the cell ends is lost, so await the processes you start.",
-    "The value of the last expression is the cell result; an undefined value shows nothing. Top-level await works; a top-level return does not.",
-    "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
-    "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
-    "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff at the next step of this turn, focused on the instructions (a turn that ends first drops it). context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
-    "Set reset: true to discard retained values and the saved namespace before running new code.",
-    "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
-  ],
-  execute: Effect.fn("CellTool.execute")(function* () {
-    const saved = yield* dispatchCell()
-    const result = yield* Schema.decodeUnknownEffect(Schema.Json)(saved.result)
-    if (saved.isFailure) {
-      return yield* new ToolResultFailure({ message: "Cell execution failed", result })
-    }
-    return result
-    // The cell cancels its own work through `BranchToolWork` and reports what
-    // the cancel cost. A fiber interrupt would cut that report short.
-  }, Effect.uninterruptible),
-})
-
 // ── recovery ────────────────────────────────────────────────────────────────
 
 /**
@@ -3172,6 +3131,49 @@ export const CellBranchTools: BranchToolFeature<CellStorageTags> = {
   storage: cellStorageLayer,
   branchLayer: cellBranchLayer,
 }
+
+// ── tool ────────────────────────────────────────────────────────────────────
+
+/** The model-facing name of the cell tool. */
+const CELL_TOOL_ID = "cell"
+
+/** Declaration only. The turn dispatcher still owns identity, permissions, and execution scope. */
+export const CellTool = tool({
+  id: CELL_TOOL_ID,
+  // The cell's storage comes from the feature the root installs.
+  branchTools: CellBranchTools,
+  description: "Run TypeScript in this branch's Bun process. Bindings persist across cells.",
+  // The cell calls host tools from inside itself, so recovery must restore
+  // host bindings for it, not just its own.
+  dispatches: true,
+  params: CellInput,
+  output: Schema.Json,
+  promptGuidelines: [
+    "Top-level variables stay bound in later cells on this branch. A result's bindings names only those the cell added or bound to another value; bindingCount counts them all. The host saves them after each cell and restores them after a worker restart; a result then carries restored (names) and omitted (functions, class instances, cycles, oversized values). They also carry into a /handoff session, which continues the thread: its first cell starts with the previous session's saved values, and restored.previousSession names that session. Keep a scratchpad for long work in a binding.",
+    "Call a host tool through its id path: await tools.read({ path }), await tools.delegate.start({ todo }). Run independent calls concurrently with Promise.all; chain dependent calls with sequential awaits.",
+    "The cell is a full Bun process in the working directory with your user's privileges; nothing is sandboxed. Bun (Bun.file, Bun.write, Bun.$, Bun.spawn), bun:sqlite, fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory are all available. Use it directly to read, search, parse, and transform data.",
+    "Network reads are plain fetch in the cell; parse HTML or JSON there. Past sessions live in data.db under process.env.GENT_DATA_DIR, else ~/.gent (bun:sqlite; tables sessions, messages, message_chunks, content_chunks, events), so search them with SQL instead of a host tool.",
+    "Shell that changes state (git, installs, deletes, network writes) goes through tools.bash({ command }), so the command and its output stay in the session record. Bun.$ and Bun.spawn are for short reads: queries, parsers, quick checks. Use host tools for work that needs permissions, durable records, and child agents.",
+    `A cell gets ${CELL_COMPUTE_DEADLINE_MS / 1000} seconds of its own compute; past that the worker is killed and bindings not yet saved are lost. An awaited host call stops that clock, so run builds, test suites, and other long commands through tools.bash({ command, timeout }) (timeout up to 600000 ms) and parse its stdout and stderr in the cell.`,
+    "console output, process.stdout and process.stderr writes, and inherited output of spawned processes return with the cell result, before the value of the last expression. Output a spawned process writes after the cell ends is lost, so await the processes you start.",
+    "The value of the last expression is the cell result; an undefined value shows nothing. Top-level await works; a top-level return does not.",
+    "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
+    "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
+    "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff at the next step of this turn, focused on the instructions (a turn that ends first drops it). context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
+    "Set reset: true to discard retained values and the saved namespace before running new code.",
+    "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
+  ],
+  execute: Effect.fn("CellTool.execute")(function* () {
+    const saved = yield* dispatchCell()
+    const result = yield* Schema.decodeUnknownEffect(Schema.Json)(saved.result)
+    if (saved.isFailure) {
+      return yield* new ToolResultFailure({ message: "Cell execution failed", result })
+    }
+    return result
+    // The cell cancels its own work through `BranchToolWork` and reports what
+    // the cancel cost. A fiber interrupt would cut that report short.
+  }, Effect.uninterruptible),
+})
 
 // ── extension ───────────────────────────────────────────────────────────────
 

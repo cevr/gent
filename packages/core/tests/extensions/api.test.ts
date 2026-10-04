@@ -562,6 +562,56 @@ describe("defineExtension", () => {
       }
     }))
 
+  test("a tool that names a resource its extension does not register fails package validation", () =>
+    Effect.gen(function* () {
+      const counter = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(
+          ReadOnlyService,
+          ReadOnlyService.of({ read: Effect.succeed("count") }),
+        ),
+      })
+      const ext = defineExtension({
+        id: "named-resource",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("tool", readOnlyTool(counter))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(Cause.pretty(exit.cause)).toContain(
+          'tools[0] (read-only): names resource "named-resource/counter", which this extension does not register',
+        )
+      }
+    }))
+
+  test("a tool that names a resource its extension registers passes package validation", () =>
+    Effect.gen(function* () {
+      const counter = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(
+          ReadOnlyService,
+          ReadOnlyService.of({ read: Effect.succeed("count") }),
+        ),
+      })
+      const ext = defineExtension({
+        id: "named-resource",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("resource", counter)
+          yield* host.register("tool", readOnlyTool(counter))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Success")
+    }))
+
   test("defineResource rejects an empty resource id", () =>
     Effect.sync(() => {
       expect(() => defineResource({ id: "", scope: "process", layer: Layer.empty })).toThrow()
@@ -662,6 +712,17 @@ class ReadOnlyService extends Context.Service<ReadOnlyService, ReadOnlyApi>()(
 const NoInput = Schema.Struct({})
 const StringOutput = Schema.String
 
+/** A tool that reads `ReadOnlyService` from the resource it names. */
+const readOnlyTool = (resource: ReturnType<typeof defineResource<ReadOnlyService, "process">>) =>
+  tool({
+    id: "read-only",
+    description: "Read the service",
+    params: NoInput,
+    output: StringOutput,
+    resources: [resource],
+    execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+  })
+
 describe("Capability factory-shape locks (compile-time)", () => {
   test("tool({...}) — happy path compiles", () => {
     const ok = tool({
@@ -707,6 +768,36 @@ describe("Capability factory-shape locks (compile-time)", () => {
         }),
     })
 
+    expect(true).toBe(true)
+  })
+
+  test("tool({...}) body may yield the services of the resources it names", () => {
+    const reader = defineResource({
+      id: "locks/reader",
+      scope: "process",
+      layer: Layer.succeed(ReadOnlyService, ReadOnlyService.of({ read: Effect.succeed("x") })),
+    })
+    tool({
+      id: "declared-resource",
+      description: "ok",
+      params: NoInput,
+      output: StringOutput,
+      resources: [reader],
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    expect(true).toBe(true)
+  })
+
+  test("tool({...}) body that needs a service it does not declare does not compile", () => {
+    tool({
+      id: "undeclared-resource",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      // @ts-expect-error -- `ReadOnlyService` is no tool service and no named resource provides it
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this tool does not compile
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
     expect(true).toBe(true)
   })
 

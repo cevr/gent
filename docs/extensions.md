@@ -158,8 +158,8 @@ cost; `Models.available` and `Models.classifiers` say which classifiers have
 a credential. The `FileLock` / `Models` / `State` facets wrap the
 host-internal `FileLockService`, `DecisionModelResolver` and `EventStore` so authors
 never reach into runtime Tags. No facet duplicates an Effect platform
-service: files, paths, processes, and ids come from `FileSystem`, `Path`,
-`ChildProcessSpawner`, and `Crypto`, and a relative path resolves against
+service: files, paths, processes, ids, and HTTP come from `FileSystem`, `Path`,
+`ChildProcessSpawner`, `Crypto`, and `HttpClient`, and a relative path resolves against
 `ctx.cwd` with `path.resolve(ctx.cwd, p)`. `ctx.State.changed()` uses the current
 extension identity, session, and branch supplied by the host. If an
 extension needs private state, it
@@ -337,9 +337,59 @@ export default defineExtension({
   returned to the model
 - `execute(params)` — returns `Effect`; host access comes from
   `yield* ExtensionContext`
+- `resources` — the `defineResource` values whose services the body yields.
+  The same extension must register each one, or the extension fails to load
+  with `tools[i] (id): names resource "…", which this extension does not register`.
+- `branchTools` — the branch-tool feature whose storage the body yields (see
+  `@gent/core/extensions/branch-tools`); the composition root installs it
 - Optional: `readonly`, `destructive`, `interactive`, `dispatches`,
   `promptSnippet`, `promptGuidelines`, `summary` (the one-line result summary
   a client shows for a call)
+
+The body may yield only the services every root gives a tool: `ExtensionContext`,
+the platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`,
+`HttpClient`, and the `GentPlatform` that helpers such as `saveToolImage` read),
+the core services the branch-tools entry exports (`BranchToolHostServices`:
+`EventStore`, `MessageStorage`, `InteractionStorage`, `ToolRunner`), the
+services of its `resources`, and the storage of its `branchTools`. A body that
+needs any other service does not compile. A tool that keeps state names the
+resource that holds it:
+
+```ts
+import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
+
+class Tally extends Context.Service<Tally, Ref.Ref<number>>()("tally-ext/Tally") {}
+
+const TallyResource = defineResource({
+  id: "tally-ext/tally",
+  scope: "process",
+  layer: Layer.effect(Tally, Ref.make(0)),
+})
+
+const CountTool = tool({
+  id: "count",
+  description: "Count the calls of this tool in this process",
+  params: Schema.Struct({}),
+  output: Schema.Finite,
+  resources: [TallyResource],
+  execute: () => Effect.flatMap(Tally, (tally) => Ref.updateAndGet(tally, (n) => n + 1)),
+})
+
+export default defineExtension({
+  id: "tally-ext",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("resource", TallyResource)
+    yield* host.register("tool", CountTool)
+  }),
+})
+```
+
+A tool test runs the body with `runToolWithCtx` from `@gent/core/test-utils`.
+It gives the body a stub `ExtensionContext` and the platform services
+production gives it; a service the test provides replaces the harness one. The
+test provides the services of the tool's resources itself.
 
 `readonly` and `destructive` are provider hints lowered to Effect AI's
 `AiTool.Readonly` / `AiTool.Destructive` annotations. They are not authority
@@ -782,6 +832,7 @@ The framework validates all loaded extensions before creating the registry:
 
 - **Duplicate IDs** in same scope degrade the conflicting extension
 - **Model-callable tools** require a non-empty `description`
+- **A tool's `resources`** must be registered by the same extension
 - Same-name tools/agents/drivers in same scope degrade
 
 Cross-scope: higher scope wins silently (project overrides user overrides
@@ -811,10 +862,12 @@ builtin).
 - Builtins are the starting extension set, not privileged APIs or registry
   shortcuts.
 - Handlers take input only; host authority comes from `yield* ExtensionContext`.
-- Extension-private authority is an imported service Tag from a resource layer,
-  not a read/write or capability declaration.
-- Runtime services such as `GentPlatform`, `ToolRunner`,
-  storage Tags, event stores, and process helpers are not public extension API.
+- Extension-private authority is an imported service Tag from a resource layer
+  that the tool names in `resources`, not a read/write or capability declaration.
+- Runtime services such as `GentPlatform`, `ToolRunner`, storage Tags and event
+  stores are not on `@gent/core/extensions/api`. The branch-tools entry exports
+  the core services a branch tool reads, and any extension that imports it may
+  yield them.
 - Tagged-union variant tags are PascalCase. Extension health reports
   `"Healthy"` or `"Degraded"`, and a degraded extension carries
   `"ActivationFailed"` or `"ModelCatalogFailed"` issues. An

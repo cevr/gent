@@ -154,9 +154,13 @@ updates this list in the same commit.
 14. **A child's completion arrives as a user message, never a tool result.**
     Receipt: `packages/extensions/src/delegate.ts`.
 15. **Platform edges stay explicit.** Extensions reach files, paths,
-    processes, and ids through the Effect platform services
-    (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`) and resolve
+    processes, ids, and HTTP through the Effect platform services
+    (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`, `HttpClient`) and resolve
     relative paths against `ctx.cwd`; `runProcess` is the one command helper.
+    `ExtensionPlatformServices` names that set with `GentPlatform`, and
+    `extensionPlatformServicesLive` re-provides it: the server root and the
+    tool test harness (`runToolWithCtx`) build an extension's platform through
+    that one layer.
     No `ExtensionContext` facet duplicates an Effect platform service; the
     facets are host authority only (`Session`, `Interaction`,
     `FileLock`, `Models`, `Extensions`, `State`). An atomic write has one owner, `writeFileAtomic` in
@@ -296,6 +300,19 @@ updates this list in the same commit.
     `packages/extensions/src/compaction.ts`,
     `packages/extensions/src/anthropic.ts` (`PromptCacheTtl`),
     `apps/tui/src/extensions/cache.client.tsx`.
+18. **A tool body yields only the services it is given.** `tool` bounds the
+    services its `execute` may require: `ExtensionContext`,
+    `ExtensionPlatformServices`, the core services the branch-tools entry
+    exports (`BranchToolHostServices`), the services of the resources the tool
+    names in `resources`, and the storage of the feature it names in
+    `branchTools`. A body that needs any other service does not compile, so a
+    tool cannot reach a core service the root happens to hold. The resource
+    services derive from each `defineResource` value; there is no
+    hand-written list. Package validation fails an extension whose tool names
+    a resource the extension does not register. Receipts:
+    `packages/core/src/domain/capability.ts` (`tool`),
+    `packages/core/src/domain/extension.ts` (`validateToolResources`),
+    `packages/core/tests/extensions/api.test.ts`.
 
 ### Known gaps
 

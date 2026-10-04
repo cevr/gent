@@ -1053,8 +1053,16 @@ export const dueAtOf = (
 const summaryWithNote = (schedule: ReadonlyArray<string>, note: string): string =>
   [...schedule, note.trim()].filter((part) => part.length > 0).join(" · ")
 
+/** The branch's alarm timers: the wake, monitor and cancel tools arm and clear them. */
+const WakeAlarmsResource = defineResource({
+  id: "@gent/wake/alarms",
+  scope: "branch",
+  layer: WakeAlarmsLive,
+})
+
 export const WakeTool = tool({
   id: "wake",
+  resources: [WakeAlarmsResource],
   description:
     "Set an alarm. When it fires, a wake message carrying your note starts a new turn on this branch. Use it to check on work that runs outside this session (CI, a deploy, a remote job) at a known time instead of polling.",
   promptSnippet: "Schedule a wake-up alarm",
@@ -1160,6 +1168,7 @@ const validRegex = (pattern: Option.Option<string>): Effect.Effect<void, WakeErr
 
 export const MonitorTool = tool({
   id: "monitor",
+  resources: [WakeAlarmsResource],
   description:
     "Poll a shell command on an interval until it exits 0 (or its output matches `until`), then wake this branch with a message carrying the last output and your note. Use it for CI runs, deploys, ports, files, or URLs that change on their own.",
   promptSnippet: "Poll a command until it succeeds, then wake",
@@ -1237,6 +1246,7 @@ const CancelResult = Schema.Struct({ cancelled: Schema.Array(Schema.String) })
 
 export const CancelTool = tool({
   id: "wake.cancel",
+  resources: [WakeAlarmsResource],
   description:
     "Cancel a pending alarm or monitor by wakeId, or every pending one on this branch when no id is given. Use it when the thing you were waiting for is already done. A notice still shown to the user is dismissed the same way.",
   promptSnippet: "Cancel a pending alarm or monitor",
@@ -1429,13 +1439,6 @@ export const WakeExtension = defineExtension({
         ),
       ),
     )
-    yield* host.register(
-      "resource",
-      defineResource({
-        id: "@gent/wake/alarms",
-        scope: "branch",
-        layer: WakeAlarmsLive,
-      }),
-    )
+    yield* host.register("resource", WakeAlarmsResource)
   }),
 })

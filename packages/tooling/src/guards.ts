@@ -3004,6 +3004,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/extensions/tests/session-tools.test.ts",
     text: "anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane",
   },
+  {
+    // The type test asserts that a tool body needing an undeclared service
+    // fails to compile; the Effect diagnostic reports the same failure.
+    file: "packages/core/tests/extensions/api.test.ts",
+    text: "missingEffectContext:off -- the test asserts that this tool does not compile",
+  },
 ]
 
 const approvedCount = (entry: ApprovedSuppressionEntry): number => entry.count ?? 1

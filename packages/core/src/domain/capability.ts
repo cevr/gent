@@ -10,7 +10,14 @@ import {
 import * as Prompt from "effect/ai/Prompt"
 import type * as Response from "effect/ai/Response"
 import * as AiTool from "effect/ai/Tool"
-import type { TurnNotice } from "./extension.js"
+import type {
+  AnyResourceContribution,
+  ExtensionContext,
+  ResourceServices,
+  TurnNotice,
+} from "./extension.js"
+import type { ExtensionPlatformServices } from "../runtime/gent-platform.js"
+import type { BranchToolFeature, BranchToolHostServices } from "../runtime/tools.js"
 import { clipSummary, summarizeToolResult } from "./message.js"
 
 // ── prompt ──────────────────────────────────────────────────────────────────
@@ -461,6 +468,8 @@ interface GentToolMetadata<
   /** The author's one-line result summary over wire values; see `ToolInput.summary`. */
   // oxlint-disable-next-line effect/noUnknownParameters -- Stored results are wire values; the author's typed function reads them.
   readonly summary?: (input: unknown, output: unknown) => string
+  /** The ids of the resources the tool names; its extension must register each. */
+  readonly resources: ReadonlyArray<string>
 }
 
 // oxlint-disable-next-line effect/noNullish -- The metadata annotation is absent on native tools outside the Gent factory.
@@ -592,6 +601,8 @@ export interface ToolInput<
   Output extends Schema.Encoder<any, never> = Schema.Encoder<any, never>,
   Error = never,
   Deps = never,
+  Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
+  Feature = never,
 > extends ToolDeclarations {
   /** Stable id (extension-local). Used by the LLM as the tool name. */
   readonly id: string
@@ -613,8 +624,22 @@ export interface ToolInput<
    *  through this schema, and Gent stores the same schema in metadata for
    *  lifecycle hooks and direct tool-runner invocation. */
   readonly output: Output
-  /** The tool body. Receives decoded `params`; host capabilities are imported
-   *  as constrained Effect services such as `ExtensionContext`. */
+  /**
+   * The resources whose services the body yields. Each is a `defineResource`
+   * value the same extension registers; the loader fails the extension when
+   * it does not.
+   */
+  readonly resources?: Resources
+  /**
+   * The branch-tool feature whose storage the body yields. The composition
+   * root installs it (`createDependencies({ branchTools })`).
+   */
+  readonly branchTools?: BranchToolFeature<Feature>
+  /**
+   * The tool body. Receives decoded `params`. It may yield `ToolServices`, the
+   * services of its `resources`, and the storage of its `branchTools`; a body
+   * that needs any other service does not compile.
+   */
   readonly execute: (
     params: Schema.Schema.Type<Params>,
   ) => Effect.Effect<Schema.Schema.Type<Output>, Error, Deps>
@@ -630,6 +655,12 @@ export interface ToolInput<
 }
 
 /**
+ * The services every root gives a tool body: its `ExtensionContext`, the
+ * extension platform, and the core services the branch-tools entry exports.
+ */
+type ToolServices = ExtensionContext | ExtensionPlatformServices | BranchToolHostServices
+
+/**
  * Lower a `ToolInput` to a `ToolCapability`. Defaults to a write tool unless
  * `readonly: true`; destructive metadata is opt-in.
  */
@@ -639,9 +670,11 @@ export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Output extends Schema.Encoder<any, never>,
   Error,
-  Deps,
+  Deps extends ToolServices | ResourceServices<Resources[number]> | Feature,
+  Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
+  Feature = never,
 >(
-  input: ToolInput<Params, Output, Error, Deps>,
+  input: ToolInput<Params, Output, Error, Deps, Resources, Feature>,
 ): ToolCapability<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error> => {
   const params = input.params
   const id = ToolId.make(input.id)
@@ -656,9 +689,10 @@ export const tool = <
     output: input.output,
     effect: (params) => {
       const decoded = Schema.decodeUnknownSync(Schema.toType(input.params))(params)
-      // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The factory erases author service requirements; the runtime provides them at execution boundaries.
+      // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The bound on `Deps` admits only services every tool body gets; the runtime provides them at execution boundaries.
       return input.execute(decoded) as Effect.Effect<Schema.Schema.Type<Output>, Error, never>
     },
+    resources: (input.resources ?? []).map((resource) => String(resource.id)),
   }
   Object.assign(metadata, declarationsOf(input))
   const summarize = input.summary

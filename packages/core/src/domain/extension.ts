@@ -155,6 +155,13 @@ interface ResourceContribution<A, S extends ResourceScope, R = never, E = never>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
 export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any>
 
+/**
+ * The services a resource definition's layer provides. A tool that names the
+ * resource in `tool({ resources })` may yield them.
+ */
+export type ResourceServices<Resource> =
+  Resource extends ResourceContribution<infer A, ResourceScope, infer _R, infer _E> ? A : never
+
 // ── Smart constructor ───────────────────────────────────────────────────────
 
 /** Spec type accepted by {@link defineResource}. */
@@ -1326,6 +1333,22 @@ const validateResources = (contribs: ExtensionContributions): Option.Option<stri
   return Option.none()
 }
 
+/** Each resource a tool names is one its own extension registers. */
+const validateToolResources = (contribs: ExtensionContributions): Option.Option<string> => {
+  const registered = new Set((contribs.resources ?? []).map((resource) => String(resource.id)))
+  for (const [i, capability] of (contribs.tools ?? []).entries()) {
+    if (!isToolCapability(capability)) continue
+    const metadata = getToolMetadata(capability)
+    for (const resource of metadata.resources) {
+      if (registered.has(resource)) continue
+      return Option.some(
+        `tools[${i}] (${metadata.id}): names resource "${resource}", which this extension does not register`,
+      )
+    }
+  }
+  return Option.none()
+}
+
 const validateDriverIds = (contribs: ExtensionContributions): Option.Option<string> => {
   const allDriverIds = new Map<string, string>()
   for (const [i, d] of (contribs.modelDrivers ?? []).entries()) {
@@ -1390,6 +1413,7 @@ export const validateExtensionPackage = (
       validateKnownBuckets,
       validateResources,
       validateCapabilities,
+      validateToolResources,
       validateAgents,
       validateDriverIds,
     ]

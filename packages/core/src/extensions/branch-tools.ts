@@ -35,6 +35,7 @@
 // The feature contract itself: what a root installs, and what the loop reads.
 export {
   type BranchToolFeature,
+  type BranchToolHostServices,
   type BranchToolLayerFactory,
   BranchToolWork,
 } from "../runtime/tools.js"

@@ -5390,6 +5390,14 @@ export default defineExtension({
           manifest: { id: ExtensionId.make("@test/working-branch-resource") },
           setup: Effect.gen(function* () {
             const host = yield* ExtensionHost
+            const token = defineResource({
+              id: "test/working-branch-resource/token",
+              scope: "branch",
+              layer: Layer.succeed(
+                ProfileToken,
+                ProfileToken.of({ read: Effect.succeed("working branch resource") }),
+              ),
+            })
             yield* host.register(
               "tool",
               tool({
@@ -5397,6 +5405,7 @@ export default defineExtension({
                 description: "Read the working branch service",
                 params: Schema.Struct({}),
                 output: Schema.String,
+                resources: [token],
                 execute: () =>
                   Effect.gen(function* () {
                     const token = yield* ProfileToken
@@ -5412,27 +5421,21 @@ export default defineExtension({
                 description: "List the extensions the turn's registry holds",
                 params: Schema.Struct({}),
                 output: Schema.String,
+                // No tool may require a core service; the probe looks it up.
                 execute: () =>
-                  Effect.gen(function* () {
-                    const registry = yield* ExtensionRegistry
-                    return registry
-                      .getResolved()
-                      .extensions.map((extension) => extension.manifest.id)
-                      .join(",")
-                  }),
+                  Effect.map(Effect.serviceOption(ExtensionRegistry), (registry) =>
+                    Option.match(registry, {
+                      onNone: () => "no registry",
+                      onSome: (found) =>
+                        found
+                          .getResolved()
+                          .extensions.map((extension) => extension.manifest.id)
+                          .join(","),
+                    }),
+                  ),
               }),
             )
-            yield* host.register(
-              "resource",
-              defineResource({
-                id: "test/working-branch-resource/token",
-                scope: "branch",
-                layer: Layer.succeed(
-                  ProfileToken,
-                  ProfileToken.of({ read: Effect.succeed("working branch resource") }),
-                ),
-              }),
-            )
+            yield* host.register("resource", token)
             yield* host.register(
               "request",
               request({

@@ -19,6 +19,7 @@ import {
 import { encodeToolOutput, stringifyOutput, ToolResultFailure } from "../domain/message.js"
 import {
   type ExtraRepositories,
+  type InteractionStorage,
   type MessageStorage,
   type OwnedToolCallAddress,
   ToolCallBindingStorage,
@@ -614,6 +615,14 @@ export interface BranchToolFeature<A> {
   /** Per-branch services, built with the loop and torn down with it. */
   readonly branchLayer: BranchToolLayerFactory
 }
+
+/**
+ * The core services every root gives a tool body, which the branch-tools entry
+ * exports: the event store, message and interaction storage, and the tool
+ * runner that dispatches inner calls. Any extension that imports that entry
+ * may yield them in a tool.
+ */
+export type BranchToolHostServices = EventStore | MessageStorage | InteractionStorage | ToolRunner
 
 /** The feature a deployment installs when its tools hold no branch state. */
 export const noBranchTools: BranchToolFeature<never> = {

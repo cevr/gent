@@ -2622,7 +2622,17 @@ const toolDescription = (server: McpServer, listed: CatalogTool) => {
  * One host tool per listed MCP tool, each under its own segment (see
  * `allocateSegments`). A name the server lists twice is one tool.
  */
-const toolsFor = (server: McpServer, catalog: CatalogServer) => {
+/** The clients of one extension's servers, as the resource every MCP tool names. */
+const mcpClientsResource = (extensionId: string, clients: Parameters<typeof mcpClientsLive>[0]) =>
+  defineResource({
+    id: `${extensionId}/clients`,
+    scope: "process",
+    layer: mcpClientsLive(clients),
+  })
+
+type McpClientsResource = ReturnType<typeof mcpClientsResource>
+
+const toolsFor = (server: McpServer, catalog: CatalogServer, clients: McpClientsResource) => {
   const listed = catalog.tools
   const segments = allocateSegments(
     listed.map((entry) => entry.name),
@@ -2645,6 +2655,7 @@ const toolsFor = (server: McpServer, catalog: CatalogServer) => {
         destructive: entry.annotations?.destructiveHint === true,
         params: inputSchemaOf(entry.inputSchema),
         output,
+        resources: [clients],
         execute: Effect.fn("Mcp.call")(function* (input) {
           const clients = yield* McpClients
           const result = yield* clients.call(server, entry.name, input)
@@ -2756,18 +2767,19 @@ const catalogFor = (
  * count and instructions. It reads this process's state and connects to
  * nothing.
  */
-const McpStatusTool = tool({
-  id: "mcp.status",
-  description:
-    "Report each configured MCP server: transport, health, connection, tool count, and the server's own instructions",
-  readonly: true,
-  params: Schema.Struct({}),
-  output: McpStatus,
-  execute: Effect.fn("Mcp.status")(function* () {
-    const clients = yield* McpClients
-    return yield* clients.status
-  }),
-})
+const mcpStatusTool = (clients: McpClientsResource) =>
+  tool({
+    id: "mcp.status",
+    description:
+      "Report each configured MCP server: transport, health, connection, tool count, and the server's own instructions",
+    readonly: true,
+    params: Schema.Struct({}),
+    output: McpStatus,
+    resources: [clients],
+    execute: Effect.fn("Mcp.status")(function* () {
+      return yield* (yield* McpClients).status
+    }),
+  })
 
 const statusLine = (server: McpServerStatus) => {
   let tools = `${server.tools} tools`
@@ -2901,25 +2913,19 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
       .filter((entry) => entry.listedNow || entry.restamp)
       .map((entry): readonly [string, CatalogServer] => [entry.server.key, entry.catalog]),
   ).pipe(Effect.ignore)
-  yield* host.register(
-    "resource",
-    defineResource({
-      id: `${extensionId}/clients`,
-      scope: "process",
-      layer: mcpClientsLive({
-        registered,
-        misconfigured,
-        file,
-        blobs: yield* blobDirectory(host.home),
-        auth,
-        environment,
-      }),
-    }),
-  )
+  const clients = mcpClientsResource(extensionId, {
+    registered,
+    misconfigured,
+    file,
+    blobs: yield* blobDirectory(host.home),
+    auth,
+    environment,
+  })
+  yield* host.register("resource", clients)
   yield* host.register(
     "tool",
-    McpStatusTool,
-    ...registered.flatMap((entry) => toolsFor(entry.server, entry.catalog)),
+    mcpStatusTool(clients),
+    ...registered.flatMap((entry) => toolsFor(entry.server, entry.catalog, clients)),
   )
   yield* host.register("request", McpCommand)
 })
