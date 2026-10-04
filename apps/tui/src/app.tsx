@@ -805,6 +805,7 @@ export function Session(props: SessionProps) {
               client.turnModel(),
               client.defaultReasoningLevel(),
               Option.flatMap(client.routedModel(), (route) => route.effort),
+              client.effortFallback(),
             )}
             current={Option.some(
               Option.getOrElse(

@@ -2546,6 +2546,62 @@ describe("App status and activity rows", () => {
         }).pipe(Effect.timeout("4 seconds")),
     )
   }
+  it.scopedLive(
+    "with no classifier signed in, the effort picker's auto row says routes fall back",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-effort-fallback")
+        const branchId = BranchId.make("branch-effort-fallback")
+        const opus = new Model({
+          id: ModelId.make("anthropic/claude-opus-5"),
+          name: "Claude Opus 5",
+          provider: ProviderId.make("anthropic"),
+          contextLength: 1_000_000,
+          reasoning: true,
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+        })
+        const { setup } = yield* mountApp({
+          client: {
+            model: { list: () => Effect.succeed([opus]) },
+            session: {
+              getSnapshot: () =>
+                Effect.succeed({
+                  sessionId,
+                  branchId,
+                  messages: [],
+                  lastEventId: nullValue,
+                  reasoningLevel: absent,
+                  reasoningAuto: true,
+                  defaultReasoningLevel: "medium",
+                  resolvedModelId: opus.id,
+                  agent: AgentName.make("main"),
+                  runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                  metrics: {
+                    turns: 1,
+                    durationMs: 0,
+                    costUsd: 0,
+                    lastInputTokens: 500,
+                    effortRouted: {
+                      model: opus.id,
+                      effort: "high",
+                      reason: "no classifier model has a credential",
+                      fallback: true,
+                    },
+                  },
+                }),
+            },
+          },
+          app: { debugMode: true },
+          cwd: "/work",
+          width: 120,
+          initialSession: sessionNamed(sessionId, branchId, "Effort fallback"),
+        })
+        yield* waitForFrame(setup, (next) => next.includes("auto"), "auto in the status row")
+        yield* typeCommand("/effort")(setup)
+        const picker = yield* waitForFrame(setup, (next) => next.includes("Effort ·"), "picker")
+        expect(picker).toContain("routes fall back: no classifier model has a credential")
+      }).pipe(Effect.timeout("4 seconds")),
+  )
   // The whole path on a server: `/effort auto` stores auto, a turn asks the
   // effort router, the row names its pick, and `/effort high` leaves auto.
   for (const width of [120, 60]) {

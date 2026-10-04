@@ -604,6 +604,12 @@ interface ClientAgentValue {
   /** The session is on `/effort auto`: the effort router picks each turn's level. */
   reasoningAuto: () => boolean
   /**
+   * Why the newest effort route fell back (`ModelRouted.fallback`): no
+   * classifier signed in, a failed call, a pick the model cannot run. None
+   * when it did not, or before the first.
+   */
+  effortFallback: () => Option.Option<string>
+  /**
    * While a turn runs, the level its requests go out at (its newest
    * `StreamStarted`, until its `TurnCompleted`; None when they name none): a
    * level set meanwhile waits for the next turn. Else, and before the turn's
@@ -1524,6 +1530,11 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
     reasoningAuto: () => session().reasoningAuto === true,
+    effortFallback: () =>
+      Option.fromUndefinedOr(runtimeMetrics().effortRouted).pipe(
+        Option.filter((route) => route.fallback === true),
+        Option.map((route) => route.reason),
+      ),
     // From the event fold alone, so the level changes at `TurnCompleted`, in
     // the feed's order; the runtime watch is a second stream with its own.
     turnReasoningLevel: () =>

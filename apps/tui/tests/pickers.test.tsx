@@ -327,6 +327,22 @@ describe("Settings picker", () => {
       }),
   )
 
+  it.live("the auto row says routes fall back, and why, after a route that fell back", () =>
+    Effect.sync(() => {
+      const autoDetail = (fellBack: Option.Option<string>) =>
+        reasoningRows(Option.some(effortModel), Option.none(), Option.none(), fellBack).find(
+          (row) => row.id === AUTO_ROW_ID,
+        )?.detail
+      expect([
+        autoDetail(Option.none()),
+        autoDetail(Option.some("no classifier model has a credential")),
+      ]).toEqual([
+        "the router picks each turn's level",
+        "routes fall back: no classifier model has a credential",
+      ])
+    }),
+  )
+
   it.live("the effort rows follow what the model accepts", () =>
     Effect.sync(() => {
       const ids = (rowsModel: Option.Option<Model>) =>
