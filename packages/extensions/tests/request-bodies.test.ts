@@ -630,17 +630,17 @@ const PINNED = [
   'anthropic claude-opus-5 max: {"max_tokens":128000,"output_config":{"effort":"max"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5 turn: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5 temp: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
-  'anthropic claude-fable-5 none: {"max_tokens":768,"output_config":{"effort":"low"}} cache=[] beta=-',
+  'anthropic claude-fable-5 none: {"max_tokens":768,"output_config":{"effort":"low"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5 medium: {"max_tokens":128000,"output_config":{"effort":"medium"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5 max: {"max_tokens":128000,"output_config":{"effort":"max"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5-1 turn: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5-1 temp: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
-  'anthropic claude-fable-5-1 none: {"max_tokens":768,"output_config":{"effort":"low"}} cache=[] beta=-',
+  'anthropic claude-fable-5-1 none: {"max_tokens":768,"output_config":{"effort":"low"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5-1 medium: {"max_tokens":128000,"output_config":{"effort":"medium"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5-1 max: {"max_tokens":128000,"output_config":{"effort":"max"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-opus-5-5 turn: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-opus-5-5 temp: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
-  'anthropic claude-opus-5-5 none: {"max_tokens":768,"output_config":{"effort":"low"}} cache=[] beta=-',
+  'anthropic claude-opus-5-5 none: {"max_tokens":768,"output_config":{"effort":"low"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-opus-5-5 medium: {"max_tokens":128000,"output_config":{"effort":"medium"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-opus-5-5 max: {"max_tokens":128000,"output_config":{"effort":"max"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-sonnet-5-5 turn: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
@@ -946,6 +946,39 @@ describe("effort changes", () => {
         expect([modelName, itemKinds(third)]).toEqual([modelName, kinds])
       }
     }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live(
+    "an off turn on a model whose thinking cannot turn off carries its lowest effort, and the cache holds",
+    () =>
+      Effect.gen(function* () {
+        const route = yield* routeNamed("anthropic")
+        for (const modelName of ["claude-fable-5-1", "claude-opus-5-5"]) {
+          const first = bodyOf(
+            yield* captureRequest(route, modelName, sessionHints("high", []), sessionPrompt(2)),
+          )
+          const off = bodyOf(
+            yield* captureRequest(
+              route,
+              modelName,
+              { ...sessionHints("high", [Option.some("high")]), reasoning: "none" },
+              sessionPrompt(4),
+            ),
+          )
+          // The top level and the earlier conversation stay as sent; the
+          // change rides in the conversation at the lowest effort.
+          expect([modelName, topLevelOf(off)]).toEqual([modelName, topLevelOf(first)])
+          const earlier = conversationOf(first)
+          expect([modelName, conversationOf(off).slice(0, earlier.length)]).toEqual([
+            modelName,
+            earlier,
+          ])
+          expect([modelName, itemKinds(off)]).toEqual([
+            modelName,
+            ["user", "assistant", "user", "effort:low"],
+          ])
+        }
+      }).pipe(Effect.timeout("30 seconds")),
   )
 
   it.live("a Messages request names the effort beta only when it carries an effort marker", () =>

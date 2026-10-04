@@ -82,7 +82,10 @@ updates this list in the same commit.
     the mid-conversation beta, GPT-6 and later on the Responses wire get a
     `configuration_update` item, and the top-level effort stays at the effort
     before the first change. Any other model, or a history it cannot carry,
-    sends the plain request. Receipts: `modelChangeNotice` and
+    sends the plain request. On a Claude model whose thinking cannot turn off
+    (Fable 5, Mythos, Opus 5.5), `/effort off` sends the lowest effort with
+    the adaptive thinking every other level sends: an effort change the
+    conversation carries, which the status row and the receipt name. Receipts: `modelChangeNotice` and
     `assistantRunEfforts` in `packages/core/src/runtime/model-context.ts`,
     `readKnownSteps` in `packages/core/src/runtime/turn.ts`, `effortCarrier`
     in `packages/extensions/src/providers.ts`, `withEffortMarkers` in

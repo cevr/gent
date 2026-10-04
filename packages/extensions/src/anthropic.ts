@@ -2265,7 +2265,8 @@ const PLAIN_REQUEST: AnthropicRequestPlan = { effort: Option.none(), thinking: O
  * - No hint: the model's own defaults. A family that thinks by default is
  *   sent `adaptive`, its own default, so that the thinking display applies.
  * - `none`: as little reasoning as the model allows. An always-on family
- *   runs at its lowest effort; a `BetweenTools` family (Claude Sonnet 5.5)
+ *   runs at its lowest effort with the adaptive thinking its other levels
+ *   send, so `/effort off` is an effort change and keeps the cache; a `BetweenTools` family (Claude Sonnet 5.5)
  *   sends `between_tools` at its lowest effort; a family on by default, or a
  *   model that lists a toggle, turns thinking off. The compaction summary asks for this under
  *   a 768-token cap, and thinking counts toward `max_tokens`, so a thinking
@@ -2294,8 +2295,10 @@ const anthropicRequestPlan = (
     return PLAIN_REQUEST
   }
   if (hint.value === "none") {
+    // The thinking every other level sends: the change stays an effort
+    // change, which the conversation can carry with the cache intact.
     if (Option.contains(rule, "AlwaysOn")) {
-      return { effort: lowestEffort(entry), thinking: Option.none() }
+      return { effort: lowestEffort(entry), thinking: Option.some(THINKING_CONFIG.adaptive) }
     }
     if (Option.contains(rule, "BetweenTools")) {
       return {

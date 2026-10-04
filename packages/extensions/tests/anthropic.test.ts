@@ -2823,9 +2823,13 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
         output_config: { effort: "low" },
         thinking: { type: "between_tools" },
       })
-      // Thinking cannot be turned off: the lowest effort instead.
+      // Thinking cannot be turned off: the lowest effort instead, with the
+      // thinking every other level sends, so the change is an effort change.
       for (const model of ["claude-opus-5-5", "claude-fable-5", "claude-fable-5-1"]) {
-        expect(yield* sentOnBothPaths(model, none)).toEqual({ output_config: { effort: "low" } })
+        expect(yield* sentOnBothPaths(model, none)).toEqual({
+          output_config: { effort: "low" },
+          thinking: { type: "adaptive", display: "summarized" },
+        })
       }
       // Thinking already off by default: nothing to send.
       for (const model of ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]) {
