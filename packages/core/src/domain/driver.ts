@@ -14,7 +14,7 @@
  *
  * @module
  */
-import { Context, type Duration, Effect, Option, Predicate, Schema, type Layer } from "effect"
+import { Context, Duration, Effect, Option, Predicate, Schema, type Layer } from "effect"
 import type { HttpClient } from "effect/http"
 import {
   AiError,
@@ -253,11 +253,13 @@ interface ProviderAuthContribution {
  * step for those. A request the provider refused as too long is not
  * transient: the loop hands the window off first, then runs the step again.
  * Providers name that refusal only in text, so `contextOverflow` reads it.
+ * A failure can name when a retry succeeds (`retryAt`); that time replaces
+ * the backoff, and a time past `maxDelay` ends the retries at once.
  */
 export interface RetryPolicy {
   /** Delay before the first retry, in milliseconds. */
   readonly initialDelay: number
-  /** Upper bound of any delay, in milliseconds. A provider retry-after past it ends the retries. */
+  /** Upper bound of any delay, in milliseconds. A failure that resets later than this from now is not retried. */
   readonly maxDelay: number
   /** Multiplier applied to the delay after each attempt. */
   readonly backoffFactor: number
@@ -267,6 +269,51 @@ export interface RetryPolicy {
   readonly transientStreamEvent: Schema.Top
   /** True when a failed request was refused as longer than the model accepts. */
   readonly contextOverflow: (cause: unknown) => boolean
+  /**
+   * When a retry of this failure can succeed, in epoch milliseconds, read
+   * from the provider's own fields by schema (a header, the error body),
+   * never from message text; none when the failure names no time.
+   * `DEFAULT_RETRY_POLICY` reads the typed retry-after (`retryAfterAt`); a
+   * driver adds the reset fields of a rate-limited request
+   * (`rateLimitResponse`), and the latest time it knows wins, so a generic
+   * retry-after never shortens a usage limit's reset. A usage limit that resets in
+   * hours names a time past `maxDelay`: the step fails at once, and the
+   * turn's `ErrorOccurred.retryAt` and `TurnAfterInput.retryAt` carry it.
+   */
+  readonly retryAt: (cause: unknown, nowMs: number) => Option.Option<number>
+}
+
+/** The provider's typed retry-after, counted from `nowMs`; the default `RetryPolicy.retryAt`. */
+export const retryAfterAt = (cause: unknown, nowMs: number): Option.Option<number> => {
+  if (!AiError.isAiError(cause)) return Option.none()
+  return Option.map(
+    Option.fromUndefinedOr(cause.retryAfter),
+    (retryAfter) => nowMs + Duration.toMillis(retryAfter),
+  )
+}
+
+/**
+ * The HTTP response a rate-limited request kept: its headers (lower-case
+ * names, as the HTTP client gives them) and its raw body. A driver decodes
+ * its reset fields from these.
+ */
+export interface FailureResponse {
+  readonly headers: (typeof AiError.HttpResponseDetails.Type)["headers"]
+  readonly body: Option.Option<string>
+}
+
+/**
+ * The response of a request the provider refused for a rate or usage limit,
+ * when the failure kept one. Any other failure has none: a refused request
+ * can carry the same limit headers, and they say nothing about its retry.
+ */
+export const rateLimitResponse = (cause: unknown): Option.Option<FailureResponse> => {
+  if (!AiError.isAiError(cause) || cause.reason._tag !== "RateLimitError") return Option.none()
+  const http = Option.fromUndefinedOr(cause.reason.http)
+  return Option.map(http, (context) => ({
+    headers: context.response?.headers ?? {},
+    body: Option.fromUndefinedOr(context.body),
+  }))
 }
 
 /**
@@ -368,6 +415,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   maxAttempts: 3,
   transientStreamEvent: Schema.Never,
   contextOverflow: isContextOverflow,
+  retryAt: retryAfterAt,
 }
 
 // ── model catalog ──

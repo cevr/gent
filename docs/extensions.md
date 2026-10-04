@@ -38,7 +38,17 @@ export default defineExtension({
 
 That's it. Save as `~/.gent/extensions/greet.ts`. The next turn loads it; an
 edited, added or removed extension file reaches the next turn the same way, with
-no restart.
+no restart. An extension is built with the modules it imports by a relative
+path, so an edit to one of them reaches the next turn too, and a save of the
+same bytes changes nothing. Its top level runs once per version; setup runs
+again on each new profile. An edit that breaks an extension that ran (it does
+not build or import, its setup fails, it fails validation, or a process
+Resource fails to build) keeps the last good version running, and health
+reports the extension degraded with why the new version failed. A last good
+version whose tool, request, agent or driver id collides with another
+extension's does not run: the extension is failed, and the other one runs.
+Deleting the file or disabling the id removes the extension; nothing is kept
+after that.
 
 For the smallest complete product loop, see
 `examples/extensions/session-notes.ts`. It is still one file, but covers the
@@ -118,15 +128,30 @@ interaction, file lock, classifier, extension, and state-pulse accessors
 (`Session`, `Interaction`, `FileLock`, `Models`, `Extensions`, `State`)
 plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
 `home`. `Extensions.status` lists every extension of the session's profile
-as an `ExtensionStatus` (`Active` with its file version, `Failed` with the
+as an `ExtensionStatus` (`Active` with its version, `Failed` with the
 phase that stopped it, or `Disabled`), and each config file that did not
-load; it reads the extension files as they are now, so an extension an agent
+load. An `Active` status with `reloadFailed` is a last good version still
+running: a newer version of its file failed at that phase. It reads the extension files as they are now, so an extension an agent
 just wrote shows there. `Extensions.reload(id)` runs every setup of the
 profile again and returns the new statuses; an unchanged extension keeps its
 process and branch Resources, a run that is going on keeps its profile, and
 an id the profile does not name fails. Any extension gets this facet. The
-shipped `@gent/extension-admin` extension gives it to the agent as the
-read-only `extensions.status` tool (`packages/extensions/src/extension-admin.ts`). `Models.decide({ definition, input, model?, timeoutMs? })` asks a
+shipped `@gent/extension-admin` extension (`packages/extensions/src/extension-admin.ts`)
+gives the agent `extensions.status`, `extensions.reload`, and four verbs that
+change what the next turn loads: `extensions.enable` and `extensions.disable`
+edit `disabledExtensions` in the user or project `config.json` (every other key
+stays; a file that is not JSON or that gent would not read as a config is
+refused, not replaced), `extensions.add` copies a file or directory into a
+scope's extensions directory (an existing name is refused), and
+`extensions.remove` moves one into a new directory of its own under
+`extension-trash` in the data directory, so no remove replaces another. Each
+of the four asks the user once
+through `Interaction.approve`, naming the scope, the path and who it reaches;
+a headless run declines. The `project` scope needs a project the user trusts,
+and `user` is the default only when the session runs from home. A verb's
+optional `resume` queues one message on its own branch (`Session.send`,
+`delivery: "queue"`), so the agent goes on in the same task on the new
+profile. The bundled `extensions` skill carries the guide and a template. `Models.decide({ definition, input, model?, timeoutMs? })` asks a
 classifier model (System One: Jev, Clef) every `effect/ai/Decision` of the
 definition in one call and returns the answers, the model, the usage and the
 cost; `Models.available` and `Models.classifiers` say which classifiers have
@@ -390,7 +415,9 @@ export default defineExtension({
 A `turnAfter` hook that sends a `"queue"` message starts another model turn,
 at full price, and that turn's end runs the hook again. A fixed `sourceId`
 makes the follow-up once per session. Send from `turnAfter` only when the
-model must answer.
+model must answer. A turn that a usage limit failed carries `retryAt`
+(`Option`, epoch milliseconds): the time the model's driver says the limit
+resets, so a hook can wait for it instead of sending into the same limit.
 
 Lifecycle extension points are typed hook kinds, not keyed middleware bags:
 `systemPrompt`, `turnProjection`, `turnAfter`, `loopOpen` (a branch's loop was
@@ -608,7 +635,9 @@ builtin).
   storage Tags, event stores, and process helpers are not public extension API.
 - Tagged-union variant tags are PascalCase. Extension health reports
   `"Healthy"` or `"Degraded"`, and a degraded extension carries
-  `"ActivationFailed"` or `"ModelCatalogFailed"` issues. An extension the
+  `"ActivationFailed"` or `"ModelCatalogFailed"` issues. An
+  `"ActivationFailed"` issue with `runningVersion` is a failed reload: the new
+  version failed and that last good version still runs. An extension the
   disabled list names is `"Disabled"`, in the optional `disabledExtensions`
   list of the snapshot. Match on the tag
   through the exported schema rather than a string literal where possible.
