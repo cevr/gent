@@ -2,6 +2,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Clock, Effect, Option } from "effect"
 import { createSignal, Show } from "solid-js"
+import { OptimizedBuffer, RGBA } from "@opentui/core"
 import {
   CaretLine,
   caretWindow,
@@ -1200,4 +1201,166 @@ describe("docked pane column budget", () => {
       expect(rowLines[0]?.trimEnd().length).toBe(ruleWidth(lines) - 1)
     }),
   )
+})
+
+// ── box borders under a scissor ─────────────────────────────────────────────
+
+/**
+ * A box drawn under a scissor (a clipped parent, such as the live tail that
+ * cuts off a prompt's top rows) shows inside the scissor what the same box
+ * drawn alone shows there, and leaves every cell outside it as it was: the
+ * scissor crops the box, it does not lay the box or its titles out again.
+ * OpenTUI's border fast path wrote past the scissor (`patches/README.md`).
+ */
+describe("box borders under a scissor", () => {
+  const WIDTH = 24
+  const HEIGHT = 8
+
+  interface Rect {
+    readonly x: number
+    readonly y: number
+    readonly width: number
+    readonly height: number
+  }
+
+  type BoxOptions = Parameters<OptimizedBuffer["drawBox"]>[0]
+
+  const borderColor = RGBA.fromInts(200, 200, 200, 255)
+  const clearBackground = RGBA.fromInts(0, 0, 0, 0)
+  const solidBackground = RGBA.fromInts(10, 20, 30, 255)
+  const groundColor = RGBA.fromInts(90, 90, 90, 255)
+  const box = { x: 2, y: 1, width: 20, height: 6, border: true, borderColor } as const
+
+  /** A buffer with a dot in every cell, so a cell a draw changed shows. */
+  const groundBuffer = Effect.acquireRelease(
+    Effect.sync(() => {
+      const buffer = OptimizedBuffer.create(WIDTH, HEIGHT, "unicode")
+      for (let y = 0; y < HEIGHT; y++) buffer.drawText(".".repeat(WIDTH), 0, y, groundColor)
+      return buffer
+    }),
+    (buffer) => Effect.sync(() => buffer.destroy()),
+  )
+
+  /** Every cell as its char, colors and attributes. */
+  const cellsOf = (buffer: OptimizedBuffer): string[] => {
+    const { char, fg, bg, attributes } = buffer.buffers
+    return Array.from({ length: WIDTH * HEIGHT }, (_, at) =>
+      [
+        char[at],
+        ...fg.subarray(at * 4, at * 4 + 4),
+        ...bg.subarray(at * 4, at * 4 + 4),
+        attributes[at],
+      ].join(","),
+    )
+  }
+
+  /** The cells after `options` is drawn under each of `clips`, the last innermost. */
+  const drawn = (clips: ReadonlyArray<Rect>, options: Option.Option<BoxOptions>) =>
+    Effect.gen(function* () {
+      const buffer = yield* groundBuffer
+      for (const clip of clips) buffer.pushScissorRect(clip.x, clip.y, clip.width, clip.height)
+      if (Option.isSome(options)) buffer.drawBox(options.value)
+      for (const _clip of clips) buffer.popScissorRect()
+      return cellsOf(buffer)
+    })
+
+  const inside = (clips: ReadonlyArray<Rect>, at: number) => {
+    const x = at % WIDTH
+    const y = Math.floor(at / WIDTH)
+    return clips.every(
+      (clip) => x >= clip.x && x < clip.x + clip.width && y >= clip.y && y < clip.y + clip.height,
+    )
+  }
+
+  /** The rows of `cells`, so a failure names the row that differs. */
+  const rowsOf = (cells: ReadonlyArray<string>) =>
+    Array.from({ length: HEIGHT }, (_, y) => cells.slice(y * WIDTH, (y + 1) * WIDTH).join(" | "))
+
+  const cases: ReadonlyArray<{
+    readonly name: string
+    readonly clips: ReadonlyArray<Rect>
+    readonly options: BoxOptions
+  }> = [
+    {
+      name: "a left title cut at its start",
+      clips: [{ x: 6, y: 0, width: 18, height: HEIGHT }],
+      options: { ...box, backgroundColor: clearBackground, title: "TITLE" },
+    },
+    {
+      name: "a centered title cut on its left",
+      clips: [{ x: 10, y: 0, width: 14, height: HEIGHT }],
+      options: {
+        ...box,
+        backgroundColor: clearBackground,
+        title: "CENTER",
+        titleAlignment: "center",
+      },
+    },
+    {
+      name: "a right title cut on its right",
+      clips: [{ x: 0, y: 0, width: 18, height: HEIGHT }],
+      options: {
+        ...box,
+        backgroundColor: clearBackground,
+        title: "RIGHT",
+        titleAlignment: "right",
+      },
+    },
+    {
+      name: "a narrow scissor over a left title's end",
+      clips: [{ x: 7, y: 0, width: 3, height: HEIGHT }],
+      options: { ...box, backgroundColor: clearBackground, title: "TITLE" },
+    },
+    {
+      name: "a wide-character title cut on its left",
+      clips: [{ x: 9, y: 0, width: 15, height: HEIGHT }],
+      options: {
+        ...box,
+        backgroundColor: clearBackground,
+        title: "日本語の題",
+        titleAlignment: "center",
+      },
+    },
+    {
+      name: "a top row and its title above the scissor",
+      clips: [{ x: 0, y: 2, width: WIDTH, height: 6 }],
+      options: {
+        ...box,
+        backgroundColor: clearBackground,
+        title: "TOP",
+        bottomTitle: "BOTTOM",
+        bottomTitleAlignment: "right",
+      },
+    },
+    {
+      name: "nested scissors",
+      clips: [
+        { x: 4, y: 0, width: 16, height: HEIGHT },
+        { x: 0, y: 2, width: 12, height: 6 },
+      ],
+      options: { ...box, backgroundColor: clearBackground, title: "NESTED" },
+    },
+    {
+      name: "a solid background cut on its left",
+      clips: [{ x: 6, y: 0, width: 18, height: HEIGHT }],
+      options: { ...box, backgroundColor: solidBackground, shouldFill: true, title: "SOLID" },
+    },
+  ]
+
+  for (const { name, clips, options } of cases) {
+    it.live(`${name} shows the uncut box's cells inside the scissor and none outside`, () =>
+      Effect.gen(function* () {
+        const whole = yield* drawn([], Option.some(options))
+        const ground = yield* drawn([], Option.none())
+        const cut = yield* drawn(clips, Option.some(options))
+        const expected = whole.map((cell, at) => {
+          if (inside(clips, at)) return cell
+          return ground[at] ?? ""
+        })
+        // The uncut box drew inside the scissor, so the crop has something to keep.
+        expect(whole.some((cell, at) => inside(clips, at) && cell !== ground[at])).toBe(true)
+        expect(rowsOf(cut)).toEqual(rowsOf(expected))
+      }).pipe(Effect.scoped),
+    )
+  }
 })

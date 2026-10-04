@@ -1,8 +1,16 @@
 diff --git a/chunk-bun-j2z63cdy.js b/chunk-bun-j2z63cdy.js
-index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..e7d8fb5708ef773fb275f8ecf874c07c897baa2e 100644
+index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..6ec00ff74f4d73e00b15ea8e86051e2cc166b458 100644
 --- a/chunk-bun-j2z63cdy.js
 +++ b/chunk-bun-j2z63cdy.js
-@@ -7284,6 +7284,7 @@ class CliRenderer2 extends EventEmitter5 {
+@@ -6506,6 +6506,7 @@ var ANSI = {
+   clearSavedLines: "\x1B[3J",
+   scrollDown: (lines) => `\x1B[${lines}T`,
+   scrollUp: (lines) => `\x1B[${lines}S`,
++  scrollIntoHistory: (lines, height) => `\x1B7\x1B[${height};1H${"\n".repeat(lines)}\x1B8`,
+   moveCursor: (row, col) => `\x1B[${row};${col}H`,
+   moveCursorAndClear: (row, col) => `\x1B[${row};${col}H\x1B[J`,
+   setRgbBackground: (r, g, b) => `\x1B[48;2;${r};${g};${b}m`,
+@@ -7284,6 +7285,7 @@ class CliRenderer2 extends EventEmitter5 {
    _splitHeight = 0;
    renderOffset = 0;
    splitTailColumn = 0;
@@ -10,7 +18,7 @@ index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..e7d8fb5708ef773fb275f8ecf874c07c
    pendingSplitFooterTransition = null;
    forceFullRepaintRequested = false;
    maxSplitCommitsPerFrame = 8;
-@@ -7995,6 +7996,15 @@ Captured external output:
+@@ -7995,6 +7997,15 @@ Captured external output:
        const previousSurfaceTopLine = this.renderOffset + 1;
        const previousSurfaceHeight = this._splitHeight;
        this.clearPendingSplitFooterTransition();
@@ -26,7 +34,25 @@ index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..e7d8fb5708ef773fb275f8ecf874c07c
        this.resetSplitScrollback(this.getSplitCursorSeedRows());
        if (previousMode === "passthrough" && this._terminalIsSetup) {
          const nextSurfaceTopLine = this.renderOffset + 1;
-@@ -8768,6 +8778,7 @@ Captured external output:
+@@ -8652,7 +8663,17 @@ Captured external output:
+     }
+     return commits;
+   }
++  scrollSplitViewportIntoHistory() {
++    const transition = this.pendingSplitFooterTransition;
++    const lines = transition?.scrollLines ?? 0;
++    if (transition === null || transition.mode !== "viewport-scroll" || lines <= 0 || transition.sourceTopLine <= transition.targetTopLine) {
++      return;
++    }
++    this.writeOut("\x1B[?2026h" + ANSI.scrollIntoHistory(lines, this._terminalHeight));
++    this.setPendingSplitFooterTransition({ ...transition, sourceTopLine: transition.targetTopLine });
++  }
+   flushPendingSplitCommits(forceFooterRepaint = false, drainAll = false) {
++    this.scrollSplitViewportIntoHistory();
+     const commits = this.externalOutputQueue.peek(drainAll ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
+     let hasCommittedOutput = false;
+     const lastCommitIndex = commits.length - 1;
+@@ -8768,6 +8789,7 @@ Captured external output:
      this.flushPendingSplitCommits(this._externalOutputMode === "capture-stdout" ? forceFooterRepaint : false, true);
    }
    resetSplitScrollback(seedRows = 0) {
@@ -34,7 +60,7 @@ index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..e7d8fb5708ef773fb275f8ecf874c07c
      this.splitTailColumn = 0;
      this.renderOffset = this.lib.resetSplitScrollback(this.rendererPtr, seedRows, this.getSplitPinnedRenderOffset());
    }
-@@ -8792,8 +8803,10 @@ Captured external output:
+@@ -8792,8 +8814,10 @@ Captured external output:
      const splitActive = this._screenMode === "split-footer" && this._splitHeight > 0;
      if (!splitActive) {
        this.clearPendingSplitFooterTransition();
@@ -47,7 +73,7 @@ index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..e7d8fb5708ef773fb275f8ecf874c07c
        this.renderOffset = 0;
        this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
        return;
-@@ -8802,8 +8815,10 @@ Captured external output:
+@@ -8802,8 +8826,10 @@ Captured external output:
        this.syncSplitScrollback();
      } else {
        this.clearPendingSplitFooterTransition();
@@ -60,7 +86,7 @@ index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..e7d8fb5708ef773fb275f8ecf874c07c
        this.renderOffset = this.getSplitPinnedRenderOffset();
        this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
      }
-@@ -8847,6 +8862,11 @@ Captured external output:
+@@ -8847,6 +8873,11 @@ Captured external output:
      if (terminalWritable && prevSplitHeight > 0) {
        this.flushPendingSplitOutputBeforeTransition();
      }
@@ -72,7 +98,16 @@ index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..e7d8fb5708ef773fb275f8ecf874c07c
      const previousSurfaceTopLine = this.renderOffset + 1;
      const shouldDeferSplitFooterResizeTransition = this._terminalIsSetup && prevScreenMode === "split-footer" && screenMode === "split-footer" && this._externalOutputMode === "capture-stdout" && prevSplitHeight > 0 && nextSplitHeight > 0 && !terminalScreenModeChanged;
      const splitStartupSeedBlocksFirstNativeFrame = this.pendingSplitStartupCursorSeed && this.splitStartupSeedTimeoutId !== null;
-@@ -8929,6 +8949,9 @@ Captured external output:
+@@ -8880,7 +8911,7 @@ Captured external output:
+         this.writeOut(scrollDown);
+       } else if (splitViewportScrollLines > 0) {
+         const additionalLines = splitViewportScrollLines;
+-        const scrollUp = ANSI.scrollUp(additionalLines);
++        const scrollUp = ANSI.scrollIntoHistory(additionalLines, this._terminalHeight);
+         this.writeOut(scrollUp);
+       }
+     }
+@@ -8929,6 +8960,9 @@ Captured external output:
      if (terminalScreenModeChanged) {
        if (terminalWritable) {
          this.lib.suspendRenderer(this.rendererPtr);
@@ -82,7 +117,7 @@ index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..e7d8fb5708ef773fb275f8ecf874c07c
          this.lib.setupTerminal(this.rendererPtr, nextUseAlternateScreen);
          this.pendingSuspendedTerminalSetup = false;
        } else {
-@@ -9543,6 +9566,7 @@ Captured external output:
+@@ -9543,6 +9577,7 @@ Captured external output:
        }
        return;
      }
@@ -90,11 +125,27 @@ index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..e7d8fb5708ef773fb275f8ecf874c07c
      if (this._terminalIsSetup && this._controlState !== "explicit_suspended" /* EXPLICIT_SUSPENDED */ && !this.isSplitCursorSeedFrameBlocked()) {
        this.flushPendingSplitOutputBeforeTransition();
      }
+@@ -10193,6 +10228,7 @@ Captured external output:
+         return "rendered";
+       }
+       const force = this.forceFullRepaintRequested;
++      this.scrollSplitViewportIntoHistory();
+       const nativeStatus = this.lib.render(this.rendererPtr, force);
+       if (nativeStatus === NATIVE_RENDER_STATUS_SKIPPED || nativeStatus === NATIVE_RENDER_STATUS_FAILED) {
+         return this.handleNativeRenderRejection(nativeStatus);
 diff --git a/chunk-node-wp7ct2m6.js b/chunk-node-wp7ct2m6.js
-index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..4a04e58214f5cd0b102e3883baa00473150f0faa 100644
+index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..bf46cbfd8ff34e1acb6997f02cfb9aba4f22f401 100644
 --- a/chunk-node-wp7ct2m6.js
 +++ b/chunk-node-wp7ct2m6.js
-@@ -7283,6 +7283,7 @@ class CliRenderer2 extends EventEmitter5 {
+@@ -6505,6 +6505,7 @@ var ANSI = {
+   clearSavedLines: "\x1B[3J",
+   scrollDown: (lines) => `\x1B[${lines}T`,
+   scrollUp: (lines) => `\x1B[${lines}S`,
++  scrollIntoHistory: (lines, height) => `\x1B7\x1B[${height};1H${"\n".repeat(lines)}\x1B8`,
+   moveCursor: (row, col) => `\x1B[${row};${col}H`,
+   moveCursorAndClear: (row, col) => `\x1B[${row};${col}H\x1B[J`,
+   setRgbBackground: (r, g, b) => `\x1B[48;2;${r};${g};${b}m`,
+@@ -7283,6 +7284,7 @@ class CliRenderer2 extends EventEmitter5 {
    _splitHeight = 0;
    renderOffset = 0;
    splitTailColumn = 0;
@@ -102,7 +153,7 @@ index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..4a04e58214f5cd0b102e3883baa00473
    pendingSplitFooterTransition = null;
    forceFullRepaintRequested = false;
    maxSplitCommitsPerFrame = 8;
-@@ -7994,6 +7995,15 @@ Captured external output:
+@@ -7994,6 +7996,15 @@ Captured external output:
        const previousSurfaceTopLine = this.renderOffset + 1;
        const previousSurfaceHeight = this._splitHeight;
        this.clearPendingSplitFooterTransition();
@@ -118,7 +169,25 @@ index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..4a04e58214f5cd0b102e3883baa00473
        this.resetSplitScrollback(this.getSplitCursorSeedRows());
        if (previousMode === "passthrough" && this._terminalIsSetup) {
          const nextSurfaceTopLine = this.renderOffset + 1;
-@@ -8767,6 +8777,7 @@ Captured external output:
+@@ -8651,7 +8662,17 @@ Captured external output:
+     }
+     return commits;
+   }
++  scrollSplitViewportIntoHistory() {
++    const transition = this.pendingSplitFooterTransition;
++    const lines = transition?.scrollLines ?? 0;
++    if (transition === null || transition.mode !== "viewport-scroll" || lines <= 0 || transition.sourceTopLine <= transition.targetTopLine) {
++      return;
++    }
++    this.writeOut("\x1B[?2026h" + ANSI.scrollIntoHistory(lines, this._terminalHeight));
++    this.setPendingSplitFooterTransition({ ...transition, sourceTopLine: transition.targetTopLine });
++  }
+   flushPendingSplitCommits(forceFooterRepaint = false, drainAll = false) {
++    this.scrollSplitViewportIntoHistory();
+     const commits = this.externalOutputQueue.peek(drainAll ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
+     let hasCommittedOutput = false;
+     const lastCommitIndex = commits.length - 1;
+@@ -8767,6 +8788,7 @@ Captured external output:
      this.flushPendingSplitCommits(this._externalOutputMode === "capture-stdout" ? forceFooterRepaint : false, true);
    }
    resetSplitScrollback(seedRows = 0) {
@@ -126,7 +195,7 @@ index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..4a04e58214f5cd0b102e3883baa00473
      this.splitTailColumn = 0;
      this.renderOffset = this.lib.resetSplitScrollback(this.rendererPtr, seedRows, this.getSplitPinnedRenderOffset());
    }
-@@ -8791,8 +8802,10 @@ Captured external output:
+@@ -8791,8 +8813,10 @@ Captured external output:
      const splitActive = this._screenMode === "split-footer" && this._splitHeight > 0;
      if (!splitActive) {
        this.clearPendingSplitFooterTransition();
@@ -139,7 +208,7 @@ index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..4a04e58214f5cd0b102e3883baa00473
        this.renderOffset = 0;
        this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
        return;
-@@ -8801,8 +8814,10 @@ Captured external output:
+@@ -8801,8 +8825,10 @@ Captured external output:
        this.syncSplitScrollback();
      } else {
        this.clearPendingSplitFooterTransition();
@@ -152,7 +221,7 @@ index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..4a04e58214f5cd0b102e3883baa00473
        this.renderOffset = this.getSplitPinnedRenderOffset();
        this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
      }
-@@ -8846,6 +8861,11 @@ Captured external output:
+@@ -8846,6 +8872,11 @@ Captured external output:
      if (terminalWritable && prevSplitHeight > 0) {
        this.flushPendingSplitOutputBeforeTransition();
      }
@@ -164,7 +233,16 @@ index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..4a04e58214f5cd0b102e3883baa00473
      const previousSurfaceTopLine = this.renderOffset + 1;
      const shouldDeferSplitFooterResizeTransition = this._terminalIsSetup && prevScreenMode === "split-footer" && screenMode === "split-footer" && this._externalOutputMode === "capture-stdout" && prevSplitHeight > 0 && nextSplitHeight > 0 && !terminalScreenModeChanged;
      const splitStartupSeedBlocksFirstNativeFrame = this.pendingSplitStartupCursorSeed && this.splitStartupSeedTimeoutId !== null;
-@@ -8928,6 +8948,9 @@ Captured external output:
+@@ -8879,7 +8910,7 @@ Captured external output:
+         this.writeOut(scrollDown);
+       } else if (splitViewportScrollLines > 0) {
+         const additionalLines = splitViewportScrollLines;
+-        const scrollUp = ANSI.scrollUp(additionalLines);
++        const scrollUp = ANSI.scrollIntoHistory(additionalLines, this._terminalHeight);
+         this.writeOut(scrollUp);
+       }
+     }
+@@ -8928,6 +8959,9 @@ Captured external output:
      if (terminalScreenModeChanged) {
        if (terminalWritable) {
          this.lib.suspendRenderer(this.rendererPtr);
@@ -174,7 +252,7 @@ index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..4a04e58214f5cd0b102e3883baa00473
          this.lib.setupTerminal(this.rendererPtr, nextUseAlternateScreen);
          this.pendingSuspendedTerminalSetup = false;
        } else {
-@@ -9542,6 +9565,7 @@ Captured external output:
+@@ -9542,6 +9576,7 @@ Captured external output:
        }
        return;
      }
@@ -182,11 +260,19 @@ index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..4a04e58214f5cd0b102e3883baa00473
      if (this._terminalIsSetup && this._controlState !== "explicit_suspended" /* EXPLICIT_SUSPENDED */ && !this.isSplitCursorSeedFrameBlocked()) {
        this.flushPendingSplitOutputBeforeTransition();
      }
+@@ -10192,6 +10227,7 @@ Captured external output:
+         return "rendered";
+       }
+       const force = this.forceFullRepaintRequested;
++      this.scrollSplitViewportIntoHistory();
+       const nativeStatus = this.lib.render(this.rendererPtr, force);
+       if (nativeStatus === NATIVE_RENDER_STATUS_SKIPPED || nativeStatus === NATIVE_RENDER_STATUS_FAILED) {
+         return this.handleNativeRenderRejection(nativeStatus);
 diff --git a/chunk-bun-sjw2d9bq.js b/chunk-bun-sjw2d9bq.js
-index a28320a281f82eea0833ad1f5868d0f8c74c9602..8cea88d6b6022dc48988efa48dc86352292f6fb1 100644
+index a28320a281f82eea0833ad1f5868d0f8c74c9602..517a2ecc3462fcfa56ab709c25295eecda4b2fa6 100644
 --- a/chunk-bun-sjw2d9bq.js
 +++ b/chunk-bun-sjw2d9bq.js
-@@ -11386,6 +11386,39 @@ function packDrawOptions(border, shouldFill, titleAlignment, bottomTitleAlignmen
+@@ -11386,6 +11386,67 @@ function packDrawOptions(border, shouldFill, titleAlignment, bottomTitleAlignmen
    return packed;
  }
  
@@ -201,32 +287,60 @@ index a28320a281f82eea0833ad1f5868d0f8c74c9602..8cea88d6b6022dc48988efa48dc86352
 +    return { x: 0, y: 0, width: 0, height: 0 };
 +  return { x, y, width: right - x, height: bottom - y };
 +}
-+function clipBoxToScissor(options, scissor) {
-+  const box = { x: options.x, y: options.y, width: options.width, height: options.height, border: options.border, title: options.title, bottomTitle: options.bottomTitle };
++function borderCellsOutsideScissor(options, scissor, width, height) {
 +  if (scissor === undefined)
-+    return box;
-+  const clipped = intersectScissorRect(box, scissor);
-+  if (clipped.width === 0 || clipped.height === 0)
-+    return null;
-+  const top = clipped.y === box.y;
-+  const bottom = clipped.y + clipped.height === box.y + box.height;
-+  const left = clipped.x === box.x;
-+  const right = clipped.x + clipped.width === box.x + box.width;
-+  if (top && bottom && left && right)
-+    return box;
-+  const sides = box.border === true ? ["top", "right", "bottom", "left"] : Array.isArray(box.border) ? box.border : [];
-+  return {
-+    ...clipped,
-+    border: sides.filter((side) => side === "top" ? top : side === "bottom" ? bottom : side === "left" ? left : right),
-+    title: top ? box.title : undefined,
-+    bottomTitle: bottom ? box.bottomTitle : undefined
++    return [];
++  const left = Math.max(0, options.x);
++  const top = Math.max(0, options.y);
++  const right = Math.min(width - 1, options.x + options.width - 1);
++  const bottom = Math.min(height - 1, options.y + options.height - 1);
++  if (left > right || top > bottom)
++    return [];
++  const scissorRight = scissor.x + scissor.width - 1;
++  const scissorBottom = scissor.y + scissor.height - 1;
++  if (left >= scissor.x && right <= scissorRight && top >= scissor.y && bottom <= scissorBottom)
++    return [];
++  if (right < scissor.x || left > scissorRight || bottom < scissor.y || top > scissorBottom)
++    return [];
++  const cells = [];
++  const keep = (x, y) => {
++    if (x < scissor.x || x > scissorRight || y < scissor.y || y > scissorBottom)
++      cells.push(y * width + x);
 +  };
++  for (let x = left;x <= right; x++) {
++    if (top === options.y)
++      keep(x, top);
++    if (bottom === options.y + options.height - 1)
++      keep(x, bottom);
++  }
++  for (let y = top;y <= bottom; y++) {
++    if (left === options.x)
++      keep(left, y);
++    if (right === options.x + options.width - 1)
++      keep(right, y);
++  }
++  return cells;
++}
++function saveCells(buffers, cells) {
++  return cells.map((at) => ({ at, char: buffers.char[at], attributes: buffers.attributes[at], fg: buffers.fg.slice(at * 4, at * 4 + 4), bg: buffers.bg.slice(at * 4, at * 4 + 4) }));
++}
++function restoreBorderCells(buffers, saved, borderChars) {
++  for (const cell of saved) {
++    const { at } = cell;
++    const changed = buffers.char[at] !== cell.char || buffers.attributes[at] !== cell.attributes || buffers.fg.subarray(at * 4, at * 4 + 4).some((value, index) => value !== cell.fg[index]) || buffers.bg.subarray(at * 4, at * 4 + 4).some((value, index) => value !== cell.bg[index]);
++    if (!changed || !borderChars.includes(buffers.char[at]))
++      continue;
++    buffers.char[at] = cell.char;
++    buffers.attributes[at] = cell.attributes;
++    buffers.fg.set(cell.fg, at * 4);
++    buffers.bg.set(cell.bg, at * 4);
++  }
 +}
 +
  class OptimizedBuffer2 {
    static fbIdCounter = 0;
    id;
-@@ -11397,6 +11430,7 @@ class OptimizedBuffer2 {
+@@ -11397,6 +11458,7 @@ class OptimizedBuffer2 {
    respectAlpha = false;
    _rawBuffers = null;
    _destroyed = false;
@@ -234,17 +348,15 @@ index a28320a281f82eea0833ad1f5868d0f8c74c9602..8cea88d6b6022dc48988efa48dc86352
    get ptr() {
      return this.bufferPtr;
    }
-@@ -11637,19 +11671,25 @@ class OptimizedBuffer2 {
-     this.guard();
+@@ -11638,18 +11700,25 @@ class OptimizedBuffer2 {
      const style = parseBorderStyle2(options.borderStyle, "single");
      const borderChars = options.customBorderChars ?? BorderCharArrays2[style];
--    const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
--    this.lib.bufferDrawBox(this.bufferPtr, options.x, options.y, options.width, options.height, borderChars, packedOptions, options.borderColor, options.backgroundColor, options.titleColor ?? options.borderColor, options.title ?? null, options.bottomTitle ?? null);
-+    const box = clipBoxToScissor(options, this._scissorRects.at(-1));
-+    if (box === null)
-+      return;
-+    const packedOptions = packDrawOptions(box.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
-+    this.lib.bufferDrawBox(this.bufferPtr, box.x, box.y, box.width, box.height, borderChars, packedOptions, options.borderColor, options.backgroundColor, options.titleColor ?? options.borderColor, box.title ?? null, box.bottomTitle ?? null);
+     const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
++    const outside = borderCellsOutsideScissor(options, this._scissorRects.at(-1), this._width, this._height);
++    const saved = outside.length === 0 ? null : saveCells(this.buffers, outside);
+     this.lib.bufferDrawBox(this.bufferPtr, options.x, options.y, options.width, options.height, borderChars, packedOptions, options.borderColor, options.backgroundColor, options.titleColor ?? options.borderColor, options.title ?? null, options.bottomTitle ?? null);
++    if (saved !== null)
++      restoreBorderCells(this.buffers, saved, borderChars);
    }
    pushScissorRect(x, y, width, height) {
      this.guard();
@@ -263,10 +375,10 @@ index a28320a281f82eea0833ad1f5868d0f8c74c9602..8cea88d6b6022dc48988efa48dc86352
    }
    pushOpacity(opacity) {
 diff --git a/chunk-node-80p7e6t6.js b/chunk-node-80p7e6t6.js
-index 82915fa04684c45affab3b7297e8917f89dc5dc6..7136402aae1862fcd17212df5c4f10f039d006c0 100644
+index 82915fa04684c45affab3b7297e8917f89dc5dc6..06a6e0ed1d111c0aae3104e03a7d9ee884106957 100644
 --- a/chunk-node-80p7e6t6.js
 +++ b/chunk-node-80p7e6t6.js
-@@ -11368,6 +11368,39 @@ function packDrawOptions(border, shouldFill, titleAlignment, bottomTitleAlignmen
+@@ -11368,6 +11368,67 @@ function packDrawOptions(border, shouldFill, titleAlignment, bottomTitleAlignmen
    return packed;
  }
  
@@ -281,32 +393,60 @@ index 82915fa04684c45affab3b7297e8917f89dc5dc6..7136402aae1862fcd17212df5c4f10f0
 +    return { x: 0, y: 0, width: 0, height: 0 };
 +  return { x, y, width: right - x, height: bottom - y };
 +}
-+function clipBoxToScissor(options, scissor) {
-+  const box = { x: options.x, y: options.y, width: options.width, height: options.height, border: options.border, title: options.title, bottomTitle: options.bottomTitle };
++function borderCellsOutsideScissor(options, scissor, width, height) {
 +  if (scissor === undefined)
-+    return box;
-+  const clipped = intersectScissorRect(box, scissor);
-+  if (clipped.width === 0 || clipped.height === 0)
-+    return null;
-+  const top = clipped.y === box.y;
-+  const bottom = clipped.y + clipped.height === box.y + box.height;
-+  const left = clipped.x === box.x;
-+  const right = clipped.x + clipped.width === box.x + box.width;
-+  if (top && bottom && left && right)
-+    return box;
-+  const sides = box.border === true ? ["top", "right", "bottom", "left"] : Array.isArray(box.border) ? box.border : [];
-+  return {
-+    ...clipped,
-+    border: sides.filter((side) => side === "top" ? top : side === "bottom" ? bottom : side === "left" ? left : right),
-+    title: top ? box.title : undefined,
-+    bottomTitle: bottom ? box.bottomTitle : undefined
++    return [];
++  const left = Math.max(0, options.x);
++  const top = Math.max(0, options.y);
++  const right = Math.min(width - 1, options.x + options.width - 1);
++  const bottom = Math.min(height - 1, options.y + options.height - 1);
++  if (left > right || top > bottom)
++    return [];
++  const scissorRight = scissor.x + scissor.width - 1;
++  const scissorBottom = scissor.y + scissor.height - 1;
++  if (left >= scissor.x && right <= scissorRight && top >= scissor.y && bottom <= scissorBottom)
++    return [];
++  if (right < scissor.x || left > scissorRight || bottom < scissor.y || top > scissorBottom)
++    return [];
++  const cells = [];
++  const keep = (x, y) => {
++    if (x < scissor.x || x > scissorRight || y < scissor.y || y > scissorBottom)
++      cells.push(y * width + x);
 +  };
++  for (let x = left;x <= right; x++) {
++    if (top === options.y)
++      keep(x, top);
++    if (bottom === options.y + options.height - 1)
++      keep(x, bottom);
++  }
++  for (let y = top;y <= bottom; y++) {
++    if (left === options.x)
++      keep(left, y);
++    if (right === options.x + options.width - 1)
++      keep(right, y);
++  }
++  return cells;
++}
++function saveCells(buffers, cells) {
++  return cells.map((at) => ({ at, char: buffers.char[at], attributes: buffers.attributes[at], fg: buffers.fg.slice(at * 4, at * 4 + 4), bg: buffers.bg.slice(at * 4, at * 4 + 4) }));
++}
++function restoreBorderCells(buffers, saved, borderChars) {
++  for (const cell of saved) {
++    const { at } = cell;
++    const changed = buffers.char[at] !== cell.char || buffers.attributes[at] !== cell.attributes || buffers.fg.subarray(at * 4, at * 4 + 4).some((value, index) => value !== cell.fg[index]) || buffers.bg.subarray(at * 4, at * 4 + 4).some((value, index) => value !== cell.bg[index]);
++    if (!changed || !borderChars.includes(buffers.char[at]))
++      continue;
++    buffers.char[at] = cell.char;
++    buffers.attributes[at] = cell.attributes;
++    buffers.fg.set(cell.fg, at * 4);
++    buffers.bg.set(cell.bg, at * 4);
++  }
 +}
 +
  class OptimizedBuffer2 {
    static fbIdCounter = 0;
    id;
-@@ -11379,6 +11412,7 @@ class OptimizedBuffer2 {
+@@ -11379,6 +11440,7 @@ class OptimizedBuffer2 {
    respectAlpha = false;
    _rawBuffers = null;
    _destroyed = false;
@@ -314,17 +454,15 @@ index 82915fa04684c45affab3b7297e8917f89dc5dc6..7136402aae1862fcd17212df5c4f10f0
    get ptr() {
      return this.bufferPtr;
    }
-@@ -11619,19 +11653,25 @@ class OptimizedBuffer2 {
-     this.guard();
+@@ -11620,18 +11682,25 @@ class OptimizedBuffer2 {
      const style = parseBorderStyle2(options.borderStyle, "single");
      const borderChars = options.customBorderChars ?? BorderCharArrays2[style];
--    const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
--    this.lib.bufferDrawBox(this.bufferPtr, options.x, options.y, options.width, options.height, borderChars, packedOptions, options.borderColor, options.backgroundColor, options.titleColor ?? options.borderColor, options.title ?? null, options.bottomTitle ?? null);
-+    const box = clipBoxToScissor(options, this._scissorRects.at(-1));
-+    if (box === null)
-+      return;
-+    const packedOptions = packDrawOptions(box.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
-+    this.lib.bufferDrawBox(this.bufferPtr, box.x, box.y, box.width, box.height, borderChars, packedOptions, options.borderColor, options.backgroundColor, options.titleColor ?? options.borderColor, box.title ?? null, box.bottomTitle ?? null);
+     const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
++    const outside = borderCellsOutsideScissor(options, this._scissorRects.at(-1), this._width, this._height);
++    const saved = outside.length === 0 ? null : saveCells(this.buffers, outside);
+     this.lib.bufferDrawBox(this.bufferPtr, options.x, options.y, options.width, options.height, borderChars, packedOptions, options.borderColor, options.backgroundColor, options.titleColor ?? options.borderColor, options.title ?? null, options.bottomTitle ?? null);
++    if (saved !== null)
++      restoreBorderCells(this.buffers, saved, borderChars);
    }
    pushScissorRect(x, y, width, height) {
      this.guard();
