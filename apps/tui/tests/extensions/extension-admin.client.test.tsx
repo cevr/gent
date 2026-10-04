@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Option } from "effect"
+import { Deferred, Effect, Option, Predicate, Schema } from "effect"
 import type { ExtensionStatus } from "@gent/core/extensions/api"
 import extensionAdminClient, {
   extensionDetail,
@@ -9,7 +9,7 @@ import extensionAdminClient, {
   paneTitle,
 } from "../../src/extensions/extension-admin.client"
 import { renderFrame, renderScoped } from "../render-harness-boundary"
-import { waitForFrame } from "../helpers-boundary"
+import { waitForFrame, waitUntil } from "../helpers-boundary"
 import { makePaneSlot, provideClientServices } from "../extension-test-harness-boundary"
 
 // ── extensions pane ─────────────────────────────────────────────────────────
@@ -121,7 +121,18 @@ const openPane = (
 ) =>
   Effect.gen(function* () {
     const server = paneServer(extensions, afterChange)
-    const contributions = yield* provideClientServices(extensionAdminClient.setup, server.options)
+    const setup = yield* openPaneOn(server.options, width, height)
+    return { setup, server }
+  })
+
+/** The pane open at `width` columns over a server the test gives. */
+const openPaneOn = (
+  options: Parameters<typeof provideClientServices>[1],
+  width: number,
+  height = 30,
+) =>
+  Effect.gen(function* () {
+    const contributions = yield* provideClientServices(extensionAdminClient.setup, options)
     const command = Option.getOrThrow(Option.fromUndefinedOr(contributions.commands?.[0]))
     const widget = Option.getOrThrow(Option.fromUndefinedOr(contributions.widgets?.[0]))
     expect(command.slash).toBe("extensions")
@@ -129,7 +140,86 @@ const openPane = (
     const setup = yield* renderScoped(() => <Pane />, { width, height })
     command.onSelect()
     yield* waitForFrame(setup, (frame) => frame.includes("Extensions ·"), "the extensions pane")
-    return { setup, server }
+    return setup
+  })
+
+/** A change the server refuses, in its own words. */
+class PaneRefusal extends Schema.TaggedError<PaneRefusal>()("PaneRefusal", {
+  message: Schema.String,
+}) {}
+
+/**
+ * A server that answers as the real one: a change reads and writes one
+ * status, `reload` refuses an extension that is off, and each `set-enabled`
+ * waits for the test to let it end.
+ */
+const statefulServer = (initial: ExtensionStatus) =>
+  Effect.sync(() => {
+    const gates: Array<Deferred.Deferred<void>> = []
+    const requests: Array<{ readonly capabilityId: string; readonly input: unknown }> = []
+    let current = initial
+    const turnedOn: ExtensionStatus = {
+      _tag: "Active",
+      id: initial.id,
+      scope: initial.scope,
+      sourcePath: initial.sourcePath,
+      version: "0123456789abcdef0123",
+    }
+    const turnedOff: ExtensionStatus = {
+      _tag: "Disabled",
+      id: initial.id,
+      scope: initial.scope,
+      sourcePath: initial.sourcePath,
+    }
+    const answer = (request: {
+      readonly capabilityId: string
+      readonly input: unknown
+    }): Effect.Effect<unknown, PaneRefusal> =>
+      Effect.gen(function* () {
+        requests.push({ capabilityId: request.capabilityId, input: request.input })
+        if (request.capabilityId === "extensions.pane.set-enabled") {
+          const gate = yield* Deferred.make<void>()
+          gates.push(gate)
+          yield* Deferred.await(gate)
+          const on =
+            Predicate.hasProperty(request.input, "enabled") && request.input.enabled === true
+          current = turnedOff
+          let verb = "Disabled"
+          if (on) {
+            current = turnedOn
+            verb = "Enabled"
+          }
+          return {
+            detail: `${verb} ${initial.id} in /home/u/.gent/config.json.`,
+            extensions: [current],
+          }
+        }
+        if (request.capabilityId === "extensions.pane.reload") {
+          if (current._tag === "Disabled") {
+            return yield* new PaneRefusal({
+              message: `${initial.id} is off in a config: turn it on to set it up`,
+            })
+          }
+          return {
+            detail: `Set ${initial.id} up again; the next turn runs the new setup.`,
+            extensions: [current],
+          }
+        }
+        return { detail: "", extensions: [current] }
+      })
+    return {
+      requests,
+      /** Let the oldest waiting `set-enabled` end, once one waits. */
+      release: Effect.gen(function* () {
+        yield* waitUntil(() => gates.length > 0, "a set-enabled waits")
+        const gate = yield* Effect.fromOption(Option.fromUndefinedOr(gates.shift()))
+        yield* Deferred.succeed(gate, void 0)
+      }),
+      options: {
+        requestEffect: answer,
+        shell: { pane: makePaneSlot(), reloadExtensions: () => {} },
+      },
+    }
   })
 
 describe("extensions pane", () => {
@@ -151,7 +241,9 @@ describe("extensions pane", () => {
           (text) => text.includes("Disabled @user/notes in /home/u/.gent/config.json."),
           "the toggle's reply",
         )
-        expect(server.requests.at(1)).toEqual({
+        expect(
+          server.requests.find((request) => request.capabilityId === "extensions.pane.set-enabled"),
+        ).toEqual({
           capabilityId: "extensions.pane.set-enabled",
           input: { id: "@user/notes", enabled: false },
         })
@@ -212,6 +304,55 @@ describe("extensions pane", () => {
           "the failed row in view on a short terminal",
         )
       }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // Keys the reader presses while a change runs act after it, in order,
+  // each on the state the change before it left, and each reply shows.
+  it.scopedLive("a reload pressed while a turn-on runs waits for it, and both replies show", () =>
+    Effect.gen(function* () {
+      const server = yield* statefulServer(disabled)
+      const setup = yield* openPaneOn(server.options, 120)
+      yield* waitForFrame(setup, (text) => text.includes("project · off"), "the row")
+      setup.mockInput.pressKey(" ")
+      setup.mockInput.pressKey("r")
+      yield* server.release
+      yield* waitForFrame(
+        setup,
+        (text) =>
+          text.includes("Enabled @project/off") && text.includes("Set @project/off up again"),
+        "both replies",
+      )
+      expect(renderFrame(setup)).not.toContain("is off in a config")
+      const changes = server.requests
+        .map((request) => request.capabilityId)
+        .filter((id) => id !== "extensions.pane.status")
+      expect(changes).toEqual(["extensions.pane.set-enabled", "extensions.pane.reload"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("two presses of space turn an extension on and then off again", () =>
+    Effect.gen(function* () {
+      const server = yield* statefulServer(disabled)
+      const setup = yield* openPaneOn(server.options, 120)
+      yield* waitForFrame(setup, (text) => text.includes("project · off"), "the row")
+      setup.mockInput.pressKey(" ")
+      setup.mockInput.pressKey(" ")
+      yield* server.release
+      yield* server.release
+      yield* waitForFrame(
+        setup,
+        (text) => text.includes("Disabled @project/off") && text.includes("project · off"),
+        "the second reply",
+      )
+      expect(
+        server.requests
+          .filter((request) => request.capabilityId === "extensions.pane.set-enabled")
+          .map((request) => request.input),
+      ).toEqual([
+        { id: "@project/off", enabled: true },
+        { id: "@project/off", enabled: false },
+      ])
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.scopedLive(

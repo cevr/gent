@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Effect, Match, Option } from "effect"
+import { Effect, Match, Option, Queue } from "effect"
 import { createEffect, createSignal, on, Show } from "solid-js"
 import { type ExtensionStatus, ref } from "@gent/core/extensions/api"
 import { EXTENSION_ADMIN_EXTENSION_ID, ExtensionAdminRpc } from "@gent/extensions/client"
@@ -33,7 +33,8 @@ import {
  * the version it runs. `space` turns the extension off or on and `r` sets it
  * up again: each is the reader's own act, so it asks nothing, and the client
  * extensions load again after it (`shell.reloadExtensions`), so a client half
- * follows its server half. `enter` shows a failure's whole text.
+ * follows its server half. Changes run one at a time, in key order, each on
+ * the status the one before it left. `enter` shows a failure's whole text.
  *
  * The pane is the client half of `@gent/extension-admin`; the agent reaches
  * the same changes through that extension's tools, which ask.
@@ -151,8 +152,11 @@ interface ExtensionsController {
   readonly loading: () => boolean
   /** A failed read or a refused change, newest first. */
   readonly error: () => Option.Option<string>
-  /** What the last change did, on the row it changed, until the pane closes. */
-  readonly note: () => Option.Option<ChangeNote>
+  /**
+   * What the last changes did, each on the row it changed, until the pane
+   * closes: the replies of changes pressed while one ran stay together.
+   */
+  readonly notes: () => ReadonlyArray<ChangeNote>
   readonly clearNote: () => void
   readonly refresh: () => void
   readonly toggle: (status: ExtensionStatus) => void
@@ -167,10 +171,18 @@ interface ChangeNote {
   readonly text: string
 }
 
+/** A change the reader pressed: the row, and the request it makes on the row's current status. */
+interface PendingChange {
+  readonly status: ExtensionStatus
+  readonly act: (
+    current: ExtensionStatus,
+  ) => Effect.Effect<{ readonly detail: string }, { readonly message: string }>
+}
+
 const noStatuses: ReadonlyArray<ExtensionStatus> = []
 
 const makeExtensionsController = Effect.gen(function* () {
-  const { transport, shell } = yield* ClientContext
+  const { transport, shell, lifecycle } = yield* ClientContext
   const statuses = yield* sessionQuery({
     initial: noStatuses,
     follow: false,
@@ -179,52 +191,89 @@ const makeExtensionsController = Effect.gen(function* () {
         .request(ref(ExtensionAdminRpc.Status), {}, session)
         .pipe(Effect.map((output) => output.extensions)),
   })
-  const [note, setNote] = createSignal(Option.none<ChangeNote>())
+  const [notes, setNotes] = createSignal<ReadonlyArray<ChangeNote>>([])
   const [changeError, setChangeError] = createSignal(Option.none<string>())
+  /** The row's status as the server holds it now, or as the pane last read it. */
+  const currentStatus = (status: ExtensionStatus) =>
+    transport
+      .request(ref(ExtensionAdminRpc.Status), {})
+      .pipe(
+        Effect.map((output) =>
+          Option.getOrElse(
+            Option.fromUndefinedOr(
+              output.extensions.find((current) => statusKey(current) === statusKey(status)),
+            ),
+            () => status,
+          ),
+        ),
+      )
 
-  /** Run a change; its reply is the row's note, and the pane and the client extensions read again. */
-  const change = (
-    status: ExtensionStatus,
-    request: Effect.Effect<{ readonly detail: string }, { readonly message: string }>,
-  ) =>
-    shell.cast(
-      request.pipe(
-        Effect.match({
-          onFailure: (failure) => {
-            setNote(Option.none())
-            setChangeError(Option.some(failure.message))
-          },
-          onSuccess: (output) => {
-            setChangeError(Option.none())
-            setNote(Option.some({ key: statusKey(status), text: output.detail }))
-            statuses.refresh()
-            shell.reloadExtensions()
-          },
-        }),
-      ),
+  /**
+   * Run one change on the row's status as the changes before it left it.
+   * Its reply joins the row's notes; the first change of a run starts them
+   * again. The pane and the client extensions read again after each.
+   */
+  const runChange = (pending: PendingChange, first: boolean) =>
+    currentStatus(pending.status).pipe(
+      Effect.flatMap(pending.act),
+      Effect.match({
+        onFailure: (failure) => {
+          if (first) setNotes([])
+          setChangeError(Option.some(failure.message))
+        },
+        onSuccess: (output) => {
+          if (first) setChangeError(Option.none())
+          const note = { key: statusKey(pending.status), text: output.detail }
+          setNotes((current) => [...current.filter(() => !first), note])
+          statuses.refresh()
+          shell.reloadExtensions()
+        },
+      }),
     )
+
+  // One change at a time, in the order the keys came: each acts on the
+  // status the change before it left, so `space` then `r` on an extension
+  // that is off turns it on and then sets it up. The changes pressed while
+  // one runs make one run, and every reply of the run shows, a refusal
+  // included.
+  const mailbox = yield* Queue.unbounded<PendingChange>()
+  const runChanges = Effect.gen(function* () {
+    let next = Option.some(yield* Queue.take(mailbox))
+    let first = true
+    while (Option.isSome(next)) {
+      yield* runChange(next.value, first)
+      first = false
+      next = yield* Queue.poll(mailbox)
+    }
+  }).pipe(Effect.forever)
+  yield* lifecycle.scoped(Effect.forkScoped(runChanges))
+
+  const change = (status: ExtensionStatus, act: PendingChange["act"]) => {
+    Queue.offerUnsafe(mailbox, { status, act })
+  }
 
   return {
     extensions: statuses.value,
     loading: statuses.loading,
     error: () => Option.orElse(changeError(), statuses.error),
-    note,
-    clearNote: () => setNote(Option.none()),
+    notes,
+    clearNote: () => setNotes([]),
     refresh: () => {
-      setNote(Option.none())
+      setNotes([])
       setChangeError(Option.none())
       statuses.refresh()
     },
     toggle: (status) =>
-      change(
-        status,
+      change(status, (current) =>
         transport.request(ref(ExtensionAdminRpc.SetEnabled), {
-          id: status.id,
-          enabled: status._tag === "Disabled",
+          id: current.id,
+          enabled: current._tag === "Disabled",
         }),
       ),
     reload: (status) =>
-      change(status, transport.request(ref(ExtensionAdminRpc.Reload), { id: status.id })),
+      change(status, (current) =>
+        transport.request(ref(ExtensionAdminRpc.Reload), { id: current.id }),
+      ),
     open: () => shell.pane.isOpen(EXTENSIONS_PANE),
     close: () => shell.pane.close(EXTENSIONS_PANE),
   } satisfies ExtensionsController
@@ -285,14 +334,18 @@ function ExtensionsPane(props: { readonly controller: ExtensionsController }) {
         muted: () => status._tag === "Disabled",
       }),
     )
-  // A change's note shows on its row; the rows read again after the change
+  // A change's notes show on its row; the rows read again after the change
   // can pass the cursor over another row first.
   const detail = () =>
     Option.flatMap(cursor(), (status) =>
       Option.orElse(
-        Option.map(
-          Option.filter(controller.note(), (note) => note.key === statusKey(status)),
-          (note) => note.text,
+        Option.liftPredicate(
+          controller
+            .notes()
+            .filter((note) => note.key === statusKey(status))
+            .map((note) => note.text)
+            .join(" · "),
+          (text) => text.length > 0,
         ),
         () => Option.some(extensionDetail(status)),
       ),
