@@ -237,6 +237,59 @@ describe("E2E: Terminal handover", () => {
     TEST_TIMEOUT,
   )
 
+  // The terminal's signal keys belong to the program it was handed to: the
+  // program runs in the terminal's foreground group, and gent lets ctrl+\ and
+  // ctrl+c pass while it waits, as a shell's `system()` does.
+  it.scopedLive(
+    "ctrl+\\ and ctrl+c during a handover reach the program, and gent takes the terminal back",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* makeTempDirectoryScoped("gent-e2e-signals-")
+        const editor = `${dir}/editor`
+        yield* fs.writeFileString(
+          editor,
+          [
+            "#!/bin/sh",
+            "trap 'printf \"EDITOR-SIGQUIT\\n\"' QUIT",
+            'trap \'printf "edited after ctrl+c" > "$1"; exit 0\' INT',
+            "printf 'EDITOR-WAITING\\n'",
+            "while :; do sleep 1; done",
+            "",
+          ].join("\n"),
+        )
+        yield* fs.chmod(editor, 0o755)
+        const ctx = yield* seedAndSpawn(["--mock-empty"], DEFAULT_PTY_SIZE, {
+          VISUAL: editor,
+          EDITOR: editor,
+        })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        ctx.pty.write("draft")
+        yield* settlePty(ctx, REPAINT)
+        ctx.pty.write(keys["ctrl+g"])
+        yield* ptyWaitFor(ctx, "EDITOR-WAITING", { timeout: 10_000 })
+        ctx.pty.write(keys["ctrl+\\"])
+        yield* ptyWaitFor(ctx, "EDITOR-SIGQUIT", { timeout: 5_000 })
+        ctx.pty.write(keys["ctrl+c"])
+        yield* screenWaitFor(
+          ctx,
+          (visible) =>
+            visible.some((line) => line.includes("┃ edited after ctrl+c")) &&
+            visible.some((line) => line.includes("ready")),
+          { timeout: 10_000, label: "the screen back with the edit in the composer" },
+        )
+        // Gent is alive: the composer still takes keys.
+        ctx.pty.write(" and more")
+        yield* screenWaitFor(
+          ctx,
+          (visible) => visible.some((line) => line.includes("┃ edited after ctrl+c and more")),
+          { timeout: 5_000, label: "the composer takes keys after the handover" },
+        )
+        expect(yield* exitWithin(ctx.pty.exited, "1 second")).toEqual(Option.none())
+      }).pipe(Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
+
   // `@gent/git` runs `hunk` from PATH; a stand-in prints its arguments and exits.
   it.scopedLive(
     "/diff hands the terminal to hunk and takes it back",

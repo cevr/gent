@@ -1,7 +1,7 @@
 import { Context, Effect, FileSystem, Layer, Option, Schema, Semaphore } from "effect"
 import { GentPlatform } from "@gent/core/host"
 import { runProcess } from "@gent/core/extensions/api"
-import type { ChildProcessSpawner } from "effect/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { createContext } from "solid-js"
 import { useRequiredContext } from "./utils"
 
@@ -75,8 +75,63 @@ export class LinkOpener extends Context.Service<LinkOpener, LinkOpenerService>()
  * the terminal itself (an editor, a diff viewer) runs inside one. The verb is
  * the host's: the editor uses it, and a client extension reaches it as
  * `ClientShell.handover`.
+ *
+ * The terminal's signal keys go to the program, as they do for a program a
+ * shell runs: each process the effect spawns joins gent's process group (the
+ * terminal's foreground group), and gent lets ctrl+c and ctrl+\ pass until
+ * the terminal is back.
  */
-export type Handover = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+export type Handover = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+) => Effect.Effect<A, E, R | ChildProcessSpawner.ChildProcessSpawner>
+
+/**
+ * The signals a terminal's keys send its foreground group: ctrl+c (SIGINT)
+ * and ctrl+\ (SIGQUIT). While a program holds the terminal they are the
+ * program's, and gent lets them pass, as POSIX `system()` and git's editor
+ * launch do. Ctrl+z (SIGTSTP) keeps its default: the shell stops gent and the
+ * program together, and `fg` resumes both. Held, it would stop the program
+ * alone while gent waits for it, and nothing would hold the terminal.
+ */
+const TERMINAL_SIGNALS = ["SIGINT", "SIGQUIT"] as const
+
+/**
+ * Take the process's listeners of the terminal signals off until `effect`
+ * ends, however it ends, and let the signals pass meanwhile. The passing
+ * listener goes on before the others come off: a signal with no listener
+ * would end gent.
+ */
+const passTerminalSignals = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const pass = () => {}
+      return TERMINAL_SIGNALS.map((signal) => {
+        const listeners = process.listeners(signal)
+        process.on(signal, pass)
+        for (const listener of listeners) process.removeListener(signal, listener)
+        return { signal, listeners, pass }
+      })
+    }),
+    () => effect,
+    (held) =>
+      Effect.sync(() => {
+        for (const { signal, listeners, pass } of held) {
+          for (const listener of listeners) process.on(signal, listener)
+          process.removeListener(signal, pass)
+        }
+      }),
+  )
+
+/** `command` with each of its processes in gent's process group, not a session of its own. */
+const inForeground = (command: ChildProcess.Command): ChildProcess.Command => {
+  if (ChildProcess.isStandardCommand(command))
+    return ChildProcess.make(command.command, command.args, { ...command.options, detached: false })
+  return ChildProcess.pipeTo(
+    inForeground(command.left),
+    inForeground(command.right),
+    command.options,
+  )
+}
 
 /**
  * One terminal, one holder: a handover asked for while another runs waits
@@ -89,10 +144,15 @@ export const makeHandover = (terminal: {
 }): Handover => {
   const holder = Semaphore.makeUnsafe(1)
   return (effect) =>
-    Effect.acquireUseRelease(
-      Effect.sync(terminal.suspend),
-      () => effect,
-      () => Effect.sync(terminal.resume),
+    passTerminalSignals(
+      Effect.acquireUseRelease(
+        Effect.sync(terminal.suspend),
+        () =>
+          Effect.updateService(effect, ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
+            ChildProcessSpawner.make((command) => spawner.spawn(inForeground(command))),
+          ),
+        () => Effect.sync(terminal.resume),
+      ),
     ).pipe(holder.withPermits(1))
 }
 

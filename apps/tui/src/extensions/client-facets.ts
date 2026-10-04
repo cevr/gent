@@ -406,8 +406,9 @@ export interface ClientShell {
    * on the terminal itself (`runProcess` with inherited stdio): the renderer
    * suspends first and resumes when the effect ends, however it ends. One
    * handover runs at a time, the host's editor included; a second waits.
-   * Keys go to the program while it runs, and transcript rows a running turn
-   * commits meanwhile land on the return.
+   * Keys go to the program while it runs, ctrl+c and ctrl+\ included (each
+   * process the effect spawns joins the terminal's foreground group), and
+   * transcript rows a running turn commits meanwhile land on the return.
    */
   readonly handover: Handover
   /**
