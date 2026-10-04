@@ -329,8 +329,11 @@ export const ScreenshotTool = tool({
 label. It reads the format and size from the image's own header and takes
 PNG, JPEG, GIF and WebP up to 3.75 MiB and 8,000 pixels a side; anything
 else fails with `ToolImageError`, so an image the model API would refuse
-never enters a session. The stored tool result stays ordinary JSON. A server
-start removes a blob nobody saved or sent for 14 days.
+never enters a session. The stored tool result stays ordinary JSON. Each
+request reads the bytes back and sends the image right after the tool
+result, under the line `Image from <tool> <source> <width>x<height>:`. A model
+the catalog says reads no images gets a line that names the image instead. A
+server start removes a blob nobody saved or sent for 14 days.
 
 ### request — extension-to-extension RPC
 

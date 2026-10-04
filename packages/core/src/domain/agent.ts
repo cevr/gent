@@ -90,6 +90,12 @@ export class Model extends Schema.Class<Model>("Model")({
    */
   efforts: Schema.optional(Schema.Array(ReasoningEffort)),
   /**
+   * Whether the model reads images, as the catalog says (`modalities.input`).
+   * False: a request sends a line in place of each tool image. Absent when
+   * the catalog does not say: the request sends the images.
+   */
+  imageInput: Schema.optional(Schema.Boolean),
+  /**
    * How long the provider keeps a request's prompt cached after the request,
    * in milliseconds, as the model's driver says. A turn that starts on a large
    * window after it lapsed hands the window off first (`projectContextWindow`),

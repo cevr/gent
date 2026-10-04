@@ -2,21 +2,35 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
   Clock,
+  Context,
+  Crypto,
   Effect,
   Exit,
   Fiber,
   FileSystem,
+  Layer,
   Option,
   Path,
   Predicate,
   Schema,
   Stream,
+  SynchronizedRef,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
+import { LanguageModel } from "effect/ai"
+import * as Prompt from "effect/ai/Prompt"
+import type { ChildProcessSpawner } from "effect/process"
 import {
+  AgentDefinition,
   defineExtension,
   ExtensionHost,
+  isRecord,
+  isRecordArray,
+  Model,
+  ModelId,
   omitUndefined,
+  ProviderAuthInfo,
+  ProviderId,
   saveToolImage,
   tool,
   ToolImage,
@@ -27,12 +41,25 @@ import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
   runToolWithCtx,
+  type SequenceStep,
   testAgent,
   testToolContext,
   textStep,
   toolCallStep,
   waitFor,
 } from "@gent/core/test-utils"
+import {
+  AnthropicPlatform,
+  buildAnthropicModelDriver,
+  type ClaudeCredentials,
+} from "../src/anthropic.js"
+import { buildOpenAIModelDriver, type OpenAICredentials } from "../src/openai.js"
+import {
+  CHAT_COMPLETIONS_CLASS,
+  type CredentialCacheCell,
+  EMPTY_CREDENTIAL_CELL,
+} from "../src/providers.js"
+import { fakeFetchLayer, makeFakeFetchState } from "./helpers/fake-http-client.js"
 
 // ── image fixtures ──────────────────────────────────────────────────────────
 
@@ -332,6 +359,308 @@ describe("tool images through a turn", () => {
         })
         yield* waitFor(fs.exists(old), (exists) => !exists, 5_000, "the old blob removed")
         expect(yield* fs.exists(recent)).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    15_000,
+  )
+})
+
+// ── request ─────────────────────────────────────────────────────────────────
+
+/** The image the tool saves from the `index`th path of a turn. */
+const shotBytes = (index: number) => pngBytes(64, 32, 11 + index)
+const SHOT = shotBytes(0)
+const SHOT_DATA = base64(SHOT)
+
+/**
+ * One turn: the model calls `save_image` once for each path in `paths`, one
+ * call a step, then answers. Returns the prompt of each request, in order.
+ * Each path is a copy of `SHOT` with its own filler, written in the cwd.
+ */
+const imageTurn = Effect.fn("test.imageTurn")(function* (params: {
+  readonly paths: ReadonlyArray<string>
+  readonly agent?: AgentDefinition
+  readonly models?: ReadonlyArray<Model>
+}) {
+  const home = yield* makeTempDirectoryScoped("tool-image-request-home-")
+  const cwd = yield* makeTempDirectoryScoped("tool-image-request-cwd-")
+  const fs = yield* FileSystem.FileSystem
+  for (const [index, path] of params.paths.entries()) {
+    yield* fs.writeFile(`${cwd}/${path}`, shotBytes(index))
+  }
+  const prompts: Array<Prompt.Prompt> = []
+  const seen: SequenceStep["assertOptions"] = (options) => {
+    prompts.push(options.prompt)
+  }
+  const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+    ...params.paths.map((path) => ({
+      ...toolCallStep("save_image", { path }),
+      assertOptions: seen,
+    })),
+    { ...textStep("Saw them."), assertOptions: seen },
+  ])
+  const { client, sessionId, branchId } = yield* createRpcHarness({
+    agents: [params.agent ?? testAgent],
+    extensionInputs: [saveImageExtension],
+    providerLayer,
+    home,
+    cwd,
+    ...omitUndefined({ models: params.models }),
+  })
+  const turn = yield* client.session.events({ sessionId, branchId }).pipe(
+    Stream.map(({ event }) => event),
+    Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+    Stream.runDrain,
+    Effect.forkScoped,
+  )
+  yield* client.message.send({ sessionId, branchId, content: "look at the screens" })
+  yield* Fiber.join(turn)
+  yield* controls.assertDone
+  const stored = yield* client.message.list({ branchId })
+  return { prompts, stored }
+})
+
+/** The message after the last tool message of `prompt`, and that tool message. */
+const afterLastToolMessage = (prompt: Prompt.Prompt) => {
+  const index = prompt.content.findLastIndex((message) => message.role === "tool")
+  return {
+    tool: Option.fromUndefinedOr(prompt.content[index]),
+    next: Option.fromUndefinedOr(prompt.content[index + 1]),
+  }
+}
+
+/** The parts of a user message, as the type and the text or data each carries. */
+const partsOf = (message: Option.Option<Prompt.Message>) => {
+  if (Option.isNone(message) || message.value.role !== "user") return []
+  return message.value.content.map((part) => {
+    if (part.type === "text") return { type: "text", value: part.text }
+    if (Predicate.isString(part.data)) return { type: part.type, value: part.data }
+    return { type: part.type, value: "<bytes>" }
+  })
+}
+
+// The real drivers: each sends the prompt the turn built, through a fake fetch.
+
+const apiKey = ProviderAuthInfo.cases.Api.make({ key: "image-test-key" })
+
+const anthropicModel = Effect.gen(function* () {
+  const credentialCellRef =
+    yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+  const services = Context.add(
+    yield* Effect.context<
+      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
+    >(),
+    AnthropicPlatform,
+    AnthropicPlatform.of({ platform: "darwin", home: "/nonexistent/gent-test-home", env: {} }),
+  )
+  const driver = buildAnthropicModelDriver(credentialCellRef, Option.none(), services, "1h")
+  return yield* driver.resolveModel("claude-sonnet-4-5", apiKey)
+}).pipe(Effect.provide(BunServices.layer))
+
+const responsesModel = Effect.gen(function* () {
+  const credentialCellRef =
+    yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+  const driver = buildOpenAIModelDriver(
+    credentialCellRef,
+    new Map(),
+    Option.none(),
+    yield* Crypto.Crypto,
+  )
+  return yield* driver.resolveModel("gpt-5.4", apiKey)
+}).pipe(Effect.provide(BunServices.layer))
+
+const chatCompletionsModel = CHAT_COMPLETIONS_CLASS.resolveModel({
+  providerId: "compat",
+  model: { id: "vision-chat", name: "Vision chat" },
+  apiKey: Option.some("image-test-key"),
+  baseUrl: Option.some("https://chat.example.test/v1"),
+  transformClient: Option.none(),
+  hints: Option.none(),
+})
+
+/** The JSON body `model` sends for `prompt`; the fake answers 400, so nothing streams back. */
+const requestBody = (
+  model: Layer.Layer<LanguageModel.LanguageModel>,
+  prompt: Prompt.Prompt,
+): Effect.Effect<Schema.Json> =>
+  Effect.gen(function* () {
+    const state = makeFakeFetchState()
+    yield* LanguageModel.streamText({ prompt }).pipe(
+      Stream.runDrain,
+      Effect.provide(
+        Layer.provideMerge(
+          model,
+          fakeFetchLayer(state, () => ({ status: 400, body: '{"error":"refused by the test"}' })),
+        ),
+      ),
+      Effect.exit,
+    )
+    return decodeJson(state.captured[0]?.body ?? "null")
+  })
+
+const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))
+
+/** The items of `body[key]`, as JSON objects. */
+const itemsOf = (
+  body: Schema.Json | Record<string, Schema.Json>,
+  key: string,
+): ReadonlyArray<Record<string, Schema.Json>> => {
+  if (!isRecord(body)) return []
+  const items = body[key]
+  if (!isRecordArray(items)) return []
+  return items.map((item) => decodeObject(item))
+}
+const decodeObject = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))
+
+describe("tool images in a request", () => {
+  it.scopedLive(
+    "the step after an image tool sends the image in a user message after the result",
+    () =>
+      Effect.gen(function* () {
+        const { prompts } = yield* imageTurn({ paths: ["shot.png"] })
+        expect(prompts).toHaveLength(2)
+        // The first request has no tool result yet.
+        expect(prompts[0]?.content.some((message) => message.role === "tool")).toBe(false)
+        const { tool, next } = afterLastToolMessage(prompts[1] ?? Prompt.empty)
+        expect(Option.map(tool, (message) => message.role)).toEqual(Option.some("tool"))
+        expect(partsOf(next)).toEqual([
+          { type: "text", value: "Image from save_image shot.png 64x32:" },
+          { type: "file", value: `data:image/png;base64,${SHOT_DATA}` },
+        ])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "each real driver sends the image where its API takes one",
+    () =>
+      Effect.gen(function* () {
+        const { prompts } = yield* imageTurn({ paths: ["shot.png"] })
+        const prompt = prompts[1] ?? Prompt.empty
+        const dataUrl = `data:image/png;base64,${SHOT_DATA}`
+
+        // Messages: the image joins the tool result in one user turn.
+        const anthropic = itemsOf(yield* requestBody(yield* anthropicModel, prompt), "messages")
+        const resultTurn = anthropic.find(
+          (message) =>
+            isRecordArray(message["content"]) &&
+            message["content"].some((block) => block["type"] === "tool_result"),
+        )
+        expect(resultTurn?.["role"]).toBe("user")
+        const blocks = itemsOf(resultTurn ?? {}, "content")
+        expect(blocks.map((block) => block["type"])).toEqual(["tool_result", "text", "image"])
+        expect(blocks[1]?.["text"]).toBe("Image from save_image shot.png 64x32:")
+        expect(blocks[2]?.["source"]).toEqual({
+          type: "base64",
+          media_type: "image/png",
+          data: SHOT_DATA,
+        })
+
+        // Responses: a user input_image right after the function call output.
+        const responses = itemsOf(yield* requestBody(yield* responsesModel, prompt), "input")
+        const output = responses.findIndex((item) => item["type"] === "function_call_output")
+        expect(output).toBeGreaterThan(-1)
+        const imageItem = responses[output + 1]
+        expect(imageItem?.["role"]).toBe("user")
+        expect(itemsOf(imageItem ?? {}, "content")).toEqual([
+          { type: "input_text", text: "Image from save_image shot.png 64x32:" },
+          { type: "input_image", image_url: dataUrl, detail: "auto" },
+        ])
+
+        // Chat Completions: a user image_url message right after the tool message.
+        const chat = itemsOf(yield* requestBody(yield* chatCompletionsModel, prompt), "messages")
+        const toolMessage = chat.findIndex((message) => message["role"] === "tool")
+        expect(toolMessage).toBeGreaterThan(-1)
+        const imageMessage = chat[toolMessage + 1]
+        expect(imageMessage?.["role"]).toBe("user")
+        expect(itemsOf(imageMessage ?? {}, "content")).toEqual([
+          { type: "text", text: "Image from save_image shot.png 64x32:" },
+          { type: "image_url", image_url: { url: dataUrl, detail: "auto" } },
+        ])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a model the catalog says reads no images gets a line in place of each",
+    () =>
+      Effect.gen(function* () {
+        const blind = ModelId.make("test/blind")
+        const { prompts } = yield* imageTurn({
+          paths: ["shot.png"],
+          agent: AgentDefinition.make({ name: testAgent.name, description: "Blind", model: blind }),
+          models: [
+            Model.make({
+              id: blind,
+              name: "Blind",
+              provider: ProviderId.make("test"),
+              contextLength: 200_000,
+              imageInput: false,
+            }),
+          ],
+        })
+        const { next } = afterLastToolMessage(prompts[1] ?? Prompt.empty)
+        expect(partsOf(next)).toEqual([
+          {
+            type: "text",
+            value: "[image not shown: this model takes no image input: save_image shot.png 64x32]",
+          },
+        ])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "an image whose blob is gone gets a line in its place",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("tool-image-gone-home-")
+        const prompts: Array<Prompt.Prompt> = []
+        const seen: SequenceStep["assertOptions"] = (options) => {
+          prompts.push(options.prompt)
+        }
+        // The tool saves the image, then removes its blob before the next step reads it.
+        const GoneTool = tool({
+          id: "save_image",
+          description: "Save an image, then lose it",
+          params: Schema.Struct({}),
+          output: Schema.Struct({ image: ToolImage }),
+          execute: () =>
+            Effect.gen(function* () {
+              const image = yield* saveToolImage({ bytes: SHOT, source: "lost.png" })
+              const fs = yield* FileSystem.FileSystem
+              yield* fs.remove(`${home}/.gent/blobs/${image.sha256}.png`).pipe(Effect.orDie)
+              return { image }
+            }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          { ...toolCallStep("save_image", {}), assertOptions: seen },
+          { ...textStep("Gone."), assertOptions: seen },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          extensionInputs: [
+            defineExtension({
+              id: "image-loser",
+              setup: Effect.gen(function* () {
+                const host = yield* ExtensionHost
+                yield* host.register("tool", GoneTool)
+              }),
+            }),
+          ],
+          providerLayer,
+          home,
+        })
+        const turn = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+          Stream.runDrain,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "lose it" })
+        yield* Fiber.join(turn)
+        const { next } = afterLastToolMessage(prompts[1] ?? Prompt.empty)
+        expect(partsOf(next)).toEqual([
+          { type: "text", value: "[image no longer stored: save_image lost.png 64x32]" },
+        ])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     15_000,
   )

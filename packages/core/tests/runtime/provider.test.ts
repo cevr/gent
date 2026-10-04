@@ -2878,11 +2878,13 @@ describe("models.dev catalog source", () => {
                   { type: "unknown-kind" },
                 ],
                 interleaved: { field: "reasoning_content" },
+                modalities: { input: ["text", "image", "pdf"], output: ["text"] },
                 // models.dev names the wire protocol `shape`.
                 provider: { npm: "@ai-sdk/openai-compatible", ["shape"]: "completions" },
               },
+              "text-only": { name: "Text only", modalities: { input: ["text"] } },
               // An odd field drops itself, never the model.
-              odd: { name: 42, limit: "big", tool_call: "yes" },
+              odd: { name: 42, limit: "big", tool_call: "yes", modalities: { input: "image" } },
               "not-an-object": 7,
             },
           },
@@ -2910,11 +2912,17 @@ describe("models.dev catalog source", () => {
           reasoningField: "reasoning_content",
           npm: "@ai-sdk/openai-compatible",
           protocol: "completions",
+          imageInput: true,
         },
+        { id: "text-only", name: "Text only", imageInput: false },
         { id: "odd", name: "odd" },
         // The decision source's models follow the chat models of the same provider.
         { id: "judge", name: "Judge", decision: true },
       ])
+      // The model says whether it reads images; absent when the catalog does not say.
+      expect(
+        models.map((entry) => Option.fromUndefinedOr(modelFromCatalog("openai", entry).imageInput)),
+      ).toEqual([Option.some(true), Option.some(false), Option.none(), Option.none()])
       expect(catalog.providerIds).toEqual(["openai"])
       expect(Option.isNone(catalog.provider("absent"))).toBe(true)
     }),

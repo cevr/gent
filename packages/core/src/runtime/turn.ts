@@ -160,7 +160,7 @@ import {
   ToolInteractionPending,
   type TurnInterruption,
 } from "./tools.js"
-import { ConfigService, type UserConfig } from "./config.js"
+import { ConfigService, RuntimeEnvironment, type UserConfig } from "./config.js"
 import { type AgentLoopError, asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
   driverCacheWritesByLifetime,
@@ -196,9 +196,11 @@ import {
   projectCurrentWindow,
   type PromptCache,
   type StepMeasure,
+  toolImagePrompt,
   toPrompt,
   turnNoticesText,
 } from "./model-context.js"
+import { toolImageDirectory } from "./tool-image.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { LoopInbox } from "./agent-loop.js"
 
@@ -2790,10 +2792,18 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   )
   // The provider sees each tool under its wire name, in the declarations and
   // in the conversation's calls; the reply's parts name the tool ids again.
+  // Each tool image goes after its result, from the blob store: the stored
+  // result holds only its reference.
+  const toolImages = yield* toolImagePrompt({
+    messages: projection.messages,
+    model: modelOption.value,
+    directory: yield* toolImageDirectory((yield* RuntimeEnvironment).home),
+  })
   const prompt = toWirePrompt(
     toPrompt(projection.messages, {
       systemPrompt: resolved.systemPrompt,
       notices: requestNotices(resolved),
+      toolImages,
     }),
   )
   // The effort each assistant run of this prompt was sent at, by its

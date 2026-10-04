@@ -484,6 +484,8 @@ export const CatalogModel = Schema.Struct({
   protocol: Schema.optional(Schema.String),
   /** True for a decision model (`type: "decision"`): it answers typed decisions, never a turn. */
   decision: Schema.optional(Schema.Boolean),
+  /** Whether `modalities.input` lists `image`; absent when the entry names no input modalities. */
+  imageInput: Schema.optional(Schema.Boolean),
 })
 export type CatalogModel = typeof CatalogModel.Type
 
@@ -552,6 +554,7 @@ export const modelFromCatalog = (
       ),
       releaseDate: entry.releaseDate,
       reasoning: entry.reasoning,
+      imageInput: entry.imageInput,
       efforts: Option.getOrUndefined(Option.liftPredicate(levels, (each) => each.length > 0)),
     }),
   })

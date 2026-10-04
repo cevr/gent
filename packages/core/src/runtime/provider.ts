@@ -1054,6 +1054,12 @@ const parseCatalogModel = (models: JsonRecord, id: string): Option.Option<Catalo
         api: Option.getOrUndefined(field(override, "api", Schema.String)),
         protocol: Option.getOrUndefined(field(override, "shape", Schema.String)),
         decision: Option.getOrUndefined(decision),
+        imageInput: Option.getOrUndefined(
+          Option.map(
+            field(objectField(raw, "modalities"), "input", Schema.Array(Schema.String)),
+            (inputs) => inputs.includes("image"),
+          ),
+        ),
       }),
     } satisfies CatalogModel
   })

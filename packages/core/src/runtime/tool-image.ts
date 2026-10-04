@@ -3,12 +3,28 @@
  * writes the bytes once to the content-addressed blob store,
  * `<data dir>/blobs/<sha256>.<ext>`, and returns a `ToolImage` the tool puts
  * anywhere in its output. The stored tool result stays ordinary JSON. The
- * server sweeps the store when it starts (`sweepToolImages`).
+ * server sweeps the store when it starts (`sweepToolImages`). At request time
+ * core finds each `ToolImage` in the window's tool results (`toolImagesOf`),
+ * reads its bytes back (`readToolImage`), and sends them after the tool
+ * results (`toPrompt` in `model-context.ts`).
+ *
+ * The extension API (the save) and the request projection (the read) share
+ * this module; neither owns the other.
  *
  * @module
  */
-import { Clock, Crypto, Duration, Effect, FileSystem, Option, Path, Schema } from "effect"
-import { Hex } from "effect/encoding"
+import {
+  Clock,
+  Crypto,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Predicate,
+  Schema,
+} from "effect"
+import { Base64, Hex } from "effect/encoding"
 import { ExtensionContext } from "../domain/extension.js"
 import { omitUndefined } from "../domain/guards.js"
 import { resolveDataDir, writeFileAtomic } from "./gent-platform.js"
@@ -50,6 +66,39 @@ const TOOL_IMAGE_MAX_BYTES = (5 * 1024 * 1024 * 3) / 4
 
 /** The longest side the store takes, in pixels: Anthropic refuses a larger image. */
 const TOOL_IMAGE_MAX_SIDE = 8_000
+
+const decodeToolImage = Schema.decodeUnknownOption(ToolImage)
+
+/**
+ * Each `ToolImage` in a tool result, in document order, once per image. A
+ * value tagged `ToolImage` that does not decode is not an image.
+ */
+export const toolImagesOf = (value: Schema.Json): ReadonlyArray<ToolImage> => {
+  const found: ToolImage[] = []
+  const seen = new Set<string>()
+  const visit = (node: Schema.Json): void => {
+    if (
+      Predicate.isNull(node) ||
+      Predicate.isString(node) ||
+      Predicate.isNumber(node) ||
+      Predicate.isBoolean(node)
+    ) {
+      return
+    }
+    // An array or an object: either one's values are JSON.
+    if (Predicate.isTagged(node, "ToolImage")) {
+      const image = decodeToolImage(node)
+      if (Option.isSome(image) && !seen.has(image.value.sha256)) {
+        seen.add(image.value.sha256)
+        found.push(image.value)
+      }
+      return
+    }
+    for (const item of Object.values(node)) visit(item)
+  }
+  visit(value)
+  return found
+}
 
 // ── image header ────────────────────────────────────────────────────────────
 
@@ -158,7 +207,7 @@ const FILE_EXTENSIONS: Readonly<Record<ToolImageMediaType, string>> = {
 }
 
 /** Where the blobs live: `<data dir>/blobs`. */
-const toolImageDirectory = Effect.fn("ToolImage.directory")(function* (home: string) {
+export const toolImageDirectory = Effect.fn("ToolImage.directory")(function* (home: string) {
   const path = yield* Path.Path
   return path.join(yield* resolveDataDir(home), "blobs")
 })
@@ -279,4 +328,24 @@ export const saveToolImage = Effect.fn("saveToolImage")(function* (input: SaveTo
     bytes,
     Option.orElse(source, () => Option.some(input.path)),
   )
+})
+
+// ── request read ────────────────────────────────────────────────────────────
+
+/**
+ * The image's bytes in base64, from the store under `directory`; none when
+ * its file is gone or no longer holds `image.bytes` bytes. A read marks the
+ * file as used, so the sweep keeps an image a session still sends.
+ */
+export const readToolImage = Effect.fn("ToolImage.read")(function* (
+  directory: string,
+  image: ToolImage,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const file = blobPath(path, directory, image)
+  const bytes = yield* Effect.option(fs.readFile(file))
+  if (Option.isNone(bytes) || bytes.value.length !== image.bytes) return Option.none<string>()
+  yield* touch(file)
+  return Option.some(Base64.encode(bytes.value))
 })

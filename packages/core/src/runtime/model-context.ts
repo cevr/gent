@@ -24,7 +24,8 @@ import {
 } from "../domain/message.js"
 import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
-import { cacheWriteRate, ModelId, type ModelPricing } from "../domain/agent.js"
+import { cacheWriteRate, type Model, ModelId, type ModelPricing } from "../domain/agent.js"
+import { readToolImage, type ToolImage, toolImagesOf } from "./tool-image.js"
 import type { ToolCapability } from "../domain/capability.js"
 import type { TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
@@ -42,6 +43,12 @@ interface PromptTranscriptOptions {
   readonly systemPrompt?: ReadonlyArray<string>
   /** The turn's notices, placed after the conversation; see `turnNoticesText`. */
   readonly notices?: ReadonlyArray<TurnNotice>
+  /**
+   * What stands for each tool image, by the id of the tool call whose result
+   * holds it, in the result's order (`toolImagePrompt`). Absent: the tool
+   * results go without their images.
+   */
+  readonly toolImages?: ToolImagePrompt
 }
 
 const isAiVisibleMessage = (message: Message): boolean => message.metadata?.hidden !== true
@@ -248,6 +255,152 @@ const modelToolResult = (part: Prompt.ToolResultPart): Prompt.ToolResultPart => 
   return bounded
 }
 
+// ── tool images ─────────────────────────────────────────────────────────────
+
+/** Each stored tool result's images, by the part object, as `modelToolResults` keeps bounds. */
+const toolResultImageCache = new WeakMap<Prompt.ToolResultPart, ReadonlyArray<ToolImage>>()
+
+/** The images a stored tool result holds (`toolImagesOf`), read from the stored, unbounded result. */
+const toolResultImages = (part: Prompt.ToolResultPart): ReadonlyArray<ToolImage> => {
+  const known = toolResultImageCache.get(part)
+  if (Predicate.isNotUndefined(known)) return known
+  const images = Option.match(decodeToolResultJson(part.result), {
+    onNone: (): ReadonlyArray<ToolImage> => [],
+    onSome: toolImagesOf,
+  })
+  toolResultImageCache.set(part, images)
+  return images
+}
+
+/**
+ * The tokens an image costs a model, high: Anthropic counts `w*h/750` and
+ * scales an image down to about 1,600 tokens; OpenAI counts fewer. The
+ * estimate counts every image of the window, whether the request sends it or
+ * a line in its place.
+ */
+const toolImageTokens = (image: ToolImage): number =>
+  Math.min(Math.ceil((image.width * image.height) / 750), 1_600)
+
+/** One image of a tool result the prompt holds: the call, its tool, the image. */
+interface PromptToolImage {
+  readonly toolCallId: string
+  readonly toolName: string
+  readonly image: ToolImage
+}
+
+/** The images of the visible tool results in `messages`, oldest first. */
+const promptToolImages = (messages: ReadonlyArray<Message>): ReadonlyArray<PromptToolImage> =>
+  messages.flatMap((message) => {
+    if (!isAiVisibleMessage(message) || message.role !== "tool") return []
+    return message.parts.flatMap((part) => {
+      if (part.type !== "tool-result") return []
+      return toolResultImages(part).map((image) => ({
+        toolCallId: part.id,
+        toolName: part.name,
+        image,
+      }))
+    })
+  })
+
+/**
+ * What stands for one tool image in a request: its bytes in base64 under a
+ * label line, or a line alone. Each text depends only on the image, its tool
+ * and the model, never on the request, so a request's prefix stays the same
+ * bytes from one step to the next.
+ */
+const ToolImageContent = Schema.TaggedUnion({
+  Bytes: { label: Schema.String, mediaType: Schema.String, data: Schema.String },
+  Line: { text: Schema.String },
+})
+type ToolImageContent = typeof ToolImageContent.Type
+
+/** What stands for each image, by tool call id, in the result's order. */
+type ToolImagePrompt = ReadonlyMap<string, ReadonlyArray<ToolImageContent>>
+
+/** How a line names an image: its tool, its source when it has one, and its size. */
+const toolImageName = (entry: PromptToolImage): string =>
+  [
+    entry.toolName,
+    ...Option.toArray(Option.fromUndefinedOr(entry.image.source)),
+    `${entry.image.width}x${entry.image.height}`,
+  ].join(" ")
+
+/**
+ * What stands for each tool image in the window `messages`, for `model`, read
+ * from the blob store under `directory`. A model the catalog says reads no
+ * images gets a line for each; an image whose blob is gone gets a line.
+ */
+export const toolImagePrompt = Effect.fn("ModelContext.toolImagePrompt")(function* (params: {
+  readonly messages: ReadonlyArray<Message>
+  readonly model: Pick<Model, "imageInput">
+  readonly directory: string
+}) {
+  const images = promptToolImages(params.messages)
+  const contents = yield* Effect.forEach(
+    images,
+    (entry) =>
+      Effect.gen(function* () {
+        const name = toolImageName(entry)
+        if (params.model.imageInput === false) {
+          return ToolImageContent.cases.Line.make({
+            text: `[image not shown: this model takes no image input: ${name}]`,
+          })
+        }
+        return Option.match(yield* readToolImage(params.directory, entry.image), {
+          onNone: () =>
+            ToolImageContent.cases.Line.make({ text: `[image no longer stored: ${name}]` }),
+          onSome: (data) =>
+            ToolImageContent.cases.Bytes.make({
+              label: `Image from ${name}:`,
+              mediaType: entry.image.mediaType,
+              data,
+            }),
+        })
+      }),
+    { concurrency: 4 },
+  )
+  const byCall = new Map<string, Array<ToolImageContent>>()
+  for (const [index, entry] of images.entries()) {
+    const content = contents[index]
+    if (Predicate.isUndefined(content)) continue
+    const known = byCall.get(entry.toolCallId) ?? []
+    known.push(content)
+    byCall.set(entry.toolCallId, known)
+  }
+  const prompt: ToolImagePrompt = byCall
+  return prompt
+})
+
+/**
+ * The user message that carries a tool message's images, right after it:
+ * each image under its label, or the line that stands for it. A driver sends
+ * it in the same user turn as the tool results where its API allows
+ * (Anthropic), else as a user message after them (OpenAI Responses, Chat
+ * Completions): tool results take no image there.
+ */
+const toolImageMessage = (
+  message: Prompt.ToolMessage,
+  toolImages: ToolImagePrompt,
+): Option.Option<Prompt.UserMessage> => {
+  const content = message.content.flatMap((part): ReadonlyArray<Prompt.UserMessagePart> => {
+    if (part.type !== "tool-result") return []
+    return (toolImages.get(part.id) ?? []).flatMap((image) =>
+      ToolImageContent.match(image, {
+        Bytes: (bytes) => [
+          Prompt.textPart({ text: bytes.label }),
+          Prompt.filePart({
+            mediaType: bytes.mediaType,
+            data: `data:${bytes.mediaType};base64,${bytes.data}`,
+          }),
+        ],
+        Line: (line) => [Prompt.textPart({ text: line.text })],
+      }),
+    )
+  })
+  if (content.length === 0) return Option.none()
+  return Option.some(Prompt.userMessage({ content }))
+}
+
 const toToolMessage = (message: Message): Option.Option<Prompt.ToolMessage> => {
   const content = message.parts.flatMap((part): ReadonlyArray<Prompt.ToolMessagePart> => {
     if (part.type === "tool-result") return [modelToolResult(part)]
@@ -360,9 +513,13 @@ export const toPrompt = (
   options?: PromptTranscriptOptions,
 ): Prompt.Prompt => {
   const systemBlocks = (options?.systemPrompt ?? []).filter((block) => block !== "")
+  const toolImages: ToolImagePrompt = options?.toolImages ?? new Map()
   const promptMessages = [
     ...systemBlocks.map((block) => Prompt.systemMessage({ content: block })),
-    ...toPromptMessages(messages),
+    ...toPromptMessages(messages).flatMap((message): ReadonlyArray<Prompt.Message> => {
+      if (message.role !== "tool" || toolImages.size === 0) return [message]
+      return [message, ...Option.toArray(toolImageMessage(message, toolImages))]
+    }),
   ]
   const notices = turnNoticesText(options?.notices ?? [])
   if (Option.isSome(notices)) promptMessages.push(Prompt.systemMessage({ content: notices.value }))
@@ -618,6 +775,8 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
         case "tool-result":
           // The model sees the bounded result, so the budget counts that, not the stored one.
           chars += encodeToolOutput(modelToolResult(part).result).length
+          // And each image the result holds, at the tokens it costs a model.
+          for (const image of toolResultImages(part)) chars += toolImageTokens(image) * 4
           break
         case "file":
           chars += 1000 // ~250 tokens estimate for image references

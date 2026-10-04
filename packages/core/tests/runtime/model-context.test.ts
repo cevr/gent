@@ -308,6 +308,35 @@ describe("projectModelContext", () => {
     expect(projection.omittedMessageIds).toEqual([MessageId.make("old")])
   })
 
+  test("a tool result counts each image it holds at the tokens the image costs a model", () => {
+    const holding = (tag: string, width: number, height: number) =>
+      message(`${tag}-${width}`, "tool", [
+        Prompt.toolResultPart({
+          id: ToolCallId.make("call-1"),
+          name: "screenshot",
+          isFailure: false,
+          providerExecuted: false,
+          result: {
+            shot: {
+              _tag: tag,
+              sha256: "a".repeat(64),
+              mediaType: "image/png",
+              width,
+              height,
+              bytes: 4_000,
+            },
+          },
+        }),
+      ])
+    // A tag of the same length that is no image: the JSON is the same size.
+    const imageCost = (width: number, height: number) =>
+      estimateTokens([holding("ToolImage", width, height)]) -
+      estimateTokens([holding("ToolImagX", width, height)])
+    // w*h/750, as Anthropic counts it, up to the 1,600 a scaled image costs.
+    expect(imageCost(150, 100)).toBe(20)
+    expect(imageCost(1500, 1000)).toBe(1_600)
+  })
+
   test("rejects an oversized newest user turn instead of returning an empty prompt", () => {
     const messages = [
       message("old", "assistant", [text("old")]),

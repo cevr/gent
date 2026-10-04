@@ -64,6 +64,17 @@ updates this list in the same commit.
     characters inline (head and tail); the rest is paged through
     `context.read`. Receipt: `maximumModelToolResultChars` in
     `packages/core/src/runtime/model-context.ts`.
+    A tool image travels by reference: the stored result holds a
+    `ToolImage`, and each request reads its bytes from the blob store and
+    sends them in a user message right after the tool results (Anthropic
+    merges it into the tool results' user turn; Responses and Chat Completions
+    take it as a user message after the tool output). A model the catalog
+    says reads no images (`Model.imageInput` false), or an image whose blob is
+    gone, gets one fixed line instead. Every text that stands for an image
+    depends only on the image, its tool and the model, so a request prefix
+    stays the same bytes. The estimate counts each image at
+    `min(w*h/750, 1600)` tokens. Receipts: `toolImagePrompt` and `toPrompt` in
+    `packages/core/src/runtime/model-context.ts`.
 11. **A model change is a durable user-role notice the loop writes.** The
     settings update only records the choice. At each step boundary the loop
     compares the model the branch last ran on or was told it continues with
