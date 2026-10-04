@@ -45,7 +45,7 @@ import {
   ActorCommandId,
   BranchId,
   ExtensionId,
-  type MessageId,
+  MessageId,
   RequestId,
   SessionId,
   type ToolCallId,
@@ -792,7 +792,14 @@ export const mapExtensionServiceError = <A, E, R>(
  *   turn the previous process left unfinished resumes.
  * - `queue` waits behind the running turn, keyed by `sourceId` so a repeat is
  *   a no-op and `dequeueFollowUp` can take it back. `wake` starts a turn even
- *   on a branch with no prior history.
+ *   on a branch with no prior history. `ifLatest` makes the line conditional:
+ *   it starts its turn at once, or it is not admitted. The loop admits it only
+ *   while the branch is idle, nothing waits in its queue (a parked steer, a
+ *   queued follow-up, a reserved start), and `ifLatest` is still the newest
+ *   message a person or an extension sent to the branch (not one the runtime
+ *   wrote, nor a steer a running turn joined). The test and the admission
+ *   hold the queue's own permit, so no other send lands between them. A line
+ *   that is not admitted changes nothing, as a repeat does.
  * - `steer` joins the running turn at its next step. An idle branch parks it
  *   unless `wake` asks for a turn now. A `requestId` makes a repeat a no-op,
  *   and names the message: `interjectionMessageId(requestId)`. A `stopMessage` with
@@ -825,6 +832,7 @@ export const SessionSendParams = Schema.Union([
     sourceId: Schema.String,
     metadata: Schema.optional(MessageMetadata),
     wake: Schema.optional(Schema.Boolean),
+    ifLatest: Schema.optional(MessageId),
   }),
   Schema.Struct({
     delivery: Schema.Literal("steer"),

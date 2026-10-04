@@ -114,6 +114,7 @@ import {
   dateFromMillis,
   Session,
   Branch,
+  type Message,
   type MessageMetadata,
   messagePartsDisplayText,
 } from "../../src/domain/message"
@@ -4805,6 +4806,213 @@ describe("addressed session verbs via RPC", () => {
         expect(deleted.gone).toBe(true)
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
+  )
+})
+
+describe("a queue sent on a condition", () => {
+  const extensionId = ExtensionId.make("@gent/test-conditional-queue")
+  const branchOf = (harness: { readonly sessionId: SessionId; readonly branchId: BranchId }) => ({
+    sessionId: harness.sessionId,
+    branchId: harness.branchId,
+  })
+
+  /**
+   * A request that decides to send, waits at `release`, then queues a line
+   * that only the branch's newest message may take. It stands for an alarm
+   * that read the branch some time before its fire queues.
+   */
+  const conditionalQueue = (gate: {
+    readonly reached: Deferred.Deferred<void>
+    readonly release: Deferred.Deferred<void>
+  }) =>
+    defineExtension({
+      id: extensionId,
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.register(
+          "request",
+          request({
+            id: "queue-if-latest",
+            input: Schema.Struct({ ifLatest: MessageId, sourceId: Schema.String }),
+            output: Schema.Struct({ sent: Schema.Boolean }),
+            answersDuringTurn: true,
+            execute: Effect.fn("QueueIfLatest.execute")(function* (input) {
+              const ctx = yield* ExtensionContext
+              yield* Deferred.succeed(gate.reached, void 0)
+              yield* Deferred.await(gate.release)
+              yield* ctx.Session.send({
+                delivery: "queue",
+                sourceId: input.sourceId,
+                content: "continue where it stopped",
+                ifLatest: input.ifLatest,
+                wake: true,
+              })
+              return { sent: true }
+            }),
+          }),
+        )
+      }),
+    })
+
+  const queueIfLatest = (
+    harness: Effect.Success<ReturnType<typeof createRpcHarness>>,
+    input: { readonly ifLatest: MessageId; readonly sourceId: string },
+  ) =>
+    harness.client.extension.request({
+      ...branchOf(harness),
+      extensionId,
+      capabilityId: "queue-if-latest",
+      input,
+    })
+
+  const userIds = (messages: ReadonlyArray<{ readonly id: MessageId; readonly role: string }>) =>
+    messages
+      .values()
+      .filter((message) => message.role === "user")
+      .map((message) => message.id)
+      .toArray()
+
+  const answered = (
+    messages: ReadonlyArray<{ readonly role: string; readonly parts: Message["parts"] }>,
+    text: string,
+  ) =>
+    messages.some(
+      (message) => message.role === "assistant" && messagePartsDisplayText(message.parts) === text,
+    )
+
+  it.scopedLive("the branch's newest message takes the queued line and starts its turn", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("first answer"),
+        textStep("continued"),
+      ])
+      const released = yield* Deferred.make<void>()
+      yield* Deferred.succeed(released, void 0)
+      const harness = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer,
+        extensionInputs: [
+          ...e2ePreset.extensionInputs,
+          conditionalQueue({ reached: yield* Deferred.make<void>(), release: released }),
+        ],
+      })
+      const ids = branchOf(harness)
+      yield* harness.client.message.send({ ...ids, content: "start the task" })
+      const [first] = userIds(
+        yield* waitFor(
+          harness.client.message.list(ids),
+          (messages) => answered(messages, "first answer"),
+          5_000,
+          "the first turn answered",
+        ),
+      )
+      yield* queueIfLatest(harness, {
+        ifLatest: Option.getOrThrow(Option.fromUndefinedOr(first)),
+        sourceId: "go-on",
+      })
+      yield* waitFor(
+        harness.client.message.list(ids),
+        (messages) => answered(messages, "continued"),
+        5_000,
+        "the queued line's turn answered",
+      )
+      yield* controls.assertDone
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a message sent while the line waits keeps it out of the branch", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("first answer"),
+        textStep("second answer"),
+      ])
+      const gate = { reached: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() }
+      const harness = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer,
+        extensionInputs: [...e2ePreset.extensionInputs, conditionalQueue(gate)],
+      })
+      const ids = branchOf(harness)
+      yield* harness.client.message.send({ ...ids, content: "start the task" })
+      const [first] = userIds(
+        yield* waitFor(
+          harness.client.message.list(ids),
+          (messages) => answered(messages, "first answer"),
+          5_000,
+          "the first turn answered",
+        ),
+      )
+      const queued = yield* queueIfLatest(harness, {
+        ifLatest: Option.getOrThrow(Option.fromUndefinedOr(first)),
+        sourceId: "go-on",
+      }).pipe(Effect.forkScoped)
+      // The line decided to send; before it queues, the user sends and is answered.
+      yield* Deferred.await(gate.reached)
+      yield* harness.client.message.send({ ...ids, content: "do something else" })
+      yield* waitFor(
+        Effect.all([harness.client.message.list(ids), harness.client.session.getSnapshot(ids)]),
+        ([messages, snapshot]) =>
+          answered(messages, "second answer") && snapshot.runtime._tag === "Idle",
+        5_000,
+        "the user's turn answered",
+      )
+      yield* Deferred.succeed(gate.release, void 0)
+      yield* Fiber.join(queued)
+      // The send returned after its admission was decided: nothing was admitted.
+      const messages = yield* harness.client.message.list(ids)
+      expect(userIds(messages)).toHaveLength(2)
+      expect(yield* harness.client.queue.get(ids)).toEqual({ steering: [], followUp: [] })
+      expect((yield* harness.client.session.getSnapshot(ids)).runtime._tag).toBe("Idle")
+      yield* controls.assertDone
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a steer parked on the idle branch keeps the line out", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("first answer"),
+      ])
+      const released = yield* Deferred.make<void>()
+      yield* Deferred.succeed(released, void 0)
+      const harness = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer,
+        extensionInputs: [
+          ...e2ePreset.extensionInputs,
+          conditionalQueue({ reached: yield* Deferred.make<void>(), release: released }),
+        ],
+      })
+      const ids = branchOf(harness)
+      yield* harness.client.message.send({ ...ids, content: "start the task" })
+      const [first] = userIds(
+        yield* waitFor(
+          Effect.all([harness.client.message.list(ids), harness.client.session.getSnapshot(ids)]),
+          ([messages, snapshot]) =>
+            answered(messages, "first answer") && snapshot.runtime._tag === "Idle",
+          5_000,
+          "the first turn answered",
+        ).pipe(Effect.map(([messages]) => messages)),
+      )
+      // Without `wake`, a steer on an idle branch waits for the next turn.
+      yield* harness.client.steer.command({
+        command: {
+          _tag: "Interject",
+          ...ids,
+          requestId: RequestId.make("parked"),
+          message: "look at the loader first",
+        },
+      })
+      yield* queueIfLatest(harness, {
+        ifLatest: Option.getOrThrow(Option.fromUndefinedOr(first)),
+        sourceId: "go-on",
+      })
+      const queue = yield* harness.client.queue.get(ids)
+      expect(queue.steering).toHaveLength(1)
+      expect(queue.followUp).toEqual([])
+      expect((yield* harness.client.session.getSnapshot(ids)).runtime._tag).toBe("Idle")
+      expect(userIds(yield* harness.client.message.list(ids))).toHaveLength(1)
+      yield* controls.assertDone
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 

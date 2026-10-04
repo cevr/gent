@@ -147,11 +147,19 @@ already expresses the authority.
 Its `delivery` picks how the message lands, and each mode takes only its own
 fields:
 
-| `delivery` | Lands                                   | Own fields                                                             |
-| ---------- | --------------------------------------- | ---------------------------------------------------------------------- |
-| `"turn"`   | starts a turn on another branch         | `completion`, `commandId`                                              |
-| `"queue"`  | waits behind the running turn           | `sourceId` (idempotency and `dequeueFollowUp` key), `metadata`, `wake` |
-| `"steer"`  | joins the running turn at its next step | `requestId`, `metadata`, `wake`                                        |
+| `delivery` | Lands                                   | Own fields                                                                         |
+| ---------- | --------------------------------------- | ---------------------------------------------------------------------------------- |
+| `"turn"`   | starts a turn on another branch         | `completion`, `commandId`                                                          |
+| `"queue"`  | waits behind the running turn           | `sourceId` (idempotency and `dequeueFollowUp` key), `metadata`, `wake`, `ifLatest` |
+| `"steer"`  | joins the running turn at its next step | `requestId`, `metadata`, `wake`                                                    |
+
+A `"queue"` with `ifLatest: <messageId>` is conditional: it starts its turn at
+once or it is not admitted. The loop admits it only while the branch is idle,
+nothing waits in its queue (a parked steer, a follow-up), and `ifLatest` is
+still the newest message a person or an extension sent to the branch. The
+test and the admission are one step under the queue's permit, so a message a
+user sends after the extension decided still wins. `@gent/wake` sends its
+auto-resume this way. A line that is not admitted changes nothing.
 
 A message carries no agent, run spec or interactive flag. Those belong to the
 target session: `ctx.Session.create` sets them once in its `admission`.

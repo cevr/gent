@@ -2684,6 +2684,7 @@ interface ExtensionSessionControlService {
     readonly content: string
     readonly metadata?: MessageMetadata
     readonly wake?: boolean
+    readonly ifLatest?: MessageId
     readonly clientRequest?: ClientRequestGrant
   }) => Effect.Effect<void, Error>
   readonly dequeueFollowUp: (input: {
@@ -3068,7 +3069,10 @@ export const makeExtensionHostContextProvider = (
                         content: queued.content,
                         metadata: queued.metadata,
                         wake: queued.wake,
-                        ...omitUndefined({ clientRequest: clientRequestGrant(runInfo, target) }),
+                        ...omitUndefined({
+                          ifLatest: queued.ifLatest,
+                          clientRequest: clientRequestGrant(runInfo, target),
+                        }),
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))
                   }),

@@ -471,6 +471,8 @@ const QueueFollowUpPayload = Schema.Struct({
   metadata: Schema.optional(MessageMetadata),
   /** Start a turn for the item even on a branch with no prior history. */
   wake: Schema.optional(Schema.Boolean),
+  /** Admit the item only while this is the branch's newest step (`SessionSendParams`). */
+  ifLatest: Schema.optional(MessageId),
 })
 type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
 
@@ -508,6 +510,12 @@ const QueueFollowUpFields = {
   message: Message,
   /** Start a turn for this item even on a branch with no prior history. */
   wake: Schema.optional(Schema.Boolean),
+  /**
+   * Admit the item only while this is the branch's newest step, and start it
+   * at once (`SessionSendParams`). Optional: a stored command written before
+   * it decodes.
+   */
+  ifLatest: Schema.optional(MessageId),
 }
 
 /** `sender` is optional: a stored command written before it decodes. */
@@ -819,6 +827,7 @@ export const queueFollowUpOn = Effect.fn("AgentLoop.client.queueFollowUp")(funct
         workspaceId,
         message,
         wake: input.wake,
+        ifLatest: input.ifLatest,
       }),
     )
     .pipe(
