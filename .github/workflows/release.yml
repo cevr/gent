@@ -1,0 +1,102 @@
+name: Release
+
+# A tag `v<version>` builds the gent and gent-cell pair on each platform's own
+# runner, runs the release smoke on it, and drafts a GitHub release with one
+# archive per platform and their SHA256SUMS. The owner checks the draft and
+# publishes it; install.sh and `gent upgrade` read published releases only.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Each runner builds its own platform: `bun install` puts that
+          # platform's OpenTUI and fff libraries on disk, and the build embeds
+          # them. x64 embeds Bun's baseline runtime, which runs without AVX2.
+          - platform: darwin-arm64
+            runner: macos-15
+            target: bun-darwin-arm64
+          - platform: darwin-x64
+            runner: macos-15-intel
+            target: bun-darwin-x64-baseline
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            target: bun-linux-x64-baseline
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            target: bun-linux-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The pinned Bun builds the bytecode, and each binary embeds that Bun.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: The tag names the version apps/tui/package.json holds
+        run: |
+          version="$(jq -r .version apps/tui/package.json)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME, but apps/tui/package.json holds $version" >&2
+            exit 1
+          fi
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+        env:
+          GENT_COMPILE_TARGET: ${{ matrix.target }}
+
+      # arm64 macOS runs only signed code; an ad-hoc signature is enough for a
+      # file curl downloads, which carries no quarantine flag.
+      - name: Sign
+        if: startsWith(matrix.platform, 'darwin')
+        run: codesign --force --sign - apps/tui/bin/gent apps/tui/bin/gent-cell
+
+      - name: Smoke
+        run: bun packages/e2e/src/release-smoke.ts apps/tui/bin
+
+      - name: Pack
+        run: tar -czf "gent-${{ matrix.platform }}.tar.gz" -C apps/tui/bin gent gent-cell
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gent-${{ matrix.platform }}
+          path: gent-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Draft the release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gent-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum gent-*.tar.gz > SHA256SUMS
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes dist/*

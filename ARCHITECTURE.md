@@ -1816,6 +1816,13 @@ A fixed port (`gent server start --port`) changes only the attach decision. A SQ
 
 E2E coverage that needs process boundaries uses focused server-process fixtures; transport contract tests run through the in-process direct transport.
 
+## Distribution
+
+gent ships as one pair of compiled files, `gent` and `gent-cell`, per platform: `darwin-arm64`, `darwin-x64`, `linux-x64` and `linux-arm64` (glibc). The pair stays together: `gent` starts the cell worker from the directory of its real executable.
+
+- **Release.** `.github/workflows/release.yml` runs on a `v<version>` tag that matches `apps/tui/package.json`. Each platform builds on its own runner, because `bun install` puts only that platform's OpenTUI and fff libraries on disk and the build embeds them; x64 embeds Bun's baseline runtime (`GENT_COMPILE_TARGET`), which runs without AVX2. macOS signs the pair ad hoc. Each runner runs the release smoke, then packs `gent-<platform>.tar.gz`. The last job writes `SHA256SUMS` and drafts the GitHub release; the owner checks the draft and publishes it.
+- **Release smoke.** `packages/e2e/src/release-smoke.ts <dir>` runs a built pair the way an install runs it: no Bun on `PATH`, no keys, a model catalog address that refuses, a scratch home. It checks `--version` against the manifest and `--help`, reports the median `--version` start, runs a scripted turn whose steps are cells through a link in another directory, loads a user TypeScript extension and one with its own `node_modules`, refuses an import that nothing binds, and proves that the working directory's `.env` sets nothing. `bun run test:e2e` runs it on the local build ("passes the release smoke" in `apps/tui/tests/headless-cli-exit.test.ts`), so each change proves the script.
+
 ## TUI
 
 TUI is a client over the shared contract, not a parallel app.

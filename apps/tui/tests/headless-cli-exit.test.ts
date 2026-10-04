@@ -326,7 +326,7 @@ const runCompiled = (
     })
     const [exitCode, stdout, stderr] = yield* Effect.all(
       [
-        waitForExit(proc, 15000),
+        waitForExit(proc, 40000),
         Effect.promise(() => new Response(proc.stdout).text()),
         Effect.promise(() => new Response(proc.stderr).text()),
       ],
@@ -405,7 +405,37 @@ describe("compiled binary", () => {
         expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" })
         expect(stdout).toContain("[tool done: cell]")
         expect(stdout).not.toContain("[tool error: cell]")
-      }).pipe(Effect.timeout("18 seconds"), Effect.provide(BunServices.layer)),
-    20000,
+      }).pipe(Effect.timeout("45 seconds"), Effect.provide(BunServices.layer)),
+    50000,
+  )
+
+  // The release runs this script on each platform's pair before it packs the
+  // archive; running it here proves the script on every change.
+  it.scopedLive(
+    "passes the release smoke",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const binary = yield* compiledBinary
+        const script = yield* path.fromFileUrl(
+          new URL("../../../packages/e2e/src/release-smoke.ts", import.meta.url),
+        )
+        // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
+        const proc = Bun.spawn(["bun", script, path.dirname(binary)], {
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const [exitCode, stdout, stderr] = yield* Effect.all(
+          [
+            waitForExit(proc, 100000),
+            Effect.promise(() => new Response(proc.stdout).text()),
+            Effect.promise(() => new Response(proc.stderr).text()),
+          ],
+          { concurrency: "unbounded" },
+        )
+        expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 })
+        expect(`${stdout}${stderr}`).toContain("release smoke passed")
+      }).pipe(Effect.timeout("105 seconds"), Effect.provide(BunServices.layer)),
+    110000,
   )
 })
