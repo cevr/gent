@@ -1,4 +1,15 @@
-import { Clock, Context, Deferred, Effect, Option, Predicate, Ref, Schema } from "effect"
+import {
+  Cause,
+  Clock,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Option,
+  Predicate,
+  Ref,
+  Schema,
+} from "effect"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import type { EventStoreError } from "./event.js"
 import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "./ids.js"
@@ -283,10 +294,17 @@ export interface InteractionStorageConfig {
     requestId: InteractionRequestId,
     decisionJson: string,
   ) => Effect.Effect<Option.Option<StoredInteractionDecision>, EventStoreError>
-  readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, never>
+  /**
+   * The row closes. A failure leaves it as it was: the owner logs it and
+   * keeps the branch's slot for the row until a later write closes it.
+   */
+  readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
   /** Its call took the answer; the row stays open until the call or its turn ends. */
-  readonly take: (requestId: InteractionRequestId) => Effect.Effect<void, never>
+  readonly take: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
 }
+
+/** The storage write that stops a row being pending. */
+type RowWrite = "take" | "resolve"
 
 interface InteractionServiceConfig {
   readonly onPresent: (
@@ -320,9 +338,13 @@ class CurrentInteractionCall extends Context.Service<
  * - `closing`: it closed, and its row is being taken or settled. No call
  *   takes, answers, or parks on it. The slot frees only when that write is
  *   done, so the next ask never stores a pending row beside it.
+ * - `unsettled`: it closed, but the write that closes its row failed, so the
+ *   row can still be pending. Any write that later closes the row frees the
+ *   slot: the cleanup of the call that took the answer, the end of the turn,
+ *   or the next ask, which writes again before it looks again.
  * A call that meets an `admitting` or `closing` request waits for the change.
  */
-type OpenPhase = "admitting" | "shown" | "closing"
+type OpenPhase = "admitting" | "shown" | "closing" | "unsettled"
 
 /** The request in a branch's slot. */
 interface OpenRequest {
@@ -339,6 +361,9 @@ const closingSlot = (open: OpenRequest): Option.Option<OpenRequest> =>
   Option.some({ ...open, phase: "closing" })
 
 const isShown = (open: OpenRequest) => open.phase === "shown"
+
+/** Closed in memory: its row is being closed, or a write to close it failed. */
+const isClosed = (open: OpenRequest) => open.phase === "closing" || open.phase === "unsettled"
 
 /**
  * An answer a call took. The call takes it again on each later run until it
@@ -509,37 +534,121 @@ export const makeInteractionService = (
       yield* Deferred.completeWith(previous, Effect.void)
     })
 
+    const writeRow = (write: RowWrite, requestId: InteractionRequestId) => {
+      if (write === "take") return config.storage.take(requestId)
+      return config.storage.resolve(requestId)
+    }
+
+    const logRowFailure = (
+      write: RowWrite,
+      requestId: InteractionRequestId,
+      cause: Cause.Cause<unknown>,
+    ) =>
+      Effect.logWarning(`interaction.${write}-failed`).pipe(
+        Effect.annotateLogs({ requestId, error: Cause.pretty(cause) }),
+      )
+
+    /**
+     * The row of `requestId` stopped being pending: free the slot if it still
+     * holds that request closed, and let a waiting call look again.
+     */
+    const rowClosed = (key: string, requestId: InteractionRequestId) =>
+      Ref.update(state, (current) => {
+        const branch = branchOf(current, key)
+        const held = Option.exists(
+          branch.open,
+          (open) => open.requestId === requestId && isClosed(open),
+        )
+        if (!held) return current
+        return putBranch(current, key, { ...branch, open: Option.none() })
+      }).pipe(Effect.andThen(signal))
+
     /**
      * Finish closing the request in a branch's slot: `write` takes or settles
      * its row, and only then does the slot free and a waiting call look
      * again. The caller has moved the request to `closing` in the same
      * transition that closed it, and runs this without an interrupt between.
+     *
+     * A failed write leaves the row as it was, so the slot keeps the request
+     * as `unsettled` and the failure goes to the caller (fail loud). A waiting
+     * call looks again and writes the row again.
      */
-    const closeSlot = (key: string, requestId: InteractionRequestId, write: Effect.Effect<void>) =>
-      write.pipe(
-        Effect.andThen(
-          Ref.update(state, (current) => {
+    const closeSlot = (
+      key: string,
+      requestId: InteractionRequestId,
+      write: RowWrite,
+    ): Effect.Effect<void, EventStoreError> =>
+      Effect.exit(writeRow(write, requestId)).pipe(
+        Effect.flatMap((exit) => {
+          if (Exit.isSuccess(exit)) return rowClosed(key, requestId)
+          const unsettle = Ref.update(state, (current) => {
             const branch = branchOf(current, key)
-            const held = Option.exists(
+            const open = Option.filter(
               branch.open,
-              (open) => open.requestId === requestId && open.phase === "closing",
+              (value) => value.requestId === requestId && value.phase === "closing",
             )
-            if (!held) return current
-            return putBranch(current, key, { ...branch, open: Option.none() })
-          }),
-        ),
-        Effect.andThen(signal),
+            if (Option.isNone(open)) return current
+            return putBranch(current, key, {
+              ...branch,
+              open: Option.some({ ...open.value, phase: "unsettled" }),
+            })
+          })
+          return unsettle.pipe(
+            Effect.andThen(signal),
+            Effect.andThen(logRowFailure(write, requestId, exit.cause)),
+            Effect.andThen(Effect.failCause(exit.cause)),
+          )
+        }),
       )
 
     /** Settle the closing request's row, then free the slot. */
     const settle = (key: string, requestId: InteractionRequestId) =>
-      closeSlot(key, requestId, config.storage.resolve(requestId))
+      closeSlot(key, requestId, "resolve")
 
-    /** A kept answer's call ended: its row stops being open. */
-    const release = (entries: ReadonlyArray<TakenAnswer>) =>
-      Effect.forEach(entries, (entry) => config.storage.resolve(entry.requestId), {
-        discard: true,
-      })
+    /**
+     * Settle where no caller can take the failure: the end of a run or of a
+     * turn. `closeSlot` logged it and keeps the slot until the row closes.
+     */
+    const settleLogged = (key: string, requestId: InteractionRequestId) =>
+      Effect.asVoid(Effect.exit(settle(key, requestId)))
+
+    /**
+     * A kept answer's call ended: its row stops being open. If an earlier
+     * write to that row failed, the slot still holds it, and this write frees
+     * it. A failure is logged; the row is no longer pending unless that
+     * earlier write failed too, and then the slot still holds it.
+     */
+    const release = (key: string, entries: ReadonlyArray<TakenAnswer>) =>
+      Effect.forEach(
+        entries,
+        (entry) =>
+          Effect.exit(config.storage.resolve(entry.requestId)).pipe(
+            Effect.flatMap((exit) => {
+              if (Exit.isSuccess(exit)) return rowClosed(key, entry.requestId)
+              return logRowFailure("resolve", entry.requestId, exit.cause)
+            }),
+          ),
+        { discard: true },
+      )
+
+    /**
+     * A call met a request whose close failed: close it again and look
+     * again. The call that took its answer keeps it, so the write is `take`;
+     * otherwise the row settles.
+     */
+    const reconcile = (
+      current: InteractionState,
+      key: string,
+      branch: BranchInteractions,
+      open: OpenRequest,
+    ): [Effect.Effect<void, EventStoreError>, InteractionState] => {
+      let write: RowWrite = "resolve"
+      if (branch.taken.some((entry) => entry.requestId === open.requestId)) write = "take"
+      return [
+        closeSlot(key, open.requestId, write),
+        putBranch(current, key, { ...branch, open: closingSlot(open) }),
+      ]
+    }
 
     /** This ask's owner: the running call and the index of this ask in its run. */
     const currentOwner = Effect.gen(function* () {
@@ -661,9 +770,11 @@ export const makeInteractionService = (
           ...branch,
           open: closingSlot(open),
         })
+        // The dialog closes with the request in memory, also when its row
+        // write fails: the request takes no answer from here on.
         let settling = settle(key, open.requestId)
         if (!current.decisions.has(open.requestId))
-          settling = settling.pipe(Effect.andThen(config.onDismiss(open.requestId, branchRef)))
+          settling = settling.pipe(Effect.ensuring(config.onDismiss(open.requestId, branchRef)))
         return [Effect.as(settling, Option.none()), settled]
       }
       /** An answer this call kept from an earlier run, for the same question. */
@@ -675,7 +786,7 @@ export const makeInteractionService = (
             // The call asks something else here now: forget the old answer.
             const taken = branch.taken.filter((entry) => entry !== kept)
             return [
-              Effect.as(release([kept]), Option.none()),
+              Effect.as(release(key, [kept]), Option.none()),
               putBranch(current, key, { ...branch, taken }),
             ]
           },
@@ -700,6 +811,10 @@ export const makeInteractionService = (
         open: OpenRequest,
         wait: Next,
       ): Step => {
+        if (open.phase === "unsettled") {
+          const [write, next] = reconcile(current, key, branch, open)
+          return [Effect.as(write, Option.none()), next]
+        }
         if (!isShown(open)) return [wait, current]
         const mine = isOwner(open.owner, asker)
         const sameCall = Option.exists(
@@ -731,7 +846,7 @@ export const makeInteractionService = (
             queue: withoutOwner(branch.queue, asker),
             taken: [...branch.taken, { requestId: open.requestId, owner, paramsJson, decision }],
           })
-          const keep = closeSlot(key, open.requestId, config.storage.take(open.requestId))
+          const keep = closeSlot(key, open.requestId, "take")
           return [Effect.as(keep, Option.some(decision)), taken]
         }
         const answeredOwner = open.owner.value.toolCallId
@@ -862,6 +977,10 @@ export const makeInteractionService = (
               return [Effect.as(admitted, true), claimed]
             }
             const open = branch.open.value
+            if (open.phase === "unsettled") {
+              const [write, next] = reconcile(current, key, branch, open)
+              return [Effect.as(write, false), next]
+            }
             if (!isShown(open)) return [wait, current]
             if (Option.exists(open.owner, (other) => branch.running.has(other.toolCallId)))
               return [wait, current]
@@ -885,7 +1004,7 @@ export const makeInteractionService = (
             Effect.map((current): Answer => {
               const branch = branchOf(current, key)
               const open = Option.filter(branch.open, (value) => value.requestId === requestId)
-              if (!Option.exists(open, (value) => value.phase !== "closing"))
+              if (!Option.exists(open, (value) => !isClosed(value)))
                 return Effect.fail(
                   new InteractionClosedError({
                     message: "The interaction closed without an answer",
@@ -1021,7 +1140,8 @@ export const makeInteractionService = (
             ] => {
               const branch = branchOf(current, key)
               // A request already closing keeps the slot until its own close
-              // frees it; any other open request closes here.
+              // frees it; any other open request closes here, also one whose
+              // earlier close failed.
               const closes = Option.filter(branch.open, (value) => value.phase !== "closing")
               let open = branch.open
               if (Option.isSome(closes)) open = closingSlot(closes.value)
@@ -1045,10 +1165,12 @@ export const makeInteractionService = (
               })
             },
           )
-          yield* release(ended.taken)
+          yield* release(key, ended.taken)
           const open = ended.open
           if (Option.isNone(open)) return yield* signal
-          yield* settle(key, open.value.open.requestId)
+          // The dialog closes also when the row write fails: the request
+          // takes no answer from here on.
+          yield* settleLogged(key, open.value.open.requestId)
           if (isShown(open.value.open) && !open.value.answered)
             yield* config.onDismiss(open.value.open.requestId, branchRef)
         }).pipe(Effect.uninterruptible),
@@ -1069,7 +1191,9 @@ export const makeInteractionService = (
           // it again when its step runs again.
           const owner = Option.fromUndefinedOr(record.owner)
           if (Option.isNone(owner) || Option.isNone(decision)) {
-            yield* config.storage.resolve(record.requestId)
+            yield* config.storage
+              .resolve(record.requestId)
+              .pipe(Effect.catchCause((cause) => logRowFailure("resolve", record.requestId, cause)))
             return false
           }
           const entry: TakenAnswer = {
@@ -1112,9 +1236,9 @@ export const makeInteractionService = (
       // so a call that asks first waits for an earlier owner that has not
       // started yet instead of settling that owner's answer. Answers kept by
       // a call that is not in this step are dropped.
-      beginStep: (branchRef, callIds) =>
-        Ref.modify(state, (current): [ReadonlyArray<TakenAnswer>, InteractionState] => {
-          const key = contextKey(branchRef)
+      beginStep: (branchRef, callIds) => {
+        const key = contextKey(branchRef)
+        return Ref.modify(state, (current): [ReadonlyArray<TakenAnswer>, InteractionState] => {
           const running = new Set(callIds)
           const branch = branchOf(current, key)
           const stays = (entry: TakenAnswer) => running.has(entry.owner.toolCallId)
@@ -1127,7 +1251,8 @@ export const makeInteractionService = (
               taken: branch.taken.filter(stays),
             }),
           ]
-        }).pipe(Effect.flatMap(release)),
+        }).pipe(Effect.flatMap((released) => release(key, released)))
+      },
 
       ownCall: (branchRef, toolCallId) => (self) =>
         Effect.gen(function* () {
@@ -1139,8 +1264,8 @@ export const makeInteractionService = (
           const ended = Effect.gen(function* () {
             const run = { toolCallId, asked: yield* Ref.get(asked), parked: yield* Ref.get(parked) }
             const left = yield* Ref.modify(state, (current) => endRun(current, key, run))
-            yield* release(left.released)
-            if (Option.isSome(left.abandoned)) yield* settle(key, left.abandoned.value)
+            yield* release(key, left.released)
+            if (Option.isSome(left.abandoned)) yield* settleLogged(key, left.abandoned.value)
             yield* signal
           })
           return yield* self.pipe(

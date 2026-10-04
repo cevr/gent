@@ -94,8 +94,16 @@ describe("Interaction Request", () => {
     persist: (record) => persistInteraction(is, record),
     decide: (branch, requestId, decisionJson) =>
       decideInteraction(is, branch, requestId, decisionJson),
-    resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-    take: (requestId) => is.take(requestId).pipe(Effect.catchEager(() => Effect.void)),
+    resolve: (requestId) =>
+      is
+        .resolve(requestId)
+        .pipe(
+          Effect.mapError((cause) => new EventStoreError({ message: "resolve failed", cause })),
+        ),
+    take: (requestId) =>
+      is
+        .take(requestId)
+        .pipe(Effect.mapError((cause) => new EventStoreError({ message: "take failed", cause }))),
   })
   type ServiceConfig = Parameters<typeof makeInteractionService>[0]
   /** An interaction service over `storage`; a hook the test does not watch does nothing. */
@@ -659,7 +667,7 @@ describe("Interaction Request", () => {
       const base = callbacksFor(is)
       const writeStarted = yield* Deferred.make<void>()
       const gate = yield* Deferred.make<void>()
-      const hold = (write: Effect.Effect<void>) =>
+      const hold = (write: Effect.Effect<void, EventStoreError>) =>
         Deferred.succeed(writeStarted, void 0).pipe(
           Effect.andThen(Deferred.await(gate)),
           Effect.andThen(write),
@@ -708,6 +716,59 @@ describe("Interaction Request", () => {
     askWhileSlotReleaseIsHeld("resolve", false),
   )
 
+  /**
+   * The write that marks call A's answer taken dies once. A's run ends with
+   * the defect, and its cleanup settles A's row. That settle also frees the
+   * slot, so call B asks after the turn ends instead of waiting forever, and
+   * nothing writes A's settled row again.
+   */
+  it.live("a take that dies frees the slot when the call's cleanup settles its row", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const base = callbacksFor(is)
+      let takes = 0
+      const resolved: InteractionRequestId[] = []
+      const interaction = yield* serviceOver({
+        ...base,
+        resolve: (requestId) =>
+          Effect.sync(() => resolved.push(requestId)).pipe(Effect.andThen(base.resolve(requestId))),
+        take: (requestId) =>
+          Effect.suspend(() => {
+            takes += 1
+            if (takes === 1) return Effect.die("the take write is lost")
+            return base.take(requestId)
+          }),
+      })
+      const branch = { sessionId: SessionId.make("s-take-dies"), branchId: BranchId.make("b-td") }
+      yield* ensureStorageParents(branch)
+      const a = ToolCallId.make("call-a")
+      const b = ToolCallId.make("call-b")
+      const askA = interaction.present({ text: "A?" }, branch)
+      yield* interaction.beginStep(branch, [a, b])
+      const x = yield* pendingId(yield* interaction.ownCall(branch, a)(askA).pipe(Effect.exit))
+      yield* interaction.storeResolution(branch, x, { approved: true })
+      yield* interaction.beginStep(branch, [a, b])
+      const died = yield* interaction.ownCall(branch, a)(askA).pipe(Effect.exit)
+      expect(Exit.isFailure(died) && Cause.hasDies(died.cause)).toBe(true)
+      // A's cleanup settled its row.
+      expect(yield* is.listOpen(branch)).toEqual([])
+      expect(resolved).toEqual([x])
+      yield* interaction.endTurn(branch)
+      yield* interaction.beginStep(branch, [b])
+      const y = yield* pendingId(
+        yield* interaction
+          .ownCall(
+            branch,
+            b,
+          )(interaction.present({ text: "B?" }, branch))
+          .pipe(Effect.timeout("1 second"), Effect.exit),
+      )
+      expect(yield* shownRequest(interaction, branch)).toEqual(Option.some(y))
+      expect((yield* is.listOpen(branch)).map((record) => record.requestId)).toEqual([y])
+      expect(resolved).toEqual([x])
+    }).pipe(Effect.provide(storageLive), Effect.timeout("4 seconds")),
+  )
+
   it.live("ending the turn settles its open request and closes the dialog", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
@@ -730,21 +791,28 @@ describe("Interaction Request", () => {
     }).pipe(Effect.provide(storageLive)),
   )
 
-  // A failed resolve leaves the row open, so a restart asks it again; the
-  // log is the only trace of why.
-  it.live("a settle that storage fails logs its request and leaves the row open", () =>
+  // A failed resolve leaves the row open, and the log names the request.
+  // The slot stays with that row: the next ask settles it first, so it never
+  // stores a second pending row beside it.
+  it.live("a settle that storage fails keeps the slot until the next ask settles the row", () =>
     Effect.gen(function* () {
       const warnings: Array<{ readonly message: string; readonly requestId: unknown }> = []
       const capture = Logger.make(({ message, fiber }) => {
         const annotations = fiber.getRef(References.CurrentLogAnnotations)
         warnings.push({ message: String(message), requestId: annotations["requestId"] })
       })
+      let resolves = 0
       const failingResolve = Layer.effect(
         InteractionStorage,
         Effect.map(InteractionStorage, (is) =>
           InteractionStorage.of({
             ...is,
-            resolve: () => Effect.fail(new StorageError({ message: "disk full" })),
+            resolve: (requestId) =>
+              Effect.suspend(() => {
+                resolves += 1
+                if (resolves === 1) return Effect.fail(new StorageError({ message: "disk full" }))
+                return is.resolve(requestId)
+              }),
           }),
         ),
       ).pipe(Layer.provideMerge(storageLive))
@@ -766,7 +834,19 @@ describe("Interaction Request", () => {
           message: "interaction.resolve-failed",
           requestId: open,
         })
-        expect((yield* (yield* InteractionStorage).listOpen(branch)).length).toBe(1)
+        const is = yield* InteractionStorage
+        expect((yield* is.listOpen(branch)).map((record) => record.requestId)).toEqual([open])
+        const next = yield* pendingId(
+          yield* asCall(
+            approval,
+            branch,
+            "call-2",
+          )(approval.present({ text: "Next?" }, branch)).pipe(
+            Effect.timeout("1 second"),
+            Effect.exit,
+          ),
+        )
+        expect((yield* is.listOpen(branch)).map((record) => record.requestId)).toEqual([next])
       }).pipe(
         Effect.provide(Layer.mergeAll(approvalLayer, Logger.layer([capture]))),
         // The test preload turns logs off; this test reads one.
@@ -796,6 +876,47 @@ describe("Interaction Request", () => {
           take: (requestId) => Effect.sync(() => void taken.push(requestId)),
         }),
       )
+
+  it.live("an inner call that meets a request whose settle failed settles it, then asks", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const base = callbacksFor(is)
+      let resolves = 0
+      const presented = yield* Queue.unbounded<InteractionRequestId>()
+      const interaction = yield* serviceOver(
+        {
+          ...base,
+          resolve: (requestId) =>
+            Effect.suspend(() => {
+              resolves += 1
+              if (resolves === 1) return Effect.fail(new EventStoreError({ message: "disk full" }))
+              return base.resolve(requestId)
+            }),
+        },
+        { onPresent: (requestId) => Queue.offer(presented, requestId) },
+      )
+      const branch = { sessionId: SessionId.make("s-unsettled"), branchId: BranchId.make("b-un") }
+      yield* ensureStorageParents(branch)
+      const open = yield* pendingId(
+        yield* asCall(
+          interaction,
+          branch,
+        )(interaction.present({ text: "Go?" }, branch)).pipe(Effect.exit),
+      )
+      expect(yield* Queue.take(presented)).toBe(open)
+      // The settle fails: the row stays pending, and the slot stays with it.
+      yield* interaction.endTurn(branch)
+      expect((yield* is.listOpen(branch)).map((record) => record.requestId)).toEqual([open])
+      const inner = yield* asCall(
+        interaction,
+        branch,
+        "call-2",
+      )(askOwned(interaction, is, branch, [])("Inner?")).pipe(Effect.forkChild)
+      const asked = yield* Queue.take(presented).pipe(Effect.timeout("1 second"))
+      expect((yield* is.listOpen(branch)).map((record) => record.requestId)).toEqual([asked])
+      yield* Fiber.interrupt(inner)
+    }).pipe(Effect.provide(storageLive), Effect.timeout("4 seconds")),
+  )
 
   it.live("a dispatching owner's inner calls wait for their answers in place, one at a time", () =>
     Effect.gen(function* () {
