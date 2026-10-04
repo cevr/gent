@@ -469,8 +469,20 @@ const agentDefinitionFields = {
   driver: Schema.optional(DriverRef),
 }
 
-/** What `new AgentDefinition` and `AgentDefinition.make` take. */
+/** What `new AgentDefinition` and its static constructors take. */
 type AgentDefinitionInput = Schema.Struct.MakeIn<typeof agentDefinitionFields>
+
+/**
+ * Why an agent's input is refused: the keys the schema does not name, read
+ * before a constructor parses them away. `None` when every key is named.
+ */
+const refusedAgentKeys = (input: AgentDefinitionInput): Option.Option<string> => {
+  const unknown = Object.keys(input).filter((key) => !Object.hasOwn(agentDefinitionFields, key))
+  if (unknown.length === 0) return Option.none()
+  return Option.some(
+    `AgentDefinition "${input.name}" has keys the schema does not name: ${unknown.join(", ")}. Tool lists are \`tools\` patterns: allowedTools [a, b] is tools [a, b]; deniedTools [x] is tools ["*", "!x"].`,
+  )
+}
 
 /**
  * AgentDefinition — agent identity + defaults.
@@ -494,23 +506,41 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
    * Builds an agent and refuses a key the schema does not name. The schema
    * would drop such a key, so an extension written before `tools`
    * (`allowedTools`, `deniedTools`) or with a misspelled field would run
-   * with every tool; it fails where it builds the agent instead. `make` is
-   * `new`, so the check has one owner.
+   * with every tool; it fails where it builds the agent instead. Every
+   * authoring constructor asks `refusedAgentKeys` before it parses: `new`
+   * and `make` throw, `makeEffect` fails with the same message, `makeOption`
+   * is `None`. A decode (stored rows, the wire) passes only named keys.
    */
   // @effect-diagnostics-next-line overriddenSchemaConstructor:off -- the check refuses only keys the schema does not name, and a decode passes only named keys; `new` must be as strict as `make`.
   constructor(props: AgentDefinitionInput, options?: Schema.MakeOptions) {
-    const unknown = Object.keys(props).filter((key) => !Object.hasOwn(agentDefinitionFields, key))
-    if (unknown.length > 0) {
+    const refused = refusedAgentKeys(props)
+    if (Option.isSome(refused)) {
       // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- A definition with a key the schema drops is programmer misuse; it must fail where the extension builds it.
-      throw new Error(
-        `AgentDefinition "${props.name}" has keys the schema does not name: ${unknown.join(", ")}. Tool lists are \`tools\` patterns: allowedTools [a, b] is tools [a, b]; deniedTools [x] is tools ["*", "!x"].`,
-      )
+      throw new Error(refused.value)
     }
     super(props, options)
   }
 
   static override make(input: AgentDefinitionInput, options?: Schema.MakeOptions): AgentDefinition {
     return new AgentDefinition(input, options)
+  }
+
+  static override makeEffect(
+    input: AgentDefinitionInput,
+    options?: Schema.MakeOptions,
+  ): Effect.Effect<AgentDefinition, SchemaIssue.Issue> {
+    return Option.match(refusedAgentKeys(input), {
+      onSome: (message) => Effect.fail(new SchemaIssue.InvalidValue({ message }, input)),
+      onNone: () => super.makeEffect(input, options),
+    })
+  }
+
+  static override makeOption(
+    input: AgentDefinitionInput,
+    options?: Schema.MakeOptions,
+  ): Option.Option<AgentDefinition> {
+    if (Option.isSome(refusedAgentKeys(input))) return Option.none()
+    return super.makeOption(input, options)
   }
 
   /**

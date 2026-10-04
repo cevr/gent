@@ -1411,6 +1411,8 @@ an extension registers one (`host.register("agent", ...)`), and the config
 without `name`, all optional (`Struct.omit` of the class fields, not a copy).
 A config entry decodes through `AuthoredAgentPatch`, which refuses a key the
 schema does not name and names the agent and the key.
+`AgentDefinition`'s every authoring constructor (`new`, `make`, `makeEffect`,
+`makeOption`) refuses a key the schema does not name (`refusedAgentKeys`).
 The roster (`resolveAgentRoster`) is the extension agents with each config
 entry of their name applied, plus a new agent for each entry that names none.
 A patch replaces the fields it names; `systemPromptAddendum` appends. A field

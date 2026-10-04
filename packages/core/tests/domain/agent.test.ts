@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { Option, Schema } from "effect"
+import { it } from "effect-bun-test"
+import { Effect, Option, Result, Schema, SchemaIssue } from "effect"
 import {
   AgentDefinition,
   AgentName,
@@ -271,6 +272,36 @@ describe("agent definition", () => {
       'AgentDefinition "painter" has keys the schema does not name: toolz',
     )
   })
+
+  // The inherited constructors parse first, and a parse drops the key.
+  test("makeOption refuses an agent with an old tool list", () => {
+    const old = { name: AgentName.make("painter"), allowedTools: ["read"] }
+    expect(AgentDefinition.makeOption(old)).toEqual(Option.none())
+  })
+
+  it.live("makeEffect fails on an unknown key and names it", () =>
+    Effect.gen(function* () {
+      const old = { name: AgentName.make("painter"), allowedTools: ["read"] }
+      const built = yield* Effect.result(AgentDefinition.makeEffect(old))
+      expect(Result.isFailure(built)).toBe(true)
+      if (Result.isFailure(built)) {
+        expect(SchemaIssue.makeFormatterDefault()(built.failure)).toContain(
+          'AgentDefinition "painter" has keys the schema does not name: allowedTools',
+        )
+      }
+    }),
+  )
+
+  it.live("makeEffect and makeOption still build an agent with known keys", () =>
+    Effect.gen(function* () {
+      const reader = { name: AgentName.make("reader"), tools: ["read"] }
+      const built = yield* AgentDefinition.makeEffect(reader)
+      expect(built.admitsTool("bash")).toBe(false)
+      expect(Option.map(AgentDefinition.makeOption(reader), (agent) => agent.tools)).toEqual(
+        Option.some(["read"]),
+      )
+    }),
+  )
 })
 
 // ── model ids ───────────────────────────────────────────────────────────────

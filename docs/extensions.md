@@ -766,10 +766,11 @@ restriction it asked for.
 
 A config entry with a key the schema does not name fails to load, and the
 error names the agent and the key: a misspelled `toolz` would otherwise give
-an agent every tool. TypeScript source has no old reading either:
-`AgentDefinition.make` and `new AgentDefinition` refuse a key the schema does
-not name, so an extension that still passes `allowedTools` fails to load and
-the failure names the key.
+an agent every tool.
+TypeScript source has no old reading either: `AgentDefinition.make`,
+`new AgentDefinition`, `makeEffect` and `makeOption` refuse a key the schema
+does not name, so an extension that still passes `allowedTools` fails to load
+and the failure names the key.
 
 ### Paths
 
