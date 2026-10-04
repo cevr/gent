@@ -799,7 +799,9 @@ export const mapExtensionServiceError = <A, E, R>(
  *   message a person or an extension sent to the branch (not one the runtime
  *   wrote, nor a steer a running turn joined). The test and the admission
  *   hold the queue's own permit, so no other send lands between them. A line
- *   that is not admitted changes nothing, as a repeat does.
+ *   that is not admitted changes nothing, as a repeat does. An admitted line
+ *   is a promise: it is stored before `send` returns, and a restart before
+ *   its turn starts runs it once, with no new test of `ifLatest`.
  * - `steer` joins the running turn at its next step. An idle branch parks it
  *   unless `wake` asks for a turn now. A `requestId` makes a repeat a no-op,
  *   and names the message: `interjectionMessageId(requestId)`. A `stopMessage` with

@@ -625,6 +625,9 @@ export type LoopInbox = {
    * newest step (`latestStep`). A turn writes its opener before it leaves
    * the phase, and every phase move takes this permit, so no send lands
    * between the test and the reservation, and none overtakes the item later.
+   * An admitted item is a promise: the same transaction stores it in the
+   * in-flight slot, so a restart before its turn stores the message runs it
+   * once, with no new test of `ifLatest`.
    */
   readonly admit: (
     item: QueuedTurnItem,
@@ -807,11 +810,22 @@ export const makeLoopInbox = (
           ) {
             return { value: Option.none(), next: current, persist: false }
           }
+          // An accepted line is a promise. Its caller may forget its own
+          // record (an alarm row) once this returns, and the start may wait
+          // for the side-mutation permit, so the item is stored in the
+          // in-flight slot before admission returns. A restart then runs it
+          // once from that slot, without a new check of `ifLatest`; the
+          // reservation still orders it ahead of every later admission, and
+          // its turn clears the slot when it stores the message.
           const reserved = buildRunningState(item, { startedAtMs })
           return {
             value: Option.some(reserved),
-            next: { ...current, startingState: reserved },
-            persist: false,
+            next: {
+              ...current,
+              queue: { ...current.queue, inFlight: item },
+              startingState: reserved,
+            },
+            persist: true,
           }
         }
         // Build the next queue first: a retry of a queued id replaces in

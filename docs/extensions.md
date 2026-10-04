@@ -159,7 +159,10 @@ nothing waits in its queue (a parked steer, a follow-up), and `ifLatest` is
 still the newest message a person or an extension sent to the branch. The
 test and the admission are one step under the queue's permit, so a message a
 user sends after the extension decided still wins. `@gent/wake` sends its
-auto-resume this way. A line that is not admitted changes nothing.
+auto-resume this way. A line that is not admitted changes nothing. An admitted
+line is a promise: it is stored before `send` returns, so the extension can
+forget its own record, and a restart before its turn starts runs it once,
+with no new test of `ifLatest`.
 
 A message carries no agent, run spec or interactive flag. Those belong to the
 target session: `ctx.Session.create` sets them once in its `admission`.

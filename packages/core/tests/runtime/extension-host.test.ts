@@ -4967,6 +4967,122 @@ describe("a queue sent on a condition", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  /**
+   * A mutation request that queues a line on a condition and then keeps the
+   * side-mutation permit. The admitted line cannot start while it holds the
+   * permit; `sent` says the admission is decided.
+   */
+  const queueThenHold = (sent: Deferred.Deferred<void>) =>
+    defineExtension({
+      id: extensionId,
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.register(
+          "request",
+          request({
+            id: "queue-then-hold",
+            input: Schema.Struct({ ifLatest: MessageId, sourceId: Schema.String }),
+            output: Schema.Struct({ sent: Schema.Boolean }),
+            execute: Effect.fn("QueueThenHold.execute")(function* (input) {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Session.send({
+                delivery: "queue",
+                sourceId: input.sourceId,
+                content: "continue where it stopped",
+                ifLatest: input.ifLatest,
+                wake: true,
+              })
+              yield* Deferred.succeed(sent, void 0)
+              return yield* Effect.never
+            }),
+          }),
+        )
+      }),
+    })
+
+  // An accepted line is a promise. The server closes after the admission and
+  // before the turn starts; the next server runs the line once, without a
+  // check of its condition against the branch it finds.
+  it.scopedLive(
+    "a line accepted before a restart runs once after it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-conditional-restart-" })
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-cwd-" })
+        const layerFor = (
+          providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+          sent: Deferred.Deferred<void>,
+        ) =>
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            storagePath: `${directory}/gent.db`,
+            cwd,
+            extensionInputs: [...e2ePreset.extensionInputs, queueThenHold(sent)],
+          })
+
+        const { layer: firstProvider, controls: firstControls } =
+          yield* LanguageModelLayers.sequence([textStep("first answer")])
+        const sent = yield* Deferred.make<void>()
+        const ids = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layerFor(firstProvider, sent))
+            const created = yield* client.session.create({ cwd })
+            const ids = { sessionId: created.sessionId, branchId: created.branchId }
+            yield* client.message.send({ ...ids, content: "start the task" })
+            const [first] = userIds(
+              yield* waitFor(
+                Effect.all([client.message.list(ids), client.session.getSnapshot(ids)]),
+                ([messages, snapshot]) =>
+                  answered(messages, "first answer") && snapshot.runtime._tag === "Idle",
+                5_000,
+                "the first turn answered",
+              ).pipe(Effect.map(([messages]) => messages)),
+            )
+            yield* client.extension
+              .request({
+                ...ids,
+                extensionId,
+                capabilityId: "queue-then-hold",
+                input: {
+                  ifLatest: Option.getOrThrow(Option.fromUndefinedOr(first)),
+                  sourceId: "go-on",
+                },
+              })
+              .pipe(Effect.ignore, Effect.forkScoped)
+            // The line is accepted; its turn waits for the permit the request holds.
+            yield* Deferred.await(sent)
+            expect(userIds(yield* client.message.list(ids))).toHaveLength(1)
+            return ids
+          }),
+        )
+        yield* firstControls.assertDone
+
+        const { layer: secondProvider, controls } = yield* LanguageModelLayers.sequence([
+          textStep("continued"),
+        ])
+        const { client } = yield* createRpcClient(
+          layerFor(secondProvider, yield* Deferred.make<void>()),
+        )
+        const [messages] = yield* waitFor(
+          Effect.all([client.message.list(ids), client.session.getSnapshot(ids)]),
+          ([listed, snapshot]) => answered(listed, "continued") && snapshot.runtime._tag === "Idle",
+          5_000,
+          "the accepted line ran after the restart",
+        )
+        const lines = messages.filter(
+          (message) =>
+            message.role === "user" &&
+            messagePartsDisplayText(message.parts) === "continue where it stopped",
+        )
+        expect(lines).toHaveLength(1)
+        expect(yield* client.queue.get(ids)).toEqual({ steering: [], followUp: [] })
+        yield* controls.assertDone
+      }).pipe(Effect.provide(BunPlatformLive), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
   it.scopedLive("a steer parked on the idle branch keeps the line out", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([

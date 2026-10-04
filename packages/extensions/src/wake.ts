@@ -304,7 +304,9 @@ const dropPendingRow =
  * What a fire leaves behind, and the move of its row. In `wake` mode a
  * user-role line is queued with `wake: true`, which starts a turn on an idle
  * loop; the queue drops a repeat of the same fire key, so the row can move in
- * a later write. In `notify` mode the notice and the row move are one write,
+ * a later write. A resume's conditional line is stored when the loop accepts
+ * it, as a queued line is, so a restart after the row moved still runs it. In
+ * `notify` mode the notice and the row move are one write,
  * so a stop cannot leave a notice with its row still due. A file an older
  * binary left in that state has the notice already: an alarm's notice text
  * names its due time, so the same text under the same id is the same fire,
