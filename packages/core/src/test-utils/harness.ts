@@ -737,6 +737,16 @@ const MODEL_CATALOG_FIXTURE_CHAT = {
           { type: "effort", values: ["low", "medium", "high", "xhigh", "max"] },
         ],
       },
+      "claude-sonnet-5-5": {
+        name: "Claude Sonnet 5.5",
+        cost: { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+        limit: { context: 1000000, output: 128000 },
+        release_date: "2026-09-28",
+        tool_call: true,
+        reasoning: true,
+        temperature: false,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+      },
       "claude-opus-4-6": {
         name: "Claude Opus 4.6",
         cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },

@@ -2790,6 +2790,7 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
       // Thinking on by default: with a hint and without one.
       for (const model of [
         "claude-sonnet-5",
+        "claude-sonnet-5-5",
         "claude-opus-5",
         "claude-opus-5-5",
         "claude-fable-5-1",
@@ -2815,6 +2816,13 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
       for (const model of ["claude-sonnet-5", "claude-opus-5"]) {
         expect(yield* sentOnBothPaths(model, none)).toEqual({ thinking: { type: "disabled" } })
       }
+      // Sonnet 5.5 turns its up-front thinking off with `between_tools`, not
+      // `disabled`, and takes it at effort low to high only: the lowest effort
+      // goes beside it.
+      expect(yield* sentOnBothPaths("claude-sonnet-5-5", none)).toEqual({
+        output_config: { effort: "low" },
+        thinking: { type: "between_tools" },
+      })
       // Thinking cannot be turned off: the lowest effort instead.
       for (const model of ["claude-opus-5-5", "claude-fable-5", "claude-fable-5-1"]) {
         expect(yield* sentOnBothPaths(model, none)).toEqual({ output_config: { effort: "low" } })

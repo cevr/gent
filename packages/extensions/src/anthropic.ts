@@ -2175,11 +2175,17 @@ export const buildKeychainTransformClient = (
  *   - `Off`: thinking stays off until the request sets `{type: "adaptive"}`.
  *   - `On`: thinking is on, and `{type: "disabled"}` turns it off.
  *   - `AlwaysOn`: thinking is on, and a request that disables it gets HTTP 400.
+ *   - `BetweenTools`: thinking is on, and `{type: "between_tools"}` turns the
+ *     up-front thinking off, at effort `low`, `medium` or `high` only (HTTP 400
+ *     at `xhigh` or `max`). Claude Sonnet 5.5,
+ *     platform.claude.com/docs/en/build-with-claude/effort ("Recommended
+ *     effort levels for Claude Sonnet 5.5": "To turn off up-front thinking,
+ *     send `thinking: {type: "between_tools"}` instead of `disabled`").
  *   - `Budget`: thinking stays off until the request sets `{type: "enabled",
  *     budget_tokens}`; the family has no adaptive thinking, and its effort
  *     does not turn thinking on (Claude Opus 4.5, platform.claude.com/docs/en/build-with-claude/extended-thinking).
  */
-type ThinkingDefault = "Off" | "On" | "AlwaysOn" | "Budget"
+type ThinkingDefault = "Off" | "On" | "AlwaysOn" | "BetweenTools" | "Budget"
 
 /**
  * The Claude families whose thinking default the table above names, first
@@ -2197,6 +2203,7 @@ const THINKING_DEFAULTS: ReadonlyArray<{
   readonly thinking: ThinkingDefault
 }> = [
   { pattern: /(fable-5|mythos|opus-5-5)(-|$)/, thinking: "AlwaysOn" },
+  { pattern: /sonnet-5-5(-|$)/, thinking: "BetweenTools" },
   // Opus 5 accepts `disabled` only at effort `high` or below; `none` names no effort.
   { pattern: /(opus-5|sonnet-5)(-|$)/, thinking: "On" },
   { pattern: /(opus-4-[78]|(opus|sonnet)-4-6)(-|$)/, thinking: "Off" },
@@ -2249,8 +2256,9 @@ const PLAIN_REQUEST: AnthropicRequestPlan = { effort: Option.none(), thinking: O
  * - No hint: the model's own defaults. A family that thinks by default is
  *   sent `adaptive`, its own default, so that the thinking display applies.
  * - `none`: as little reasoning as the model allows. An always-on family
- *   runs at its lowest effort; a family on by default, or a model that lists
- *   a toggle, turns thinking off. The compaction summary asks for this under
+ *   runs at its lowest effort; a `BetweenTools` family (Claude Sonnet 5.5)
+ *   sends `between_tools` at its lowest effort; a family on by default, or a
+ *   model that lists a toggle, turns thinking off. The compaction summary asks for this under
  *   a 768-token cap, and thinking counts toward `max_tokens`, so a thinking
  *   summary can come back cut or empty.
  * - A level with an effort list: the lowest effort the model accepts at or
@@ -2271,7 +2279,7 @@ const anthropicRequestPlan = (
   const rule = thinkingDefault(entry.id)
   const hint = reasoningHint(entry, hints)
   if (Option.isNone(hint)) {
-    if (Option.exists(rule, (value) => value === "On" || value === "AlwaysOn")) {
+    if (Option.exists(rule, (value) => value !== "Off" && value !== "Budget")) {
       return { effort: Option.none(), thinking: Option.some(THINKING_CONFIG.adaptive) }
     }
     return PLAIN_REQUEST
@@ -2279,6 +2287,12 @@ const anthropicRequestPlan = (
   if (hint.value === "none") {
     if (Option.contains(rule, "AlwaysOn")) {
       return { effort: lowestEffort(entry), thinking: Option.none() }
+    }
+    if (Option.contains(rule, "BetweenTools")) {
+      return {
+        effort: lowestEffort(entry),
+        thinking: Option.some(THINKING_CONFIG.betweenTools),
+      }
     }
     if (Option.contains(rule, "On") || hasToggle(entry)) {
       return { effort: Option.none(), thinking: Option.some(THINKING_CONFIG.disabled) }
@@ -2368,7 +2382,8 @@ const THINKING_CONFIG = {
     block_binding: { prefix_mismatch_behavior: "drop_block" },
   },
   disabled: { type: "disabled" },
-} satisfies Record<"adaptive" | "disabled", JsonRecord>
+  betweenTools: { type: "between_tools" },
+} satisfies Record<"adaptive" | "disabled" | "betweenTools", JsonRecord>
 
 /** The beta that `thinking.block_binding` requires; sending the field without it is a 400. */
 const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
