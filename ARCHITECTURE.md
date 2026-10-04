@@ -308,7 +308,9 @@ updates this list in the same commit.
     names in `branchTools`. A body that requires any other service does not
     compile. A type argument that grants services makes its declaration
     required, so a typed input cannot grant a service without the value that
-    provides it. The bound is on the type: it limits the services `execute`
+    provides it. Only a tuple type proves which resources a value holds, so
+    an array type (`ReadonlyArray<typeof Counter>`) grants nothing; the
+    factories infer an inline `resources: [Counter]` as a tuple. The bound is on the type: it limits the services `execute`
     requires (its `R`). It does not hide the runtime context, so
     `Effect.serviceOption` still reads a service the root holds
     (`registry_probe` in `packages/core/tests/server/rpc.test.ts`). The
@@ -344,17 +346,15 @@ names the decision that left it open.
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
   snapshot read per session per tick. Rejected as R6 in the same ledger.
-- **Only the root chooses a branch-tool feature.** A root installs one
-  feature (`createDependencies({ branchTools })`), and the shipped cell
-  declares it. A user extension cannot declare a feature of its own, and
-  the loader does not bind `@gent/extensions` for user files, so a user leaf
-  cannot name `CellBranchTools` either. This runs against the owner rule
-  that a shipped extension is never more privileged than a user extension.
-  Binding the value would only let a user leaf share the cell's private
-  storage; it would not let a user extension bring a feature. The fix that
-  removes the asymmetry is a root that composes the features its extensions
-  declare, which is a new concept, so it stays open until an extension
-  other than the cell needs branch state.
+- **Open: a user extension cannot get a branch-tool feature.** This breaks
+  the owner rule that a shipped extension is never more privileged than a
+  user extension (`NORTH_STAR.md`), and nothing here waives it. A root
+  installs one feature (`createDependencies({ branchTools })`) and the
+  shipped cell declares it. A user extension cannot bring a feature of its
+  own, and the loader does not bind `@gent/extensions` for user files, so a
+  user leaf cannot name `CellBranchTools` either. Binding that value would
+  only let a user leaf share the cell's private storage. The repair is
+  queued as its own design batch (pass 30 orchestrator queue).
 - **Compaction is measured on long sessions only by hand.** The handoff
   count (`ModelContextProjected.compacted`) after the spill comes from gamut
   runs, not from a test; the receipt in

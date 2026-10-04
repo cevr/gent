@@ -338,6 +338,9 @@ export default defineExtension({
 - `execute(params)` — returns `Effect`; host access comes from
   `yield* ExtensionContext`
 - `resources` — the `defineResource` values whose services the body yields.
+  Write the array inline (`resources: [Counter]`) or type it as a tuple: an
+  array type such as `ReadonlyArray<typeof Counter>` can be empty, so it
+  grants no services.
   The same extension must register each one, or the extension fails to load
   with `tools[i] (id): names resource "…", which this extension does not register`.
 - `branchTools` — the branch-tool feature whose storage the body yields (see

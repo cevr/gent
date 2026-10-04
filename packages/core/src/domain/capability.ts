@@ -300,6 +300,16 @@ type RequiredDeclarations<Resources, Feature> = ([Resources] extends [ReadonlyAr
   : { readonly resources: Resources }) &
   ([Feature] extends [never] ? unknown : { readonly branchTools: BranchToolFeature<Feature> })
 
+/**
+ * The services a `resources` declaration proves present. Only a tuple type
+ * proves which definitions the value holds; an array type such as
+ * `ReadonlyArray<typeof Counter>` also types an empty or partial array, so it
+ * grants nothing. The factories take `Resources` as a `const` type parameter,
+ * so an inline `resources: [Counter]` infers as a tuple.
+ */
+type DeclaredResourceServices<Resources extends ReadonlyArray<AnyResourceContribution>> =
+  number extends Resources["length"] ? never : ResourceServices<Resources[number]>
+
 /** Author-facing input to `request({...})`. */
 export type RequestInput<
   Input = unknown,
@@ -379,9 +389,9 @@ interface RequestInputFields<
 export function request<
   Input,
   Output,
-  R extends LeafServices | ResourceServices<Resources[number]> | Feature = never,
+  R extends LeafServices | DeclaredResourceServices<Resources> | Feature = never,
   E extends RequestFailure = CapabilityError,
-  Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
+  const Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
   Feature = never,
 >(input: RequestInput<Input, Output, R, E, Resources, Feature>): RequestCapability<Input, Output>
 export function request(input: {
@@ -738,8 +748,8 @@ export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Output extends Schema.Encoder<any, never>,
   Error,
-  Deps extends LeafServices | ResourceServices<Resources[number]> | Feature,
-  Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
+  Deps extends LeafServices | DeclaredResourceServices<Resources> | Feature,
+  const Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
   Feature = never,
 >(
   input: ToolInput<Params, Output, Error, Deps, Resources, Feature>,

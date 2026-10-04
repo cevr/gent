@@ -3005,12 +3005,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane",
   },
   {
-    // The type tests assert that a tool body and a request body needing an
-    // undeclared service fail to compile; the Effect diagnostic reports the
-    // same failure.
+    // The type tests assert that a tool body and a request body needing a
+    // service no declaration proves fail to compile; the Effect diagnostic
+    // reports the same failure.
     file: "packages/core/tests/extensions/api.test.ts",
     text: "missingEffectContext:off -- the test asserts that this leaf does not compile",
-    count: 2,
+    count: 6,
   },
 ]
 
