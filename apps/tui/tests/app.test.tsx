@@ -6851,6 +6851,54 @@ export default defineClientExtension("@test/hello", {
         )
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
+  it.live("a client reload keeps the widgets of an extension it kept mounted", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      let mounts = 0
+      let home = Option.none<string>()
+      let shell = Option.none<ClientContext["Service"]["shell"]>()
+      const counted = defineClientExtension("@test/counted-widget", {
+        setup: Effect.gen(function* () {
+          shell = Option.some((yield* ClientContext).shell)
+          return clientContributions(
+            widgetContribution({
+              id: "counted",
+              slot: "below-input",
+              component: () => {
+                mounts += 1
+                home = Option.some(useWorkspace().home)
+                return <text>counted widget</text>
+              },
+            }),
+          )
+        }),
+      })
+      const { setup, ext } = yield* mountApp({
+        builtins: [counted],
+        initialSession: sessionNamed(
+          SessionId.make("session-kept-widget"),
+          BranchId.make("branch-kept-widget"),
+          "Kept",
+        ),
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("counted widget"), "the widget")
+      const dir = `${yield* Effect.fromOption(home)}/.gent/extensions`
+      yield* fs.makeDirectory(dir, { recursive: true })
+      yield* fs.writeFileString(
+        `${dir}/added.client.ts`,
+        `import { Effect } from "effect"
+import { clientCommandContribution, defineClientExtension } from "@gent/tui/extensions"
+export default defineClientExtension("@test/added", {
+  setup: Effect.succeed(clientCommandContribution({ id: "added", title: "added", onSelect: () => {} })),
+})
+`,
+      )
+      ;(yield* Effect.fromOption(shell)).reloadExtensions()
+      yield* waitUntil(() => ext.commands().some((command) => command.id === "added"), "the reload")
+      expect(renderFrame(setup)).toContain("counted widget")
+      expect(mounts).toBe(1)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
   it.scopedLive("a turn's end in the session in view reads extension health again", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-health-turn")
