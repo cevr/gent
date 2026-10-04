@@ -50,13 +50,22 @@ const moduleDirectory = Effect.gen(function* () {
   return path.dirname(yield* Effect.orDie(path.fromFileUrl(new URL(import.meta.url))))
 })
 
-/** The repo root `install.sh` to copy into the image, when the repo has one. */
+/**
+ * The repo root `install.sh` to copy into the image, when the repo has one.
+ * A copy that fails the site's installer check stops the deploy: the site
+ * would otherwise ship a fallback that is not gent's installer.
+ */
 const bundledInstallerFile = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const source = path.join(yield* moduleDirectory, "..", "..", "..", "install.sh")
-  if (yield* Effect.orDie(fs.exists(source))) return [{ source, dest: BUNDLED_INSTALLER }]
-  return []
+  if (!(yield* Effect.orDie(fs.exists(source)))) return []
+  yield* Site.checkInstaller(yield* Effect.orDie(fs.readFileString(source))).pipe(
+    Effect.catchTag("InstallerRejected", (rejected) =>
+      Effect.die(new Error(`${source} is not gent's installer: ${rejected.reason}`)),
+    ),
+  )
+  return [{ source, dest: BUNDLED_INSTALLER }]
 })
 
 /**

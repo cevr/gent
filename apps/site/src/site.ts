@@ -4,16 +4,24 @@
  *
  * - `GET /` is the landing page: what gent is, the install line, links.
  * - `GET /install.sh` and `GET /install` serve the installer itself, never a
- *   redirect, so `curl -fsSL https://gent.cvr.im/install.sh | sh` and a plain
- *   `curl gent.cvr.im/install.sh | sh` both run it. The script is the
- *   `install.sh` asset of the latest GitHub release. When there is no release
- *   or GitHub fails, it is the copy bundled at deploy time; with no copy, a
- *   script that says so and exits 1. The `x-gent-install-source` header names
- *   which one answered.
+ *   redirect, so `curl -fsSL https://gent.cvr.im/install.sh | sh` runs it.
+ *   Use HTTPS: Railway's edge answers plain HTTP with an empty 301 before the
+ *   request reaches this app, so `curl gent.cvr.im/install.sh | sh` without
+ *   `-L` runs nothing. The script is the `install.sh` asset of the latest
+ *   GitHub release, when GitHub answers with a complete installer. When there
+ *   is no release, or GitHub fails or answers with anything else, it is the
+ *   copy bundled at deploy time; with no copy, a script that says so and exits
+ *   1. The `x-gent-install-source` header names which one answered.
  * - `GET /healthz` answers `ok` (Railway's health check).
  */
-import { Cache, Duration, Effect, Exit, Layer, Option } from "effect"
-import { HttpClient, HttpRouter, HttpServerResponse } from "effect/http"
+import { Cache, Duration, Effect, Exit, Layer, Option, Schema, Stream } from "effect"
+import {
+  FetchHttpClient,
+  HttpClient,
+  type HttpClientResponse,
+  HttpRouter,
+  HttpServerResponse,
+} from "effect/http"
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -28,6 +36,25 @@ const RELEASE_TTL = Duration.minutes(5)
 /** After a miss (no release, or GitHub failed), ask again sooner. */
 const MISS_TTL = Duration.minutes(1)
 const FETCH_TIMEOUT = Duration.seconds(10)
+
+/**
+ * The hosts a release download may pass through: GitHub itself, then the
+ * hosts it redirects release assets to. Every hop is HTTPS on the default port.
+ */
+const RELEASE_HOSTS: ReadonlySet<string> = new Set([
+  "github.com",
+  "release-assets.githubusercontent.com",
+  "objects.githubusercontent.com",
+])
+/** GitHub takes two hops (tag, then asset host); more is not a release download. */
+const MAX_REDIRECTS = 5
+/** The installer is about 11 KiB; anything this large is not it. */
+export const MAX_INSTALLER_BYTES = 256 * 1024
+/** The second line of the repo's `install.sh`: what makes a script gent's installer. */
+export const INSTALLER_MARKER =
+  "# Install gent, the minimal agent harness: https://github.com/cevr/gent"
+/** The installer's last line. Its body is inside `main`, so a cut-short copy runs nothing. */
+const INSTALLER_CALL = 'main "$@"'
 
 /**
  * The script for when no installer exists. Served with status 200: a 4xx or
@@ -48,12 +75,106 @@ export interface SiteOptions {
   readonly bundledInstaller: Option.Option<string>
 }
 
-/** The latest release's installer, fetched with the given client. */
+/** Why a release answer is not served as the installer. */
+export class InstallerRejected extends Schema.TaggedError<InstallerRejected>()(
+  "InstallerRejected",
+  { reason: Schema.String },
+) {}
+
+const reject = (reason: string): Effect.Effect<never, InstallerRejected> =>
+  Effect.fail(new InstallerRejected({ reason }))
+
+/**
+ * The script as gent's installer, or why it is not one: `#!/bin/sh` first,
+ * the marker line, and the closing `main "$@"` last.
+ */
+export const checkInstaller = (script: string): Effect.Effect<string, InstallerRejected> => {
+  const lines = script.trimEnd().split("\n")
+  if (lines[0] !== "#!/bin/sh") return reject("no #!/bin/sh first line")
+  if (!lines.includes(INSTALLER_MARKER)) return reject("no installer marker line")
+  if (lines.at(-1) !== INSTALLER_CALL) return reject(`no closing ${INSTALLER_CALL}`)
+  return Effect.succeed(script)
+}
+
+/** True for an HTTPS URL on the default port of one of GitHub's release hosts. */
+const onReleaseHost = (url: URL) =>
+  url.protocol === "https:" && url.port === "" && RELEASE_HOSTS.has(url.hostname)
+
+/** The next hop of a redirect, when it stays on HTTPS and on GitHub's release hosts. */
+const redirectTarget = (
+  location: Option.Option<string>,
+  from: URL,
+): Effect.Effect<URL, InstallerRejected> =>
+  location.pipe(
+    Option.flatMap((value) => Option.fromNullOr(URL.parse(value, from))),
+    Option.match({
+      onNone: () => reject("a redirect without a readable location"),
+      onSome: (next) => {
+        if (onReleaseHost(next)) return Effect.succeed(next)
+        return reject(`a redirect off GitHub's release hosts: ${next.origin}`)
+      },
+    }),
+  )
+
+/**
+ * The body of a 200, read up to `MAX_INSTALLER_BYTES`: the read stops as soon
+ * as the body passes the bound, and a body shorter than its declared length
+ * is incomplete.
+ */
+const boundedText = Effect.fn("Site.boundedText")(function* (
+  response: HttpClientResponse.HttpClientResponse,
+) {
+  const declared = Option.fromUndefinedOr(response.headers["content-length"]).pipe(
+    Option.map(Number),
+  )
+  if (Option.isSome(declared) && declared.value > MAX_INSTALLER_BYTES) {
+    return yield* reject(`a body of ${declared.value} bytes`)
+  }
+  const chunks: Array<Uint8Array> = []
+  let size = 0
+  yield* Stream.runForEach(response.stream, (chunk) => {
+    size += chunk.length
+    if (size > MAX_INSTALLER_BYTES) return reject(`a body over ${MAX_INSTALLER_BYTES} bytes`)
+    chunks.push(chunk)
+    return Effect.void
+  })
+  if (Option.isSome(declared) && declared.value !== size) {
+    return yield* reject(`${size} of ${declared.value} declared bytes`)
+  }
+  const bytes = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.length
+  }
+  return yield* Effect.try({
+    try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    catch: () => new InstallerRejected({ reason: "a body that is not UTF-8" }),
+  })
+})
+
+/**
+ * The latest release's installer, fetched with the given client. The client
+ * does not follow redirects itself (`fetch` with `redirect: "manual"`): each
+ * hop is checked against the release hosts first. Only a complete 200 that
+ * passes `checkInstaller` is the installer.
+ */
 const fetchReleaseInstaller = Effect.fn("Site.fetchReleaseInstaller")(function* (
   client: HttpClient.HttpClient,
 ) {
-  const response = yield* HttpClient.filterStatusOk(client).get(RELEASE_INSTALLER_URL)
-  return yield* response.text
+  let url = new URL(RELEASE_INSTALLER_URL)
+  for (let hop = 0; ; hop++) {
+    const response = yield* client
+      .get(url)
+      .pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }))
+    if (response.status >= 300 && response.status < 400) {
+      if (hop === MAX_REDIRECTS) return yield* reject(`more than ${MAX_REDIRECTS} redirects`)
+      url = yield* redirectTarget(Option.fromUndefinedOr(response.headers["location"]), url)
+      continue
+    }
+    if (response.status !== 200) return yield* reject(`status ${response.status}`)
+    return yield* checkInstaller(yield* boundedText(response))
+  }
 })
 
 const installResponse = (source: InstallSource, script: string) =>
@@ -116,7 +237,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
 
 <h2>Install</h2>
 <div class="install"><code id="line">${INSTALL_LINE}</code><button type="button" id="copy" hidden>Copy</button></div>
-<p class="note">macOS and Linux. One self-contained binary: no Bun or Node needed to run it. <a href="/install.sh">Read the script</a> first if you like.</p>
+<p class="note">macOS and Linux. Two self-contained binaries, <code>gent</code> and its <code>gent-cell</code> worker: no Bun or Node needed to run them. <a href="/install.sh">Read the script</a> first if you like.</p>
 
 <h2>What it is</h2>
 <ul>
