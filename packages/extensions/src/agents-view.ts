@@ -12,8 +12,10 @@ import {
   isSpawnedSession,
   request,
   SessionId,
+  sessionThread,
   tailChars,
 } from "@gent/core/extensions/api"
+import { DELEGATE_AGENT_NAME } from "./delegate.js"
 
 // Test seam: only tests read these exports. The row shapes (LiveAgentRow,
 // DurableAgentRow, AgentRow) and the row functions (rowKey, sectionOf,
@@ -80,6 +82,10 @@ export interface DurableAgentRow {
   readonly updatedAt: number
   /** Spawned beside its parent's work (a delegate child or a `/btw` fork), not a handoff. */
   readonly sideThread: boolean
+  /** The thread key (`sessionThread`): a handoff chain shares its first session's id. */
+  readonly thread: SessionId
+  /** A delegate child: its completion lands in its parent's transcript. */
+  readonly delegate: boolean
 }
 
 /** One reconciled row, ready for display. */
@@ -102,6 +108,15 @@ export interface AgentRow {
   readonly depth: number
   /** From the durable row; a loop with no session row yet is not marked. */
   readonly sideThread: boolean
+  /** The thread key, from the durable row; `None` for a loop with no session row yet. */
+  readonly thread: Option.Option<SessionId>
+  /** From the durable row; a loop with no session row yet is not marked. */
+  readonly delegate: boolean
+  /**
+   * The loops this row stands for, oldest first. One for a loop; a thread's
+   * sessions after `buildRowTree` folds them, the row's own ids the newest's.
+   */
+  readonly members: ReadonlyArray<AgentRowKey>
 }
 
 /**
@@ -178,13 +193,97 @@ export const reconcileAgentRows = (params: {
       live: Option.isSome(live),
       depth: 0,
       sideThread: Option.exists(durable, (row) => row.sideThread),
+      thread: Option.map(durable, (row) => row.thread),
+      delegate: Option.exists(durable, (row) => row.delegate),
+      members: [identity.value],
     })
   }
   return rows
 }
 
+/** Oldest first; the row key breaks a tie, so the order is total. */
+const byStart = (left: AgentRow, right: AgentRow) => {
+  const start =
+    Option.getOrElse(left.createdAt, () => 0) - Option.getOrElse(right.createdAt, () => 0)
+  if (start !== 0) return start
+  return Order.String(rowKey(left), rowKey(right))
+}
+
+/** The first row of `rows` under `order`, or `seed` when none comes before it. */
+const firstBy = (
+  seed: AgentRow,
+  rows: ReadonlyArray<AgentRow>,
+  order: (left: AgentRow, right: AgentRow) => number,
+): AgentRow =>
+  rows.reduce((best, row) => {
+    if (order(row, best) < 0) return row
+    return best
+  }, seed)
+
 /**
- * Order rows for display: by section, and in each section as a tree. A root,
+ * One row for the sessions of one thread. The newest session is the thread's
+ * current one: the row takes its ids, name, cwd and liveness, so opening the
+ * row opens it. The status is the most active session's, the start and the
+ * place in the tree (parent, side-thread mark) the first session's, and the
+ * last update the latest of any.
+ */
+const foldThread = (seed: AgentRow, others: ReadonlyArray<AgentRow>): AgentRow => {
+  if (others.length === 0) return seed
+  const all = [seed, ...others]
+  const first = firstBy(seed, all, byStart)
+  const current = firstBy(seed, all, (left, right) => byStart(right, left))
+  const busiest = firstBy(
+    seed,
+    all,
+    (left, right) =>
+      SECTION_ORDER[left.section] - SECTION_ORDER[right.section] || byStart(right, left),
+  )
+  const stamps = all.flatMap((row) => Option.toArray(row.updatedAt))
+  return {
+    ...current,
+    section: busiest.section,
+    status: busiest.status,
+    runningSince: busiest.runningSince,
+    createdAt: first.createdAt,
+    updatedAt: Option.map(
+      Option.liftPredicate(stamps, (values) => values.length > 0),
+      (values) => Math.max(...values),
+    ),
+    parent: first.parent,
+    sideThread: first.sideThread,
+    members: all.toSorted(byStart).map((row) => ({
+      sessionId: row.sessionId,
+      branchId: row.branchId,
+    })),
+  }
+}
+
+/**
+ * Fold each thread's sessions (a handoff chain) into one row. A loop with no
+ * session row has no key and stays its own row. A parent link keeps the
+ * persisted parent; `buildRowTree` nests a child of an older session under
+ * its thread's row through the row's members.
+ */
+const groupThreads = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> => {
+  const groups = new Map<string, { readonly seed: AgentRow; readonly others: Array<AgentRow> }>()
+  for (const row of rows) {
+    const key = Option.match(row.thread, {
+      onNone: () => `loop ${rowKey(row)}`,
+      onSome: (thread) => `thread ${thread}`,
+    })
+    Option.match(Option.fromUndefinedOr(groups.get(key)), {
+      onNone: () => groups.set(key, { seed: row, others: [] }),
+      onSome: (group) => group.others.push(row),
+    })
+  }
+  return Array.from(groups.values(), (group) => foldThread(group.seed, group.others))
+}
+
+/**
+ * Order rows for display: one row per thread, by section, and in each
+ * section as a tree. The sessions of one thread (a handoff chain) fold into
+ * one row first; a spawned session is a thread of its own and nests under
+ * the session that started it. A root,
  * or a row whose parent is in another section, is placed by its last update,
  * most recent first, at depth 0; its children follow it one level deeper, in
  * the order they started, as the tray lists them, so a child's steps never
@@ -196,9 +295,16 @@ export const reconcileAgentRows = (params: {
  * make work disappear from the view. Rows on a parent cycle are placed as
  * roots.
  */
-export const buildRowTree = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> => {
+export const buildRowTree = (loops: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> => {
+  const rows = groupThreads(loops)
   const byKey = new Map<string, AgentRow>()
   for (const row of rows) byKey.set(rowKey(row), row)
+  // Each session of a thread stands for the thread's row, so a child of an
+  // older session nests under the thread.
+  const rowOfMember = new Map<string, string>()
+  for (const row of rows) {
+    for (const member of row.members) rowOfMember.set(rowKey(member), rowKey(row))
+  }
 
   const byRecency = (left: AgentRow, right: AgentRow) => {
     const recency =
@@ -206,15 +312,9 @@ export const buildRowTree = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<Agent
     if (recency !== 0) return recency
     return Order.String(rowKey(left), rowKey(right))
   }
-  const byStart = (left: AgentRow, right: AgentRow) => {
-    const start =
-      Option.getOrElse(left.createdAt, () => 0) - Option.getOrElse(right.createdAt, () => 0)
-    if (start !== 0) return start
-    return Order.String(rowKey(left), rowKey(right))
-  }
   // The parent a row nests under here: one in the same section.
   const parentKeyOf = (row: AgentRow): Option.Option<string> =>
-    Option.map(row.parent, rowKey).pipe(
+    Option.map(row.parent, (parent) => rowOfMember.get(rowKey(parent)) ?? rowKey(parent)).pipe(
       Option.filter((key) => byKey.get(key)?.section === row.section),
     )
   const children = new Map<string, Array<AgentRow>>()
@@ -259,6 +359,8 @@ export const filterRows = (
       Option.getOrElse(row.cwd, () => ""),
       row.sessionId,
       row.branchId,
+      // An older session of the thread finds the thread's row.
+      ...row.members.map((member) => member.sessionId),
     ]
     return fields.some((field) => field.toLowerCase().includes(needle))
   })
@@ -479,10 +581,30 @@ export const AgentRowEntry = Schema.Struct({
   runningSince: Schema.optional(Schema.Finite),
   live: Schema.Boolean,
   depth: Schema.Finite,
-  /** The session this loop was delegated from; absent at a tree root. */
+  /**
+   * The session this one was created from, as stored. Absent at a tree root.
+   * When that session is an older one of a thread, the row it nests under is
+   * the thread's row, whose `sessions` hold it.
+   */
   parentSessionId: Schema.optional(SessionId),
   /** The session opened a thread of its own under a parent; a handoff shares its parent's. */
   sideThread: Schema.Boolean,
+  /**
+   * The thread's key: its first session's id. A handoff does not change it,
+   * so a client follows one thread by it while the row's own ids move to the
+   * newest session. Absent for a loop with no stored session.
+   */
+  thread: Schema.optional(SessionId),
+  /**
+   * A delegate child, whose completion lands in its parent's transcript; the
+   * TUI gives it no done row. Absent for any other session.
+   */
+  delegate: Schema.optional(Schema.Literal(true)),
+  /**
+   * The sessions of this row's thread, oldest first, when it holds more than
+   * one (a handoff chain). The row's own ids are the newest's.
+   */
+  sessions: Schema.optional(Schema.Array(SessionId)),
   /** A running loop's current tool or last streamed line. Wire only, never stored. */
   activity: Schema.optional(Schema.String),
 })
@@ -492,8 +614,9 @@ export const ListAgentsInput = Schema.Struct({
   /** Case-insensitive substring filter over name, cwd, and ids. */
   query: Schema.optional(Schema.String),
   /**
-   * Only this session and the sessions below it, at any depth: the tray's
-   * read, whose cost follows the subtree rather than the workspace. Absent,
+   * Only this session's thread and the sessions below it, at any depth: the
+   * tray's read, whose cost follows the subtree rather than the workspace. A
+   * handoff's listing so holds what the sessions it continues started. Absent,
    * the listing covers every session in the workspace.
    */
   root: Schema.optional(SessionId),
@@ -506,7 +629,7 @@ const ListAgentsOutput = Schema.Struct({
 
 /**
  * Join the live loop enumeration against durable session storage, before the
- * query filter: the whole workspace, or with a `root` only its subtree.
+ * query filter: the whole workspace, or with a `root` only its thread's tree.
  *
  * Neither catalog is sufficient alone: the live one is empty after a restart,
  * and the durable one cannot say what is running. `projectAgentRows` above
@@ -519,7 +642,9 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (root: Option.
   // A catalog read that fails is a host defect, not something the caller can
   // recover from, so it dies rather than widening the capability's error type.
   const activeLoops = yield* ctx.Session.listActiveLoops.pipe(Effect.orDie)
-  const sessions = yield* ctx.Session.listSessions({ root: Option.getOrUndefined(root) }).pipe(
+  // A root stands for its whole thread: a handoff's listing holds what the
+  // sessions it continues started, even with the thread's first session gone.
+  const sessions = yield* ctx.Session.listSessions({ thread: Option.getOrUndefined(root) }).pipe(
     Effect.orDie,
   )
   const listed: ReadonlyArray<AgentRowKey> = activeLoops.map((loop) => ({
@@ -563,11 +688,13 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (root: Option.
         // has a parent and is the session its own thread is named after.
         // A session that names its parent without a branch gets no `parent`.
         sideThread: isSpawnedSession(session),
+        thread: sessionThread(session),
+        delegate: session.admission?.agent === DELEGATE_AGENT_NAME,
       },
     ]
   })
 
-  return { rows: projectAgentRows({ live, durable }), listed }
+  return { loops: reconcileAgentRows({ live, durable }), listed }
 })
 
 export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
@@ -579,22 +706,28 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
     input: ListAgentsInput,
     output: ListAgentsOutput,
     execute: Effect.fn("AgentsViewRpc.ListAgents")(function* (input) {
-      const { rows: all, listed } = yield* collectRows(Option.fromUndefinedOr(input.root))
+      const { loops, listed } = yield* collectRows(Option.fromUndefinedOr(input.root))
       const activity = yield* AgentActivity
       // Every live child read here is watched, working or idle, so its next
       // turn reports from its first event. A tree root is never in the tray.
-      // The watch set comes from the rows before the query filter; under a
-      // `root` it is that subtree, which is all the caller shows. Only the
-      // runtime's whole listing stops a watcher, never the rows read here.
+      // The watch set comes from the loops before the query filter and before
+      // a thread folds its sessions into one row; under a `root` it is that
+      // subtree, which is all the caller shows. Only the runtime's whole
+      // listing stops a watcher, never the rows read here.
       yield* activity.follow({
         listed,
-        watch: all.filter((row) => row.live && Option.isSome(row.parent)),
+        watch: loops.filter((row) => row.live && Option.isSome(row.parent)),
       })
-      const rows = filterRows(all, input.query ?? "")
+      const rows = filterRows(buildRowTree(loops), input.query ?? "")
       const lines = new Map<string, string>()
       for (const row of rows) {
-        const line = yield* activity.read(row)
-        if (Option.isSome(line)) lines.set(rowKey(row), line.value)
+        // A thread's row says what its newest working session does.
+        for (const member of row.members.toReversed()) {
+          const line = yield* activity.read(member)
+          if (Option.isNone(line)) continue
+          lines.set(rowKey(row), line.value)
+          break
+        }
       }
       return {
         rows: rows.map((row) => ({
@@ -613,6 +746,14 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
             Option.map(row.parent, (parent) => parent.sessionId),
           ),
           sideThread: row.sideThread,
+          thread: Option.getOrUndefined(row.thread),
+          delegate: Option.getOrUndefined(Option.liftPredicate(true as const, () => row.delegate)),
+          sessions: Option.getOrUndefined(
+            Option.liftPredicate(
+              row.members.map((member) => member.sessionId),
+              (ids) => ids.length > 1,
+            ),
+          ),
           activity: lines.get(rowKey(row)),
         })),
       }

@@ -2520,6 +2520,38 @@ describe("Scripted debug model tool scenario", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
+  it.live("debug threads starts two threads under their wire names, lists them, then answers", () =>
+    Effect.gen(function* () {
+      const tools = ["thread__start", "thread__list"]
+      const steps = yield* Effect.forEach([0, 1, 2], (done) => step(done, tools, "debug threads"))
+      expect(steps.map((parts) => callsOf(parts).map((call) => call.name))).toEqual([
+        ["thread__start", "thread__start"],
+        ["thread__list"],
+        [],
+      ])
+      // The first thread plays the tool scenario in its own session.
+      expect(callsOf(steps[0] ?? [])[0]?.params).toEqual(
+        expect.objectContaining({ task: "debug tools" }),
+      )
+      const cell = callsOf(yield* step(0, ["cell"], "debug threads"))
+      expect(cell[0]?.params).toEqual({
+        code: expect.stringContaining("tools.thread.start({"),
+      })
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("debug handoff asks for a handoff, then answers", () =>
+    Effect.gen(function* () {
+      const steps = yield* Effect.forEach([0, 1], (done) =>
+        step(done, ["handoff"], "debug handoff"),
+      )
+      expect(steps.map((parts) => callsOf(parts).map((call) => call.name))).toEqual([
+        ["handoff"],
+        [],
+      ])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.live("a turn narrowed to cell runs each step's ops as cell code", () =>
     Effect.gen(function* () {
       const reads = callsOf(yield* step(1, ["cell"]))

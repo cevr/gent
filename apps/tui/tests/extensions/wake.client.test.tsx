@@ -1,13 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option, Queue } from "effect"
+import { DateTime, Effect, Option, Queue } from "effect"
 import { createSignal } from "solid-js"
 import { WAKE_EXTENSION_ID, type WakePendingType } from "@gent/extensions/client"
 import { BranchId, SessionId } from "@gent/core/extensions/api"
-import wakeExtension, { WakeTray, wakeTrayLines } from "../../src/extensions/wake.client"
+import wakeExtension, { WakeTray, wakeLabel, wakeTrayLines } from "../../src/extensions/wake.client"
 import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
 import { renderFrame, renderScoped } from "../render-harness-boundary"
-import { waitForFrame } from "../helpers-boundary"
+import { waitForFrame, waitUntil } from "../helpers-boundary"
 
 // ── wake tray ───────────────────────────────────────────────────────────────
 
@@ -107,6 +107,182 @@ describe("wakeTrayLines", () => {
       ])
       expect(wakeTrayLines(pending, 1_000_000, 20)[0]?.text).toBe("alarm in 1m 35s · c…")
     }),
+  )
+})
+
+// ── auto-resume ─────────────────────────────────────────────────────────────
+
+/**
+ * An auto-resume shows as its own row: when it fires on the wall clock, the
+ * countdown, the attempt, and the key that cancels it. A resume that did not
+ * run leaves a notice that says why and when the limit resets.
+ */
+
+const utc = () => DateTime.zoneMakeOffset(0)
+
+/** 00:16:40 UTC; the resume fires 47 minutes later, at 01:03:40. */
+const RESUME_NOW = 1_000_000
+
+const resumePending: WakePendingType = {
+  now: RESUME_NOW,
+  entries: [
+    {
+      _tag: "alarm",
+      wakeId: "resume:m-limited:3790000",
+      dueAt: RESUME_NOW + 47 * 60_000,
+      note: "continue after the usage limit resets",
+      resume: { attempt: 1, maxResumes: 3, resetAt: 3_790_000, messageId: "m-limited" },
+    },
+  ],
+}
+
+describe("auto-resume rows", () => {
+  it.live("a pending resume names its time, countdown, attempt and the key that cancels it", () =>
+    Effect.sync(() => {
+      expect(wakeTrayLines(resumePending, RESUME_NOW, 80, utc)).toEqual([
+        { glyph: "↻", text: "resume at 01:03 · in 47m 0s · 1/3 · esc cancels" },
+      ])
+      // A narrow tray keeps the countdown and the key, and drops the rest.
+      expect(wakeTrayLines(resumePending, RESUME_NOW, 30, utc)).toEqual([
+        { glyph: "↻", text: "resume in 47m 0s · esc cancels" },
+      ])
+      expect(wakeTrayLines(resumePending, RESUME_NOW, 20, utc)[0]?.text).toBe(
+        "resume in 47m 0s · …",
+      )
+    }),
+  )
+
+  it.live("a resume that did not run says why and when the limit resets", () =>
+    Effect.sync(() => {
+      const notices: WakePendingType = {
+        now: RESUME_NOW,
+        entries: [
+          {
+            _tag: "notice",
+            wakeId: "resume:m-capped:4600000",
+            outcome: "fired",
+            firedAt: RESUME_NOW - 60_000,
+            content: "Auto-resume stopped after 3 attempts.",
+            note: "auto-resume stopped after 3 attempts",
+            resume: { resetAt: 4_600_000 },
+          },
+          {
+            _tag: "notice",
+            wakeId: "resume:m-late:0",
+            outcome: "fired",
+            firedAt: RESUME_NOW - 120_000,
+            content: "Auto-resume skipped.",
+            note: "auto-resume skipped: gent was not running",
+            resume: { resetAt: 0 },
+          },
+        ],
+      }
+      expect(wakeTrayLines(notices, RESUME_NOW, 80, utc)).toEqual([
+        { glyph: "↻", text: "auto-resume skipped: gent was not running · reset 00:00" },
+        { glyph: "↻", text: "auto-resume stopped after 3 attempts · resets 01:16" },
+      ])
+    }),
+  )
+
+  it.live("a fired resume reads as a resume, not an alarm", () =>
+    Effect.sync(() => {
+      expect(
+        wakeLabel(
+          Option.some({
+            outcome: "fired",
+            note: "continue after the usage limit resets",
+            firedAt: 3_820_000,
+            resume: { attempt: 2, resetAt: 3_790_000 },
+          }),
+        ),
+      ).toBe("↻ resumed after the usage limit reset · attempt 2")
+    }),
+  )
+
+  // Esc on an idle composer cancels the pending resume: the wake client's
+  // stoppable dismisses it on the server by id and says so.
+  it.scopedLive("the stoppable dismisses the pending resume by id", () =>
+    Effect.gen(function* () {
+      const dismissed: Array<unknown> = []
+      const notes: Array<string> = []
+      let entries = resumePending.entries
+      const contributions = yield* provideClientServices(wakeExtension.setup, {
+        requestEffect: (request) =>
+          Effect.sync(() => {
+            if (request.capabilityId === "wake.dismiss") {
+              dismissed.push(request.input)
+              entries = []
+              return { dismissed: ["resume:m-limited:3790000"] }
+            }
+            return { now: RESUME_NOW, entries } satisfies WakePendingType
+          }),
+        shell: { notify: (message) => notes.push(message) },
+      })
+      const stoppables = Option.getOrElse(
+        Option.fromUndefinedOr(contributions.stoppables),
+        () => [],
+      )
+      expect(stoppables.map((stoppable) => stoppable.id)).toEqual(["wake.resume"])
+      const active = () => stoppables.some((stoppable) => stoppable.active())
+      yield* waitUntil(active, "the pending resume read")
+      for (const stoppable of stoppables) stoppable.stop()
+      yield* waitUntil(() => notes.length > 0, "the cancel reported")
+      expect(dismissed).toEqual([{ wakeId: "resume:m-limited:3790000" }])
+      expect(notes).toEqual(["auto-resume cancelled"])
+      yield* waitUntil(() => !active(), "no resume pending")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  // The resume fired between the tray's read and the dismiss: the server has
+  // nothing left to cancel, and the turn it started is running.
+  it.scopedLive("a dismiss that cancels nothing says the resume already fired", () =>
+    Effect.gen(function* () {
+      const notes: Array<string> = []
+      let entries = resumePending.entries
+      const contributions = yield* provideClientServices(wakeExtension.setup, {
+        requestEffect: (request) =>
+          Effect.sync(() => {
+            if (request.capabilityId === "wake.dismiss") {
+              entries = []
+              return { dismissed: [] }
+            }
+            return { now: RESUME_NOW, entries } satisfies WakePendingType
+          }),
+        shell: { notify: (message) => notes.push(message) },
+      })
+      const stoppables = Option.getOrElse(
+        Option.fromUndefinedOr(contributions.stoppables),
+        () => [],
+      )
+      const active = () => stoppables.some((stoppable) => stoppable.active())
+      yield* waitUntil(active, "the pending resume read")
+      for (const stoppable of stoppables) stoppable.stop()
+      yield* waitUntil(() => notes.length > 0, "the dismiss reported")
+      expect(notes).toEqual(["auto-resume already fired"])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live(
+    "a pending resume keeps its row when more entries than the tray shows are due first",
+    () =>
+      Effect.sync(() => {
+        const alarm = (wakeId: string, inSeconds: number) => ({
+          _tag: "alarm" as const,
+          wakeId,
+          dueAt: RESUME_NOW + inSeconds * 1000,
+          note: `check ${wakeId}`,
+        })
+        const crowded: WakePendingType = {
+          now: RESUME_NOW,
+          entries: [alarm("a1", 60), alarm("a2", 120), alarm("a3", 180), ...resumePending.entries],
+        }
+        expect(wakeTrayLines(crowded, RESUME_NOW, 80, utc)).toEqual([
+          { glyph: "↻", text: "resume at 01:03 · in 47m 0s · 1/3 · esc cancels" },
+          { glyph: "◷", text: "alarm in 1m 0s · check a1" },
+          { glyph: "◷", text: "alarm in 2m 0s · check a2" },
+          { glyph: " ", text: "+1 more pending" },
+        ])
+      }),
   )
 })
 

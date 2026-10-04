@@ -7,6 +7,7 @@ import {
   formatActivityRow,
   formatCellRowLabel,
   formatCost,
+  formatClock,
   formatDuration,
   collapsedOperations,
   formatFailureRow,
@@ -29,6 +30,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Fiber,
   Match,
   Option,
   Predicate,
@@ -248,22 +250,6 @@ const stepSummary = (steps: TurnSteps): ReadonlyArray<string> => {
   return parts
 }
 
-/** A clock field (0 to 59, a month, a day) as two digits. */
-const twoDigits = (n: number) => `${Math.floor(n / 10)}${n % 10}`
-
-/**
- * The wall-clock time a limit resets in `zone`: "17:05" on the day of `now`,
- * else "2026-10-05 09:30". A clock time stays true on a row that does not
- * redraw, where a countdown goes stale.
- */
-const resetClock = (retryAt: number, now: number, zone: DateTime.TimeZone): string => {
-  const at = DateTime.toParts(DateTime.makeZonedUnsafe(retryAt, { timeZone: zone }))
-  const today = DateTime.toParts(DateTime.makeZonedUnsafe(now, { timeZone: zone }))
-  const time = `${twoDigits(at.hour)}:${twoDigits(at.minute)}`
-  if (at.year === today.year && at.month === today.month && at.day === today.day) return time
-  return `${at.year}-${twoDigits(at.month)}-${twoDigits(at.day)} ${time}`
-}
-
 /** The error's text, its first line ending with the reset time when the failure names one. */
 const errorLabel = (
   event: Extract<SessionEvent, { _tag: "error" }>,
@@ -272,7 +258,7 @@ const errorLabel = (
 ): string => {
   if (Predicate.isUndefined(event.retryAt)) return event.error
   const [first = "", ...rest] = event.error.split("\n")
-  return [`${first} · resets ${resetClock(event.retryAt, now, zone())}`, ...rest].join("\n")
+  return [`${first} · resets ${formatClock(event.retryAt, now, zone())}`, ...rest].join("\n")
 }
 
 /**
@@ -1899,6 +1885,13 @@ type CommitOutcome = "landed" | "refused" | "unsettled" | "stale"
 /** How long exit waits for the live view's last commits. */
 const EXIT_FLUSH_MS = 1500
 
+/**
+ * How long blank rows inside an item stay before the transcript is written
+ * again: a tail that grows into them meanwhile (a streamed answer, the rows
+ * a turn's end adds) closes them itself.
+ */
+const GAP_SETTLE_MS = 300
+
 /** An item's rows from `from` up to `to`, or to its last row when `to` is `None`. */
 interface RowRange {
   readonly from: number
@@ -2033,14 +2026,15 @@ interface NativeTranscriptProps {
  * the region pushes up when it grows at the terminal's bottom go to the
  * terminal's scrollback for good; a shrink there leaves the freed rows
  * empty. So the tail keeps the transcript's last `canvas` rows: the rows the
- * region can show when the footer is at its smallest. Rows above them move
- * into history, a final item's rows in order, the top rows of an item first
- * when the session is idle. In a long session the region then takes every
- * row it may at once and keeps them: the footer's base (composer, status, the
- * activity row while a turn runs) and the tail share them, and growing UI
- * docked in the footer covers the tail's last rows rather than growing the
- * region. Closing it shows those rows again, and a smaller footer shows the
- * tail rows it kept above.
+ * region shows over the footer's base as it is now. Rows above them move into
+ * history, a final item's rows in order, its top rows first when the rest
+ * still fits. In a long session the region then takes every row it may at
+ * once and keeps them: the footer's base (composer, status, the activity row
+ * while a turn runs) and the tail share them. A base that grows moves the
+ * tail's top rows into history; one that shrinks leaves its rows above the
+ * tail until the tail grows into them. Growing UI docked in the footer covers
+ * the tail's last rows rather than growing the region, and closing it shows
+ * those rows again.
  */
 export function NativeTranscript(props: NativeTranscriptProps) {
   const renderer = useRenderer()
@@ -2101,11 +2095,10 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   /** Rows offered to history whose commit has not landed. The live view still shows them. */
   let pendingRows = 0
   /**
-   * The smallest footer base since the transcript was last laid out from the
-   * start. The live tail keeps the rows the region shows at that base, so a
-   * base that shrinks back (a turn that ends) shows kept rows, never blank ones.
+   * The canvas the last pass offered rows for, since the transcript was last
+   * laid out from the start. A taller canvas gives back rows still in flight.
    */
-  let footerFloor = Option.none<number>()
+  let offeredCanvas = Option.none<number>()
   /**
    * The fingerprints history was last checked against as a prefix. A commit
    * lands only while the item it drew still has the fingerprint these hold at
@@ -2168,7 +2161,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     // A commit still settling was drawn for the screen the replay clears:
     // it comes back, and the replay offers its item again.
     commits.take()
-    footerFloor = Option.none()
+    offeredCanvas = Option.none()
     batch(() => {
       setNativeOutputReady(false)
       setReplayPending(true)
@@ -2563,6 +2556,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
 
   onCleanup(() => {
     disposed = true
+    stopGapWatch()
     if (exitFlushes.get(renderer) === flushForExit) exitFlushes.delete(renderer)
     Queue.endUnsafe(nativeTasks)
     renderer.off("frame", finishNativeReturn)
@@ -2681,10 +2675,14 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   // Scrollback is immutable, so nothing commits until every client renderer
   // has loaded and every notice-row source has answered; the live view draws
   // the rows it has meanwhile. The live tail keeps the transcript's last
-  // `canvas` rows: the rows the region shows when the footer is at its
-  // smallest. Rows above them move into history in transcript order. While a
-  // turn runs only a whole final item moves; once the session is idle the
-  // top rows of an item move too, so every row is in history or on screen.
+  // `canvas` rows: the rows the region shows under the pinned prompt and over
+  // the footer's base as they are now. Rows above them move into history in
+  // transcript order, a final item's top rows too, so a base that grows (the
+  // activity row as a turn starts) moves the rows it takes from the tail into
+  // history: every final row is in history or on screen. Only an item that is
+  // not final yet (a streamed answer, a run still going) keeps rows the tail
+  // cannot show. A base that shrinks leaves its rows above the tail, under
+  // history, until the tail grows into them; a turn's end adds its own rows.
   // A measurement runs it again: what it reads per item it reads from the
   // memos below, so a growing tail costs the same in a session of any length.
   const fingerprints = createMemo(() => historyFingerprints(displayedItems(), toolRuns()))
@@ -2722,22 +2720,22 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         requestReplay()
         return
       }
-      const floor = Option.match(footerFloor, {
-        onNone: () => base,
-        onSome: (rows) => Math.min(rows, base),
-      })
-      // A lower floor makes the canvas taller. Rows offered for the old one
+      const canvas = maximum - base - pinnedRows
+      // A taller canvas shows more of the tail. Rows offered for the old one
       // and not landed would leave the tail short of it: they come back, and
       // this pass offers again for the new canvas.
-      if (Option.exists(footerFloor, (rows) => floor < rows) && pendingRows > 0) rewind()
-      footerFloor = Option.some(floor)
+      if (Option.exists(offeredCanvas, (rows) => canvas > rows) && pendingRows > 0) rewind()
+      offeredCanvas = Option.some(canvas)
       // The rows the tail holds above the canvas, less those already offered.
       offerRows(items, next, {
-        excess: tailRows - (maximum - floor - pinnedRows) - pendingRows,
+        excess: tailRows - canvas - pendingRows,
         unfinished,
         turnRunning,
         runs,
       })
+      // A pass that offers nothing can still leave a gap: a taller canvas
+      // gave back the rows in flight, and no commit sizes the region again.
+      watchGap()
     })
   })
 
@@ -2764,9 +2762,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   }
 
   /**
-   * Offers the transcript's rows above the canvas to history, in order. A
-   * whole final item moves at any time; the top rows of an item move only
-   * while no turn runs.
+   * Offers the transcript's rows above the canvas to history, in order: a
+   * final item whole, or its top rows when the rest still fits. An item that
+   * is not final stops the offer, with every item after it.
    */
   const offerRows = (
     items: ReadonlyArray<SessionItem>,
@@ -2794,7 +2792,6 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         excess -= rest
         continue
       }
-      if (plan.turnRunning) return
       offer(item, value, Option.some(queuedRows + excess))
       return
     }
@@ -2884,7 +2881,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * which the commit then writes into the space the region left. Any other
    * shrink there would leave its rows empty under the status row, so the
    * region keeps them: they sit above the live tail, under history, and the
-   * next rows the tail grows take them. A region above the bottom (a short
+   * next rows the tail grows take them. Kept rows inside an item that history
+   * holds the top of replay the transcript once they stay (`watchGap`).
+   * A region above the bottom (a short
    * session) has the terminal's own empty rows under it, so it shrinks to
    * what it wants, and a pane grows it into those rows. A replay clears the
    * screen and starts from the rows the region wants.
@@ -2906,9 +2905,54 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     // `afterCommitFrame` grows it then.
     if (!replaying && unflushedRows > 0) {
       renderer.footerHeight = Math.min(rows, renderer.footerHeight)
-      return
-    }
-    renderer.footerHeight = rows
+    } else renderer.footerHeight = rows
+    watchGap()
+  }
+
+  /**
+   * Whether the region holds rows above the live tail at the terminal's
+   * bottom while history holds the top rows of the first live item: blank
+   * rows inside that item, between its rows in history and its rows on
+   * screen. Scrollback takes no row back, so only a replay closes them.
+   */
+  const gapInsideItem = () => {
+    if (disposed || renderer.isDestroyed || renderer.screenMode !== "split-footer") return false
+    if (props.expanded || props.overlayOpen || replayPending() || settlingNative) return false
+    if (partialRows() === 0 || pendingRows > 0 || unflushedRows > 0) return false
+    const place = regionPlace(renderer)
+    if (place.top + place.rows < renderer.terminalHeight) return false
+    const height = dimensions().height
+    const wanted = splitFooterHeight(
+      height,
+      props.footerHeight + stickyRows() + Math.max(1, liveHeight()),
+    )
+    return renderer.footerHeight > wanted
+  }
+  let gapWatch = Option.none<Fiber.Fiber<void>>()
+  const stopGapWatch = () => {
+    if (Option.isSome(gapWatch)) Effect.runFork(Fiber.interrupt(gapWatch.value))
+    gapWatch = Option.none()
+  }
+  /**
+   * Replays the transcript once blank rows inside an item outlast
+   * `GAP_SETTLE_MS`. Each new size starts the wait again, so only a gap the
+   * tail left settled replays, not one it is about to grow into.
+   */
+  function watchGap() {
+    stopGapWatch()
+    if (!untrack(gapInsideItem)) return
+    gapWatch = Option.some(
+      Effect.runFork(
+        Effect.sleep(GAP_SETTLE_MS).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              gapWatch = Option.none()
+              if (untrack(gapInsideItem)) requestReplay()
+            }),
+          ),
+        ),
+      ),
+    )
   }
 
   /**

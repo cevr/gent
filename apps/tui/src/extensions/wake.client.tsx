@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, Effect, Match, Option, Schedule, Schema } from "effect"
+import { DateTime, Effect, Match, Option, Predicate, Schedule, Schema } from "effect"
 import { For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
 import {
@@ -15,9 +15,12 @@ import {
   clientContributions,
   CollapsedRow,
   defineClientExtension,
+  formatClock,
   formatDuration,
   messageRendererContribution,
   sessionQuery,
+  stoppableContribution,
+  textWidth,
   TrayFrame,
   truncate,
   useSpinnerClock,
@@ -54,6 +57,48 @@ interface WakeTrayLine {
 const ALARM_GLYPH = "◷"
 const MONITOR_GLYPH = "◉"
 const NOTICE_GLYPH = "◆"
+/** An auto-resume: the turn a usage limit stopped, run again once the limit resets. */
+const RESUME_GLYPH = "↻"
+
+type AlarmEntry = Extract<WakeEntryType, { readonly _tag: "alarm" }>
+type ResumeAlarm = NonNullable<AlarmEntry["resume"]>
+type NoticeEntry = Extract<WakeEntryType, { readonly _tag: "notice" }>
+type ResumeNotice = NonNullable<NoticeEntry["resume"]>
+
+/**
+ * `resume at 17:05 · in 47m 0s · 1/3 · esc cancels`: the wall clock it fires
+ * at, the countdown, the attempt, and the key that cancels it. A narrow tray
+ * keeps the countdown and the key.
+ */
+const resumeLine = (
+  alarm: AlarmEntry,
+  resume: ResumeAlarm,
+  now: number,
+  width: number,
+  zone: () => DateTime.TimeZone,
+): WakeTrayLine => {
+  const left = formatRemaining(alarm.dueAt - now)
+  const full = `resume at ${formatClock(alarm.dueAt, now, zone())} · in ${left} · ${resume.attempt}/${resume.maxResumes} · esc cancels`
+  if (textWidth(full) <= width) return { glyph: RESUME_GLYPH, text: full }
+  return { glyph: RESUME_GLYPH, text: truncate(`resume in ${left} · esc cancels`, width) }
+}
+
+/** A resume that did not run: why, and when the limit resets (or did). */
+const resumeNoticeLine = (
+  notice: NoticeEntry,
+  resume: ResumeNotice,
+  now: number,
+  width: number,
+  zone: () => DateTime.TimeZone,
+): WakeTrayLine => {
+  const clock = formatClock(resume.resetAt, now, zone())
+  const line = (verb: string): WakeTrayLine => ({
+    glyph: RESUME_GLYPH,
+    text: truncate(`${notice.note} · ${verb} ${clock}`, width),
+  })
+  if (resume.resetAt > now) return line("resets")
+  return line("reset")
+}
 
 /** The kind word says what the fire does: `(notify)` leaves a notice instead of starting a turn. */
 const kindOf = (entry: { readonly mode?: "wake" | "notify" }, kind: string): string => {
@@ -68,10 +113,18 @@ const formatAgo = (millis: number): string => {
   return `${remaining} ago`
 }
 
-const entryLine = (entry: WakeEntryType, now: number, width: number): WakeTrayLine =>
+const entryLine = (
+  entry: WakeEntryType,
+  now: number,
+  width: number,
+  zone: () => DateTime.TimeZone,
+): WakeTrayLine =>
   Match.type<WakeEntryType>().pipe(
     Match.tagsExhaustive({
       alarm: (alarm): WakeTrayLine => {
+        if (Predicate.isNotUndefined(alarm.resume)) {
+          return resumeLine(alarm, alarm.resume, now, width, zone)
+        }
         const cadence = Option.match(Option.fromUndefinedOr(alarm.everySeconds), {
           onNone: () => "",
           onSome: (seconds) => ` · every ${formatRemaining(seconds * 1000)}`,
@@ -95,31 +148,48 @@ const entryLine = (entry: WakeEntryType, now: number, width: number): WakeTrayLi
           ),
         }
       },
-      notice: (notice): WakeTrayLine => ({
-        glyph: NOTICE_GLYPH,
-        text: truncate(
-          `${notice.outcome} ${formatAgo(now - notice.firedAt)} · ${notice.note}`,
-          width,
-        ),
-      }),
+      notice: (notice): WakeTrayLine => {
+        if (Predicate.isNotUndefined(notice.resume)) {
+          return resumeNoticeLine(notice, notice.resume, now, width, zone)
+        }
+        return {
+          glyph: NOTICE_GLYPH,
+          text: truncate(
+            `${notice.outcome} ${formatAgo(now - notice.firedAt)} · ${notice.note}`,
+            width,
+          ),
+        }
+      },
     }),
   )(entry)
 
-/** One line per pending entry, soonest first; past the cap the rest collapse into one count line. */
+/**
+ * One line per pending entry, soonest first; past the cap the rest collapse
+ * into one count line. A pending auto-resume comes first whatever its due
+ * time: its row names the key that cancels it, and the cap must not hide
+ * it. Clock times read in the zone `zone` gives, the viewer's own unless a
+ * test fixes it.
+ */
 export const wakeTrayLines = (
   pending: WakePendingType,
   now: number,
   width: number,
+  zone: () => DateTime.TimeZone = DateTime.zoneMakeLocal,
 ): ReadonlyArray<WakeTrayLine> => {
-  // A notice already fired, so it sorts ahead of everything still pending.
+  // The pending resume, then the notices (already fired), then the rest by due time.
+  const rankOf = (entry: WakeEntryType): number => {
+    if (entry._tag === "alarm" && Predicate.isNotUndefined(entry.resume)) return 0
+    if (entry._tag === "notice") return 1
+    return 2
+  }
   const dueOf = (entry: WakeEntryType): number => {
     if (entry._tag === "alarm") return entry.dueAt
     if (entry._tag === "monitor") return entry.deadline
-    return entry.firedAt - Number.MAX_SAFE_INTEGER
+    return entry.firedAt
   }
-  const sorted = [...pending.entries].sort((a, b) => dueOf(a) - dueOf(b))
+  const sorted = [...pending.entries].sort((a, b) => rankOf(a) - rankOf(b) || dueOf(a) - dueOf(b))
   const shown = sorted.slice(0, TRAY_MAX_ROWS)
-  const lines = shown.map((entry) => entryLine(entry, now, width))
+  const lines = shown.map((entry) => entryLine(entry, now, width, zone))
   const rest = sorted.length - shown.length
   if (rest > 0) lines.push({ glyph: " ", text: `+${rest} more pending` })
   return lines
@@ -164,10 +234,16 @@ const wakeHead = (value: WakeDetails): string => {
   return `${MONITOR_GLYPH} monitor matched`
 }
 
-const wakeLabel = (wake: Option.Option<WakeDetails>): string =>
+/** A resume's fire names the attempt instead of the note, which only says what it does. */
+export const wakeLabel = (wake: Option.Option<WakeDetails>): string =>
   Option.match(wake, {
     onNone: () => `${ALARM_GLYPH} alarm fired`,
-    onSome: (value) => `${wakeHead(value)} · ${value.note}`,
+    onSome: (value) => {
+      if (Predicate.isNotUndefined(value.resume)) {
+        return `${RESUME_GLYPH} resumed after the usage limit reset · attempt ${value.resume.attempt}`
+      }
+      return `${wakeHead(value)} · ${value.note}`
+    },
   })
 
 const REFRESH_EVENTS: ReadonlySet<string> = new Set([
@@ -178,7 +254,7 @@ const REFRESH_EVENTS: ReadonlySet<string> = new Set([
 
 export default defineClientExtension(WAKE_EXTENSION_ID, {
   setup: Effect.gen(function* () {
-    const { transport, lifecycle } = yield* ClientContext
+    const { transport, lifecycle, shell } = yield* ClientContext
 
     const pending = yield* sessionQuery({
       initial: Option.none<WakePendingType>(),
@@ -211,7 +287,42 @@ export default defineClientExtension(WAKE_EXTENSION_ID, {
       ),
     )
 
+    // The auto-resume pending on the branch in view, by id: Esc on an idle,
+    // empty composer cancels it on the server, and the pulse that follows
+    // clears its tray row. A dismiss that removed nothing came after the
+    // fire: the resume already queued its line, so it says that instead.
+    const pendingResume = (): Option.Option<string> =>
+      Option.flatMap(pending.value(), (value) =>
+        Option.fromUndefinedOr(
+          value.entries.find(
+            (entry) => entry._tag === "alarm" && Predicate.isNotUndefined(entry.resume),
+          ),
+        ),
+      ).pipe(Option.map((entry) => entry.wakeId))
+    const cancelResume = (wakeId: string) =>
+      shell.cast(
+        transport.request(ref(WakeRpc.Dismiss), { wakeId }).pipe(
+          Effect.andThen(({ dismissed }) =>
+            Effect.sync(() => {
+              if (dismissed.includes(wakeId)) return shell.notify("auto-resume cancelled")
+              return shell.notify("auto-resume already fired")
+            }),
+          ),
+          Effect.catch((failure) =>
+            Effect.sync(() => shell.notify(`auto-resume: not cancelled: ${failure.message}`)),
+          ),
+          Effect.ensuring(Effect.sync(pending.refresh)),
+        ),
+      )
+
     return clientContributions(
+      stoppableContribution({
+        id: "wake.resume",
+        active: () => Option.isSome(pendingResume()),
+        stop: () => {
+          Option.map(pendingResume(), cancelResume)
+        },
+      }),
       messageRendererContribution(WAKE_MESSAGE_TYPE, (props) => (
         <CollapsedRow label={wakeLabel(decodeWakeDetails(props.details))} />
       )),

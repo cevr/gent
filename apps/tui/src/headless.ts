@@ -486,6 +486,9 @@ export const runHeadless = (
           branchId,
           content: promptText,
           requestId: sendRequestId,
+          // No user watches what this turn leaves behind: an auto-resume
+          // the turn would arm must not start a paid turn after the run exits.
+          unattended: true,
         }),
       ).pipe(
         Effect.retry({

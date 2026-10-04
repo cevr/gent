@@ -942,12 +942,15 @@ interface RelationshipStorageService {
   ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
 
   /**
-   * The session and every session below it by parent link, at any depth:
-   * delegate children, `/btw` forks and handoffs alike. One indexed recursive
-   * read, so its cost follows the subtree, not the workspace. A parent cycle
-   * ends the walk. Empty when the session is not in the workspace.
+   * Every session of the session's thread, and every session below any of
+   * them by parent link, at any depth: delegate children, `/btw` forks and
+   * the handoffs of those alike. The thread is read by its key, not from its
+   * first session, so a deleted first session (whose handoffs stay, detached)
+   * loses none of the rest. One indexed recursive read, so its cost follows
+   * the thread's subtree, not the workspace. A parent cycle ends the walk.
+   * Empty when the session is not in the workspace.
    */
-  readonly getSessionTree: (
+  readonly getThreadTree: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
 
@@ -1030,15 +1033,22 @@ export class RelationshipStorage extends Context.Service<
           Effect.mapError(storageError("Failed to get session ancestors")),
         ),
 
-        getSessionTree: Effect.fn("RelationshipStorage.getSessionTree")(
+        getThreadTree: Effect.fn("RelationshipStorage.getThreadTree")(
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
-            // `UNION` over ids alone ends on a cycle: a repeated id adds no row.
-            // The unary `+` keeps the planner off the workspace index, which
-            // would scan every session in the workspace at each step: each
-            // step walks `idx_sessions_parent` and the result reads by id.
+            // The seed is the thread's sessions by key, through
+            // `idx_sessions_thread`. `UNION` over ids alone ends on a cycle: a
+            // repeated id adds no row. The unary `+` keeps the planner off the
+            // workspace index, which would scan every session in the
+            // workspace at each step: each step walks `idx_sessions_parent`
+            // and the result reads by id.
             const rows = yield* sql<SessionRow>`WITH RECURSIVE tree(id) AS (
-            SELECT id FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
+            SELECT id FROM sessions
+            WHERE workspace_id = ${workspaceId}
+              AND thread_id = (
+                SELECT thread_id FROM sessions
+                WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
+              )
             UNION
             SELECT s.id
             FROM tree t
@@ -1051,7 +1061,7 @@ export class RelationshipStorage extends Context.Service<
           ORDER BY updated_at DESC`
             return yield* Effect.forEach(rows, sessionFromRow)
           },
-          Effect.mapError(storageError("Failed to get session tree")),
+          Effect.mapError(storageError("Failed to get thread tree")),
         ),
 
         getThreadSessions: Effect.fn("RelationshipStorage.getThreadSessions")(

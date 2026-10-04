@@ -1446,6 +1446,7 @@ const makeHarness = (
       startedRef: yield* Ref.make(true),
       turnSettled: () => Effect.succeed(false),
       steerDecided: () => Effect.succeed(false),
+      latestStep: Effect.succeedNone,
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
@@ -2328,6 +2329,29 @@ describe("a usage limit's reset time", () => {
       const errors = (yield* Fiber.join(events)).filter((event) => event._tag === "ErrorOccurred")
       const retryAt = Option.getOrThrow(Option.fromUndefinedOr(errors[0]?.retryAt))
       expect(retryAt).toBeGreaterThanOrEqual(before + Duration.toMillis(Duration.hours(5)))
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  // A live check of auto-resume needs a reset that comes inside the run.
+  it.scopedLive("the debug model's usage limit resets when the message says", () =>
+    Effect.gen(function* () {
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: LanguageModelLayers.debug(),
+      })
+      const events = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map(({ event }) => event),
+        Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      const before = yield* Clock.currentTimeMillis
+      yield* client.message.send({ sessionId, branchId, content: "debug usage limit 2m" })
+      const errors = (yield* Fiber.join(events)).filter((event) => event._tag === "ErrorOccurred")
+      const after = yield* Clock.currentTimeMillis
+      const retryAt = Option.getOrThrow(Option.fromUndefinedOr(errors[0]?.retryAt))
+      expect(retryAt).toBeGreaterThanOrEqual(before + Duration.toMillis(Duration.minutes(2)))
+      expect(retryAt).toBeLessThanOrEqual(after + Duration.toMillis(Duration.minutes(2)))
     }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -4897,6 +4921,7 @@ describe("loop inbox", () => {
         turnSettled: (messageId) => Effect.succeed(messageId === MessageId.make("settled")),
         // The running turn opened on "busy", so its message is stored.
         steerDecided: (messageId) => Effect.succeed(messageId === MessageId.make("busy")),
+        latestStep: Effect.succeedSome(MessageId.make("busy")),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),

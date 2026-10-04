@@ -1,4 +1,5 @@
 import {
+  DateTime,
   Effect,
   FileSystem,
   Match,
@@ -308,6 +309,24 @@ export const formatDuration = (ms: number, style: DurationStyle): string =>
     Match.when("precise", () => precise(ms)),
     Match.exhaustive,
   )
+
+/** A clock field (0 to 59, a month, a day) as two digits. */
+const twoDigits = (n: number) => `${Math.floor(n / 10)}${n % 10}`
+
+/**
+ * The wall-clock time `at` in `zone`: "17:05" on the day of `now`, else
+ * "2026-10-05 09:30". A clock time stays true on a row that does not redraw,
+ * where a countdown goes stale.
+ */
+export const formatClock = (at: number, now: number, zone: DateTime.TimeZone): string => {
+  const parts = DateTime.toParts(DateTime.makeZonedUnsafe(at, { timeZone: zone }))
+  const today = DateTime.toParts(DateTime.makeZonedUnsafe(now, { timeZone: zone }))
+  const time = `${twoDigits(parts.hour)}:${twoDigits(parts.minute)}`
+  if (parts.year === today.year && parts.month === today.month && parts.day === today.day) {
+    return time
+  }
+  return `${parts.year}-${twoDigits(parts.month)}-${twoDigits(parts.day)} ${time}`
+}
 
 // ── error formatting ────────────────────────────────────────────────────────
 

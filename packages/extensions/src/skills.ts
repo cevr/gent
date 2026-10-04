@@ -61,8 +61,11 @@ import principlesSkill from "./skills/bundled/principles/SKILL.md" with { type: 
 
 import repositories from "./skills/bundled/repositories/SKILL.md" with { type: "text" }
 
+import extensionsSkill from "./skills/bundled/extensions/SKILL.md" with { type: "text" }
+
 export const bundledSkillFiles: ReadonlyArray<readonly [string, string]> = [
   ["repositories/SKILL.md", repositories],
+  ["extensions/SKILL.md", extensionsSkill],
   ["principles/SKILL.md", principlesSkill],
   ["principles/references/acknowledge-before-processing.md", acknowledgeBeforeProcessing],
   ["principles/references/boundary-discipline.md", boundaryDiscipline],

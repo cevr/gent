@@ -2113,22 +2113,48 @@ describe("thread sessions", () => {
     }).pipe(Effect.provide(testSqliteStorage(Layer.empty, {}))),
   )
 
-  it.live("a session tree holds the session and everything below it, and nothing beside it", () =>
+  it.live(
+    "a thread tree holds the thread's sessions and everything below them, and nothing beside it",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeSession("root", { at: 1_000 })
+        yield* makeSession("handoff", { parent: "root", thread: String(root.threadId), at: 2_000 })
+        yield* makeSession("delegate", { parent: "root", at: 3_000 })
+        yield* makeSession("grandchild", { parent: "delegate", at: 4_000 })
+        // Another conversation in the same workspace, with its own child.
+        yield* makeSession("other", { at: 5_000 })
+        yield* makeSession("other-child", { parent: "other", at: 6_000 })
+        const relationships = yield* RelationshipStorage
+
+        const tree = yield* relationships.getThreadTree(SessionId.make("root"))
+        expect(ids(tree)).toEqual(["grandchild", "delegate", "handoff", "root"])
+        // Any session of the thread reads the same tree.
+        expect(ids(yield* relationships.getThreadTree(SessionId.make("handoff")))).toEqual(
+          ids(tree),
+        )
+        const branch = yield* relationships.getThreadTree(SessionId.make("delegate"))
+        expect(ids(branch)).toEqual(["grandchild", "delegate"])
+        expect(yield* relationships.getThreadTree(SessionId.make("missing"))).toEqual([])
+      }).pipe(Effect.provide(testSqliteStorage(Layer.empty, {}))),
+  )
+
+  it.live("a thread tree with its first session deleted holds every session left", () =>
     Effect.gen(function* () {
       const root = yield* makeSession("root", { at: 1_000 })
-      yield* makeSession("handoff", { parent: "root", thread: String(root.threadId), at: 2_000 })
-      yield* makeSession("delegate", { parent: "root", at: 3_000 })
-      yield* makeSession("grandchild", { parent: "delegate", at: 4_000 })
-      // Another conversation in the same workspace, with its own child.
-      yield* makeSession("other", { at: 5_000 })
-      yield* makeSession("other-child", { parent: "other", at: 6_000 })
+      const thread = String(root.threadId)
+      yield* makeSession("second", { parent: "root", thread, at: 2_000 })
+      yield* makeSession("spawn", { parent: "second", at: 3_000 })
+      yield* makeSession("third", { parent: "second", thread, at: 4_000 })
+      const sessions = yield* SessionStorage
       const relationships = yield* RelationshipStorage
+      yield* sessions.deleteSession(SessionId.make("root"))
 
-      const tree = yield* relationships.getSessionTree(SessionId.make("root"))
-      expect(ids(tree)).toEqual(["grandchild", "delegate", "handoff", "root"])
-      const branch = yield* relationships.getSessionTree(SessionId.make("delegate"))
-      expect(ids(branch)).toEqual(["grandchild", "delegate"])
-      expect(yield* relationships.getSessionTree(SessionId.make("missing"))).toEqual([])
+      // `second` lost its parent link; the thread's key still finds it.
+      expect(ids(yield* relationships.getThreadTree(SessionId.make("third")))).toEqual([
+        "third",
+        "spawn",
+        "second",
+      ])
     }).pipe(Effect.provide(testSqliteStorage(Layer.empty, {}))),
   )
 

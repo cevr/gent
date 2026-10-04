@@ -48,6 +48,7 @@ import {
   waitForHeadlessReady,
 } from "./headless"
 import { type GentClientBundle } from "@gent/sdk"
+import { version } from "../package.json"
 import {
   CliStartupError,
   connectFlag,
@@ -59,7 +60,9 @@ import {
   resumableSessions,
   server,
   sessions,
+  markVersionInUse,
   storage,
+  upgrade,
 } from "./ops"
 
 // Clear client log on startup
@@ -107,7 +110,7 @@ const gentFlags = {
   isolate: isolateFlag,
   debug: Flag.Boolean("debug").pipe(
     Flag.withDescription(
-      'Start an in-memory server with a seeded session on the scripted model, to exercise the TUI; a message with "debug tools" plays a multi-step tool turn, and one with "debug ask" asks a background question',
+      'Start an in-memory server with a seeded session on the scripted model, to exercise the TUI; a message with "debug tools" plays a multi-step tool turn, one with "debug ask" asks a background question, one with "debug threads" starts two threads, and one with "debug handoff" asks for a handoff',
     ),
     Flag.withDefault(false),
   ),
@@ -441,14 +444,13 @@ const resume = Command.make(
 
 // Root command with subcommands
 const command = main.pipe(
-  Command.withSubcommands([resume, sessions, server, doctor, storage]),
+  Command.withSubcommands([resume, sessions, server, doctor, storage, upgrade]),
   Command.withDescription("Gent - minimal, opinionated agent harness"),
 )
 
-// CLI
-const cli = Command.run(command, {
-  version: "0.0.0",
-})
+// CLI. The version is the one apps/tui/package.json names: the release sets it
+// there once, and the compiled build bundles the file.
+const cli = Command.run(command, { version })
 const TraceLoggerLayer = Layer.unwrap(
   clientTraceLogger.pipe(Effect.map((logger) => Logger.layer([logger]))),
 )
@@ -461,6 +463,8 @@ const mainEffect = Effect.scoped(
     const platformContext = yield* Layer.build(BunPlatformLive)
     const platform = Context.makeUnsafe<unknown>(platformContext.mapUnsafe)
     const runCli = Effect.gen(function* () {
+      // An installed gent marks its version in use until it exits, so an update keeps its pair.
+      yield* markVersionInUse
       const loggerContext = yield* Layer.build(TraceLoggerLayer)
       return yield* Effect.provideContext(
         cli,

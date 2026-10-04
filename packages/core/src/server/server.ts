@@ -326,6 +326,16 @@ export const buildExtensionHealthSnapshot = (
         }),
       )
     } else {
+      // A failed reload: the new version failed, the last good one runs.
+      if (!Predicate.isUndefined(status.reloadFailed)) {
+        issues.push(
+          ExtensionHealthIssue.cases.ActivationFailed.make({
+            phase: status.reloadFailed.phase,
+            error: status.reloadFailed.error,
+            runningVersion: status.version,
+          }),
+        )
+      }
       issues.push(...(runtimeIssues.get(status.manifest.id) ?? []))
     }
 
@@ -1360,7 +1370,7 @@ const RpcHandlers = GentRpcs.toLayer(
             branchId: input.branchId,
             content: input.content,
             requestId: input.requestId,
-            metadata: clientMetadata(),
+            metadata: clientMetadata(omitUndefined({ unattended: input.unattended })),
           })
           .pipe(
             Effect.tap(() =>

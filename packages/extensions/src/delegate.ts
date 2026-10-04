@@ -69,12 +69,15 @@ import { makeBranchStateStore } from "./branch-state-store.js"
 /**
  * A child never delegates. Fan-out is the caller's decision, and a project
  * prompt that addresses "the orchestrator" reaches children too, so without
- * this a worker reads that prompt and spawns its own workers.
+ * this a worker reads that prompt and spawns its own workers. For the same
+ * reason a child never starts a thread: it does bounded work for its
+ * parent, not unrelated work of its own.
  */
 const CHILD_DENIED_TOOLS: ReadonlyArray<string> = [
   "delegate.start",
   "delegate.cancel",
   "delegate.list",
+  "thread.start",
 ]
 
 export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
@@ -563,6 +566,9 @@ const deliverCompletion = (
 
 const CHILD_TASK_PREFIX = "Task from your parent session "
 
+/** `metadata.customType` on a child's first message, the task its parent gave it. */
+export const CHILD_TASK_TYPE = "child-task"
+
 /**
  * The child's first message names where the task came from. Without it a
  * child reads a bare instruction after its system prompt and can take its
@@ -608,6 +614,7 @@ const submitStart = (entry: DelegateEntry) =>
       content: childTaskText(ctx.sessionId, entry.prompt),
       commandId: ActorCommandId.make(startMessageId(entry.requestId)),
       completion: "admission",
+      metadata: { customType: CHILD_TASK_TYPE },
     })
   })
 

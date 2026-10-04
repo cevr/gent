@@ -3550,15 +3550,29 @@ const debugRateLimit = (method: string) =>
 /** A user message holding it makes the debug model answer with a usage limit. */
 const USAGE_LIMIT_PHRASE = "debug usage limit"
 
+/** `debug usage limit 2m`: the reset the message names, in seconds, minutes or hours. */
+const USAGE_LIMIT_RESET = /debug usage limit (\d+)([smh])\b/
+
+const usageLimitReset = (text: string): Duration.Duration => {
+  const match = Option.fromNullishOr(USAGE_LIMIT_RESET.exec(text))
+  if (Option.isNone(match)) return Duration.hours(5)
+  const amount = Number(match.value[1])
+  if (match.value[2] === "s") return Duration.seconds(amount)
+  if (match.value[2] === "m") return Duration.minutes(amount)
+  return Duration.hours(amount)
+}
+
 /**
- * The debug model's usage limit: a 429 whose limit resets in five hours, past
- * every retry cap, so the turn fails at once and names the reset time.
+ * The debug model's usage limit: a 429 whose limit resets in five hours, or
+ * when the message says (`debug usage limit 2m`). Past every retry cap (a
+ * reset more than 30 s away), the turn fails at once and names the reset
+ * time; a shorter one is retried as any rate limit is.
  */
-const debugUsageLimit = (method: string) =>
+const debugUsageLimit = (method: string, text: string) =>
   AiError.make({
     module: "LanguageModelLayers",
     method,
-    reason: new AiError.RateLimitError({ retryAfter: Duration.hours(5) }),
+    reason: new AiError.RateLimitError({ retryAfter: usageLimitReset(text) }),
   })
 
 const extractLatestUserText = (promptInput: Prompt.RawInput): string => {
@@ -3699,9 +3713,15 @@ export const multiToolCallStep = (
  * its assumption in a bash step that sleeps, and answers. The sleep keeps
  * the turn open long enough to answer the question while it runs.
  *
+ * `debug threads` starts two threads with `thread.start` (one plays `debug
+ * tools`, one answers at once), lists them with `thread.list`, and answers.
+ * `debug handoff` calls `handoff`; on a yes the new session continues the
+ * thread, so the Sessions pane shows one row with two sessions.
+ *
  * `debug usage limit` (not a scenario) fails the step with a rate limit that
- * resets in five hours (`debugUsageLimit`), so a scripted run shows the
- * error row that names the reset time.
+ * resets in five hours, or when the message says (`debug usage limit 2m`;
+ * `debugUsageLimit`), so a scripted run shows the error row that names the
+ * reset time, and an auto-resume that fires inside the run.
  *
  * A step calls the tools the request advertises: each op as its own call, or,
  * on a turn narrowed to `cell`, one `cell` call whose code awaits the ops.
@@ -3804,6 +3824,37 @@ const ASK_STEPS: ReadonlyArray<ScenarioStep> = [
   { reasoning: "Summarize.", ops: [] },
 ]
 
+const THREAD_STEPS: ReadonlyArray<ScenarioStep> = [
+  {
+    reasoning: "Two jobs apart from this one; each gets a thread of its own.",
+    ops: [
+      { tool: "thread.start", input: { task: "debug tools", name: "widen the greeting" } },
+      {
+        tool: "thread.start",
+        input: { task: "Draft the release notes.", name: "draft release notes" },
+      },
+    ],
+  },
+  { reasoning: "See how they run.", ops: [{ tool: "thread.list", input: {} }] },
+  { reasoning: "Summarize.", ops: [] },
+]
+
+const HANDOFF_STEPS: ReadonlyArray<ScenarioStep> = [
+  {
+    reasoning: "The user asked to hand off.",
+    ops: [
+      {
+        tool: "handoff",
+        input: {
+          context: `Go on with the greeting in ${scenarioFile("a.ts")}.`,
+          reason: "debug handoff",
+        },
+      },
+    ],
+  },
+  { reasoning: "Summarize.", ops: [] },
+]
+
 const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
   {
     phrase: "debug tools",
@@ -3815,6 +3866,16 @@ const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
     steps: ASK_STEPS,
     answer:
       "Wired an in-memory LRU cache. The backend question is still open; I assumed in-memory LRU.",
+  },
+  {
+    phrase: "debug threads",
+    steps: THREAD_STEPS,
+    answer: "Started two threads; the Sessions pane shows them under this session.",
+  },
+  {
+    phrase: "debug handoff",
+    steps: HANDOFF_STEPS,
+    answer: "Handed off.",
   },
 ]
 
@@ -3921,8 +3982,9 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
     streamText: (modelOptions) =>
       Effect.suspend(() => {
         const latestUserText = extractLatestUserText(modelOptions.prompt)
-        if (latestUserText.toLowerCase().includes(USAGE_LIMIT_PHRASE)) {
-          return Effect.fail(debugUsageLimit("Debug.streamText"))
+        const lowered = latestUserText.toLowerCase()
+        if (lowered.includes(USAGE_LIMIT_PHRASE)) {
+          return Effect.fail(debugUsageLimit("Debug.streamText", lowered))
         }
         const scenario = Option.fromUndefinedOr(
           DEBUG_SCENARIOS.find((entry) => latestUserText.toLowerCase().includes(entry.phrase)),

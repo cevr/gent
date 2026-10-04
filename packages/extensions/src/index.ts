@@ -45,21 +45,21 @@ import { InteractionToolsExtension } from "./interaction-tools.js"
 // ── artifact-identity ───────────────────────────────────────────────────────
 
 /**
- * The compiled build replaces this symbol with a build-owned token before it
- * bundles the builtin extensions. Source-mode execution has no trusted build
- * boundary, so it remains unsupported for durable artifact replay.
+ * The compiled build defines this symbol as `{ id, version }` before it
+ * bundles the builtin extensions; the build's id names their artifact. The
+ * same define names the build to discovery (`GentPlatform.build`).
+ * Source-mode execution has no trusted build boundary, so it remains
+ * unsupported for durable artifact replay.
  */
-declare const __GENT_BUILTIN_ARTIFACT_ID__: unknown
+declare const __GENT_BUILD__: unknown
 
 // Source mode has no definition: reading the symbol throws a ReferenceError.
-const buildArtifactId = Result.try(() => __GENT_BUILTIN_ARTIFACT_ID__).pipe(
+const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Result.try(
+  () => __GENT_BUILD__,
+).pipe(
   Result.getSuccess,
-  Option.flatMap(Schema.decodeUnknownOption(Schema.NonEmptyString)),
-)
-
-const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Option.map(
-  buildArtifactId,
-  (value) => LoadedArtifactIdentity.make(value),
+  Option.flatMap(Schema.decodeUnknownOption(Schema.Struct({ id: Schema.NonEmptyString }))),
+  Option.map(({ id }) => LoadedArtifactIdentity.make(`build:${id}`)),
 )
 
 // ── builtin composition ─────────────────────────────────────────────────────

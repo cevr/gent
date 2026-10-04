@@ -1,6 +1,6 @@
 import { it, describe, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Path } from "effect"
+import { Effect, FileSystem, Path, Schedule, Schema } from "effect"
 import { createWorkerEnv, seedAuthKeys, serveModelCatalogFixture } from "@gent/core/test-utils"
 const makeTempDir = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -72,6 +72,10 @@ const runGent = (args: ReadonlyArray<string>, options: { readonly keyless?: bool
     return { exitCode, stdout, stderr }
   })
 const runHeadless = (args: ReadonlyArray<string>) => runGent(["-H", ...args])
+
+const decodeManifest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
+)
 
 describe("headless CLI", () => {
   it.scopedLive(
@@ -164,6 +168,26 @@ describe("headless CLI", () => {
     20000,
   )
 
+  // The release sets the version once, in apps/tui/package.json.
+  it.scopedLive(
+    "--version prints the version apps/tui/package.json names",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const manifest = path.resolve(
+          yield* path.fromFileUrl(new URL("../package.json", import.meta.url)),
+        )
+        const { version } = decodeManifest(yield* fs.readFileString(manifest))
+        const { exitCode, stdout } = yield* runGent(["--version"])
+        expect({ exitCode, stdout: stdout.trim() }).toEqual({
+          exitCode: 0,
+          stdout: `gent v${version}`,
+        })
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
   it.scopedLive(
     "--help names --approve-all",
     () =>
@@ -235,52 +259,103 @@ export default defineExtension({
 })
 `
 
+/**
+ * A user extension that logs what the process environment holds for
+ * `GENT_DOTENV_PROBE`, which only a `.env` file in the working directory sets.
+ */
+const DOTENV_PROBE = `
+import { defineExtension } from "@gent/core/extensions/api"
+import { Effect } from "effect"
+
+export default defineExtension({
+  id: "@user/dotenv-probe",
+  setup: Effect.logInfo("dotenv-probe").pipe(
+    Effect.annotateLogs({ dotenv: process.env["GENT_DOTENV_PROBE"] ?? "unset" }),
+  ),
+})
+`
+
+/** The probe's server log line, a JSON object. */
+const decodeDotenvProbeLine = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ dotenv: Schema.String })),
+)
+
+/** The compiled binary `bun run test:e2e` builds first (turbo `dependsOn`). */
+const compiledBinary = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const binary = yield* path.fromFileUrl(new URL("../bin/gent", import.meta.url))
+  expect({ binary, exists: yield* fs.exists(binary) }).toEqual({ binary, exists: true })
+  return binary
+})
+
+/**
+ * Run `<binary> --debug -H <prompt>` in a fresh home (the system temp
+ * directory: no node_modules above it) that is also the working directory.
+ * `extensions` are written under `~/.gent/extensions` and `files` into the
+ * home first. Returns the exit, the output and the server log lines.
+ */
+const runCompiled = (
+  binary: string,
+  prompt: string,
+  setup: {
+    readonly extensions?: Readonly<Record<string, string>>
+    readonly files?: Readonly<Record<string, string>>
+  } = {},
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const homeDir = yield* makeTempDir
+    const extensionDir = path.join(homeDir, ".gent", "extensions")
+    yield* fs.makeDirectory(extensionDir, { recursive: true })
+    for (const [name, text] of Object.entries(setup.extensions ?? {})) {
+      yield* fs.writeFileString(path.join(extensionDir, name), text)
+    }
+    for (const [name, text] of Object.entries(setup.files ?? {})) {
+      yield* fs.writeFileString(path.join(homeDir, name), text)
+    }
+    const env = createWorkerEnv(homeDir)
+    yield* seedAuthKeys(env["GENT_AUTH_DIRECTORY"]!)
+    // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
+    const proc = Bun.spawn([binary, "--debug", "-H", prompt], {
+      cwd: homeDir,
+      env: { ...(yield* makeChildEnv(homeDir, env)), GENT_LOG_LEVEL: "debug" },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [exitCode, stdout, stderr] = yield* Effect.all(
+      [
+        waitForExit(proc, 40000),
+        Effect.promise(() => new Response(proc.stdout).text()),
+        Effect.promise(() => new Response(proc.stderr).text()),
+      ],
+      { concurrency: "unbounded" },
+    )
+    const logDir = path.join(env["GENT_DATA_DIR"]!, "logs")
+    const serverLogs = (yield* fs.readDirectory(logDir)).filter((name) =>
+      name.endsWith("-server.log"),
+    )
+    const logs = yield* Effect.forEach(serverLogs, (name) =>
+      fs.readFileString(path.join(logDir, name)),
+    )
+    const logLines = logs.join("\n").split("\n")
+    return { exitCode, stdout, stderr, logLines }
+  })
+
 describe("compiled binary", () => {
   it.scopedLive(
     "loads a user extension outside the repository that imports the effect peers",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        // `bun run test:e2e` builds the binary first (turbo `dependsOn`).
-        const binary = yield* path.fromFileUrl(new URL("../bin/gent", import.meta.url))
-        expect({ binary, exists: yield* fs.exists(binary) }).toEqual({ binary, exists: true })
-        // The system temp directory: no node_modules above it.
-        const homeDir = yield* makeTempDir
-        const extensionDir = path.join(homeDir, ".gent", "extensions")
-        yield* fs.makeDirectory(extensionDir, { recursive: true })
-        yield* fs.writeFileString(path.join(extensionDir, "peers-probe.ts"), PEERS_PROBE)
-        const env = createWorkerEnv(homeDir)
-        yield* seedAuthKeys(env["GENT_AUTH_DIRECTORY"]!)
-        // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
-        const proc = Bun.spawn([binary, "--debug", "-H", "Say hi in 3 words"], {
-          cwd: homeDir,
-          env: { ...(yield* makeChildEnv(homeDir, env)), GENT_LOG_LEVEL: "debug" },
-          stdout: "pipe",
-          stderr: "pipe",
-        })
-        const [exitCode, stdout, stderr] = yield* Effect.all(
-          [
-            waitForExit(proc, 15000),
-            Effect.promise(() => new Response(proc.stdout).text()),
-            Effect.promise(() => new Response(proc.stderr).text()),
-          ],
-          { concurrency: "unbounded" },
+        const { exitCode, stdout, stderr, logLines } = yield* runCompiled(
+          yield* compiledBinary,
+          "Say hi in 3 words",
+          { extensions: { "peers-probe.ts": PEERS_PROBE } },
         )
         expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" })
         expect(stdout).toContain("Latest user message: Say hi in 3 words")
-
-        const logDir = path.join(env["GENT_DATA_DIR"]!, "logs")
-        const serverLogs = (yield* fs.readDirectory(logDir)).filter((name) =>
-          name.endsWith("-server.log"),
-        )
-        const lines = yield* Effect.forEach(serverLogs, (name) =>
-          fs.readFileString(path.join(logDir, name)),
-        )
-        const probeLines = lines
-          .join("\n")
-          .split("\n")
-          .filter((line) => line.includes('"@user/peers-probe"'))
+        const probeLines = logLines.filter((line) => line.includes('"@user/peers-probe"'))
         // On a failure, the probe's own log lines name the import that failed.
         const loaded = probeLines.some(
           (line) => line.includes('"msg":"extension.setup.ok"') && line.includes('"tools":1'),
@@ -288,5 +363,121 @@ describe("compiled binary", () => {
         expect({ loaded, probeLines }).toMatchObject({ loaded: true })
       }).pipe(Effect.timeout("18 seconds"), Effect.provide(BunServices.layer)),
     20000,
+  )
+
+  // One shared server serves many projects: a project's `.env` must not set
+  // the environment of gent, its extensions or the cell worker it starts.
+  it.scopedLive(
+    "does not read the .env of the directory it starts in",
+    () =>
+      Effect.gen(function* () {
+        const { exitCode, stderr, logLines } = yield* runCompiled(
+          yield* compiledBinary,
+          "Say hi in 3 words",
+          {
+            extensions: { "dotenv-probe.ts": DOTENV_PROBE },
+            files: { ".env": "GENT_DOTENV_PROBE=read-from-project-dotenv\n" },
+          },
+        )
+        expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" })
+        const seen = logLines
+          .filter((line) => line.includes('"msg":"dotenv-probe"'))
+          .map((line) => decodeDotenvProbeLine(line).dotenv)
+        expect(seen).toEqual(["unset"])
+      }).pipe(Effect.timeout("18 seconds"), Effect.provide(BunServices.layer)),
+    20000,
+  )
+
+  // An install links `gent` from a bin directory into the version directory
+  // that holds the pair; the link's directory has no worker. The host starts
+  // the worker beside its real executable, so each version keeps its own.
+  it.scopedLive(
+    "started through a symlink, runs cells with the worker beside its real executable",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const linkDir = yield* makeTempDir
+        const link = path.join(linkDir, "gent")
+        yield* fs.symlink(yield* compiledBinary, link)
+        // The scripted model's `debug tools` turn runs its steps as cells.
+        const { exitCode, stdout, stderr } = yield* runCompiled(link, "debug tools")
+        expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" })
+        expect(stdout).toContain("[tool done: cell]")
+        expect(stdout).not.toContain("[tool error: cell]")
+      }).pipe(Effect.timeout("45 seconds"), Effect.provide(BunServices.layer)),
+    50000,
+  )
+
+  // install.sh never prunes a version a running gent marks, so a server keeps
+  // its gent-cell across updates.
+  it.scopedLive(
+    "in an install, marks its version in use while it runs",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const binary = yield* compiledBinary
+        const home = yield* makeTempDir
+        const versionDir = path.join(home, "gent", "versions", "1.0.0")
+        yield* fs.makeDirectory(versionDir, { recursive: true })
+        for (const name of ["gent", "gent-cell"]) {
+          yield* fs.copyFile(path.join(path.dirname(binary), name), path.join(versionDir, name))
+          yield* fs.chmod(path.join(versionDir, name), 0o755)
+        }
+        // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
+        const proc = Bun.spawn(
+          [path.join(versionDir, "gent"), "server", "start", "--isolate", "--mock", "--port", "0"],
+          {
+            cwd: home,
+            env: { PATH: "/usr/bin:/bin", HOME: home, GENT_DATA_DIR: path.join(home, "data") },
+            stdout: "ignore",
+            stderr: "ignore",
+          },
+        )
+        // A failed wait still stops the server.
+        yield* Effect.addFinalizer(() => Effect.sync(() => proc.kill("SIGKILL")))
+        const marker = path.join(versionDir, ".in-use", String(proc.pid))
+        yield* fs
+          .exists(marker)
+          .pipe(
+            Effect.repeat({ until: (found) => found, schedule: Schedule.spaced("100 millis") }),
+            Effect.timeout("30 seconds"),
+          )
+        proc.kill("SIGTERM")
+        expect(yield* waitForExit(proc, 20000)).not.toBe(-1)
+        expect(yield* fs.exists(marker)).toBe(false)
+      }).pipe(Effect.timeout("55 seconds"), Effect.provide(BunServices.layer)),
+    60000,
+  )
+
+  // The release runs this script on each platform's pair before it packs the
+  // archive; running it here proves the script on every change.
+  it.scopedLive(
+    "passes the release smoke",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const binary = yield* compiledBinary
+        const script = yield* path.fromFileUrl(
+          new URL("../../../packages/e2e/src/release-smoke.ts", import.meta.url),
+        )
+        // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
+        const proc = Bun.spawn(["bun", script, path.dirname(binary)], {
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const [exitCode, stdout, stderr] = yield* Effect.all(
+          [
+            waitForExit(proc, 100000),
+            Effect.promise(() => new Response(proc.stdout).text()),
+            Effect.promise(() => new Response(proc.stderr).text()),
+          ],
+          { concurrency: "unbounded" },
+        )
+        expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 })
+        expect(`${stdout}${stderr}`).toContain("release smoke passed")
+      }).pipe(Effect.timeout("105 seconds"), Effect.provide(BunServices.layer)),
+    110000,
   )
 })

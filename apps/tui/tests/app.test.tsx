@@ -124,6 +124,7 @@ import {
   noticeRowContribution,
   rendererContribution,
   statusLabelContribution,
+  stoppableContribution,
   widgetContribution,
 } from "../src/extensions/client-facets"
 import { NOTICE_ROWS_BOUND, useExit, useSessionController } from "../src/session"
@@ -1303,6 +1304,8 @@ describe("App session view and fatal screen", () => {
     // A command runs on a key, outside the draw.
     commands: [],
     autocomplete: ["autocomplete items", "autocomplete open"],
+    // A stoppable runs on Esc, outside the draw; its Esc test covers a throw.
+    stoppables: [],
   } as const satisfies Record<keyof ClientContributions, ReadonlyArray<string>>
   const breaksSession = sessionNamed("session-breaks", "branch-breaks", "Breaks")
   const breaksEnvelope = (id: number, event: EventEnvelope["event"]) =>
@@ -1663,6 +1666,64 @@ describe("App session view and fatal screen", () => {
 })
 
 describe("App draft, shell and exit keys", () => {
+  // Esc on an idle, empty composer stops what an extension holds pending,
+  // such as an auto-resume. A user extension gets the same key as a shipped
+  // one; a draft is nearer, so Esc steps through it first.
+  it.scopedLive("Esc on an empty idle composer stops an extension's pending stoppable", () =>
+    Effect.gen(function* () {
+      const [pendingStop, setPendingStop] = createSignal(true)
+      let stops = 0
+      const extension = defineClientExtension("@test/stoppable", {
+        setup: Effect.succeed(
+          stoppableContribution({
+            id: "probe-pending",
+            active: pendingStop,
+            stop: () => {
+              stops += 1
+              setPendingStop(false)
+            },
+          }),
+        ),
+      })
+      // Its id sorts first, so Esc asks it first: its throw fails it by name,
+      // and the press goes on to the next stoppable.
+      const throwing = defineClientExtension("@test/a-stoppable-throws", {
+        setup: Effect.succeed(
+          stoppableContribution({
+            id: "probe-throws",
+            active: () => Schema.decodeUnknownSync(Schema.Boolean)("active broke"),
+            stop: () => {},
+          }),
+        ),
+      })
+      const { setup, ext } = yield* mountApp({
+        builtins: [...builtinClientModules, throwing, extension],
+        initialSession: sessionNamed("session-stop", "branch-stop", "Stop"),
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·") && ext.loaded(), "loaded")
+      const { shutdowns } = yield* countShutdowns(setup)
+      // A draft is nearer: the press arms its clear and stops nothing.
+      yield* Effect.promise(() => setup.mockInput.typeText("keep me"))
+      yield* waitForFrame(setup, (frame) => frame.includes("keep me"), "the draft")
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => frame.includes(ESC_CUE), "the clear cue")
+      expect(stops).toBe(0)
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => !frame.includes("keep me"), "the draft cleared")
+      expect(stops).toBe(0)
+      // On the empty composer the press stops the pending one.
+      setup.mockInput.pressEscape()
+      yield* waitUntil(() => stops === 1, "the stoppable stopped")
+      // Nothing is pending now, so the next press does nothing.
+      setup.mockInput.pressEscape()
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- A lone escape byte stays in the stdin parser until its real-clock timeout flushes it as a key; no event marks the flush.
+      yield* Effect.sleep("100 millis")
+      expect(stops).toBe(1)
+      expect(shutdowns()).toBe(0)
+      expect(ext.failures().map((failure) => failure.id)).toEqual(["@test/a-stoppable-throws"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   // Esc never quits: on a draft the first press arms and says so, and the
   // second clears the draft.
   it.scopedLive("Esc Esc on a draft clears it and never quits", () =>

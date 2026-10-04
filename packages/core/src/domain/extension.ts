@@ -45,7 +45,7 @@ import {
   ActorCommandId,
   BranchId,
   ExtensionId,
-  type MessageId,
+  MessageId,
   RequestId,
   SessionId,
   type ToolCallId,
@@ -263,6 +263,12 @@ export interface LoadedExtension {
    */
   readonly version?: string
   /**
+   * Set when this is the last good version of an extension whose newer
+   * version failed: the phase that stopped the new version and why. The
+   * profile runs this version in its place (`SessionProfileCache`).
+   */
+  readonly reloadFailed?: ReloadFailure
+  /**
    * Typed contribution buckets produced by the extension's setup function.
    * Consumers (the registry, the hook compiler, the profile build) read each
    * bucket directly — `contributions.tools`,
@@ -286,9 +292,18 @@ export interface FailedExtension {
 /** An extension the config's `disabledExtensions` names: found, and never set up. */
 export type DisabledExtension = Pick<LoadedExtension, "manifest" | "scope" | "sourcePath">
 
-/** An extension as health reports it: active, failed with its phase and error, or disabled. */
+/** Why a newer version of a running extension did not replace it. */
+interface ReloadFailure {
+  readonly phase: FailedExtensionPhase
+  readonly error: string
+}
+
+/**
+ * An extension as health reports it: active, failed with its phase and error,
+ * or disabled. An active one with `reloadFailed` runs its last good version.
+ */
 export type ExtensionStatusInfo =
-  | (Pick<LoadedExtension, "manifest" | "scope" | "sourcePath" | "version"> & {
+  | (Pick<LoadedExtension, "manifest" | "scope" | "sourcePath" | "version" | "reloadFailed"> & {
       readonly status: "active"
     })
   | (FailedExtension & { readonly status: "failed" })
@@ -300,18 +315,28 @@ const ExtensionStatusIdentity = {
   sourcePath: Schema.String,
 }
 
+const ExtensionStatusPhase = Schema.Literals(["load", "setup", "validation", "startup"])
+
 /**
  * One extension of a profile as the `Extensions` facet reports it. `Active`
- * names the file version it loaded from (none for a builtin); `Failed` names
- * the phase that stopped it: `load` (the file did not import), `setup`,
- * `validation` or `startup` (a Resource did not build); `Disabled` is named
- * by the config's `disabledExtensions`.
+ * names the version it loaded from (none for a builtin); with `reloadFailed`
+ * it is the last good version, still running because a newer version failed
+ * at that phase. `Failed` names the phase that stopped it: `load` (the file
+ * did not build or import), `setup`, `validation` or `startup` (a Resource did
+ * not build); `Disabled` is named by the config's `disabledExtensions`.
  */
 export const ExtensionStatus = Schema.TaggedUnion({
-  Active: { ...ExtensionStatusIdentity, version: Schema.optional(Schema.String) },
+  Active: {
+    ...ExtensionStatusIdentity,
+    version: Schema.optional(Schema.String),
+    // Optional, so a status written before the field decodes as it did.
+    reloadFailed: Schema.optional(
+      Schema.Struct({ phase: ExtensionStatusPhase, error: Schema.String }),
+    ),
+  },
   Failed: {
     ...ExtensionStatusIdentity,
-    phase: Schema.Literals(["load", "setup", "validation", "startup"]),
+    phase: ExtensionStatusPhase,
     error: Schema.String,
   },
   Disabled: ExtensionStatusIdentity,
@@ -795,7 +820,16 @@ export const mapExtensionServiceError = <A, E, R>(
  *   turn the previous process left unfinished resumes.
  * - `queue` waits behind the running turn, keyed by `sourceId` so a repeat is
  *   a no-op and `dequeueFollowUp` can take it back. `wake` starts a turn even
- *   on a branch with no prior history.
+ *   on a branch with no prior history. `ifLatest` makes the line conditional:
+ *   it starts its turn at once, or it is not admitted. The loop admits it only
+ *   while the branch is idle, nothing waits in its queue (a parked steer, a
+ *   queued follow-up, a reserved start), and `ifLatest` is still the newest
+ *   message a person or an extension sent to the branch (not one the runtime
+ *   wrote, nor a steer a running turn joined). The test and the admission
+ *   hold the queue's own permit, so no other send lands between them. A line
+ *   that is not admitted changes nothing, as a repeat does. An admitted line
+ *   is a promise: it is stored before `send` returns, and a restart before
+ *   its turn starts runs it once, with no new test of `ifLatest`.
  * - `steer` joins the running turn at its next step. An idle branch parks it
  *   unless `wake` asks for a turn now. A `requestId` makes a repeat a no-op,
  *   and names the message: `interjectionMessageId(requestId)`. A `stopMessage` with
@@ -828,6 +862,7 @@ export const SessionSendParams = Schema.Union([
     sourceId: Schema.String,
     metadata: Schema.optional(MessageMetadata),
     wake: Schema.optional(Schema.Boolean),
+    ifLatest: Schema.optional(MessageId),
   }),
   Schema.Struct({
     delivery: Schema.Literal("steer"),
@@ -950,13 +985,15 @@ export interface ExtensionSessionService {
   readonly holdResident: Effect.Effect<void, never, Scope.Scope>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
   /**
-   * Every session in the workspace, or with a `root` only that session and
-   * the sessions below it by parent link, at any depth; a read that costs
-   * the subtree, not the workspace. The durable half of an agent catalog:
-   * survives restarts, but says nothing about what is running now.
+   * Every session in the workspace, or with `thread` only the sessions of
+   * that session's thread and the sessions below any of them by parent link,
+   * at any depth; a read that costs the thread's subtree, not the workspace.
+   * The thread is read by its key, so a deleted first session loses none of
+   * the rest. The durable half of an agent catalog: survives restarts, but
+   * says nothing about what is running now.
    */
   readonly listSessions: (params?: {
-    readonly root?: SessionId
+    readonly thread?: SessionId
   }) => Effect.Effect<ReadonlyArray<Session>, ExtensionServiceError>
   /**
    * Loops materialized right now. The live half of an agent catalog: carries

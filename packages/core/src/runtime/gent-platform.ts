@@ -33,8 +33,8 @@ import { causeMessage } from "../domain/guards.js"
  *   - `randomId`         — UUIDv7 string for runtime-owned identifiers
  *   - `osInfo`           — `{ platform, arch, release, hostname, type }`
  *   - `pid`              — current process id
- *   - `execPath`         — absolute path to the running executable
- *   - `compiled`         — whether this process is the compiled gent binary
+ *   - `execPath`         — real path of the running executable, fixed at start
+ *   - `build`            — the compiled build's id and version, or a source run
  *   - `homeDirectory`    — current user home directory
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
  *   - `hash(alg, input)` — content-addressed `sha256` hex digest for durable
@@ -75,6 +75,17 @@ export class SignalError extends Schema.TaggedError<SignalError>()("SignalError"
   reason: Schema.String,
 }) {}
 
+/**
+ * The build this process runs. The compiled gent carries the id its build
+ * drew and the version it ships as; a source run has neither. Discovery
+ * names a build by it, and the cell picks its worker by it.
+ */
+export const GentBuild = Schema.TaggedUnion({
+  Compiled: { id: Schema.NonEmptyString, version: Schema.NonEmptyString },
+  Source: {},
+})
+export type GentBuild = typeof GentBuild.Type
+
 type GentPlatformHashAlgorithm = "sha256"
 
 /**
@@ -83,6 +94,26 @@ type GentPlatformHashAlgorithm = "sha256"
  */
 export type RuntimeModuleSource = () => object | Promise<object>
 
+/** One build of an entry file and the relative modules it imports. */
+export interface ModuleBundle {
+  /** One ES module. Each package import (a bare specifier) stays an import. */
+  readonly code: string
+  /** The absolute paths of the files the build read: the entry and its relative modules. */
+  readonly inputs: ReadonlyArray<string>
+}
+
+/** The build of an entry file failed: a syntax error, or a relative module that does not resolve. */
+export class ModuleBundleError extends Schema.TaggedError<ModuleBundleError>()(
+  "ModuleBundleError",
+  { entry: Schema.String, message: Schema.String },
+) {}
+
+/**
+ * The query a served module's specifier carries (`serveModule`): the file's
+ * path, then `?gent-module=` and a version.
+ */
+export const SERVED_MODULE_QUERY = "gent-module"
+
 interface GentPlatformApi {
   /**
    * Resolve each bare specifier to the given module for every file loaded
@@ -90,15 +121,24 @@ interface GentPlatformApi {
    * process; a later bind of the same specifier is ignored.
    */
   readonly bindModules: (modules: ReadonlyMap<string, RuntimeModuleSource>) => Effect.Effect<void>
+  /**
+   * Build an entry file and every relative module it imports into one ES
+   * module. A package import stays an import, so a bound specifier still
+   * reaches the module this process runs.
+   */
+  readonly bundleModule: (entry: string) => Effect.Effect<ModuleBundle, ModuleBundleError>
+  /**
+   * Serve `code` to each later import of `specifier`: a file's absolute path
+   * with the `SERVED_MODULE_QUERY` query. Its package imports resolve from
+   * the file's directory, as the file's own would.
+   */
+  readonly serveModule: (specifier: string, code: string) => Effect.Effect<void>
   readonly randomId: Effect.Effect<string>
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>
   readonly execPath: Effect.Effect<string>
-  /**
-   * True in the compiled gent, whose build defines it; false in a source run.
-   * The cell picks its worker by it, and the SDK names its build by it.
-   */
-  readonly compiled: Effect.Effect<boolean>
+  /** The build this process runs: `Compiled` with its id and version, or `Source`. */
+  readonly build: Effect.Effect<GentBuild>
   readonly homeDirectory: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
@@ -119,6 +159,12 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
         const counter = yield* Ref.make(0)
         return GentPlatform.of({
           bindModules: () => Effect.void,
+          // No bundler: a test that loads extension files runs the Bun platform.
+          bundleModule: (entry) =>
+            Effect.fail(
+              new ModuleBundleError({ entry, message: "the test platform builds no modules" }),
+            ),
+          serveModule: () => Effect.void,
           randomId: Ref.updateAndGet(counter, (n) => n + 1).pipe(
             Effect.map((n) => `${prefix}-${String(n).padStart(8, "0")}`),
           ),
@@ -131,7 +177,7 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           }),
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
-          compiled: Effect.succeed(false),
+          build: Effect.succeed(GentBuild.cases.Source.make({})),
           homeDirectory: Effect.succeed("/nonexistent/gent-test-home"),
           signal: () => Effect.void,
           // Deterministic, content-derived stub: same input → same digest.
