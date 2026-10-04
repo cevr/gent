@@ -394,9 +394,20 @@ extensions the config leaves active or failed, versions of the extension files
 on disk). Each resolve reads the config and lists the user and project
 extension directories as they are now, under the place's lock, so an edit to
 `disabledExtensions` and an added, fixed or edited extension file reach the
-next turn and the next session without a restart; a file is imported under its
-version (mtime, size, inode), so Bun's module cache does not serve the old one.
-A directory extension's version is its index file's. Project trust comes from
+next turn and the next session without a restart. Each extension entry (a file,
+or a directory's index) is built with every module it imports by a relative
+path into one module (`GentPlatform.bundleModule`, `Bun.build` with package
+imports external), and its version is the built module's hash. The platform
+serves the build at the entry's path with the version in the query
+(`serveModule`), so a new version is imported afresh, the same version comes
+from Bun's module cache, and a package import still resolves from the entry's
+directory. The cache keeps each entry's last build with a stat stamp and a
+content hash of every input (`buildEntry`, `ModuleGraphs`): a resolve with no
+input touched costs a stat of each (about 1.5 ms for the scan); a save of the
+same bytes reads and hashes the inputs and builds nothing; an edit builds again
+(about 10 ms; the first build of a process about 70 ms). A failed build is not
+kept, so a relative module created later is found. An untrusted project's
+files are listed, not built. Project trust comes from
 `isProjectExtensionDirectoryTrusted` (`runtime/config.ts`), the reader the TUI's
 client-extension loader calls too: it reads `trustedProjects` from the user
 config file as it is now, and a file that does not decode trusts no project.

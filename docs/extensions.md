@@ -38,7 +38,10 @@ export default defineExtension({
 
 That's it. Save as `~/.gent/extensions/greet.ts`. The next turn loads it; an
 edited, added or removed extension file reaches the next turn the same way, with
-no restart.
+no restart. An extension is built with the modules it imports by a relative
+path, so an edit to one of them reaches the next turn too, and a save of the
+same bytes changes nothing. Its top level runs once per version; setup runs
+again on each new profile.
 
 For the smallest complete product loop, see
 `examples/extensions/session-notes.ts`. It is still one file, but covers the

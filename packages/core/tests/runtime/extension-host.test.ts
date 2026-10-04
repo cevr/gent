@@ -652,6 +652,75 @@ export default defineExtension({
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
+  // An extension's version is the content of every file it builds from: an
+  // edit to a module it imports by a relative path is a new version, and a
+  // save of the same bytes is not.
+  it.scopedLive(
+    "an edit to a relative module reaches the next resolve and a save of the same bytes builds nothing",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-profile-graph-" })
+        const home = path.join(directory, "home")
+        const launch = path.join(directory, "launch")
+        const extensionDir = path.join(home, ".gent", "extensions", "graph")
+        const index = path.join(extensionDir, "index.ts")
+        const valueModule = path.join(extensionDir, "value.ts")
+        yield* fs.makeDirectory(extensionDir, { recursive: true })
+        yield* fs.makeDirectory(launch, { recursive: true })
+        yield* writeFileAtomic(
+          index,
+          `import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+import { value } from "./value.ts";
+class Marker extends Context.Service<Marker, { readonly value: string }>()(
+  "@gent/core/tests/runtime/extension-host.test/SessionProfileResourceMarker",
+) {}
+export default defineExtension({
+  id: "profile-graph",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "profile-graph/marker",
+      scope: "process",
+      layer: Layer.succeed(Marker, Marker.of({ value })),
+    }));
+  }),
+});
+`,
+        )
+        // Replaced, as gent and most editors save: a new inode and mtime.
+        const writeValue = (value: string) =>
+          writeFileAtomic(valueModule, `export const value = "${value}";\n`)
+        const marker = (profile: SessionProfile) =>
+          Context.get(profile.layerContext, SessionProfileResourceMarker).value
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(launch))
+          yield* writeValue("first")
+          const first = yield* resolve
+          expect(marker(first)).toBe("first")
+
+          yield* writeValue("second")
+          const second = yield* resolve
+          expect(marker(second)).toBe("second")
+
+          // The same bytes, saved again: the same version, so the same profile.
+          yield* writeValue("second")
+          expect(yield* resolve).toBe(second)
+          const indexText = yield* fs.readFileString(index)
+          yield* writeFileAtomic(index, indexText)
+          expect(yield* resolve).toBe(second)
+        }).pipe(
+          Effect.timeout("15 seconds"),
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   // A branch's loop closes while one of its fibers resolves: the lease lands
   // on a scope that is already closed, and is released at once.
   it.scopedLive(
@@ -1846,7 +1915,7 @@ const fsLayer = Layer.provideMerge(
  */
 const discoverProfileExtensions = (dirs: { readonly home: string; readonly cwd: string }) =>
   Effect.gen(function* () {
-    const scan = yield* scanRuntimeProfileExtensions(dirs)
+    const scan = yield* scanRuntimeProfileExtensions(dirs, new Map())
     const declarations = yield* loadRuntimeProfileDeclarations(
       { ...dirs, platform: "test", extensions: [] },
       scan,
@@ -5228,7 +5297,7 @@ describe("live Profile", () => {
         }
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs),
+          yield* scanRuntimeProfileExtensions(inputs, new Map()),
         )
         expect(events).toEqual([])
         expect(declarations.extensionDeclarations.failed).toContainEqual(
@@ -5278,7 +5347,7 @@ describe("live Profile", () => {
 
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs),
+          yield* scanRuntimeProfileExtensions(inputs, new Map()),
         )
         expect(declarations.extensionDeclarations.failed).toEqual([
           expect.objectContaining({
@@ -5303,7 +5372,7 @@ describe("live Profile", () => {
         // A disabled id silences its file.
         const quiet = yield* loadRuntimeProfileDeclarations(
           { ...inputs, disabledExtensions: ["broken", "folder-broken", "local"] },
-          yield* scanRuntimeProfileExtensions(inputs),
+          yield* scanRuntimeProfileExtensions(inputs, new Map()),
         )
         expect(quiet.extensionDeclarations.failed).toEqual([])
 

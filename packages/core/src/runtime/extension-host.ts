@@ -101,7 +101,7 @@ import type {
   ModelRouterContribution,
 } from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
-import { GentPlatform, type RuntimeModuleSource } from "./gent-platform.js"
+import { GentPlatform, type RuntimeModuleSource, SERVED_MODULE_QUERY } from "./gent-platform.js"
 import {
   type ConfigLoadError,
   ConfigService,
@@ -1228,18 +1228,136 @@ const isExtensionFile = (entry: string): boolean =>
     return entry.endsWith(ext)
   })
 
-/** An extension file found on disk, and its version (`fileVersion`). */
+/**
+ * An extension file found on disk, its version, and its build: one module of
+ * the file and every module it imports by a relative path (`buildEntry`).
+ */
 interface DiscoveredFile {
   readonly path: string
+  /** The built module's content hash, or a failed build's (`!` and the error's hash). */
   readonly version: string
+  /** The built module, or why the build failed. */
+  readonly build: Result.Result<string, string>
 }
 
 /**
- * The extension files in a directory, sorted by path, and the entries that
- * could not be read (a dangling symlink, a permission error). It reports
- * nothing; `discoverDir` turns the unreadable entries into failures.
+ * The last good build of one extension entry. `stamps` holds each input's
+ * stat (`fileVersion`), so a resolve with no file touched reads no file;
+ * `content` hashes each input's bytes, so a save of the same bytes builds
+ * nothing.
  */
-const scanDir = Effect.fn("ExtensionLoader.scanDir")(function* (dir: string) {
+interface ModuleGraph {
+  readonly stamps: ReadonlyMap<string, string>
+  readonly content: string
+  readonly version: string
+  readonly code: string
+}
+
+/**
+ * The module graphs of the extension entries this process built, by entry
+ * path. The session profile cache owns one for the process, so a stat of
+ * each input is all an unchanged extension costs a resolve. A failed build
+ * is not kept: it builds again on the next resolve, so a relative module
+ * created later is found.
+ */
+type ModuleGraphs = Map<string, ModuleGraph>
+
+/** A file's stat stamp, or `missing` when it is gone. */
+const statStamp = (fs: FileSystem.FileSystem, file: string) =>
+  fs.stat(file).pipe(
+    Effect.map(fileVersion),
+    Effect.orElseSucceed(() => "missing"),
+  )
+
+/**
+ * The content hash of a build's inputs: each input's path and bytes, in path
+ * order. A file that cannot be read hashes as missing, so it never matches.
+ */
+const contentHash = Effect.fn("ExtensionLoader.contentHash")(function* (
+  inputs: ReadonlyArray<string>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const platform = yield* GentPlatform
+  const parts: string[] = []
+  for (const input of inputs.toSorted(Order.String)) {
+    const bytes = yield* fs.readFile(input).pipe(Effect.option)
+    const digest = Option.match(bytes, {
+      onNone: () => "missing",
+      onSome: (content) => platform.hash("sha256", content),
+    })
+    parts.push(`${input}\u0000${digest}`)
+  }
+  return platform.hash("sha256", parts.join("\u0000"))
+})
+
+/**
+ * Build an extension entry into one module, or reuse its last build. Each
+ * resolve stats the entry and the modules its last build read: no stat
+ * changed, the last build stands. A stat changed but no byte did (a save of
+ * the same bytes, a `touch`), the last build stands and the new stats are
+ * kept. Otherwise the entry builds again. The version is the built module's
+ * hash, so two builds of the same code share one version.
+ */
+const buildEntry = Effect.fn("ExtensionLoader.buildEntry")(function* (
+  entry: string,
+  graphs: ModuleGraphs,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const platform = yield* GentPlatform
+  const known = Option.fromNullishOr(graphs.get(entry))
+  const inputs = Option.match(known, {
+    onNone: () => [entry],
+    onSome: (graph) => [...graph.stamps.keys()],
+  })
+  const before = new Map<string, string>()
+  for (const input of inputs) before.set(input, yield* statStamp(fs, input))
+  if (Option.isSome(known)) {
+    const graph = known.value
+    if ([...before].every(([input, stamp]) => graph.stamps.get(input) === stamp)) {
+      return { version: graph.version, build: Result.succeed(graph.code) }
+    }
+    if ((yield* contentHash(inputs)) === graph.content) {
+      graphs.set(entry, { ...graph, stamps: before })
+      return { version: graph.version, build: Result.succeed(graph.code) }
+    }
+  }
+  const built = yield* platform.bundleModule(entry).pipe(Effect.result)
+  if (Result.isFailure(built)) {
+    const error = `Failed to build ${entry}: ${built.failure.message}`
+    graphs.delete(entry)
+    return {
+      version: `!${platform.hash("sha256", error)}`,
+      build: Result.fail(error),
+    }
+  }
+  // A known input keeps the stat from before the build: an edit during the
+  // build then shows as a change on the next resolve.
+  const stamps = new Map<string, string>()
+  for (const input of built.success.inputs) {
+    stamps.set(input, before.get(input) ?? (yield* statStamp(fs, input)))
+  }
+  const graph: ModuleGraph = {
+    stamps,
+    content: yield* contentHash(built.success.inputs),
+    version: platform.hash("sha256", built.success.code),
+    code: built.success.code,
+  }
+  graphs.set(entry, graph)
+  return { version: graph.version, build: Result.succeed(graph.code) }
+})
+
+/**
+ * The extension files in a directory, sorted by path, each built
+ * (`buildEntry`) when `graphs` is given, and the entries that could not be
+ * read (a dangling symlink, a permission error). A directory whose code may
+ * not load (an untrusted project) is listed, not built. It reports nothing;
+ * `discoverDir` turns the unreadable entries into failures and the loader the
+ * failed builds.
+ */
+const scanDir = Effect.fn("ExtensionLoader.scanDir")(function* (
+  dir: string,
+  graphs: Option.Option<ModuleGraphs>,
+) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const paths: DiscoveredFile[] = []
@@ -1266,26 +1384,27 @@ const scanDir = Effect.fn("ExtensionLoader.scanDir")(function* (dir: string) {
     const found = yield* Effect.result(
       Effect.gen(function* () {
         const stat = yield* fs.stat(filePath)
-        if (stat.type === "File" && isExtensionFile(entry))
-          return Option.some({ path: filePath, version: fileVersion(stat) })
-        if (stat.type !== "Directory") return Option.none<DiscoveredFile>()
-        // A directory extension is its index.ts/index.js/index.mjs. Its
-        // version is the index's: an edit to a module it imports is not seen.
+        if (stat.type === "File" && isExtensionFile(entry)) return Option.some(filePath)
+        if (stat.type !== "Directory") return Option.none<string>()
+        // A directory extension is its index.ts/index.js/index.mjs.
         for (const indexName of ["index.ts", "index.js", "index.mjs"]) {
           const indexPath = path.join(filePath, indexName)
-          if (yield* fs.exists(indexPath)) {
-            const indexStat = yield* fs.stat(indexPath)
-            return Option.some({ path: indexPath, version: fileVersion(indexStat) })
-          }
+          if (yield* fs.exists(indexPath)) return Option.some(indexPath)
         }
-        return Option.none<DiscoveredFile>()
+        return Option.none<string>()
       }),
     )
     if (Result.isFailure(found)) {
       unreadable.push({ path: filePath, error: found.failure })
       continue
     }
-    if (Option.isSome(found.success)) paths.push(found.success.value)
+    if (Option.isNone(found.success)) continue
+    const entryPath = found.success.value
+    if (Option.isNone(graphs)) {
+      paths.push({ path: entryPath, version: "unbuilt", build: Result.fail("not built") })
+      continue
+    }
+    paths.push({ path: entryPath, ...(yield* buildEntry(entryPath, graphs.value)) })
   }
 
   // Code-unit order, not the locale's: load order decides service conflicts.
@@ -1341,21 +1460,25 @@ interface ExtensionScan {
  * and a user file that does not decode trusts no project: a revoke is never
  * undone by a broken edit.
  */
-export const scanRuntimeProfileExtensions = Effect.fn("ExtensionLoader.scanExtensions")(
-  function* (inputs: {
+export const scanRuntimeProfileExtensions = Effect.fn("ExtensionLoader.scanExtensions")(function* (
+  inputs: {
     readonly cwd: string
     readonly home: string
-  }): Effect.fn.Return<ExtensionScan, never, FileSystem.FileSystem | Path.Path> {
-    const dirs = extensionDirectories(yield* Path.Path, inputs)
-    const projectTrusted = yield* isProjectExtensionDirectoryTrusted(dirs)
-    const user = yield* scanDir(dirs.userDir)
-    // Launched from home, the project directory is the user's: one scope, read once.
-    let project: DirScan = { paths: [], unreadable: [] }
-    if (yield* hasProjectScope({ user: dirs.userDir, project: dirs.projectDir }))
-      project = yield* scanDir(dirs.projectDir)
-    return { dirs, user, project, projectTrusted }
   },
-)
+  graphs: ModuleGraphs,
+): Effect.fn.Return<ExtensionScan, never, FileSystem.FileSystem | Path.Path | GentPlatform> {
+  const dirs = extensionDirectories(yield* Path.Path, inputs)
+  const projectTrusted = yield* isProjectExtensionDirectoryTrusted(dirs)
+  const user = yield* scanDir(dirs.userDir, Option.some(graphs))
+  // Launched from home, the project directory is the user's: one scope, read once.
+  let project: DirScan = { paths: [], unreadable: [] }
+  if (yield* hasProjectScope({ user: dirs.userDir, project: dirs.projectDir }))
+    project = yield* scanDir(
+      dirs.projectDir,
+      Option.filter(Option.some(graphs), () => projectTrusted),
+    )
+  return { dirs, user, project, projectTrusted }
+})
 
 /**
  * The extension files a scan found, each with its version, the paths that
@@ -1424,21 +1547,31 @@ const provideExtensionModules: Effect.Effect<void, never, GentPlatform> = GentPl
 const importExtensionModule = (filePath: string) => import(filePath)
 
 /**
- * Load a single extension from a file path. The import names the file's
- * version, so an edited file is imported again instead of from Bun's module
- * cache. Two limits follow from Bun's module cache. Bun never drops a module,
- * so every version of an edited file stays in memory until the process
- * exits. And only the entry file is versioned: a module it imports by a
- * relative path keeps the first version this process loaded, for a file
- * extension as for a directory extension's index.
+ * Load a single extension from its build (`buildEntry`). The platform serves
+ * the built module at the file's path with its version in the query, so a
+ * new version is imported afresh and the same version comes from Bun's module
+ * cache: its top level runs once. The build holds every module the file
+ * imports by a relative path, so an edit to one is a new version too. A
+ * package import stays an import and resolves from the file's directory. Bun
+ * never drops a module, so every version of an edited file stays in memory
+ * until the process exits.
  */
 const loadExtensionFile = Effect.fn("ExtensionLoader.loadExtensionFile")(function* (
   file: DiscoveredFile,
 ) {
   const filePath = file.path
+  if (Result.isFailure(file.build)) {
+    return yield* new ExtensionLoadError({
+      extensionId: ExtensionId.make("unknown"),
+      message: file.build.failure,
+    })
+  }
   yield* provideExtensionModules
+  const platform = yield* GentPlatform
+  const specifier = `${filePath}?${SERVED_MODULE_QUERY}=${encodeURIComponent(file.version)}`
+  yield* platform.serveModule(specifier, file.build.success)
   const mod = yield* Effect.tryPromise({
-    try: () => importExtensionModule(`${filePath}?v=${encodeURIComponent(file.version)}`),
+    try: () => importExtensionModule(specifier),
     catch: (err) =>
       new ExtensionLoadError({
         extensionId: ExtensionId.make("unknown"),
@@ -2238,6 +2371,9 @@ export class SessionProfileCache extends Context.Service<
         // join the file stamp, so a reload misses both the alias and the
         // profile and builds a new profile.
         const reloads = new Map<string, Map<string, number>>()
+        // Each extension entry's last good build, shared by every place: an
+        // unchanged extension costs a resolve a stat of each file it built from.
+        const graphs: ModuleGraphs = new Map()
         const filesStamp = (place: string, scan: ExtensionScan): ReadonlyArray<string> => [
           ...extensionScanStamp(scan),
           ...Array.from(reloads.get(place) ?? new Map<string, number>())
@@ -2506,7 +2642,7 @@ export class SessionProfileCache extends Context.Service<
                   // edit cannot put the older profile back.
                   const fresh = yield* restore(configService.getFresh(canonicalCwd))
                   const scan = yield* restore(
-                    scanRuntimeProfileExtensions(inputsFor(canonicalCwd)).pipe(
+                    scanRuntimeProfileExtensions(inputsFor(canonicalCwd), graphs).pipe(
                       Effect.provideContext(platformServicesContext),
                     ),
                   )
