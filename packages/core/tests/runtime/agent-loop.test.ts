@@ -1265,7 +1265,7 @@ describe("model resolution failure", () => {
             BranchId.make("signed-out-branch"),
             "hello",
           ),
-          { runSpec: { overrides: { modelId } } },
+          { runSpec: { overrides: { model: modelId } } },
         ).pipe(Effect.exit)
         const events = yield* Ref.get(eventsRef)
         const shown = events.flatMap((event) => {
@@ -1293,7 +1293,7 @@ describe("model resolution failure", () => {
 
   it.live(
     "a classifier a run override names is refused before its driver resolves a chat model",
-    () => refusesClassifier({ agents: testAgents, overrides: { modelId: CLASSIFIER_MODEL_ID } }),
+    () => refusesClassifier({ agents: testAgents, overrides: { model: CLASSIFIER_MODEL_ID } }),
   )
 })
 
@@ -1302,7 +1302,7 @@ const CLASSIFIER_MODEL_ID = ModelId.make("judge-driver/jev-latest")
 /** Run one turn whose model is a classifier, and check it is refused by name and never resolved for chat. */
 const refusesClassifier = (params: {
   readonly agents: ReadonlyArray<AgentDefinition>
-  readonly overrides: { readonly modelId?: ModelId }
+  readonly overrides: { readonly model?: ModelId }
 }) => {
   const modelId = CLASSIFIER_MODEL_ID
   return Effect.gen(function* () {

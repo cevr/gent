@@ -3357,7 +3357,7 @@ const chatGptHarness = (responder: Parameters<typeof fakeFetchLayer>[1]) =>
       ...e2ePreset,
       extensionInputs: [...e2ePreset.extensionInputs, watch],
       providerLayer: Layer.provide(model, fakeFetchLayer(fetchState, responder)),
-      admission: { runSpec: { overrides: { modelId: ModelId.make("openai/gpt-5.4") } } },
+      admission: { runSpec: { overrides: { model: ModelId.make("openai/gpt-5.4") } } },
     })
     return { ...harness, fetchState, turnAfters }
   })

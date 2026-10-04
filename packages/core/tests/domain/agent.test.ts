@@ -65,6 +65,32 @@ describe("run spec", () => {
     )
     expect(decoded).toEqual({ overrides: { maxModelAttempts: 32 } })
   })
+
+  // Rows written before `tools` carry the two lists and `modelId`; each
+  // decodes into the one pattern list and `model`, and encodes in the new shape.
+  test("a stored run spec with the old tool lists decodes into tool patterns", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(RunSpecSchema))
+    expect(
+      decode('{"overrides":{"modelId":"openai/gpt-5","allowedTools":["read","film.look"]}}'),
+    ).toEqual({ overrides: { model: ModelId.make("openai/gpt-5"), tools: ["read", "film.look"] } })
+    expect(decode('{"overrides":{"deniedTools":["delegate.start","bash"]}}')).toEqual({
+      overrides: { tools: ["*", "!delegate.start", "!bash"] },
+    })
+    expect(decode('{"overrides":{"allowedTools":["read","bash"],"deniedTools":["bash"]}}')).toEqual(
+      { overrides: { tools: ["read", "bash", "!bash"] } },
+    )
+    const migrated = decode('{"overrides":{"modelId":"a/b","deniedTools":["bash"]}}')
+    expect(Schema.encodeSync(Schema.fromJsonString(RunSpecSchema))(migrated)).toBe(
+      '{"overrides":{"model":"a/b","tools":["*","!bash"]}}',
+    )
+  })
+
+  test("a run spec that names tools keeps them over the old lists", () => {
+    const decoded = Schema.decodeSync(Schema.fromJsonString(RunSpecSchema))(
+      '{"overrides":{"tools":["read"],"deniedTools":["read"],"model":"a/b","modelId":"c/d"}}',
+    )
+    expect(decoded).toEqual({ overrides: { tools: ["read"], model: ModelId.make("a/b") } })
+  })
 })
 
 // ── model ids ───────────────────────────────────────────────────────────────

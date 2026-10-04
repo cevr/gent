@@ -2981,7 +2981,7 @@ describe("message.send", () => {
           admission: {
             runSpec: {
               overrides: {
-                modelId: ModelId.make("custom/model"),
+                model: ModelId.make("custom/model"),
                 reasoningEffort: "high",
                 systemPromptAddendum: "Extra public contract instructions",
               },
@@ -3080,7 +3080,7 @@ describe("message.send", () => {
           new UserConfig({
             agents: {
               [AgentName.make("main")]: {
-                modelId: ModelId.make("openai/gpt-5.6-sol"),
+                model: ModelId.make("openai/gpt-5.6-sol"),
                 reasoningEffort: "low",
               },
             },
@@ -3092,7 +3092,7 @@ describe("message.send", () => {
         const created = yield* client.session.create({ cwd: process.cwd() })
         const specified = yield* client.session.create({
           cwd: process.cwd(),
-          admission: { runSpec: { overrides: { modelId: ModelId.make("custom/model") } } },
+          admission: { runSpec: { overrides: { model: ModelId.make("custom/model") } } },
         })
         const replied = (session: typeof created, text: string) =>
           waitFor(
@@ -3143,7 +3143,7 @@ describe("message.send", () => {
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const created = yield* client.session.create({
           cwd: process.cwd(),
-          admission: { runSpec: { overrides: { modelId: ModelId.make("custom/model") } } },
+          admission: { runSpec: { overrides: { model: ModelId.make("custom/model") } } },
         })
         const target = { sessionId: created.sessionId, branchId: created.branchId }
         const admitted = yield* client.session.getSnapshot(target)
@@ -3232,7 +3232,7 @@ describe("message.send", () => {
           new UserConfig({
             agents: {
               [AgentName.make("main")]: {
-                modelId: ModelId.make("openai/gpt-5.6-sol"),
+                model: ModelId.make("openai/gpt-5.6-sol"),
                 reasoningEffort: "low",
               },
             },

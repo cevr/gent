@@ -2472,7 +2472,7 @@ const mcpImageTurn = (png: string) =>
     const path = yield* Path.Path
     const fixture = yield* makeFixture
     const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-images-" })
-    // An agent that lists the MCP tool calls it natively, beside the shipped cell.
+    // An agent whose tools name the MCP server calls its tools natively, beside the shipped cell.
     const pictureAgent = defineExtension({
       id: "@test/picture-agent",
       setup: Effect.gen(function* () {
@@ -2482,7 +2482,7 @@ const mcpImageTurn = (png: string) =>
           AgentDefinition.make({
             name: AgentName.make("picture"),
             description: "looks at pictures",
-            allowedTools: ["mcp.fixture.png"],
+            tools: ["mcp.fixture.*"],
           }),
         )
       }),

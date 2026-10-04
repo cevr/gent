@@ -677,7 +677,7 @@ const helper = AgentDefinition.make({
   name: AgentName.make("helper"),
   description: "Helper for specific tasks",
   model: ModelId.make("anthropic/claude-sonnet-4-6"),
-  allowedTools: ["read", "write"],
+  tools: ["read", "write"],
 })
 
 export default defineExtension({
@@ -689,8 +689,8 @@ export default defineExtension({
 })
 ```
 
-`allowedTools` is authoritative: the agent gets exactly the tools it names,
-less its `deniedTools`, and no extension adds one. The cell is the model
+`tools` is authoritative: the agent gets exactly the tools its patterns
+admit, and no extension adds one. The cell is the model
 surface only for an agent that admits `cell`; the helper above calls `read`
 and `write` directly. An extension that selects or describes its own tool in a
 `turnProjection` hook asks `agent.admitsTool(id)` first.

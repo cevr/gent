@@ -3185,8 +3185,8 @@ const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
  * listing the host ships with each changed turn; `await tools(id)` asks the
  * kernel for the rest of the entry.
  * The extension owns the model selection and catalog through ordinary hooks.
- * An agent whose lists leave the cell out (`allowedTools` without it, or
- * `deniedTools` with it) keeps its own tools as the model surface.
+ * An agent whose `tools` patterns leave the cell out keeps its own tools as
+ * the model surface.
  */
 export const CellExtension = defineExtension({
   id: CELL_EXTENSION_ID,

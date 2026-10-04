@@ -13,7 +13,7 @@ import {
 } from "effect"
 import {
   AgentName,
-  AgentRunOverridesSchema,
+  StoredAgentPatch,
   type DriverRef,
   DriverOverridesFromConfig,
   isRetiredDriverRef,
@@ -142,11 +142,14 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    */
   driverOverrides: Schema.optional(DriverOverridesFromConfig),
   /**
-   * Per-agent definition overrides: model, reasoning effort, tool lists and
-   * a prompt addendum. Project config shadows user config key-by-key; a
-   * run's own `RunSpec.overrides` shadows both.
+   * Agents by name, each an `AgentDefinition` without its `name` (an
+   * `AgentPatch`). A name no extension registers creates an agent; one that
+   * names a registered agent replaces the fields it sets. Project config
+   * shadows user config key-by-key; a run's own `RunSpec.overrides` shadows
+   * both. An entry written before `tools` (`allowedTools`, `deniedTools`,
+   * `modelId`) decodes into `tools` and `model`.
    */
-  agents: Schema.optional(Schema.Record(AgentName, AgentRunOverridesSchema)),
+  agents: Schema.optional(Schema.Record(AgentName, StoredAgentPatch)),
   /**
    * models.dev providers to enable, patch or add, by provider id. A key that
    * names a catalog provider enables it and patches its entry; a new key adds

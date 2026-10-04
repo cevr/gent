@@ -12,7 +12,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Database } from "bun:sqlite"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
-import { AgentName } from "../../src/domain/agent"
+import { AgentName, ModelId } from "../../src/domain/agent"
 import * as Prompt from "effect/ai/Prompt"
 import { BranchId, MessageId, SessionId, CurrentWorkspaceId } from "../../src/domain/ids"
 import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"
@@ -135,7 +135,7 @@ describe("session admission", () => {
       const sessionId = SessionId.make("admitted-session")
       const admission = {
         agent: AgentName.make("helper"),
-        runSpec: { overrides: { deniedTools: ["delegate.start"] } },
+        runSpec: { overrides: { tools: ["*", "!delegate.start"] } },
       }
       yield* sessions.createSession(
         new Session({ id: sessionId, admission, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
@@ -146,6 +146,28 @@ describe("session admission", () => {
         new Session({ id: plain, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
       )
       expect((yield* sessions.getSession(plain))?.admission).toBeUndefined()
+    }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(kernelOnly)),
+  )
+
+  // A session a delegate started before `tools` stored its run overrides
+  // with `modelId` and the two tool lists. The row still reads, as patterns.
+  it.scopedLive("a stored admission with the old tool lists reads as tool patterns", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const sql = yield* SqlClient.SqlClient
+      const sessionId = SessionId.make("old-child")
+      yield* sessions.createSession(
+        new Session({ id: sessionId, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
+      )
+      const oldAdmission =
+        '{"agent":"delegate","runSpec":{"overrides":{"modelId":"openai/gpt-5","allowedTools":["read","bash"],"deniedTools":["bash"]}}}'
+      yield* sql`UPDATE sessions SET admission_json = ${oldAdmission} WHERE id = ${sessionId}`
+      expect((yield* sessions.getSession(sessionId))?.admission).toEqual({
+        agent: AgentName.make("delegate"),
+        runSpec: {
+          overrides: { model: ModelId.make("openai/gpt-5"), tools: ["read", "bash", "!bash"] },
+        },
+      })
     }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(kernelOnly)),
   )
 
@@ -238,9 +260,10 @@ describe("session admission", () => {
           const sessions = yield* SessionStorage
           // The copied `interactive` key stays in the row and decodes away:
           // whether a turn can ask comes from its origin now.
+          // The old deny list decodes into tool patterns.
           expect((yield* sessions.getSession(recorded))?.admission).toEqual({
             agent: AgentName.make("helper"),
-            runSpec: { overrides: { deniedTools: ["delegate.start"] } },
+            runSpec: { overrides: { tools: ["*", "!delegate.start"] } },
           })
           expect((yield* sessions.getSession(queued))?.admission).toEqual({
             agent: AgentName.make("helper"),

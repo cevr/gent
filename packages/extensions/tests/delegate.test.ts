@@ -376,8 +376,8 @@ describe("a child's completion", () => {
           const harness = yield* harnessWithHome(startThenEnd("pong"), {
             config: new UserConfig({
               agents: {
-                [DEFAULT_AGENT_NAME]: { modelId: ModelId.make("test/parent-model") },
-                [DELEGATE_AGENT_NAME]: { modelId: ModelId.make("test/child-model") },
+                [DEFAULT_AGENT_NAME]: { model: ModelId.make("test/parent-model") },
+                [DELEGATE_AGENT_NAME]: { model: ModelId.make("test/child-model") },
               },
             }),
           })
@@ -509,7 +509,7 @@ describe("a child's completion", () => {
           })
           const harness = yield* harnessWithHome(providerLayer, {
             config: new UserConfig({
-              agents: { [DELEGATE_AGENT_NAME]: { modelId: childModel } },
+              agents: { [DELEGATE_AGENT_NAME]: { model: childModel } },
             }),
           })
           const { client } = harness
@@ -1348,7 +1348,7 @@ describe("a start nobody waits for", () => {
       const ctx = Struct.omit(testToolContext(), ["toolCallId"])
       const error = yield* runToolWithCtx(
         StartChild,
-        { todo: "analyze the codebase", overrides: { deniedTools: ["bash"] } },
+        { todo: "analyze the codebase", overrides: { tools: ["*", "!bash"] } },
         ctx,
       ).pipe(Effect.flip)
       expect(error).toMatchObject({
@@ -1424,7 +1424,7 @@ describe("a start nobody waits for", () => {
           ])
           const harness = yield* harnessWithHome(providerLayer)
           const { client, sessionId, branchId } = harness
-          const runSpec = { overrides: { modelId: ModelId.make("test/override-model") } }
+          const runSpec = { overrides: { model: ModelId.make("test/override-model") } }
           // The child session carries its admission from creation, as `admitChild` makes it.
           const child = yield* client.session.create({
             parentSessionId: sessionId,
@@ -2042,7 +2042,7 @@ const systemBlocksWithChildDenying = (deniedTool: string) =>
       parentBlocks.push(blocks)
       parentCalls += 1
       if (parentCalls === 1) {
-        const input = `{ todo: "${childTask}", overrides: { deniedTools: ["${deniedTool}"] } }`
+        const input = `{ todo: "${childTask}", overrides: { tools: ["*", "!${deniedTool}"] } }`
         const code = `await tools.delegate.start(${input})`
         return Effect.succeed(toolStep("cell", { code }, "cell-start-1"))
       }

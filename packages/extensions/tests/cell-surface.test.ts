@@ -1087,7 +1087,7 @@ describe("shipped model surface", () => {
   )
 
   it.scopedLive(
-    "an agent whose allowedTools omit the cell gets exactly those tools and no cell",
+    "an agent whose tools omit the cell gets exactly those tools and no cell",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -1104,7 +1104,7 @@ describe("shipped model surface", () => {
               AgentDefinition.make({
                 name: AgentName.make("closed"),
                 description: "reads only",
-                allowedTools: ["read"],
+                tools: ["read"],
               }),
             )
           }),
@@ -1157,7 +1157,7 @@ describe("shipped model surface", () => {
               AgentDefinition.make({
                 name: AgentName.make("scoped"),
                 description: "reads only",
-                allowedTools: ["cell", "read"],
+                tools: ["cell", "read"],
               }),
             )
           }),
@@ -1361,7 +1361,7 @@ describe("branch cell lifetime", () => {
           },
           {
             send: true,
-            code: "const finished = await tools.delegate.start({todo: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['cell', 'read_session'], deniedTools: ['delegate.start'], systemPromptAddendum: 'Report the verified result'}}); await tools['child-handle']({_tag: 'save', handle: finished}); await tools['model-started']({call: 12}); true",
+            code: "const finished = await tools.delegate.start({todo: 'Return the result', overrides: {model: 'custom/model', reasoningEffort: 'high', tools: ['cell', 'read_session', '!delegate.start'], systemPromptAddendum: 'Report the verified result'}}); await tools['child-handle']({_tag: 'save', handle: finished}); await tools['model-started']({call: 12}); true",
           },
           {
             send: false,
@@ -1555,7 +1555,7 @@ describe("branch cell lifetime", () => {
               extensions,
               providerLayer,
               branchTools: CellBranchTools,
-              agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, deniedTools: ["hidden"] })],
+              agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, tools: ["*", "!hidden"] })],
             })
             expect(yield* Ref.get(pids)).toEqual([])
             const second = yield* client.branch.create({ sessionId })
@@ -1735,8 +1735,8 @@ describe("saved cell recovery through RPC", () => {
       `a ${state} cell recovers, and a call cut short is reported as interrupted instead of running again`,
       () =>
         Effect.gen(function* () {
-          const deniedTools: string[] = []
-          if (state === "revoked") deniedTools.push("cell")
+          const tools: string[] = ["*"]
+          if (state === "revoked") tools.push("!cell")
           const nativeCalls = yield* Ref.make(0)
           const cellCalls = yield* Ref.make(0)
           const approvalCalls = yield* Ref.make(0)
@@ -1798,7 +1798,7 @@ describe("saved cell recovery through RPC", () => {
             createE2ELayer({
               extensions,
               providerLayer,
-              agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, deniedTools })],
+              agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, tools })],
               branchTools: CellBranchTools,
               approvalLayer: ApprovalService.Live,
             }),

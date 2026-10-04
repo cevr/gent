@@ -1,8 +1,9 @@
 import {
-  AgentDefinition,
+  type AgentDefinition,
   AgentName,
   type AgentName as AgentNameType,
-  type AgentRunOverrides,
+  type AgentPatch,
+  applyAgentPatch,
   calculateCost,
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
@@ -1337,48 +1338,15 @@ const requestNotices = (resolved: ResolvedTurnContext): ReadonlyArray<TurnNotice
   ...resolved.notices.map(({ notice }) => notice),
 ]
 
-const mergeSystemPromptAddendum = (
-  base: Option.Option<string>,
-  addendum: Option.Option<string>,
-): Option.Option<string> =>
-  Option.match(addendum, {
-    onNone: () => base,
-    onSome: (value) =>
-      Option.match(base, {
-        onNone: () => Option.some(value),
-        onSome: (baseValue) => Option.some(`${baseValue}\n\n${value}`),
-      }),
-  })
-
 /** Config `agents[name]` and `RunSpec.overrides` reshape a definition the same way. */
 const applyAgentOverrides = (
   agent: AgentDefinition,
-  overrides: Option.Option<AgentRunOverrides>,
-): AgentDefinition => {
-  const systemPromptAddendum = Option.match(overrides, {
-    onNone: () => Option.fromUndefinedOr(agent.systemPromptAddendum),
-    onSome: (value) =>
-      mergeSystemPromptAddendum(
-        Option.fromUndefinedOr(agent.systemPromptAddendum),
-        Option.fromUndefinedOr(value.systemPromptAddendum),
-      ),
+  overrides: Option.Option<AgentPatch>,
+): AgentDefinition =>
+  Option.match(overrides, {
+    onNone: () => agent,
+    onSome: (patch) => applyAgentPatch(agent, patch),
   })
-
-  const value = Option.getOrUndefined(overrides)
-  return AgentDefinition.make({
-    ...agent,
-    ...omitUndefined({
-      model: value?.modelId,
-      allowedTools: value?.allowedTools,
-      deniedTools: value?.deniedTools,
-      reasoningEffort: value?.reasoningEffort,
-      contextLength: value?.contextLength,
-      maxSteps: value?.maxSteps,
-      maxModelAttempts: value?.maxModelAttempts,
-      systemPromptAddendum: Option.getOrUndefined(systemPromptAddendum),
-    }),
-  })
-}
 
 interface SessionSettingsSource {
   readonly modelId?: ModelId

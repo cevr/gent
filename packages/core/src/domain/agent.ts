@@ -1,4 +1,5 @@
-import { Option, Schema, SchemaGetter } from "effect"
+import { Option, Predicate, Schema, SchemaGetter, Struct } from "effect"
+import { omitUndefined } from "./guards.js"
 import { SessionId } from "./ids.js"
 
 // ── model ───────────────────────────────────────────────────────────────────
@@ -376,20 +377,58 @@ export const DriverOverridesFromConfig = Schema.Record(AgentName, StoredDriverRe
 
 export const DEFAULT_AGENT_NAME = AgentName.make("main")
 
+// ── tool patterns ───────────────────────────────────────────────────────────
+
+/** `text` with every regular-expression metacharacter escaped. */
+const escapeRegExp = (text: string): string => text.replaceAll(/[.+?^${}()|[\]\\]/g, "\\$&")
+
+/**
+ * One tool pattern as a matcher of the whole id: `*` is any run of
+ * characters, dots too (so `*` is every tool and `film.*` every `film.` tool
+ * at any depth), and every other character matches itself.
+ */
+const patternMatcher = (pattern: string): RegExp =>
+  new RegExp(`^${pattern.split("*").map(escapeRegExp).join(".*")}$`)
+
+/**
+ * Whether ordered tool patterns admit the tool `id`. The last pattern that
+ * matches decides: a plain pattern admits, a `!` pattern takes back. A tool
+ * no pattern matches is left out; absent patterns admit every tool.
+ */
+const toolPatternsAdmit = (patterns: Option.Option<ReadonlyArray<string>>, id: string): boolean =>
+  Option.match(patterns, {
+    onNone: () => true,
+    onSome: (list) =>
+      list.reduce((admitted, pattern) => {
+        const negated = pattern.startsWith("!")
+        const body = pattern.slice(Number(negated))
+        if (patternMatcher(body).test(id)) return !negated
+        return admitted
+      }, false),
+  })
+
+// ── agent definition ────────────────────────────────────────────────────────
+
 /**
  * AgentDefinition — agent identity + defaults.
  *
  * Per `composability-not-flags`, agent specs carry only what makes the agent
- * what it is: name, description, model, prompt, tool allow/deny, sampling
- * defaults, and driver routing. Per-run overrides live on `RunSpec`.
+ * what it is: name, description, model, prompt, tool patterns, sampling
+ * defaults, and driver routing. A config file's `agents` entry patches one
+ * by name (`AgentPatch`); per-run overrides are the same patch, on `RunSpec`.
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,
   description: Schema.optional(Schema.String),
   model: Schema.optional(ModelId),
   systemPromptAddendum: Schema.optional(Schema.String),
-  allowedTools: Schema.optional(Schema.Array(Schema.String)),
-  deniedTools: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Ordered tool patterns: the tools the agent's turns hold. The last
+   * pattern that matches a tool id decides; `!` takes a tool back; `*` is
+   * any run of characters, dots included. Absent: every tool. Availability
+   * only: a held tool still asks the user where it asks (`admitsTool`).
+   */
+  tools: Schema.optional(Schema.Array(Schema.String)),
   temperature: Schema.optional(Schema.Finite),
   reasoningEffort: Schema.optional(ReasoningEffort),
   /** Input window in tokens. Overrides the model catalog's limit; a smaller value hands off sooner. */
@@ -405,18 +444,93 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   driver: Schema.optional(DriverRef),
 }) {
   /**
-   * Whether a turn of this agent holds the tool `id`: the allow list, when
-   * set, names it, and the deny list does not. The lists are authoritative:
-   * an agent with `allowedTools` gets exactly those tools, and no extension
-   * adds one (`compileToolPolicy`). An extension that selects or describes
-   * its own tool asks this first.
+   * Whether a turn of this agent holds the tool `id` (`toolPatternsAdmit`
+   * over `tools`). The patterns are authoritative: no extension adds a tool
+   * they leave out (`compileToolPolicy`). An extension that selects or
+   * describes its own tool asks this first.
    */
   admitsTool(id: string): boolean {
-    const allowed = Option.fromUndefinedOr(this.allowedTools)
-    if (Option.isSome(allowed) && !allowed.value.includes(id)) return false
-    return this.deniedTools?.includes(id) !== true
+    return toolPatternsAdmit(Option.fromUndefinedOr(this.tools), id)
   }
 }
+
+/**
+ * An agent's fields but `name`, each optional (every field but `name` is
+ * optional already): a config `agents` entry and a run's `RunSpec.overrides`.
+ * Applied to an agent it replaces each field it names (`applyAgentPatch`).
+ */
+export const AgentPatch = Schema.Struct(Struct.omit(AgentDefinition.fields, ["name"]))
+export type AgentPatch = typeof AgentPatch.Type
+
+/** The fields an agent patch carried before `tools` and `model`. */
+const LegacyAgentPatch = Schema.Struct({
+  ...AgentPatch.fields,
+  modelId: Schema.optional(ModelId),
+  allowedTools: Schema.optional(Schema.Array(Schema.String)),
+  deniedTools: Schema.optional(Schema.Array(Schema.String)),
+})
+type LegacyAgentPatch = typeof LegacyAgentPatch.Type
+
+/**
+ * The two old tool lists as one pattern list: the allowed ids, then each
+ * denied id negated; a deny list alone starts from `*`.
+ */
+const legacyToolPatterns = (
+  allowed: Option.Option<ReadonlyArray<string>>,
+  denied: Option.Option<ReadonlyArray<string>>,
+): Option.Option<ReadonlyArray<string>> => {
+  if (Option.isNone(allowed) && Option.isNone(denied)) return Option.none()
+  const negated = Option.getOrElse(denied, () => []).map((id) => `!${id}`)
+  return Option.some([...Option.getOrElse(allowed, () => ["*"]), ...negated])
+}
+
+const migrateAgentPatch = (stored: LegacyAgentPatch): AgentPatch => {
+  const { modelId, allowedTools, deniedTools, ...patch } = stored
+  const model = Option.orElse(Option.fromUndefinedOr(patch.model), () =>
+    Option.fromUndefinedOr(modelId),
+  )
+  const tools = Option.orElse(Option.fromUndefinedOr(patch.tools), () =>
+    legacyToolPatterns(Option.fromUndefinedOr(allowedTools), Option.fromUndefinedOr(deniedTools)),
+  )
+  return {
+    ...patch,
+    ...omitUndefined({ model: Option.getOrUndefined(model), tools: Option.getOrUndefined(tools) }),
+  }
+}
+
+/**
+ * An agent patch as config files and stored rows hold it. A patch written
+ * before `tools` (the `allowedTools`/`deniedTools` lists, `modelId`) decodes
+ * into `tools` and `model`; `tools` or `model`, when present, win. It
+ * encodes in the new shape only.
+ */
+export const StoredAgentPatch = LegacyAgentPatch.pipe(
+  Schema.decodeTo(Schema.toType(AgentPatch), {
+    decode: SchemaGetter.transform(migrateAgentPatch),
+    encode: SchemaGetter.transform((patch: AgentPatch): LegacyAgentPatch => patch),
+  }),
+)
+
+/**
+ * `first` then `second`: each field `second` names replaces the one in
+ * `first`, except `systemPromptAddendum`, which appends after a blank line,
+ * since an addendum adds to the agent's own prompt. User then project config
+ * entries merge this way.
+ */
+const mergeAgentPatches = (first: AgentPatch, second: AgentPatch): AgentPatch => {
+  const addenda = [first.systemPromptAddendum, second.systemPromptAddendum].filter(
+    Predicate.isString,
+  )
+  return {
+    ...first,
+    ...omitUndefined(second),
+    ...(addenda.length > 0 && { systemPromptAddendum: addenda.join("\n\n") }),
+  }
+}
+
+/** `agent` reshaped by `patch` as `mergeAgentPatches` merges: config entries, then a run's overrides. */
+export const applyAgentPatch = (agent: AgentDefinition, patch: AgentPatch): AgentDefinition =>
+  AgentDefinition.make({ ...mergeAgentPatches(agent, patch), name: agent.name })
 
 // Default model — used when an agent has no model set
 export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")
@@ -473,24 +587,13 @@ export const effectiveModelDriver = (
 //
 // Every child is a durable session driven by the same loop as its parent.
 
-export const AgentRunOverridesSchema = Schema.Struct({
-  modelId: Schema.optional(ModelId),
-  allowedTools: Schema.optional(Schema.Array(Schema.String)),
-  deniedTools: Schema.optional(Schema.Array(Schema.String)),
-  reasoningEffort: Schema.optional(ReasoningEffort),
-  contextLength: Schema.optional(Schema.Natural),
-  maxSteps: Schema.optional(Schema.Natural),
-  maxModelAttempts: Schema.optional(Schema.Natural),
-  systemPromptAddendum: Schema.optional(Schema.String),
-})
-export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type
-
 /**
  * Rows written before `parentToolCallId` was dropped still carry it; a struct
- * decode ignores the extra key.
+ * decode ignores the extra key. Overrides written before `tools` decode
+ * through `StoredAgentPatch`.
  */
 export const RunSpecSchema = Schema.Struct({
-  overrides: Schema.optional(AgentRunOverridesSchema),
+  overrides: Schema.optional(StoredAgentPatch),
 })
 export type RunSpec = typeof RunSpecSchema.Type
 

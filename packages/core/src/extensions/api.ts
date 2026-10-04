@@ -55,9 +55,9 @@ import {
 export {
   AgentDefinition,
   AgentName,
+  AgentPatch,
   ReasoningEffort,
   type RunSpec,
-  RunSpecSchema,
 } from "../domain/agent.js"
 export {
   type GentExtension,

@@ -877,13 +877,13 @@ describe("user configuration", () => {
           })
         yield* write(home, {
           [AgentName.make("main")]: {
-            modelId: ModelId.make("anthropic/claude-sonnet-5"),
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             reasoningEffort: "low",
           },
           [AgentName.make("helper")]: { reasoningEffort: "minimal" },
         })
         yield* write(project, {
-          [AgentName.make("main")]: { modelId: ModelId.make("openai/gpt-5.6-sol") },
+          [AgentName.make("main")]: { model: ModelId.make("openai/gpt-5.6-sol") },
         })
         const live = ConfigService.Live.pipe(
           Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
@@ -894,11 +894,34 @@ describe("user configuration", () => {
           const result = yield* cfg.get(project)
           // The project entry replaces the user entry for `main` as a whole.
           expect(result.agents?.[AgentName.make("main")]).toEqual({
-            modelId: ModelId.make("openai/gpt-5.6-sol"),
+            model: ModelId.make("openai/gpt-5.6-sol"),
           })
           expect(result.agents?.[AgentName.make("helper")]).toEqual({ reasoningEffort: "minimal" })
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    // A config file written before `tools` names `modelId` and the two tool
+    // lists. It still decodes, as `model` and tool patterns: a field the
+    // schema rejects would fail the whole file.
+    it.live("a config entry with the old tool lists reads as tool patterns", () =>
+      Effect.gen(function* () {
+        const config = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
+          encodeJson({
+            agents: {
+              main: { modelId: "openai/gpt-5", deniedTools: ["bash"] },
+              painter: { allowedTools: ["film.look", "read"] },
+            },
+          }),
+        )
+        expect(config.agents?.[AgentName.make("main")]).toEqual({
+          model: ModelId.make("openai/gpt-5"),
+          tools: ["*", "!bash"],
+        })
+        expect(config.agents?.[AgentName.make("painter")]).toEqual({
+          tools: ["film.look", "read"],
+        })
+      }),
     )
 
     it.scopedLive("a hand edit reaches the next read without a restart", () =>
