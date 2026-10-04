@@ -13,7 +13,9 @@ import {
   OpenQuestions,
   PromptTool,
   QUESTION_ANSWER_TYPE,
+  QuestionAnswerDetails,
   questionAnswerText,
+  QuestionRow,
 } from "../src/interaction-tools.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import {
@@ -640,16 +642,33 @@ describe("background question store", () => {
     )
   })
 
-  test("the answer text holds the question, the assumption and the answer", () => {
+  test("a recorded answer stays through a replay and does not count toward the cap", () => {
+    const answered = {
+      ...askedRow("call-0:0", "Which cache?"),
+      answered: { answer: "Redis", batch: "question-answer:b" },
+    }
+    const eight = Array.from({ length: 8 }, (_, index) =>
+      askedRow(`call-${index + 1}:0`, `Q${index + 1}`),
+    )
+    const next = addOpenQuestions(
+      [answered, ...eight],
+      [askedRow("call-0:0", "Which cache?", 2_000), askedRow("call-9:0", "Which cache?")],
+    )
+    expect(next).toEqual([answered, ...eight.slice(1), askedRow("call-9:0", "Which cache?")])
+  })
+
+  test("the answer text holds the question, the assumption and the answer, and no id", () => {
+    const id = `cell:${"a".repeat(64)}:0`
     const text = questionAnswerText([
       {
-        row: { ...askedRow("call-7:0", "Which cache backend?"), assume: "in-memory LRU" },
+        row: { ...askedRow(id, "Which cache backend?"), assume: "in-memory LRU" },
         answer: "Redis",
       },
     ])
+    expect(text).not.toContain(id)
     expect(text).toBe(
       [
-        "Answer to your background question call-7:0 (asked 1970-01-01T00:00:01.000Z):",
+        "Answer to your background question (asked 1970-01-01T00:00:01.000Z):",
         "Q: Which cache backend?",
         "You assumed: in-memory LRU",
         "A: Redis",
@@ -687,6 +706,8 @@ interface QuestionsInput {
 const questionsHarness = (
   providerLayer: Parameters<typeof createRpcHarness>[0]["providerLayer"],
   fixtures: ReadonlyArray<(typeof e2ePreset.extensionInputs)[number]> = [],
+  /** `approvalLayer: ApprovalService.Live` parks a blocking ask until the test answers it. */
+  options: Pick<Parameters<typeof createRpcHarness>[0], "approvalLayer"> = {},
 ) =>
   Effect.gen(function* () {
     const home = yield* makeTempDirectoryScoped("questions-")
@@ -697,6 +718,7 @@ const questionsHarness = (
       providerLayer,
       cwd,
       home,
+      ...options,
     })
     const target = { sessionId: harness.sessionId, branchId: harness.branchId }
     const request = (capabilityId: string, input: QuestionsInput) =>
@@ -719,9 +741,10 @@ const questionsHarness = (
     }
   })
 
-const answerMessages = (
-  messages: ReadonlyArray<{ readonly metadata?: { readonly customType?: string } }>,
-) => messages.filter((message) => message.metadata?.customType === QUESTION_ANSWER_TYPE)
+const answerMessages = <M extends { readonly metadata?: { readonly customType?: string } }>(
+  messages: ReadonlyArray<M>,
+): ReadonlyArray<M> =>
+  messages.filter((message) => message.metadata?.customType === QUESTION_ANSWER_TYPE)
 
 const decodeTextPart = Schema.decodeUnknownOption(
   Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
@@ -757,6 +780,32 @@ const conversationOf = (prompt: Prompt.Prompt) => {
   if (turnRequestText(prompt).notices.length === 0) return prompt.content
   return prompt.content.slice(0, -1)
 }
+
+const twoQuestions = {
+  questions: [
+    ...cacheQuestion.questions,
+    { header: "db", question: "Which database should the tests use?", assume: "SQLite" },
+  ],
+}
+
+const decodeAnswerDetails = Schema.decodeUnknownOption(QuestionAnswerDetails)
+
+/** Every answer the model read for question `id`, across the answer messages. */
+const answersTo = (
+  messages: ReadonlyArray<{
+    readonly metadata?: { readonly customType?: string; readonly details?: unknown }
+  }>,
+  id: string,
+) =>
+  answerMessages(messages).flatMap((message) =>
+    Option.match(decodeAnswerDetails(message.metadata?.details), {
+      onNone: () => [],
+      onSome: (details) =>
+        details.answers.filter((entry) => entry.id === id).map((entry) => entry.answer),
+    }),
+  )
+
+const encodeRows = Schema.encodeSync(Schema.fromJsonString(Schema.Array(QuestionRow)))
 
 describe("ask_user_async", () => {
   it.live(
@@ -831,6 +880,11 @@ describe("ask_user_async", () => {
           yield* harness.answer({
             answers: [{ id: "ask-2:0", answer: "Redis, we run it in prod" }],
           })
+          // The waiting answer carries its message's metadata, so a client
+          // can show it as an answer rather than as its text.
+          const waiting = (yield* harness.snapshot).runtime.queue.steering
+          expect(waiting.map((entry) => entry.metadata?.customType)).toEqual([QUESTION_ANSWER_TYPE])
+          expect(answersTo(waiting, "ask-2:0")).toEqual(["Redis, we run it in prod"])
           yield* Deferred.succeed(release, void 0)
           yield* Fiber.join(turns)
           yield* controls.assertDone
@@ -851,6 +905,65 @@ describe("ask_user_async", () => {
           expect(answerMessages(snapshot.messages)).toHaveLength(1)
           expect(lastAssistantText(snapshot.messages)).toBe("Switching the cache to Redis.")
           expect(yield* harness.open).toEqual([])
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  // A turn parked on a blocking ask resumes at a step boundary: the stored
+  // tool results are there and no stream is open, so an answer that came
+  // while it waited joins before the next model request, not after it.
+  it.live(
+    "a turn parked on ask_user resumes with the background answer in its first request",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const prompts: Array<Prompt.Prompt> = []
+          const record = (options: { readonly prompt: Prompt.Prompt }) => {
+            prompts.push(options.prompt)
+          }
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("ask_user_async", cacheQuestion, { toolCallId: ToolCallId.make("ask-p") }),
+            toolCallStep(
+              "ask_user",
+              {
+                questions: [{ question: "Proceed?", options: [{ label: "Yes" }, { label: "No" }] }],
+              },
+              { toolCallId: ToolCallId.make("park-p") },
+            ),
+            { ...textStep("Done with Redis."), assertOptions: record },
+            { ...textStep("Done with Redis, again."), assertOptions: record },
+          ])
+          const harness = yield* questionsHarness(providerLayer, [], {
+            approvalLayer: ApprovalService.Live,
+          })
+          const presented = yield* harness.client.session.events(harness.target).pipe(
+            Stream.map((envelope) => envelope.event),
+            Stream.filter((event) => event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* harness.client.message.send({ ...harness.target, content: "add a cache" })
+          const [ask] = Array.from(yield* Fiber.join(presented))
+          if (ask?._tag !== "InteractionPresented") return yield* Effect.die("no ask presented")
+          yield* harness.answer({ answers: [{ id: "ask-p:0", answer: "Redis" }] })
+          yield* harness.client.interaction.respondInteraction({
+            ...harness.target,
+            requestId: ask.requestId,
+            approved: true,
+            notes: '[["Yes"]]',
+          })
+          yield* waitFor(
+            harness.snapshot,
+            (current) => current.runtime._tag === "Idle" && prompts.length > 0,
+            5_000,
+            "the resumed turn ended",
+          )
+          const first = Option.getOrThrow(Option.fromUndefinedOr(prompts[0]))
+          const last = conversationOf(first).at(-1)
+          expect(last?.role).toBe("user")
+          expect(jsonText(last)).toContain("A: Redis")
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
@@ -919,6 +1032,114 @@ describe("ask_user_async", () => {
           expect(answerMessages(snapshot.messages)).toHaveLength(0)
           yield* controls.assertDone
         }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  // First answer wins per question: a submit whose write failed, then a
+  // retry that answers fewer questions, must not reach the model twice.
+  it.live(
+    "a failed answer write and a narrower retry give each question one answer",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("ask_user_async", twoQuestions, { toolCallId: ToolCallId.make("ask-f") }),
+            textStep("Using the defaults for now."),
+            textStep("Switching the cache."),
+            textStep("Switching the cache, again."),
+          ])
+          const harness = yield* questionsHarness(providerLayer)
+          yield* harness.client.message.send({ ...harness.target, content: "add a cache" })
+          yield* waitFor(
+            harness.snapshot,
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              lastAssistantText(current.messages) === "Using the defaults for now.",
+            5_000,
+            "the first turn answered",
+          )
+          const fs = yield* FileSystem.FileSystem
+          const directory = `${harness.home}/.gent/questions`
+          yield* fs.chmod(directory, 0o555)
+          const failed = yield* harness
+            .answer({
+              answers: [
+                { id: "ask-f:0", answer: "Redis" },
+                { id: "ask-f:1", answer: "Postgres" },
+              ],
+            })
+            .pipe(Effect.exit)
+          yield* fs.chmod(directory, 0o755)
+          expect(failed._tag).toBe("Failure")
+          yield* harness.answer({ answers: [{ id: "ask-f:0", answer: "SQLite file" }] })
+          yield* waitFor(
+            harness.snapshot,
+            (current) =>
+              current.runtime._tag === "Idle" && answerMessages(current.messages).length > 0,
+            5_000,
+            "the answer turn ended",
+          )
+          const snapshot = yield* harness.snapshot
+          expect(answersTo(snapshot.messages, "ask-f:0")).toHaveLength(1)
+          expect(answersTo(snapshot.messages, "ask-f:1")).toEqual([])
+          expect((yield* harness.open).map((row) => row.id)).toEqual(["ask-f:1"])
+        }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunFileSystem.layer)),
+      ),
+    10_000,
+  )
+
+  // The state a failed removal leaves: an answer recorded, and maybe sent,
+  // whose row is still in the file. The recorded answer is the one that goes,
+  // and a batch sent again under its request id reaches the model once.
+  it.live(
+    "a recorded answer wins over a later one, and its batch reaches the model once",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("ask_user_async", twoQuestions, { toolCallId: ToolCallId.make("ask-o") }),
+            textStep("Using the defaults for now."),
+            textStep("Switching the cache."),
+            textStep("Switching the cache, again."),
+          ])
+          const harness = yield* questionsHarness(providerLayer)
+          yield* harness.client.message.send({ ...harness.target, content: "add a cache" })
+          yield* waitFor(
+            harness.snapshot,
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              lastAssistantText(current.messages) === "Using the defaults for now.",
+            5_000,
+            "the first turn answered",
+          )
+          const fs = yield* FileSystem.FileSystem
+          const file = `${harness.home}/.gent/questions/${harness.branchId}.json`
+          const opened = yield* harness.open
+          const [cache, db] = Option.getOrThrow(
+            Option.all([Option.fromUndefinedOr(opened[0]), Option.fromUndefinedOr(opened[1])]),
+          )
+          const planted = encodeRows([
+            { ...cache, answered: { answer: "Redis", batch: "question-answer:planted" } },
+            db,
+          ])
+          yield* fs.writeFileString(file, planted)
+          expect((yield* harness.open).map((row) => row.id)).toEqual(["ask-o:1"])
+          yield* harness.answer({ answers: [{ id: "ask-o:0", answer: "SQLite file" }] })
+          yield* waitFor(
+            harness.snapshot,
+            (current) =>
+              current.runtime._tag === "Idle" && answerMessages(current.messages).length > 0,
+            5_000,
+            "the answer turn ended",
+          )
+          // The removal failed after the send: the batch is in the file again.
+          yield* fs.writeFileString(file, planted)
+          yield* harness.answer({ answers: [] })
+          const snapshot = yield* harness.snapshot
+          expect(answersTo(snapshot.messages, "ask-o:0")).toEqual(["Redis"])
+          expect((yield* harness.open).map((row) => row.id)).toEqual(["ask-o:1"])
+        }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunFileSystem.layer)),
       ),
     10_000,
   )

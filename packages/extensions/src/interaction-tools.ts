@@ -1,4 +1,14 @@
-import { Clock, Crypto, DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
+import {
+  Clock,
+  Crypto,
+  DateTime,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Predicate,
+  Schema,
+} from "effect"
 import { Hex } from "effect/encoding"
 import {
   defineExtension,
@@ -348,6 +358,19 @@ export const OpenQuestion = Schema.Struct({
 })
 export type OpenQuestion = typeof OpenQuestion.Type
 
+/**
+ * A question as the branch file keeps it. `answered` is written once, before
+ * the answer is sent, and never changes: the first answer recorded is the one
+ * the model reads. `batch` is the request id of the send that carries it, so a
+ * send repeated after a failed removal sends nothing new. A row with an answer
+ * is closed for the reader; it leaves the file once its batch was sent.
+ */
+export const QuestionRow = Schema.Struct({
+  ...OpenQuestion.fields,
+  answered: Schema.optionalKey(Schema.Struct({ answer: Schema.String, batch: Schema.String })),
+})
+export type QuestionRow = typeof QuestionRow.Type
+
 /** What `questions.open` answers: the open questions of the branch, oldest first. */
 export const OpenQuestions = Schema.Struct({ questions: Schema.Array(OpenQuestion) })
 export type OpenQuestions = typeof OpenQuestions.Type
@@ -373,39 +396,64 @@ class QuestionsError extends Schema.TaggedError<QuestionsError>()("QuestionsErro
 const questionStore = makeBranchStateStore({
   name: "QuestionStore",
   directory: "questions",
-  codec: Schema.fromJsonString(Schema.Array(OpenQuestion)),
+  codec: Schema.fromJsonString(Schema.Array(QuestionRow)),
   empty: [],
   invalid: (file, cause) =>
     new QuestionsError({ message: `Question file ${file} is invalid: ${cause.message}` }),
 })
 
+const isAnswered = (row: QuestionRow): boolean => Predicate.isNotUndefined(row.answered)
+
 /**
- * The open questions with `asked` added: a row with an id already open is
+ * The stored rows with `asked` added: an open row with the same id is
  * replaced (a replay of the same call), and so is an open row with the same
- * question text (the model asked it again). Past the cap the oldest goes,
- * with no message: the model already works on its assumption.
+ * question text (the model asked it again). A row with a recorded answer
+ * stays as it is, and a replay does not open it again. Past the cap the
+ * oldest open question goes, with no message: the model already works on its
+ * assumption. An answered row waits for its send and does not count.
  */
 export const addOpenQuestions = (
-  open: ReadonlyArray<OpenQuestion>,
+  rows: ReadonlyArray<QuestionRow>,
   asked: ReadonlyArray<OpenQuestion>,
-): ReadonlyArray<OpenQuestion> => {
-  const ids = new Set(asked.map((row) => row.id))
-  const texts = new Set(asked.map((row) => row.question))
-  const kept = open.filter((row) => !ids.has(row.id) && !texts.has(row.question))
-  const next = [...kept, ...asked]
-  return next.slice(Math.max(0, next.length - MAX_OPEN_QUESTIONS))
+): ReadonlyArray<QuestionRow> => {
+  const answeredIds = new Set(
+    rows
+      .values()
+      .filter(isAnswered)
+      .map((row) => row.id),
+  )
+  const fresh = asked.filter((row) => !answeredIds.has(row.id))
+  const ids = new Set(fresh.map((row) => row.id))
+  const texts = new Set(fresh.map((row) => row.question))
+  const kept = rows.filter(
+    (row) => isAnswered(row) || (!ids.has(row.id) && !texts.has(row.question)),
+  )
+  const next: ReadonlyArray<QuestionRow> = [...kept, ...fresh]
+  const open = next.filter((row) => !isAnswered(row))
+  const dropped = new Set(
+    open.slice(0, Math.max(0, open.length - MAX_OPEN_QUESTIONS)).map((row) => row.id),
+  )
+  return next.filter((row) => !dropped.has(row.id))
 }
+
+/** The rows the reader can still answer: those with no recorded answer. */
+const openRows = (rows: ReadonlyArray<QuestionRow>): ReadonlyArray<OpenQuestion> =>
+  rows.filter((row) => !isAnswered(row))
 
 const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis))
 
-/** The answers as the model reads them: self-contained, so it needs no lookup. */
+/**
+ * The answers as the model reads them: self-contained, so it needs no lookup.
+ * The question's id stays in the message details; the model needs only the
+ * question, and an id from a cell call is long.
+ */
 export const questionAnswerText = (
   answers: ReadonlyArray<{ readonly row: OpenQuestion; readonly answer: string }>,
 ): string =>
   answers
     .map(({ row, answer }) =>
       [
-        `Answer to your background question ${row.id} (asked ${isoOf(row.askedAt)}):`,
+        `Answer to your background question (asked ${isoOf(row.askedAt)}):`,
         `Q: ${row.question}`,
         `You assumed: ${row.assume}`,
         `A: ${answer}`,
@@ -414,9 +462,10 @@ export const questionAnswerText = (
     .join("\n\n")
 
 /**
- * The steer's request id names the questions it answers, so a repeat of the
- * same answer sends nothing new. Hashed: tool call ids are long, and a
- * request id holds at most 128 characters.
+ * The request id of one batch of answers: it names the questions the batch
+ * answers. Each question is in one batch only, because its answer is
+ * recorded once, so a send repeated for the batch sends nothing new. Hashed:
+ * tool call ids are long, and a request id holds at most 128 characters.
  */
 const answerRequestId = (ids: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -523,35 +572,64 @@ const AnswerQuestionsResult = Schema.Struct({
 })
 
 /**
- * Answers and dismisses under the branch file's lock. The answers of one
- * submit go as one steer before the rows leave the file: a failed write
- * leaves them open, and a retry's steer carries the same request id, so it
- * sends nothing new. An id that is not open (answered already, dismissed, or
- * dropped past the cap) is skipped.
+ * Answers and dismisses in two steps, each under the branch file's lock.
+ *
+ * 1. Record: an answer to a question that has none is written to its row,
+ *    with the batch it goes in, before anything is sent. A recorded answer
+ *    never changes, so the first one wins: a retry that answers it again, or
+ *    answers fewer questions, adds nothing. A dismissed open row goes.
+ * 2. Send: every batch the file holds goes as one steer under its request id,
+ *    then its rows leave the file. A batch a failed removal left behind goes
+ *    again with the same request id, and the session sends nothing new.
+ *
+ * An id that is not open (answered already, dismissed, or dropped past the
+ * cap) is skipped.
  */
 const answerQuestions = Effect.fn("QuestionsRpc.answer")(function* (
   input: typeof AnswerQuestionsInput.Type,
 ) {
   const ctx = yield* ExtensionContext
   const dismiss = new Set(input.dismiss ?? [])
-  const result = yield* questionStore.modify((open) =>
+  const recorded = yield* questionStore.modify((rows) =>
     Effect.gen(function* () {
-      const byId = new Map(open.map((row) => [row.id, row]))
-      const answers = input.answers.flatMap(({ id, answer }) =>
-        Option.match(Option.fromUndefinedOr(byId.get(id)), {
-          onNone: () => [],
-          onSome: (row) => [{ row, answer }],
-        }),
-      )
-      const answered = answers.map(({ row }) => row.id)
-      const dismissed = open
-        .filter((row) => dismiss.has(row.id) && !answered.includes(row.id))
-        .map((row) => row.id)
-      if (answers.length > 0) {
+      const open = new Map(openRows(rows).map((row) => [row.id, row]))
+      const fresh = new Map<string, string>()
+      for (const { id, answer } of input.answers) {
+        if (open.has(id) && !fresh.has(id)) fresh.set(id, answer)
+      }
+      const dismissed = [...open.keys()].filter((id) => dismiss.has(id) && !fresh.has(id))
+      if (fresh.size === 0 && dismissed.length === 0) {
+        return { next: rows, result: { answered: [], dismissed } }
+      }
+      const batch = yield* answerRequestId([...fresh.keys()])
+      const next = rows
+        .filter((row) => !dismissed.includes(row.id))
+        .map((row): QuestionRow =>
+          Option.match(Option.fromUndefinedOr(fresh.get(row.id)), {
+            onNone: () => row,
+            onSome: (answer) => ({ ...row, answered: { answer, batch } }),
+          }),
+        )
+      return { next, result: { answered: [...fresh.keys()], dismissed } }
+    }),
+  )
+  const sent = yield* questionStore.modify((rows) =>
+    Effect.gen(function* () {
+      const batches = new Map<
+        string,
+        Array<{ readonly row: QuestionRow; readonly answer: string }>
+      >()
+      for (const row of rows) {
+        if (Predicate.isUndefined(row.answered)) continue
+        const entries = batches.get(row.answered.batch) ?? []
+        entries.push({ row, answer: row.answered.answer })
+        batches.set(row.answered.batch, entries)
+      }
+      for (const [batch, answers] of batches) {
         yield* ctx.Session.send({
           delivery: "steer",
           wake: true,
-          requestId: yield* answerRequestId(answered),
+          requestId: batch,
           content: questionAnswerText(answers),
           metadata: {
             customType: QUESTION_ANSWER_TYPE,
@@ -567,13 +645,12 @@ const answerQuestions = Effect.fn("QuestionsRpc.answer")(function* (
           },
         })
       }
-      const closed = new Set([...answered, ...dismissed])
-      if (closed.size === 0) return { next: open, result: { answered, dismissed } }
-      return { next: open.filter((row) => !closed.has(row.id)), result: { answered, dismissed } }
+      if (batches.size === 0) return { next: rows, result: false }
+      return { next: rows.filter((row) => !isAnswered(row)), result: true }
     }),
   )
-  if (result.answered.length > 0 || result.dismissed.length > 0) yield* ctx.State.changed()
-  return result
+  if (recorded.dismissed.length > 0 || sent) yield* ctx.State.changed()
+  return recorded
 })
 
 export const QuestionsRpc = defineRequests(INTERACTION_TOOLS_EXTENSION_ID, {
@@ -583,7 +660,7 @@ export const QuestionsRpc = defineRequests(INTERACTION_TOOLS_EXTENSION_ID, {
     answersDuringTurn: true,
     input: Schema.Struct({}),
     output: OpenQuestions,
-    execute: () => questionStore.read().pipe(Effect.map((questions) => ({ questions }))),
+    execute: () => questionStore.read().pipe(Effect.map((rows) => ({ questions: openRows(rows) }))),
   }),
   Answer: request({
     id: "questions.answer",

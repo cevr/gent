@@ -3230,7 +3230,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         toolCalls: pendingToolCalls,
         recoveredResults,
       })
-      if (Option.isNone(known)) return { step: pendingStep, interaction: Option.none() }
+      // The step's results are already stored: this is the step boundary.
+      if (Option.isNone(known)) {
+        yield* deliverSteeringAtStepBoundary({ finalStep: false })
+        return { step: pendingStep, interaction: Option.none() }
+      }
       const unsettledCalls = nativeToolCalls.filter(
         (toolCall) => !known.value.knownResults.has(toolCall.id),
       )
@@ -3309,6 +3313,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
       if (Option.isNone(interactionSignal)) {
         yield* clearProcessLocalReplayBindings(pendingAssistant.value.id)
+        // The resumed step's results are stored and no stream is open: steering
+        // that arrived while the turn was parked joins before the next model
+        // request, as it does after any tool step (`runTools`).
+        yield* deliverSteeringAtStepBoundary({ finalStep: false })
         return { step: pendingStep, interaction: Option.none() }
       }
       const pending = interactionSignal.value

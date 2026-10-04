@@ -309,6 +309,10 @@ const toQueueEntry = (
     id: item.message.id,
     content,
     createdAt: item.message.createdAt.getTime(),
+    ...Option.match(Option.fromUndefinedOr(item.message.metadata), {
+      onNone: () => ({}),
+      onSome: (metadata) => ({ metadata }),
+    }),
   }
   if (tag === "Steering") {
     return Option.some(SteeringQueueEntryInfo.make(fields))

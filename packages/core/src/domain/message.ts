@@ -1726,6 +1726,12 @@ const QueueEntryFields = {
   id: MessageId,
   content: Schema.String,
   createdAt: Schema.Finite,
+  /**
+   * The queued message's metadata, when it has some: a client shows an
+   * extension's message (a background answer) by its custom type, as the
+   * transcript does, and not as its raw text.
+   */
+  metadata: Schema.optionalKey(MessageMetadata),
 }
 
 const SteeringEntry = Schema.TaggedStruct("Steering", QueueEntryFields)
