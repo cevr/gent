@@ -308,26 +308,33 @@ describe("extensions pane", () => {
 
   // Keys the reader presses while a change runs act after it, in order,
   // each on the state the change before it left, and each reply shows.
-  it.scopedLive("a reload pressed while a turn-on runs waits for it, and both replies show", () =>
-    Effect.gen(function* () {
-      const server = yield* statefulServer(disabled)
-      const setup = yield* openPaneOn(server.options, 120)
-      yield* waitForFrame(setup, (text) => text.includes("project · off"), "the row")
-      setup.mockInput.pressKey(" ")
-      setup.mockInput.pressKey("r")
-      yield* server.release
-      yield* waitForFrame(
-        setup,
-        (text) =>
-          text.includes("Enabled @project/off") && text.includes("Set @project/off up again"),
-        "both replies",
-      )
-      expect(renderFrame(setup)).not.toContain("is off in a config")
-      const changes = server.requests
-        .map((request) => request.capabilityId)
-        .filter((id) => id !== "extensions.pane.status")
-      expect(changes).toEqual(["extensions.pane.set-enabled", "extensions.pane.reload"])
-    }).pipe(Effect.timeout("10 seconds")),
+  it.scopedLive(
+    "a reload pressed while a turn-on runs waits for it, and both replies show, the latest first",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* statefulServer(disabled)
+        const setup = yield* openPaneOn(server.options, 120)
+        yield* waitForFrame(setup, (text) => text.includes("project · off"), "the row")
+        setup.mockInput.pressKey(" ")
+        setup.mockInput.pressKey("r")
+        yield* server.release
+        yield* waitForFrame(
+          setup,
+          (text) =>
+            text.includes("Enabled @project/off") && text.includes("Set @project/off up again"),
+          "both replies",
+        )
+        const frame = renderFrame(setup)
+        expect(frame).not.toContain("is off in a config")
+        // The latest reply leads, so a narrow detail line shows it whole.
+        expect(frame.indexOf("Set @project/off up again")).toBeLessThan(
+          frame.indexOf("Enabled @project/off"),
+        )
+        const changes = server.requests
+          .map((request) => request.capabilityId)
+          .filter((id) => id !== "extensions.pane.status")
+        expect(changes).toEqual(["extensions.pane.set-enabled", "extensions.pane.reload"])
+      }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.scopedLive("two presses of space turn an extension on and then off again", () =>

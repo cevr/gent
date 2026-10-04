@@ -153,8 +153,9 @@ interface ExtensionsController {
   /** A failed read or a refused change, newest first. */
   readonly error: () => Option.Option<string>
   /**
-   * What the last changes did, each on the row it changed, until the pane
-   * closes: the replies of changes pressed while one ran stay together.
+   * What the last changes did, newest first, each on the row it changed,
+   * until the pane closes: the replies of changes pressed while one ran stay
+   * together.
    */
   readonly notes: () => ReadonlyArray<ChangeNote>
   readonly clearNote: () => void
@@ -210,8 +211,8 @@ const makeExtensionsController = Effect.gen(function* () {
 
   /**
    * Run one change on the row's status as the changes before it left it.
-   * Its reply joins the row's notes; the first change of a run starts them
-   * again. The pane and the client extensions read again after each.
+   * Its reply joins the row's notes, newest first, so a narrow detail line
+   * shows the latest whole; the first change of a run starts them again. The pane and the client extensions read again after each.
    */
   const runChange = (pending: PendingChange, first: boolean) =>
     currentStatus(pending.status).pipe(
@@ -224,7 +225,7 @@ const makeExtensionsController = Effect.gen(function* () {
         onSuccess: (output) => {
           if (first) setChangeError(Option.none())
           const note = { key: statusKey(pending.status), text: output.detail }
-          setNotes((current) => [...current.filter(() => !first), note])
+          setNotes((current) => [note, ...current.filter(() => !first)])
           statuses.refresh()
           shell.reloadExtensions()
         },
