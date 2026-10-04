@@ -2214,7 +2214,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     ReadSessionTool,
-    "- tools.read_session(input: { sessionId: string; branchId?: string }): Promise<{ sessionId: string; content: string; messageCount?: number; branchCount?: number }> // Read a past session's conversation as markdown. A long transcript keeps its head and tail.",
+    "- tools.read_session(input: { sessionId: string; branchId?: string; fromMessageId?: string }): Promise<{ sessionId: string; content: string; messageCount?: number; branchCount?: number }> // Read a past session's conversation as markdown. A long transcript keeps its head and tail.",
   ],
   [
     WakeTool,

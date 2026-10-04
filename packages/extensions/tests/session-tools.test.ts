@@ -326,6 +326,52 @@ describe("Session tools via model turn", () => {
     10_000,
   )
   it.live(
+    "read_session refuses a message the session does not have",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let target = ""
+          let calls = 0
+          const providerLayer = LanguageModelLayers.testStream(() => {
+            calls += 1
+            if (calls > 1) {
+              return Effect.succeed(
+                Stream.fromIterable([textDeltaPart("done"), finishPart({ finishReason: "stop" })]),
+              )
+            }
+            return Effect.succeed(
+              Stream.fromIterable([
+                toolCallPart(
+                  "read_session",
+                  { sessionId: target, fromMessageId: "no-such-message" },
+                  { toolCallId: ToolCallId.make("read-unknown-message") },
+                ),
+                finishPart({ finishReason: "tool-calls" }),
+              ]),
+            )
+          })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [AgentsExtension, SessionToolsExtension],
+          })
+          target = sessionId
+          const eventFiber = yield* toolEventsFor(
+            client.session.events({ sessionId, branchId }),
+            "read_session",
+          )
+          yield* client.message.send({ sessionId, branchId, content: "Read this session" })
+          const events = Array.from(yield* Fiber.join(eventFiber))
+          const failed = events.find((event) => event.event._tag === "ToolCallFailed")
+          expect(failed?.event._tag).toBe("ToolCallFailed")
+          if (failed?.event._tag === "ToolCallFailed") {
+            expect(failed.event.output).toContain("has no message no-such-message")
+          }
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+  it.live(
     "a handoff session messages its predecessor as a session, not as its child",
     () =>
       Effect.scoped(
