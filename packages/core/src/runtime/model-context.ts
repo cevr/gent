@@ -1697,9 +1697,11 @@ const measuredUnits = (
  * asks, or when a turn starts on a large window whose prompt cache went
  * cold. It gives the history that leaves the window to whichever extension
  * installs a `ModelContextCompactor` as a process resource and gets back the
- * notice the handoff marker carries. With none installed, an overflowing
- * transcript is simply truncated. The loop owns the marker, its ids, and the
- * transaction; the extension owns the summary prompt and the notice text.
+ * notice the handoff marker carries. Several installed compactors form one
+ * chain (`chainCompactors`), project first, then user, then builtin. With
+ * none installed, or each one refusing, an overflowing transcript is simply
+ * truncated. The loop owns the marker, its ids, and the transaction; the
+ * extension owns the summary prompt and the notice text.
  */
 
 /** Why a summary was not produced. Every failure degrades to a truncated window. */
@@ -1753,6 +1755,22 @@ export class ModelContextCompactor extends Context.Service<
   ModelContextCompactor,
   ModelContextCompactorService
 >()("@gent/core/src/runtime/model-context/ModelContextCompactor") {}
+
+/**
+ * Two compactors as one: `first` is asked, and a window it refuses with
+ * `ModelCompactionError` goes to `next`, whose answer (or refusal) stands.
+ * The host chains each extension's compactor over the ones of lower scope.
+ */
+export const chainCompactors = (
+  first: ModelContextCompactor["Service"],
+  next: ModelContextCompactor["Service"],
+) =>
+  ModelContextCompactor.of({
+    compact: (request) =>
+      first
+        .compact(request)
+        .pipe(Effect.catchTag("ModelCompactionError", () => next.compact(request))),
+  })
 
 // ── model-context-ledger ────────────────────────────────────────────────────
 

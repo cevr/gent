@@ -800,8 +800,12 @@ Shape:
   optional `summarized` range) that status and the TUI read. A compactor that
   fails degrades to truncation with a visible notice. The request names the
   agent whose window it compacts (`agentName`), so a project compactor can
-  serve one agent and fail with `ModelCompactionError` for the others, whose
-  windows are then truncated. The marker's notice
+  serve one agent and fail with `ModelCompactionError` for the others.
+  Installed compactors form one chain in scope order, project, then user, then
+  builtin (`chainCompactors`, joined where the host merges each extension's
+  Resource services): the first summary wins, a `ModelCompactionError` hands
+  the window to the next compactor, and with none left the window is
+  truncated. The marker's notice
   names the session id, the branch id, and the replaced id range so the model
   can page the replaced history from the cell.
 - Project instructions are an extension, not a profile field. `@gent/agents`

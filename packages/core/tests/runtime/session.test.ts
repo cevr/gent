@@ -16,10 +16,12 @@ import {
   Context,
   Deferred,
   Exit,
+  FileSystem,
   Effect,
   Fiber,
   Layer,
   Option,
+  Path,
   Predicate,
   Ref,
   Schema,
@@ -1039,13 +1041,15 @@ describe("session metrics", () => {
 
   /**
    * Two turns of `agentName` on a small window, so the second turn's
-   * projection overflows and `compact` runs. Returns the stored events of the
-   * branch.
+   * projection overflows and a compactor runs: `compact`, a builtin
+   * extension's, and any `place` holds as extension files. Returns the stored
+   * events of the branch.
    */
   const runCompactingTurns = (
     compact: ModelContextCompactor["Service"]["compact"],
     summaryModels: readonly Model[],
     agentName: AgentName = DEFAULT_AGENT_NAME,
+    place: { readonly home?: string; readonly cwd?: string } = {},
   ) =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
@@ -1078,6 +1082,7 @@ describe("session metrics", () => {
         agents: [AgentDefinition.make({ name: agentName, model: smallWindow.id })],
         extensionInputs: [compactor],
         models: [smallWindow, ...summaryModels],
+        ...place,
       })
       return yield* Effect.gen(function* () {
         const { client } = yield* createRpcClient(layer)
@@ -1177,6 +1182,15 @@ describe("session metrics", () => {
     }),
   )
 
+  type CompactingEvents = Effect.Success<ReturnType<typeof runCompactingTurns>>
+  const compactedBy = (events: CompactingEvents) =>
+    events.some((event) => event._tag === "ModelContextProjected" && event.compacted)
+  const notices = (events: CompactingEvents) =>
+    events.flatMap((event) => {
+      if (event._tag !== "ErrorOccurred") return []
+      return [event.error]
+    })
+
   it.live("a compactor that serves one agent summarizes its window and truncates the others", () =>
     Effect.gen(function* () {
       const film = AgentName.make("film")
@@ -1191,15 +1205,6 @@ describe("session metrics", () => {
         }
         return Effect.succeed({ notice: "film summary", modelId: request.modelId })
       }
-      type Events = Effect.Success<ReturnType<typeof runCompactingTurns>>
-      const compactedBy = (events: Events) =>
-        events.some((event) => event._tag === "ModelContextProjected" && event.compacted)
-      const notices = (events: Events) =>
-        events.flatMap((event) => {
-          if (event._tag !== "ErrorOccurred") return []
-          return [event.error]
-        })
-
       const filmEvents = yield* runCompactingTurns(filmOnly, [], film)
       expect(compactedBy(filmEvents)).toBe(true)
       expect(notices(filmEvents)).toEqual([])
@@ -1211,6 +1216,75 @@ describe("session metrics", () => {
       ])
       expect(asked).toEqual([film, DEFAULT_AGENT_NAME])
     }),
+  )
+
+  it.live(
+    "a window the project compactor refuses goes to the builtin one; the project one serves its agent",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "gent-compactor-chain-home-" }),
+        )
+        const project = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "gent-compactor-chain-project-" }),
+        )
+        // The user trusts the project, so its extension file loads at project scope.
+        yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(home, ".gent", "config.json"),
+          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+            trustedProjects: [project],
+          }),
+        )
+        const projectExtensions = path.join(project, ".gent", "extensions")
+        yield* fs.makeDirectory(projectExtensions, { recursive: true })
+        yield* fs.writeFileString(
+          path.join(projectExtensions, "film-compactor.ts"),
+          [
+            'import { Effect, Layer } from "effect";',
+            'import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";',
+            'import { ModelCompactionError, ModelContextCompactor } from "@gent/core/extensions/branch-tools";',
+            "export default defineExtension({",
+            '  id: "@test/film-compactor",',
+            "  setup: Effect.gen(function* () {",
+            "    const host = yield* ExtensionHost;",
+            '    yield* host.register("resource", defineResource({',
+            '      id: "@test/film-compactor/compactor",',
+            '      scope: "process",',
+            "      layer: Layer.succeed(ModelContextCompactor, ModelContextCompactor.of({",
+            "        compact: (request) => {",
+            '          if (request.agentName === "film") return Effect.succeed({ notice: "film summary", modelId: request.modelId });',
+            '          return Effect.fail(new ModelCompactionError({ modelId: request.modelId, reason: "NotFilmAgent" }));',
+            "        },",
+            "      })),",
+            "    }));",
+            "  }),",
+            "});",
+            "",
+          ].join("\n"),
+        )
+        const film = AgentName.make("film")
+        const askedBuiltin: Array<AgentName> = []
+        const builtin: ModelContextCompactor["Service"]["compact"] = (request) => {
+          askedBuiltin.push(request.agentName)
+          return Effect.succeed({ notice: "builtin summary", modelId: request.modelId })
+        }
+        const place = { home, cwd: project }
+
+        // The project compactor refuses the default agent; the builtin one summarizes it.
+        const defaultEvents = yield* runCompactingTurns(builtin, [], DEFAULT_AGENT_NAME, place)
+        expect(compactedBy(defaultEvents)).toBe(true)
+        expect(notices(defaultEvents)).toEqual([])
+        expect(askedBuiltin).toEqual([DEFAULT_AGENT_NAME])
+
+        // The project compactor serves the film agent; the builtin one is never asked.
+        const filmEvents = yield* runCompactingTurns(builtin, [], film, place)
+        expect(compactedBy(filmEvents)).toBe(true)
+        expect(notices(filmEvents)).toEqual([])
+        expect(askedBuiltin).toEqual([DEFAULT_AGENT_NAME])
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 })
 

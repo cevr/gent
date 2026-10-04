@@ -1,3 +1,4 @@
+import { chainCompactors, ModelContextCompactor } from "./model-context.js"
 import {
   Cause,
   Context,
@@ -1125,8 +1126,26 @@ export const resourceBuildKeys = (
 }
 
 /**
+ * `context` with an extension's Resource services `added` over it. A later
+ * extension's service wins, except the compactor: a later one is chained in
+ * front of the one before it (`chainCompactors`), so in resolution order the
+ * project's compactor is asked first, then the user's, then the builtin one.
+ */
+const mergeResourceServices = (
+  context: Context.Context<unknown>,
+  added: Context.Context<unknown>,
+): Context.Context<unknown> => {
+  const merged = Context.merge(context, added)
+  const before = Context.getOption(context, ModelContextCompactor)
+  const after = Context.getOption(added, ModelContextCompactor)
+  if (Option.isNone(before) || Option.isNone(after)) return merged
+  return Context.add(merged, ModelContextCompactor, chainCompactors(after.value, before.value))
+}
+
+/**
  * Build one scope's Resources extension by extension, in resolution order, so
- * a later extension's service wins exactly as it does in the registry. Each
+ * a later extension's service wins exactly as it does in the registry (a
+ * compactor joins a chain instead; see `mergeResourceServices`). Each
  * extension builds in its own child of `parent`, over the services the
  * extensions before it built. A build that fails closes its own scope, is
  * logged naming its extension, and is returned in `failed`; the other
@@ -1162,7 +1181,7 @@ export const buildScopeResources = (params: {
       }
       const reused = params.reuse?.(extension) ?? Option.none()
       if (Option.isSome(reused)) {
-        context = Context.merge(context, reused.value)
+        context = mergeResourceServices(context, reused.value)
         active.push(extension)
         continue
       }
@@ -1177,7 +1196,7 @@ export const buildScopeResources = (params: {
         .pipe(Effect.exit)
       if (Exit.isSuccess(built)) {
         params.built?.(extension, extensionScope, built.value)
-        context = Context.merge(context, built.value)
+        context = mergeResourceServices(context, built.value)
         active.push(extension)
         continue
       }
