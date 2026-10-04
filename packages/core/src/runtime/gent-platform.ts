@@ -83,6 +83,26 @@ type GentPlatformHashAlgorithm = "sha256"
  */
 export type RuntimeModuleSource = () => object | Promise<object>
 
+/** One build of an entry file and the relative modules it imports. */
+export interface ModuleBundle {
+  /** One ES module. Each package import (a bare specifier) stays an import. */
+  readonly code: string
+  /** The absolute paths of the files the build read: the entry and its relative modules. */
+  readonly inputs: ReadonlyArray<string>
+}
+
+/** The build of an entry file failed: a syntax error, or a relative module that does not resolve. */
+export class ModuleBundleError extends Schema.TaggedError<ModuleBundleError>()(
+  "ModuleBundleError",
+  { entry: Schema.String, message: Schema.String },
+) {}
+
+/**
+ * The query a served module's specifier carries (`serveModule`): the file's
+ * path, then `?gent-module=` and a version.
+ */
+export const SERVED_MODULE_QUERY = "gent-module"
+
 interface GentPlatformApi {
   /**
    * Resolve each bare specifier to the given module for every file loaded
@@ -90,6 +110,18 @@ interface GentPlatformApi {
    * process; a later bind of the same specifier is ignored.
    */
   readonly bindModules: (modules: ReadonlyMap<string, RuntimeModuleSource>) => Effect.Effect<void>
+  /**
+   * Build an entry file and every relative module it imports into one ES
+   * module. A package import stays an import, so a bound specifier still
+   * reaches the module this process runs.
+   */
+  readonly bundleModule: (entry: string) => Effect.Effect<ModuleBundle, ModuleBundleError>
+  /**
+   * Serve `code` to each later import of `specifier`: a file's absolute path
+   * with the `SERVED_MODULE_QUERY` query. Its package imports resolve from
+   * the file's directory, as the file's own would.
+   */
+  readonly serveModule: (specifier: string, code: string) => Effect.Effect<void>
   readonly randomId: Effect.Effect<string>
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>
@@ -119,6 +151,12 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
         const counter = yield* Ref.make(0)
         return GentPlatform.of({
           bindModules: () => Effect.void,
+          // No bundler: a test that loads extension files runs the Bun platform.
+          bundleModule: (entry) =>
+            Effect.fail(
+              new ModuleBundleError({ entry, message: "the test platform builds no modules" }),
+            ),
+          serveModule: () => Effect.void,
           randomId: Ref.updateAndGet(counter, (n) => n + 1).pipe(
             Effect.map((n) => `${prefix}-${String(n).padStart(8, "0")}`),
           ),

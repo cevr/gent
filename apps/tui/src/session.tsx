@@ -2427,6 +2427,7 @@ export function useSessionFeed(
         appendSessionEvent(setStore, {
           _tag: "error",
           error: event.error,
+          retryAt: event.retryAt,
           createdAt: stampedAt,
           seq: eventSeq++,
         })

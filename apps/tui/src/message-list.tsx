@@ -199,7 +199,12 @@ const SessionEvent = Schema.Union([
     ...SessionEventPlacement,
   }),
   Schema.TaggedStruct("interruption", SessionEventPlacement),
-  Schema.TaggedStruct("error", { error: Schema.String, ...SessionEventPlacement }),
+  Schema.TaggedStruct("error", {
+    error: Schema.String,
+    /** When a usage limit that failed the turn resets, in epoch milliseconds (`ErrorOccurred.retryAt`). */
+    retryAt: Schema.optional(Schema.Finite),
+    ...SessionEventPlacement,
+  }),
   /**
    * A muted row the turn goes on past: an error such as a compaction
    * fallback, or a row a client extension derives (`noticeRowContribution`).
@@ -244,7 +249,42 @@ const stepSummary = (steps: TurnSteps): ReadonlyArray<string> => {
   return parts
 }
 
-export const getSessionEventLabel = (event: SessionEvent, now = currentMillis()): string => {
+/** A clock field (0 to 59, a month, a day) as two digits. */
+const twoDigits = (n: number) => `${Math.floor(n / 10)}${n % 10}`
+
+/**
+ * The wall-clock time a limit resets in `zone`: "17:05" on the day of `now`,
+ * else "2026-10-05 09:30". A clock time stays true on a row that does not
+ * redraw, where a countdown goes stale.
+ */
+const resetClock = (retryAt: number, now: number, zone: DateTime.TimeZone): string => {
+  const at = DateTime.toParts(DateTime.makeZonedUnsafe(retryAt, { timeZone: zone }))
+  const today = DateTime.toParts(DateTime.makeZonedUnsafe(now, { timeZone: zone }))
+  const time = `${twoDigits(at.hour)}:${twoDigits(at.minute)}`
+  if (at.year === today.year && at.month === today.month && at.day === today.day) return time
+  return `${at.year}-${twoDigits(at.month)}-${twoDigits(at.day)} ${time}`
+}
+
+/** The error's text, its first line ending with the reset time when the failure names one. */
+const errorLabel = (
+  event: Extract<SessionEvent, { _tag: "error" }>,
+  now: number,
+  zone: () => DateTime.TimeZone,
+): string => {
+  if (Predicate.isUndefined(event.retryAt)) return event.error
+  const [first = "", ...rest] = event.error.split("\n")
+  return [`${first} · resets ${resetClock(event.retryAt, now, zone())}`, ...rest].join("\n")
+}
+
+/**
+ * The row's text at `now`. Clock times read in the zone `zone` gives, the
+ * viewer's own unless a test fixes it; only a row with a reset time asks.
+ */
+export const getSessionEventLabel = (
+  event: SessionEvent,
+  now = currentMillis(),
+  zone: () => DateTime.TimeZone = DateTime.zoneMakeLocal,
+): string => {
   if (event._tag === "turn-ended") {
     return [
       `Worked for ${formatDuration(event.durationSeconds * 1000, "compact")}`,
@@ -252,7 +292,7 @@ export const getSessionEventLabel = (event: SessionEvent, now = currentMillis())
     ].join(" · ")
   }
   if (event._tag === "interruption") return "Interrupted · what do you want to do instead?"
-  if (event._tag === "error") return event.error
+  if (event._tag === "error") return errorLabel(event, now, zone)
   if (event._tag === "notice") return event.text
   const count = `${event.attempt}/${event.maxAttempts}`
   const reason = retryReason(event.reason)

@@ -3439,3 +3439,99 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
     }),
   )
 })
+
+// ── reset time decode ───────────────────────────────────────────────────────
+
+/** The reset time the driver reads from a failed request's answer, counted from `nowMs`. */
+const failedResetAt = (
+  answer: { readonly status: number; readonly errorType: string },
+  headers: Record<string, string>,
+  nowMs: number,
+) =>
+  Effect.gen(function* () {
+    const credentialCellRef =
+      yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+    const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
+    const model = yield* driver.resolveModel("claude-sonnet-4-5", makeApiAuthInfo("test-key"))
+    const reply = () => ({
+      status: answer.status,
+      headers: { "content-type": "application/json", ...headers },
+      body: encodeExternalJson({
+        type: "error",
+        error: { type: answer.errorType, message: "The request failed" },
+      }),
+    })
+    const error = yield* LanguageModel.streamText({ prompt: "hi" }).pipe(
+      Stream.runDrain,
+      Effect.provide(Layer.provideMerge(model, fakeFetchLayer(makeFakeFetchState(), reply))),
+      Effect.scoped,
+      Effect.flip,
+    )
+    return Option.getOrThrow(Option.fromUndefinedOr(driver.retry)).retryAt(error, nowMs)
+  })
+
+/** The reset time the driver reads from a 429 with `headers`, counted from `nowMs`. */
+const rateLimitedResetAt = (headers: Record<string, string>, nowMs: number) =>
+  failedResetAt({ status: 429, errorType: "rate_limit_error" }, headers, nowMs)
+
+const RESET_NOW = Date.parse("2026-10-04T12:00:00Z")
+
+describe("Anthropic reset time", () => {
+  it.live("a rate limit resets when its latest spent limit is full again", () =>
+    Effect.gen(function* () {
+      const resetAt = yield* rateLimitedResetAt(
+        {
+          "anthropic-ratelimit-requests-remaining": "0",
+          "anthropic-ratelimit-requests-reset": "2026-10-04T12:05:00Z",
+          "anthropic-ratelimit-input-tokens-remaining": "0",
+          "anthropic-ratelimit-input-tokens-reset": "2026-10-04T12:01:00Z",
+          "anthropic-ratelimit-output-tokens-remaining": "8000",
+          "anthropic-ratelimit-output-tokens-reset": "2026-10-04T13:00:00Z",
+        },
+        RESET_NOW,
+      )
+      expect(resetAt).toEqual(Option.some(Date.parse("2026-10-04T12:05:00Z")))
+    }),
+  )
+
+  it.live("a limit with some left does not hold the retry", () =>
+    Effect.gen(function* () {
+      const resetAt = yield* rateLimitedResetAt(
+        {
+          "anthropic-ratelimit-requests-remaining": "40",
+          "anthropic-ratelimit-requests-reset": "2026-10-04T12:05:00Z",
+        },
+        RESET_NOW,
+      )
+      expect(resetAt).toEqual(Option.none())
+    }),
+  )
+
+  it.live("a short retry-after does not shorten a spent limit's reset", () =>
+    Effect.gen(function* () {
+      const resetAt = yield* rateLimitedResetAt(
+        {
+          "retry-after": "3",
+          "anthropic-ratelimit-requests-remaining": "0",
+          "anthropic-ratelimit-requests-reset": "2026-10-04T12:05:00Z",
+        },
+        RESET_NOW,
+      )
+      expect(resetAt).toEqual(Option.some(Date.parse("2026-10-04T12:05:00Z")))
+    }),
+  )
+
+  it.live("a refused request's limit headers name no reset", () =>
+    Effect.gen(function* () {
+      const resetAt = yield* failedResetAt(
+        { status: 400, errorType: "invalid_request_error" },
+        {
+          "anthropic-ratelimit-requests-remaining": "0",
+          "anthropic-ratelimit-requests-reset": "2026-10-04T12:05:00Z",
+        },
+        RESET_NOW,
+      )
+      expect(resetAt).toEqual(Option.none())
+    }),
+  )
+})

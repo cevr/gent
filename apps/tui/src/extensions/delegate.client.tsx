@@ -4,8 +4,10 @@ import { createMemo, For, Show } from "solid-js"
 import { splitLines } from "@gent/core/protocol"
 import {
   CHILD_COMPLETION_TYPE,
+  CHILD_TASK_TYPE,
   ChildCompletionDetails,
   childOutcomeWords,
+  childTaskBody,
   DELEGATE_EXTENSION_ID,
   readChildCompletionHeadline,
 } from "@gent/extensions/client"
@@ -342,6 +344,15 @@ export default defineClientExtension(DELEGATE_EXTENSION_ID, {
           {(details) => <ChildCompletionRow {...props} details={details()} />}
         </Show>
       )),
+      // A child's first message is its task under a frame the child's model
+      // reads; the transcript shows the task, and the frame when expanded.
+      messageRendererContribution(
+        CHILD_TASK_TYPE,
+        (props) => (
+          <UserRow {...props} header="delegate · task" content={childTaskBody(props.content)} />
+        ),
+        { prompt: childTaskBody },
+      ),
     ),
   ),
 })

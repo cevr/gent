@@ -437,16 +437,16 @@ at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 
 ### Slash Commands
 
-| Command            | Action                                                             |
-| ------------------ | ------------------------------------------------------------------ |
-| `/new`, `/clear`   | Start a new session                                                |
-| `/help`            | Open the command palette                                           |
-| `/sessions`        | Sessions pane: every session, live and stored; side threads marked |
-| `/agents`, `/tree` | Aliases of `/sessions`                                             |
-| `/branch`          | Create new branch                                                  |
-| `/fork`            | Fork from a message                                                |
-| `/thread`          | Thread pane: the sessions and windows this one runs on             |
-| `/btw`, `/side`    | Fork pane: ask a parallel session on the side                      |
+| Command            | Action                                                                  |
+| ------------------ | ----------------------------------------------------------------------- |
+| `/new`, `/clear`   | Start a new session                                                     |
+| `/help`            | Open the command palette                                                |
+| `/sessions`        | Sessions pane: one row per thread, live and stored; side threads marked |
+| `/agents`, `/tree` | Aliases of `/sessions`                                                  |
+| `/branch`          | Create new branch                                                       |
+| `/fork`            | Fork from a message                                                     |
+| `/thread`          | Thread pane: the sessions and windows this one runs on                  |
+| `/btw`, `/side`    | Fork pane: ask a parallel session on the side                           |
 
 A command sent before every command source has answered (the client
 extensions' load and the session's server slash list, `commandsSettled` in
@@ -467,21 +467,21 @@ connection cut short is no answer, and the reconnect reads it again.
 Every builtin without its own view lives in `src/extensions/builtins.tsx`; a
 builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 
-| Extension ID                              | Where                    | What                                       |
-| ----------------------------------------- | ------------------------ | ------------------------------------------ |
-| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers      |
-| `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup             |
-| `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup        |
-| `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command                    |
-| `@gent/goal`                              | `builtins.tsx`           | Goal label, goal continuation row          |
-| `@gent/session-tools`                     | `builtins.tsx`           | Sender row for `session.send`              |
-| `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter                    |
-| `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane (the session browser), tray    |
-| `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                           |
-| `@gent/cache`                             | `cache.client.tsx`       | Cache-miss rows, waste total, cache timer  |
-| `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child-completion row |
-| `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                             |
-| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row            |
+| Extension ID                              | Where                    | What                                                            |
+| ----------------------------------------- | ------------------------ | --------------------------------------------------------------- |
+| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers                           |
+| `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup                                  |
+| `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup                             |
+| `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command                                         |
+| `@gent/goal`                              | `builtins.tsx`           | Goal label, goal continuation row                               |
+| `@gent/session-tools`                     | `builtins.tsx`           | Sender row for `session.send`                                   |
+| `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter                                         |
+| `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane (the session browser), tray (working and done rows) |
+| `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                                                |
+| `@gent/cache`                             | `cache.client.tsx`       | Cache-miss rows, waste total, cache timer                       |
+| `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child-completion row                      |
+| `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                                                  |
+| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row                                 |
 
 Client extensions author against one public entry, `@gent/tui/extensions`
 (`src/extensions.ts`): `defineClientExtension`, `ClientContext`, the

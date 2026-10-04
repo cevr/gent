@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Deferred, Effect, Fiber, Option, Order, Schedule, Schema } from "effect"
+import { DateTime, Deferred, Effect, Fiber, Option, Order, Schedule, Schema } from "effect"
 import {
   type CliRenderer,
   type CliRendererExternalOutputEvent,
@@ -49,9 +49,13 @@ import {
 import {
   BTW_QUESTION_TYPE,
   CHILD_COMPLETION_TYPE,
+  CHILD_TASK_TYPE,
+  childTaskText,
   forkQuestionText,
   type SessionMessageDetails,
   sessionMessageText,
+  THREAD_TASK_TYPE,
+  threadTaskText,
 } from "@gent/extensions/client"
 import {
   batch,
@@ -226,6 +230,38 @@ describe("session event labels", () => {
       "Retried 1/3 · overloaded (529)",
     )
     expect(getSessionEventLabel({ ...event, reason: "" }, createdAt)).toBe("Retrying in 2s... 1/3")
+  })
+
+  test("an error with a reset time names the wall-clock reset after its first line", () => {
+    const utc = () => DateTime.zoneMakeOffset(0)
+    const now = Date.parse("2026-10-04T12:00:00Z")
+    const event: SessionEvent = {
+      _tag: "error",
+      error: "Rate limit exceeded\nThe usage limit has been reached",
+      retryAt: Date.parse("2026-10-04T17:05:00Z"),
+      createdAt: now,
+      seq: 1,
+    }
+    expect(getSessionEventLabel(event, now, utc)).toBe(
+      "Rate limit exceeded · resets 17:05\nThe usage limit has been reached",
+    )
+    const nextDay = { ...event, retryAt: Date.parse("2026-10-05T09:30:00Z") }
+    expect(getSessionEventLabel(nextDay, now, utc)).toBe(
+      "Rate limit exceeded · resets 2026-10-05 09:30\nThe usage limit has been reached",
+    )
+    // The wall clock is the viewer's zone, not UTC.
+    expect(
+      getSessionEventLabel(event, now, () => DateTime.zoneMakeOffset(2 * 60 * 60 * 1000)),
+    ).toBe("Rate limit exceeded · resets 19:05\nThe usage limit has been reached")
+    // A row with no reset never asks for the zone.
+    let zoneReads = 0
+    const counted = () => {
+      zoneReads += 1
+      return DateTime.zoneMakeOffset(0)
+    }
+    const plain: SessionEvent = { _tag: "error", error: event.error, createdAt: now, seq: 1 }
+    expect(getSessionEventLabel(plain, now, counted)).toBe(event.error)
+    expect(zoneReads).toBe(0)
   })
 
   test("an interruption row joins its parts with the separator every row uses", () => {
@@ -941,6 +977,38 @@ describe("transcript message rows", () => {
         expect(frame).not.toContain("A side question, asked in a fork")
         const expandedFrame = yield* renderLoaded([asked], true)
         expect(expandedFrame).toContain("A side question, asked in a fork")
+      }),
+  )
+
+  it.scopedLive(
+    "a thread's and a delegate child's first message show the task, not its frame",
+    () =>
+      Effect.gen(function* () {
+        const task = (id: string, text: string, customType: string): ListMessage => ({
+          ...userMessage("regular-message", id, text, "queued"),
+          pendingMode: absent,
+          metadata: { customType },
+        })
+        const thread = task(
+          "thread-1",
+          threadTaskText(SessionId.make("01a0ca0cb3e7"), "Tidy the changelog."),
+          THREAD_TASK_TYPE,
+        )
+        const child = task(
+          "child-1",
+          childTaskText(SessionId.make("01a0ca0cb3e7"), "Fix the csv quoting."),
+          CHILD_TASK_TYPE,
+        )
+        const frame = yield* renderLoaded([thread, child])
+        expect(frame).toContain("thread · task")
+        expect(frame).toContain("Tidy the changelog.")
+        expect(frame).not.toContain("Thread started by session")
+        expect(frame).toContain("delegate · task")
+        expect(frame).toContain("Fix the csv quoting.")
+        expect(frame).not.toContain("Task from your parent session")
+        const expandedFrame = yield* renderLoaded([thread, child], true)
+        expect(expandedFrame).toContain("Thread started by session")
+        expect(expandedFrame).toContain("Task from your parent session")
       }),
   )
 

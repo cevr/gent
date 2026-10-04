@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Deferred, Effect, Option } from "effect"
+import { Clock, Deferred, Effect, Exit, Option } from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal, Show } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
@@ -8,6 +8,7 @@ import {
   type AgentRowEntry,
   DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
+  SESSION_TOOLS_EXTENSION_ID,
 } from "@gent/extensions/client"
 import {
   default as agentsExtension,
@@ -19,7 +20,7 @@ import {
 } from "../../src/extensions/agents.client"
 import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 import { DockProvider, PickerFrame } from "../../src/ui"
-import { renderFrame, renderScoped } from "../render-harness-boundary"
+import { createMockClient, renderFrame, renderScoped } from "../render-harness-boundary"
 import { useCommand } from "../../src/commands"
 import { useScopedKeyboard } from "../../src/terminal"
 import { waitForFrame, waitUntil, waitUntilAdvancing } from "../helpers-boundary"
@@ -186,7 +187,9 @@ describe("Agents controller listing scope", () => {
         controller.refresh("")
         yield* Effect.yieldNow
 
-        expect(asked).toEqual([{ query: "", root: SessionId.make("here") }, { query: "" }])
+        // Strict: an in-process request refuses an input with an `undefined`
+        // key as no JSON value, so the open pane's input has no `root` key.
+        expect(asked).toStrictEqual([{ query: "", root: SessionId.make("here") }, { query: "" }])
       }),
   )
 })
@@ -274,9 +277,12 @@ describe("Agents pane refresh while open", () => {
     Effect.gen(function* () {
       let childLive = false
       let listings = 0
-      const listed = (): ReadonlyArray<AgentRowEntry> => [
-        { ...row("child", childLive), parentSessionId: parentKey.sessionId },
-      ]
+      const listed = (): ReadonlyArray<AgentRowEntry> => {
+        const entry = { ...row("child", childLive), parentSessionId: parentKey.sessionId }
+        if (childLive) return [entry]
+        // A stored child has no loop, so it is inactive.
+        return [{ ...entry, section: "inactive" }]
+      }
       const clock = yield* TestClock.make()
       const controller = yield* provideClientServices(
         makeAgentsController(
@@ -575,6 +581,7 @@ describe("Agents pane navigation", () => {
             reload: () => {},
             detail: () => Option.none(),
             select: () => {},
+            done: () => [],
             open: () => true,
           }}
           onSelect={(value) => {
@@ -613,6 +620,7 @@ describe("Agents pane navigation", () => {
             reload: () => {},
             detail: () => Option.none(),
             select: () => {},
+            done: () => [],
             open: () => true,
           }}
           onSelect={() => {}}
@@ -662,6 +670,7 @@ describe("Agents pane navigation", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open: () => true,
             }}
             onSelect={(value) => {
@@ -711,6 +720,7 @@ describe("Agents pane navigation", () => {
             refresh: () => {},
             reload: () => {},
             detail,
+            done: () => [],
             select: (selection) => {
               Option.match(selection, {
                 onNone: () => {},
@@ -779,6 +789,7 @@ describe("Agents pane navigation", () => {
                 omittedMessages: 0,
               }),
             select: () => {},
+            done: () => [],
             open: () => true,
           }}
           onSelect={() => {}}
@@ -838,6 +849,7 @@ describe("Agents pane delete", () => {
             reload: () => {},
             detail: () => Option.none(),
             select: () => {},
+            done: () => [],
             open: () => true,
           }}
           onSelect={() => {}}
@@ -959,6 +971,7 @@ describe("Agents pane framing", () => {
                     omittedMessages: 0,
                   }),
                 select: () => {},
+                done: () => [],
                 open: () => true,
               }}
               onSelect={() => {}}
@@ -1019,6 +1032,7 @@ describe("Agents pane framing", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open: () => true,
             }}
             onSelect={() => {}}
@@ -1068,6 +1082,7 @@ describe("Agents pane framing", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open: () => true,
             }}
             onSelect={() => {}}
@@ -1123,6 +1138,7 @@ describe("Agents pane framing", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open: () => true,
             }}
             onSelect={() => {}}
@@ -1197,6 +1213,7 @@ describe("agents pane rows", () => {
             reload: () => {},
             detail: () => Option.none(),
             select: () => {},
+            done: () => [],
             open: () => true,
           }}
           onSelect={() => {}}
@@ -1363,6 +1380,7 @@ describe("idle middle parent", () => {
     reload: () => {},
     detail: () => Option.none(),
     select: () => {},
+    done: () => [],
     open,
   })
 
@@ -1399,6 +1417,472 @@ describe("idle middle parent", () => {
       const lineOf = (name: string) => frame.split("\n").find((line) => line.includes(name)) ?? ""
       expect(lineOf("delegate: a task")).toContain("• delegate: a task")
       expect(lineOf("delegate: b task")).not.toContain("• delegate: b task")
+    }),
+  )
+})
+
+describe("thread rows", () => {
+  // first → second → third: one handoff chain, listed as one row on its newest session.
+  const members = ["first", "second", "third"].map((id) => SessionId.make(id))
+  const thread: AgentRowEntry = {
+    ...root("third", "idle"),
+    name: "fix auth refresh",
+    sideThread: true,
+    parentSessionId: SessionId.make("starter"),
+    sessions: members,
+  }
+  const controllerOver = (listed: ReadonlyArray<AgentRowEntry>, current: string) => ({
+    rows: () => listed,
+    current: () => ({ sessionId: SessionId.make(current), branchId: BranchId.make("any") }),
+    error: () => Option.none(),
+    loading: () => false,
+    refresh: () => {},
+    reload: () => {},
+    detail: () => Option.none(),
+    select: () => {},
+    done: () => [],
+    open: () => true,
+  })
+  const paneAt = (listed: ReadonlyArray<AgentRowEntry>, current: string, width: number) =>
+    renderScoped(
+      () => (
+        <AgentsPane
+          open={true}
+          controller={controllerOver(listed, current)}
+          onSelect={() => {}}
+          onDelete={() => {}}
+          onClose={() => {}}
+        />
+      ),
+      { width, height: 20 },
+    )
+
+  it.scopedLive(
+    "a thread's row counts its sessions, and a narrow pane drops the side-thread mark first",
+    () =>
+      Effect.gen(function* () {
+        const wide = yield* paneAt([thread], "elsewhere", 120)
+        const wideFrame = yield* waitForFrame(
+          wide,
+          (next) => next.includes("fix auth"),
+          "wide pane",
+        )
+        const wideRow = wideFrame.split("\n").find((line) => line.includes("fix auth")) ?? ""
+        expect(wideRow).toContain("side thread  3 sessions")
+
+        const narrow = yield* paneAt([thread], "elsewhere", 60)
+        const narrowFrame = yield* waitForFrame(
+          narrow,
+          (next) => next.includes("fix auth"),
+          "narrow pane",
+        )
+        const narrowRow = narrowFrame.split("\n").find((line) => line.includes("fix auth")) ?? ""
+        expect(narrowRow).toContain("3 sessions")
+        expect(narrowRow).not.toContain("side thread")
+      }),
+  )
+
+  it.scopedLive("the shell on an older session of a thread finds itself on the thread's row", () =>
+    Effect.gen(function* () {
+      const setup = yield* paneAt([root("other", "idle"), thread], "second", 100)
+      const frame = yield* waitForFrame(setup, (next) => next.includes("fix auth"), "pane")
+      const lineOf = (text: string) => frame.split("\n").find((line) => line.includes(text)) ?? ""
+      expect(lineOf("fix auth")).toContain("› ")
+      expect(lineOf("other")).not.toContain("› ")
+    }),
+  )
+
+  it.scopedLive(
+    "the tray of an older session lists the work its thread's newer session started",
+    () =>
+      Effect.gen(function* () {
+        const listed = [thread, child("worker", "running", "third")]
+        const setup = yield* renderScoped(() => (
+          <SubagentTray controller={{ ...controllerOver(listed, "first"), open: () => false }} />
+        ))
+        const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "tray")
+        expect(frame).toContain("working · delegate: worker task")
+        expect(frame).not.toContain("fix auth")
+      }),
+  )
+
+  it.scopedLive(
+    "the tray of a handoff lists the work the session it continues started, by its real parent",
+    () =>
+      Effect.gen(function* () {
+        // `first` spawned `worker`, then handed off to `third`: the worker's
+        // parent stays `first`, whose thread's row is `third`'s.
+        const listed = [thread, child("worker", "running", "first")]
+        const setup = yield* renderScoped(() => (
+          <SubagentTray controller={{ ...controllerOver(listed, "third"), open: () => false }} />
+        ))
+        const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "tray")
+        expect(frame).toContain("working · delegate: worker task")
+      }),
+  )
+
+  it.scopedLive(
+    "a second Ctrl+X on a thread's row deletes each of its sessions, newest first",
+    () =>
+      Effect.gen(function* () {
+        const deleted: Array<string> = []
+        const reply = { rows: [thread] }
+        const runtime = makeClientExtensionRuntime({
+          transport: {
+            ...makeClientTestTransport({ requestReply: reply }),
+            client: createMockClient({
+              extension: { request: () => Effect.succeed(reply) },
+              session: {
+                delete: (input: { readonly sessionId: string }) =>
+                  Effect.sync(() => {
+                    deleted.push(input.sessionId)
+                  }),
+              },
+            }),
+          },
+        })
+        const contributions = yield* runClientExtensionSetup(runtime, agentsExtension)
+        const commands = contributions.commands ?? []
+        const pane = Option.getOrThrow(
+          Option.fromUndefinedOr(contributions.widgets?.find((w) => w.id === "agents.pane")),
+        )
+        const Session = () => {
+          const command = useCommand()
+          useScopedKeyboard((event) => command.handleKeybind(event, commands, false))
+          return <pane.component />
+        }
+        const setup = yield* renderScoped(() => <Session />, { width: 120, height: 20 })
+        setup.mockInput.pressKey("t", { ctrl: true })
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("fix auth"),
+          "the pane lists the thread",
+        )
+
+        setup.mockInput.pressKey("x", { ctrl: true })
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("delete this thread's 3 sessions and their children"),
+          "armed",
+        )
+        setup.mockInput.pressKey("x", { ctrl: true })
+        yield* waitUntil(() => deleted.length === 3, "each session deleted")
+        expect(deleted).toEqual(["third", "second", "first"])
+        yield* Effect.promise(() => runtime.dispose())
+      }),
+  )
+})
+
+describe("done threads", () => {
+  const starter = { sessionId: SessionId.make("starter"), branchId: BranchId.make("starter-b") }
+  const threadRow = (id: string, section: AgentRowEntry["section"]): AgentRowEntry => ({
+    ...root(id, section),
+    name: `${id} notes`,
+    sideThread: true,
+    parentSessionId: starter.sessionId,
+  })
+
+  /** The gate a test holds tray reads on. */
+  interface ReadGate {
+    gate: Option.Option<Deferred.Deferred<void>>
+  }
+
+  /**
+   * A controller over a listing the test changes, with the shell on `here()`.
+   * While `held` has a gate, a read waits on it, then answers the listing as
+   * it is when the gate opens.
+   */
+  const controllerOver = (
+    listed: (input: ListAgentsInput) => ReadonlyArray<AgentRowEntry>,
+    here: () => RowKeyOf,
+    held: ReadGate = { gate: Option.none() },
+  ) =>
+    Effect.gen(function* () {
+      const pulses = new Set<
+        (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void
+      >()
+      let listings = 0
+      const clock = yield* TestClock.make()
+      const controller = yield* provideClientServices(
+        makeAgentsController(
+          (input) =>
+            Effect.sync(() => {
+              listings += 1
+              return held.gate
+            }).pipe(
+              Effect.flatMap(
+                Option.match({ onNone: () => Effect.void, onSome: (gate) => Deferred.await(gate) }),
+              ),
+              Effect.map(() => listed(input)),
+            ),
+          () => Effect.succeed(detail(1)),
+        ).pipe(Effect.provideService(Clock.Clock, clock)),
+        {
+          currentSession: here,
+          transport: {
+            ...makeClientTestTransport({ currentSession: here }),
+            onExtensionStateChanged: (cb) => {
+              pulses.add(cb)
+              return () => {
+                pulses.delete(cb)
+              }
+            },
+          },
+        },
+      )
+      /** One read under `query` (none by default), awaited to its reply. */
+      const read = (label: string, query = "") =>
+        Effect.gen(function* () {
+          const before = listings
+          controller.refresh(query)
+          yield* waitUntil(() => listings > before && !controller.loading(), label)
+        })
+      const pulse = (extensionId: string) => {
+        for (const cb of pulses) cb({ ...here(), extensionId })
+      }
+      return { controller, read, pulse, listings: () => listings }
+    })
+  type RowKeyOf = { readonly sessionId: SessionId; readonly branchId: BranchId }
+
+  it.scopedLive(
+    "a thread seen running that goes idle while the shell is elsewhere is done until opened",
+    () =>
+      Effect.gen(function* () {
+        let section: AgentRowEntry["section"] = "running"
+        let here: RowKeyOf = starter
+        const { controller, read } = yield* controllerOver(
+          () => [threadRow("notes", section)],
+          () => here,
+        )
+        yield* read("running")
+        expect(controller.done()).toEqual([])
+
+        section = "idle"
+        yield* read("idle")
+        expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("notes")])
+        // Later listings keep it until the reader opens it.
+        yield* read("idle again")
+        expect(controller.done()).toHaveLength(1)
+
+        here = { sessionId: SessionId.make("notes"), branchId: BranchId.make("notes-branch") }
+        yield* read("opened")
+        expect(controller.done()).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "a thread the reader watched finish from inside it is not done back at its starter",
+    () =>
+      Effect.gen(function* () {
+        let section: AgentRowEntry["section"] = "running"
+        let here: RowKeyOf = starter
+        const { controller, read } = yield* controllerOver(
+          () => [threadRow("notes", section)],
+          () => here,
+        )
+        yield* read("running, seen from the starter")
+        // The reader opens the thread while it runs and sees it finish there.
+        here = { sessionId: SessionId.make("notes"), branchId: BranchId.make("notes-branch") }
+        yield* read("running, seen inside")
+        section = "idle"
+        yield* read("idle, seen inside")
+        here = starter
+        yield* read("back at the starter")
+        expect(controller.done()).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a delegate child gets no done row, and a thread that runs again leaves done", () =>
+    Effect.gen(function* () {
+      let section: AgentRowEntry["section"] = "running"
+      const { controller, read } = yield* controllerOver(
+        () => [{ ...threadRow("child", section), delegate: true }, threadRow("again", section)],
+        () => starter,
+      )
+      yield* read("running")
+      section = "idle"
+      yield* read("idle")
+      expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("again")])
+      section = "running"
+      yield* read("running again")
+      expect(controller.done()).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  /** `notes` as one thread over `sessions`, keyed by its first session. */
+  const handedOff = (
+    sessions: ReadonlyArray<string>,
+    section: AgentRowEntry["section"],
+  ): AgentRowEntry => {
+    const newest = sessions.at(-1) ?? "notes"
+    const entry = { ...threadRow(newest, section), thread: SessionId.make(sessions[0] ?? newest) }
+    if (sessions.length === 1) return entry
+    return { ...entry, sessions: sessions.map((id) => SessionId.make(id)) }
+  }
+
+  it.scopedLive(
+    "a thread is done by its key across a handoff, and its next session's turn clears it",
+    () =>
+      Effect.gen(function* () {
+        let listed = [handedOff(["t1"], "running")]
+        const { controller, read } = yield* controllerOver(
+          () => listed,
+          () => starter,
+        )
+        yield* read("t1 runs")
+        // The turn ended on a handoff: the row moves to t2, which is idle.
+        listed = [handedOff(["t1", "t2"], "idle")]
+        yield* read("t2 idle")
+        expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("t2")])
+        // A third session of the thread runs: the thread is not done.
+        listed = [handedOff(["t1", "t2", "t3"], "running")]
+        yield* read("t3 runs")
+        expect(controller.done()).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "a deleted thread leaves done when an unfiltered listing of its root lacks it, never by a filtered one",
+    () =>
+      Effect.gen(function* () {
+        let listed = [threadRow("notes", "running")]
+        const { controller, read } = yield* controllerOver(
+          () => listed,
+          () => starter,
+        )
+        yield* read("running")
+        listed = [threadRow("notes", "idle")]
+        yield* read("idle")
+        expect(controller.done()).toHaveLength(1)
+        // A filter that does not match the thread proves nothing about it.
+        listed = []
+        yield* read("filtered", "other words")
+        listed = [threadRow("notes", "idle")]
+        yield* read("idle again")
+        expect(controller.done()).toHaveLength(1)
+        // The thread is deleted: the root's whole listing no longer holds it.
+        listed = []
+        yield* read("deleted")
+        listed = [threadRow("notes", "idle")]
+        yield* read("a row with its id again")
+        expect(controller.done()).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "done rows belong to the shell's thread: an unrelated session shows none, and coming back shows them",
+    () =>
+      Effect.gen(function* () {
+        const elsewhere = { sessionId: SessionId.make("unrelated"), branchId: BranchId.make("u") }
+        let here: RowKeyOf = starter
+        let section: AgentRowEntry["section"] = "running"
+        const { controller, read } = yield* controllerOver(
+          (input) => {
+            if (input.root === elsewhere.sessionId) return [root("unrelated", "idle")]
+            return [threadRow("notes", section)]
+          },
+          () => here,
+        )
+        yield* read("running")
+        section = "idle"
+        yield* read("idle")
+        expect(controller.done()).toHaveLength(1)
+        here = elsewhere
+        yield* read("unrelated")
+        expect(controller.done()).toEqual([])
+        here = starter
+        yield* read("back")
+        expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("notes")])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a reply the shell left before it landed changes no done row", () =>
+    Effect.gen(function* () {
+      // `starter` handed off to `next`: one thread, whose row is `next`'s.
+      const own: AgentRowEntry = {
+        ...root("next", "idle"),
+        thread: starter.sessionId,
+        sessions: [starter.sessionId, SessionId.make("next")],
+      }
+      const next = { sessionId: SessionId.make("next"), branchId: BranchId.make("next-b") }
+      let here: RowKeyOf = starter
+      let section: AgentRowEntry["section"] = "running"
+      const held: ReadGate = { gate: Option.none() }
+      const { controller, read, listings } = yield* controllerOver(
+        () => [own, threadRow("notes", section)],
+        () => here,
+        held,
+      )
+      yield* read("running")
+      // The next read is out when the shell moves to the thread's next session.
+      const gate = yield* Deferred.make<void>()
+      held.gate = Option.some(gate)
+      const before = listings()
+      controller.refresh("")
+      yield* waitUntil(() => listings() > before, "the read is out")
+      here = next
+      section = "idle"
+      yield* Deferred.done(gate, Exit.void)
+      yield* waitUntil(() => !controller.loading(), "the reply lands")
+      // The reply was for `starter`; the shell is on `next`. It is dropped.
+      expect(controller.done()).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a session-tools pulse re-reads the tray, so a started thread shows at once", () =>
+    Effect.gen(function* () {
+      const { pulse, listings } = yield* controllerOver(
+        () => [],
+        () => starter,
+      )
+      const before = listings()
+      pulse(SESSION_TOOLS_EXTENSION_ID)
+      yield* waitUntil(() => listings() > before, "pulse read")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("done rows follow the working rows inside the cap, and the rest are counted", () =>
+    Effect.sync(() => {
+      const running = ["a", "b"].map((id) => child(id, "running", "root"))
+      const done = ["x", "y"].map((id) => threadRow(id, "idle"))
+      expect(trayLines(running, 80, done).map((line) => line.text)).toEqual([
+        "working · delegate: a task",
+        "working · delegate: b task",
+        "done · x notes",
+        "+1 more done",
+      ])
+      expect(trayLines([], 80, done).map((line) => line.pulse)).toEqual([false, false])
+    }),
+  )
+
+  it.scopedLive("the tray shows a done thread, and hides it while the shell is on it", () =>
+    Effect.gen(function* () {
+      const [here, setHere] = createSignal<RowKeyOf>(starter)
+      const finished = threadRow("release", "idle")
+      const setup = yield* renderScoped(
+        () => (
+          <SubagentTray
+            controller={{
+              rows: () => [finished],
+              current: here,
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              done: () => [finished],
+              open: () => false,
+            }}
+          />
+        ),
+        { width: 80, height: 10 },
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("done ·"), "done row")
+      expect(frame).toContain("done · release notes")
+      expect(frame).toContain("ctrl+t sessions")
+      setHere({ sessionId: finished.sessionId, branchId: finished.branchId })
+      yield* waitForFrame(setup, (next) => !next.includes("done ·"), "opened thread")
     }),
   )
 })
@@ -1483,6 +1967,7 @@ describe("Subagent tray", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open,
             }}
           />
@@ -1529,6 +2014,7 @@ describe("Subagent tray", () => {
               reload: () => {},
               detail: () => Option.none(),
               select: () => {},
+              done: () => [],
               open: () => false,
             }}
           />
@@ -1554,6 +2040,7 @@ describe("Subagent tray", () => {
             reload: () => {},
             detail: () => Option.none(),
             select: () => {},
+            done: () => [],
             open: () => false,
           }}
         />
