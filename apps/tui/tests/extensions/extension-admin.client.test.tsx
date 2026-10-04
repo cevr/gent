@@ -78,9 +78,13 @@ describe("extensions pane rows", () => {
 })
 
 /** The pane's requests as the server answers them, each one recorded. */
-const paneServer = (extensions: ReadonlyArray<ExtensionStatus> = statuses) => {
+const paneServer = (
+  extensions: ReadonlyArray<ExtensionStatus> = statuses,
+  afterChange: ReadonlyArray<ExtensionStatus> = extensions,
+) => {
   const requests: Array<{ readonly capabilityId: string; readonly input: unknown }> = []
   let reloads = 0
+  let current = extensions
   return {
     requests,
     reloads: () => reloads,
@@ -95,7 +99,8 @@ const paneServer = (extensions: ReadonlyArray<ExtensionStatus> = statuses) => {
           if (request.capabilityId === "extensions.pane.reload") {
             detail = "Set @user/notes up again; the next turn runs the new setup."
           }
-          return { detail, extensions }
+          if (detail.length > 0) current = afterChange
+          return { detail, extensions: current }
         }),
       shell: {
         pane: makePaneSlot(),
@@ -112,9 +117,10 @@ const openPane = (
   width: number,
   extensions: ReadonlyArray<ExtensionStatus> = statuses,
   height = 30,
+  afterChange: ReadonlyArray<ExtensionStatus> = extensions,
 ) =>
   Effect.gen(function* () {
-    const server = paneServer(extensions)
+    const server = paneServer(extensions, afterChange)
     const contributions = yield* provideClientServices(extensionAdminClient.setup, server.options)
     const command = Option.getOrThrow(Option.fromUndefinedOr(contributions.commands?.[0]))
     const widget = Option.getOrThrow(Option.fromUndefinedOr(contributions.widgets?.[0]))
@@ -204,6 +210,28 @@ describe("extensions pane", () => {
           setup,
           (text) => text.includes("@user/notes  ") && !text.includes("builtin-00"),
           "the failed row in view on a short terminal",
+        )
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "the cursor stays on the row the reader turned off when the rows come back in a new order",
+    () =>
+      Effect.gen(function* () {
+        const notesOff: ExtensionStatus = {
+          _tag: "Disabled",
+          id: reloadFailed.id,
+          scope: reloadFailed.scope,
+          sourcePath: reloadFailed.sourcePath,
+        }
+        const { setup } = yield* openPane(120, statuses, 30, [builtin, failed, disabled, notesOff])
+        setup.mockInput.pressKey(" ")
+        yield* waitForFrame(
+          setup,
+          (text) =>
+            text.includes("Disabled @user/notes in /home/u/.gent/config.json.") &&
+            text.includes("2 off"),
+          "the reply on the row turned off",
         )
       }).pipe(Effect.timeout("10 seconds")),
   )

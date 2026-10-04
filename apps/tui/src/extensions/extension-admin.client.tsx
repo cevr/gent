@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Effect, Equal, Match, Option } from "effect"
+import { Effect, Match, Option } from "effect"
 import { createEffect, createSignal, on, Show } from "solid-js"
 import { type ExtensionStatus, ref } from "@gent/core/extensions/api"
 import { EXTENSION_ADMIN_EXTENSION_ID, ExtensionAdminRpc } from "@gent/extensions/client"
@@ -131,6 +131,9 @@ export const paneTitle = (extensions: ReadonlyArray<ExtensionStatus>): string =>
 /** Whether a row needs the reader: the pane opens on the first such row. */
 const needsReader = (status: ExtensionStatus): boolean => stateWord(status) !== "on"
 
+/** A row's key: an id is unique within a scope. */
+const statusKey = (status: ExtensionStatus): string => `${status.scope}:${status.id}`
+
 /** The rows a body of text takes at `width`, each paragraph wrapped. */
 const wrappedRows = (text: string, width: number): number =>
   text
@@ -148,14 +151,20 @@ interface ExtensionsController {
   readonly loading: () => boolean
   /** A failed read or a refused change, newest first. */
   readonly error: () => Option.Option<string>
-  /** What the last change did, until the cursor moves. */
-  readonly note: () => Option.Option<string>
+  /** What the last change did, on the row it changed, until the pane closes. */
+  readonly note: () => Option.Option<ChangeNote>
   readonly clearNote: () => void
   readonly refresh: () => void
   readonly toggle: (status: ExtensionStatus) => void
   readonly reload: (status: ExtensionStatus) => void
   readonly open: () => boolean
   readonly close: () => void
+}
+
+/** A change's reply and the row it reports on (`statusKey`). */
+interface ChangeNote {
+  readonly key: string
+  readonly text: string
 }
 
 const noStatuses: ReadonlyArray<ExtensionStatus> = []
@@ -170,11 +179,12 @@ const makeExtensionsController = Effect.gen(function* () {
         .request(ref(ExtensionAdminRpc.Status), {}, session)
         .pipe(Effect.map((output) => output.extensions)),
   })
-  const [note, setNote] = createSignal(Option.none<string>())
+  const [note, setNote] = createSignal(Option.none<ChangeNote>())
   const [changeError, setChangeError] = createSignal(Option.none<string>())
 
-  /** Run a change; its reply is the note, and the pane and the client extensions read again. */
+  /** Run a change; its reply is the row's note, and the pane and the client extensions read again. */
   const change = (
+    status: ExtensionStatus,
     request: Effect.Effect<{ readonly detail: string }, { readonly message: string }>,
   ) =>
     shell.cast(
@@ -186,7 +196,7 @@ const makeExtensionsController = Effect.gen(function* () {
           },
           onSuccess: (output) => {
             setChangeError(Option.none())
-            setNote(Option.some(output.detail))
+            setNote(Option.some({ key: statusKey(status), text: output.detail }))
             statuses.refresh()
             shell.reloadExtensions()
           },
@@ -207,12 +217,14 @@ const makeExtensionsController = Effect.gen(function* () {
     },
     toggle: (status) =>
       change(
+        status,
         transport.request(ref(ExtensionAdminRpc.SetEnabled), {
           id: status.id,
           enabled: status._tag === "Disabled",
         }),
       ),
-    reload: (status) => change(transport.request(ref(ExtensionAdminRpc.Reload), { id: status.id })),
+    reload: (status) =>
+      change(status, transport.request(ref(ExtensionAdminRpc.Reload), { id: status.id })),
     open: () => shell.pane.isOpen(EXTENSIONS_PANE),
     close: () => shell.pane.close(EXTENSIONS_PANE),
   } satisfies ExtensionsController
@@ -255,9 +267,16 @@ function ExtensionsPane(props: { readonly controller: ExtensionsController }) {
   )
   const controller = props.controller
   // A pane that closes over a failure's text opens on the list again.
+  // The row the reader last changed: the rows read again after a change can
+  // come back in a new order, and the cursor stays on that row until the
+  // pane closes.
+  const [changed, setChanged] = createSignal(Option.none<string>())
   createEffect(
     on(controller.open, (open) => {
-      if (!open) setIssue(Option.none())
+      if (open) return
+      setIssue(Option.none())
+      setChanged(Option.none())
+      controller.clearNote()
     }),
   )
   const rows = (): ReadonlyArray<SelectListRow<ExtensionStatus>> =>
@@ -266,7 +285,18 @@ function ExtensionsPane(props: { readonly controller: ExtensionsController }) {
         muted: () => status._tag === "Disabled",
       }),
     )
-  const detail = () => Option.orElse(controller.note(), () => Option.map(cursor(), extensionDetail))
+  // A change's note shows on its row; the rows read again after the change
+  // can pass the cursor over another row first.
+  const detail = () =>
+    Option.flatMap(cursor(), (status) =>
+      Option.orElse(
+        Option.map(
+          Option.filter(controller.note(), (note) => note.key === statusKey(status)),
+          (note) => note.text,
+        ),
+        () => Option.some(extensionDetail(status)),
+      ),
+    )
   const showIssue = (status: ExtensionStatus) =>
     Option.match(extensionIssue(status), {
       onNone: () => {},
@@ -293,30 +323,35 @@ function ExtensionsPane(props: { readonly controller: ExtensionsController }) {
               id="extensions"
               open={controller.open()}
               rows={rows}
-              rowKey={(status) => `${status.scope}:${status.id}`}
-              sticky={(values) => {
-                const first = values.findIndex(needsReader)
-                return Option.some(Math.max(0, first))
-              }}
-              onCursor={(selected) => {
-                // A reply's note stays until the reader moves: rows read again
-                // after a change report the same row.
-                const key = (status: ExtensionStatus) => `${status.scope}:${status.id}`
-                if (!Equal.equals(Option.map(cursor(), key), Option.map(selected, key))) {
-                  controller.clearNote()
-                }
-                setCursor(selected)
-              }}
+              rowKey={statusKey}
+              sticky={(values) =>
+                Option.orElse(
+                  Option.flatMap(changed(), (key) =>
+                    Option.liftPredicate(
+                      values.findIndex((status) => statusKey(status) === key),
+                      (index) => index >= 0,
+                    ),
+                  ),
+                  () => Option.some(Math.max(0, values.findIndex(needsReader))),
+                )
+              }
+              onCursor={setCursor}
               loading={controller.loading}
               onSelect={showIssue}
               onDismiss={controller.close}
               extraKeys={(event, selected) => {
                 if (event.name === "space") {
-                  Option.map(selected, controller.toggle)
+                  Option.map(selected, (status) => {
+                    setChanged(Option.some(statusKey(status)))
+                    controller.toggle(status)
+                  })
                   return true
                 }
                 if (event.name === "r" && event.ctrl !== true && event.meta !== true) {
-                  Option.map(selected, controller.reload)
+                  Option.map(selected, (status) => {
+                    setChanged(Option.some(statusKey(status)))
+                    controller.reload(status)
+                  })
                   return true
                 }
                 return false
