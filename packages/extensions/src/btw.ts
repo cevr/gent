@@ -125,7 +125,7 @@ export const BTW_MERGE_TYPE = "btw-merge"
  * the fork and its messages by id; `question` and `reply` are one-line
  * previews for the transcript row only.
  */
-const ForkMergeDetails = Schema.Struct({
+export const ForkMergeDetails = Schema.Struct({
   fork: Schema.Struct({ sessionId: SessionId, branchId: BranchId, name: Schema.String }),
   /** The fork's first own message: where its turns start, after the history it copied. */
   fromMessageId: MessageId,
@@ -135,7 +135,7 @@ const ForkMergeDetails = Schema.Struct({
   question: Schema.String,
   reply: Schema.String,
 })
-type ForkMergeDetails = typeof ForkMergeDetails.Type
+export type ForkMergeDetails = typeof ForkMergeDetails.Type
 
 const AskInput = Schema.Struct({
   question: Schema.String,
@@ -345,21 +345,36 @@ const forkMergeOf = (
   })
 }
 
+const FORK_MERGE_PREFIX = 'The user merged a /btw fork back into this session: "'
+const FORK_MERGE_NAME_END = '" (session '
+
 /**
  * The text the branch's model reads for a merge: ids, not content. The model
  * reads the fork's own turns with `read_session` from `fromMessageId` when it
  * needs them, so the merge appends a few lines to the branch, and no summary
  * call runs. The question is named so the model can judge whether to read.
  */
-const forkMergeText = (details: ForkMergeDetails): string => {
+export const forkMergeText = (details: ForkMergeDetails): string => {
   let questions = `${details.turns} questions`
   if (details.turns === 1) questions = "1 question"
   return [
-    `The user merged a /btw fork back into this session: "${details.fork.name}" (session ${details.fork.sessionId}, branch ${details.fork.branchId}).`,
+    `${FORK_MERGE_PREFIX}${details.fork.name}${FORK_MERGE_NAME_END}${details.fork.sessionId}, branch ${details.fork.branchId}).`,
     "The fork began as a copy of this branch and ran beside it in the same directory; what it said is not in this conversation.",
     `Its own messages start at ${details.fromMessageId}: ${questions}, the last "${details.question}", answered in message ${details.replyId}.`,
     `Before you go on, read them with read_session (sessionId ${details.fork.sessionId}, fromMessageId ${details.fromMessageId}).`,
   ].join("\n")
+}
+
+/**
+ * What the reader asked with a merge, for the prompt the transcript pins:
+ * `merged <fork name>`, read from the first line of `forkMergeText`. The
+ * caller reads the message's type; other text comes back as it is.
+ */
+export const forkMergePrompt = (text: string): string => {
+  const first = text.split("\n", 1)[0] ?? ""
+  const end = first.lastIndexOf(FORK_MERGE_NAME_END)
+  if (!first.startsWith(FORK_MERGE_PREFIX) || end < FORK_MERGE_PREFIX.length) return text
+  return `merged ${first.slice(FORK_MERGE_PREFIX.length, end)}`
 }
 
 /**

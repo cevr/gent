@@ -32,11 +32,16 @@ export {
   remainingTokens,
 } from "./goal.js"
 // forkQuestionText, like childTaskText, has only a test reader here: it
-// writes the text forkQuestionBody reads.
+// writes the text forkQuestionBody reads. forkMergeText writes the text
+// forkMergePrompt reads, in the same way.
 export {
   BTW_EXTENSION_ID,
+  BTW_MERGE_TYPE,
   BTW_QUESTION_TYPE,
   BtwRpc,
+  ForkMergeDetails,
+  forkMergePrompt,
+  forkMergeText,
   forkQuestionBody,
   forkQuestionText,
   type ForkView as ForkViewType,

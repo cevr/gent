@@ -351,10 +351,12 @@ history takes them, and they stay there into the next turn until the item
 moves whole, so the row would sit between that item's rows in history and its
 rows on screen. It is derived from the displayed items, so it
 follows the branch and session in view. `readerPrompt` decides whose message
-it is, from the metadata alone: a user message with the server's client origin
-(`fromClient`: typed, or a steer that joined the running turn), or a custom
-type whose `messageRendererContribution` passes `prompt` (the `/btw` fork's
-question). A message another agent or an extension sent (a parent's
+it is, from the metadata alone: a custom type whose
+`messageRendererContribution` passes `prompt`, in the text that function reads
+(the `/btw` fork's question, or a `/btw` merge as `merged <fork name>`, which
+the reader sent but whose text the model reads is ids), or else a user message
+with the server's client origin (`fromClient`: typed, or a steer that joined
+the running turn). A message another agent or an extension sent (a parent's
 `Session.send`, a wake, a delegate start), a queued follow-up, a hidden message
 and a row stored before the client origin existed are not. It is the first row a
 short terminal gives up: it shows only while the live tail keeps a row beside
@@ -446,7 +448,7 @@ at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 | `/branch`          | Create new branch                                                       |
 | `/fork`            | Fork from a message                                                     |
 | `/thread`          | Thread pane: the sessions and windows this one runs on                  |
-| `/btw`, `/side`    | Fork pane: ask a parallel session on the side                           |
+| `/btw`, `/side`    | Fork pane: ask a parallel session on the side; `ctrl+s` merges it back  |
 
 A command sent before every command source has answered (the client
 extensions' load and the session's server slash list, `commandsSettled` in
