@@ -1,14 +1,15 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
-import { Context, Effect, FileSystem, Layer, Option, Path } from "effect"
-import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
+import { ConfigProvider, Context, Effect, FileSystem, Layer, Option, Path } from "effect"
+import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { runProcess } from "@gent/core/extensions/api"
 import { GentPlatform } from "@gent/core/host"
 import { BunGentPlatformLive, makeTempDirectoryScoped } from "@gent/core/test-utils"
+import { formatUpgradeOutcome, upgradeInstall } from "../src/ops"
 
 // ── a release host on loopback ──────────────────────────────────────────────
 
-/** install.sh reads this variable; the tests point it at the fixture host. */
+/** install.sh and `gent upgrade` read this variable; the tests point it at the fixture host. */
 const RELEASES_URL = "GENT_RELEASES_URL"
 
 /** Every platform name the release holds: the fixture serves one pair for each. */
@@ -291,5 +292,184 @@ describe("install.sh", () => {
         `${bunBin}/gent comes before ${path.join(home, ".local", "bin")} on PATH`,
       )
     }).pipe(Effect.timeout("60 seconds"), Effect.provide(services)),
+  )
+})
+
+// ── gent upgrade ────────────────────────────────────────────────────────────
+
+/**
+ * Run `gent upgrade` as the gent at `executable` (a real path) of build
+ * `build`, against the release host at `releases`.
+ */
+const upgradeAs = (
+  executable: string,
+  build: GentBuild,
+  releases: string,
+  requested: Option.Option<string> = Option.none(),
+) =>
+  Effect.scoped(upgradeInstall(requested)).pipe(
+    Effect.provideService(
+      ConfigProvider.ConfigProvider,
+      ConfigProvider.fromEnvRecord({ [RELEASES_URL]: releases }),
+    ),
+    Effect.provide(
+      Layer.merge(
+        Layer.effect(
+          GentPlatform,
+          Effect.gen(function* () {
+            const platform = yield* GentPlatform
+            return GentPlatform.of({
+              ...platform,
+              execPath: Effect.succeed(executable),
+              build: Effect.succeed(build),
+            })
+          }),
+        ).pipe(Layer.provide(BunGentPlatformLive)),
+        FetchHttpClient.layer,
+      ),
+    ),
+  )
+
+type GentBuild = Effect.Success<GentPlatform["Service"]["build"]>
+
+const compiled = (version: string): GentBuild => ({ _tag: "Compiled", id: "4f9c2e1a", version })
+
+/** A scratch home where install.sh installed each of `versions`, in order. */
+const installedHome = (releases: string, versions: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const home = yield* makeTempDirectoryScoped("gent-upgrade-home-")
+    for (const version of versions) {
+      const installed = yield* install(home, releases, ["--version", version, "--no-modify-path"])
+      expect(installed.exitCode).toBe(0)
+    }
+    return home
+  })
+
+/** The real path of the gent of `version` in the install under `home`. */
+const installedGent = (home: string, version: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    return yield* fs.realPath(path.join((yield* layout(home)).root, "versions", version, "gent"))
+  })
+
+const threeReleases = Effect.gen(function* () {
+  return yield* serveReleases(
+    new Map([
+      ["1.1.0", yield* makeRelease("1.1.0")],
+      ["1.2.0", yield* makeRelease("1.2.0")],
+      ["1.3.0", yield* makeRelease("1.3.0")],
+    ]),
+    "1.3.0",
+  )
+})
+
+describe("gent upgrade", () => {
+  it.scopedLive("moves an install to the latest release and keeps the version it replaces", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      const releases = yield* threeReleases
+      const home = yield* installedHome(releases, ["1.1.0", "1.2.0"])
+      const before = yield* layout(home)
+
+      const outcome = yield* upgradeAs(
+        yield* installedGent(home, "1.2.0"),
+        compiled("1.2.0"),
+        releases,
+      )
+      expect(outcome).toEqual({
+        _tag: "Upgraded",
+        from: "1.2.0",
+        to: "1.3.0",
+        directory: path.join(before.root, "versions", "1.3.0"),
+      })
+      const after = yield* layout(home)
+      expect(after).toEqual({
+        root: before.root,
+        versions: ["1.2.0", "1.3.0"],
+        current: Option.some("versions/1.3.0/gent"),
+        bin: before.bin,
+      })
+      const ran = yield* runProcess(path.join(home, ".local", "bin", "gent"), ["--version"])
+      expect(ran.stdout.trim()).toBe("gent v1.3.0")
+      expect(formatUpgradeOutcome(outcome).split("\n").at(-1)).toBe(
+        "A gent of v1.2.0 that still runs keeps its server: close it, or run `gent server stop`, before you start v1.3.0.",
+      )
+    }).pipe(Effect.timeout("60 seconds"), Effect.provide(services)),
+  )
+
+  it.scopedLive("installs a pinned version, and the latest when it runs says so", () =>
+    Effect.gen(function* () {
+      const releases = yield* threeReleases
+      const home = yield* installedHome(releases, ["1.3.0"])
+      const pinned = yield* upgradeAs(
+        yield* installedGent(home, "1.3.0"),
+        compiled("1.3.0"),
+        releases,
+        Option.some("v1.1.0"),
+      )
+      expect(pinned._tag).toBe("Upgraded")
+      expect((yield* layout(home)).versions).toEqual(["1.1.0", "1.3.0"])
+
+      const latest = yield* upgradeAs(
+        yield* installedGent(home, "1.3.0"),
+        compiled("1.3.0"),
+        releases,
+      )
+      expect(latest).toEqual({ _tag: "Current", version: "1.3.0" })
+      expect(formatUpgradeOutcome(latest)).toBe("Already at gent v1.3.0.")
+    }).pipe(Effect.timeout("60 seconds"), Effect.provide(services)),
+  )
+
+  it.scopedLive("an archive that does not match SHA256SUMS changes nothing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const good = yield* serveReleases(new Map([["1.2.0", yield* makeRelease("1.2.0")]]), "1.2.0")
+      const home = yield* installedHome(good, ["1.2.0"])
+      const tampered = yield* serveReleases(
+        new Map([["1.3.0", yield* makeRelease("1.3.0", { tampered: true })]]),
+        "1.3.0",
+      )
+      const before = yield* layout(home)
+      const error = yield* upgradeAs(
+        yield* installedGent(home, "1.2.0"),
+        compiled("1.2.0"),
+        tampered,
+      ).pipe(Effect.flip)
+      expect(error.message).toContain("does not match the SHA256SUMS of v1.3.0")
+      expect(yield* layout(home)).toEqual(before)
+      // The work directory went with the scope.
+      expect([...(yield* fs.readDirectory(path.join(before.root, "versions")))]).toEqual(["1.2.0"])
+    }).pipe(Effect.timeout("60 seconds"), Effect.provide(services)),
+  )
+
+  it.scopedLive("a gent inside node_modules is left to its package manager", () =>
+    Effect.gen(function* () {
+      const executable = "/nonexistent/loop-probe-x/node_modules/@gent/linux-x64/bin/gent"
+      const outcome = yield* upgradeAs(executable, compiled("1.2.0"), "http://127.0.0.1:9/releases")
+      expect(outcome).toEqual({ _tag: "PackageManager", executable })
+      expect(formatUpgradeOutcome(outcome)).toContain("upgrade it with that package manager")
+    }).pipe(Effect.timeout("30 seconds"), Effect.provide(services)),
+  )
+
+  it.scopedLive("a source run and a gent outside an install are refused", () =>
+    Effect.gen(function* () {
+      const nowhere = "http://127.0.0.1:9/releases"
+      const source = yield* upgradeAs(
+        "/nonexistent/loop-probe-x/bun",
+        { _tag: "Source" },
+        nowhere,
+      ).pipe(Effect.flip)
+      expect(source.message).toContain("this gent runs from a source checkout")
+      const elsewhere = yield* upgradeAs(
+        "/nonexistent/loop-probe-x/bin/gent",
+        compiled("1.2.0"),
+        nowhere,
+      ).pipe(Effect.flip)
+      expect(elsewhere.message).toContain(
+        "this one runs from /nonexistent/loop-probe-x/bin/gent. Install a release with: curl -fsSL https://gent.cvr.im/install.sh | sh",
+      )
+    }).pipe(Effect.timeout("30 seconds"), Effect.provide(services)),
   )
 })
