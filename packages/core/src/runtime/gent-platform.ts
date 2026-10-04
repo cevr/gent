@@ -17,6 +17,7 @@ import {
   Stream,
 } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
+import { HttpClient } from "effect/http"
 import { causeMessage } from "../domain/guards.js"
 
 // ── gent-platform ───────────────────────────────────────────────────────────
@@ -251,14 +252,15 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
 
 /**
  * The platform services an extension yields directly, in `setup` and in every
- * leaf: files, paths, processes, random bytes, and gent's own platform (the
- * image codec's owner). Every root provides them once.
+ * leaf: files, paths, processes, random bytes, HTTP, and gent's own platform
+ * (the image codec's owner). Every root provides them once.
  */
 export type ExtensionPlatformServices =
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
+  | HttpClient.HttpClient
   | GentPlatform
 
 /**
@@ -279,6 +281,7 @@ export const extensionPlatformServicesLive: Layer.Layer<
     Effect.service(ChildProcessSpawner.ChildProcessSpawner),
   ),
   Layer.effect(Crypto.Crypto, Effect.service(Crypto.Crypto)),
+  Layer.effect(HttpClient.HttpClient, Effect.service(HttpClient.HttpClient)),
   Layer.effect(GentPlatform, Effect.service(GentPlatform)),
 )
 

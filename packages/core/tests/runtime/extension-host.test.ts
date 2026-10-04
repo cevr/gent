@@ -2575,7 +2575,13 @@ const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
 )
 
 const fsLayer = Layer.provideMerge(
-  Layer.mergeAll(BunFileSystem.layer, Path.layer, BunCrypto.layer, BunGentPlatformLive),
+  Layer.mergeAll(
+    BunFileSystem.layer,
+    Path.layer,
+    BunCrypto.layer,
+    EffectHttpEntry.FetchHttpClient.layer,
+    BunGentPlatformLive,
+  ),
   childProcessSpawnerLive,
 )
 

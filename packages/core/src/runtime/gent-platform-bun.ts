@@ -21,6 +21,7 @@ import * as path from "node:path"
 import { Effect, Layer, Match, Option, Predicate, Result, Schema } from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
+import { FetchHttpClient } from "effect/http"
 import {
   GentBuild,
   GentPlatform,
@@ -271,12 +272,19 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
 /**
  * The complete Bun-runtime platform stack: `@effect/platform-bun`
- * (FileSystem, Path, ChildProcessSpawner, …) bundled with the gent-owned
- * `BunGentPlatformLive`. Production wiring and test harnesses both yield
- * this single Layer so they can't drift on which BunService stack they
- * pull in.
+ * (FileSystem, Path, ChildProcessSpawner, …) and the fetch `HttpClient`,
+ * bundled with the gent-owned `BunGentPlatformLive`. Production wiring and
+ * test harnesses both yield this single Layer so they can't drift on which
+ * BunService stack they pull in.
  *
  * Note: this is an output-context bundle (`Layer.merge`), not a dependency
  * wiring — each member either has no requirements or is given its own.
  */
-export const BunPlatformLive = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
+export const BunPlatformLive = Layer.mergeAll(
+  BunServices.layer,
+  // Fresh: `FetchHttpClient.layer` captures the `Fetch` of the context it is
+  // built in, and a shared build would hand this one to a model client built
+  // later over its own `Fetch`.
+  Layer.fresh(FetchHttpClient.layer),
+  BunGentPlatformLive,
+)

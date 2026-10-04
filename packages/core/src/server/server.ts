@@ -2112,7 +2112,6 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
       FileLockService.layer,
       AgentLoopSessionGovernance.Live,
       ...Option.getOrElse(Option.fromUndefinedOr(config.overrides?.extraLayers), () => []),
-      FetchHttpClient.layer,
     ),
     launchProfile,
   )
