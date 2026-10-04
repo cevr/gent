@@ -1191,6 +1191,93 @@ describe("ask_user_async", () => {
     10_000,
   )
 
+  // The state a failed send leaves: an answer recorded and never sent. It is
+  // hidden from the reader, so no second answer comes; recovery sends it.
+  it.live(
+    "an answer recorded but never sent reaches the model at the next questions.open",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("ask_user_async", twoQuestions, { toolCallId: ToolCallId.make("ask-u") }),
+            textStep("Using the defaults for now."),
+            textStep("Switching the cache."),
+          ])
+          const harness = yield* questionsHarness(providerLayer)
+          yield* harness.client.message.send({ ...harness.target, content: "add a cache" })
+          yield* waitFor(
+            harness.snapshot,
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              lastAssistantText(current.messages) === "Using the defaults for now.",
+            5_000,
+            "the first turn answered",
+          )
+          const fs = yield* FileSystem.FileSystem
+          const file = `${harness.home}/.gent/questions/${harness.branchId}.json`
+          const opened = yield* harness.open
+          const [cache, db] = Option.getOrThrow(
+            Option.all([Option.fromUndefinedOr(opened[0]), Option.fromUndefinedOr(opened[1])]),
+          )
+          yield* fs.writeFileString(
+            file,
+            encodeRows([
+              { ...cache, answered: { answer: "Redis", batch: "question-answer:unsent" } },
+              db,
+            ]),
+          )
+          expect((yield* harness.open).map((row) => row.id)).toEqual(["ask-u:1"])
+          const answered = yield* waitFor(
+            harness.snapshot,
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              lastAssistantText(current.messages) === "Switching the cache.",
+            5_000,
+            "the recorded answer reached the model",
+          )
+          expect(answersTo(answered.messages, "ask-u:0")).toEqual(["Redis"])
+        }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunFileSystem.layer)),
+      ),
+    10_000,
+  )
+
+  // A restart between the record and the send: the branch's loop opens in a
+  // new process with the answer recorded. It goes with no user action.
+  it.live(
+    "an answer recorded but never sent reaches the model when the branch's loop opens",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("Switching the cache to Redis."),
+          ])
+          const harness = yield* questionsHarness(providerLayer)
+          const fs = yield* FileSystem.FileSystem
+          const directory = `${harness.home}/.gent/questions`
+          yield* fs.makeDirectory(directory, { recursive: true })
+          yield* fs.writeFileString(
+            `${directory}/${harness.branchId}.json`,
+            encodeRows([
+              {
+                ...askedRow("ask-r:0", "Which cache backend do you want in production?"),
+                answered: { answer: "Redis", batch: "question-answer:restart" },
+              },
+            ]),
+          )
+          const answered = yield* waitFor(
+            harness.snapshot,
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              lastAssistantText(current.messages) === "Switching the cache to Redis.",
+            5_000,
+            "the recorded answer reached the model",
+          )
+          expect(answersTo(answered.messages, "ask-r:0")).toEqual(["Redis"])
+        }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunFileSystem.layer)),
+      ),
+    10_000,
+  )
+
   // The state a failed removal leaves: an answer recorded, and maybe sent,
   // whose row is still in the file. The recorded answer is the one that goes,
   // and a batch sent again under its request id reaches the model once.

@@ -1,4 +1,5 @@
 import {
+  Cause,
   Clock,
   Crypto,
   DateTime,
@@ -572,47 +573,15 @@ const AnswerQuestionsResult = Schema.Struct({
 })
 
 /**
- * Answers and dismisses in two steps, each under the branch file's lock.
- *
- * 1. Record: an answer to a question that has none is written to its row,
- *    with the batch it goes in, before anything is sent. A recorded answer
- *    never changes, so the first one wins: a retry that answers it again, or
- *    answers fewer questions, adds nothing. A dismissed open row goes.
- * 2. Send: every batch the file holds goes as one steer under its request id,
- *    then its rows leave the file. A batch a failed removal left behind goes
- *    again with the same request id, and the session sends nothing new.
- *
- * An id that is not open (answered already, dismissed, or dropped past the
- * cap) is skipped.
+ * Sends every batch of recorded answers the branch file holds, each as one
+ * steer under its stored request id, then removes its rows; reports whether
+ * any batch went. A batch a failed send or a failed removal left behind goes
+ * again with the same request id, and the session sends nothing new, so this
+ * runs wherever an earlier step may have stopped short: after each record,
+ * at each `questions.open`, and when the branch's loop opens (a restart).
  */
-const answerQuestions = Effect.fn("QuestionsRpc.answer")(function* (
-  input: typeof AnswerQuestionsInput.Type,
-) {
+const sendRecordedAnswers = Effect.fn("QuestionsRpc.sendRecorded")(function* () {
   const ctx = yield* ExtensionContext
-  const dismiss = new Set(input.dismiss ?? [])
-  const recorded = yield* questionStore.modify((rows) =>
-    Effect.gen(function* () {
-      const open = new Map(openRows(rows).map((row) => [row.id, row]))
-      const fresh = new Map<string, string>()
-      for (const { id, answer } of input.answers) {
-        if (open.has(id) && !fresh.has(id)) fresh.set(id, answer)
-      }
-      const dismissed = [...open.keys()].filter((id) => dismiss.has(id) && !fresh.has(id))
-      if (fresh.size === 0 && dismissed.length === 0) {
-        return { next: rows, result: { answered: [], dismissed } }
-      }
-      const batch = yield* answerRequestId([...fresh.keys()])
-      const next = rows
-        .filter((row) => !dismissed.includes(row.id))
-        .map((row): QuestionRow =>
-          Option.match(Option.fromUndefinedOr(fresh.get(row.id)), {
-            onNone: () => row,
-            onSome: (answer) => ({ ...row, answered: { answer, batch } }),
-          }),
-        )
-      return { next, result: { answered: [...fresh.keys()], dismissed } }
-    }),
-  )
   const sent = yield* questionStore.modify((rows) =>
     Effect.gen(function* () {
       const batches = new Map<
@@ -649,7 +618,53 @@ const answerQuestions = Effect.fn("QuestionsRpc.answer")(function* (
       return { next: rows.filter((row) => !isAnswered(row)), result: true }
     }),
   )
-  if (recorded.dismissed.length > 0 || sent) yield* ctx.State.changed()
+  if (sent) yield* ctx.State.changed()
+  return sent
+})
+
+/**
+ * Answers and dismisses in two steps, each under the branch file's lock.
+ *
+ * 1. Record: an answer to a question that has none is written to its row,
+ *    with the batch it goes in, before anything is sent. A recorded answer
+ *    never changes, so the first one wins: a retry that answers it again, or
+ *    answers fewer questions, adds nothing. A dismissed open row goes.
+ * 2. Send: every batch the file holds goes as one steer under its request id,
+ *    then its rows leave the file (`sendRecordedAnswers`).
+ *
+ * An id that is not open (answered already, dismissed, or dropped past the
+ * cap) is skipped.
+ */
+const answerQuestions = Effect.fn("QuestionsRpc.answer")(function* (
+  input: typeof AnswerQuestionsInput.Type,
+) {
+  const ctx = yield* ExtensionContext
+  const dismiss = new Set(input.dismiss ?? [])
+  const recorded = yield* questionStore.modify((rows) =>
+    Effect.gen(function* () {
+      const open = new Map(openRows(rows).map((row) => [row.id, row]))
+      const fresh = new Map<string, string>()
+      for (const { id, answer } of input.answers) {
+        if (open.has(id) && !fresh.has(id)) fresh.set(id, answer)
+      }
+      const dismissed = [...open.keys()].filter((id) => dismiss.has(id) && !fresh.has(id))
+      if (fresh.size === 0 && dismissed.length === 0) {
+        return { next: rows, result: { answered: [], dismissed } }
+      }
+      const batch = yield* answerRequestId([...fresh.keys()])
+      const next = rows
+        .filter((row) => !dismissed.includes(row.id))
+        .map((row): QuestionRow =>
+          Option.match(Option.fromUndefinedOr(fresh.get(row.id)), {
+            onNone: () => row,
+            onSome: (answer) => ({ ...row, answered: { answer, batch } }),
+          }),
+        )
+      return { next, result: { answered: [...fresh.keys()], dismissed } }
+    }),
+  )
+  const sent = yield* sendRecordedAnswers()
+  if (recorded.dismissed.length > 0 && !sent) yield* ctx.State.changed()
   return recorded
 })
 
@@ -660,7 +675,13 @@ export const QuestionsRpc = defineRequests(INTERACTION_TOOLS_EXTENSION_ID, {
     answersDuringTurn: true,
     input: Schema.Struct({}),
     output: OpenQuestions,
-    execute: () => questionStore.read().pipe(Effect.map((rows) => ({ questions: openRows(rows) }))),
+    // An answer recorded and not yet sent goes first: the reader no longer
+    // sees its question, so nothing else would send it.
+    execute: () =>
+      sendRecordedAnswers().pipe(
+        Effect.andThen(questionStore.read()),
+        Effect.map((rows) => ({ questions: openRows(rows) })),
+      ),
   }),
   Answer: request({
     id: "questions.answer",
@@ -682,5 +703,17 @@ export const InteractionToolsExtension = defineExtension({
     yield* host.register("tool", AskUserTool, PromptTool, HandoffTool, AskUserAsyncTool)
     yield* host.register("request", QuestionsRpc.Open, QuestionsRpc.Answer)
     yield* host.on("sessionDeleted", ({ branchIds }) => questionStore.removeBranches(branchIds))
+    // A restart between an answer's record and its send leaves it in the
+    // file, hidden from the reader: the branch's loop open sends it.
+    yield* host.on("loopOpen", () =>
+      sendRecordedAnswers().pipe(
+        Effect.asVoid,
+        Effect.catchCause((cause) =>
+          Effect.logWarning("questions.recorded.send.failed").pipe(
+            Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+          ),
+        ),
+      ),
+    )
   }),
 })
