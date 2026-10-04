@@ -889,6 +889,17 @@ describe("formatActivityHeader", () => {
     expect(formatActivityHeader(calls, 50)).toBe("6 tools · 3 read · 1 search · 1 failed · 9.7s")
     expect(formatActivityHeader(calls, 10)).toBe("6 tools · 1 failed · 9.7s")
   })
+
+  test("thoughts count after the kinds, and a narrow header drops them first", () => {
+    const calls = [cell([op("read", "a"), op("bash", "t", "failed")])]
+    expect(formatActivityHeader(calls, Number.POSITIVE_INFINITY, 1)).toBe(
+      "2 tools · 1 read · 1 command · 1 thought · 1 failed",
+    )
+    expect(formatActivityHeader(calls, Number.POSITIVE_INFINITY, 6)).toBe(
+      "2 tools · 1 read · 1 command · 6 thoughts · 1 failed",
+    )
+    expect(formatActivityHeader(calls, 40, 6)).toBe("2 tools · 1 read · 1 command · 1 failed")
+  })
 })
 
 describe("activity rows", () => {

@@ -5795,24 +5795,30 @@ describe("tool runs across steps", () => {
     }),
   )
 
-  it.scopedLive("reasoning between steps stays in the run and shows at the full level", () =>
-    Effect.gen(function* () {
-      const items: SessionItem[] = [
-        step("r1", ["git status"], { before: [reasoning("FIRST-THOUGHT")] }),
-        step("r2", ["bun test"], { before: [reasoning("SECOND-THOUGHT"), text("  ")] }),
-      ]
-      const collapsed = yield* draw(items, "collapsed")
-      expect(headers(collapsed)).toEqual(["● 2 tools · 2 commands"])
-      // The thought before the run draws as before; the one inside it waits for the full level.
-      expect(collapsed).toContain("FIRST-THOUGHT")
-      expect(collapsed).not.toContain("SECOND-THOUGHT")
-      const full = yield* draw(items, "full")
-      const lines = full.split("\n")
-      const thought = lines.findIndex((line) => line.includes("SECOND-THOUGHT"))
-      const secondRow = lines.findIndex((line) => line.includes("└ cell"))
-      expect(thought).toBeGreaterThan(lines.findIndex((line) => line.includes("├ cell")))
-      expect(secondRow).toBeGreaterThan(thought)
-    }),
+  it.scopedLive(
+    "reasoning before and between a run's steps counts in its header and opens at full",
+    () =>
+      Effect.gen(function* () {
+        const items: SessionItem[] = [
+          step("r1", ["git status"], { before: [reasoning("FIRST-THOUGHT")] }),
+          step("r2", ["bun test"], { before: [reasoning("SECOND-THOUGHT"), text("  ")] }),
+        ]
+        for (const disclosure of ["collapsed", "preview"] as const) {
+          const frame = yield* draw(items, disclosure)
+          expect(headers(frame)).toEqual(["● 2 tools · 2 commands · 2 thoughts"])
+          expect(frame).not.toContain("THOUGHT")
+        }
+        const full = yield* draw(items, "full")
+        const lines = full.split("\n")
+        const first = lines.findIndex((line) => line.includes("FIRST-THOUGHT"))
+        const thought = lines.findIndex((line) => line.includes("SECOND-THOUGHT"))
+        const firstRow = lines.findIndex((line) => line.includes("├ cell"))
+        const secondRow = lines.findIndex((line) => line.includes("└ cell"))
+        expect(first).toBeLessThan(firstRow)
+        expect(first).toBeGreaterThan(lines.findIndex((line) => line.includes("● 2 tools")))
+        expect(thought).toBeGreaterThan(firstRow)
+        expect(secondRow).toBeGreaterThan(thought)
+      }),
   )
 
   it.scopedLive("a run's rows clip to one line each at 60 columns", () =>
@@ -5885,9 +5891,12 @@ describe("tool runs across steps", () => {
         const committedText: string[] = []
         const setup = yield* renderScoped(
           () => (
+            // At the full level the reasoning draws whole, so its rows push
+            // the earlier items to history while the run is open.
             <Transcript
               items={items()}
               streaming={true}
+              disclosure="full"
               onRenderer={(renderer) => {
                 renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
                   committedText.push(committedTextOf(event))
@@ -6224,5 +6233,159 @@ describe("collapse ladder", () => {
         ])
       }
     }),
+  )
+
+  // ── reasoning ──
+
+  const thinkingOnly = (id: string, content: string): ListMessage => ({
+    ...assistant(id, ""),
+    reasoning: content,
+    segments: [{ _tag: "reasoning", content }],
+  })
+
+  it.scopedLive(
+    "a run counts the reasoning before, inside and after it as thoughts, at 120 and 60",
+    () =>
+      Effect.gen(function* () {
+        const wide = yield* draw(debugTurn(), "collapsed", 120)
+        expect(lines(wide)).toContain(
+          "  ● 7 tools · 3 read · 2 commands · 1 search · 1 edit · 6 thoughts · 1 failed",
+        )
+        // The run took the thought before its first call and the one before the answer.
+        expect(wide).not.toContain("Set up a scratch fixture")
+        expect(wide).not.toContain("Summarize.")
+        expect(wide).not.toContain("∴")
+        expect(wide).toContain("The check for d.ts failed: it does not exist yet.")
+        const narrow = yield* draw(debugTurn(), "collapsed", 60)
+        // The thoughts count is the first part a narrow header drops.
+        const [header = ""] = lines(narrow).filter((line) => line.includes("● 7 tools"))
+        expect(header).not.toContain("thought")
+        expect(header).toContain("· 1 failed")
+        expect(header.length).toBeLessThanOrEqual(59)
+      }),
+  )
+
+  it.scopedLive("the full level draws a run's thoughts where they came: first, between, last", () =>
+    Effect.gen(function* () {
+      const full = lines(yield* draw(debugTurn(), "full", 120))
+      const at = (text: string) => full.findIndex((line) => line.includes(text))
+      expect(at("● 7 tools")).toBeLessThan(at("Set up a scratch fixture"))
+      expect(at("Set up a scratch fixture")).toBeLessThan(at("Read the three files"))
+      expect(at("Check for the file")).toBeLessThan(at("Summarize."))
+      expect(at("Summarize.")).toBeLessThan(at("The check for d.ts failed"))
+      expect(full.filter((line) => line.includes("Summarize."))).toHaveLength(1)
+    }),
+  )
+
+  it.scopedLive(
+    "reasoning with no call is one line at collapsed and preview, and its markdown at full",
+    () =>
+      Effect.gen(function* () {
+        const reasoningText =
+          "**Verifying final test output****Refactoring LedgerStore.list****Checking the lint**"
+        const items: SessionItem[] = [
+          clientPrompt("thought-prompt", "check it"),
+          {
+            ...assistant("thought-answer", "All green."),
+            reasoning: reasoningText,
+            segments: [
+              { _tag: "reasoning", content: reasoningText },
+              { _tag: "text", content: "All green." },
+            ],
+          },
+        ]
+        for (const disclosure of ["collapsed", "preview"] as const) {
+          const wide = yield* draw(items, disclosure, 120)
+          expect(lines(wide)).toContain("  ∴ Thought · Verifying final test output · 3 summaries")
+          expect(wide).not.toContain("Refactoring")
+          const narrow = yield* draw(items, disclosure, 30)
+          const [line = ""] = lines(narrow).filter((value) => value.includes("∴"))
+          expect(line).toBe("  ∴ Thought · Verifying fina…")
+        }
+        const full = yield* draw(items, "full", 120)
+        expect(full).toContain("Refactoring LedgerStore.list")
+        expect(full).not.toContain("∴")
+      }),
+  )
+
+  it.scopedLive("a run takes no reasoning from an earlier message, nor any a turn end leaves", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        clientPrompt("held-prompt", "debug tools"),
+        thinkingOnly("held-before", "EARLIER-THOUGHT"),
+        cellStep("held-step", "", [
+          op("held-op", "bash", { command: "ls" }, bashOutput("x\n", "", 0)),
+        ]),
+        thinkingOnly("held-after", "TRAILING-THOUGHT"),
+      ]
+      const frame = lines(yield* draw(items, "collapsed", 120))
+      expect(frame).toContain("  ● 1 tool · 1 command")
+      expect(frame).toContain("  ∴ Thought · EARLIER-THOUGHT")
+      expect(frame).toContain("  ∴ Thought · TRAILING-THOUGHT")
+    }),
+  )
+
+  it.scopedLive(
+    "native history takes a run with its closing thought once, after the stored answer",
+    () =>
+      Effect.gen(function* () {
+        const prompt = clientPrompt("closing-prompt", "RUN-PROMPT")
+        const answer: ListMessage = {
+          ...assistant("closing-answer", longBody("ANSWER")),
+          reasoning: "CLOSING-THOUGHT",
+          segments: [
+            { _tag: "reasoning", content: "CLOSING-THOUGHT" },
+            { _tag: "text", content: longBody("ANSWER") },
+          ],
+        }
+        const steps = [
+          cellStep("closing-1", "LEADING-THOUGHT", [
+            op("closing-op-1", "bash", { command: "git status" }, bashOutput("ok\n", "", 0)),
+          ]),
+          cellStep("closing-2", "MIDDLE-THOUGHT", [
+            op("closing-op-2", "bash", { command: "bun test" }, bashOutput("ok\n", "", 0)),
+          ]),
+        ]
+        const [items, setItems] = createSignal<ListMessage[]>([
+          assistant("closing-earlier", longBody("EARLIER")),
+          prompt,
+          ...steps,
+          { ...answer, draft: true },
+        ])
+        const committed: string[] = []
+        const setup = yield* renderScoped(
+          () => (
+            <Transcript
+              items={items()}
+              streaming={true}
+              onRenderer={(renderer) => {
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committed.push(committedTextOf(event))
+                })
+              }}
+            />
+          ),
+          { width: 60, height: 14 },
+        )
+        const flushUntil = (done: () => boolean) =>
+          Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({ until: done, schedule: Schedule.spaced("10 millis") }),
+            Effect.timeout("3 seconds"),
+            Effect.ignore,
+          )
+        // The streamed answer ended the run, but its reasoning is the run's
+        // closing thought: the head waits for the stored answer.
+        yield* flushUntil(() => committed.join("").includes("RUN-PROMPT"))
+        yield* flushUntil(() => false).pipe(Effect.timeout("300 millis"), Effect.ignore)
+        expect(committed.join("")).toContain("RUN-PROMPT")
+        expect(committed.join("")).not.toContain("tools")
+        setItems([assistant("closing-earlier", longBody("EARLIER")), prompt, ...steps, answer])
+        yield* flushUntil(() => committed.join("").includes("● 2 tools"))
+        const history = committed.join("")
+        expect(history.match(/● \d+ tools?/g)).toEqual(["● 2 tools"])
+        expect(history).toContain("● 2 tools · 2 commands · 3 thoughts")
+        expect(history).not.toContain("THOUGHT")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 })

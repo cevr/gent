@@ -975,13 +975,15 @@ const TOOL_KINDS: ReadonlyMap<string, readonly [string, string]> = new Map([
 /**
  * Header for a group of calls: `7 tools · 4 read · 2 edit · 1 command ·
  * 1 failed · 4.2s`. Kinds go largest first, ties in the order they ran. A
- * cell with no ops names its source's verbs in place of a kind. Where the
- * header is wider than `width` columns, kinds drop from the right first: the
- * tool count, the failures and the time stay.
+ * cell with no ops names its source's verbs in place of a kind, and
+ * `thoughts` counts the reasoning the run took after the kinds. Where the
+ * header is wider than `width` columns, parts drop from the right first (the
+ * thoughts, then the kinds): the tool count, the failures and the time stay.
  */
 export function formatActivityHeader(
   calls: ReadonlyArray<ActivityCall>,
   width = Number.POSITIVE_INFINITY,
+  thoughts = 0,
 ): string {
   if (calls.length === 0) return ""
   const entries = activityEntries(calls)
@@ -1002,7 +1004,9 @@ export function formatActivityHeader(
   const counted = Array.from(kinds.values())
     .toSorted((left, right) => right.count - left.count)
     .map(({ count, words }) => `${count} ${countNoun(count, words[0], words[1])}`)
+  // The thoughts count is the last optional part, so a narrow header drops it first.
   const optional = [...counted, ...verbs.slice(0, 4)]
+  if (thoughts > 0) optional.push(plural(thoughts, "thought"))
   const failed = entries.filter((entry) => isFailedOp(entry.operation)).length
   const tail: string[] = []
   if (failed > 0) tail.push(`${failed} failed`)

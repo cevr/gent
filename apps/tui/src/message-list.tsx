@@ -21,6 +21,7 @@ import {
   truncate,
   workingIconFrame,
 } from "./utils"
+import { textWidth } from "./bun-adapter"
 import {
   type Cause,
   DateTime,
@@ -131,6 +132,27 @@ export const reasoningMarkdown = (reasoning: string): string => {
     .map((summary) => summary.trim())
     .filter((summary) => summary.length > 0)
     .join("\n\n")
+}
+
+/**
+ * Reasoning at the collapsed and preview levels, in one line:
+ * `∴ Thought · <first summary's heading> · N summaries`. Where the line is
+ * wider than `width` columns, the count drops first, then the heading is cut.
+ */
+const formatThoughtLine = (reasoning: string, width = Number.POSITIVE_INFINITY): string => {
+  const summaries = reasoningMarkdown(reasoning)
+    .split("\n\n")
+    .filter((summary) => summary.length > 0)
+  const first = (summaries[0] ?? "").split("\n")[0] ?? ""
+  const heading = first
+    .replace(/^#+\s*/, "")
+    .replace(/^\*\*(.*)\*\*$/, "$1")
+    .trim()
+  let line = "∴ Thought"
+  if (heading.length > 0) line = `${line} · ${heading}`
+  const count = ` · ${plural(summaries.length, "summary", "summaries")}`
+  if (summaries.length > 1 && textWidth(line + count) <= width) return line + count
+  return truncate(line, width)
 }
 
 // ── session event labels ────────────────────────────────────────────────────
@@ -513,12 +535,17 @@ const ANSWER_INDENT = 2
 /**
  * A run of tool calls: what one group header draws. As in fx, a run spans the
  * steps of a turn. Reasoning and blank text between its calls do not end it;
- * answer text, an image, a user message, a session row, or an ask does.
+ * answer text, an image, a user message, a session row, or an ask does. As in
+ * opencode's activity line, the run also takes the reasoning just before its
+ * first call (from that call's own message) and the reasoning just before the
+ * text that ends it, and its header counts them all as thoughts.
  */
 interface ToolRun {
   readonly calls: ReadonlyArray<ToolCall>
-  /** The reasoning the run took from between its calls, by the id of the call it came before. */
+  /** The reasoning the run took before its calls, by the id of the call it came before. */
   readonly reasoning: ReadonlyMap<string, ReadonlyArray<string>>
+  /** The reasoning the run took from before the text that ended it. */
+  readonly closing: ReadonlyArray<string>
   /** Nothing after the run has ended it yet: another step may join it. */
   readonly open: boolean
   /** A step the run took is still a streamed answer (a `draft`) that its stored answer replaces. */
@@ -549,9 +576,23 @@ interface RunDraft {
   readonly headMessage: string
   readonly calls: ToolCall[]
   readonly reasoning: Map<string, ReadonlyArray<string>>
-  /** Reasoning and blank text since the last call: the run takes them only if another call joins. */
-  readonly held: { keys: string[]; reasoning: string[] }
+  closing: ReadonlyArray<string>
+  /**
+   * Reasoning and blank text since the last call: the run takes them only if
+   * another call joins, or answer text ends the run. `streamed` marks one held
+   * from a streamed answer.
+   */
+  readonly held: Passing
 }
+
+/** Reasoning and blank text segments in a row, with the keys of the segments. */
+interface Passing {
+  keys: string[]
+  reasoning: string[]
+  streamed: boolean
+}
+
+const noPassing = (): Passing => ({ keys: [], reasoning: [], streamed: false })
 
 /** A run while the walk may still change it. */
 interface RunState {
@@ -576,6 +617,10 @@ const projectToolRuns = (
   const drafts: RunState[] = []
   const absorbed = new Set<string>()
   let current = Option.none<RunState>()
+  // Reasoning and blank text in this message with no run open: a call in the
+  // same message starts a run that takes them. Only the same message: an
+  // earlier one may already be in history, and taking from it would change it.
+  let prelude = noPassing()
   // Whatever ends a run ends it for good: no later call joins it.
   const close = () => {
     Option.map(current, (entry) => {
@@ -588,21 +633,33 @@ const projectToolRuns = (
       onSome: (entry) => joinRun(entry, call, key, absorbed, message.draft === true),
       onNone: () => {
         const entry = startRun(call, key, message.id)
+        takeHeld(entry, prelude, call.id, absorbed)
         drafts.push(entry)
         current = Option.some(entry)
       },
     })
+    prelude = noPassing()
     if (asksReader(call)) close()
   }
   const takeSegment = (message: StepMessage, segment: AssistantSegment, index: number) => {
     const key = segmentKey(message.id, index)
+    const streamed = message.draft === true
     if (segment._tag === "tool-call") return takeCall(message, segment.toolCall, key)
-    if (acrossSteps && passesRun(segment) && Option.isSome(current)) {
-      return holdSegment(current.value, segment, key)
+    if (acrossSteps && passesRun(segment)) {
+      return Option.match(current, {
+        onSome: (entry) => holdSegment(entry.draft.held, segment, key, streamed),
+        onNone: () => holdSegment(prelude, segment, key, streamed),
+      })
     }
+    // Answer text ends the run, which takes the reasoning given just before it.
+    if (acrossSteps && segment._tag === "text") {
+      Option.map(current, (entry) => takeClosing(entry, streamed, absorbed))
+    }
+    prelude = noPassing()
     close()
   }
   for (const item of items) {
+    prelude = noPassing()
     if (waitsInPlace(item)) continue
     if (!isMessageItem(item) || item.role !== "assistant") {
       close()
@@ -639,11 +696,19 @@ const startRun = (call: ToolCall, key: string, messageId: string): RunState => (
     headMessage: messageId,
     calls: [call],
     reasoning: new Map<string, ReadonlyArray<string>>(),
-    held: { keys: [], reasoning: [] },
+    closing: [],
+    held: noPassing(),
   },
   open: true,
   streamed: false,
 })
+
+/** The run takes the passing segments: their keys draw at its head, their reasoning before `callId`. */
+const takeHeld = (entry: RunState, passing: Passing, callId: string, absorbed: Set<string>) => {
+  for (const key of passing.keys) absorbed.add(key)
+  if (passing.reasoning.length > 0) entry.draft.reasoning.set(callId, passing.reasoning)
+  if (passing.streamed) entry.streamed = true
+}
 
 /** A call joins the run, and the segments held since the last call go with it. */
 const joinRun = (
@@ -656,24 +721,49 @@ const joinRun = (
   const { draft } = entry
   draft.calls.push(call)
   absorbed.add(key)
-  for (const held of draft.held.keys) absorbed.add(held)
-  if (draft.held.reasoning.length > 0) draft.reasoning.set(call.id, draft.held.reasoning)
-  draft.held.keys = []
-  draft.held.reasoning = []
+  takeHeld(entry, draft.held, call.id, absorbed)
+  Object.assign(draft.held, noPassing())
   if (streamed) entry.streamed = true
 }
 
-/** A segment that passes the run waits: the run takes it only if another call joins. */
-const holdSegment = (entry: RunState, segment: AssistantSegment, key: string) => {
-  entry.draft.held.keys.push(key)
-  if (segment._tag === "reasoning") entry.draft.held.reasoning.push(segment.content)
+/**
+ * Answer text ends the run, and the run takes the reasoning held before it.
+ * The head waits for the run's end, so it takes them before history does;
+ * the run is streamed while the text or the reasoning is, so the head waits
+ * for the stored answer too.
+ */
+const takeClosing = (entry: RunState, streamed: boolean, absorbed: Set<string>) => {
+  const { held } = entry.draft
+  if (held.reasoning.length === 0) return
+  for (const key of held.keys) absorbed.add(key)
+  entry.draft.closing = held.reasoning
+  if (held.streamed || streamed) entry.streamed = true
+  Object.assign(held, noPassing())
+}
+
+/** A segment that passes the run waits: the run takes it only if a call or answer text comes next. */
+const holdSegment = (
+  passing: Passing,
+  segment: AssistantSegment,
+  key: string,
+  streamed: boolean,
+) => {
+  passing.keys.push(key)
+  if (segment._tag === "reasoning") passing.reasoning.push(segment.content)
+  if (streamed) passing.streamed = true
 }
 
 const toolRunsOf = (drafts: ReadonlyArray<RunState>, absorbed: ReadonlySet<string>): ToolRuns => {
   const heads = new Map<string, ToolRun>()
   const headedBy = new Map<string, ToolRun[]>()
   for (const { draft, open, streamed } of drafts) {
-    const run: ToolRun = { calls: draft.calls, reasoning: draft.reasoning, open, streamed }
+    const run: ToolRun = {
+      calls: draft.calls,
+      reasoning: draft.reasoning,
+      closing: draft.closing,
+      open,
+      streamed,
+    }
     heads.set(draft.head, run)
     headedBy.set(draft.headMessage, [...(headedBy.get(draft.headMessage) ?? []), run])
   }
@@ -905,8 +995,33 @@ function AssistantMessage(props: {
       return [{ segment, run: Option.fromUndefinedOr(props.runs.heads.get(key)) }]
     }),
   )
-  const reasoningMarkdownBlock = (content: string) => (
-    <box flexDirection="column" marginBottom={1}>
+  // Reasoning opens at the full level and in the transcript view; below
+  // that it is one line, as fx and Codex keep it out of the inline view.
+  const dimensions = useTerminalDimensions()
+  const thoughtWidth = () => dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN
+  const reasoningOpen = () => props.fullDetail || props.disclosure === "full"
+  // Reasoning parts itself from the block after it; the message's last block
+  // leaves the gap to the next message's own margin.
+  const reasoningBlock = (content: string, last: boolean) => (
+    <Show
+      when={reasoningOpen()}
+      fallback={
+        <box marginBottom={gapAfter(last)}>
+          <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+            {formatThoughtLine(content, thoughtWidth())}
+          </text>
+        </box>
+      }
+    >
+      {reasoningMarkdownBlock(content, last)}
+    </Show>
+  )
+  const gapAfter = (last: boolean) => {
+    if (last) return 0
+    return 1
+  }
+  const reasoningMarkdownBlock = (content: string, last = false) => (
+    <box flexDirection="column" marginBottom={gapAfter(last)}>
       <markdown
         syntaxStyle={props.syntaxStyle()}
         streaming
@@ -927,10 +1042,11 @@ function AssistantMessage(props: {
           draw either. */}
       <Show when={segments().length > 0}>
         <For each={drawnSegments()}>
-          {({ segment, run }) =>
+          {({ segment, run }, index) =>
             Match.value(segment).pipe(
               Match.tagsExhaustive({
-                reasoning: (segment) => reasoningMarkdownBlock(segment.content),
+                reasoning: (segment) =>
+                  reasoningBlock(segment.content, index() === drawnSegments().length - 1),
                 image: (segment) => (
                   <text style={{ fg: theme.info }}>
                     [Image: {segment.image.mediaType.replace("image/", "")}]
@@ -945,6 +1061,10 @@ function AssistantMessage(props: {
                     reasoning={Option.match(run, {
                       onNone: () => new Map<string, ReadonlyArray<string>>(),
                       onSome: (value) => value.reasoning,
+                    })}
+                    closing={Option.match(run, {
+                      onNone: () => [],
+                      onSome: (value) => value.closing,
                     })}
                     renderReasoning={reasoningMarkdownBlock}
                     runOpen={Option.exists(run, (value) => value.open)}
@@ -974,9 +1094,12 @@ function AssistantMessage(props: {
 
 function ToolCallGroup(props: {
   calls: ToolCall[]
-  /** Reasoning from between the run's steps, by the id of the call it came before: the full level draws it. */
+  /** Reasoning the run took, by the id of the call it came before: the full level draws it. */
   reasoning: ReadonlyMap<string, ReadonlyArray<string>>
-  renderReasoning: (content: string) => JSX.Element
+  /** Reasoning the run took from before the text that ended it: the full level draws it last. */
+  closing: ReadonlyArray<string>
+  /** Draws reasoning; `last` drops the gap after it, where the group's own block ends. */
+  renderReasoning: (content: string, last?: boolean) => JSX.Element
   /** A later step may still join the group's run, so its last call is not yet its last. */
   runOpen: boolean
   disclosure: DisclosureLevel
@@ -1008,7 +1131,12 @@ function ToolCallGroup(props: {
   // surface that draws the header or the rows (the live tail, a history
   // commit) keeps the terminal's last column free.
   const lineWidth = () => dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN - 2
-  const header = createMemo(() => formatActivityHeader(activity(), lineWidth()))
+  // Every reasoning segment the run took counts as a thought; one with no text is none.
+  const thoughts = () =>
+    [...props.closing, ...Array.from(props.reasoning.values()).flat()].filter(
+      (content) => content.trim().length > 0,
+    ).length
+  const header = createMemo(() => formatActivityHeader(activity(), lineWidth(), thoughts()))
   // The transcript view and the full level both open every row.
   const rowsOpen = () => props.fullDetail || props.disclosure === "full"
   // Collapsed draws one line under the header for each failure, so a failure
@@ -1175,6 +1303,15 @@ function ToolCallGroup(props: {
               )
             }}
           </For>
+          <Show when={props.closing.length > 0}>
+            <box flexDirection="column" marginTop={1}>
+              <For each={[...props.closing]}>
+                {(content, index) =>
+                  props.renderReasoning(content, index() === props.closing.length - 1)
+                }
+              </For>
+            </box>
+          </Show>
         </Show>
       </box>
     </Show>
@@ -1184,8 +1321,8 @@ function ToolCallGroup(props: {
 /**
  * A call's own output under its preview row, one line a row behind a `│ `
  * gutter, then the count of the lines left out and the key that shows them.
+ * `width` is the columns a line has after the gutter.
  */
-/** A row's output head under a `│` gutter; `width` is the columns a line has after the gutter. */
 function OutputHeadRows(props: { head: OutputHead; width: number }) {
   const { theme } = useTheme()
   return (
@@ -1388,7 +1525,11 @@ const historyFingerprints = (
     if (headed.length === 0) return own
     return encodeFingerprint([
       own,
-      headed.map((run) => [run.calls.map(toolFingerprint), Array.from(run.reasoning.values())]),
+      headed.map((run) => [
+        run.calls.map(toolFingerprint),
+        Array.from(run.reasoning.values()),
+        run.closing,
+      ]),
     ])
   })
 
