@@ -66,6 +66,7 @@ export {
   type TurnUsage,
 } from "../domain/extension.js"
 export {
+  acceptedEfforts,
   credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
   DriverError,
@@ -86,8 +87,15 @@ export type {
   CatalogProvider,
   ModelCatalogView,
   ModelDriverContribution,
+  ModelRouteCurrent,
+  ModelRouteDecision,
+  ModelRouteInput,
+  ModelRouterContribution,
+  VirtualModel,
+  VirtualModelProblem,
   ProviderAuthorizationResult,
   ProviderHints,
+  RunEffort,
   StoredOAuthCredentials,
   UpdateStoredOAuth,
 } from "../domain/driver.js"
@@ -102,7 +110,9 @@ export {
 } from "../domain/ids.js"
 // The message a `steer` send lands; `Session.stopMessage({ messageId })` names it.
 export { interjectionMessageId } from "../domain/agent-loop.js"
-export { Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
+export { clampEffort, Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
+// What a prompt-cache write costs and how long it lives: a router prices a switch with them.
+export { cacheWriteRate, promptCacheTtlMsFor } from "../domain/agent.js"
 export { AuthMethod } from "../domain/driver.js"
 // The assistant message a turn's step stores; `StreamStarted` names the turn and step.
 export {
@@ -143,6 +153,7 @@ export {
   ExtensionContext,
   ExtensionServiceError,
   type ExtensionContextService,
+  type ExtensionModelsService,
 } from "../domain/extension.js"
 export { isRecord, isRecordArray, type JsonRecord, omitUndefined } from "../domain/guards.js"
 // Runs a command to completion over the Effect `ChildProcessSpawner`.
@@ -155,7 +166,8 @@ export {
 export { headChars, headTailChars, lineCount, splitLines, tailChars } from "../domain/message.js"
 export { maximumModelToolResultChars } from "../runtime/model-context.js"
 // Launched from home, the project's `.gent` is the user's; every reader of project files asks this.
-export { hasProjectScope } from "../runtime/config.js"
+// A project file whose entries run commands or spend on models counts only in a trusted project.
+export { hasProjectScope, isProjectTrusted } from "../runtime/config.js"
 // ── Public API ──
 
 export { ExtensionHost, type ExtensionHostService } from "../domain/extension.js"

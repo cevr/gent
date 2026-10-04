@@ -6,6 +6,38 @@ until it is regenerated for the new release. The Effect patches follow
 `catalog.effect`; the guards fail when a patch key names another Effect
 version. These are local dependency patches, not upstream releases.
 
+## `@opentui/core@0.5.14`
+
+The split footer forgets its history state when it leaves for the alternate
+screen. `syncSplitFooterState` resets the native split scrollback (its row
+count and the column the last history row ends on), and the return to
+`capture-stdout` seeds it again from the cursor row at column 0. The
+terminal keeps the main screen behind the alternate one, so that state was
+still true. gent's commits end mid-row (no trailing newline), so after the
+return the next commit starts at column 1 of the last history row and
+overwrites it. Also, `setupTerminal(false)` on the return writes `height - 1`
+newlines from the cursor that the alternate screen restored. When the region
+left from the screen's top row, the cursor is in the region (no clear moved
+it), and the newlines push the screen's rows into scrollback: a second copy.
+
+The patch keeps the state while the alternate screen covers the split
+(`parkedSplitScrollback`, the region's surface offset). While it is held,
+`syncSplitFooterState` does not reset the native split scrollback or the tail
+column. Before the return's terminal setup, the cursor goes to the region's
+top row, so the reserved newlines stay inside the region's rows. The first
+change to `capture-stdout` after the return takes the region's offset back
+(clamped by `syncSplitScrollback`) instead of the cursor seed. A resize, any
+`resetSplitScrollback` (`resetSplitFooterForReplay` too) and a change to
+`main-screen` drop the held state; then the return seeds from the cursor as
+before. The Bun and Node bundles get the same change; native code is not
+changed. The PTY tests in `packages/e2e/tests/scrollback.test.ts` ("a picker
+closed over …") and the picker tests in
+`apps/tui/tests/message-list.test.tsx` cover it.
+
+Remove this patch when an OpenTUI release keeps the split's history state
+across the alternate screen. Checked on 2026-10-04: `main` after 0.5.14
+still resets it.
+
 ## `@effect/ai-anthropic@4.0.0`
 
 `prepareMessages` sets the request's `system` field from each system group

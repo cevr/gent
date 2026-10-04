@@ -26,6 +26,7 @@ import {
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionFileLockServiceApi,
+  type ExtensionModelsService,
   type ExtensionHook,
   ExtensionHost,
   type ExtensionHostContext,
@@ -91,7 +92,11 @@ import {
 } from "../domain/capability.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import { causeChainMessage, causeMessage, omitUndefined } from "../domain/guards.js"
-import type { ApiClassContribution, ModelDriverContribution } from "../domain/driver.js"
+import type {
+  ApiClassContribution,
+  ModelDriverContribution,
+  ModelRouterContribution,
+} from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import { GentPlatform, type RuntimeModuleSource } from "./gent-platform.js"
 import {
@@ -608,6 +613,7 @@ interface ResolvedExtensions {
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly apiClasses: ReadonlyMap<string, ApiClassContribution>
+  readonly modelRouters: ReadonlyMap<string, ModelRouterContribution>
   readonly slashCommands: ReadonlyArray<SlashCommand>
   readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -887,6 +893,11 @@ export const resolveExtensions = (
     (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.apiClasses), () => []),
     (apiClass) => apiClass.id,
   )
+  const modelRouters = compileBucket(
+    sorted,
+    (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.modelRouters), () => []),
+    (router) => router.id,
+  )
 
   const slashCommands = compileSlashCommands(capabilityWinners)
 
@@ -902,6 +913,7 @@ export const resolveExtensions = (
     agents,
     modelDrivers,
     apiClasses,
+    modelRouters,
     slashCommands,
     extensionHooks,
     extensions: sorted,
@@ -1748,6 +1760,11 @@ const collectValidationFailures = (
     (apiClass) => Option.some(apiClass.id),
     "API class",
   )
+  collectScopedCollisions(
+    (cs) => cs.modelRouters ?? [],
+    (router) => Option.some(router.id),
+    "model router",
+  )
 
   return failures
 }
@@ -2570,6 +2587,11 @@ const turnStartOf = (state: SessionRuntimeState): Option.Option<number> => {
 interface ExtensionHostContextInput {
   /** Built by the caller over `GentPlatform`, which is an Effect rather than a service Tag. */
   readonly host: ExtensionHostPlatform
+  /**
+   * The classifier facet, built by the caller over `DecisionModelResolver`
+   * (`makeExtensionModels`), which this module cannot import.
+   */
+  readonly models: ExtensionModelsService
   /** The loop's follow-up queue. Absent outside a loop. */
   readonly sessionControl?: ExtensionSessionControlService
 }
@@ -2749,6 +2771,7 @@ export const makeExtensionHostContextProvider = (
       home: environment.home,
       host,
       FileLock,
+      Models: input.models,
 
       State: ((extensionId) =>
         Option.match(extensionId, {

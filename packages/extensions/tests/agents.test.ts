@@ -54,6 +54,10 @@ describe("agents extension", () => {
     expect(compiled).toContain("Never revert changes you did not make.")
     expect(String(main.name)).toBe("main")
   })
+
+  test("the default agent asks for high effort, the level each model clamps from", () => {
+    expect(main.reasoningEffort).toBe("high")
+  })
 })
 
 describe("project instructions", () => {

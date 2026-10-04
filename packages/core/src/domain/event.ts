@@ -79,11 +79,50 @@ export const AgentEvent = Schema.TaggedUnion({
     branchId: BranchId,
     messageId: Schema.optional(MessageId),
     step: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    /**
+     * The effort the step's request goes out at, as its `StreamEnded`
+     * receipt will name it: a client shows the running turn's level before
+     * the step ends. Absent when the request names no level (see
+     * `reasoningDefault`), and on rows written before the field.
+     */
+    reasoningLevel: Schema.optional(ReasoningEffort),
+    /** True when the step's request names no level to a model that reasons. */
+    reasoningDefault: Schema.optional(Schema.Literal(true)),
   },
   StreamChunk: {
     sessionId: SessionId,
     branchId: BranchId,
     chunk: Schema.String,
+  },
+  /**
+   * A turn on a virtual model (`router/auto`) runs on this concrete model.
+   * Written once, before the turn's first request; every step of the turn,
+   * a replay and a recovered turn read it and never route again.
+   */
+  ModelRouted: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    messageId: MessageId,
+    /** The virtual model the session selected. */
+    selected: ModelId,
+    /** The concrete model every step of the turn runs on. */
+    model: ModelId,
+    /** The choice's effort; absent when the choice names none. */
+    effort: Schema.optional(ReasoningEffort),
+    /**
+     * The index of the choice in the router's list; absent when the turn
+     * could not route and kept the model the branch runs on.
+     */
+    choice: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    /** Why the choice fits, as the router said, or why the turn did not route. */
+    reason: Schema.String,
+    /** True when the router did not choose: the turn kept its model or took the default choice. */
+    fallback: Schema.optional(Schema.Boolean),
+    /** The classifier model the router asked; absent when it asked none. */
+    classifier: Schema.optional(ModelId),
+    /** What the classifier calls cost at the catalog's price; absent when unpriced or none. */
+    costUsd: Schema.optional(Schema.Finite),
+    durationMs: Schema.Finite,
   },
   StreamEnded: {
     sessionId: SessionId,
@@ -133,6 +172,21 @@ export const AgentEvent = Schema.TaggedUnion({
     interrupted: Schema.optional(Schema.Boolean),
     /** How the step ended; the step boundary the loop's policy matched on. */
     outcome: Schema.optional(StepOutcomeTag),
+    /**
+     * The effort the step's request sent for `model`: the hint after the
+     * levels the model accepts (`effectiveEffort`). A driver rebuilds the
+     * effort history of a conversation from these, so a change keeps the
+     * cached prefix. Absent when the request named no level (see
+     * `reasoningDefault`), and on rows written before the field.
+     */
+    reasoningLevel: Schema.optional(ReasoningEffort),
+    /**
+     * True when the step's request named no level to a model that reasons:
+     * the step ran at the model's own default. A step with neither field (a
+     * model that does not reason, a row written before the fields) reads as
+     * one at an unknown level.
+     */
+    reasoningDefault: Schema.optional(Schema.Literal(true)),
   },
   TurnCompleted: {
     sessionId: SessionId,
@@ -330,6 +384,8 @@ export const StreamChunk = AgentEvent.cases.StreamChunk
 export type StreamChunk = typeof AgentEvent.cases.StreamChunk.Type
 export const StreamEnded = AgentEvent.cases.StreamEnded
 export type StreamEnded = typeof AgentEvent.cases.StreamEnded.Type
+export const ModelRouted = AgentEvent.cases.ModelRouted
+export type ModelRouted = typeof AgentEvent.cases.ModelRouted.Type
 export const TurnCompleted = AgentEvent.cases.TurnCompleted
 export type TurnCompleted = typeof AgentEvent.cases.TurnCompleted.Type
 export const ModelContextProjected = AgentEvent.cases.ModelContextProjected

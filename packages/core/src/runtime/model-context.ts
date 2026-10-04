@@ -28,7 +28,7 @@ import { cacheWriteRate, ModelId, type ModelPricing } from "../domain/agent.js"
 import type { ToolCapability } from "../domain/capability.js"
 import type { TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
-import type { ProviderAuthError } from "../domain/driver.js"
+import type { ProviderAuthError, RunEffort } from "../domain/driver.js"
 import type { ProviderError, StorageError } from "../domain/errors.js"
 import type { EventStorageError } from "../storage/storage.js"
 
@@ -281,10 +281,11 @@ const reasoningReplayAt = (index: number, lastModelChange: number): ReasoningRep
   return "text-only"
 }
 
-export const toPromptMessages = (
+/** Each visible message with the prompt message it becomes, in order; one that becomes none is left out. */
+const promptEntries = (
   messages: ReadonlyArray<Message>,
-): ReadonlyArray<Prompt.Message> => {
-  const result: Prompt.Message[] = []
+): ReadonlyArray<readonly [Message, Prompt.Message]> => {
+  const result: Array<readonly [Message, Prompt.Message]> = []
   const lastModelChange = messages.findLastIndex(
     (message) => message.metadata?.customType === MODEL_CHANGE_MESSAGE_TYPE,
   )
@@ -292,10 +293,36 @@ export const toPromptMessages = (
   for (const [index, message] of messages.entries()) {
     if (!isAiVisibleMessage(message)) continue
     const promptMessage = toPromptMessage(message, reasoningReplayAt(index, lastModelChange))
-    if (Option.isSome(promptMessage)) result.push(promptMessage.value)
+    if (Option.isSome(promptMessage)) result.push([message, promptMessage.value])
   }
 
   return result
+}
+
+export const toPromptMessages = (messages: ReadonlyArray<Message>): ReadonlyArray<Prompt.Message> =>
+  promptEntries(messages).map(([, prompt]) => prompt)
+
+/**
+ * One entry per run of consecutive assistant messages in the prompt
+ * `toPromptMessages` builds, in order: the effort `effortOf` reads for the
+ * run's last message. A driver sends such a run as one assistant turn, so
+ * the entries line up with the turns on the wire
+ * (`ProviderHints.reasoningHistory`).
+ */
+export const assistantRunEfforts = (
+  messages: ReadonlyArray<Message>,
+  effortOf: (message: Message) => Option.Option<RunEffort>,
+): ReadonlyArray<Option.Option<RunEffort>> => {
+  const runs: Array<Option.Option<RunEffort>> = []
+  let previousRole: Prompt.Message["role"] = "system"
+  for (const [message, prompt] of promptEntries(messages)) {
+    if (prompt.role === "assistant") {
+      if (previousRole === "assistant") runs.pop()
+      runs.push(effortOf(message))
+    }
+    previousRole = prompt.role
+  }
+  return runs
 }
 
 /** Opens the notices message, so the model does not read host facts as the user speaking. */
@@ -1303,6 +1330,27 @@ export const projectModelContext = (
   const units = measuredUnits(messages, measure)
   if (Result.isFailure(units)) return Result.fail(units.failure)
   return projectUnits(units.success, budget)
+}
+
+/**
+ * The tokens of the current window before the turn's prompt: what a request
+ * on another model writes to its cache again. It is the estimate
+ * `coldHandoffPays` reads (`ModelContextProjection.historyTokens`) for a
+ * window that fits: chars/4 per unit, raised by the last measure. A history
+ * whose tool calls do not pair counts at chars/4.
+ */
+export const estimateHistoryTokens = (
+  messages: ReadonlyArray<Message>,
+  measure: Option.Option<StepMeasure>,
+): number => {
+  const window = messagesInCurrentWindow(messages)
+  const units = measuredUnits(window, measureInCurrentWindow(window, measure))
+  if (Result.isFailure(units)) return estimateTokens(window)
+  return Option.match(anchorUnit(units.success), {
+    onNone: () => 0,
+    onSome: (anchor) =>
+      units.success.slice(0, anchor).reduce((sum, unit) => sum + unit.estimatedTokens, 0),
+  })
 }
 
 /**

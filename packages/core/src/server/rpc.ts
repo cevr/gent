@@ -163,6 +163,8 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
    * re-derive the precedence. */
   resolvedModelId: ModelId,
   resolvedReasoningLevel: Schema.optional(ReasoningEffort),
+  /** The reasoning level without the session's own: what clearing it falls back to. */
+  defaultReasoningLevel: Schema.optional(ReasoningEffort),
   /** Current runtime state (`_tag` + queue). Idle sessions return Idle runtime. */
   runtime: Schema.suspend(() => SessionRuntimeStateSchema),
   /** Cumulative usage derived from the event log (turns, tokens, cost, last
@@ -179,6 +181,8 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
 export class SessionView extends Session.extend<SessionView>("SessionView")({
   resolvedModelId: Schema.optional(ModelId),
   resolvedReasoningLevel: Schema.optional(ReasoningEffort),
+  /** The reasoning level without the session's own: what clearing it falls back to. */
+  defaultReasoningLevel: Schema.optional(ReasoningEffort),
 }) {}
 
 export { SteerCommand }

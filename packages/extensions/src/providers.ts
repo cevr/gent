@@ -15,10 +15,12 @@ import {
   SynchronizedRef,
 } from "effect"
 import {
+  acceptedEfforts,
   type ApiClassContribution,
   type ApiClassRequest,
   type CatalogModel,
   catalogModelEntry,
+  clampEffort,
   isRecordArray,
   type JsonRecord,
   Model,
@@ -28,8 +30,9 @@ import {
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderHints,
-  ReasoningEffort,
+  type ReasoningEffort,
   type ReasoningOption,
+  type RunEffort,
 } from "@gent/core/extensions/api"
 import {
   FetchHttpClient,
@@ -757,46 +760,18 @@ export const postOAuthForm = (
 // effort list, the on/off toggle and the thinking budget models.dev lists
 // under `reasoning_options`, and `temperature: false` for a model that
 // refuses a sampling temperature. No class keeps a table of model families.
-
-/** Every effort level, lowest first; the catalog's `null` effort reads as `"none"`. */
-const EFFORT_ORDER = ReasoningEffort.literals
-
-/**
- * The effort a request names for a hint: the lowest level the model accepts
- * at or above `level`, else the highest it accepts. `order` ranks every level
- * lowest first; `accepts` is the model's own list, in the same order. A model
- * that accepts nothing gets none.
- */
-const effortAtOrAbove = <Level extends string>(
-  order: ReadonlyArray<Level>,
-  accepts: ReadonlyArray<Level>,
-  level: Level,
-): Option.Option<Level> => {
-  const rank = order.indexOf(level)
-  return Option.fromUndefinedOr(accepts.find((each) => order.indexOf(each) >= rank)).pipe(
-    Option.orElse(() => Option.fromUndefinedOr(accepts.at(-1))),
-  )
-}
+// The effort list and its clamp are core's (`acceptedEfforts`, `clampEffort`):
+// the step's receipt and a client's level read the same ones.
 
 /** The model's reasoning controls; none when the catalog lists none. */
 const reasoningOptions = (entry: CatalogModel): ReadonlyArray<ReasoningOption> =>
   entry.reasoningOptions ?? []
 
-/** The efforts the model accepts, lowest first; empty when the catalog lists no effort list. */
-const acceptedEfforts = (entry: CatalogModel): ReadonlyArray<ReasoningEffort> =>
-  Option.match(
-    Option.fromUndefinedOr(reasoningOptions(entry).find((option) => option.type === "effort")),
-    {
-      onNone: () => [],
-      onSome: (option) => EFFORT_ORDER.filter((level) => option.values.includes(level)),
-    },
-  )
-
 /** The effort a request names for `level`: the lowest the model accepts at or above it, else its highest. */
 export const effortFor = (
   entry: CatalogModel,
   level: ReasoningEffort,
-): Option.Option<ReasoningEffort> => effortAtOrAbove(EFFORT_ORDER, acceptedEfforts(entry), level)
+): Option.Option<ReasoningEffort> => clampEffort(acceptedEfforts(entry), level)
 
 /** The lowest effort the model accepts; none without an effort list. */
 export const lowestEffort = (entry: CatalogModel): Option.Option<ReasoningEffort> =>
@@ -842,6 +817,92 @@ export const sampledTemperature = (
     Option.filter(() => !modelReasons(entry, hints) && entry.temperature !== false),
     Option.flatMap((value) => Option.fromNullishOr(value.temperature)),
   )
+
+// ── effort carrier ──────────────────────────────────────────────────────────
+//
+// A change of the top-level effort invalidates the provider's prompt cache
+// (Anthropic: `output_config.effort` invalidates the cached messages; OpenAI:
+// `reasoning.effort` can change the hidden instructions). Two wires carry a
+// change inside the conversation instead: the Messages effort marker and the
+// Responses `configuration_update` item. A driver that sends one keeps the
+// top level at the effort before the first change and puts one marker at each
+// change. It rebuilds them from the steps' receipts on every request
+// (`ProviderHints.reasoningHistory`), so request `n + 1` repeats request `n`'s
+// bytes and adds after them. Nothing about the carrier is stored.
+
+/** One effort change inside the conversation. */
+interface EffortChange {
+  /** The assistant run the change starts at; `EffortCarrier.runs` names the reply the request asks for. */
+  readonly run: number
+  readonly effort: ReasoningEffort
+}
+
+/** The effort changes a request carries inside its conversation. */
+export interface EffortCarrier {
+  /**
+   * The effort the top level names: the one the first run was sent at.
+   * `"default"` names none, as that run's request did.
+   */
+  readonly pinned: RunEffort
+  /** The number of assistant runs the request's conversation holds. */
+  readonly runs: number
+  /** In run order, never two at one run. */
+  readonly changes: ReadonlyArray<EffortChange>
+}
+
+/**
+ * The effort changes for a request that sends `current`, from the hints'
+ * history. `"default"` is a request that named no level; `defaultLevel` is
+ * the level the model then runs at, and a change is a change of the level
+ * applied, so a marker always names a level. None, so the request is plain,
+ * when the request writes no prompt cache (a compaction summary), sends no
+ * effort, or would send the same body plain (no change, and its top level
+ * already names the first run's effort); or when `carries` refuses one of the
+ * efforts (the driver cannot send it as a marker, for example when its plan
+ * changes the thinking too). With no change and a first run at another form
+ * of the same level (the default against that level named), the carrier keeps
+ * the first run's top level.
+ *
+ * A run with no receipt (a step on another model, a step stored before
+ * receipts, a forked branch), or one at a default the driver does not know,
+ * takes the next known effort, else `current`. The last marker so always
+ * equals `current`: a request whose history disagrees with the receipts (a
+ * revert, a fork) gets no stale marker at its tail.
+ */
+export const effortCarrier = (
+  hints: Option.Option<ProviderHints>,
+  current: Option.Option<RunEffort>,
+  defaultLevel: Option.Option<ReasoningEffort>,
+  carries: (effort: RunEffort) => boolean,
+): Option.Option<EffortCarrier> => {
+  const known = (entry: Option.Option<RunEffort>): Option.Option<RunEffort> =>
+    Option.filter(entry, (effort) => effort !== "default" || Option.isSome(defaultLevel))
+  const now = known(current)
+  if (!writesPromptCache(hints) || Option.isNone(now)) return Option.none()
+  const history = Option.getOrElse(
+    Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.reasoningHistory)),
+    (): ReadonlyArray<Option.Option<RunEffort>> => [],
+  )
+  const sequence = history.reduceRight<ReadonlyArray<RunEffort>>(
+    (later, entry) => [Option.getOrElse(known(entry), () => later[0] ?? now.value), ...later],
+    [now.value],
+  )
+  const levelOf = (effort: RunEffort): Option.Option<ReasoningEffort> => {
+    if (effort === "default") return defaultLevel
+    return Option.some(effort)
+  }
+  return Option.flatMap(Option.all(sequence.map(levelOf)), (levels) => {
+    const changes = levels.flatMap((effort, run): ReadonlyArray<EffortChange> => {
+      if (run === 0 || effort === levels[run - 1]) return []
+      return [{ run, effort }]
+    })
+    const pinned = sequence[0] ?? now.value
+    if ((changes.length === 0 && pinned === now.value) || !sequence.every(carries)) {
+      return Option.none()
+    }
+    return Option.some({ pinned, runs: history.length, changes })
+  })
+}
 
 /** OpenCode's own cap on a thinking budget (`OUTPUT_TOKEN_MAX - 1` in `provider/transform.ts`). */
 const BUDGET_CEILING = 31_999
@@ -895,12 +956,14 @@ export const thinkingBudget = (
  * The catalog entries of one provider the agent loop can drive, as models.
  * A model without tool calling is dropped: every gent turn sends tools. Each
  * model carries `promptCacheTtl`, how long the provider keeps a request's
- * prompt cached; models.dev does not say.
+ * prompt cached; models.dev does not say. `apiClass` is the class the
+ * driver plans its requests with: its effort levels are the model's.
  */
 export const catalogModels = (
   catalog: ModelCatalogView,
   providerId: string,
   promptCacheTtl: Duration.Duration,
+  apiClass: Pick<ApiClassContribution, "efforts">,
 ): ReadonlyArray<Model> =>
   Option.match(catalog.provider(providerId), {
     onNone: () => [],
@@ -909,7 +972,7 @@ export const catalogModels = (
         .filter((entry) => entry.toolCall !== false && entry.decision !== true)
         .map((entry) =>
           Model.make({
-            ...modelFromCatalog(providerId, entry),
+            ...modelFromCatalog(providerId, entry, apiClass.efforts),
             promptCacheTtlMs: Duration.toMillis(promptCacheTtl),
           }),
         ),

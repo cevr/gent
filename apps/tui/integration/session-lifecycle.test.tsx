@@ -5,10 +5,20 @@ import { App, resolveInteractiveState, resolveInteractiveBootstrap } from "../sr
 import { mountClient } from "../tests/render-harness-boundary"
 import {
   baseLocalLayer,
+  createE2ELayer,
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   LanguageModelLayers,
   testAgent,
 } from "@gent/core/test-utils"
+import {
+  AgentDefinition,
+  DEFAULT_AGENT_NAME,
+  DEFAULT_MODEL_ID,
+  Model,
+  ProviderId,
+} from "@gent/core/protocol"
+import { defineExtension, ExtensionHost } from "@gent/core/extensions/api"
+import { Model as AiModel } from "effect/ai"
 import { Gent } from "@gent/sdk"
 import { repoRoot } from "./helpers"
 import { waitForFrame } from "../tests/helpers-boundary"
@@ -134,5 +144,131 @@ describe("session lifecycle", () => {
         }),
       ),
     10000,
+  )
+})
+
+describe("effort command", () => {
+  // The model accepts three levels: a level past them is sent clamped.
+  const effortModel = Model.make({
+    id: DEFAULT_MODEL_ID,
+    name: "Effort Model",
+    provider: ProviderId.make(DEFAULT_MODEL_ID.split("/")[0] ?? ""),
+    contextLength: 128_000,
+    reasoning: true,
+    efforts: ["low", "medium", "high"],
+  })
+  // The driver lists the model, so the client's catalog names it; no turn runs.
+  const effortDriver = defineExtension({
+    id: "effort-driver",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("modelDriver", {
+        id: effortModel.provider,
+        name: "Effort driver",
+        listModels: () => Effect.succeed([effortModel]),
+        resolveModel: () =>
+          Effect.succeed(
+            AiModel.make(effortModel.provider, effortModel.id, LanguageModelLayers.failing),
+          ),
+      })
+    }),
+  })
+
+  // The agent's own level: what `default` falls back to.
+  const mediumAgent = AgentDefinition.make({
+    name: DEFAULT_AGENT_NAME,
+    description: "Test agent at medium effort",
+    reasoningEffort: "medium",
+  })
+
+  // `/effort off` is `none`, sent as the model's lowest level; `/think` is the
+  // old name; `/effort default` clears the session's level. The picker's
+  // `default` row names the agent's level, never the session's override.
+  it.live(
+    "/effort and its /think alias store the session's level, and the status row shows what is sent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* repoRoot
+          const { client, runtime } = yield* Gent.test(
+            createE2ELayer({
+              providerLayer: LanguageModelLayers.debug(),
+              agents: [mediumAgent],
+              extensionInputs: [effortDriver],
+              models: [effortModel],
+              toolRunner: "test",
+            }),
+          )
+          const bootstrap = yield* resolveInteractiveBootstrap({ client, cwd, continue_: false })
+          const sessionId = bootstrap.initialSession.sessionId
+          // A stored key, so the driver needs no sign-in (the layer's own temp home).
+          yield* client.auth.setKey({ provider: effortModel.provider, key: "test-key", sessionId })
+          const { setup } = yield* mountClient({
+            client,
+            runtime,
+            initialPrompt: bootstrap.initialPrompt,
+            initialSession: bootstrap.initialSession,
+            cwd,
+            width: 100,
+            height: 32,
+            view: () => <App />,
+          })
+          const statusRow = (frame: string) =>
+            Option.getOrElse(
+              Option.fromUndefinedOr(frame.split("\n").find((row) => row.includes("Effort Model"))),
+              () => "",
+            )
+          // The snapshot has landed once the row shows the agent's level.
+          yield* waitForFrame(
+            setup,
+            (frame) => statusRow(frame).includes(" medium"),
+            "status row at the agent's level",
+            3000,
+          )
+          const run = (line: string, stored: Option.Option<string>, shown: string) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() => setup.mockInput.typeText(line))
+              yield* Effect.promise(() => setup.renderOnce())
+              setup.mockInput.pressEnter()
+              yield* waitForFrame(
+                setup,
+                (frame) => statusRow(frame).includes(` ${shown}`),
+                `status row after ${line}`,
+                3000,
+              )
+              const session = yield* client.session.get({ sessionId })
+              const level: Option.Option<string> = Option.fromNullishOr(session?.reasoningLevel)
+              expect([line, level]).toEqual([line, stored])
+            })
+          // The picker's `default` row, read while the picker is open.
+          const defaultRow = Effect.gen(function* () {
+            yield* Effect.promise(() => setup.mockInput.typeText("/effort"))
+            yield* Effect.promise(() => setup.renderOnce())
+            setup.mockInput.pressEnter()
+            const frame = yield* waitForFrame(
+              setup,
+              (each) => each.includes("Effort ·"),
+              "effort picker",
+              3000,
+            )
+            setup.mockInput.pressEscape()
+            yield* waitForFrame(setup, (each) => !each.includes("Effort ·"), "picker closed", 3000)
+            return Option.getOrElse(
+              Option.fromUndefinedOr(
+                frame.split("\n").find((row) => row.includes("agent or config default")),
+              ),
+              () => "",
+            ).trim()
+          })
+          const agentDefault = /default\s+agent or config default \(medium\)$/
+          expect(yield* defaultRow).toMatch(agentDefault)
+          yield* run("/effort off", Option.some("none"), "low")
+          expect(yield* defaultRow).toMatch(agentDefault)
+          yield* run("/think high", Option.some("high"), "high")
+          yield* run("/effort max", Option.some("max"), "high")
+          yield* run("/effort default", Option.none(), "medium")
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15000,
   )
 })

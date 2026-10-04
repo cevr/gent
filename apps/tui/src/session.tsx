@@ -36,6 +36,7 @@ import {
   assistantMessageIdForTurn,
   Branch,
   type BranchId,
+  effectiveEffort,
   Message as DurableMessage,
   type AuthProviderInfo,
   type EventEnvelope,
@@ -130,6 +131,41 @@ import type { ResolvedNoticeRows } from "./extensions/loader-boundary"
 export interface StatusRowLabel {
   text: string
   color: RGBA
+  /**
+   * The form the row draws when its group cannot fit every label in full
+   * (`StatusRow`). Absent, the label keeps its text, and only the row's last
+   * cut can shorten it.
+   */
+  short?: StatusLabelShort
+}
+
+/** A status label's short form, and when it gives way. */
+interface StatusLabelShort {
+  /** The shorter text; empty leaves the label out. */
+  readonly text: string
+  /** The order in which labels take their short forms, lowest first (`STATUS_YIELD`). */
+  readonly rank: number
+}
+
+/**
+ * When each core label takes its short form on a narrow row: the debug mark
+ * first, then the cwd, before the model, and the idle phase word last. The
+ * effort and the right-anchored numbers have none.
+ */
+export const STATUS_YIELD = { debug: 0, cwd: 1, model: 2, phase: 3 } as const
+
+/**
+ * The model's name without its family word, for a narrow row: `Claude
+ * Sonnet 5` reads `Sonnet 5`. A name whose rest does not start with a letter
+ * or has no version digit (`Gemini 3 Pro`, `GPT-6.1 Sol`) stays whole, so the
+ * short form still names one model.
+ */
+export const shortModelName = (name: string): string => {
+  const space = name.indexOf(" ")
+  if (space < 0) return name
+  const rest = name.slice(space + 1)
+  if (/^\p{L}/u.test(rest) && /\d/.test(rest)) return rest
+  return name
 }
 
 interface ThemeColors {
@@ -202,24 +238,40 @@ export function buildContextLabels(input: {
 /**
  * The labels that sit beside the model name: its effort, and the debug mark.
  *
+ * The effort is the one a request to the model is sent (`effectiveEffort`,
+ * the reading the step's receipt records): the session's level clamped to
+ * the levels the model accepts, none for a model that does not reason. Before
+ * the catalog names the model, the level shows as set.
+ *
  * The context gauge is in {@link buildContextLabels}, in the row's
  * right-anchored group — effort names how the model is
  * configured, the gauge reports what the session has spent, and the two
  * belong at opposite ends.
  */
 export function buildModelLabels(input: {
-  readonly reasoningLevel: Option.Option<string>
+  readonly reasoningLevel: Option.Option<ReasoningEffort>
+  readonly model: Option.Option<Pick<Model, "reasoning" | "efforts">>
   readonly theme: ThemeColors
   readonly debugMode: boolean
 }): StatusRowLabel[] {
   const items: StatusRowLabel[] = []
 
-  if (Option.isSome(input.reasoningLevel)) {
-    items.push({ text: input.reasoningLevel.value, color: input.theme.info })
+  const sent = Option.flatMap(input.reasoningLevel, (level) =>
+    Option.match(input.model, {
+      onNone: () => Option.some(level),
+      onSome: (model) => effectiveEffort(model, level),
+    }),
+  )
+  if (Option.isSome(sent)) {
+    items.push({ text: sent.value, color: input.theme.info })
   }
 
   if (input.debugMode) {
-    items.push({ text: "debug", color: input.theme.warning })
+    items.push({
+      text: "debug",
+      color: input.theme.warning,
+      short: { text: "", rank: STATUS_YIELD.debug },
+    })
   }
 
   return items
@@ -1498,11 +1550,18 @@ interface SessionCommandRegistryProps {
   readonly openPalette: () => void
 }
 
-/** `/think <level>`: a core reasoning level, or `default`/`off` to clear the session override. */
-const ReasoningLevelInput = Schema.Union([ReasoningEffort, Schema.Literals(["default", "off"])])
-const VALID_REASONING_LEVELS = ["default", ...ReasoningEffort.literals]
+/** `/effort <level>`: a core effort level, `off` for `none`, or `default` to clear the session's level. */
+const EffortInput = Schema.Union([ReasoningEffort, Schema.Literals(["default", "off"])])
+const EFFORT_USAGE = `Usage: /effort <${["default", "off", ...ReasoningEffort.literals].join("|")}>`
 
-const parseReasoningLevel = Schema.decodeUnknownOption(ReasoningLevelInput)
+const parseEffort = Schema.decodeUnknownOption(EffortInput)
+
+/** The session level an `/effort` argument stores: `default` clears it, `off` is `none`. */
+const sessionEffort = (input: typeof EffortInput.Type): Option.Option<ReasoningEffort> => {
+  if (input === "default") return Option.none()
+  if (input === "off") return Option.some("none")
+  return Option.some(input)
+}
 
 const AMBIGUOUS_PREVIEW = 4
 
@@ -1602,11 +1661,14 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     onSelect: props.openForkPicker,
   },
   {
-    id: "session.think",
-    title: "Set Reasoning Level",
-    description: "Pick the reasoning level for this session (/think <level>, /think default)",
+    id: "session.effort",
+    title: "Set Effort",
+    description:
+      "Pick the reasoning effort for this session (/effort <level>, /effort off, /effort default)",
     category: "Session",
-    slash: "think",
+    slash: "effort",
+    // The command's earlier name.
+    aliases: ["think"],
     onSelect: props.openReasoningPicker,
     onSlash: (args) => {
       const level = args.trim().toLowerCase()
@@ -1614,16 +1676,14 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         props.openReasoningPicker()
         return
       }
-      const reasoningLevel = parseReasoningLevel(level)
-      if (Option.isNone(reasoningLevel)) {
-        props.client.setError(`Usage: /think <${VALID_REASONING_LEVELS.join("|")}>`)
+      const effort = parseEffort(level)
+      if (Option.isNone(effort)) {
+        props.client.setError(EFFORT_USAGE)
         return
       }
-      // `default`/`off` decode to `None`, which clears the session override.
-      const sessionReasoningLevel = Schema.decodeUnknownOption(ReasoningEffort)(
-        reasoningLevel.value,
+      props.cast(
+        props.client.updateSessionSettings({ reasoningLevel: sessionEffort(effort.value) }),
       )
-      props.cast(props.client.updateSessionSettings({ reasoningLevel: sessionReasoningLevel }))
     },
   },
   {

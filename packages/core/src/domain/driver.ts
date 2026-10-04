@@ -23,15 +23,11 @@ import {
   type Model as AiModel,
   type Response,
 } from "effect/ai"
-import {
-  type CacheWriteByLifetime,
-  Model,
-  ModelId,
-  ProviderId,
-  type ReasoningEffort,
-} from "./agent.js"
+import { type CacheWriteByLifetime, Model, ModelId, ProviderId, ReasoningEffort } from "./agent.js"
 import { omitUndefined } from "./guards.js"
 import type { SessionId } from "./ids.js"
+import type { ExtensionContext, ExtensionServiceError } from "./extension.js"
+import type { Message } from "./message.js"
 
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
 export type DriverFailureId = typeof DriverFailureId.Type
@@ -126,6 +122,13 @@ export type ProviderResolution = Layer.Layer<
   readonly provider: string
 }
 
+/**
+ * The effort an assistant run was sent at: a level, or `default` for a
+ * request that named none to a model that reasons, which ran at the model's
+ * own default (`StreamEnded.reasoningDefault`).
+ */
+export type RunEffort = ReasoningEffort | "default"
+
 /** Hints passed from the agent loop into `resolveModel`. Drivers bake these
  *  into their provider Config layer (e.g. `AnthropicLanguageModel.Config.max_tokens`). */
 export interface ProviderHints {
@@ -149,6 +152,18 @@ export interface ProviderHints {
    * the catalog does not say.
    */
   readonly supportsReasoning?: boolean
+  /**
+   * The effort each earlier assistant run of the request's prompt was sent
+   * at, in prompt order: one entry per run of consecutive assistant
+   * messages, from the steps' receipts (`StreamEnded.reasoningLevel`, or
+   * `default` by `StreamEnded.reasoningDefault`). None where no receipt says:
+   * a step on another model, a step stored before receipts, a forked branch.
+   * A driver whose wire carries an effort change
+   * inside the conversation rebuilds the changes from it, so the request's
+   * earlier bytes stay the same. Absent on a request with no conversation
+   * history to keep (the compaction summary).
+   */
+  readonly reasoningHistory?: ReadonlyArray<Option.Option<RunEffort>>
 }
 
 /**
@@ -445,10 +460,33 @@ export interface ModelCatalogView {
 }
 
 /**
+ * The effort levels the catalog lists for the model, lowest first; empty when
+ * it lists no effort list (a thinking budget or a toggle only).
+ */
+export const acceptedEfforts = (entry: CatalogModel): ReadonlyArray<ReasoningEffort> =>
+  Option.match(
+    Option.fromUndefinedOr(
+      (entry.reasoningOptions ?? []).find((option) => option.type === "effort"),
+    ),
+    {
+      onNone: () => [],
+      onSome: (option) => ReasoningEffort.literals.filter((level) => option.values.includes(level)),
+    },
+  )
+
+/**
  * A catalog model as gent's `Model`, under `providerId` (a driver id, which
  * may differ from the catalog provider's). A decision model is a classifier.
+ * `efforts` are the levels its requests name (`Model.efforts`): by default
+ * the catalog's effort list; an API class that plans a level otherwise
+ * passes its own (`ApiClassContribution.efforts`).
  */
-export const modelFromCatalog = (providerId: string, entry: CatalogModel): Model => {
+export const modelFromCatalog = (
+  providerId: string,
+  entry: CatalogModel,
+  efforts: (entry: CatalogModel) => ReadonlyArray<ReasoningEffort> = acceptedEfforts,
+): Model => {
+  const levels = efforts(entry)
   const model = Model.make({
     id: ModelId.make(`${providerId}/${entry.id}`),
     name: entry.name,
@@ -466,6 +504,7 @@ export const modelFromCatalog = (providerId: string, entry: CatalogModel): Model
       ),
       releaseDate: entry.releaseDate,
       reasoning: entry.reasoning,
+      efforts: Option.getOrUndefined(Option.liftPredicate(levels, (each) => each.length > 0)),
     }),
   })
   if (entry.decision !== true) return model
@@ -543,6 +582,13 @@ export interface ApiClassContribution {
   readonly protocols: ReadonlyArray<string>
   /** How long a prompt stays cached; none: the model never goes cold. */
   readonly promptCacheTtl: Option.Option<Duration.Duration>
+  /**
+   * The effort levels this class's requests name for `entry`, lowest first
+   * (`Model.efforts`), when its plan differs from the catalog's effort list:
+   * a class that turns reasoning off for `none` lists `none`. Absent: the
+   * catalog's list (`acceptedEfforts`).
+   */
+  readonly efforts?: (entry: CatalogModel) => ReadonlyArray<ReasoningEffort>
   readonly resolveModel: (
     request: ApiClassRequest,
   ) => Effect.Effect<ProviderResolution, DriverError>
@@ -678,4 +724,90 @@ export interface ModelDriverContribution {
   readonly cacheWritesByLifetime?: (
     metadata: Response.ProviderMetadata,
   ) => ReadonlyArray<CacheWriteByLifetime>
+}
+
+// ── ModelRouterContribution — virtual models ──
+
+/**
+ * One choice of a virtual model: a concrete model, an effort, or both. A
+ * choice with no model keeps the model the branch runs on and sets only the
+ * effort. `reason` says when the choice fits; the router's classifier reads it.
+ */
+export interface VirtualModelChoice {
+  readonly model?: ModelId
+  readonly effort?: ReasoningEffort
+  readonly reason: string
+}
+
+/**
+ * A model id that names no model: `<router id>/<name>` picks one of its
+ * choices at the start of each turn. Selectable wherever a model id goes.
+ */
+export interface VirtualModel {
+  readonly name: string
+  /** What the picker and the status row show (`Auto`). */
+  readonly label: string
+  /** At least one; at least one names a model. */
+  readonly choices: ReadonlyArray<VirtualModelChoice>
+  /** The index of the default choice: a turn takes it when no route answers. */
+  readonly fallback: number
+}
+
+/** A virtual model the router could not offer, and why; it shows as a catalog failure. */
+export interface VirtualModelProblem {
+  readonly name: string
+  readonly reason: string
+}
+
+/** The model the branch's last request ran on, and what a switch away from it costs. */
+export interface ModelRouteCurrent {
+  readonly model: Model
+  /** The provider still holds that request's prompt cache; a switch writes it again. */
+  readonly warm: boolean
+  /** The estimate of the prefix a switch writes again on the new model, in tokens. */
+  readonly historyTokens: number
+}
+
+/** What a router reads to pick a choice for one turn. */
+export interface ModelRouteInput {
+  /** The selected virtual model. */
+  readonly model: VirtualModel
+  /** The model-visible messages, the newest (a user message) last. */
+  readonly messages: ReadonlyArray<Message>
+  /**
+   * Aligned with `model.choices`: the catalog entry each choice runs on (a
+   * choice with no model, the current model's); none for a model the
+   * catalog does not list, or whose driver has no sign-in that `/auth`
+   * lists as ready: the turn cannot run it.
+   */
+  readonly candidates: ReadonlyArray<Option.Option<Model>>
+  /** None on the branch's first request. */
+  readonly current: Option.Option<ModelRouteCurrent>
+  /** The session is a spawned child: its requests ask for the child cache lifetime. */
+  readonly child: boolean
+}
+
+/** The choice a router picked, and why, in a few words. */
+export interface ModelRouteDecision {
+  readonly choice: number
+  readonly reason: string
+}
+
+/**
+ * A router of virtual models. Its `id` is the provider segment of the ids it
+ * serves (`router/auto`); a model driver with the same id wins. Core routes
+ * once per turn, at its first step: it calls `route` (10 s at most), records
+ * the pick as a `ModelRouted` event, and runs every step of the turn on it.
+ * A route that fails, times out or picks a choice the turn cannot run takes
+ * the current model when it is a choice, else the default choice. The router
+ * asks classifiers through `ExtensionContext.Models`.
+ */
+export interface ModelRouterContribution {
+  readonly id: string
+  readonly name: string
+  readonly models: ReadonlyArray<VirtualModel>
+  readonly problems?: ReadonlyArray<VirtualModelProblem>
+  readonly route: (
+    input: ModelRouteInput,
+  ) => Effect.Effect<ModelRouteDecision, ExtensionServiceError, ExtensionContext>
 }

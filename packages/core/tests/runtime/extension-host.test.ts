@@ -122,7 +122,7 @@ import {
   ProviderAuthInfo,
   type ProviderResolution,
 } from "../../src/domain/driver"
-import { Model as AiModel, type LanguageModel } from "effect/ai"
+import { Decision, DecisionModel, Model as AiModel, type LanguageModel } from "effect/ai"
 import {
   Auth,
   DecisionModelResolver,
@@ -191,6 +191,7 @@ const approvalRequest = { text: "Approve?", metadata: {} }
 const ambientContext = Effect.gen(function* () {
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
+    models: testExtensionHostContext().Models,
   })
   return provider.forRun({ sessionId, branchId, interactive: true, clientRequest: Option.none() })
 }).pipe(
@@ -1388,6 +1389,7 @@ describe("resolveTurnProfile", () => {
         )
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
+          models: testExtensionHostContext().Models,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-profile"),
@@ -1416,6 +1418,7 @@ describe("resolveTurnProfile", () => {
         const asked: Array<string> = []
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
+          models: testExtensionHostContext().Models,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("missing-session"),
@@ -1454,6 +1457,7 @@ describe("resolveTurnProfile", () => {
         }
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
+          models: testExtensionHostContext().Models,
         })
         const sessionId = SessionId.make("session-runtime-context-storage-failure")
         const profileFailure = yield* Effect.flip(
@@ -1531,6 +1535,7 @@ describe("resolveTurnProfile", () => {
         }
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
+          models: testExtensionHostContext().Models,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-driver"),
@@ -3056,6 +3061,7 @@ describe("host session facet", () => {
       )
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
+        models: testExtensionHostContext().Models,
       })
       const ctx = provider.forRun({
         sessionId: SESSION_ID,
@@ -3118,6 +3124,7 @@ describe("client request origin", () => {
         )
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
+        models: testExtensionHostContext().Models,
         sessionControl: {
           queueFollowUp: hold,
           dequeueFollowUp: () => Effect.succeed(false),
@@ -4792,6 +4799,192 @@ describe("addressed session verbs via RPC", () => {
         expect(deleted.gone).toBe(true)
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
+  )
+})
+
+// ── models facet ─────────────────────────────────────────────────────────────
+
+describe("models facet via RPC", () => {
+  const extensionId = ExtensionId.make("@gent/test-models")
+  /** A variable no test run sets: the judge has a credential only when the test stores one. */
+  const JUDGE_ENV = "GENT_TEST_MODELS_JUDGE_KEY_NEVER_SET"
+
+  const classifierModel = (name: string, price: Option.Option<number>) =>
+    Model.make({
+      id: ModelId.make(`judge/${name}`),
+      name,
+      provider: ProviderId.make("judge"),
+      kind: "classifier",
+      ...Option.match(price, {
+        onNone: () => ({}),
+        onSome: (perMillion) => ({ pricing: { input: perMillion, output: perMillion } }),
+      }),
+    })
+
+  /**
+   * The usage the judge reports for an input: an input that names a missing
+   * count leaves that count out, as a provider that does not report it does.
+   */
+  const judgeCounts = (input: string): readonly [Option.Option<number>, Option.Option<number>] => {
+    if (input === "no counts") return [Option.none(), Option.none()]
+    if (input === "input only") return [Option.some(21), Option.none()]
+    if (input === "output only") return [Option.none(), Option.some(21)]
+    if (input === "fractional") return [Option.some(21.5), Option.some(0)]
+    return [Option.some(21), Option.some(0)]
+  }
+  const judgeUsage = (input: string) => {
+    const [inputTokens, outputTokens] = judgeCounts(input)
+    return {
+      inputTokens: Option.getOrUndefined(inputTokens),
+      outputTokens: Option.getOrUndefined(outputTokens),
+    }
+  }
+
+  /** Three classifiers, listed dearest first; each answers the first label with 21 input tokens. */
+  const judgeDriver: ModelDriverContribution = {
+    id: "judge",
+    name: "Judge",
+    envCredential: JUDGE_ENV,
+    resolveModel: () => Effect.die("judge serves classifier models only"),
+    listModels: () =>
+      Effect.succeed([
+        classifierModel("jev-dear", Option.some(2)),
+        classifierModel("jev-free", Option.none()),
+        classifierModel("jev-cheap", Option.some(0.1)),
+      ]),
+    resolveDecisionModel: () =>
+      Effect.succeed(
+        Layer.effect(
+          DecisionModel.DecisionModel,
+          DecisionModel.make({
+            decide: (options) =>
+              Effect.succeed({
+                answers: Object.fromEntries(
+                  Object.entries(options.decisions).map(([name, decision]) => {
+                    let labels: ReadonlyArray<string> = []
+                    if (decision._tag === "Classify") labels = Object.keys(decision.criteria)
+                    return [
+                      name,
+                      {
+                        _tag: "Classify" as const,
+                        label: labels[0] ?? "",
+                        probabilities: Object.fromEntries(
+                          labels.map((label, index) => [label, Number(index === 0)]),
+                        ),
+                        confidence: 0.9,
+                      },
+                    ]
+                  }),
+                ),
+                usage: judgeUsage(
+                  Option.getOrElse(
+                    Schema.decodeUnknownOption(Schema.String)(options.state),
+                    () => "",
+                  ),
+                ),
+              }),
+          }),
+        ),
+      ),
+  }
+
+  const Ask = request({
+    id: "ask",
+    input: Schema.Struct({
+      model: Schema.optional(Schema.String),
+      text: Schema.optional(Schema.String),
+    }),
+    output: Schema.Struct({
+      available: Schema.Boolean,
+      classifiers: Schema.Array(Schema.String),
+      decided: Schema.String,
+    }),
+    execute: Effect.fn("Ask.execute")(function* (input) {
+      const ctx = yield* ExtensionContext
+      const available = yield* ctx.Models.available
+      const classifiers = yield* ctx.Models.classifiers
+      const decided = yield* ctx.Models.decide({
+        definition: Decision.make({
+          input: Schema.String,
+          decisions: {
+            team: Decision.classify({
+              instructions: "Which team",
+              criteria: { billing: "payments", technical: "bugs" },
+            }),
+          },
+        }),
+        input: input.text ?? "charged twice",
+        ...omitUndefined({ model: input.model }),
+      }).pipe(
+        Effect.map(
+          (reply) => `${reply.model} ${reply.answers.team.label} ${String(reply.costUsd)}`,
+        ),
+        Effect.catch((error) => Effect.succeed(`error: ${error.message}`)),
+      )
+      return { available, classifiers: classifiers.map((model) => model.id), decided }
+    }),
+  })
+
+  const extension = defineExtension({
+    id: extensionId,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("modelDriver", judgeDriver)
+      yield* host.register("request", Ask)
+    }),
+  })
+
+  it.scopedLive(
+    "an extension asks the classifiers through ExtensionContext.Models: none without a credential, the cheapest first with one",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const harness = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensionInputs: [...e2ePreset.extensionInputs, extension],
+        })
+        const ask = (model: Option.Option<string>, text?: string) =>
+          harness.client.extension
+            .request({
+              sessionId: harness.sessionId,
+              branchId: harness.branchId,
+              extensionId,
+              capabilityId: Ask.id,
+              input: {
+                ...Option.match(model, { onNone: () => ({}), onSome: (id) => ({ model: id }) }),
+                ...omitUndefined({ text }),
+              },
+            })
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Ask.output)))
+
+        const before = yield* ask(Option.none())
+        expect(before.available).toBe(false)
+        expect(before.classifiers).toEqual([])
+        expect(before.decided).toContain(
+          "error: models.decide: No classifier model has a credential",
+        )
+
+        yield* harness.client.auth.setKey({
+          provider: "judge",
+          key: "judge-key",
+          sessionId: harness.sessionId,
+        })
+        const named = yield* ask(Option.some("judge/jev-dear"))
+        expect(named.available).toBe(true)
+        expect(named.classifiers).toEqual(["judge/jev-cheap", "judge/jev-dear", "judge/jev-free"])
+        // 21 input tokens at $2/M.
+        expect(named.decided).toBe(`judge/jev-dear billing ${String((21 * 2) / 1_000_000)}`)
+        const unpriced = yield* ask(Option.some("judge/jev-free"))
+        expect(unpriced.decided).toBe("judge/jev-free billing undefined")
+        // A priced classifier whose reply leaves a billable count out, or
+        // reports one no provider bills, has no known price: never a partial sum.
+        for (const text of ["no counts", "input only", "output only", "fractional"]) {
+          const partial = yield* ask(Option.some("judge/jev-dear"), text)
+          expect([text, partial.decided]).toEqual([text, "judge/jev-dear billing undefined"])
+        }
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 })
 

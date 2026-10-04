@@ -140,7 +140,12 @@ import type { ConfigService } from "./config.js"
 import { RuntimeEnvironment } from "./config.js"
 import type { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 import type { StorageError } from "../domain/errors.js"
-import { type DecisionModelResolver, type ModelRegistry, ModelResolver } from "./provider.js"
+import {
+  type DecisionModelResolver,
+  makeExtensionModels,
+  type ModelRegistry,
+  ModelResolver,
+} from "./provider.js"
 import { GentPlatform } from "./gent-platform.js"
 import { Actor } from "effect-encore"
 
@@ -1723,6 +1728,7 @@ const makeAgentLoopBehavior = (
 
     const hostProvider = yield* makeExtensionHostContextProvider({
       host,
+      models: yield* makeExtensionModels,
       sessionControl: {
         queueFollowUp: (
           input,

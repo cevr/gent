@@ -217,7 +217,81 @@ describe("E2E: Scrollback ownership", () => {
       }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
+
+  // A picker draws on the alternate screen, and the terminal keeps its own
+  // screen meanwhile. Its return must find history as it left it: the next
+  // commit goes on the row under the last history row, not over it, and the
+  // rows on screen do not go to scrollback a second time.
+  const pickerReturns = [
+    { name: "a long session", size: { cols: 60, rows: 20 }, turn: true },
+    { name: "a short session", size: { cols: 120, rows: 40 }, turn: false },
+  ] as const
+  for (const { name, size, turn } of pickerReturns) {
+    it.scopedLive(
+      `a picker closed over ${name} keeps every transcript row once, in order, at ${size.cols}x${size.rows}`,
+      () =>
+        Effect.gen(function* () {
+          const ctx = yield* seedAndSpawn(["--debug"], size)
+          yield* screenWaitFor(
+            ctx,
+            (visible) =>
+              visible.some((row) => row.includes(DEBUG_SESSION_END)) &&
+              visible.some((row) => row.startsWith("ready")),
+            { timeout: 25_000, label: "the debug session at idle" },
+          )
+          const before = transcriptRows(yield* settleAndCapture(ctx, SETTLE))
+          expect(before.length).toBeGreaterThan(10)
+
+          ctx.pty.write("/model")
+          yield* settlePty(ctx, TYPED)
+          ctx.pty.write(keys.enter)
+          yield* screenWaitFor(
+            ctx,
+            (visible) => visible.some((row) => row.startsWith("Model · ")),
+            {
+              timeout: 10_000,
+              label: "the model picker open",
+            },
+          )
+          ctx.pty.write(keys.esc)
+          yield* screenWaitFor(
+            ctx,
+            (visible) =>
+              !visible.some((row) => row.startsWith("Model · ")) &&
+              visible.some((row) => row.startsWith("ready")),
+            { timeout: 10_000, label: "the model picker closed" },
+          )
+          yield* settlePty(ctx, SETTLE)
+          if (turn) {
+            ctx.pty.write("hello")
+            yield* settlePty(ctx, TYPED)
+            ctx.pty.write(keys.enter)
+            yield* screenWaitFor(
+              ctx,
+              (visible) => visible.some((row) => row.startsWith("● Worked for")),
+              { timeout: 25_000, label: "the turn after the picker at its end" },
+            )
+          }
+
+          const known = new Set(before)
+          const after = gridText(yield* settleAndCapture(ctx, SETTLE)).filter((row) =>
+            known.has(row),
+          )
+          expect(after).toEqual(before)
+        }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
+      TEST_TIMEOUT,
+    )
+  }
 })
+
+/** The row the `--debug` session's seeded transcript ends on, at every width. */
+const DEBUG_SESSION_END = "renderer behavior directly."
+
+/** The transcript's rows, history first, up to the seeded session's last row. */
+const transcriptRows = (grid: Parameters<typeof gridText>[0]): string[] => {
+  const rows = gridText(grid)
+  return rows.slice(0, rows.findIndex((row) => row.includes(DEBUG_SESSION_END)) + 1)
+}
 
 describe("E2E: Settle then capture", () => {
   it.live("the capture reads what the child wrote while it waited for quiet", () =>

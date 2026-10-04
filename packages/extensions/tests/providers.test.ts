@@ -52,7 +52,9 @@ import {
   AnthropicPlatform,
   buildAnthropicModelDriver,
   type ClaudeCredentials,
+  MESSAGES_CLASS,
 } from "../src/anthropic.js"
+import { RESPONSES_CLASS } from "../src/openai.js"
 
 // ── driver catalog ──────────────────────────────────────────────────────────
 
@@ -129,9 +131,54 @@ describe("driver catalog", () => {
       limit: { context: 1_000_000 },
     })
 
-    const models = catalogModels(catalog, "anthropic", Duration.minutes(5))
+    const models = catalogModels(catalog, "anthropic", Duration.minutes(5), MESSAGES_CLASS)
 
     expect(models.map((model) => model.promptCacheTtlMs)).toEqual([5 * 60_000])
+  })
+
+  test("a model lists the effort levels its API class sends", () => {
+    const efforts: CatalogModel["reasoningOptions"] = [
+      { type: "effort", values: ["low", "medium", "high", "xhigh", "max"] },
+    ]
+    const catalog = anthropicCatalog(
+      // On by default: `none` turns thinking off.
+      { id: "claude-opus-5", name: "Opus 5", reasoning: true, reasoningOptions: efforts },
+      // Always on: `none` sends the lowest effort.
+      { id: "claude-fable-5", name: "Fable 5", reasoning: true, reasoningOptions: efforts },
+      // A budget only: a level picks the budget, so any level passes.
+      {
+        id: "claude-haiku-4-5",
+        name: "Haiku 4.5",
+        reasoning: true,
+        reasoningOptions: [{ type: "budget_tokens", min: 1024 }],
+      },
+    )
+    const openai = catalogOf({
+      id: "openai",
+      name: "OpenAI",
+      env: [],
+      models: [
+        {
+          id: "gpt-5.5-pro",
+          name: "GPT-5.5 Pro",
+          reasoning: true,
+          reasoningOptions: [{ type: "effort", values: ["medium", "high", "xhigh"] }],
+        },
+      ],
+    })
+    const ttl = Duration.minutes(5)
+
+    const models = [
+      ...catalogModels(catalog, "anthropic", ttl, MESSAGES_CLASS),
+      ...catalogModels(openai, "openai", ttl, RESPONSES_CLASS),
+    ]
+    const levels = (model: Model) => Option.fromUndefinedOr(model.efforts)
+    expect(Object.fromEntries(models.map((model) => [model.id, levels(model)]))).toEqual({
+      "anthropic/claude-opus-5": Option.some(["none", "low", "medium", "high", "xhigh", "max"]),
+      "anthropic/claude-fable-5": Option.some(["low", "medium", "high", "xhigh", "max"]),
+      "anthropic/claude-haiku-4-5": Option.none(),
+      "openai/gpt-5.5-pro": Option.some(["medium", "high", "xhigh"]),
+    })
   })
 
   test("a driver lists only its own provider's models a turn can drive", () => {
@@ -153,11 +200,10 @@ describe("driver catalog", () => {
     )
 
     const ttl = Duration.minutes(5)
-    expect(catalogModels(catalog, "openai", ttl).map((model) => model.id)).toEqual([
-      ModelId.make("openai/gpt-5.4"),
-      ModelId.make("openai/gpt-4o"),
-    ])
-    expect(catalogModels(catalog, "missing", ttl)).toEqual([])
+    expect(catalogModels(catalog, "openai", ttl, RESPONSES_CLASS).map((model) => model.id)).toEqual(
+      [ModelId.make("openai/gpt-5.4"), ModelId.make("openai/gpt-4o")],
+    )
+    expect(catalogModels(catalog, "missing", ttl, RESPONSES_CLASS)).toEqual([])
   })
 
   it.live(

@@ -216,6 +216,40 @@ describe("session metrics fold", () => {
     expect(foldSessionMetrics(log).context?.compactions).toBe(2)
   })
 
+  test("a running turn's effort is its step's level from the stream's start until the turn completes", () => {
+    const started = (
+      step: number,
+      receipt: { readonly reasoningLevel: "low" } | { readonly reasoningDefault: true },
+    ) =>
+      wrap(
+        AgentEvent.cases.StreamStarted.make({
+          sessionId,
+          branchId,
+          messageId: MessageId.make("m"),
+          step,
+          ...receipt,
+        }),
+      )
+    const low = { reasoningLevel: "low" } as const
+    const ended = wrap(
+      AgentEvent.cases.StreamEnded.make({
+        sessionId,
+        branchId,
+        reasoningLevel: "low",
+        outcome: "ToolCalls",
+      }),
+    )
+    const done = wrap(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }))
+    // The step's end and the next step keep the level; only the turn's end clears it.
+    expect(foldSessionMetrics([started(1, low)]).turnEffort).toEqual({ level: "low" })
+    expect(foldSessionMetrics([started(1, low), ended, started(2, low)]).turnEffort).toEqual({
+      level: "low",
+    })
+    expect(foldSessionMetrics([started(1, low), ended, done]).turnEffort).toBeUndefined()
+    // A request that names no level runs at the model's default: no level to show.
+    expect(foldSessionMetrics([started(1, { reasoningDefault: true })]).turnEffort).toEqual({})
+  })
+
   test("a branch with no projection carries no context block", () => {
     expect(foldSessionMetrics([])).toEqual({
       turns: 0,

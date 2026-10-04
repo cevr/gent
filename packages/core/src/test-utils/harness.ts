@@ -21,6 +21,7 @@ import {
   type ExtensionContributions,
   extensionServicesFromHostContext,
   type ExtensionFileLockServiceApi,
+  type ExtensionModelsService,
   ExtensionHost,
   type ExtensionHostContext,
   type ExtensionHostPlatform,
@@ -57,6 +58,7 @@ import {
 import {
   Auth,
   type LoadedModelCatalog,
+  makeExtensionModels,
   modelCatalogFromBodies,
   ModelCatalogSource,
   ModelRegistry,
@@ -206,6 +208,13 @@ const testExtensionState = (): ReturnType<ExtensionStateFacet> => ({
   changed: () => Effect.void,
 })
 
+/** A stub runtime with no classifier: none is available, and a decide dies. */
+const testExtensionModels = (): ExtensionModelsService => ({
+  decide: () => die("Models.decide"),
+  available: Effect.succeed(false),
+  classifiers: Effect.succeed([]),
+})
+
 export const testExtensionHostContext = (
   overrides: TestExtensionHostContextOverrides = {},
 ): ExtensionHostContext => ({
@@ -218,6 +227,7 @@ export const testExtensionHostContext = (
   Session: { ...defaultSession(), ...overrides.Session },
   Interaction: { ...defaultInteraction(), ...overrides.Interaction },
   FileLock: overrides.FileLock ?? testExtensionFileLock(),
+  Models: overrides.Models ?? testExtensionModels(),
   State: overrides.State ?? (() => testExtensionState()),
 })
 
@@ -318,6 +328,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     Session: resolvedSession,
     Interaction: resolvedInteraction,
     FileLock: resolvedFileLock,
+    Models: overrides?.Models ?? testExtensionModels(),
     ...overrides,
     State: () => resolvedState,
   }
@@ -530,6 +541,7 @@ export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (ru
   const profile = yield* (yield* SessionProfileCache).resolve(run.sessionCwd ?? environment.cwd)
   const hostProvider = yield* makeExtensionHostContextProvider({
     host: testHostFacts({ cwd: environment.cwd, home: environment.home }).host,
+    models: yield* makeExtensionModels,
   })
   const turnProfile: AgentLoopTurnProfile = {
     turnGenerationId: profile.generationId,
@@ -560,6 +572,7 @@ export const runtimeHostContext = Effect.fn("test.runtimeHostContext")(function*
   const environment = yield* RuntimeEnvironment
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts({ cwd: environment.cwd, home: environment.home }).host,
+    models: yield* makeExtensionModels,
     sessionControl: {
       queueFollowUp: (input) => queueFollowUpOn(input).pipe(Effect.provideContext(loopClient)),
       dequeueFollowUp: (input) => dequeueFollowUpOn(input).pipe(Effect.provideContext(loopClient)),
@@ -1666,6 +1679,12 @@ interface E2ELayerOptions {
   readonly models?: ReadonlyArray<Model> | "catalog"
   /** The price of every model the test registry makes up. Default: free. */
   readonly modelPricing?: ModelPricing
+  /**
+   * `"checked"`: a turn reads each driver's sign-in as production does, so a
+   * route skips a model whose driver has none. Default: every driver counts
+   * as signed in, as a scripted model needs no sign-in.
+   */
+  readonly signIn?: "checked"
   /** Auth override. Use for public RPC auth failure-path tests. */
   readonly authLayer?: Layer.Layer<Auth>
   /**
@@ -1717,6 +1736,7 @@ export const registerContributions = (contributions: ExtensionContributions) =>
     yield* host.register("request", ...(contributions.requests ?? []))
     yield* host.register("agent", ...(contributions.agents ?? []))
     yield* host.register("modelDriver", ...(contributions.modelDrivers ?? []))
+    yield* host.register("modelRouter", ...(contributions.modelRouters ?? []))
     for (const slot of contributions.hooks ?? []) yield* replayHook(host, slot)
   })
 
@@ -1793,6 +1813,13 @@ const testModelRegistry = (
   return Option.some(ModelRegistry.Test(models, Option.fromUndefinedOr(config.modelPricing)))
 }
 
+/** The resolver of the test's model; `signIn: "checked"` reads sign-ins as production does. */
+const testModelResolver = (config: Pick<E2ELayerOptions, "providerLayer" | "signIn">) => {
+  if (config.signIn === "checked")
+    return LanguageModelLayers.signInCheckedResolver(config.providerLayer)
+  return LanguageModelLayers.resolver(config.providerLayer)
+}
+
 const e2eDependencies = <A>(
   config: E2ELayerWithFeature<A>,
   directories: { readonly cwd: string; readonly home: string },
@@ -1809,7 +1836,7 @@ const e2eDependencies = <A>(
     failOnExtensionFailure: config.allowFailedExtensions !== true,
     overrides: {
       modelRegistryLayer: Option.getOrUndefined(testModelRegistry(config)),
-      modelResolverLayer: LanguageModelLayers.resolver(config.providerLayer),
+      modelResolverLayer: testModelResolver(config),
       authLayer: config.authLayer ?? Auth.Test(),
       modelCatalogHttpLayer: config.modelCatalogHttpLayer ?? modelCatalogFixtureLayer,
       approvalLayer: config.approvalLayer ?? ApprovalService.Test(),

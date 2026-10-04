@@ -13,12 +13,14 @@ import {
   SynchronizedRef,
 } from "effect"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
-import type * as Prompt from "effect/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   type ModelDriverContribution,
   type ProviderAuthInfo,
   ProviderAuthInfo as ProviderAuthInfoSchema,
   type ProviderHints,
+  type ReasoningEffort,
+  type RunEffort,
 } from "@gent/core/extensions/api"
 import { modelCatalogFromBodies } from "@gent/core/test-utils"
 import {
@@ -161,6 +163,30 @@ const payload = {
       },
       "claude-fable-5": {
         name: "Claude Fable 5",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+        tool_call: true,
+        temperature: false,
+        limit: { context: 1000000, output: 128000 },
+      },
+      "claude-fable-5-1": {
+        name: "Claude Fable 5.1",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+        tool_call: true,
+        temperature: false,
+        limit: { context: 1000000, output: 128000 },
+      },
+      "claude-opus-5-5": {
+        name: "Claude Opus 5.5",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+        tool_call: true,
+        temperature: false,
+        limit: { context: 1000000, output: 128000 },
+      },
+      "claude-sonnet-5-5": {
+        name: "Claude Sonnet 5.5",
         reasoning: true,
         reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
         tool_call: true,
@@ -481,7 +507,12 @@ const line = (label: string, request: CapturedRequest): string => {
 }
 
 /** One request through the route, captured and refused, so nothing past the body matters. */
-const requestLine = (route: Route, modelName: string, label: string, hints: ProviderHints) =>
+const captureRequest = (
+  route: Route,
+  modelName: string,
+  hints: ProviderHints,
+  prompt: Prompt.RawInput = PROMPT,
+) =>
   Effect.gen(function* () {
     const state = makeFakeFetchState()
     const fetch = fakeFetchLayer(state, () => ({
@@ -497,18 +528,23 @@ const requestLine = (route: Route, modelName: string, label: string, hints: Prov
         Option.some(hints),
       ).pipe(
         Effect.flatMap((model) =>
-          LanguageModel.generateText({ prompt: PROMPT }).pipe(
+          LanguageModel.generateText({ prompt }).pipe(
             Effect.provide(Layer.provideMerge(model, fetch)),
           ),
         ),
         Effect.scoped,
       ),
     )
-    return Option.match(Option.fromUndefinedOr(state.captured[0]), {
-      onNone: () => `${label}: <no request>`,
-      onSome: (request) => line(label, request),
-    })
+    return Option.fromUndefinedOr(state.captured[0])
   })
+
+const requestLine = (route: Route, modelName: string, label: string, hints: ProviderHints) =>
+  Effect.map(captureRequest(route, modelName, hints), (request) =>
+    Option.match(request, {
+      onNone: () => `${label}: <no request>`,
+      onSome: (captured) => line(label, captured),
+    }),
+  )
 
 const matrix = Effect.gen(function* () {
   const lines: Array<string> = []
@@ -595,9 +631,24 @@ const PINNED = [
   'anthropic claude-opus-5 max: {"max_tokens":128000,"output_config":{"effort":"max"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5 turn: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5 temp: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
-  'anthropic claude-fable-5 none: {"max_tokens":768,"output_config":{"effort":"low"}} cache=[] beta=-',
+  'anthropic claude-fable-5 none: {"max_tokens":768,"output_config":{"effort":"low"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5 medium: {"max_tokens":128000,"output_config":{"effort":"medium"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-fable-5 max: {"max_tokens":128000,"output_config":{"effort":"max"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-fable-5-1 turn: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-fable-5-1 temp: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-fable-5-1 none: {"max_tokens":768,"output_config":{"effort":"low"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-fable-5-1 medium: {"max_tokens":128000,"output_config":{"effort":"medium"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-fable-5-1 max: {"max_tokens":128000,"output_config":{"effort":"max"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-opus-5-5 turn: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-opus-5-5 temp: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-opus-5-5 none: {"max_tokens":768,"output_config":{"effort":"low"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-opus-5-5 medium: {"max_tokens":128000,"output_config":{"effort":"medium"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-opus-5-5 max: {"max_tokens":128000,"output_config":{"effort":"max"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-sonnet-5-5 turn: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-sonnet-5-5 temp: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-sonnet-5-5 none: {"max_tokens":768,"output_config":{"effort":"low"},"thinking":{"type":"between_tools"}} cache=[] beta=-',
+  'anthropic claude-sonnet-5-5 medium: {"max_tokens":128000,"output_config":{"effort":"medium"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
+  'anthropic claude-sonnet-5-5 max: {"max_tokens":128000,"output_config":{"effort":"max"},"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-sonnet-5 turn: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-sonnet-5 temp: {"max_tokens":128000,"thinking":{"block_binding":{"prefix_mismatch_behavior":"drop_block"},"display":"summarized","type":"adaptive"}} cache=[messages.0.content.0=1h system.0=1h] beta=thinking-binding-controls-2026-08-01',
   'anthropic claude-sonnet-5 none: {"max_tokens":768,"thinking":{"type":"disabled"}} cache=[] beta=-',
@@ -680,5 +731,598 @@ describe("request bodies", () => {
     Effect.gen(function* () {
       expect(yield* matrix).toEqual(PINNED)
     }).pipe(Effect.timeout("60 seconds")),
+  )
+})
+
+// ── effort changes ──────────────────────────────────────────────────────────
+
+/**
+ * One session's conversation, whole: a turn of a tool step and a text step,
+ * then two turns of one text step each. A request sends a prefix of it.
+ */
+const SESSION: Prompt.RawInput = [
+  { role: "system", content: "You are terse." },
+  { role: "user", content: "Read a.txt." },
+  {
+    role: "assistant",
+    content: [
+      {
+        type: "tool-call",
+        id: "call_read",
+        name: "read",
+        params: { path: "a.txt" },
+        providerExecuted: false,
+      },
+    ],
+  },
+  {
+    role: "tool",
+    content: [
+      {
+        type: "tool-result",
+        id: "call_read",
+        name: "read",
+        result: "alpha",
+        isFailure: false,
+        providerExecuted: false,
+      },
+    ],
+  },
+  { role: "assistant", content: [{ type: "text", text: "It says alpha." }] },
+  { role: "user", content: "Thanks." },
+  { role: "assistant", content: [{ type: "text", text: "Welcome." }] },
+  { role: "user", content: "Read it again." },
+]
+
+const sessionPrompt = (messages: number): Prompt.RawInput =>
+  Prompt.make(SESSION).content.slice(0, messages)
+
+/**
+ * The session's four requests. A turn runs at one effort (core keeps a level
+ * set mid-turn for the next turn): both steps of the first turn at `low`, the
+ * second turn at `high`, the third at `low`. Each request names the effort
+ * every earlier assistant run was sent at.
+ */
+const SESSION_REQUESTS: ReadonlyArray<{
+  readonly messages: number
+  readonly reasoning: ReasoningEffort
+  readonly history: ReadonlyArray<Option.Option<ReasoningEffort>>
+}> = [
+  { messages: 2, reasoning: "low", history: [] },
+  { messages: 4, reasoning: "low", history: [Option.some("low")] },
+  { messages: 6, reasoning: "high", history: [Option.some("low"), Option.some("low")] },
+  {
+    messages: 8,
+    reasoning: "low",
+    history: [Option.some("low"), Option.some("low"), Option.some("high")],
+  },
+]
+
+/**
+ * The effort each assistant run of the body, then its reply, runs at, as the
+ * provider applies the body: the top level first. A Messages effort marker
+ * takes effect from the next user turn; a Responses `configuration_update`
+ * at once (Codex sends one right before the request it changes,
+ * `codex-rs/core/src/session/turn.rs`).
+ */
+const appliedEfforts = (body: Schema.JsonObject): ReadonlyArray<string> => {
+  let markers: "next-user-turn" | "at-once" = "next-user-turn"
+  if (Predicate.isNotUndefined(body["input"])) markers = "at-once"
+  let applied = topLevelEffort(body)
+  let pending = applied
+  const runs: Array<string> = []
+  let inRun = false
+  for (const kind of itemKinds(body)) {
+    if (kind.startsWith("effort:")) {
+      pending = kind.slice("effort:".length)
+      if (markers === "at-once") applied = pending
+      continue
+    }
+    if (kind === "user" || kind === "function_call_output") {
+      if (markers === "next-user-turn") applied = pending
+      inRun = false
+      continue
+    }
+    if (kind === "assistant" || kind === "function_call" || kind === "reasoning") {
+      if (!inRun) runs.push(applied)
+      inRun = true
+    }
+  }
+  return [...runs, applied]
+}
+
+const sessionHints = (
+  reasoning: ReasoningEffort,
+  history: ReadonlyArray<Option.Option<RunEffort>>,
+): ProviderHints => ({
+  reasoning,
+  cacheKey: "session-1",
+  supportsReasoning: true,
+  reasoningHistory: history,
+})
+
+/** A session request that names no level: the model runs at its default. */
+const defaultHints = (history: ReadonlyArray<Option.Option<RunEffort>>): ProviderHints => ({
+  cacheKey: "session-1",
+  supportsReasoning: true,
+  reasoningHistory: history,
+})
+
+const DEFAULT_RUN = Option.some<RunEffort>("default")
+
+const routeNamed = (label: string) =>
+  Effect.map(routes, (all) =>
+    Option.getOrThrow(Option.fromUndefinedOr(all.find((route) => route.label === label))),
+  )
+
+/** The captured request's JSON body; a request with none fails the test. */
+const bodyOf = (request: Option.Option<CapturedRequest>): Schema.JsonObject =>
+  Option.getOrThrow(
+    Option.filter(Option.some(decodeBody(Option.getOrThrow(request).body ?? "{}")), isObject),
+  )
+
+/** The value without its `cache_control` fields: a marker moves with the tail, and the cache matches the content. */
+const withoutCacheMarkers = (value: Schema.Json): Schema.Json => {
+  if (isList(value)) return value.map(withoutCacheMarkers)
+  if (!isObject(value)) return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== "cache_control")
+      .map(([key, item]) => [key, withoutCacheMarkers(item)] as const),
+  )
+}
+
+/** The body's conversation: Messages `messages`, Responses `input`. */
+const conversationOf = (body: Schema.JsonObject): Array<Schema.Json> => {
+  const items = body["messages"] ?? body["input"]
+  if (Predicate.isUndefined(items) || !isList(items)) return []
+  return items.map(withoutCacheMarkers)
+}
+
+/** The body outside its conversation, without cache markers. */
+const topLevelOf = (body: Schema.JsonObject): Schema.Json =>
+  withoutCacheMarkers(
+    Object.fromEntries(
+      Object.entries(body).filter(([key]) => key !== "messages" && key !== "input"),
+    ),
+  )
+
+/** Each conversation item by its role or type; an effort marker as `effort:<level>`. */
+const itemKinds = (body: Schema.JsonObject): ReadonlyArray<string> =>
+  conversationOf(body).map((item) => {
+    if (!isObject(item)) return "?"
+    const config = item["output_config"] ?? item["reasoning"]
+    if (isObject(config) && Predicate.isString(config["effort"]))
+      return `effort:${config["effort"]}`
+    const role = item["role"]
+    if (Predicate.isString(role)) return role
+    const type = item["type"]
+    if (Predicate.isString(type)) return type
+    return "?"
+  })
+
+/** The effort the body's top level names. */
+const topLevelEffort = (body: Schema.JsonObject): string => {
+  const config = body["output_config"] ?? body["reasoning"]
+  if (isObject(config) && Predicate.isString(config["effort"])) return config["effort"]
+  return "-"
+}
+
+const sessionBodies = (label: string, modelName: string) =>
+  Effect.gen(function* () {
+    const route = yield* routeNamed(label)
+    const requests: Array<CapturedRequest> = []
+    for (const step of SESSION_REQUESTS) {
+      const request = yield* captureRequest(
+        route,
+        modelName,
+        sessionHints(step.reasoning, step.history),
+        sessionPrompt(step.messages),
+      )
+      requests.push(Option.getOrThrow(request))
+    }
+    return requests
+  })
+
+/** The same request with the effort history and without it. */
+const withAndWithoutHistory = (
+  label: string,
+  modelName: string,
+  hints: ProviderHints,
+  messages: number,
+) =>
+  Effect.gen(function* () {
+    const route = yield* routeNamed(label)
+    const { reasoningHistory: _history, ...plain } = hints
+    const carried = yield* captureRequest(route, modelName, hints, sessionPrompt(messages))
+    const without = yield* captureRequest(route, modelName, plain, sessionPrompt(messages))
+    return [bodyOf(carried), bodyOf(without)] as const
+  })
+
+const MID_CONVERSATION_BETA = "mid-conversation-output-config-2026-07-01"
+
+/** The models whose requests carry an effort change inside the conversation. */
+const CARRYING: ReadonlyArray<readonly [string, string, ReadonlyArray<string>]> = [
+  ...["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"].map(
+    (model) =>
+      [
+        "anthropic",
+        model,
+        [
+          "user",
+          "assistant",
+          "user",
+          "assistant",
+          "effort:high",
+          "user",
+          "assistant",
+          "effort:low",
+          "user",
+        ],
+      ] as const,
+  ),
+  [
+    "openai",
+    "gpt-6.1-sol",
+    [
+      "system",
+      "user",
+      "function_call",
+      "function_call_output",
+      "assistant",
+      "user",
+      "effort:high",
+      "assistant",
+      "user",
+      "effort:low",
+    ],
+  ],
+]
+
+describe("effort changes", () => {
+  it.live("an effort change keeps every byte the earlier request sent", () =>
+    Effect.gen(function* () {
+      for (const [label, modelName, kinds] of CARRYING) {
+        const bodies = (yield* sessionBodies(label, modelName)).map((request) =>
+          bodyOf(Option.some(request)),
+        )
+        expect([modelName, ...bodies.map(topLevelEffort)]).toEqual([
+          modelName,
+          ...bodies.map(() => "low"),
+        ])
+        for (const [index, body] of bodies.entries()) {
+          if (index === 0) continue
+          const earlier = Option.getOrThrow(Option.fromUndefinedOr(bodies[index - 1]))
+          expect([modelName, index, topLevelOf(body)]).toEqual([
+            modelName,
+            index,
+            topLevelOf(earlier),
+          ])
+          const kept = conversationOf(earlier)
+          expect([modelName, index, conversationOf(body).slice(0, kept.length)]).toEqual([
+            modelName,
+            index,
+            kept,
+          ])
+        }
+        expect([
+          modelName,
+          itemKinds(Option.getOrThrow(Option.fromUndefinedOr(bodies.at(-1)))),
+        ]).toEqual([modelName, kinds])
+      }
+    }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live(
+    "each run and the reply run at the effort the receipts name, as the provider applies it",
+    () =>
+      Effect.gen(function* () {
+        for (const [label, modelName] of CARRYING) {
+          const requests = yield* sessionBodies(label, modelName)
+          for (const [index, request] of requests.entries()) {
+            const step = Option.getOrThrow(Option.fromUndefinedOr(SESSION_REQUESTS[index]))
+            const receipts = step.history.map((entry) => Option.getOrElse(entry, () => "?"))
+            expect([modelName, index, appliedEfforts(bodyOf(Option.some(request)))]).toEqual([
+              modelName,
+              index,
+              [...receipts, step.reasoning],
+            ])
+          }
+        }
+      }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live("a change a Messages reply cannot take in time sends the plain request", () =>
+    Effect.gen(function* () {
+      const route = yield* routeNamed("anthropic")
+      // A marker after the tool result takes effect only at the next user
+      // turn, after the reply; a prompt merged into the tool result before
+      // it has no user turn of its own to precede.
+      const merged: Prompt.RawInput = [
+        ...Prompt.make(sessionPrompt(4)).content,
+        ...Prompt.make([{ role: "user", content: "Stop and summarize." }]).content,
+      ]
+      const cases: ReadonlyArray<readonly [string, Prompt.RawInput]> = [
+        ["after a tool result", sessionPrompt(4)],
+        ["a prompt merged into a tool result", merged],
+      ]
+      for (const [reason, prompt] of cases) {
+        const hints = sessionHints("high", [Option.some("low")])
+        const { reasoningHistory: _history, ...plain } = hints
+        const carried = bodyOf(yield* captureRequest(route, "claude-fable-5-1", hints, prompt))
+        const without = bodyOf(yield* captureRequest(route, "claude-fable-5-1", plain, prompt))
+        expect([reason, carried]).toEqual([reason, without])
+        expect([reason, appliedEfforts(carried)]).toEqual([reason, ["high", "high"]])
+      }
+    }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live(
+    "an off turn on a model whose thinking cannot turn off carries its lowest effort, and the cache holds",
+    () =>
+      Effect.gen(function* () {
+        const route = yield* routeNamed("anthropic")
+        for (const modelName of ["claude-fable-5-1", "claude-opus-5-5"]) {
+          const before = [
+            Option.some<ReasoningEffort>("high"),
+            Option.some<ReasoningEffort>("high"),
+          ]
+          const first = bodyOf(
+            yield* captureRequest(
+              route,
+              modelName,
+              sessionHints("high", before.slice(0, 1)),
+              sessionPrompt(4),
+            ),
+          )
+          const off = bodyOf(
+            yield* captureRequest(
+              route,
+              modelName,
+              { ...sessionHints("high", before), reasoning: "none" },
+              sessionPrompt(6),
+            ),
+          )
+          // The top level and the earlier conversation stay as sent; the
+          // change rides in the conversation at the lowest effort.
+          expect([modelName, topLevelOf(off)]).toEqual([modelName, topLevelOf(first)])
+          const earlier = conversationOf(first)
+          expect([modelName, conversationOf(off).slice(0, earlier.length)]).toEqual([
+            modelName,
+            earlier,
+          ])
+          expect([modelName, itemKinds(off)]).toEqual([
+            modelName,
+            ["user", "assistant", "user", "assistant", "effort:low", "user"],
+          ])
+          expect([modelName, appliedEfforts(off)]).toEqual([modelName, ["high", "high", "low"]])
+        }
+      }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live(
+    "a change from runs sent at the model's default keeps the top level as sent and marks the change",
+    () =>
+      Effect.gen(function* () {
+        const route = yield* routeNamed("anthropic")
+        // Claude Opus 5.5 runs at `medium` when the request names no effort;
+        // the other models here at `high`.
+        const cases: ReadonlyArray<readonly [string, ReasoningEffort]> = [
+          ["claude-fable-5-1", "high"],
+          ["claude-opus-5-5", "medium"],
+          ["claude-sonnet-5-5", "high"],
+        ]
+        for (const [modelName, level] of cases) {
+          const steps: ReadonlyArray<readonly [number, ProviderHints]> = [
+            [2, defaultHints([])],
+            [4, defaultHints([DEFAULT_RUN])],
+            [6, sessionHints("low", [DEFAULT_RUN, DEFAULT_RUN])],
+            [8, defaultHints([DEFAULT_RUN, DEFAULT_RUN, Option.some("low")])],
+          ]
+          const bodies: Array<Schema.JsonObject> = []
+          for (const [messages, hints] of steps) {
+            bodies.push(
+              bodyOf(yield* captureRequest(route, modelName, hints, sessionPrompt(messages))),
+            )
+          }
+          for (const [index, body] of bodies.entries()) {
+            if (index === 0) continue
+            const earlier = Option.getOrThrow(Option.fromUndefinedOr(bodies[index - 1]))
+            expect([modelName, index, topLevelOf(body)]).toEqual([
+              modelName,
+              index,
+              topLevelOf(earlier),
+            ])
+            const kept = conversationOf(earlier)
+            expect([modelName, index, conversationOf(body).slice(0, kept.length)]).toEqual([
+              modelName,
+              index,
+              kept,
+            ])
+          }
+          expect([modelName, bodies.map(topLevelEffort)]).toEqual([modelName, ["-", "-", "-", "-"]])
+          const last = Option.getOrThrow(Option.fromUndefinedOr(bodies.at(-1)))
+          expect([modelName, itemKinds(last)]).toEqual([
+            modelName,
+            [
+              "user",
+              "assistant",
+              "user",
+              "assistant",
+              "effort:low",
+              "user",
+              "assistant",
+              `effort:${level}`,
+              "user",
+            ],
+          ])
+          // The top level names no effort: the model's default applies until a marker.
+          const applied = appliedEfforts(last).map((effort) => {
+            if (effort === "-") return level
+            return effort
+          })
+          expect([modelName, applied]).toEqual([modelName, [level, level, "low", level]])
+        }
+      }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live(
+    "a turn at the model's default after runs at that level keeps the top level as sent",
+    () =>
+      Effect.gen(function* () {
+        const route = yield* routeNamed("anthropic")
+        const high = Option.some<RunEffort>("high")
+        const first = yield* captureRequest(
+          route,
+          "claude-fable-5-1",
+          sessionHints("high", [high]),
+          sessionPrompt(4),
+        )
+        const atDefault = yield* captureRequest(
+          route,
+          "claude-fable-5-1",
+          defaultHints([high, high]),
+          sessionPrompt(6),
+        )
+        expect(topLevelOf(bodyOf(atDefault))).toEqual(topLevelOf(bodyOf(first)))
+        expect(itemKinds(bodyOf(atDefault))).toEqual([
+          "user",
+          "assistant",
+          "user",
+          "assistant",
+          "user",
+        ])
+        const beta = (Option.getOrThrow(atDefault).headers["anthropic-beta"] ?? "").split(",")
+        expect(beta.includes(MID_CONVERSATION_BETA)).toBe(false)
+        // Back from the default to an explicit level the default equals: no marker either.
+        const explicit = yield* captureRequest(
+          route,
+          "claude-fable-5-1",
+          sessionHints("high", [DEFAULT_RUN, DEFAULT_RUN]),
+          sessionPrompt(6),
+        )
+        const plainDefault = yield* captureRequest(
+          route,
+          "claude-fable-5-1",
+          defaultHints([DEFAULT_RUN]),
+          sessionPrompt(4),
+        )
+        expect(topLevelOf(bodyOf(explicit))).toEqual(topLevelOf(bodyOf(plainDefault)))
+        expect(itemKinds(bodyOf(explicit))).toEqual([
+          "user",
+          "assistant",
+          "user",
+          "assistant",
+          "user",
+        ])
+      }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live("a Messages request names the effort beta only when it carries an effort marker", () =>
+    Effect.gen(function* () {
+      const requests = yield* sessionBodies("anthropic", "claude-fable-5-1")
+      expect(
+        requests.map((request) =>
+          (request.headers["anthropic-beta"] ?? "").split(",").includes(MID_CONVERSATION_BETA),
+        ),
+      ).toEqual([false, false, true, true])
+    }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live("the conversation's cache marker stays on the user turn after an effort marker", () =>
+    Effect.gen(function* () {
+      const requests = yield* sessionBodies("anthropic", "claude-fable-5-1")
+      const changed = Option.getOrThrow(Option.fromUndefinedOr(requests[2]))
+      expect(itemKinds(bodyOf(Option.some(changed)))).toEqual([
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "effort:high",
+        "user",
+      ])
+      expect(line("tail", changed)).toContain("cache=[messages.5.content.0=1h system.0=1h]")
+    }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live("a model without per-message effort sends what it sends without a history", () =>
+    Effect.gen(function* () {
+      const cases: ReadonlyArray<readonly [string, string]> = [
+        ["anthropic", "claude-fable-5"],
+        ["anthropic", "claude-opus-4-6"],
+        ["anthropic", "claude-sonnet-5"],
+        ["openai", "gpt-5.5-pro"],
+        ["openai", "gpt-5.1"],
+        ["opencode", "claude-opus-5"],
+        ["opencode", "gpt-6.1-sol"],
+      ]
+      for (const [label, modelName] of cases) {
+        const [carried, without] = yield* withAndWithoutHistory(
+          label,
+          modelName,
+          sessionHints("low", [Option.some("low"), Option.some("low"), Option.some("high")]),
+          8,
+        )
+        expect([label, modelName, carried]).toEqual([label, modelName, without])
+      }
+    }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live("an effort history the request cannot carry sends the plain request", () =>
+    Effect.gen(function* () {
+      const cases: ReadonlyArray<readonly [string, string, string, ProviderHints]> = [
+        [
+          "no cache key",
+          "anthropic",
+          "claude-fable-5-1",
+          {
+            reasoning: "low",
+            supportsReasoning: true,
+            reasoningHistory: [Option.some("low"), Option.some("low"), Option.some("high")],
+          },
+        ],
+        [
+          "no receipts",
+          "anthropic",
+          "claude-fable-5-1",
+          sessionHints("low", [Option.none(), Option.none(), Option.none()]),
+        ],
+        [
+          "no receipts",
+          "openai",
+          "gpt-6.1-sol",
+          sessionHints("low", [Option.none(), Option.none(), Option.none()]),
+        ],
+        [
+          "runs not aligned",
+          "anthropic",
+          "claude-fable-5-1",
+          sessionHints("low", [Option.some("high")]),
+        ],
+        ["runs not aligned", "openai", "gpt-6.1-sol", sessionHints("low", [Option.some("high")])],
+        [
+          "default level unknown",
+          "openai",
+          "gpt-6.1-sol",
+          sessionHints("high", [DEFAULT_RUN, DEFAULT_RUN, DEFAULT_RUN]),
+        ],
+        [
+          "thinking turned off",
+          "anthropic",
+          "claude-opus-5",
+          sessionHints("high", [Option.some("none"), Option.some("none"), Option.some("high")]),
+        ],
+        [
+          "thinking between tools",
+          "anthropic",
+          "claude-sonnet-5-5",
+          sessionHints("high", [Option.some("none"), Option.some("none"), Option.some("high")]),
+        ],
+      ]
+      for (const [reason, label, modelName, hints] of cases) {
+        const [carried, without] = yield* withAndWithoutHistory(label, modelName, hints, 8)
+        expect([reason, modelName, carried]).toEqual([reason, modelName, without])
+      }
+    }).pipe(Effect.timeout("30 seconds")),
   )
 })

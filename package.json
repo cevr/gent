@@ -71,6 +71,7 @@
   },
   "patchedDependencies": {
     "@effect/ai-anthropic@4.0.0": "patches/@effect%2Fai-anthropic@4.0.0.patch",
-    "@effect/ai-openai-compat@4.0.0": "patches/@effect%2Fai-openai-compat@4.0.0.patch"
+    "@effect/ai-openai-compat@4.0.0": "patches/@effect%2Fai-openai-compat@4.0.0.patch",
+    "@opentui/core@0.5.14": "patches/@opentui%2Fcore@0.5.14.patch"
   }
 }

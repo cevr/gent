@@ -56,6 +56,8 @@ import {
   formatCwdGit,
   overlayHoldsComposer,
   SessionControllerContext,
+  shortModelName,
+  STATUS_YIELD,
   useExit,
 } from "./session"
 import { ExtensionRenderBoundary, useExtensionUI } from "./extensions/host"
@@ -532,7 +534,9 @@ function ActivityRow(props: { children: JSX.Element }) {
 /**
  * The model as the status row names it: its name, and its provider's label
  * (`providerLabel`) when another provider's model has the same name, so the
- * row says which provider runs, and bills, the next turn.
+ * row says which provider runs, and bills, the next turn. A narrow row takes
+ * the label's short form instead (`shortModelName`, no provider label), so
+ * the pair `Auto → Sonnet 5` fits beside the effort and the gauge.
  */
 export const statusModelName = (
   model: Model,
@@ -618,15 +622,33 @@ export function Session(props: SessionProps) {
 
   const modelLabels = (): StatusRowLabel[] => {
     const model = client.modelInfo()
+    const routed = client.routedModel()
     const items: StatusRowLabel[] = []
-    if (Option.isSome(model))
+    const name = (entry: Model) =>
+      statusModelName(entry, client.models(), controller.authProviders())
+    // The selected model, and the model its newest route chose.
+    const named = (format: (entry: Model) => string) =>
+      Option.map(model, (selected) =>
+        Option.match(routed, {
+          onNone: () => format(selected),
+          onSome: (route) => `${format(selected)} → ${format(route.model)}`,
+        }),
+      )
+    const full = named(name)
+    const short = named((entry) => shortModelName(entry.name))
+    if (Option.isSome(full))
       items.push({
-        text: statusModelName(model.value, client.models(), controller.authProviders()),
+        text: full.value,
         color: theme.textMuted,
+        short: { text: Option.getOrElse(short, () => full.value), rank: STATUS_YIELD.model },
       })
     return items.concat(
       buildModelLabels({
-        reasoningLevel: client.reasoningLevel(),
+        // The level the turn asks for, after the clamp of the model that runs
+        // the turn: the level the step's receipt records. While a turn runs,
+        // its own level; a level set meanwhile shows once it completes.
+        reasoningLevel: client.turnReasoningLevel(),
+        model: client.turnModel(),
         theme,
         debugMode: props.debugMode === true,
       }),
@@ -645,7 +667,8 @@ export function Session(props: SessionProps) {
       ...extensionLabels("right"),
       ...buildContextLabels({
         metrics: client.sessionMetrics(),
-        model: client.modelInfo(),
+        // A virtual model has no window: the gauge reads the routed model's.
+        model: client.turnModel(),
         theme,
       }),
       ...costLabels(),
@@ -675,7 +698,13 @@ export function Session(props: SessionProps) {
     } else if (Option.isSome(notice)) {
       items.push({ text: notice.value, color: theme.warning })
     } else if (a.phase === "idle") {
-      items.push({ text: controller.phaseLabel(), color: theme.textMuted })
+      // The phase word says least of the row: a narrow row leaves it out
+      // last. A cue, an error and a notice never give way.
+      items.push({
+        text: controller.phaseLabel(),
+        color: theme.textMuted,
+        short: { text: "", rank: STATUS_YIELD.phase },
+      })
     }
 
     // Where the session is rooted, beside the phase word rather than behind a
@@ -683,7 +712,8 @@ export function Session(props: SessionProps) {
     // apart from the model and cost alone, and the cwd is the thing that
     // distinguishes them.
     // The git facts are the launch directory's; a session rooted elsewhere
-    // shows its directory alone rather than borrow them.
+    // shows its directory alone rather than borrow them. A narrow row leaves
+    // it out before it shortens the model.
     const sessionCwd = client.pathPlace().cwd
     const atLaunchCwd = sessionCwd === workspace.cwd
     items.push({
@@ -693,6 +723,7 @@ export function Session(props: SessionProps) {
         Option.filter(workspace.gitBranch(), () => atLaunchCwd),
       ),
       color: theme.textMuted,
+      short: { text: "", rank: STATUS_YIELD.cwd },
     })
 
     return items
@@ -805,8 +836,12 @@ export function Session(props: SessionProps) {
           />
           <SettingsPicker
             open={controller.uiState().overlay._tag === "reasoning"}
-            title="Reasoning"
-            rows={reasoningRows(client.resolvedReasoningLevel())}
+            title="Effort"
+            rows={reasoningRows(
+              client.turnModel(),
+              client.defaultReasoningLevel(),
+              Option.flatMap(client.routedModel(), (route) => route.effort),
+            )}
             current={Option.some(
               Option.getOrElse(
                 Option.fromUndefinedOr(client.session().reasoningLevel),

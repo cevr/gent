@@ -30,6 +30,7 @@ import {
   Session,
 } from "../../src/domain/message"
 import {
+  assistantRunEfforts,
   boundToolResultForModel,
   coldHandoffPays,
   type CompactionRequest,
@@ -67,6 +68,7 @@ import {
   ModelId,
   type ModelPricing,
   ProviderId,
+  type ReasoningEffort,
 } from "../../src/domain/agent"
 import { omitUndefined } from "../../src/domain/guards"
 import { defineExtension, defineResource, ExtensionHost, tool } from "../../src/extensions/api"
@@ -2903,6 +2905,40 @@ describe("AI transcript projection", () => {
     expect(replayed.map((part) => [part.text, part.options])).toEqual([
       ["old", {}],
       ["new", { anthropic: { info: { type: "thinking", signature: "sig-new" } } }],
+    ])
+  })
+
+  test("the effort history has one entry per assistant run the prompt sends", () => {
+    const efforts = new Map<string, ReasoningEffort>([
+      ["a1", "low"],
+      ["a2", "high"],
+      ["a3", "medium"],
+      ["a4", "max"],
+    ])
+    const history = assistantRunEfforts(
+      [
+        message("u1", "user", [text("read it")]),
+        message("a1", "assistant", [call("c1")]),
+        message("t1", "tool", [result("c1")]),
+        // A step after a tool result is a run of its own.
+        message("a2", "assistant", [text("read")]),
+        message("u2", "user", [text("again")]),
+        // Two assistant messages in a row go as one turn: the last one's effort.
+        message("a3", "assistant", [text("partial")]),
+        message("a4", "assistant", [text("rest")]),
+        message("u3", "user", [text("and")]),
+        // A step with no receipt.
+        message("a5", "assistant", [text("unknown")]),
+        message("u4", "user", [text("now")]),
+      ],
+      (each) => Option.fromUndefinedOr(efforts.get(each.id)),
+    )
+
+    expect(history).toEqual([
+      Option.some("low"),
+      Option.some("high"),
+      Option.some("max"),
+      Option.none(),
     ])
   })
 })

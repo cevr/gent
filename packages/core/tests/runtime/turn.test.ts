@@ -58,6 +58,7 @@ import {
 import {
   AgentDefinition,
   AgentName,
+  DEFAULT_MODEL_ID,
   DriverRef,
   ModelId,
   Model,
@@ -82,6 +83,7 @@ import {
   EventId,
   EventStore,
   MessageReceived,
+  ModelRouted,
   ToolCallSucceeded,
   UsageSchema,
   TurnCompleted,
@@ -145,7 +147,13 @@ import {
 import { windowDetails } from "../../src/runtime/model-context"
 import { e2ePreset, rangeCompactorLayer, testAgents } from "../helpers/test-preset"
 import * as AiModel from "effect/ai/Model"
-import { type ModelDriverContribution, type ProviderHints } from "../../src/domain/driver"
+import {
+  type ModelDriverContribution,
+  type ModelRouteInput,
+  type ModelRouterContribution,
+  type ProviderHints,
+  type VirtualModelChoice,
+} from "../../src/domain/driver"
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
@@ -157,8 +165,12 @@ import {
 import { interjectionMessageId } from "../../src/domain/agent-loop"
 import * as AiError from "effect/ai/AiError"
 import { Database } from "bun:sqlite"
-import type { LanguageModel } from "effect/ai"
-import { LoadedArtifactIdentity, type LoadedExtension } from "../../src/domain/extension"
+import { Decision, DecisionModel, type LanguageModel } from "effect/ai"
+import {
+  ExtensionServiceError,
+  LoadedArtifactIdentity,
+  type LoadedExtension,
+} from "../../src/domain/extension"
 import {
   ToolBindingIdentity,
   ToolBindingSource,
@@ -2921,6 +2933,1003 @@ describe("model-change notice", () => {
   )
 })
 
+// ── virtual model routing ───────────────────────────────────────────────────
+
+const LIGHT_MODEL = ModelId.make("custom/light")
+const STRONG_MODEL = ModelId.make("custom/strong")
+const AUTO_MODEL = ModelId.make("router/auto")
+
+/** Light (the default), then strong at high effort. */
+const lightAndStrong: ReadonlyArray<VirtualModelChoice> = [
+  { model: LIGHT_MODEL, reason: "light work" },
+  { model: STRONG_MODEL, effort: "high", reason: "hard work" },
+]
+
+/** The texts of the user messages a router read. */
+const userTexts = (input: ModelRouteInput) =>
+  input.messages.filter((message) => message.role === "user").map((m) => messagePartsText(m.parts))
+
+/**
+ * A router that serves `router/auto` over `choices` with `route`, a tool
+ * that holds while `hold` is open, and any other registration the test needs.
+ */
+const routingExtension = (params: {
+  readonly route: ModelRouterContribution["route"]
+  readonly choices?: ReadonlyArray<VirtualModelChoice>
+  readonly fallback?: number
+  readonly hold?: HoldGate
+  readonly drivers?: ReadonlyArray<ModelDriverContribution>
+}) =>
+  defineExtension({
+    id: "test-routing",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("modelRouter", {
+        id: "router",
+        name: "Test router",
+        models: [
+          {
+            name: "auto",
+            label: "Auto",
+            choices: params.choices ?? lightAndStrong,
+            fallback: params.fallback ?? 0,
+          },
+        ],
+        route: params.route,
+      })
+      for (const driver of params.drivers ?? []) yield* host.register("modelDriver", driver)
+      yield* host.register(
+        "tool",
+        tool({
+          id: "route_hold",
+          description: "Hold until the test releases it",
+          params: Schema.Struct({}),
+          output: Schema.Struct({ held: Schema.Boolean }),
+          execute: Effect.fn("route_hold")(function* () {
+            yield* ExtensionContext
+            if (Predicate.isNotUndefined(params.hold)) {
+              yield* Deferred.succeed(params.hold.entered, void 0)
+              yield* Deferred.await(params.hold.release)
+            }
+            return { held: true }
+          }),
+        }),
+      )
+    }),
+  })
+
+type RoutingClient = Effect.Success<ReturnType<typeof createRpcHarness>>["client"]
+
+/** Record every event of the branch, from its first; read them once `turns` turns ended. */
+const recordBranchEvents = Effect.fn("test.recordBranchEvents")(function* (
+  client: RoutingClient,
+  run: { readonly sessionId: SessionId; readonly branchId: BranchId },
+) {
+  const seen = yield* Ref.make<ReadonlyArray<AgentEvent>>([])
+  yield* client.session.events({ ...run, after: 0 }).pipe(
+    Stream.runForEach(({ event }) => Ref.update(seen, (all) => [...all, event])),
+    Effect.forkScoped,
+  )
+  return (turns: number) =>
+    waitFor(
+      Ref.get(seen),
+      (events) => events.filter((event) => event._tag === "TurnCompleted").length >= turns,
+      12_000,
+      `${turns} completed turn(s)`,
+    )
+})
+
+const routedEvents = (events: ReadonlyArray<AgentEvent>) => events.filter(Schema.is(ModelRouted))
+
+const stepModels = (events: ReadonlyArray<AgentEvent>) =>
+  events.flatMap((event) => {
+    if (event._tag !== "StreamEnded") return []
+    return [event.model]
+  })
+
+const selectAuto = (client: RoutingClient, sessionId: SessionId) =>
+  client.session.updateSettings({
+    sessionId,
+    modelId: Option.some(AUTO_MODEL),
+    reasoningLevel: Option.none(),
+  })
+
+describe("virtual model routing", () => {
+  it.scopedLive(
+    "a turn on a virtual model runs every step on the model its router picks, routed once",
+    () =>
+      Effect.gen(function* () {
+        const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+        const picks = [1, 0]
+        // Each request runs on its routed model, at its choice's effort.
+        const onModel =
+          (model: ModelId, reasoning: Option.Option<string>) =>
+          (request: { readonly model: string; readonly reasoning?: string }) => {
+            expect(request.model).toBe(model)
+            expect(Option.fromUndefinedOr(request.reasoning)).toEqual(reasoning)
+          }
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          {
+            ...toolCallStep("route_hold", {}),
+            assertRequest: onModel(STRONG_MODEL, Option.some("high")),
+          },
+          { ...textStep("hard answer"), assertRequest: onModel(STRONG_MODEL, Option.some("high")) },
+          { ...textStep("light answer"), assertRequest: onModel(LIGHT_MODEL, Option.none()) },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [
+            routingExtension({
+              route: (input) =>
+                Ref.updateAndGet(inputs, (all) => [...all, input]).pipe(
+                  Effect.map((all) => ({
+                    choice: picks[all.length - 1] ?? 0,
+                    reason: `pick ${all.length}`,
+                  })),
+                ),
+            }),
+          ],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "do the hard thing" })
+        const firstTurn = yield* afterTurns(1)
+        // One route for the turn's two steps: both run on the strong model.
+        expect(routedEvents(firstTurn)).toHaveLength(1)
+        expect(routedEvents(firstTurn)[0]).toMatchObject({
+          selected: AUTO_MODEL,
+          model: STRONG_MODEL,
+          choice: 1,
+          effort: "high",
+          reason: "pick 1",
+        })
+        expect(routedEvents(firstTurn)[0]?.fallback).toBeUndefined()
+        expect(stepModels(firstTurn)).toEqual([STRONG_MODEL, STRONG_MODEL])
+        // The route lands before the turn's first request.
+        expect(firstTurn.findIndex(Schema.is(ModelRouted))).toBeLessThan(
+          firstTurn.findIndex((event) => event._tag === "StreamStarted"),
+        )
+        const [first] = yield* Ref.get(inputs)
+        expect(first?.current).toEqual(Option.none())
+        expect(first?.candidates.map(Option.map((model) => model.id))).toEqual([
+          Option.some(LIGHT_MODEL),
+          Option.some(STRONG_MODEL),
+        ])
+        expect(first?.messages.at(-1)?.role).toBe("user")
+
+        yield* client.message.send({ sessionId, branchId, content: "now something light" })
+        const both = yield* afterTurns(2)
+        expect(routedEvents(both).map((event) => event.model)).toEqual([STRONG_MODEL, LIGHT_MODEL])
+        expect(stepModels(both)).toEqual([STRONG_MODEL, STRONG_MODEL, LIGHT_MODEL])
+        // The second route reads the warm strong model and the history a switch rewrites.
+        const second = (yield* Ref.get(inputs))[1]
+        expect(Option.map(second?.current ?? Option.none(), (current) => current.model.id)).toEqual(
+          Option.some(STRONG_MODEL),
+        )
+        expect(Option.exists(second?.current ?? Option.none(), (current) => current.warm)).toBe(
+          true,
+        )
+        expect(
+          Option.exists(second?.current ?? Option.none(), (current) => current.historyTokens > 0),
+        ).toBe(true)
+        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        // The footer still names the virtual model; the metrics name where it routed.
+        expect(snapshot.resolvedModelId).toBe(AUTO_MODEL)
+        expect(snapshot.metrics.routed).toMatchObject({ selected: AUTO_MODEL, model: LIGHT_MODEL })
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a routed switch writes the model-change notice a switch by hand writes, and nothing else",
+    () =>
+      Effect.gen(function* () {
+        // One conversation on light, then a second turn on strong: picked by
+        // hand, or by the router. The second request is what is compared;
+        // both run in one directory, which the system prompt names.
+        const cwd = yield* makeTempDirectoryScoped("gent-route-bytes-")
+        const secondTurn = Effect.fn("test.secondTurn")(function* (selection: ModelId) {
+          const seen: Array<Prompt.Prompt> = []
+          const capture = (options: { readonly prompt: Prompt.Prompt }) => {
+            seen.push(options.prompt)
+          }
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("first answer"),
+            { ...textStep("strong answer"), assertOptions: capture },
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: e2ePreset.agents,
+            providerLayer,
+            cwd,
+            extensionInputs: [
+              routingExtension({ route: () => Effect.succeed({ choice: 1, reason: "hard" }) }),
+            ],
+          })
+          const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+          yield* client.session.updateSettings({
+            sessionId,
+            modelId: Option.some(LIGHT_MODEL),
+            reasoningLevel: Option.none(),
+          })
+          yield* client.message.send({ sessionId, branchId, content: "first" })
+          yield* afterTurns(1)
+          yield* client.session.updateSettings({
+            sessionId,
+            modelId: Option.some(selection),
+            reasoningLevel: Option.none(),
+          })
+          yield* client.message.send({ sessionId, branchId, content: "second" })
+          const events = yield* afterTurns(2)
+          const messages = yield* client.message.list({ branchId })
+          const [prompt] = seen
+          return {
+            models: stepModels(events),
+            transcript: messages.map((message) => message.metadata?.customType ?? message.role),
+            request: (prompt?.content ?? []).map((message) => ({
+              role: message.role,
+              text: promptText(Prompt.make([message])),
+            })),
+          }
+        })
+        const byHand = yield* secondTurn(STRONG_MODEL)
+        const routed = yield* secondTurn(AUTO_MODEL)
+        expect(routed.models).toEqual([LIGHT_MODEL, STRONG_MODEL])
+        // The route adds only the notice a hand switch adds, and sends the same request.
+        expect(routed.transcript).toEqual([
+          "user",
+          "assistant",
+          "user",
+          "model-change",
+          "assistant",
+        ])
+        expect(routed.transcript).toEqual(byHand.transcript)
+        expect(routed.request).toEqual(byHand.request)
+        expect(routed.request.at(-1)?.role).toBe("user")
+        expect(routed.request.at(-1)?.text).toContain(`continues with ${STRONG_MODEL}]`)
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a router that fails, dies or picks a choice the turn cannot run leaves the turn on the default choice",
+    () =>
+      Effect.gen(function* () {
+        const routes: ReadonlyArray<{
+          readonly route: ModelRouterContribution["route"]
+          readonly reason: string
+        }> = [
+          {
+            route: () =>
+              Effect.fail(
+                new ExtensionServiceError({
+                  service: "Models",
+                  operation: "decide",
+                  message: "no classifier",
+                }),
+              ),
+            reason: "the router failed: no classifier",
+          },
+          { route: () => Effect.die("router bug"), reason: "the router failed" },
+          {
+            route: () => Effect.succeed({ choice: 7, reason: "out of range" }),
+            reason: "the router picked choice 7, which the turn cannot run",
+          },
+        ]
+        for (const { route, reason } of routes) {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("fallback answer"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [routingExtension({ route, fallback: 1 })],
+          })
+          const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+          yield* selectAuto(client, sessionId)
+          yield* client.message.send({ sessionId, branchId, content: "route me" })
+          const events = yield* afterTurns(1)
+          const [routed] = routedEvents(events)
+          expect(routed).toMatchObject({ model: STRONG_MODEL, choice: 1, fallback: true })
+          expect(routed?.reason).toContain(reason)
+          expect(stepModels(events)).toEqual([STRONG_MODEL])
+          expect(events.filter(Schema.is(ErrorOccurred))).toEqual([])
+        }
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a router that does not answer within 10 seconds leaves the turn on the default choice",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("late answer"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [routingExtension({ route: () => Effect.never })],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "route me" })
+        const events = yield* afterTurns(1)
+        expect(routedEvents(events)[0]).toMatchObject({
+          model: LIGHT_MODEL,
+          choice: 0,
+          fallback: true,
+          reason: "the router gave no answer within 10000 ms",
+        })
+        expect(stepModels(events)).toEqual([LIGHT_MODEL])
+      }).pipe(Effect.timeout("18 seconds")),
+    22_000,
+  )
+
+  it.scopedLive(
+    "a router's pick on a provider with no sign-in leaves the turn on the default, and the route says why",
+    () =>
+      Effect.gen(function* () {
+        // The default's provider has a sign-in, the alternative's has none
+        // until the second turn.
+        const signedModel = ModelId.make("signed/main")
+        const unsignedModel = ModelId.make("unsigned/alt")
+        const chatDriver = (id: string): ModelDriverContribution => ({
+          id,
+          name: id,
+          envCredential: "GENT_TEST_ROUTE_SIGN_IN_KEY_NEVER_SET",
+          resolveModel: () => Effect.die("the test resolver serves the scripted model"),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("on the default"),
+          textStep("on the alternative"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          signIn: "checked",
+          extensionInputs: [
+            routingExtension({
+              choices: [
+                { model: signedModel, reason: "everyday work" },
+                { model: unsignedModel, reason: "hard work" },
+              ],
+              drivers: [chatDriver("signed"), chatDriver("unsigned")],
+              route: () => Effect.succeed({ choice: 1, reason: "hard" }),
+            }),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "signed", key: "test-key", sessionId })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "hard" })
+        yield* afterTurns(1)
+        // With a sign-in, the same pick runs.
+        yield* client.auth.setKey({ provider: "unsigned", key: "test-key", sessionId })
+        yield* client.message.send({ sessionId, branchId, content: "hard again" })
+        const events = yield* afterTurns(2)
+        const routed = routedEvents(events)
+        expect(routed[0]).toMatchObject({
+          model: signedModel,
+          choice: 0,
+          fallback: true,
+          reason: 'the router picked choice 1, whose provider "unsigned" has no sign-in',
+        })
+        expect(routed[1]).toMatchObject({ model: unsignedModel, choice: 1, reason: "hard" })
+        expect(routed[1]?.fallback).toBeUndefined()
+        expect(stepModels(events)).toEqual([signedModel, unsignedModel])
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a route with no choice signed in asks no classifier, falls back, and names the providers without a sign-in",
+    () =>
+      Effect.gen(function* () {
+        // The classifier has a sign-in; neither choice's provider has one.
+        const mainModel = ModelId.make("unsigned-main/main")
+        const altModel = ModelId.make("unsigned-alt/alt")
+        const chatDriver = (id: string): ModelDriverContribution => ({
+          id,
+          name: id,
+          envCredential: "GENT_TEST_ROUTE_SIGN_IN_KEY_NEVER_SET",
+          resolveModel: () => Effect.die("the test resolver serves the scripted model"),
+        })
+        const routes = yield* Ref.make(0)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("on the default"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          signIn: "checked",
+          extensionInputs: [
+            routingExtension({
+              choices: [
+                { model: mainModel, reason: "everyday work" },
+                { model: altModel, reason: "hard work" },
+              ],
+              drivers: [chatDriver("unsigned-main"), chatDriver("unsigned-alt"), routeJudgeDriver],
+              route: () =>
+                Effect.gen(function* () {
+                  yield* Ref.update(routes, (count) => count + 1)
+                  const ctx = yield* ExtensionContext
+                  yield* ctx.Models.decide({
+                    definition: Decision.make({
+                      input: Schema.String,
+                      decisions: {
+                        choice: Decision.classify({
+                          instructions: "Which choice",
+                          criteria: { choice1: "light work", choice2: "hard work" },
+                        }),
+                      },
+                    }),
+                    input: "route me",
+                  })
+                  return { choice: 1, reason: "hard" }
+                }),
+            }),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "route me" })
+        const events = yield* afterTurns(1)
+        expect(yield* Ref.get(routes)).toBe(0)
+        const [routed] = routedEvents(events)
+        expect(routed).toMatchObject({
+          model: mainModel,
+          choice: 0,
+          fallback: true,
+          reason:
+            'no choice can run: the providers "unsigned-main" and "unsigned-alt" have no sign-in',
+        })
+        expect(routed?.classifier).toBeUndefined()
+        expect(routed?.costUsd).toBeUndefined()
+        expect(stepModels(events)).toEqual([mainModel])
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a route that falls back keeps the model the branch runs on when it is a choice",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("strong answer"),
+          textStep("still strong"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [
+            routingExtension({
+              route: () =>
+                Ref.updateAndGet(calls, (count) => count + 1).pipe(
+                  Effect.flatMap((count) => {
+                    if (count === 1) return Effect.succeed({ choice: 1, reason: "hard" })
+                    return Effect.die("router bug")
+                  }),
+                ),
+            }),
+          ],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "hard" })
+        yield* afterTurns(1)
+        yield* client.message.send({ sessionId, branchId, content: "again" })
+        const events = yield* afterTurns(2)
+        // The default is light, but the branch's warm strong model is a choice.
+        expect(routedEvents(events).map((event) => [event.model, event.fallback === true])).toEqual(
+          [
+            [STRONG_MODEL, false],
+            [STRONG_MODEL, true],
+          ],
+        )
+        expect(stepModels(events)).toEqual([STRONG_MODEL, STRONG_MODEL])
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "selecting a virtual model while a tool runs keeps the turn on its model until the next turn",
+    () =>
+      Effect.gen(function* () {
+        const gate: HoldGate = {
+          entered: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        }
+        const calls = yield* Ref.make(0)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("route_hold", {}),
+          textStep("same model"),
+          textStep("routed now"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [
+            routingExtension({
+              hold: gate,
+              route: () =>
+                Ref.update(calls, (count) => count + 1).pipe(
+                  Effect.as({ choice: 1, reason: "hard" }),
+                ),
+            }),
+          ],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* client.message.send({ sessionId, branchId, content: "hold" })
+        yield* Deferred.await(gate.entered)
+        yield* selectAuto(client, sessionId)
+        yield* Deferred.succeed(gate.release, void 0)
+        const first = yield* afterTurns(1)
+        const [opening] = stepModels(first)
+        // Step 2 keeps the step-1 model: no route mid-turn, no notice, no router call.
+        expect(stepModels(first)).toEqual([opening, opening])
+        expect(routedEvents(first)).toHaveLength(1)
+        expect(routedEvents(first)[0]).toMatchObject({
+          model: opening,
+          fallback: true,
+          reason: "a turn routes only before its first request",
+        })
+        expect(routedEvents(first)[0]?.choice).toBeUndefined()
+        expect(yield* Ref.get(calls)).toBe(0)
+        const messages = yield* client.message.list({ branchId })
+        expect(messages.some((message) => message.metadata?.customType === "model-change")).toBe(
+          false,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "next turn" })
+        const both = yield* afterTurns(2)
+        expect(stepModels(both).at(-1)).toBe(STRONG_MODEL)
+        expect(yield* Ref.get(calls)).toBe(1)
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a recovered turn runs on its recorded route and does not ask the router again",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-route-replay-")
+        const dbPath = `${tempDir}/gent.db`
+        const gate: HoldGate = {
+          entered: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        }
+        const firstText = "FIRST-TURN"
+        // First process: the turn routes to strong, runs its tool, and dies
+        // while step 2 waits on the model.
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          toolCallStep("route_hold", {}),
+          { ...textStep("never emitted"), gated: true },
+        ])
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                agents: e2ePreset.agents,
+                providerLayer: firstProvider.layer,
+                extensionInputs: [
+                  routingExtension({
+                    hold: gate,
+                    route: () => Effect.succeed({ choice: 1, reason: "hard" }),
+                  }),
+                ],
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({})
+            yield* selectAuto(client, sessionId)
+            yield* client.message
+              .send({ sessionId, branchId, content: firstText })
+              .pipe(Effect.forkScoped)
+            yield* Deferred.await(gate.entered)
+            yield* Deferred.succeed(gate.release, void 0)
+            yield* firstProvider.controls.waitForCall(1)
+            return { sessionId, branchId }
+          }).pipe(Effect.timeout("10 seconds")),
+        )
+
+        // Second process: the router would pick light; the turn replays on strong.
+        const asked = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([])
+        const secondProvider = yield* LanguageModelLayers.sequence([
+          textStep("RECOVERED"),
+          textStep("NEXT"),
+        ])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                agents: e2ePreset.agents,
+                providerLayer: secondProvider.layer,
+                extensionInputs: [
+                  routingExtension({
+                    route: (input) =>
+                      Ref.update(asked, (all) => [...all, userTexts(input)]).pipe(
+                        Effect.as({ choice: 0, reason: "light" }),
+                      ),
+                  }),
+                ],
+                storagePath: dbPath,
+              }),
+            )
+            const afterTurns = yield* recordBranchEvents(client, started)
+            yield* client.session.getSnapshot(started)
+            yield* client.message.send({ ...started, content: "next" })
+            const events = yield* afterTurns(2)
+            const routed = routedEvents(events)
+            // One route per turn: the recovered turn's, recorded by the first process.
+            expect(routed.map((event) => event.model)).toEqual([STRONG_MODEL, LIGHT_MODEL])
+            // The first process's step 1, the recovered step 2, the next turn.
+            expect(stepModels(events)).toEqual([STRONG_MODEL, STRONG_MODEL, LIGHT_MODEL])
+            // The router saw only the next turn, never the recovered one.
+            expect((yield* Ref.get(asked)).map((texts) => texts.at(-1))).toEqual(["next"])
+          }).pipe(Effect.timeout("20 seconds")),
+        )
+      }).pipe(Effect.timeout("40 seconds")),
+    60_000,
+  )
+
+  it.scopedLive(
+    "a turn recovered after its route and before its first step keeps the route's charge in its cost, once",
+    () =>
+      Effect.gen(function* () {
+        // A priced classifier makes the cost its 21 tokens plus the step's;
+        // an unpriced one leaves the turn's cost unknown.
+        const cases = [
+          { judge: routeJudgeDriver, cost: Option.some((21 + 13) / 1_000_000) },
+          { judge: unpricedRouteJudgeDriver, cost: Option.none<number>() },
+        ]
+        for (const { judge, cost } of cases) {
+          const tempDir = yield* makeTempDirectoryScoped("gent-route-charge-")
+          const dbPath = `${tempDir}/gent.db`
+          const judged: ModelRouterContribution["route"] = () =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Models.decide({
+                definition: Decision.make({
+                  input: Schema.String,
+                  decisions: {
+                    choice: Decision.classify({
+                      instructions: "Which choice",
+                      criteria: { choice1: "light work", choice2: "hard work" },
+                    }),
+                  },
+                }),
+                input: "route me",
+              })
+              return { choice: 1, reason: "hard" }
+            })
+          // First process: the turn routes, sends its first request and dies
+          // before the step commits.
+          const firstProvider = yield* LanguageModelLayers.sequence([
+            { ...textStep("never emitted"), gated: true },
+          ])
+          const started = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(
+                createE2ELayer({
+                  agents: e2ePreset.agents,
+                  providerLayer: firstProvider.layer,
+                  extensionInputs: [routingExtension({ drivers: [judge], route: judged })],
+                  storagePath: dbPath,
+                  modelPricing: { input: 1, output: 1 },
+                }),
+              )
+              const { sessionId, branchId } = yield* client.session.create({})
+              yield* client.auth.setKey({ provider: judge.id, key: "test-key", sessionId })
+              yield* selectAuto(client, sessionId)
+              yield* client.message
+                .send({ sessionId, branchId, content: "route me" })
+                .pipe(Effect.forkScoped)
+              yield* firstProvider.controls.waitForCall(0)
+              return { sessionId, branchId }
+            }).pipe(Effect.timeout("10 seconds")),
+          )
+
+          // Second process: the recovered turn runs its step on the recorded
+          // route; the router is not asked again.
+          const secondProvider = yield* LanguageModelLayers.sequence([textStep("RECOVERED")])
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(
+                createE2ELayer({
+                  agents: e2ePreset.agents,
+                  providerLayer: secondProvider.layer,
+                  extensionInputs: [
+                    routingExtension({ drivers: [judge], route: () => Effect.die("asked again") }),
+                  ],
+                  storagePath: dbPath,
+                  modelPricing: { input: 1, output: 1 },
+                }),
+              )
+              const afterTurns = yield* recordBranchEvents(client, started)
+              yield* client.session.getSnapshot(started)
+              const events = yield* afterTurns(1)
+              expect(routedEvents(events)).toHaveLength(1)
+              expect(stepModels(events)).toEqual([STRONG_MODEL])
+              const completed = events.filter(Schema.is(TurnCompleted))
+              expect(completed).toHaveLength(1)
+              const turnCost = Option.fromUndefinedOr(completed[0]?.costUsd)
+              expect([judge.id, Option.isSome(turnCost)]).toEqual([judge.id, Option.isSome(cost)])
+              if (Option.isSome(cost))
+                expect(Option.getOrThrow(turnCost)).toBeCloseTo(cost.value, 12)
+            }).pipe(Effect.timeout("20 seconds")),
+          )
+        }
+      }).pipe(Effect.timeout("50 seconds")),
+    60_000,
+  )
+
+  it.scopedLive(
+    "a virtual model that routes to a router is refused: the catalog omits it and its turn says why",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [
+            routingExtension({
+              choices: [{ model: AUTO_MODEL, reason: "itself" }],
+              route: () => Effect.succeed({ choice: 0, reason: "loop" }),
+            }),
+          ],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        const models = yield* client.model.list({ sessionId })
+        expect(models.some((model) => model.id === AUTO_MODEL)).toBe(false)
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "route me" })
+        const events = yield* afterTurns(1)
+        expect(events.filter(Schema.is(ErrorOccurred)).map((event) => event.error)).toEqual([
+          `Model router "${AUTO_MODEL}": a router cannot route to a router: choice "${AUTO_MODEL}"`,
+        ])
+        expect(routedEvents(events)).toEqual([])
+        expect(stepModels(events)).toEqual([])
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "the catalog lists a virtual model with its label, beside the models it routes to",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensionInputs: [
+            ...e2ePreset.extensionInputs,
+            routingExtension({ route: () => Effect.succeed({ choice: 0, reason: "any" }) }),
+          ],
+        })
+        const models = yield* client.model.list({ sessionId })
+        expect(models.find((model) => model.id === AUTO_MODEL)).toMatchObject({
+          name: "Auto",
+          kind: "virtual",
+        })
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "the auth gate asks for the driver of a virtual model's default choice",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensionInputs: [
+            ...e2ePreset.extensionInputs,
+            routingExtension({
+              choices: [
+                { model: LIGHT_MODEL, reason: "light" },
+                { model: DEFAULT_MODEL_ID, reason: "default" },
+              ],
+              fallback: 1,
+              route: () => Effect.succeed({ choice: 0, reason: "any" }),
+            }),
+          ],
+        })
+        yield* selectAuto(client, sessionId)
+        const providers = yield* client.auth.listProviders({ sessionId })
+        expect(
+          providers
+            .filter((provider) => provider.required)
+            .map((provider) => String(provider.provider)),
+        ).toEqual(DEFAULT_MODEL_ID.split("/").slice(0, 1))
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a route to another provider sends the earlier model's reasoning as text, without its provider state",
+    () =>
+      Effect.gen(function* () {
+        const prompts = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([])
+        const encrypted = { openai: { itemId: "rs_1", encryptedContent: "enc-1" } }
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Ref.updateAndGet(prompts, (all) => [...all, options.prompt]).pipe(
+            Effect.map((all) => {
+              // The first turn reasons with OpenAI state; the routed one only answers.
+              if (all.length > 1)
+                return Stream.fromIterable([
+                  textDeltaPart("routed answer"),
+                  finishPart({ finishReason: "stop" }),
+                ] satisfies LanguageModelStreamPart[])
+              return Stream.fromIterable([
+                Response.makePart("reasoning-start", { id: "rs_1:0", metadata: encrypted }),
+                Response.makePart("reasoning-delta", { id: "rs_1:0", delta: "plan" }),
+                Response.makePart("reasoning-end", { id: "rs_1:0", metadata: encrypted }),
+                textDeltaPart("first answer"),
+                finishPart({ finishReason: "stop" }),
+              ] satisfies LanguageModelStreamPart[])
+            }),
+          ),
+        )
+        const openai = ModelId.make("openai/gpt-5.4")
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [
+            routingExtension({
+              choices: [
+                { model: openai, reason: "light" },
+                { model: STRONG_MODEL, reason: "hard" },
+              ],
+              route: () => Effect.succeed({ choice: 1, reason: "hard" }),
+            }),
+          ],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(openai),
+          reasoningLevel: Option.none(),
+        })
+        yield* client.message.send({ sessionId, branchId, content: "first" })
+        yield* afterTurns(1)
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "second" })
+        const events = yield* afterTurns(2)
+        expect(stepModels(events)).toEqual([openai, STRONG_MODEL])
+        const routedPrompt = (yield* Ref.get(prompts))[1]
+        const replayed = (routedPrompt?.content ?? []).flatMap((message) => {
+          if (message.role !== "assistant") return []
+          return message.content.flatMap((part) => {
+            if (part.type !== "reasoning") return []
+            return [[part.text, part.options]]
+          })
+        })
+        // The text goes back; the encrypted item, which only OpenAI reads, does not.
+        expect(replayed).toEqual([["plan", {}]])
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a route's classifier calls are priced into its event and the session's cost",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("classified answer"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [
+            routingExtension({
+              drivers: [routeJudgeDriver],
+              route: () =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  const reply = yield* ctx.Models.decide({
+                    definition: Decision.make({
+                      input: Schema.String,
+                      decisions: {
+                        choice: Decision.classify({
+                          instructions: "Which choice",
+                          criteria: { choice1: "light work", choice2: "hard work" },
+                        }),
+                      },
+                    }),
+                    input: "route me",
+                  })
+                  return {
+                    choice: Number(reply.answers.choice.label === "choice2"),
+                    reason: reply.answers.choice.label,
+                  }
+                }),
+            }),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "route me" })
+        const events = yield* afterTurns(1)
+        const [routed] = routedEvents(events)
+        // 21 input tokens at $1 per million.
+        expect(routed).toMatchObject({ classifier: "route-judge/jev", model: STRONG_MODEL })
+        expect(routed?.costUsd).toBeCloseTo(21 / 1_000_000, 12)
+        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        expect(snapshot.metrics.costUsd).toBeGreaterThanOrEqual(21 / 1_000_000)
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+})
+
+/** One priced classifier that answers every classification with its last label, at 21 input tokens. */
+const routeJudgeDriver: ModelDriverContribution = {
+  id: "route-judge",
+  name: "Route judge",
+  envCredential: "GENT_TEST_ROUTE_JUDGE_KEY_NEVER_SET",
+  resolveModel: () => Effect.die("the route judge serves a classifier only"),
+  listModels: () =>
+    Effect.succeed([
+      Model.make({
+        id: ModelId.make("route-judge/jev"),
+        name: "jev",
+        provider: ProviderId.make("route-judge"),
+        kind: "classifier",
+        pricing: { input: 1, output: 1 },
+      }),
+    ]),
+  resolveDecisionModel: () =>
+    Effect.succeed(
+      Layer.effect(
+        DecisionModel.DecisionModel,
+        DecisionModel.make({
+          decide: (options) =>
+            Effect.succeed({
+              answers: Object.fromEntries(
+                Object.entries(options.decisions).map(([name, decision]) => {
+                  let labels: ReadonlyArray<string> = []
+                  if (decision._tag === "Classify") labels = Object.keys(decision.criteria)
+                  const last = labels.length - 1
+                  return [
+                    name,
+                    {
+                      _tag: "Classify" as const,
+                      label: labels[last] ?? "",
+                      probabilities: Object.fromEntries(
+                        labels.map((label, index) => [label, Number(index === last)]),
+                      ),
+                      confidence: 0.9,
+                    },
+                  ]
+                }),
+              ),
+              usage: { inputTokens: 21, outputTokens: 0 },
+            }),
+        }),
+      ),
+    ),
+}
+
+/** The route judge with no price: a route through it has no known cost. */
+const unpricedRouteJudgeDriver: ModelDriverContribution = {
+  ...routeJudgeDriver,
+  id: "free-judge",
+  name: "Free judge",
+  listModels: () =>
+    Effect.succeed([
+      Model.make({
+        id: ModelId.make("free-judge/jev"),
+        name: "jev",
+        provider: ProviderId.make("free-judge"),
+        kind: "classifier",
+      }),
+    ]),
+}
+
 // ── turn record ─────────────────────────────────────────────────────────────
 
 /**
@@ -4519,6 +5528,36 @@ describe("turn ledger", () => {
         })
       }
       expect((yield* ledger.total).costUsd).toEqual(Option.some(0.75))
+    }),
+  )
+
+  it.effect("a route that every step of its turn reads is charged once", () =>
+    Effect.gen(function* () {
+      const ledger = yield* makeTurnLedger
+      const messageId = MessageId.make("ledger-routed")
+      yield* ledger.beginTurn(messageId)
+      const route = ModelRouted.make({
+        sessionId,
+        branchId,
+        messageId,
+        selected: ModelId.make("router/auto"),
+        model: ModelId.make("test/priced"),
+        reason: "hard",
+        classifier: ModelId.make("judge/jev"),
+        costUsd: 0.125,
+        durationMs: 1,
+      })
+      for (const cost of [0.5, 0.25]) {
+        yield* ledger.noteRoute(route)
+        yield* ledger.noteStep({
+          agent: AgentName.make("primary"),
+          model: ModelId.make("test/priced"),
+          usage: Option.some({ inputTokens: 100, outputTokens: 10 }),
+          costUsd: Option.some(cost),
+          toolCallCount: 0,
+        })
+      }
+      expect((yield* ledger.total).costUsd).toEqual(Option.some(0.875))
     }),
   )
 })

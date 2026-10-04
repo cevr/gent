@@ -15,6 +15,7 @@ import {
   Logger,
   Option,
   Queue,
+  Ref,
   References,
   Schema,
   Scope,
@@ -28,9 +29,11 @@ import { SocketCloseError } from "effect/socket/Socket"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import * as Prompt from "effect/ai/Prompt"
 import {
+  AgentDefinition,
   AgentName,
   BranchId,
   dateFromMillis,
+  DEFAULT_AGENT_NAME,
   GentRpcError,
   MessageId,
   Model,
@@ -50,9 +53,11 @@ import {
   userMessageIdForRequest,
 } from "@gent/core/protocol"
 import {
+  createRpcHarness,
   emptyQueueSnapshot,
   EventId,
   type ExtensionStatusScope,
+  LanguageModelLayers,
   makeTempDirectoryScoped,
   testAgent,
   waitFor,
@@ -2118,6 +2123,377 @@ describe("App status and activity rows", () => {
     })
     expect(statusModelName(model, [model], [])).toBe("Claude Opus 5")
   })
+  // A virtual model routes each turn: the row names it, the model its newest
+  // route chose and that route's effort, and the gauge reads the chosen
+  // model's window. A narrow row keeps the pair.
+  for (const width of [120, 60]) {
+    it.scopedLive(
+      `the status row names a virtual model and the model its route chose at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const sessionId = SessionId.make(`session-routed-${width}`)
+          const branchId = BranchId.make(`branch-routed-${width}`)
+          const auto = new Model({
+            id: ModelId.make("router/auto"),
+            name: "Auto",
+            provider: ProviderId.make("router"),
+            kind: "virtual",
+          })
+          const sonnet = new Model({
+            id: ModelId.make("anthropic/claude-sonnet-5"),
+            name: "Sonnet 5",
+            provider: ProviderId.make("anthropic"),
+            contextLength: 1_000_000,
+            inputLimit: 100_000,
+            outputLimit: 8_000,
+          })
+          const { setup } = yield* mountApp({
+            client: {
+              model: { list: () => Effect.succeed([sonnet, auto]) },
+              session: {
+                getSnapshot: () =>
+                  Effect.succeed({
+                    sessionId,
+                    branchId,
+                    messages: [],
+                    lastEventId: nullValue,
+                    reasoningLevel: absent,
+                    resolvedModelId: auto.id,
+                    agent: AgentName.make("main"),
+                    runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                    metrics: {
+                      turns: 1,
+                      durationMs: 0,
+                      costUsd: 0,
+                      lastInputTokens: 50_000,
+                      routed: {
+                        selected: auto.id,
+                        model: sonnet.id,
+                        effort: "high",
+                        reason: "choice 2: difficult work",
+                      },
+                    },
+                  }),
+              },
+            },
+            width,
+            initialSession: sessionNamed(sessionId, branchId, "Routed"),
+          })
+          const frame = yield* waitForFrame(
+            setup,
+            (next) => next.includes("Auto → Sonnet 5"),
+            "the routed model in the status row",
+          )
+          expect(frame).toContain("high")
+          expect(frame).toContain("(50%)")
+          // The picker lists the virtual model by its label, beside its id.
+          yield* typeCommand("/model")(setup)
+          const picker = yield* waitForFrame(
+            setup,
+            (next) => next.includes("Model ·") && next.includes("router/auto"),
+            "the virtual model in the picker",
+          )
+          expect(
+            picker.split("\n").some((row) => row.includes("Auto") && row.includes("router/auto")),
+          ).toBe(true)
+        }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
+  // The row as a live session draws it: the phase, the cwd, a routed model
+  // whose name another provider shares, its effort, the debug mark, and the
+  // cache label beside the gauge and the cost. A row too narrow for every
+  // label in full takes their short forms by its budget: the debug mark, then
+  // the cwd, then the model (no provider label, no family word), then the
+  // phase word; a label that fits again in full after a later one shortened
+  // gets its full form back.
+  const cacheLabel = defineClientExtension("@test/cache-label", {
+    setup: Effect.succeed(
+      statusLabelContribution({
+        anchor: "right",
+        produce: () => [{ text: "cache cold", color: "textMuted" as const }],
+      }),
+    ),
+  })
+  for (const [width, left, hidden] of [
+    [120, "idle · work · Auto → Claude Sonnet 5 (anthropic) · high · debug", []],
+    [80, "idle · work · Auto → Sonnet 5 · high · debug", ["Claude", "(anthropic)"]],
+    [60, "Auto → Sonnet 5 · high", ["Claude", "(anthropic)", "debug", "idle", "work"]],
+  ] as const) {
+    it.scopedLive(
+      `the status row at ${width} columns takes the short forms its budget needs, the cwd before the model`,
+      () =>
+        Effect.gen(function* () {
+          const sessionId = SessionId.make(`session-routed-shared-${width}`)
+          const branchId = BranchId.make(`branch-routed-shared-${width}`)
+          const auto = new Model({
+            id: ModelId.make("router/auto"),
+            name: "Auto",
+            provider: ProviderId.make("router"),
+            kind: "virtual",
+          })
+          const sonnet = (provider: string) =>
+            new Model({
+              id: ModelId.make(`${provider}/claude-sonnet-5`),
+              name: "Claude Sonnet 5",
+              provider: ProviderId.make(provider),
+              contextLength: 1_000_000,
+              inputLimit: 100_000,
+              outputLimit: 8_000,
+            })
+          const { setup } = yield* mountApp({
+            client: {
+              model: {
+                list: () => Effect.succeed([sonnet("anthropic"), sonnet("opencode"), auto]),
+              },
+              session: {
+                getSnapshot: () =>
+                  Effect.succeed({
+                    sessionId,
+                    branchId,
+                    messages: [],
+                    lastEventId: nullValue,
+                    reasoningLevel: absent,
+                    resolvedModelId: auto.id,
+                    agent: AgentName.make("main"),
+                    runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                    metrics: {
+                      turns: 1,
+                      durationMs: 0,
+                      costUsd: 0.0004,
+                      lastInputTokens: 500,
+                      routed: {
+                        selected: auto.id,
+                        model: ModelId.make("anthropic/claude-sonnet-5"),
+                        effort: "high",
+                        reason: "choice 2: difficult work",
+                      },
+                    },
+                  }),
+              },
+            },
+            app: { debugMode: true },
+            builtins: [...builtinClientModules, cacheLabel],
+            cwd: "/work",
+            width,
+            initialSession: sessionNamed(sessionId, branchId, "Routed shared"),
+          })
+          const frame = yield* waitForFrame(
+            setup,
+            (next) => next.includes("cache cold") && next.includes("Auto →"),
+            "the routed model in the status row",
+          )
+          const row = Option.getOrThrow(
+            Option.fromUndefinedOr(frame.split("\n").find((line) => line.includes("Auto →"))),
+          )
+          expect(row.trimStart().slice(0, left.length)).toBe(left)
+          expect(row).toContain("cache cold")
+          for (const text of hidden) expect([text, row.includes(text)]).toEqual([text, false])
+        }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
+  // A turn runs at the effort of its first step; a level set while it runs
+  // takes effect at the next turn. The row names the level the running turn
+  // runs at until the turn completes, then the session's.
+  it.scopedLive(
+    "the status row keeps the running turn's effort until the turn completes, then shows the new one",
+    () =>
+      Effect.gen(function* () {
+        const reasoner = new Model({
+          id: ModelId.make("effort-test/thinker"),
+          name: "Thinker 1",
+          provider: ProviderId.make("effort-test"),
+          contextLength: 200_000,
+          reasoning: true,
+          efforts: ["low", "medium", "high"],
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.signal("The answer.")
+        const harness = yield* createRpcHarness({
+          providerLayer,
+          agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: reasoner.id })],
+          extensionInputs: [],
+          models: [reasoner],
+        })
+        // The held reply ends before the server closes, whether the test passes or not.
+        yield* Effect.addFinalizer(() => controls.emitAll)
+        let ctx = Option.none<ClientContextValue>()
+        const setup = yield* renderScoped(
+          () => (
+            <>
+              <App />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+            </>
+          ),
+          {
+            client: harness.client,
+            runtime: createMockRuntime(),
+            width: 100,
+            initialSession: sessionNamed(harness.sessionId, harness.branchId, "Effort"),
+          },
+        )
+        const client = yield* requireClient(ctx)
+        // What the server published, in order: the test reads when the turn ends.
+        const published = yield* Ref.make<ReadonlyArray<string>>([])
+        yield* harness.client.session
+          .events({ sessionId: harness.sessionId, branchId: harness.branchId })
+          .pipe(
+            Stream.runForEach(({ event }) => Ref.update(published, (all) => [...all, event._tag])),
+            Effect.forkScoped,
+          )
+        const completed = Effect.map(Ref.get(published), (all) => all.includes("TurnCompleted"))
+        // The row names the session's directory, the harness's temporary one.
+        const statusRow = (frame: string) =>
+          frame.split("\n").find((line) => line.includes("gent-test-cwd-")) ?? ""
+        yield* typeCommand("/effort low")(setup)
+        yield* waitForFrame(setup, (frame) => statusRow(frame).includes("· low"), "low set")
+        yield* Effect.promise(() => setup.mockInput.typeText("think"))
+        setup.mockInput.pressEnter()
+        yield* controls.waitForStreamStart.pipe(Effect.timeout("3 seconds"))
+        yield* typeCommand("/effort high")(setup)
+        yield* waitUntil(
+          () => Option.contains(client.reasoningLevel(), "high"),
+          "the session's level is high",
+        )
+        // The reply streams its text and holds its end: the turn still runs.
+        yield* controls.emitNext
+        const during = yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("The answer.") && statusRow(frame).length > 0,
+          "the reply's text during the turn",
+        )
+        expect(yield* completed).toBe(false)
+        expect(statusRow(during)).toContain("· low")
+        expect(statusRow(during)).not.toContain("high")
+        yield* controls.emitAll
+        yield* waitFor(completed, (done) => done, 3_000, "the turn completed")
+        const after = yield* waitForFrame(
+          setup,
+          (frame) => statusRow(frame).includes("· high"),
+          "the new level after the turn",
+        )
+        expect(statusRow(after)).not.toContain("low")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+  // Under a virtual model the effort picker reads the routed model: its
+  // levels, and a default row that names the route's level, which the turn
+  // asks for before the agent's, clamped to what the routed model takes.
+  it.scopedLive("the effort picker under a virtual model lists the routed model's levels", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-routed-effort")
+      const branchId = BranchId.make("branch-routed-effort")
+      const auto = new Model({
+        id: ModelId.make("router/auto"),
+        name: "Auto",
+        provider: ProviderId.make("router"),
+        kind: "virtual",
+      })
+      const sonnet = new Model({
+        id: ModelId.make("anthropic/claude-sonnet-5"),
+        name: "Sonnet 5",
+        provider: ProviderId.make("anthropic"),
+        reasoning: true,
+        efforts: ["low", "medium", "high"],
+      })
+      const { setup } = yield* mountApp({
+        client: {
+          model: { list: () => Effect.succeed([sonnet, auto]) },
+          session: {
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId,
+                branchId,
+                messages: [],
+                lastEventId: nullValue,
+                reasoningLevel: absent,
+                defaultReasoningLevel: "medium",
+                resolvedModelId: auto.id,
+                agent: AgentName.make("main"),
+                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                metrics: {
+                  turns: 1,
+                  durationMs: 0,
+                  costUsd: 0,
+                  lastInputTokens: 0,
+                  routed: {
+                    selected: auto.id,
+                    model: sonnet.id,
+                    effort: "max",
+                    reason: "choice 2: difficult work",
+                  },
+                },
+              }),
+          },
+        },
+        width: 120,
+        initialSession: sessionNamed(sessionId, branchId, "Routed effort"),
+      })
+      // The row shows what the routed model is sent for the route's `max`.
+      yield* waitForFrame(setup, (next) => next.includes("Auto → Sonnet 5 · high"), "the row")
+      yield* typeCommand("/effort")(setup)
+      const picker = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Effort · 4"),
+        "the effort picker",
+      )
+      expect(picker).toContain("the route's choice (max, sends high)")
+      expect(picker).not.toContain("minimal")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  // The route belongs to the virtual model: once the session leaves it, the
+  // row names the concrete model alone.
+  it.scopedLive("a route of a virtual model the session left is not named", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-left-router")
+      const branchId = BranchId.make("branch-left-router")
+      const opus = new Model({
+        id: ModelId.make("anthropic/claude-opus-5"),
+        name: "Opus 5",
+        provider: ProviderId.make("anthropic"),
+      })
+      const sonnet = new Model({
+        id: ModelId.make("anthropic/claude-sonnet-5"),
+        name: "Sonnet 5",
+        provider: ProviderId.make("anthropic"),
+      })
+      const { setup } = yield* mountApp({
+        client: {
+          model: { list: () => Effect.succeed([opus, sonnet]) },
+          session: {
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId,
+                branchId,
+                messages: [],
+                lastEventId: nullValue,
+                reasoningLevel: absent,
+                resolvedModelId: opus.id,
+                agent: AgentName.make("main"),
+                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                metrics: {
+                  turns: 1,
+                  durationMs: 0,
+                  costUsd: 0,
+                  lastInputTokens: 0,
+                  routed: {
+                    selected: ModelId.make("router/auto"),
+                    model: sonnet.id,
+                    reason: "choice 1",
+                  },
+                },
+              }),
+          },
+        },
+        width: 120,
+        initialSession: sessionNamed(sessionId, branchId, "Left"),
+      })
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Opus 5"),
+        "the concrete model in the status row",
+      )
+      expect(frame).not.toContain("→ Sonnet 5")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
 })
 
 describe("App drafts, queue restore and forks across session switches", () => {
@@ -2809,7 +3185,7 @@ describe("App cancel and quit keys during a turn", () => {
     readonly draft: Option.Option<string>
   }> = [
     { name: "/model", title: "Model ·", open: typeCommand("/model"), draft: Option.none() },
-    { name: "/think", title: "Reasoning ·", open: typeCommand("/think"), draft: Option.none() },
+    { name: "/effort", title: "Effort ·", open: typeCommand("/effort"), draft: Option.none() },
     { name: "/auth", title: "Sign in ·", open: typeCommand("/auth"), draft: Option.none() },
     {
       name: "prompt search",
@@ -3330,7 +3706,9 @@ describe("App slash commands", () => {
         "the failure",
       )
       const row = failed.split("\n").find((line) => line.includes("audit refused")) ?? ""
-      expect(row.trim()).toStartWith("/audit failed: audit refused on this branch ·")
+      // The error stays whole; the cwd and the model give way to it.
+      expect(row.trim()).toStartWith("/audit failed: audit refused on this branch")
+      expect(row).not.toContain("…")
       yield* typeCommand("/note")(setup)
       const frame = yield* waitForFrame(
         setup,
@@ -3946,7 +4324,7 @@ describe("App docked panes at short heights", () => {
         (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("┃ after"),
         "the full terminal",
       )
-      expect(renderFrame(view.setup)).not.toContain("Reasoning ·")
+      expect(renderFrame(view.setup)).not.toContain("Effort ·")
       expect(view.steers).toEqual([])
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
@@ -4688,15 +5066,15 @@ describe("App startup prompt and renames", () => {
         () => sentMessages.some((message) => message.content === initialPrompt),
         "sent message",
       )
-      // The docked reasoning pane is part of the session view: a new mount
-      // would close it.
+      // The docked effort pane is part of the session view: a new mount
+      // would close it. `/think` is the command's earlier name.
       yield* typeCommand("/think")(setup)
-      yield* waitForFrame(setup, (frame) => frame.includes("Reasoning ·"), "the reasoning pane")
+      yield* waitForFrame(setup, (frame) => frame.includes("Effort ·"), "the effort pane")
       // The server names the session after the first turn. The record is new;
       // the session is the same one.
       yield* renameSessionA(setup, clientContext)
       const frame = yield* waitForFrame(setup, () => true, "the frame after the rename")
-      expect(frame).toContain("Reasoning ·")
+      expect(frame).toContain("Effort ·")
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -5491,13 +5869,13 @@ describe("TUI renderer surfaces", () => {
       expect(statusRowAbove(palette, "Commands")).toBe(true)
       view.setup.mockInput.pressEscape()
       yield* waitForFrame(view.setup, (frame) => !frame.includes("esc close"), "palette closed")
-      yield* typeCommand("/think")(view.setup)
-      const think = yield* waitForFrame(
+      yield* typeCommand("/effort")(view.setup)
+      const effort = yield* waitForFrame(
         view.setup,
-        (frame) => frame.includes("Reasoning ·"),
-        "the reasoning pane",
+        (frame) => frame.includes("Effort ·"),
+        "the effort pane",
       )
-      expect(statusRowAbove(think, "Reasoning ·")).toBe(true)
+      expect(statusRowAbove(effort, "Effort ·")).toBe(true)
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a resumed session with turns behind it reads idle, not ready", () =>

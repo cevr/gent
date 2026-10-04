@@ -50,6 +50,7 @@ import {
   makeLanguageModelLayer,
   ScriptedLanguageModel,
   type ScriptedStep,
+  signInReady,
   textDeltaPart,
 } from "../runtime/provider.js"
 
@@ -313,6 +314,8 @@ export interface SequenceStep extends ScriptedStep {
     readonly reasoning?: string
     /** The output cap the request asks the driver for. */
     readonly maxTokens?: number
+    /** The effort each earlier assistant run was sent at (`ProviderHints.reasoningHistory`). */
+    readonly reasoningHistory: ReadonlyArray<Option.Option<string>>
   }) => void
   readonly assertOptions?: (options: ProviderOptions) => void
   readonly gated?: boolean
@@ -474,6 +477,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
             try: () =>
               step.assertRequest?.({
                 model: String(request.modelId),
+                reasoningHistory: request.hints?.reasoningHistory ?? [],
                 ...omitUndefined({
                   reasoning: request.hints?.reasoning,
                   maxTokens: request.hints?.maxTokens,
@@ -530,6 +534,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
 /**
  * A model resolver over a test model layer: it serves the one model for every
  * request, after the sequence's `assertRequest` check when the layer has one.
+ * Every driver counts as signed in.
  */
 const resolver = (layer: Layer.Layer<LanguageModel.LanguageModel>): Layer.Layer<ModelResolver> =>
   Layer.effect(
@@ -543,12 +548,39 @@ const resolver = (layer: Layer.Layer<LanguageModel.LanguageModel>): Layer.Layer<
             onNone: () => Effect.succeed(model),
             onSome: (check) => check(request).pipe(Effect.as(model)),
           }),
+        signedIn: () => Effect.succeed(true),
       })
     }),
   ).pipe(Layer.provide(layer))
 
+/**
+ * `resolver`'s model, with each driver signed in as the production resolver
+ * reads it (`signInReady`): a test about which drivers a turn can run on.
+ */
+const signInCheckedResolver = (
+  layer: Layer.Layer<LanguageModel.LanguageModel>,
+): Layer.Layer<ModelResolver, never, Auth | ModelCatalogSource> =>
+  Layer.effect(
+    ModelResolver,
+    Effect.gen(function* () {
+      const scripted = yield* ModelResolver
+      const auth = yield* Auth
+      const catalogSource = yield* ModelCatalogSource
+      return ModelResolver.of({
+        resolve: scripted.resolve,
+        signedIn: (driverId, registry) =>
+          signInReady(driverId).pipe(
+            Effect.provideService(Auth, auth),
+            Effect.provideService(ModelCatalogSource, catalogSource),
+            Effect.provideService(ExtensionRegistry, registry),
+          ),
+      })
+    }),
+  ).pipe(Layer.provide(resolver(layer)))
+
 export const LanguageModelLayers = {
   resolver,
+  signInCheckedResolver,
   testStream,
   /**
    * The scripted model without its rate-limit retries unless a test asks for

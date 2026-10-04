@@ -130,6 +130,7 @@ import {
   listAuthMethods,
   listAuthProviders,
   listCatalogProviders,
+  makeExtensionModels,
   removeSignIn,
   storeSignIn,
   type ModelCatalogFailure,
@@ -159,6 +160,7 @@ import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent
 import {
   type AgentLoopTurnProfile,
   resolveSessionRoute,
+  routeCredentialDriver,
   runAgentLoopTurnProfile,
   turnRegistry,
 } from "../runtime/turn.js"
@@ -268,7 +270,10 @@ const getBranchTree = (
 
 // ── extension-health ────────────────────────────────────────────────────────
 
-/** Each failed catalog under the extension that contributes its driver. */
+/**
+ * Each failed catalog under the extension that contributes its driver, and
+ * each refused virtual model under the extension that contributes its router.
+ */
 const catalogFailuresByExtension = (
   resolved: ReturnType<ExtensionRegistryService["getResolved"]>,
   failures: ReadonlyArray<ModelCatalogFailure>,
@@ -276,8 +281,11 @@ const catalogFailuresByExtension = (
   const byExtension = new Map<string, Array<ExtensionHealthIssue>>()
   for (const failure of failures) {
     const driver = resolved.modelDrivers.get(failure.driverId)
-    const owner = resolved.extensions.find((extension) =>
-      (extension.contributions.modelDrivers ?? []).some((candidate) => candidate === driver),
+    const router = resolved.modelRouters.get(failure.driverId)
+    const owner = resolved.extensions.find(
+      (extension) =>
+        (extension.contributions.modelDrivers ?? []).some((candidate) => candidate === driver) ||
+        (extension.contributions.modelRouters ?? []).some((candidate) => candidate === router),
     )
     if (Predicate.isUndefined(owner)) continue
     const issues = byExtension.get(owner.manifest.id) ?? []
@@ -470,6 +478,7 @@ const makeSessionMutationsService: Effect.Effect<
   // deleted session, so no session control is wired.
   const deletedSessionHostProvider = yield* makeExtensionHostContextProvider({
     host: yield* makeExtensionHostPlatform,
+    models: yield* makeExtensionModels,
   })
 
   /**
@@ -1069,6 +1078,7 @@ const getSessionView = Effect.fn("SessionQueries.getSessionView")(function* (ses
       ...session,
       resolvedModelId: route.modelId,
       resolvedReasoningLevel: Option.getOrUndefined(route.reasoningLevel),
+      defaultReasoningLevel: Option.getOrUndefined(route.defaultReasoningLevel),
     }),
   )
 })
@@ -1145,6 +1155,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     agent: route.name,
     resolvedModelId: route.modelId,
     resolvedReasoningLevel: Option.getOrUndefined(route.reasoningLevel),
+    defaultReasoningLevel: Option.getOrUndefined(route.defaultReasoningLevel),
     runtime,
     metrics: snapshotState.metrics,
   })
@@ -1655,9 +1666,13 @@ const RpcHandlers = GentRpcs.toLayer(
           const config = yield* configService.get(Option.getOrUndefined(cwd))
           const agents = [...registry.getResolved().agents.values()]
           // The driver a turn routes through: the agent's driver, else the
-          // config override, else the model id's provider segment.
+          // config override, else the model id's provider segment; for a
+          // virtual model, its default choice's.
           const driverFor = (admission: Option.Option<SessionAdmission>) =>
-            resolveSessionRoute({ agents, admission, config, session }).modelDriver.driverId
+            routeCredentialDriver(
+              resolveSessionRoute({ agents, admission, config, session }),
+              registry.getResolved(),
+            )
           // The session's own agent, then an agent the caller asks about.
           const admissions = [Option.fromUndefinedOr(session.admission)]
           if (!Predicate.isUndefined(agentName)) admissions.push(Option.some({ agent: agentName }))
@@ -1828,8 +1843,11 @@ interface DependencyOverrides {
   >
   /** The HTTP client the models.dev catalog fetches through; tests pass the fixture client. */
   readonly modelCatalogHttpLayer?: Layer.Layer<HttpClient.HttpClient>
-  /** Replaces the auth-backed live resolver (a scripted or fixed model). */
-  readonly modelResolverLayer?: Layer.Layer<ModelResolver>
+  /**
+   * Replaces the auth-backed live resolver (a scripted or fixed model). It may
+   * read the auth store and the catalog, as a resolver that checks sign-ins does.
+   */
+  readonly modelResolverLayer?: Layer.Layer<ModelResolver, never, Auth | ModelCatalogSource>
   readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>

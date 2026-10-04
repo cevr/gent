@@ -204,11 +204,13 @@ interface AgentState {
   error: Option.Option<string>
   /**
    * What the next turn would use, resolved by the server from session
-   * settings, config, and the agent definition (`SessionSnapshot.resolved*`).
-   * Hydrated from the snapshot and refreshed after every settings change.
+   * settings, config, and the agent definition (`SessionSnapshot.resolved*`),
+   * and the reasoning level without the session's own
+   * (`SessionSnapshot.defaultReasoningLevel`). Hydrated from the snapshot and
+   * refreshed after every settings change.
    */
   resolvedModelId: Option.Option<ModelId>
-  resolvedReasoningLevel: Option.Option<ReasoningEffort>
+  defaultReasoningLevel: Option.Option<ReasoningEffort>
 }
 
 // ── session state ───────────────────────────────────────────────────────────
@@ -573,6 +575,12 @@ export interface SessionMetrics {
   readonly context: Option.Option<ModelContextMetrics>
 }
 
+/** What a virtual model's newest route chose (`ModelRouted`). */
+interface RoutedModel {
+  readonly model: Model
+  readonly effort: Option.Option<ReasoningEffort>
+}
+
 interface ClientAgentValue {
   // Agent state (derived from events)
   /** None until a snapshot names the session's agent. */
@@ -580,10 +588,20 @@ interface ClientAgentValue {
   cost: () => number
   /** The model the next turn would use: session setting, else the server-resolved default. */
   model: () => string
-  /** The session's level, else the resolved one; None before either is known. */
+  /**
+   * The level the next turn asks for: the session's, else its route's (a
+   * virtual model), else the default one; None before any is known.
+   */
   reasoningLevel: () => Option.Option<ReasoningEffort>
+  /**
+   * While a turn runs, the level its requests go out at (its newest
+   * `StreamStarted`, until its `TurnCompleted`; None when they name none): a
+   * level set meanwhile waits for the next turn. Else, and before the turn's
+   * first request, `reasoningLevel`.
+   */
+  turnReasoningLevel: () => Option.Option<ReasoningEffort>
   /** The reasoning level config/agent would apply without a session override. */
-  resolvedReasoningLevel: () => Option.Option<ReasoningEffort>
+  defaultReasoningLevel: () => Option.Option<ReasoningEffort>
   // Derived accessors
   /** Whether a turn runs; an error on screen does not change it. */
   isStreaming: () => boolean
@@ -596,6 +614,18 @@ interface ClientAgentValue {
   sessionMetrics: () => SessionMetrics
   /** None until the model registry loads the model in use. */
   modelInfo: () => Option.Option<Model>
+  /**
+   * The concrete model the newest route of the virtual model in use chose,
+   * and the effort that route set. None for a concrete model, before the
+   * first route, and after a switch away from the virtual model.
+   */
+  routedModel: () => Option.Option<RoutedModel>
+  /**
+   * The concrete model the next turn runs on, as far as the client knows:
+   * the routed model under a virtual model, else `modelInfo`. Its window and
+   * its effort levels are the ones the status row and the effort picker read.
+   */
+  turnModel: () => Option.Option<Model>
   /**
    * The chat models the session's profile serves, in catalog order: a
    * registered driver's, and an active models.dev provider's. Empty until
@@ -783,7 +813,7 @@ export function ClientProvider(props: ClientProviderProps) {
     turnsStarted: Option.none(),
     error: Option.none(),
     resolvedModelId: Option.none(),
-    resolvedReasoningLevel: Option.none(),
+    defaultReasoningLevel: Option.none(),
   })
   /**
    * The branch's totals: the snapshot's fold, then each live event stepped on
@@ -873,7 +903,7 @@ export function ClientProvider(props: ClientProviderProps) {
       turnsStarted: Option.none(),
       error: Option.none(),
       resolvedModelId: Option.none(),
-      resolvedReasoningLevel: Option.none(),
+      defaultReasoningLevel: Option.none(),
     })
     setRuntimeMetrics(initialSessionMetrics)
     setNoticeState(Option.none())
@@ -1081,7 +1111,7 @@ export function ClientProvider(props: ClientProviderProps) {
       turnsStarted: Option.some(turnsStarted),
       error: heldErrorFor(snapshot, turnsStarted),
       resolvedModelId: Option.some(snapshot.resolvedModelId),
-      resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
+      defaultReasoningLevel: Option.fromUndefinedOr(snapshot.defaultReasoningLevel),
     })
     setRuntimeMetrics(snapshot.metrics)
   }
@@ -1109,7 +1139,7 @@ export function ClientProvider(props: ClientProviderProps) {
             reply.write(() =>
               setAgentStore({
                 resolvedModelId: Option.fromUndefinedOr(view.value.resolvedModelId),
-                resolvedReasoningLevel: Option.fromUndefinedOr(view.value.resolvedReasoningLevel),
+                defaultReasoningLevel: Option.fromUndefinedOr(view.value.defaultReasoningLevel),
               }),
             )
           }),
@@ -1465,12 +1495,23 @@ export function ClientProvider(props: ClientProviderProps) {
       if (Option.isSome(resolved)) return resolveAgentModel(resolved.value)
       return DEFAULT_MODEL_ID
     },
+    // The turn's order (`applyTurnRoute`): the session's own level, else the
+    // route's, else the agent or config default.
     reasoningLevel: () =>
-      Option.orElse(
-        Option.fromUndefinedOr(session().reasoningLevel),
-        () => agentStore.resolvedReasoningLevel,
+      Option.orElse(Option.fromUndefinedOr(session().reasoningLevel), () =>
+        Option.orElse(
+          Option.flatMap(agentValue.routedModel(), (route) => route.effort),
+          () => agentStore.defaultReasoningLevel,
+        ),
       ),
-    resolvedReasoningLevel: () => agentStore.resolvedReasoningLevel,
+    // From the event fold alone, so the level changes at `TurnCompleted`, in
+    // the feed's order; the runtime watch is a second stream with its own.
+    turnReasoningLevel: () =>
+      Option.match(Option.fromUndefinedOr(runtimeMetrics().turnEffort), {
+        onNone: agentValue.reasoningLevel,
+        onSome: (turn) => Option.fromUndefinedOr(turn.level),
+      }),
+    defaultReasoningLevel: () => agentStore.defaultReasoningLevel,
     // Derived accessors
     isStreaming: () => agentStore.running,
     turnsStarted: () => agentStore.turnsStarted,
@@ -1478,6 +1519,21 @@ export function ClientProvider(props: ClientProviderProps) {
     error: () => agentStore.error,
     sessionMetrics,
     modelInfo: () => Option.fromNullishOr(catalog().modelsById[agentValue.model()]),
+    routedModel: () =>
+      Option.fromUndefinedOr(runtimeMetrics().routed).pipe(
+        Option.filter((routed) => routed.selected === agentValue.model()),
+        Option.flatMap((routed) =>
+          Option.map(Option.fromNullishOr(catalog().modelsById[routed.model]), (model) => ({
+            model,
+            effort: Option.fromUndefinedOr(routed.effort),
+          })),
+        ),
+      ),
+    turnModel: () =>
+      Option.orElse(
+        Option.map(agentValue.routedModel(), (route) => route.model),
+        agentValue.modelInfo,
+      ),
     models: runnableModels,
     modelCatalog: () => {
       if (!catalog().settled) return Option.none()

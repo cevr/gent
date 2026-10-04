@@ -47,14 +47,16 @@ export const basePromptSections = [
 ]
 
 /**
- * The default agent and its persona. Its model is `DEFAULT_MODEL_ID`.
+ * The default agent and its persona. Its model is `DEFAULT_MODEL_ID`, at
+ * `high` effort: the default of most providers and of the prior arts, and a
+ * model that accepts no `high` clamps it. `max` costs more on every turn.
  * Children run as the `delegate` agent, so there is no roster of role
  * agents to pick from.
  */
 export const main = AgentDefinition.make({
   name: AgentName.make("main"),
   description: "General purpose agent that solves tasks with code in the cell",
-  reasoningEffort: "max",
+  reasoningEffort: "high",
 })
 
 /** Sorts after the environment section and before extension sections such as skills. */

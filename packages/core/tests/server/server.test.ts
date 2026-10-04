@@ -3284,6 +3284,12 @@ describe("message.send", () => {
         const settingsView = yield* client.session.get({ sessionId: created.sessionId })
         expect(settingsView?.resolvedModelId).toBe(sessionModel)
         expect(settingsView?.resolvedReasoningLevel).toBe("max")
+        // The level the session falls back to when it clears its own: the
+        // `/effort` picker's `default` row names it under an override.
+        expect([withSettings.defaultReasoningLevel, settingsView?.defaultReasoningLevel]).toEqual([
+          "low",
+          "low",
+        ])
 
         yield* client.message.send({
           sessionId: created.sessionId,
