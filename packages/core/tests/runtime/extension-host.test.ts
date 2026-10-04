@@ -442,6 +442,8 @@ const makeCacheLayer = (params: {
   readonly allowFailedExtensions?: boolean
   /** Wraps the config service the cache reads, for a test that orders its reads. */
   readonly wrapConfig?: (live: ConfigService["Service"]) => ConfigService["Service"]
+  /** Wraps the file system the cache reads, for a test that counts its reads. */
+  readonly wrapFileSystem?: (live: FileSystem.FileSystem) => FileSystem.FileSystem
 }) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: params.cwd,
@@ -470,9 +472,18 @@ const makeCacheLayer = (params: {
     extensions: params.extensions,
   }).pipe(
     Layer.provide(
-      Layer.merge(
+      Layer.mergeAll(
         BunServices.layer,
         SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+        // A later layer's service wins: the wrapped file system, when given.
+        Option.match(Option.fromUndefinedOr(params.wrapFileSystem), {
+          onNone: () => Layer.empty,
+          onSome: (wrap) =>
+            Layer.effect(
+              FileSystem.FileSystem,
+              Effect.map(Effect.service(FileSystem.FileSystem), wrap),
+            ).pipe(Layer.provide(BunServices.layer)),
+        }),
       ),
     ),
     Layer.provideMerge(configLive),
@@ -518,6 +529,7 @@ export default defineExtension({
   return {
     home,
     launch,
+    extensionDir,
     index,
     // Replaced, as gent and most editors save: a new inode and mtime.
     writeValue: (value: string) =>
@@ -622,6 +634,42 @@ export default defineExtension({
   }),
 });
 `,
+}
+
+/**
+ * One extension file for the user and the project scope alike: id `swap`, a
+ * process Resource that keeps one file in `marks` while it lives, or that
+ * dies at startup when `value` is `startup`. The same value is the same code,
+ * so the same version, in either scope.
+ */
+function swapSource(value: string, marks: string): string {
+  let layer = `Layer.effect(Swap, Effect.gen(function* () {
+        const mark = join(${encodeJson(marks)}, randomUUID());
+        writeFileSync(mark, "");
+        yield* Effect.addFinalizer(() => Effect.sync(() => rmSync(mark)));
+        return Swap.of({ value: "${value}" });
+      }))`
+  if (value === "startup") layer = 'Layer.effect(Swap, Effect.die("startup broke"))'
+  return `import { randomUUID } from "node:crypto";
+import { rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class Swap extends Context.Service<Swap, { readonly value: string }>()(
+  "@gent/core/tests/runtime/extension-host.test/Swap",
+) {}
+export default defineExtension({
+  id: "swap",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "swap/service",
+      scope: "process",
+      layer: ${layer},
+    }));
+  }),
+});
+`
 }
 
 function chainSetupFailure(value: string): string {
@@ -832,6 +880,7 @@ export default defineExtension({
         const fs = yield* FileSystem.FileSystem
         const fixture = yield* graphExtensionFixture
         const bundles = yield* Ref.make(0)
+        const reads = yield* Ref.make(0)
 
         yield* Effect.gen(function* () {
           const cache = yield* SessionProfileCache
@@ -855,10 +904,31 @@ export default defineExtension({
           yield* writeFileAtomic(fixture.index, indexText)
           expect(yield* resolve).toBe(second)
           expect(yield* Ref.get(bundles)).toBe(built)
+
+          // Nothing touched: a stat of each input, no read and no build.
+          const readsBefore = yield* Ref.get(reads)
+          expect(yield* resolve).toBe(second)
+          expect(yield* Ref.get(reads)).toBe(readsBefore)
+          expect(yield* Ref.get(bundles)).toBe(built)
         }).pipe(
           Effect.timeout("15 seconds"),
           Effect.provide(
-            makeCacheLayer({ cwd: fixture.launch, home: fixture.home, extensions: [] }),
+            makeCacheLayer({
+              cwd: fixture.launch,
+              home: fixture.home,
+              extensions: [],
+              // Counts the reads of the extension's own files.
+              wrapFileSystem: (live) => ({
+                ...live,
+                readFile: (file) => {
+                  const counted = file.startsWith(fixture.extensionDir)
+                  return Effect.andThen(
+                    Ref.update(reads, (n) => n + Number(counted)),
+                    live.readFile(file),
+                  )
+                },
+              }),
+            }),
           ),
           Effect.updateService(GentPlatform, (live) =>
             GentPlatform.of({
@@ -873,11 +943,16 @@ export default defineExtension({
   )
 
   // An editor can save while a build reads the files. The build then holds
-  // the old bytes; the next resolve must not keep it as the new version.
+  // other bytes than the files; the next resolve must not keep it as the new
+  // version, also when the save is undone before the build ends.
   it.scopedLive("a save during a build reaches the next resolve", () =>
     Effect.gen(function* () {
       const fixture = yield* graphExtensionFixture
-      const duringBuild = yield* Ref.make(Option.none<Effect.Effect<void>>())
+      // Saves that land as a build starts and as it ends.
+      const duringBuild = yield* Ref.make(
+        Option.none<{ readonly start: Effect.Effect<void>; readonly end: Effect.Effect<void> }>(),
+      )
+      const save = (value: string) => fixture.writeValue(value).pipe(Effect.orDie)
 
       yield* Effect.gen(function* () {
         const cache = yield* SessionProfileCache
@@ -887,12 +962,21 @@ export default defineExtension({
 
         // The build reads "second"; the save of "third" lands before the
         // build ends.
-        yield* Ref.set(duringBuild, Option.some(fixture.writeValue("third").pipe(Effect.orDie)))
+        yield* Ref.set(duringBuild, Option.some({ start: Effect.void, end: save("third") }))
         yield* fixture.writeValue("second")
         yield* resolve
         expect(Option.isNone(yield* Ref.get(duringBuild))).toBe(true)
         expect(fixture.marker(yield* resolve)).toBe("third")
         expect(fixture.marker(yield* resolve)).toBe("third")
+
+        // A save that comes and goes: the build reads "passing", and
+        // "fourth" is back before it ends, with the bytes it had before.
+        yield* fixture.writeValue("fourth")
+        yield* Ref.set(duringBuild, Option.some({ start: save("passing"), end: save("fourth") }))
+        yield* resolve
+        expect(Option.isNone(yield* Ref.get(duringBuild))).toBe(true)
+        expect(fixture.marker(yield* resolve)).toBe("fourth")
+        expect(fixture.marker(yield* resolve)).toBe("fourth")
       }).pipe(
         Effect.timeout("15 seconds"),
         Effect.provide(makeCacheLayer({ cwd: fixture.launch, home: fixture.home, extensions: [] })),
@@ -900,15 +984,13 @@ export default defineExtension({
           GentPlatform.of({
             ...live,
             bundleModule: (entry) =>
-              live
-                .bundleModule(entry)
-                .pipe(
-                  Effect.tap(() =>
-                    Ref.getAndSet(duringBuild, Option.none()).pipe(
-                      Effect.flatMap((save) => Option.getOrElse(save, () => Effect.void)),
-                    ),
-                  ),
-                ),
+              Effect.gen(function* () {
+                const saves = yield* Ref.getAndSet(duringBuild, Option.none())
+                yield* Option.match(saves, { onNone: () => Effect.void, onSome: (s) => s.start })
+                const built = yield* live.bundleModule(entry)
+                yield* Option.match(saves, { onNone: () => Effect.void, onSome: (s) => s.end })
+                return built
+              }),
           }),
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
@@ -1166,6 +1248,132 @@ export default defineExtension({
             }),
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("3".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A version that failed to start, whose last good version was rejected,
+  // decided by that last good version. When a newer good version runs, the
+  // same failure decides again, though a turn still holds the failed profile.
+  it.scopedLive(
+    "a version that failed with no usable last good version runs a newer good one when it fails again",
+    () =>
+      Effect.gen(function* () {
+        const chain = yield* chainFixture
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(chain.launch))
+          const statusOf = (profile: SessionProfile) =>
+            profile.resolved.extensionStatuses.find((info) => info.manifest.id === "chain-a")
+          yield* chain.write("a", chainSource.a("first", "chain.common"))
+          expect(statusOf(yield* resolve)).toMatchObject({ status: "active" })
+
+          // The last good version collides with c, so a fails; a turn holds it.
+          const runningTurn = yield* Scope.make()
+          yield* chain.write("a", chainSource.a("startup", "chain.fresh"))
+          yield* chain.write("c", chainSource.c("chain.common"))
+          const failed = yield* cache.resolve(chain.launch).pipe(Scope.provide(runningTurn))
+          expect(statusOf(failed)).toMatchObject({ status: "failed", phase: "startup" })
+
+          yield* chain.write("a", chainSource.a("third", "chain.fresh"))
+          expect(statusOf(yield* resolve)).toMatchObject({ status: "active" })
+
+          // The same broken bytes again: the third version runs in their place.
+          yield* chain.write("a", chainSource.a("startup", "chain.fresh"))
+          const again = yield* resolve
+          expect(statusOf(again)).toMatchObject({
+            status: "active",
+            reloadFailed: { phase: "startup" },
+          })
+          expect(Context.get(again.layerContext, ChainService).value).toBe("third")
+          yield* Scope.close(runningTurn, Exit.void)
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(
+            makeCacheLayer({
+              cwd: chain.launch,
+              home: chain.home,
+              extensions: [],
+              allowFailedExtensions: true,
+            }),
+          ),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("4".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A user and a project extension may share an id and their code. Two
+  // profiles that run their last good versions swapped are two profiles:
+  // each closes its own Resources when it retires.
+  it.scopedLive(
+    "profiles that run swapped last good versions of a user and a project extension each close their Resources",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-profile-swap-" })
+        const home = path.join(directory, "home")
+        const project = path.join(directory, "project")
+        const userFile = path.join(home, ".gent", "extensions", "dup.ts")
+        const projectFile = path.join(project, ".gent", "extensions", "dup.ts")
+        yield* fs.makeDirectory(path.dirname(userFile), { recursive: true })
+        yield* fs.makeDirectory(path.dirname(projectFile), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(home, ".gent", "config.json"),
+          encodeJson({ trustedProjects: [yield* fs.realPath(project)] }),
+        )
+        // Each open swap Resource keeps one file here.
+        const marks = path.join(directory, "marks")
+        yield* fs.makeDirectory(marks)
+        const write = (user: string, projectValue: string) =>
+          Effect.all([
+            writeFileAtomic(userFile, swapSource(user, marks)),
+            writeFileAtomic(projectFile, swapSource(projectValue, marks)),
+          ])
+        const open = Effect.map(fs.readDirectory(marks), (files) => files.length)
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(project))
+          yield* write("one", "one")
+          yield* resolve
+          yield* write("one", "two")
+          yield* resolve
+          // Both fail to start: user runs one, project two. A turn holds it.
+          const runningTurn = yield* Scope.make()
+          yield* write("startup", "startup")
+          yield* cache.resolve(project).pipe(Scope.provide(runningTurn))
+          yield* write("two", "one")
+          yield* resolve
+          // Both fail again: user runs two, project one.
+          yield* write("startup", "startup")
+          yield* resolve
+          yield* Scope.close(runningTurn, Exit.void)
+          yield* write("one", "one")
+          yield* resolve
+          // Only the current profile's two Resources are open.
+          expect(yield* open).toBe(2)
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(
+            makeCacheLayer({ cwd: project, home, extensions: [], allowFailedExtensions: true }),
+          ),
+          // Bun names each source path in a comment, so the same code at two
+          // paths is two versions. A build without the comments, as another
+          // bundler may emit, gives one version: the key must not lean on it.
+          Effect.updateService(GentPlatform, (live) =>
+            GentPlatform.of({
+              ...live,
+              bundleModule: (entry) =>
+                live.bundleModule(entry).pipe(
+                  Effect.map((bundle) => ({
+                    ...bundle,
+                    code: bundle.code.replace(/^\/\/ .*$/gm, ""),
+                  })),
+                ),
+            }),
+          ),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("5".repeat(64))),
         )
       }).pipe(Effect.provide(BunPlatformLive)),
   )

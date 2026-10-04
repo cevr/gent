@@ -403,12 +403,13 @@ serves the build at the entry's path with the version in the query
 from Bun's module cache, and a package import still resolves from the entry's
 directory. The cache keeps each entry's last build with a stat stamp and a
 content hash of every input (`buildEntry`, `ModuleGraphs`): a resolve with no
-input touched costs a stat of each (about 1.5 ms for the scan); a save of the
-same bytes reads and hashes the inputs and builds nothing; an edit builds again
-(about 10 ms; the first build of a process about 70 ms). A build is kept only
-when it is coherent: it read the inputs whose stats and bytes were taken before
-it, and their bytes after it are the same, so a save during a build is never
-kept as the new version. A build that found an import not known before it, or
+input touched costs a stat of each and reads no input (about 1.5 ms for the
+scan); a save of the same bytes reads and hashes the inputs and builds nothing;
+an edit builds again (about 10 ms; the first build of a process about 70 ms).
+A build is kept only when it is coherent: it read the inputs whose stats and
+bytes were taken before it, and their stats and bytes after it are the same, so
+a save during a build is never kept as the new version, even one that puts the
+earlier bytes back (A, then B, then A: the inode and mtime moved). A build that found an import not known before it, or
 that a save overlapped, builds again with what it found (the first build of an
 entry with relative imports builds twice); after three tries the build runs
 that resolve and is not kept. A failed build is not
@@ -457,12 +458,14 @@ the Resources the profile before it built, by their build key. A last good
 version runs only in a set it is valid in: one whose contributions collide
 with the set's fails as its new version did, and the set validates again
 without it, so it never takes down an extension whose new version is good.
-The profile key names the version it runs: the declaration key
-(`profileKey`) holds a declaration-phase fallback, and the entry key adds the
-startup fallbacks the build chose. A profile that runs a last good version
-serves a resolve only while that version is still the last good one
+The profile key names the versions it decided by: the entry key adds to the
+declaration key (`profileKey`) the last good version under the key of each
+extension whose new version failed (`consultedLastGood`), named by scope and
+source, since a user and a project extension can share an id; a fallback the
+set rejected, and a failure with no last good version, count too. A profile
+serves a resolve only while each of those is still the last good one
 (`runsCurrentLastGood`), so a profile a turn still holds never brings an older
-version back. Health reports such an extension `Degraded` with an
+version back, nor keeps a failure that a newer last good version would fill. Health reports such an extension `Degraded` with an
 `ActivationFailed` issue that carries the optional `runningVersion`, and the
 facet reports it `Active` with the optional `reloadFailed`: both fields are
 optional on the wire, so an older client reads a failed activation. A deleted

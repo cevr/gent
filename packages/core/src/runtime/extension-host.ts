@@ -1330,8 +1330,10 @@ const COHERENT_BUILD_TRIES = 3
  * hash, so two builds of the same code share one version.
  *
  * A build is kept only when it is coherent: it read the files whose stats
- * and bytes were taken before it, and those bytes did not change while it
- * ran. A build that read a module not known before it, or that a save
+ * and bytes were taken before it, and neither changed while it ran. A save
+ * that comes and goes inside a build (A, then B, then A) leaves the bytes as
+ * they were but not the stat: an atomic save is a new inode, an edit in place
+ * a new mtime. A build that read a module not known before it, or that a save
  * overlapped, builds again with the inputs it found, so the first build of
  * an entry with relative imports builds twice. A build still not coherent
  * after `COHERENT_BUILD_TRIES` runs this resolve and is not kept, so the
@@ -1353,17 +1355,17 @@ const buildEntry = Effect.fn("ExtensionLoader.buildEntry")(function* (
     for (const input of files) stamps.set(input, yield* statStamp(fs, input))
     return stamps
   })
+  const sameStamps = (left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>) =>
+    left.size === right.size && [...left].every(([input, stamp]) => right.get(input) === stamp)
   let stamps = yield* statAll(inputs)
+  // An unchanged stat reads no input: only a changed one is hashed.
+  if (Option.isSome(known) && sameStamps(stamps, known.value.stamps)) {
+    return { version: known.value.version, build: Result.succeed(known.value.code) }
+  }
   let content = yield* contentHash(inputs)
-  if (Option.isSome(known)) {
-    const graph = known.value
-    if ([...stamps].every(([input, stamp]) => graph.stamps.get(input) === stamp)) {
-      return { version: graph.version, build: Result.succeed(graph.code) }
-    }
-    if (content === graph.content) {
-      graphs.set(entry, { ...graph, stamps })
-      return { version: graph.version, build: Result.succeed(graph.code) }
-    }
+  if (Option.isSome(known) && content === known.value.content) {
+    graphs.set(entry, { ...known.value, stamps })
+    return { version: known.value.version, build: Result.succeed(known.value.code) }
   }
   for (let attempt = 1; ; attempt++) {
     const built = yield* platform.bundleModule(entry).pipe(Effect.result)
@@ -1378,10 +1380,11 @@ const buildEntry = Effect.fn("ExtensionLoader.buildEntry")(function* (
     const version = platform.hash("sha256", built.success.code)
     const read = new Set(built.success.inputs)
     const sameInputs = read.size === inputs.length && inputs.every((input) => read.has(input))
-    // The bytes after the build match the bytes before it: the build read
-    // them, unless a save came and went inside it.
+    // The stats and bytes after the build match the ones before it, so no
+    // save landed while it read them.
+    const statsAfter = yield* statAll(built.success.inputs)
     const after = yield* contentHash(built.success.inputs)
-    if (sameInputs && after === content) {
+    if (sameInputs && sameStamps(statsAfter, stamps) && after === content) {
       const graph: ModuleGraph = { stamps, content, version, code: built.success.code }
       graphs.set(entry, graph)
       return { version, build: Result.succeed(graph.code) }
@@ -2485,10 +2488,12 @@ export class SessionProfileCache extends Context.Service<
         )
 
         interface ProfileEntry {
-          /** The declaration key and the startup fallbacks the profile runs. */
+          /** The declaration key and the last good versions the build decided by. */
           readonly key: string
           /** `profileKey`: the place, the declared extensions and their files. */
           readonly declarationKey: string
+          /** `consultedLastGood`: last good key to the version under it at the build. */
+          readonly consulted: ReadonlyMap<string, string>
           readonly place: string
           readonly profile: SessionProfile
           readonly scope: Scope.Closeable
@@ -2550,32 +2555,57 @@ export class SessionProfileCache extends Context.Service<
             if (key.startsWith(`${place}\u0000`) && !present.has(key)) lastGood.delete(key)
           }
         }
-        /**
-         * A profile that runs a last good version in place of a version that
-         * failed serves a resolve only while that version is still the last
-         * good one: after a newer version ran, the same failure runs the
-         * newer one. A profile a turn holds outlives that change, so the
-         * lookup checks it, by alias or by key.
-         */
-        const runsCurrentLastGood = (entry: ProfileEntry): boolean =>
-          entry.profile.resolved.extensions.every((extension) => {
-            if (Predicate.isUndefined(extension.reloadFailed)) return true
-            const current = Option.fromNullishOr(lastGood.get(lastGoodKey(entry.place, extension)))
-            return Option.isSome(current) && current.value.version === extension.version
+        /** The version the last good map holds under a key, `-` for none. */
+        const lastGoodVersion = (key: string): string =>
+          Option.match(Option.fromNullishOr(lastGood.get(key)), {
+            onNone: () => "-",
+            onSome: (extension) => extension.version ?? "",
           })
         /**
-         * The startup fallbacks a profile runs, by id and version: the part
-         * of its identity its declarations do not hold (`profileKey`), since
-         * a startup failure picks the last good version as it is then.
+         * The last good versions a profile's build decided by: for each user
+         * or project extension that runs a last good version or failed, its
+         * last good key (place, scope, source path) and the version under it
+         * then. A last good version that ran, was rejected for a collision, or
+         * failed to start is in it, and so is the lack of one.
          */
-        const startupFallbacksKey = (resolved: ResolvedExtensions): string =>
-          resolved.extensions
-            .flatMap((extension) => {
-              if (extension.reloadFailed?.phase !== "startup") return []
-              return [`${extension.manifest.id}~${extension.version ?? ""}`]
-            })
+        const consultedLastGood = (
+          place: string,
+          resolved: ResolvedExtensions,
+        ): ReadonlyMap<string, string> => {
+          const decided: Array<Pick<LoadedExtension, "scope" | "sourcePath">> = [
+            ...resolved.extensions.filter(
+              (extension) => !Predicate.isUndefined(extension.reloadFailed),
+            ),
+            ...resolved.failedExtensions,
+          ]
+          return new Map(
+            decided.flatMap((extension) => {
+              if (extension.scope === "builtin") return []
+              const key = lastGoodKey(place, extension)
+              return [[key, lastGoodVersion(key)] as const]
+            }),
+          )
+        }
+        /**
+         * A profile serves a resolve only while each last good version its
+         * build decided by is still the one under its key: after a newer
+         * version ran, the same failure decides again, and may run the newer
+         * one. A profile a turn holds outlives that change, so the lookup
+         * checks it, by alias or by key.
+         */
+        const runsCurrentLastGood = (entry: ProfileEntry): boolean =>
+          [...entry.consulted].every(([key, version]) => lastGoodVersion(key) === version)
+        /**
+         * The part of a profile's identity its declarations do not hold
+         * (`profileKey`): the last good versions it decided by, each named by
+         * scope and source, since a user and a project extension can share
+         * an id.
+         */
+        const consultedKey = (consulted: ReadonlyMap<string, string>): string =>
+          [...consulted]
+            .map(([key, version]) => [key, version].join("\u0000"))
             .toSorted()
-            .join("\u0000")
+            .join("\u0002")
         const filesStamp = (place: string, scan: ExtensionScan): ReadonlyArray<string> => [
           ...extensionScanStamp(scan),
           ...Array.from(reloads.get(place) ?? new Map<string, number>())
@@ -2813,9 +2843,9 @@ export class SessionProfileCache extends Context.Service<
                 lastGoodFor(place),
               ).pipe(Effect.provideContext(platformServicesContext)),
             )
-            // Profiles of one declaration key differ only by the startup
-            // fallbacks they run; the one whose fallbacks are still the last
-            // good versions serves.
+            // Profiles of one declaration key differ only by the last good
+            // versions their builds decided by; the one whose versions are
+            // still the last good ones serves.
             const declarationKey = profileKey(place, declarations.extensionDeclarations, files)
             const found = Option.fromNullishOr(
               [...entries.values()].find(
@@ -2829,10 +2859,13 @@ export class SessionProfileCache extends Context.Service<
             const built = yield* buildProfile(place, cwd, fresh, declarations, restore).pipe(
               Effect.orDie,
             )
-            // A profile with these fallbacks would have been found above, so
+            // The build decided by the last good versions as they are now
+            // (the place's lock is held). A stored profile with this key
+            // decided by the same ones, so it would have been found above:
             // the key is new and no stored entry is lost.
-            const key = [declarationKey, startupFallbacksKey(built.profile.resolved)].join("\u0001")
-            const entry: ProfileEntry = { key, declarationKey, place, ...built }
+            const consulted = consultedLastGood(place, built.profile.resolved)
+            const key = [declarationKey, consultedKey(consulted)].join("\u0001")
+            const entry: ProfileEntry = { key, declarationKey, consulted, place, ...built }
             entries.set(key, entry)
             aliases.set(list, key)
             yield* Effect.logInfo("session-profile.initialized").pipe(
