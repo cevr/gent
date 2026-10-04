@@ -636,6 +636,8 @@ interface ResolvedExtensions {
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly apiClasses: ReadonlyMap<string, ApiClassContribution>
   readonly modelRouters: ReadonlyMap<string, ModelRouterContribution>
+  /** The extension that registered each winning router: a route runs as its leaf. */
+  readonly modelRouterOwners: ReadonlyMap<string, ExtensionId>
   readonly slashCommands: ReadonlyArray<SlashCommand>
   readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -943,6 +945,13 @@ export const resolveExtensions = (
     (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.modelRouters), () => []),
     (router) => router.id,
   )
+  // The same scope order as the bucket, so each id names the winner's owner.
+  const modelRouterOwners = new Map<string, ExtensionId>()
+  for (const extension of sorted) {
+    for (const router of extension.contributions.modelRouters ?? []) {
+      modelRouterOwners.set(router.id, extension.manifest.id)
+    }
+  }
 
   const slashCommands = compileSlashCommands(capabilityWinners)
 
@@ -960,6 +969,7 @@ export const resolveExtensions = (
     modelDrivers,
     apiClasses,
     modelRouters,
+    modelRouterOwners,
     slashCommands,
     extensionHooks,
     extensions: sorted,

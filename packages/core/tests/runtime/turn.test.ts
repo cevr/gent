@@ -3134,6 +3134,53 @@ describe("virtual model routing", () => {
   )
 
   it.scopedLive(
+    "a router runs under its own extension id: its state pulse names it and the route stands",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          {
+            ...textStep("hard answer"),
+            assertRequest: (request) => expect(request.model).toBe(STRONG_MODEL),
+          },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [
+            routingExtension({
+              route: () =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  // A failed pulse fails the route, and the turn falls back.
+                  yield* ctx.State.changed()
+                  return { choice: 1, reason: `routed by ${ctx.extensionId}` }
+                }),
+            }),
+          ],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "do the hard thing" })
+        const events = yield* afterTurns(1)
+        expect(routedEvents(events)).toHaveLength(1)
+        expect(routedEvents(events)[0]).toMatchObject({
+          model: STRONG_MODEL,
+          choice: 1,
+          reason: "routed by test-routing",
+        })
+        expect(routedEvents(events)[0]?.fallback).toBeUndefined()
+        expect(
+          events.flatMap((event) => {
+            if (event._tag !== "ExtensionStateChanged") return []
+            return [event.extensionId]
+          }),
+        ).toEqual([ExtensionId.make("test-routing")])
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
     "a routed switch writes the model-change notice a switch by hand writes, and nothing else",
     () =>
       Effect.gen(function* () {

@@ -1732,15 +1732,18 @@ const routeCost = (calls: ReadonlyArray<RouteCall>): Option.Option<number> => {
 /**
  * Ask `router` for one pick, `ROUTE_DEADLINE_MS` at most. A router's
  * failure, timeout or defect is a reason to fall back, never the turn's. The
- * router's classifier calls go through the run's own facet; core records
- * each one's model and price for the event and the turn's cost, a call made
- * before a failure included.
+ * route runs as a leaf of the extension that registered the router, as its
+ * tools do, so its state pulse and its sends name it. The router's
+ * classifier calls go through the run's own facet; core records each one's
+ * model and price for the event and the turn's cost, a call made before a
+ * failure included.
  */
 const askRouter = Effect.fn("TurnHelpers.askRouter")(function* (
   router: ModelRouterContribution,
   input: ModelRouteInput,
 ) {
   const host = yield* CurrentExtensionHostContext
+  const owner = (yield* ExtensionRegistry).getResolved().modelRouterOwners.get(router.id)
   const calls = yield* Ref.make<ReadonlyArray<RouteCall>>([])
   const Models: ExtensionModelsService = {
     ...host.Models,
@@ -1755,7 +1758,7 @@ const askRouter = Effect.fn("TurnHelpers.askRouter")(function* (
       ),
   }
   const picked = yield* router.route(input).pipe(
-    provideExtensionLeaf({}),
+    provideExtensionLeaf(omitUndefined({ extensionId: owner })),
     Effect.provideService(CurrentExtensionHostContext, { ...host, Models }),
     Effect.map((pick): Result.Result<ModelRouteDecision, string> => Result.succeed(pick)),
     Effect.timeoutOrElse({

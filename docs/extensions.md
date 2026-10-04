@@ -687,7 +687,9 @@ of their choices at the start of each turn. Each choice names a model, an
 effort, or both, and a `reason`. Core calls `route` once per turn, before its
 first request, records the pick (`ModelRouted`) and runs every step on it. A
 route that fails, takes over 10 s or picks a choice the turn cannot run falls
-back to the default choice (`fallback`, an index). `route` may ask classifiers
+back to the default choice (`fallback`, an index). `route` runs with the
+`ExtensionContext` a tool of the same extension gets, so its
+`ctx.State.changed()` names the extension. It may ask classifiers
 through `ExtensionContext.Models`; `input.current` says whether the branch's
 prompt cache is warm and how many history tokens a switch writes again. The
 shipped `@gent/router` builds its routers from the `routers` config key.
