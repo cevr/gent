@@ -20,6 +20,7 @@ import {
   type ApiClassRequest,
   type CatalogModel,
   catalogModelEntry,
+  type CatalogPlan,
   clampEffort,
   isRecordArray,
   type JsonRecord,
@@ -1028,13 +1029,14 @@ export const thinkingBudget = (
  * A model without tool calling is dropped: every gent turn sends tools. Each
  * model carries `promptCacheTtl`, how long the provider keeps a request's
  * prompt cached; models.dev does not say. `apiClass` is the class the
- * driver plans its requests with: its effort levels are the model's.
+ * driver plans its requests with: its effort levels and its tool-image bound
+ * are the model's.
  */
 export const catalogModels = (
   catalog: ModelCatalogView,
   providerId: string,
   promptCacheTtl: Duration.Duration,
-  apiClass: Pick<ApiClassContribution, "efforts">,
+  apiClass: CatalogPlan,
 ): ReadonlyArray<Model> =>
   Option.match(catalog.provider(providerId), {
     onNone: () => [],
@@ -1043,7 +1045,7 @@ export const catalogModels = (
         .filter((entry) => entry.toolCall !== false && entry.decision !== true)
         .map((entry) =>
           Model.make({
-            ...modelFromCatalog(providerId, entry, apiClass.efforts),
+            ...modelFromCatalog(providerId, entry, apiClass),
             promptCacheTtlMs: Duration.toMillis(promptCacheTtl),
           }),
         ),
@@ -1137,17 +1139,64 @@ const reasoningInField =
       }),
     })
 
+type ImageCostOf = NonNullable<ApiClassContribution["imageCost"]>
+type ImageCost = ReturnType<ImageCostOf>
+
+/**
+ * OpenAI's image costs at the `high` detail, by model name, most specific
+ * first, from its vision guide: tiles (base and per-tile tokens) for the
+ * older models, 32-pixel patches (a multiplier, and the patch budget the
+ * `high` detail shrinks an image to) for the newer ones.
+ */
+export const OPENAI_IMAGE_COSTS: ReadonlyArray<readonly [RegExp, ImageCost]> = [
+  [/^gpt-4o-mini/, { _tag: "Tiles", baseTokens: 2_833, tileTokens: 5_667 }],
+  [/^gpt-4o/, { _tag: "Tiles", baseTokens: 85, tileTokens: 170 }],
+  [/^gpt-4\.1-mini/, { _tag: "Patches", multiplier: 1.62, maxPatches: 6_144 }],
+  [/^gpt-4\.1-nano/, { _tag: "Patches", multiplier: 2.46, maxPatches: 1_536 }],
+  [/^gpt-4\.1/, { _tag: "Tiles", baseTokens: 85, tileTokens: 170 }],
+  [/^o4-mini/, { _tag: "Patches", multiplier: 1.72, maxPatches: 1_536 }],
+  [/^o[13]/, { _tag: "Tiles", baseTokens: 75, tileTokens: 150 }],
+  [/^gpt-5-nano/, { _tag: "Patches", multiplier: 1.5, maxPatches: 1_536 }],
+  [/^gpt-5-mini/, { _tag: "Patches", multiplier: 1.2, maxPatches: 1_536 }],
+  [/^gpt-5\.2/, { _tag: "Patches", multiplier: 1.2, maxPatches: 6_144 }],
+  [/^gpt-5(\.1)?($|-)/, { _tag: "Tiles", baseTokens: 70, tileTokens: 140 }],
+]
+
+/** A newer OpenAI model (GPT-5.4 on) counts patches at 1.2, shrunk to 2,500 at the `high` detail. */
+const OPENAI_PATCH_COST: ImageCost = { _tag: "Patches", multiplier: 1.2, maxPatches: 2_500 }
+
+/** What one image costs an OpenAI model (`Model.imageCost`), read from its name. */
+export const openAiImageCost: ImageCostOf = (entry) => {
+  const name = entry.id.split("/").at(-1) ?? entry.id
+  const known = OPENAI_IMAGE_COSTS.find(([pattern]) => pattern.test(name))
+  return known?.[1] ?? OPENAI_PATCH_COST
+}
+
+/**
+ * Each image part of an OpenAI request names the `high` detail, the one its
+ * cost counts at: `auto` lets a newer model send an image whole, up to
+ * 30,000 patches, which no estimate could foresee.
+ */
+export const OPENAI_IMAGE_PART_OPTIONS = { openai: { imageDetail: "high" } }
+
 /**
  * OpenAI Chat Completions, as OpenAI-compatible upstreams speak it. Its
  * upstreams cache implicitly with no write price, so a model on it has no
  * cache lifetime and never goes cold: a cold handoff there would cost more
  * than the warm resend it replaces, and lose detail.
+ *
+ * Its upstreams take fewer images than the Messages and Responses APIs (Groq
+ * takes 5 a request and 4 MB of base64 an image), so its requests keep within
+ * that tighter bound. It counts and sends images as OpenAI does.
  */
 export const CHAT_COMPLETIONS_CLASS: ApiClassContribution = {
   id: "openai-chat",
   npm: ["@ai-sdk/openai-compatible"],
   protocols: ["completions"],
   promptCacheTtl: Option.none(),
+  imageLimit: { images: 5, base64Chars: 4_000_000 },
+  imageCost: openAiImageCost,
+  imagePartOptions: OPENAI_IMAGE_PART_OPTIONS,
   resolveModel: (request) =>
     Effect.map(loadChatSdk, ({ OpenAiClient, OpenAiLanguageModel }) => {
       const reasoningField = Option.fromUndefinedOr(request.model.reasoningField)
@@ -1208,6 +1257,50 @@ export const MessagesTransientStreamEvent = Schema.Struct({
 export const ResponsesTransientStreamEvent = Schema.Struct({
   code: Schema.Literals(["server_error", "rate_limit_exceeded"]),
 })
+
+// ── rate-limit resets ───────────────────────────────────────────────────────
+//
+// A 429 can name when each rate limit is full again in its headers. Each
+// driver decodes its own header names by schema into these limits; the rule
+// that picks the time a retry can succeed is one for every driver.
+
+/** One rate limit as a response reports it: what is left of it, and when it is full again (epoch ms). */
+interface ReportedLimit {
+  readonly remaining: Option.Option<number>
+  readonly resetAt: Option.Option<number>
+}
+
+/**
+ * The latest of the reset times a failure names; none when it names none.
+ * A retry before the latest meets a limit still spent, so a short generic
+ * retry-after never shortens a usage limit's own reset.
+ */
+export const latestReset = (resets: ReadonlyArray<Option.Option<number>>): Option.Option<number> =>
+  resets.reduce<Option.Option<number>>(
+    (latest, reset) =>
+      Option.match(reset, {
+        onNone: () => latest,
+        onSome: (at) =>
+          Option.some(
+            Math.max(
+              at,
+              Option.getOrElse(latest, () => at),
+            ),
+          ),
+      }),
+    Option.none(),
+  )
+
+/**
+ * When a retry can succeed: once every spent limit (none left) is full
+ * again, the latest of their resets. A limit with some left does not hold
+ * the retry, so its reset does not count; none when no limit reports itself
+ * spent with a reset.
+ */
+export const spentLimitsReset = (limits: ReadonlyArray<ReportedLimit>): Option.Option<number> =>
+  latestReset(
+    limits.map((limit) => Option.filter(limit.resetAt, () => Option.contains(limit.remaining, 0))),
+  )
 
 // ── messages prompt cache ───────────────────────────────────────────────────
 //

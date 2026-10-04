@@ -24,7 +24,18 @@ import {
 } from "../domain/message.js"
 import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
-import { cacheWriteRate, ModelId, type ModelPricing } from "../domain/agent.js"
+import {
+  type AgentName,
+  cacheWriteRate,
+  ImageCost,
+  type ImageLimit,
+  ImagePartOptions,
+  type Model,
+  ModelId,
+  type ModelPricing,
+} from "../domain/agent.js"
+import { readToolImage, type ToolImage, toolImageBase64Chars, toolImagesOf } from "./tool-image.js"
+import { omitUndefined } from "../domain/guards.js"
 import type { ToolCapability } from "../domain/capability.js"
 import type { TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
@@ -42,6 +53,12 @@ interface PromptTranscriptOptions {
   readonly systemPrompt?: ReadonlyArray<string>
   /** The turn's notices, placed after the conversation; see `turnNoticesText`. */
   readonly notices?: ReadonlyArray<TurnNotice>
+  /**
+   * What stands for each tool image, by the id of the tool call whose result
+   * holds it, in the result's order (`toolImagePrompt`). Absent: the tool
+   * results go without their images.
+   */
+  readonly toolImages?: ToolImagePrompt
 }
 
 const isAiVisibleMessage = (message: Message): boolean => message.metadata?.hidden !== true
@@ -248,6 +265,277 @@ const modelToolResult = (part: Prompt.ToolResultPart): Prompt.ToolResultPart => 
   return bounded
 }
 
+// ── tool images ─────────────────────────────────────────────────────────────
+
+/** Each stored tool result's images, by the part object, as `modelToolResults` keeps bounds. */
+const toolResultImageCache = new WeakMap<Prompt.ToolResultPart, ReadonlyArray<ToolImage>>()
+
+/** The images a stored tool result holds (`toolImagesOf`), read from the stored, unbounded result. */
+const toolResultImages = (part: Prompt.ToolResultPart): ReadonlyArray<ToolImage> => {
+  const known = toolResultImageCache.get(part)
+  if (Predicate.isNotUndefined(known)) return known
+  const images = Option.match(decodeToolResultJson(part.result), {
+    onNone: (): ReadonlyArray<ToolImage> => [],
+    onSome: toolImagesOf,
+  })
+  toolResultImageCache.set(part, images)
+  return images
+}
+
+/** `width` x `height` scaled by `factor`, never up, each side at least 1 pixel. */
+const scaledDown = (width: number, height: number, factor: number) => {
+  const scale = Math.min(1, factor)
+  return {
+    width: Math.max(1, Math.floor(width * scale)),
+    height: Math.max(1, Math.floor(height * scale)),
+  }
+}
+
+/** The tokens one `width` x `height` image costs at `cost` (`ImageCost`). */
+const tokensAtCost = (cost: ImageCost, width: number, height: number): number =>
+  ImageCost.match(cost, {
+    Pixels: ({ pixelsPerToken }) => Math.ceil((width * height) / pixelsPerToken),
+    Tiles: ({ baseTokens, tileTokens }) => {
+      // Fit in 2048x2048, then cut the short side to 768, as OpenAI's `high` detail does.
+      const fit = scaledDown(width, height, 2_048 / Math.max(width, height))
+      const cut = scaledDown(fit.width, fit.height, 768 / Math.min(fit.width, fit.height))
+      const tiles = Math.ceil(cut.width / 512) * Math.ceil(cut.height / 512)
+      return baseTokens + tileTokens * tiles
+    },
+    Patches: ({ multiplier, maxPatches }) => {
+      const patchesOf = (size: { readonly width: number; readonly height: number }) =>
+        Math.ceil(size.width / 32) * Math.ceil(size.height / 32)
+      let patches = patchesOf({ width, height })
+      if (patches > maxPatches) {
+        const shrunk = scaledDown(
+          width,
+          height,
+          Math.sqrt((32 * 32 * maxPatches) / (width * height)),
+        )
+        patches = Math.min(patchesOf(shrunk), maxPatches)
+      }
+      return Math.ceil(patches * multiplier)
+    },
+  })
+
+/**
+ * Every cost a shipped API class counts an image at: Anthropic's pixels, and
+ * each OpenAI rate of tiles and patches (`gpt-4o-mini`'s tiles the highest).
+ * A model whose class names no cost counts each image at the highest of
+ * these, so no known rule counts more. A test holds each shipped class's
+ * costs to this list.
+ */
+export const KNOWN_IMAGE_COSTS: ReadonlyArray<ImageCost> = [
+  ImageCost.cases.Pixels.make({ pixelsPerToken: 750 }),
+  ImageCost.cases.Tiles.make({ baseTokens: 2_833, tileTokens: 5_667 }),
+  ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 }),
+  ImageCost.cases.Tiles.make({ baseTokens: 75, tileTokens: 150 }),
+  ImageCost.cases.Tiles.make({ baseTokens: 70, tileTokens: 140 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 2_500 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 6_144 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 1_536 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.5, maxPatches: 1_536 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.62, maxPatches: 6_144 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.72, maxPatches: 1_536 }),
+  ImageCost.cases.Patches.make({ multiplier: 2.46, maxPatches: 1_536 }),
+]
+
+/**
+ * The tokens `image` costs a model whose API class counts at `cost`; none:
+ * the highest of `KNOWN_IMAGE_COSTS`. The estimate counts every image of the
+ * window, whether the request sends it or a line in its place.
+ */
+const imageTokens = (cost: Option.Option<ImageCost>, image: ToolImage): number =>
+  Option.match(cost, {
+    onSome: (known) => tokensAtCost(known, image.width, image.height),
+    onNone: () =>
+      Math.max(...KNOWN_IMAGE_COSTS.map((known) => tokensAtCost(known, image.width, image.height))),
+  })
+
+/** One image of a tool result the prompt holds: the call, its tool, the image. */
+interface PromptToolImage {
+  readonly toolCallId: string
+  readonly toolName: string
+  readonly image: ToolImage
+}
+
+/** The images of the visible tool results in `messages`, oldest first. */
+const promptToolImages = (messages: ReadonlyArray<Message>): ReadonlyArray<PromptToolImage> =>
+  messages.flatMap((message) => {
+    if (!isAiVisibleMessage(message) || message.role !== "tool") return []
+    return message.parts.flatMap((part) => {
+      if (part.type !== "tool-result") return []
+      return toolResultImages(part).map((image) => ({
+        toolCallId: part.id,
+        toolName: part.name,
+        image,
+      }))
+    })
+  })
+
+/**
+ * What stands for one tool image in a request: its bytes in base64 under a
+ * label line, or a line alone. Each text depends only on the image, its tool
+ * and the model, never on the request, so a request's prefix stays the same
+ * bytes from one step to the next.
+ */
+const ToolImageContent = Schema.TaggedUnion({
+  Bytes: {
+    label: Schema.String,
+    mediaType: Schema.String,
+    data: Schema.String,
+    options: Schema.optional(ImagePartOptions),
+  },
+  Line: { text: Schema.String },
+})
+type ToolImageContent = typeof ToolImageContent.Type
+
+/** What stands for each image, by tool call id, in the result's order. */
+type ToolImagePrompt = ReadonlyMap<string, ReadonlyArray<ToolImageContent>>
+
+/** How a line names an image: its tool, its source when it has one, and its size. */
+const toolImageName = (entry: PromptToolImage): string =>
+  [
+    entry.toolName,
+    ...Option.toArray(Option.fromUndefinedOr(entry.image.source)),
+    `${entry.image.width}x${entry.image.height}`,
+  ].join(" ")
+
+/**
+ * The tool images a request carries when the model's API class names no
+ * bound (`Model.imageLimit`): the newest 20, and about 12 MB of base64. Both
+ * sit well inside what the Messages and Responses APIs take in one request.
+ */
+const DEFAULT_IMAGE_LIMIT: ImageLimit = { images: 20, base64Chars: 12_000_000 }
+
+/**
+ * A request past its image bound leaves out this many more of its oldest
+ * images at a time: its prefix changes once each time, not at every image.
+ */
+const IMAGE_DROP_STEP = 5
+
+const roundUpToStep = (count: number) => Math.ceil(count / IMAGE_DROP_STEP) * IMAGE_DROP_STEP
+
+/**
+ * How many of a request's oldest tool images it leaves out, given each
+ * image's base64 size, oldest first: enough to keep at most `limit.images`
+ * images and `limit.base64Chars` characters, rounded up to a multiple of
+ * `IMAGE_DROP_STEP`. The newest image stays unless it alone is past the
+ * character bound. The count grows only when the images pass a bound again,
+ * so every request between two drops sends the same prefix.
+ */
+export const toolImagesToDrop = (sizes: ReadonlyArray<number>, limit: ImageLimit): number => {
+  const total = sizes.length
+  const byCount = roundUpToStep(Math.max(0, total - limit.images))
+  let chars = sizes.reduce((sum, size) => sum + size, 0)
+  let first = 0
+  while (first < total && chars > limit.base64Chars) {
+    chars -= sizes[first] ?? 0
+    first += 1
+  }
+  const byChars = roundUpToStep(first)
+  // The newest image stays, unless no request could carry it.
+  let most = Math.max(0, total - 1)
+  if ((sizes[total - 1] ?? 0) > limit.base64Chars) most = total
+  return Math.min(Math.max(byCount, byChars), most)
+}
+
+/**
+ * What stands for each tool image in the window `messages`, for `model`, read
+ * from the blob store under `directory`. A model the catalog says reads no
+ * images gets a line for each. Past the model's image bound
+ * (`toolImagesToDrop`), the oldest images get a line each; so does an image
+ * whose blob is gone. The stored session never changes: only the request
+ * leaves an image out.
+ */
+export const toolImagePrompt = Effect.fn("ModelContext.toolImagePrompt")(function* (params: {
+  readonly messages: ReadonlyArray<Message>
+  readonly model: Pick<Model, "imageInput" | "imageLimit" | "imagePartOptions">
+  readonly directory: string
+}) {
+  const images = promptToolImages(params.messages)
+  const limit = params.model.imageLimit ?? DEFAULT_IMAGE_LIMIT
+  const sizes = images.map((entry) => toolImageBase64Chars(entry.image.bytes))
+  const dropped = toolImagesToDrop(sizes, limit)
+  const contents = yield* Effect.forEach(
+    images,
+    (entry, index) =>
+      Effect.gen(function* () {
+        const name = toolImageName(entry)
+        if (params.model.imageInput === false) {
+          return ToolImageContent.cases.Line.make({
+            text: `[image not shown: this model takes no image input: ${name}]`,
+          })
+        }
+        // Each line depends on the image alone, so it stays the same bytes
+        // in every later request.
+        if ((sizes[index] ?? 0) > limit.base64Chars) {
+          return ToolImageContent.cases.Line.make({
+            text: `[image left out: larger than one request to this model takes: ${name}]`,
+          })
+        }
+        if (index < dropped) {
+          return ToolImageContent.cases.Line.make({
+            text: `[earlier image left out to keep the request small: ${name}]`,
+          })
+        }
+        return Option.match(yield* readToolImage(params.directory, entry.image), {
+          onNone: () =>
+            ToolImageContent.cases.Line.make({ text: `[image no longer stored: ${name}]` }),
+          onSome: (data) =>
+            ToolImageContent.cases.Bytes.make({
+              label: `Image from ${name}:`,
+              mediaType: entry.image.mediaType,
+              data,
+              ...omitUndefined({ options: params.model.imagePartOptions }),
+            }),
+        })
+      }),
+    { concurrency: 4 },
+  )
+  const byCall = new Map<string, Array<ToolImageContent>>()
+  for (const [index, entry] of images.entries()) {
+    const content = contents[index]
+    if (Predicate.isUndefined(content)) continue
+    const known = byCall.get(entry.toolCallId) ?? []
+    known.push(content)
+    byCall.set(entry.toolCallId, known)
+  }
+  const prompt: ToolImagePrompt = byCall
+  return prompt
+})
+
+/**
+ * The user message that carries a tool message's images, right after it:
+ * each image under its label, or the line that stands for it. A driver sends
+ * it in the same user turn as the tool results where its API allows
+ * (Anthropic), else as a user message after them (OpenAI Responses, Chat
+ * Completions): tool results take no image there.
+ */
+const toolImageMessage = (
+  message: Prompt.ToolMessage,
+  toolImages: ToolImagePrompt,
+): Option.Option<Prompt.UserMessage> => {
+  const content = message.content.flatMap((part): ReadonlyArray<Prompt.UserMessagePart> => {
+    if (part.type !== "tool-result") return []
+    return (toolImages.get(part.id) ?? []).flatMap((image) =>
+      ToolImageContent.match(image, {
+        Bytes: (bytes) => [
+          Prompt.textPart({ text: bytes.label }),
+          Prompt.filePart({
+            mediaType: bytes.mediaType,
+            data: `data:${bytes.mediaType};base64,${bytes.data}`,
+            ...omitUndefined({ options: bytes.options }),
+          }),
+        ],
+        Line: (line) => [Prompt.textPart({ text: line.text })],
+      }),
+    )
+  })
+  if (content.length === 0) return Option.none()
+  return Option.some(Prompt.userMessage({ content }))
+}
+
 const toToolMessage = (message: Message): Option.Option<Prompt.ToolMessage> => {
   const content = message.parts.flatMap((part): ReadonlyArray<Prompt.ToolMessagePart> => {
     if (part.type === "tool-result") return [modelToolResult(part)]
@@ -360,9 +648,13 @@ export const toPrompt = (
   options?: PromptTranscriptOptions,
 ): Prompt.Prompt => {
   const systemBlocks = (options?.systemPrompt ?? []).filter((block) => block !== "")
+  const toolImages: ToolImagePrompt = options?.toolImages ?? new Map()
   const promptMessages = [
     ...systemBlocks.map((block) => Prompt.systemMessage({ content: block })),
-    ...toPromptMessages(messages),
+    ...toPromptMessages(messages).flatMap((message): ReadonlyArray<Prompt.Message> => {
+      if (message.role !== "tool" || toolImages.size === 0) return [message]
+      return [message, ...Option.toArray(toolImageMessage(message, toolImages))]
+    }),
   ]
   const notices = turnNoticesText(options?.notices ?? [])
   if (Option.isSome(notices)) promptMessages.push(Prompt.systemMessage({ content: notices.value }))
@@ -604,7 +896,10 @@ const tokensForChars = (chars: number): number => Math.ceil(chars / 4)
 export const estimateTextTokens = (text: string): number => tokensForChars(text.length)
 
 /** Estimate the tokens occupied by a run of messages, at `tokensForChars`. */
-export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
+export const estimateTokens = (
+  messages: ReadonlyArray<Message>,
+  imageCost: Option.Option<ImageCost> = Option.none(),
+): number => {
   let chars = 0
   for (const msg of messages) {
     for (const part of msg.parts) {
@@ -618,6 +913,8 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
         case "tool-result":
           // The model sees the bounded result, so the budget counts that, not the stored one.
           chars += encodeToolOutput(modelToolResult(part).result).length
+          // And each image the result holds, at the tokens it costs a model.
+          for (const image of toolResultImages(part)) chars += imageTokens(imageCost, image) * 4
           break
         case "file":
           chars += 1000 // ~250 tokens estimate for image references
@@ -648,6 +945,8 @@ export const estimateToolSchemaTokens = (tools: ReadonlyArray<ToolCapability>): 
 /** The separate context reservations supplied by the model host. */
 export const ModelContextBudget = Schema.Struct({
   contextLimitTokens: Schema.Natural,
+  /** What one tool image costs the model (`Model.imageCost`); absent: the highest known cost. */
+  imageCost: Schema.optional(ImageCost),
   /** The model's input cap, when it is below the window less the output (the GPT-5 family). */
   inputLimitTokens: Schema.optional(Schema.Natural),
   reservedSystemTokens: Schema.Natural,
@@ -655,6 +954,8 @@ export const ModelContextBudget = Schema.Struct({
   reservedOutputTokens: Schema.Natural,
 })
 export type ModelContextBudget = typeof ModelContextBudget.Type
+
+const imageCostOf = (budget: ModelContextBudget) => Option.fromUndefinedOr(budget.imageCost)
 
 /**
  * The input one request may carry: the window less the output reserve, and
@@ -1084,6 +1385,7 @@ const groupToolCalls = (
 const buildUnits = (
   messages: ReadonlyArray<Message>,
   groups: ReadonlyArray<ToolGroup>,
+  imageCost: Option.Option<ImageCost>,
 ): ReadonlyArray<ProjectionUnit> => {
   const groupByStart = new Map<number, ToolGroup>()
   const groupedIndexes = new Set<number>()
@@ -1101,7 +1403,7 @@ const buildUnits = (
         start: group.value.start,
         end: group.value.end,
         messages: groupMessages,
-        estimatedTokens: estimateTokens(groupMessages),
+        estimatedTokens: estimateTokens(groupMessages, imageCost),
       })
       index = group.value.end
       continue
@@ -1113,7 +1415,7 @@ const buildUnits = (
         start: index,
         end: index,
         messages: [message.value],
-        estimatedTokens: estimateTokens([message.value]),
+        estimatedTokens: estimateTokens([message.value], imageCost),
       })
     }
   }
@@ -1295,7 +1597,7 @@ const handoffAnchorWithinTurn = (
   budget: ModelContextBudget,
   measure: Option.Option<StepMeasure>,
 ): Option.Option<MessageId> => {
-  const measured = measuredUnits(messages, measure)
+  const measured = measuredUnits(messages, measure, imageCostOf(budget))
   if (Result.isFailure(measured)) return Option.none()
   const units = measured.success
   const target = Math.floor(messageBudget(budget) / 2)
@@ -1327,7 +1629,7 @@ export const projectModelContext = (
   budget: ModelContextBudget,
   measure: Option.Option<StepMeasure> = Option.none(),
 ): Result.Result<ModelContextProjection, ModelContextError> => {
-  const units = measuredUnits(messages, measure)
+  const units = measuredUnits(messages, measure, imageCostOf(budget))
   if (Result.isFailure(units)) return Result.fail(units.failure)
   return projectUnits(units.success, budget)
 }
@@ -1342,10 +1644,12 @@ export const projectModelContext = (
 export const estimateHistoryTokens = (
   messages: ReadonlyArray<Message>,
   measure: Option.Option<StepMeasure>,
+  model: Pick<Model, "imageCost">,
 ): number => {
   const window = messagesInCurrentWindow(messages)
-  const units = measuredUnits(window, measureInCurrentWindow(window, measure))
-  if (Result.isFailure(units)) return estimateTokens(window)
+  const imageCost = Option.fromUndefinedOr(model.imageCost)
+  const units = measuredUnits(window, measureInCurrentWindow(window, measure), imageCost)
+  if (Result.isFailure(units)) return estimateTokens(window, imageCost)
   return Option.match(anchorUnit(units.success), {
     onNone: () => 0,
     onSome: (anchor) =>
@@ -1364,13 +1668,14 @@ export const estimateHistoryTokens = (
 const measuredUnits = (
   messages: ReadonlyArray<Message>,
   measure: Option.Option<StepMeasure>,
+  imageCost: Option.Option<ImageCost>,
 ): Result.Result<ReadonlyArray<ProjectionUnit>, ModelContextError> => {
   const visible = messages.filter(isAiVisibleMessage)
   const records = collectToolRecords(visible)
   if (Result.isFailure(records)) return Result.fail(records.failure)
   const groups = groupToolCalls(visible, records.success)
   if (Result.isFailure(groups)) return Result.fail(groups.failure)
-  const units = buildUnits(visible, groups.success)
+  const units = buildUnits(visible, groups.success, imageCost)
 
   const reply = Option.flatMap(measure, (value) => {
     const index = visible.findIndex((message) => message.id === value.replyId)
@@ -1402,9 +1707,11 @@ const measuredUnits = (
  * asks, or when a turn starts on a large window whose prompt cache went
  * cold. It gives the history that leaves the window to whichever extension
  * installs a `ModelContextCompactor` as a process resource and gets back the
- * notice the handoff marker carries. With none installed, an overflowing
- * transcript is simply truncated. The loop owns the marker, its ids, and the
- * transaction; the extension owns the summary prompt and the notice text.
+ * notice the handoff marker carries. Several installed compactors form one
+ * chain (`chainCompactors`), project first, then user, then builtin. With
+ * none installed, or each one refusing, an overflowing transcript is simply
+ * truncated. The loop owns the marker, its ids, and the transaction; the
+ * extension owns the summary prompt and the notice text.
  */
 
 /** Why a summary was not produced. Every failure degrades to a truncated window. */
@@ -1426,6 +1733,12 @@ export type CompactionSummary = typeof CompactionSummary.Type
 
 export interface CompactionRequest {
   readonly modelId: ModelId
+  /**
+   * The agent whose window is compacted. A compactor that serves only some
+   * agents fails with `ModelCompactionError` for the others, and the loop
+   * truncates their window instead.
+   */
+  readonly agentName: AgentName
   readonly sessionId: SessionId
   readonly branchId: BranchId
   /** The history leaving the window, oldest first, an earlier handoff marker included. */
@@ -1452,6 +1765,22 @@ export class ModelContextCompactor extends Context.Service<
   ModelContextCompactor,
   ModelContextCompactorService
 >()("@gent/core/src/runtime/model-context/ModelContextCompactor") {}
+
+/**
+ * Two compactors as one: `first` is asked, and a window it refuses with
+ * `ModelCompactionError` goes to `next`, whose answer (or refusal) stands.
+ * The host chains each extension's compactor over the ones of lower scope.
+ */
+export const chainCompactors = (
+  first: ModelContextCompactor["Service"],
+  next: ModelContextCompactor["Service"],
+) =>
+  ModelContextCompactor.of({
+    compact: (request) =>
+      first
+        .compact(request)
+        .pipe(Effect.catchTag("ModelCompactionError", () => next.compact(request))),
+  })
 
 // ── model-context-ledger ────────────────────────────────────────────────────
 
@@ -1766,6 +2095,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly modelId: ModelId
+  readonly agentName: AgentName
   readonly messages: ReadonlyArray<Message>
   readonly budget: ModelContextBudget
   /** The provider's measure of the last step, if one was reported. */
@@ -1917,6 +2247,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   const summary = yield* compactor.value
     .compact({
       modelId: params.modelId,
+      agentName: params.agentName,
       sessionId: params.sessionId,
       branchId: params.branchId,
       history,

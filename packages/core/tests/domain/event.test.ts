@@ -3,6 +3,7 @@ import {
   AgentEvent,
   BranchCreated,
   BranchSwitched,
+  ErrorOccurred,
   type EventEnvelope,
   EventId,
   EventStore,
@@ -35,6 +36,17 @@ test("turn receipts preserve model failure and leave historical outcomes unspeci
     const receipt = TurnCompleted.make({ ...historical, streamFailed })
     expect(decode(encode(receipt)).streamFailed).toBe(streamFailed)
   }
+})
+
+test("an error row from before reset times decodes, and a reset time survives the store", () => {
+  const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ErrorOccurred))
+  const encode = Schema.encodeSync(Schema.fromJsonString(ErrorOccurred))
+  const historical = decode(
+    '{"_tag":"ErrorOccurred","sessionId":"session-1","branchId":"branch-1","error":"Rate limit"}',
+  )
+  expect(historical.retryAt).toBeUndefined()
+  const limited = ErrorOccurred.make({ ...historical, retryAt: 1_800_000_000_000 })
+  expect(decode(encode(limited)).retryAt).toBe(1_800_000_000_000)
 })
 
 describe("event session routing", () => {

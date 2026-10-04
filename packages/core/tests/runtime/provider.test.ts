@@ -47,6 +47,7 @@ import {
   DecisionModelResolver,
   removeSignIn,
   listAuthMethods,
+  limitResetAt,
   listCatalogProviders,
   retryProviderCall,
   listModelCatalog,
@@ -133,6 +134,17 @@ const rateLimited = (retryAfter: Duration.Duration) =>
       reason: new AiError.RateLimitError({ retryAfter }),
     }),
   })
+
+/** A rate limit with no retry-after: the reset, if any, is in the body only the driver reads. */
+const usageLimited = new ProviderError({
+  message: "Usage limit",
+  model: "test",
+  cause: AiError.make({
+    module: "Test",
+    method: "streamText",
+    reason: new AiError.RateLimitError({}),
+  }),
+})
 
 const invalidKey = new ProviderError({
   message: "Invalid API key",
@@ -262,6 +274,54 @@ describe("provider retry", () => {
       )
       expect(Exit.isFailure(yield* Effect.exit(untyped.run))).toBe(true)
       expect(untyped.calls()).toBe(1)
+    }),
+  )
+
+  // A ChatGPT usage limit names its reset in the body, not in a retry-after.
+  it.effect("a reset time past maxDelay that the driver reads fails at once without a retry", () =>
+    Effect.gen(function* () {
+      const { run, delays, calls } = failThenSucceed(usageLimited, 1, {
+        ...fast,
+        maxDelay: 30_000,
+        retryAt: (_cause, nowMs) => Option.some(nowMs + Duration.toMillis(Duration.hours(5))),
+      })
+      const exit = yield* Effect.exit(run)
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(calls()).toBe(1)
+      expect(delays).toEqual([])
+    }),
+  )
+
+  it.effect("a reset time inside maxDelay is the wait before the retry", () =>
+    Effect.gen(function* () {
+      const { run, delays } = failThenSucceed(usageLimited, 1, {
+        ...fast,
+        maxDelay: 60_000,
+        retryAt: (_cause, nowMs) => Option.some(nowMs + 20_000),
+      })
+      const fiber = yield* Effect.forkChild(run)
+      yield* TestClock.adjust("20 seconds")
+      expect(yield* Fiber.join(fiber)).toBe("ok")
+      expect(delays).toEqual([20_000])
+    }),
+  )
+
+  it.effect("the default reset time is the retry-after counted from now", () =>
+    Effect.sync(() => {
+      const hinted = rateLimited(Duration.seconds(30))
+      expect(DEFAULT_RETRY_POLICY.retryAt(hinted.cause, 1_000)).toEqual(Option.some(31_000))
+      expect(DEFAULT_RETRY_POLICY.retryAt(usageLimited.cause, 1_000)).toEqual(Option.none())
+    }),
+  )
+
+  it.effect("only a reset past maxDelay is a limit reset the turn reports", () =>
+    Effect.sync(() => {
+      const capped = { ...policy, maxDelay: 30_000 }
+      expect(limitResetAt(capped, rateLimited(Duration.hours(5)), 0)).toEqual(
+        Option.some(Duration.toMillis(Duration.hours(5))),
+      )
+      expect(limitResetAt(capped, rateLimited(Duration.seconds(10)), 0)).toEqual(Option.none())
+      expect(limitResetAt(capped, usageLimited, 0)).toEqual(Option.none())
     }),
   )
 })
@@ -2460,6 +2520,38 @@ describe("Scripted debug model tool scenario", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
+  it.live("debug threads starts two threads under their wire names, lists them, then answers", () =>
+    Effect.gen(function* () {
+      const tools = ["thread__start", "thread__list"]
+      const steps = yield* Effect.forEach([0, 1, 2], (done) => step(done, tools, "debug threads"))
+      expect(steps.map((parts) => callsOf(parts).map((call) => call.name))).toEqual([
+        ["thread__start", "thread__start"],
+        ["thread__list"],
+        [],
+      ])
+      // The first thread plays the tool scenario in its own session.
+      expect(callsOf(steps[0] ?? [])[0]?.params).toEqual(
+        expect.objectContaining({ task: "debug tools" }),
+      )
+      const cell = callsOf(yield* step(0, ["cell"], "debug threads"))
+      expect(cell[0]?.params).toEqual({
+        code: expect.stringContaining("tools.thread.start({"),
+      })
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("debug handoff asks for a handoff, then answers", () =>
+    Effect.gen(function* () {
+      const steps = yield* Effect.forEach([0, 1], (done) =>
+        step(done, ["handoff"], "debug handoff"),
+      )
+      expect(steps.map((parts) => callsOf(parts).map((call) => call.name))).toEqual([
+        ["handoff"],
+        [],
+      ])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.live("a turn narrowed to cell runs each step's ops as cell code", () =>
     Effect.gen(function* () {
       const reads = callsOf(yield* step(1, ["cell"]))
@@ -2818,11 +2910,13 @@ describe("models.dev catalog source", () => {
                   { type: "unknown-kind" },
                 ],
                 interleaved: { field: "reasoning_content" },
+                modalities: { input: ["text", "image", "pdf"], output: ["text"] },
                 // models.dev names the wire protocol `shape`.
                 provider: { npm: "@ai-sdk/openai-compatible", ["shape"]: "completions" },
               },
+              "text-only": { name: "Text only", modalities: { input: ["text"] } },
               // An odd field drops itself, never the model.
-              odd: { name: 42, limit: "big", tool_call: "yes" },
+              odd: { name: 42, limit: "big", tool_call: "yes", modalities: { input: "image" } },
               "not-an-object": 7,
             },
           },
@@ -2850,11 +2944,17 @@ describe("models.dev catalog source", () => {
           reasoningField: "reasoning_content",
           npm: "@ai-sdk/openai-compatible",
           protocol: "completions",
+          imageInput: true,
         },
+        { id: "text-only", name: "Text only", imageInput: false },
         { id: "odd", name: "odd" },
         // The decision source's models follow the chat models of the same provider.
         { id: "judge", name: "Judge", decision: true },
       ])
+      // The model says whether it reads images; absent when the catalog does not say.
+      expect(
+        models.map((entry) => Option.fromUndefinedOr(modelFromCatalog("openai", entry).imageInput)),
+      ).toEqual([Option.some(true), Option.some(false), Option.none(), Option.none()])
       expect(catalog.providerIds).toEqual(["openai"])
       expect(Option.isNone(catalog.provider("absent"))).toBe(true)
     }),

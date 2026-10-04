@@ -8,6 +8,26 @@ Minimal, opinionated agent harness — built on Effect.
 - **Opinionated**: one way to do things, no configuration bloat
 - **Effect-native end-to-end**: services, layers, schema, streams — no Promise edges in the public surface
 
+## Install
+
+```bash
+curl -fsSL https://gent.cvr.im/install.sh | sh
+```
+
+The installer puts the release for your machine (macOS, or Linux with glibc;
+x64 or arm64) into `~/.local/share/gent/versions/<version>` and links
+`~/.local/bin/gent` to it, after it checks the archive against the release's
+`SHA256SUMS`. It adds `~/.local/bin` to `PATH` in your shell's startup file
+when it is missing (`--no-modify-path` skips that). Pin a version with
+`sh -s -- --version 0.2.0`. gent needs no Bun or Node to run.
+
+`gent upgrade` moves that install to the latest release (`gent upgrade 0.2.0`
+for a given one) and keeps the version it replaces. gent never checks for
+updates on its own.
+
+From a checkout, `bun run install:global` builds gent and installs the build
+into the same layout, as version `dev-<digest>`.
+
 ## Quick Start
 
 ```bash

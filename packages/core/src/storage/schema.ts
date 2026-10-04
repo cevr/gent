@@ -883,6 +883,28 @@ const modelCatalogSnapshotsMigration = Effect.gen(function* () {
   `)
 })
 
+/**
+ * One row for each tool image a stored message references, so the blob
+ * sweep keeps every image some message still holds. An image is content
+ * addressed and shared: the rows count its references, and each goes with
+ * its message (and so with its session) by foreign key. Additive: a message
+ * stored before it has no row, as no stored message held a tool image yet.
+ */
+const toolImageReferencesMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS tool_image_references (
+      sha256 TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      PRIMARY KEY (sha256, message_id),
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+    )
+  `)
+  yield* sql.unsafe(
+    `CREATE INDEX IF NOT EXISTS idx_tool_image_references_message ON tool_image_references(message_id)`,
+  )
+})
+
 const StoragePragmaLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
     configureSqliteConnection().pipe(
@@ -932,6 +954,7 @@ const makeStorageMigratorLive = (
       "022_turn_record_admission": turnRecordAdmissionMigration,
       "023_session_admission": sessionAdmissionMigration,
       "024_model_catalog_snapshots": modelCatalogSnapshotsMigration,
+      "025_tool_image_references": toolImageReferencesMigration,
       ...featureMigrations,
     }),
     table: "gent_storage_migrations",

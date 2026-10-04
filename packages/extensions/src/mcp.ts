@@ -57,7 +57,10 @@ import {
   omitUndefined,
   request,
   resolveDataDir,
+  saveToolImage,
   tool,
+  type ToolImage,
+  toolImageFile,
   ToolResultFailure,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
@@ -673,14 +676,12 @@ export const makeBlobStore = (directory: string) =>
         ),
       )
     return {
-      /** Each content block's file by index; none for a block that is not binary or was not written. */
-      save: (content: ReadonlyArray<Schema.Json>) =>
-        Effect.forEach(content, (block) =>
-          Option.match(binaryOf(block), {
-            onNone: () => Effect.succeed(Option.none<string>()),
-            onSome: (binary) => saveOne(binary.data, Option.fromUndefinedOr(binary.mimeType)),
-          }),
-        ),
+      /** A content block's file; none for a block that is not binary or was not written. */
+      save: (block: Schema.Json) =>
+        Option.match(binaryOf(block), {
+          onNone: () => Effect.succeed(Option.none<string>()),
+          onSome: (binary) => saveOne(binary.data, Option.fromUndefinedOr(binary.mimeType)),
+        }),
     }
   })
 
@@ -1857,10 +1858,8 @@ interface McpClientsService {
   readonly login: (name: string) => Effect.Effect<string, McpError>
   /** Hands the named server's pending login a pasted redirect address (see `pasteRedirect` in `mcpClientsLive`). */
   readonly pasteRedirect: (name: string, address: string) => Effect.Effect<LoginRedirect, McpError>
-  /** Writes a result's binary blocks to files (see `makeBlobStore`); each block's file by index. */
-  readonly saveBlobs: (
-    content: ReadonlyArray<Schema.Json>,
-  ) => Effect.Effect<ReadonlyArray<Option.Option<string>>>
+  /** Writes a binary block to a file (see `makeBlobStore`); none for a block not written. */
+  readonly saveBlob: (block: Schema.Json) => Effect.Effect<Option.Option<string>>
 }
 
 /**
@@ -2359,7 +2358,7 @@ const mcpClientsLive = ({
             servers: servers.toSorted((left, right) => compareIds(left.name, right.name)),
           }
         }),
-        saveBlobs: blobStore.save,
+        saveBlob: blobStore.save,
       })
     }),
   )
@@ -2451,22 +2450,77 @@ const binaryOf = (block: Schema.Json) => {
   return Option.none()
 }
 
-/** A call's content blocks sorted into text, other blocks, and binary blocks the cell reads from a file or not at all. */
+/**
+ * A call's content blocks sorted into text, other blocks, images in the tool
+ * image store, and binary blocks the cell reads from a file or not at all.
+ */
 interface ProjectedContent {
   readonly texts: Array<string>
   readonly blocks: Array<Schema.Json>
+  readonly images: Array<Schema.Json>
   readonly binary: Array<Schema.Json>
   /** Binary blocks with no file: past the cap, or not written. */
   unsaved: number
 }
 
-/** `saved` holds the file of each content block by index, where one was written. */
+/** An image block in the tool image store: its reference and the file cell code reads. */
+interface StoredImage {
+  readonly image: ToolImage
+  readonly path: string
+}
+
+/**
+ * The tool image an image block is stored as; none for any other block, and
+ * for an image the store refuses (not PNG, JPEG, GIF or WebP, or too large),
+ * which goes to a blob file as before.
+ */
+const storeImageBlock = (block: Schema.Json) => {
+  if (!isMediaBlock(block) || block.type !== "image")
+    return Effect.succeed(Option.none<StoredImage>())
+  const data = block.data ?? ""
+  if (data.length === 0 || base64Bytes(data) > BLOB_FILE_LIMIT) {
+    return Effect.succeed(Option.none<StoredImage>())
+  }
+  const bytes = Base64.decode(data)
+  if (Result.isFailure(bytes)) return Effect.succeed(Option.none<StoredImage>())
+  return saveToolImage({ bytes: bytes.success }).pipe(
+    Effect.flatMap((image) => Effect.map(toolImageFile(image), (path) => ({ image, path }))),
+    Effect.option,
+  )
+}
+
+/**
+ * A `ToolImage` as the JSON a result holds, with the `path` of its
+ * content-addressed file beside it, as an omitted block names its file.
+ */
+const toolImageJson = ({ image, path }: StoredImage): Schema.Json => ({
+  _tag: image._tag,
+  sha256: image.sha256,
+  mediaType: image.mediaType,
+  width: image.width,
+  height: image.height,
+  bytes: image.bytes,
+  ...omitUndefined({ source: image.source }),
+  path,
+})
+
+/**
+ * `saved` holds the file of each content block by index, where one was
+ * written; `stored` the tool image each image block was stored as, where the
+ * store took it.
+ */
 const projectContent = (
   content: ReadonlyArray<Schema.Json>,
   saved: ReadonlyArray<Option.Option<string>>,
+  stored: ReadonlyArray<Option.Option<StoredImage>>,
 ): ProjectedContent => {
-  const projected: ProjectedContent = { texts: [], blocks: [], binary: [], unsaved: 0 }
+  const projected: ProjectedContent = { texts: [], blocks: [], images: [], binary: [], unsaved: 0 }
   for (const [index, block] of content.entries()) {
+    const image = Option.flatten(Option.fromUndefinedOr(stored[index]))
+    if (Option.isSome(image)) {
+      projected.images.push(toolImageJson(image.value))
+      continue
+    }
     const path = Option.flatten(Option.fromUndefinedOr(saved[index]))
     if (Option.isSome(binaryOf(block)) && Option.isNone(path)) projected.unsaved += 1
     const file = omitUndefined({ path: Option.getOrUndefined(path) })
@@ -2519,19 +2573,26 @@ const binaryNote = (count: number, unsaved: number) => {
 /**
  * The value a call returns. Text alone is its joined text; structured content
  * alone (its text only repeating it) is that value. Anything else is an
- * object: `structuredContent`, `text`, the other blocks as `content`, and
- * `omitted` naming each image, audio, or blob block with its MIME type and
- * size, and the `path` of the file it was saved to (see `saveBlobs`) when
- * `saved` names one, and a `note` saying which the cell can read.
+ * object: `structuredContent`, `text`, the other blocks as `content`, the
+ * image blocks the tool image store took as `images` (the model sees each
+ * one after the result; each names the `path` of its file), and `omitted` naming each other image, audio, or
+ * blob block with its MIME type and size, and the `path` of the file it was
+ * saved to (see `saveBlob`) when `saved` names one, and a `note` saying which
+ * the cell can read.
  */
 export const projectCallResult = (
   result: CallResult,
   saved: ReadonlyArray<Option.Option<string>> = [],
+  stored: ReadonlyArray<Option.Option<StoredImage>> = [],
 ): Schema.Json => {
-  const { texts, blocks, binary, unsaved } = projectContent(result.content ?? [], saved)
+  const { texts, blocks, images, binary, unsaved } = projectContent(
+    result.content ?? [],
+    saved,
+    stored,
+  )
   const text = texts.join("\n")
   const structured = Option.fromUndefinedOr(result.structuredContent)
-  if (blocks.length === 0 && binary.length === 0) {
+  if (blocks.length === 0 && images.length === 0 && binary.length === 0) {
     if (Option.isNone(structured)) return text
     if (texts.length === 0 || repeats(text, structured.value)) return structured.value
   }
@@ -2539,6 +2600,7 @@ export const projectCallResult = (
   if (Option.isSome(structured)) value["structuredContent"] = structured.value
   if (texts.length > 0) value["text"] = text
   if (blocks.length > 0) value["content"] = blocks
+  if (images.length > 0) value["images"] = images
   if (binary.length > 0) {
     value["omitted"] = binary
     value["note"] = binaryNote(binary.length, unsaved)
@@ -2582,7 +2644,15 @@ const toolsFor = (server: McpServer, catalog: CatalogServer) => {
         execute: Effect.fn("Mcp.call")(function* (input) {
           const clients = yield* McpClients
           const result = yield* clients.call(server, entry.name, input)
-          const value = projectCallResult(result, yield* clients.saveBlobs(result.content ?? []))
+          const content = result.content ?? []
+          const stored = yield* Effect.forEach(content, storeImageBlock)
+          const saved = yield* Effect.forEach(content, (block, index) => {
+            if (Option.isSome(stored[index] ?? Option.none())) {
+              return Effect.succeed(Option.none<string>())
+            }
+            return clients.saveBlob(block)
+          })
+          const value = projectCallResult(result, saved, stored)
           if (result.isError === true) {
             // The host shape for a failed call, `{ error }`, with any non-text content beside it.
             if (Predicate.isString(value) && value.length > 0) {

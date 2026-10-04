@@ -45,7 +45,7 @@ import {
   ActorCommandId,
   BranchId,
   ExtensionId,
-  type MessageId,
+  MessageId,
   RequestId,
   SessionId,
   type ToolCallId,
@@ -263,6 +263,12 @@ export interface LoadedExtension {
    */
   readonly version?: string
   /**
+   * Set when this is the last good version of an extension whose newer
+   * version failed: the phase that stopped the new version and why. The
+   * profile runs this version in its place (`SessionProfileCache`).
+   */
+  readonly reloadFailed?: ReloadFailure
+  /**
    * Typed contribution buckets produced by the extension's setup function.
    * Consumers (the registry, the hook compiler, the profile build) read each
    * bucket directly — `contributions.tools`,
@@ -286,9 +292,18 @@ export interface FailedExtension {
 /** An extension the config's `disabledExtensions` names: found, and never set up. */
 export type DisabledExtension = Pick<LoadedExtension, "manifest" | "scope" | "sourcePath">
 
-/** An extension as health reports it: active, failed with its phase and error, or disabled. */
+/** Why a newer version of a running extension did not replace it. */
+interface ReloadFailure {
+  readonly phase: FailedExtensionPhase
+  readonly error: string
+}
+
+/**
+ * An extension as health reports it: active, failed with its phase and error,
+ * or disabled. An active one with `reloadFailed` runs its last good version.
+ */
 export type ExtensionStatusInfo =
-  | (Pick<LoadedExtension, "manifest" | "scope" | "sourcePath" | "version"> & {
+  | (Pick<LoadedExtension, "manifest" | "scope" | "sourcePath" | "version" | "reloadFailed"> & {
       readonly status: "active"
     })
   | (FailedExtension & { readonly status: "failed" })
@@ -300,18 +315,28 @@ const ExtensionStatusIdentity = {
   sourcePath: Schema.String,
 }
 
+const ExtensionStatusPhase = Schema.Literals(["load", "setup", "validation", "startup"])
+
 /**
  * One extension of a profile as the `Extensions` facet reports it. `Active`
- * names the file version it loaded from (none for a builtin); `Failed` names
- * the phase that stopped it: `load` (the file did not import), `setup`,
- * `validation` or `startup` (a Resource did not build); `Disabled` is named
- * by the config's `disabledExtensions`.
+ * names the version it loaded from (none for a builtin); with `reloadFailed`
+ * it is the last good version, still running because a newer version failed
+ * at that phase. `Failed` names the phase that stopped it: `load` (the file
+ * did not build or import), `setup`, `validation` or `startup` (a Resource did
+ * not build); `Disabled` is named by the config's `disabledExtensions`.
  */
 export const ExtensionStatus = Schema.TaggedUnion({
-  Active: { ...ExtensionStatusIdentity, version: Schema.optional(Schema.String) },
+  Active: {
+    ...ExtensionStatusIdentity,
+    version: Schema.optional(Schema.String),
+    // Optional, so a status written before the field decodes as it did.
+    reloadFailed: Schema.optional(
+      Schema.Struct({ phase: ExtensionStatusPhase, error: Schema.String }),
+    ),
+  },
   Failed: {
     ...ExtensionStatusIdentity,
-    phase: Schema.Literals(["load", "setup", "validation", "startup"]),
+    phase: ExtensionStatusPhase,
     error: Schema.String,
   },
   Disabled: ExtensionStatusIdentity,
@@ -422,6 +447,14 @@ export interface TurnAfterInput {
    * hooks once, after its receipt.
    */
   readonly streamFailed: boolean
+  /**
+   * When the usage limit the turn failed on resets, in epoch milliseconds:
+   * the same time as the turn's `ErrorOccurred.retryAt`, which the driver
+   * read past its retry cap (`RetryPolicy.retryAt`). Some only for a
+   * `streamFailed` turn that was not interrupted and whose last step failed
+   * so. It is held in memory, not stored.
+   */
+  readonly retryAt: Option.Option<number>
   /** The turn spent its continuations and never answered. */
   readonly unanswered: boolean
   /** What the turn's model calls spent, and whether that is all of it. */
@@ -544,14 +577,17 @@ export const hook = <K extends ExtensionHookKind, E = never, R = never>(
   // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Hook slots intentionally erase author error and service types at the runtime membrane.
   ({ kind, hook: { handler } }) as AnyExtensionHook
 
-/** Fragment a `turnProjection` hook returns to shape the turn's tools */
+/**
+ * Fragment a `turnProjection` hook returns to shape the turn's tools. The
+ * host tools are the agent's to name (`AgentDefinition.admitsTool`); a hook
+ * only picks the model-facing subset of them.
+ */
 export interface ToolPolicyFragment {
-  /** Tool names the host may run although the agent does not allow them. Agent deny still wins. */
-  readonly include?: ReadonlyArray<string>
   /**
    * Model-facing subset of the final admitted host tools. The last supplied set
-   * wins. Missing, denied, and filtered interactive tools cannot be restored here.
-   * An empty set advertises no tools. Omission preserves the previous selection.
+   * wins. Missing, unadmitted, and filtered interactive tools cannot be restored
+   * here. An empty set advertises no tools. Omission preserves the previous
+   * selection.
    */
   readonly modelSet?: ReadonlyArray<string>
 }
@@ -784,7 +820,16 @@ export const mapExtensionServiceError = <A, E, R>(
  *   turn the previous process left unfinished resumes.
  * - `queue` waits behind the running turn, keyed by `sourceId` so a repeat is
  *   a no-op and `dequeueFollowUp` can take it back. `wake` starts a turn even
- *   on a branch with no prior history.
+ *   on a branch with no prior history. `ifLatest` makes the line conditional:
+ *   it starts its turn at once, or it is not admitted. The loop admits it only
+ *   while the branch is idle, nothing waits in its queue (a parked steer, a
+ *   queued follow-up, a reserved start), and `ifLatest` is still the newest
+ *   message a person or an extension sent to the branch (not one the runtime
+ *   wrote, nor a steer a running turn joined). The test and the admission
+ *   hold the queue's own permit, so no other send lands between them. A line
+ *   that is not admitted changes nothing, as a repeat does. An admitted line
+ *   is a promise: it is stored before `send` returns, and a restart before
+ *   its turn starts runs it once, with no new test of `ifLatest`.
  * - `steer` joins the running turn at its next step. An idle branch parks it
  *   unless `wake` asks for a turn now. A `requestId` makes a repeat a no-op,
  *   and names the message: `interjectionMessageId(requestId)`. A `stopMessage` with
@@ -817,6 +862,7 @@ export const SessionSendParams = Schema.Union([
     sourceId: Schema.String,
     metadata: Schema.optional(MessageMetadata),
     wake: Schema.optional(Schema.Boolean),
+    ifLatest: Schema.optional(MessageId),
   }),
   Schema.Struct({
     delivery: Schema.Literal("steer"),
@@ -939,13 +985,15 @@ export interface ExtensionSessionService {
   readonly holdResident: Effect.Effect<void, never, Scope.Scope>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
   /**
-   * Every session in the workspace, or with a `root` only that session and
-   * the sessions below it by parent link, at any depth; a read that costs
-   * the subtree, not the workspace. The durable half of an agent catalog:
-   * survives restarts, but says nothing about what is running now.
+   * Every session in the workspace, or with `thread` only the sessions of
+   * that session's thread and the sessions below any of them by parent link,
+   * at any depth; a read that costs the thread's subtree, not the workspace.
+   * The thread is read by its key, so a deleted first session loses none of
+   * the rest. The durable half of an agent catalog: survives restarts, but
+   * says nothing about what is running now.
    */
   readonly listSessions: (params?: {
-    readonly root?: SessionId
+    readonly thread?: SessionId
   }) => Effect.Effect<ReadonlyArray<Session>, ExtensionServiceError>
   /**
    * Loops materialized right now. The live half of an agent catalog: carries

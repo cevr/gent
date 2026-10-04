@@ -67,6 +67,7 @@ import {
   SessionAdmission,
 } from "../domain/message.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
+import { toolImageDigests } from "../runtime/tool-image.js"
 import {
   AgentEvent,
   EventEnvelope,
@@ -509,6 +510,8 @@ interface MessageStorageService {
     messageId: MessageId,
     durationMs: number,
   ) => Effect.Effect<void, StorageError>
+  /** Whether any stored message, in any workspace, holds the tool image of this digest. */
+  readonly toolImageReferenced: (sha256: string) => Effect.Effect<boolean, StorageError>
 }
 
 export class MessageStorage extends Context.Service<MessageStorage, MessageStorageService>()(
@@ -521,9 +524,19 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
         const sql = yield* SqlClient.SqlClient
         const platform = yield* GentPlatform
         const insertContent = Effect.fn("MessageStorage.insertContent")(function* (
-          messageId: MessageId,
+          message: Message,
           partJsons: ReadonlyArray<string>,
         ) {
+          const messageId = message.id
+          // Each tool image the message holds, counted in the same transaction
+          // as the message, so the blob sweep never takes an image a stored
+          // message references.
+          yield* Effect.forEach(
+            toolImageDigests(message.parts),
+            (sha256) =>
+              sql`INSERT OR IGNORE INTO tool_image_references (sha256, message_id) VALUES (${sha256}, ${messageId})`,
+            { discard: true },
+          )
           // Called only for a message row this transaction just inserted: it
           // has no chunks yet, and an insert orphans none. The session delete
           // cascade is the one path that orphans chunks, and it sweeps them.
@@ -564,7 +577,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
                   turn_duration_ms: toSqlNull(message.turnDurationMs),
                   metadata: metadataJson,
                 })}`
-                yield* insertContent(message.id, partJsons)
+                yield* insertContent(message, partJsons)
                 yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId} AND workspace_id = ${yield* CurrentWorkspaceId}`
               }).pipe(sql.withTransaction)
               return message
@@ -582,7 +595,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
                   changed: number
                 }>`SELECT changes() as changed`
                 if ((rows[0]?.changed ?? 0) > 0) {
-                  yield* insertContent(message.id, partJsons)
+                  yield* insertContent(message, partJsons)
                   yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId} AND workspace_id = ${yield* CurrentWorkspaceId}`
                 }
               }).pipe(sql.withTransaction)
@@ -619,6 +632,17 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               )
             },
             Effect.mapError(storageError("Failed to list messages")),
+          ),
+
+          // Every workspace's messages count: the blob store is the data directory's.
+          toolImageReferenced: Effect.fn("MessageStorage.toolImageReferenced")(
+            function* (sha256) {
+              const rows = yield* sql<{
+                readonly found: number
+              }>`SELECT 1 AS found FROM tool_image_references WHERE sha256 = ${sha256} LIMIT 1`
+              return rows.length > 0
+            },
+            Effect.mapError(storageError("Failed to read tool image references")),
           ),
 
           updateMessageTurnDuration: Effect.fn("MessageStorage.updateMessageTurnDuration")(
@@ -918,12 +942,15 @@ interface RelationshipStorageService {
   ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
 
   /**
-   * The session and every session below it by parent link, at any depth:
-   * delegate children, `/btw` forks and handoffs alike. One indexed recursive
-   * read, so its cost follows the subtree, not the workspace. A parent cycle
-   * ends the walk. Empty when the session is not in the workspace.
+   * Every session of the session's thread, and every session below any of
+   * them by parent link, at any depth: delegate children, `/btw` forks and
+   * the handoffs of those alike. The thread is read by its key, not from its
+   * first session, so a deleted first session (whose handoffs stay, detached)
+   * loses none of the rest. One indexed recursive read, so its cost follows
+   * the thread's subtree, not the workspace. A parent cycle ends the walk.
+   * Empty when the session is not in the workspace.
    */
-  readonly getSessionTree: (
+  readonly getThreadTree: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
 
@@ -1006,15 +1033,22 @@ export class RelationshipStorage extends Context.Service<
           Effect.mapError(storageError("Failed to get session ancestors")),
         ),
 
-        getSessionTree: Effect.fn("RelationshipStorage.getSessionTree")(
+        getThreadTree: Effect.fn("RelationshipStorage.getThreadTree")(
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
-            // `UNION` over ids alone ends on a cycle: a repeated id adds no row.
-            // The unary `+` keeps the planner off the workspace index, which
-            // would scan every session in the workspace at each step: each
-            // step walks `idx_sessions_parent` and the result reads by id.
+            // The seed is the thread's sessions by key, through
+            // `idx_sessions_thread`. `UNION` over ids alone ends on a cycle: a
+            // repeated id adds no row. The unary `+` keeps the planner off the
+            // workspace index, which would scan every session in the
+            // workspace at each step: each step walks `idx_sessions_parent`
+            // and the result reads by id.
             const rows = yield* sql<SessionRow>`WITH RECURSIVE tree(id) AS (
-            SELECT id FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
+            SELECT id FROM sessions
+            WHERE workspace_id = ${workspaceId}
+              AND thread_id = (
+                SELECT thread_id FROM sessions
+                WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
+              )
             UNION
             SELECT s.id
             FROM tree t
@@ -1027,7 +1061,7 @@ export class RelationshipStorage extends Context.Service<
           ORDER BY updated_at DESC`
             return yield* Effect.forEach(rows, sessionFromRow)
           },
-          Effect.mapError(storageError("Failed to get session tree")),
+          Effect.mapError(storageError("Failed to get thread tree")),
         ),
 
         getThreadSessions: Effect.fn("RelationshipStorage.getThreadSessions")(

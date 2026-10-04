@@ -17,6 +17,12 @@ import { createMockClient, type TestTools, testPlatformLayer } from "./render-ha
 
 type ActiveClientSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
+/** An extension request as the transport sends it: its session, capability and input. */
+type ClientExtensionRequest = ActiveClientSession & {
+  readonly capabilityId: string
+  readonly input: unknown
+}
+
 /** The session in view when a test names none: the client always holds one. */
 const TEST_SESSION: ActiveClientSession = {
   sessionId: SessionId.make("test-session"),
@@ -30,8 +36,8 @@ interface ClientExtensionHarnessOptions {
   /** The session in view; `TEST_SESSION` when the test names none. */
   readonly currentSession?: () => ActiveClientSession
   readonly requestDeferred?: Deferred.Deferred<unknown, never>
-  /** Answers every extension request; it sees the session the request names. */
-  readonly requestEffect?: (request: ActiveClientSession) => Effect.Effect<unknown, Error>
+  /** Answers every extension request; it sees the session, capability and input the request names. */
+  readonly requestEffect?: (request: ClientExtensionRequest) => Effect.Effect<unknown, Error>
   readonly requestReply?: unknown
   readonly sessionEventSubscribers?: Set<(envelope: EventEnvelope) => void>
   /** The model catalog the shell holds; settled empty by default. */
@@ -117,10 +123,15 @@ export const makeClientTestTransport = (
 ): ClientShellTransport => {
   const client = createMockClient({
     extension: {
-      request: (request: ActiveClientSession) => {
+      request: (request: ClientExtensionRequest) => {
         const requestEffect = Option.fromNullishOr(opts.requestEffect)
         if (Option.isSome(requestEffect)) {
-          return requestEffect.value({ sessionId: request.sessionId, branchId: request.branchId })
+          return requestEffect.value({
+            sessionId: request.sessionId,
+            branchId: request.branchId,
+            capabilityId: request.capabilityId,
+            input: request.input,
+          })
         }
         const requestDeferred = Option.fromNullishOr(opts.requestDeferred)
         if (Option.isSome(requestDeferred)) return Deferred.await(requestDeferred.value)

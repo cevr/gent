@@ -11,6 +11,7 @@ import {
   ToolCallId,
 } from "@gent/core/protocol"
 import {
+  Array as Arr,
   Cause,
   Clock,
   Config,
@@ -20,6 +21,8 @@ import {
   FileSystem,
   Match,
   Option,
+  Path,
+  type PlatformError,
   Runtime,
   Schema,
   Stdio,
@@ -35,7 +38,14 @@ import {
 } from "@gent/sdk"
 import { BranchStorage, GentPlatform, MessageStorage, SessionStorage } from "@gent/core/host"
 import * as Prompt from "effect/ai/Prompt"
-import { Command, Flag } from "effect/cli"
+import { Argument, Command, Flag } from "effect/cli"
+import {
+  FetchHttpClient,
+  HttpClient,
+  type HttpClientError,
+  type HttpClientResponse,
+} from "effect/http"
+import { runProcess } from "@gent/core/extensions/api"
 import { readonlySqlite, textWidth } from "./bun-adapter"
 import { formatBytes, isConversation, padWidth } from "./utils"
 import * as Terminal from "effect/Terminal"
@@ -1050,3 +1060,260 @@ const storageReset = Command.make("reset", {}, () =>
 export const storage = Command.make("storage", {}, () =>
   Console.log("Usage: gent storage <reset>"),
 ).pipe(Command.withSubcommands([storageReset]))
+
+// ── install and upgrade ─────────────────────────────────────────────────────
+
+/**
+ * Where releases live: the GitHub releases page, or a mirror with the same
+ * paths. `gent upgrade` hands it to the release's install.sh.
+ */
+const releasesUrl = Config.String("GENT_RELEASES_URL").pipe(
+  Config.withDefault("https://github.com/cevr/gent/releases"),
+)
+
+const INSTALL_COMMAND = "curl -fsSL https://gent.cvr.im/install.sh | sh"
+
+/** A release version as a tag names it without its `v`: `0.2.0`, `1.0.0-rc.1`. */
+const RELEASE_VERSION = /^[0-9][0-9A-Za-z.+-]*$/
+
+/**
+ * The install root the gent at `executable` runs from: install.sh puts each
+ * version at `<XDG_DATA_HOME>/gent/versions/<version>/gent`.
+ */
+const installRoot = (path: Path.Path, executable: string): Option.Option<string> => {
+  const versionsDir = path.dirname(path.dirname(executable))
+  const root = path.dirname(versionsDir)
+  const installed =
+    path.basename(executable) === "gent" &&
+    path.basename(versionsDir) === "versions" &&
+    path.basename(root) === "gent"
+  if (!installed) return Option.none()
+  return Option.some(root)
+}
+
+/**
+ * Mark the installed version this gent runs from as in use for the life of
+ * the scope: `<version>/.in-use/<pid>`. install.sh never prunes a version
+ * with a live marker, so a gent that runs, and its server, keep their
+ * gent-cell across updates. A source run or a gent outside an install marks
+ * nothing. A gent whose marker cannot be written, or whose pair is gone once
+ * the marker is in place, does not start: it would run without gent-cell.
+ */
+export const markVersionInUse = Effect.gen(function* () {
+  const platform = yield* GentPlatform
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  if ((yield* platform.build)._tag === "Source") return
+  const executable = yield* platform.execPath
+  if (Option.isNone(installRoot(path, executable))) return
+  const versionDir = path.dirname(executable)
+  const markers = path.join(versionDir, ".in-use")
+  const marker = path.join(markers, String(yield* platform.pid))
+  const removed = new CliStartupError({
+    message: `this version of gent was removed during start (${versionDir}); run gent again`,
+  })
+  const unmarked = (error: PlatformError.PlatformError) => {
+    if (error.reason._tag === "NotFound") return removed
+    return new CliStartupError({
+      message: `could not mark ${versionDir} in use: ${error.message}`,
+      cause: error,
+    })
+  }
+  // Not recursive: a version directory that prune removed stays removed.
+  yield* fs.makeDirectory(markers).pipe(
+    Effect.catchEager((error) => {
+      if (error.reason._tag === "AlreadyExists") return Effect.void
+      return Effect.fail(error)
+    }),
+    Effect.mapError(unmarked),
+  )
+  yield* Effect.acquireRelease(fs.writeFileString(marker, "").pipe(Effect.mapError(unmarked)), () =>
+    fs.remove(marker).pipe(Effect.ignore),
+  )
+  // The other half of prune's handshake (install.sh moves a version aside,
+  // then looks for markers again): with the marker written, a pair still in
+  // place stays in place.
+  const pair = yield* Effect.forEach([executable, path.join(versionDir, "gent-cell")], (file) =>
+    fs.exists(file),
+  ).pipe(Effect.mapError(unmarked))
+  if (!pair.every(Boolean)) return yield* removed
+})
+
+class UpgradeError extends Schema.TaggedError<UpgradeError>()("UpgradeError", {
+  message: Schema.String,
+}) {}
+
+const UpgradeOutcome = Schema.TaggedUnion({
+  /** The release's install.sh switched the install to `to`; `report` is what it said. */
+  Upgraded: { from: Schema.String, to: Schema.String, report: Schema.String },
+  /** The running build is the version asked for. */
+  Current: { version: Schema.String },
+  /** A package manager owns this gent: it changes nothing. */
+  PackageManager: { executable: Schema.String },
+})
+type UpgradeOutcome = typeof UpgradeOutcome.Type
+
+const upgradeFailure = (message: string) => Effect.fail(new UpgradeError({ message }))
+
+/** A download's body, or an `UpgradeError` that names the URL. */
+const download = <A>(
+  client: HttpClient.HttpClient,
+  url: string,
+  body: (
+    response: HttpClientResponse.HttpClientResponse,
+  ) => Effect.Effect<A, HttpClientError.HttpClientError>,
+) =>
+  client.get(url).pipe(
+    Effect.flatMap(body),
+    Effect.mapError(
+      (error) => new UpgradeError({ message: `could not download ${url}: ${error.message}` }),
+    ),
+  )
+
+/** The digest SHA256SUMS gives for `name`. */
+const listedDigest = (sums: string, name: string): Option.Option<string> =>
+  Arr.findFirst(sums.split("\n"), (line) => {
+    const listed = line.trim().split(/\s+/)[1]
+    return listed === name || listed === `*${name}`
+  }).pipe(Option.map((line) => line.trim().split(/\s+/)[0] ?? ""))
+
+/**
+ * The install this gent runs from, read from its real path: an install.sh
+ * root, or none for a package manager's tree. A source run or any other
+ * path is refused.
+ */
+const findInstall = Effect.gen(function* () {
+  const platform = yield* GentPlatform
+  const path = yield* Path.Path
+  const build = yield* platform.build
+  if (build._tag === "Source") {
+    return yield* upgradeFailure(
+      `this gent runs from a source checkout; pull and rebuild it, or install a release: ${INSTALL_COMMAND}`,
+    )
+  }
+  const executable = yield* platform.execPath
+  if (executable.split(path.sep).includes("node_modules")) {
+    return { build, root: Option.none<string>(), executable }
+  }
+  const root = installRoot(path, executable)
+  if (Option.isNone(root)) {
+    return yield* upgradeFailure(
+      `gent upgrade updates a gent that install.sh installed (<root>/gent/versions/<version>/gent); this one runs from ${executable}. Install a release with: ${INSTALL_COMMAND}`,
+    )
+  }
+  return { build, root, executable }
+})
+
+/** The version asked for, or the latest: its page redirects to `.../releases/tag/v<version>`. */
+const resolveVersion = (
+  client: HttpClient.HttpClient,
+  releases: string,
+  requested: Option.Option<string>,
+) =>
+  Effect.gen(function* () {
+    let version = ""
+    if (Option.isSome(requested)) version = requested.value.replace(/^v/, "")
+    else {
+      const tag = yield* download(client, `${releases}/latest`, (response) =>
+        Effect.succeed(Arr.last(response.url.split("/")).pipe(Option.getOrElse(() => ""))),
+      )
+      if (!/^v[0-9]/.test(tag)) return yield* upgradeFailure(`${releases} has no published release`)
+      version = tag.slice(1)
+    }
+    if (!RELEASE_VERSION.test(version)) {
+      return yield* upgradeFailure(`"${version}" is not a version, such as 0.2.0`)
+    }
+    return version
+  })
+
+/** The release's install.sh, checked against the release's SHA256SUMS like any other asset. */
+const downloadInstaller = (client: HttpClient.HttpClient, releases: string, version: string) =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const base = `${releases}/download/v${version}`
+    const installer = yield* download(client, `${base}/install.sh`, (response) =>
+      Effect.map(response.arrayBuffer, (buffer) => new Uint8Array(buffer)),
+    )
+    const sums = yield* download(client, `${base}/SHA256SUMS`, (response) => response.text)
+    const expected = listedDigest(sums, "install.sh")
+    if (Option.isNone(expected)) {
+      return yield* upgradeFailure(`the SHA256SUMS of v${version} names no install.sh`)
+    }
+    const actual = platform.hash("sha256", installer)
+    if (actual !== expected.value) {
+      return yield* upgradeFailure(
+        `install.sh does not match the SHA256SUMS of v${version} (expected ${expected.value}, got ${actual})`,
+      )
+    }
+    return installer
+  })
+
+/**
+ * Move the install this gent runs from to another release. install.sh is the
+ * one owner of placing, switching and pruning: this resolves the version,
+ * downloads that release's install.sh, checks it against the release's
+ * SHA256SUMS, and runs it for the same root (`XDG_DATA_HOME` is the root's
+ * parent) and the same release host. A gent inside `node_modules` belongs to
+ * a package manager and is left alone.
+ */
+export const upgradeInstall = Effect.fn("upgradeInstall")(function* (
+  requested: Option.Option<string>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const install = yield* findInstall
+  if (Option.isNone(install.root)) {
+    return UpgradeOutcome.cases.PackageManager.make({ executable: install.executable })
+  }
+  const releases = (yield* releasesUrl).replace(/\/+$/, "")
+  const client = HttpClient.filterStatusOk(yield* HttpClient.HttpClient)
+  const version = yield* resolveVersion(client, releases, requested)
+  if (version === install.build.version) return UpgradeOutcome.cases.Current.make({ version })
+
+  const installer = yield* downloadInstaller(client, releases, version)
+  const work = yield* fs.makeTempDirectoryScoped({ prefix: "gent-upgrade-" })
+  const script = path.join(work, "install.sh")
+  yield* fs.writeFile(script, installer)
+  const ran = yield* runProcess("sh", [script, "--version", version, "--no-modify-path"], {
+    env: {
+      HOME: yield* readHome,
+      XDG_DATA_HOME: path.dirname(install.root.value),
+      GENT_RELEASES_URL: releases,
+    },
+    extendEnv: true,
+  }).pipe(
+    Effect.mapError(
+      (error) => new UpgradeError({ message: `could not run install.sh: ${error.message}` }),
+    ),
+  )
+  const report = ran.stderr.trim()
+  if (ran.exitCode !== 0) {
+    return yield* upgradeFailure(`the install.sh of v${version} failed:\n${report}`)
+  }
+  return UpgradeOutcome.cases.Upgraded.make({ from: install.build.version, to: version, report })
+})
+
+export const formatUpgradeOutcome = (outcome: UpgradeOutcome): string =>
+  Match.value(outcome).pipe(
+    Match.tagsExhaustive({
+      Upgraded: ({ from, to, report }) => `Upgraded gent v${from} to v${to}.\n${report}`,
+      Current: ({ version }) => `Already at gent v${version}.`,
+      PackageManager: ({ executable }) =>
+        `A package manager installed this gent (${executable}); upgrade it with that package manager.`,
+    }),
+  )
+
+export const upgrade = Command.make(
+  "upgrade",
+  {
+    version: Argument.String("version").pipe(
+      Argument.withDescription("The release to install, such as 0.2.0 (default: the latest)"),
+      Argument.optional,
+    ),
+  },
+  ({ version }) =>
+    Effect.gen(function* () {
+      const outcome = yield* Effect.scoped(upgradeInstall(version))
+      yield* Console.log(formatUpgradeOutcome(outcome))
+    }),
+).pipe(Command.provide(FetchHttpClient.layer))

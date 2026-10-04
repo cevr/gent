@@ -101,37 +101,24 @@ const UNKNOWN_BUILD = "unknown"
 /** Whether two fingerprints name one build. An unknown build is never the same build. */
 const sameBuild = (a: string, b: string): boolean => a === b && a !== UNKNOWN_BUILD
 
-type BuildFingerprintServices =
-  | FileSystem.FileSystem
-  | Path.Path
-  | ChildProcessSpawner.ChildProcessSpawner
-  | GentPlatform
+type BuildFingerprintServices = Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
 
 /**
  * This process's build fingerprint, from local sources (no env). A compiled
- * gent (`GentPlatform.compiled`) names its build by the binary's mtime,
- * wherever the binary is installed; a source run by the checkout's git hash.
- * A build neither names is `"unknown"`. `resolveServer` reads it once, so the
- * lock entry and the identity endpoint name one build.
+ * gent names its build by the version and the id its build drew
+ * (`GentPlatform.build`, `0.1.0+<id>`), wherever it is installed: an archive
+ * or a package keeps the mtimes it was packed with, so a file's dates name no
+ * build. A source run names it by the checkout's git hash. A build neither
+ * names is `"unknown"`. `resolveServer` reads it once, so the lock entry and
+ * the identity endpoint name one build.
  */
 export const buildFingerprint: Effect.Effect<string, never, BuildFingerprintServices> = Effect.gen(
   function* () {
-    const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const platform = yield* GentPlatform
 
-    if (yield* platform.compiled) {
-      const info = yield* fs.stat(yield* platform.execPath).pipe(Effect.option)
-      // A binary with no stat, or no mtime, names no build: two such builds
-      // would otherwise share one fingerprint and attach to each other.
-      return Option.match(
-        Option.flatMap(info, (stat) => stat.mtime),
-        {
-          onNone: () => UNKNOWN_BUILD,
-          onSome: (mtime) => `bin-${mtime.getTime().toString(36)}`,
-        },
-      )
-    }
+    const build = yield* platform.build
+    if (build._tag === "Compiled") return `${build.version}+${build.id}`
 
     const here = yield* path.fromFileUrl(new URL(import.meta.url)).pipe(Effect.option)
     if (Option.isNone(here)) return UNKNOWN_BUILD

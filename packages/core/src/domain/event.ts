@@ -310,6 +310,13 @@ export const AgentEvent = Schema.TaggedUnion({
      * on historical events. A turn always ends with its `TurnCompleted`.
      */
     notice: Schema.optional(Schema.Literal(true)),
+    /**
+     * When the provider says the failure resets, in epoch milliseconds: a
+     * usage limit whose reset the driver read past its retry cap
+     * (`RetryPolicy.retryAt`), so the step failed without a retry. Absent on
+     * any other error and on historical events.
+     */
+    retryAt: Schema.optional(Schema.Finite),
   },
   ProviderRetrying: {
     sessionId: SessionId,

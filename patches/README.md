@@ -34,9 +34,70 @@ changed. The PTY tests in `packages/e2e/tests/scrollback.test.ts` ("a picker
 closed over …") and the picker tests in
 `apps/tui/tests/message-list.test.tsx` cover it.
 
+The patch also crops a box's border to the scissor of the boxes around it.
+The native `drawBox` checks only that the box overlaps the scissor. Its fast
+path for an opaque border on a clear background then writes the border cells
+straight into the buffer, past the scissor. A prompt's left rail that the
+live tail cuts off at its top (history holds the prompt's top rows) then
+draws on the rows above the tail. `OptimizedBuffer` keeps a copy of the
+native scissor stack (`_scissorRects`, intersected as the native stack is).
+`drawBox` gives the native draw the box as it is, so the box and its titles
+keep their layout, and keeps the border cells outside the top scissor: it
+saves them before the draw and puts back each one the draw changed to a
+border glyph. Only the fast path writes there, and only with no grapheme or
+link in the buffer, so a saved cell holds no grapheme reference. The other
+paths and the titles (`drawText`) already respect the scissor. The Bun and
+Node buffer bundles (`chunk-bun-sjw2d9bq.js`, `chunk-node-80p7e6t6.js`) get
+the same change. "box borders under a scissor" in `apps/tui/tests/ui.test.tsx`
+(left, centered, right and wide-character titles, nested scissors, a solid
+background) and "a prompt cut by history draws its rail only beside its own
+rows" in `apps/tui/tests/message-list.test.tsx` cover it.
+
+The patch also keeps the rows a growing region pushes off the screen. When
+the split region grows at the terminal's bottom, the native frame scrolls the
+screen up with `CSI n S`. xterm and xterm.js drop the rows that leave the top
+on `CSI S`; they do not go to scrollback. A long session's turn that retries
+lost prompt and answer rows that way. Before each native frame
+(`flushPendingSplitCommits`, `renderNative`), `scrollSplitViewportIntoHistory`
+writes the scroll itself: it opens the synchronized update the native frame
+then closes, saves the cursor, writes `n` line feeds at the screen's last row
+(a line feed there sends the top row to scrollback) and restores the cursor.
+It then sends the native transition again with its source row at the target
+row, so the native frame keeps its row accounting (`noteViewportScroll`) and
+writes no `CSI S`. The immediate scroll in `applyScreenMode` uses the same
+line feeds (`ANSI.scrollIntoHistory`). Codex repairs the same fault this way
+(`codex-rs/tui/src/tui/scrollback.rs`, `grow_viewport`). The renderer bundles
+(`chunk-bun-j2z63cdy.js`, `chunk-node-wp7ct2m6.js`) get the same change. "a
+long session's retried multiline prompt keeps every prompt and answer row
+once at 45x15" in `packages/e2e/tests/scrollback.test.ts` covers it.
+
+The line feeds and their count belong to one native frame. JS cannot write
+inside a native frame, so the line feeds go out only when the native frame
+after them is admitted (`splitFrameAdmitsViewportScroll`). A native frame is
+skipped only for its output feed (a custom stdout): when the feed holds bytes
+that no write committed, or when the queued and in-flight spans reach the
+feed's capacity (4096). The patch first commits held bytes, as the native
+frame would (`streamCommit`), and writes the line feeds only when the feed
+has no queued or in-flight span; one span then cannot reach the capacity.
+Otherwise it writes nothing, keeps the transition as it is, and retries once
+the feed is idle (`scheduleRenderAfterFeedIdle`). A later resize then
+replaces the transition from rows that did not move, as unpatched OpenTUI
+does. Before, the line feeds went out and the native frame could still skip:
+a resize before the retry counted only its own rows, and later history did
+not join the rows before it. A buffered stdout without a render thread (gent
+on Linux) admits every frame. With a render thread (the macOS default), a
+frame is skipped while the thread holds its lock; the line feed write waits
+for the thread's last write, so only the short hold before the thread waits
+again can skip the frame. "split region growth" in `apps/tui/tests/ui.test.tsx`
+(a growth frame skipped, a second growth before the retry, a shrink and two
+commits, read in xterm) covers it.
+
 Remove this patch when an OpenTUI release keeps the split's history state
-across the alternate screen. Checked on 2026-10-04: `main` after 0.5.14
-still resets it.
+across the alternate screen, crops a box's border to the scissor and grows
+the split region without `CSI S`. Checked on 2026-10-04: `main` after 0.5.14
+still resets the state, its `drawVisibleBox` border fast path still writes
+past the scissor, and `applyPendingSplitFooterTransition` still writes
+`CSI S`.
 
 ## `@effect/ai-anthropic@4.0.0`
 

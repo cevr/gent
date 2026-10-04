@@ -55,6 +55,7 @@ import {
   projectModelContext,
   toPrompt,
   toPromptMessages,
+  toolImagesToDrop,
   windowDetails,
   settledMessages,
   windowMarkerMessage,
@@ -64,6 +65,7 @@ import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
+  ImageCost,
   Model,
   ModelId,
   type ModelPricing,
@@ -116,6 +118,25 @@ const result = (id: string, name = "read"): MessagePart =>
     isFailure: false,
     providerExecuted: false,
     result: { value: id },
+  })
+
+/** A tool result whose JSON holds one image reference tagged `tag`, its digest `digit` repeated. */
+const imageResult = (id: string, tag: string, width: number, height: number, digit: string) =>
+  Prompt.toolResultPart({
+    id: ToolCallId.make(id),
+    name: "screenshot",
+    isFailure: false,
+    providerExecuted: false,
+    result: {
+      shot: {
+        _tag: tag,
+        sha256: digit.repeat(64),
+        mediaType: "image/png",
+        width,
+        height,
+        bytes: 4_000,
+      },
+    },
   })
 
 const message = (
@@ -308,6 +329,63 @@ describe("projectModelContext", () => {
     expect(projection.omittedMessageIds).toEqual([MessageId.make("old")])
   })
 
+  test("a tool result counts each image it holds at the tokens the image costs its model", () => {
+    const holding = (tag: string, width: number, height: number) =>
+      message(`${tag}-${width}`, "tool", [imageResult("call-1", tag, width, height, "a")])
+    // A tag of the same length that is no image: the JSON is the same size.
+    const imageCost = (cost: Option.Option<ImageCost>, width: number, height: number) =>
+      estimateTokens([holding("ToolImage", width, height)], cost) -
+      estimateTokens([holding("ToolImagX", width, height)], cost)
+    // Anthropic: w*h/750 with no cap, so a high-resolution model's cost is bounded:
+    // Anthropic counts 3,888 for a 2000x1500 image on Claude 4.7 and later.
+    const pixels = Option.some(ImageCost.cases.Pixels.make({ pixelsPerToken: 750 }))
+    expect(imageCost(pixels, 150, 100)).toBe(20)
+    expect(imageCost(pixels, 1500, 1000)).toBe(2_000)
+    expect(imageCost(pixels, 2000, 1500)).toBeGreaterThanOrEqual(3_888)
+    // OpenAI tiles: 1024x1024 cuts to 768x768, four 512-pixel tiles.
+    const gpt4o = Option.some(ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 }))
+    expect(imageCost(gpt4o, 1024, 1024)).toBe(85 + 4 * 170)
+    // OpenAI patches: 1024 patches at 1.2; a 2000x2000 image shrinks to the 2,500-patch budget.
+    const patches = Option.some(
+      ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 2_500 }),
+    )
+    expect(imageCost(patches, 1024, 1024)).toBe(Math.ceil(1024 * 1.2))
+    expect(imageCost(patches, 2000, 2000)).toBe(3_000)
+    // An unknown API class counts the highest known cost: here gpt-4o-mini's tiles,
+    // one tile for 150x100, six for 1500x1000 (cut to 1152x768).
+    expect(imageCost(Option.none(), 150, 100)).toBe(2_833 + 5_667)
+    expect(imageCost(Option.none(), 1500, 1000)).toBe(2_833 + 6 * 5_667)
+  })
+
+  test("five 1024x1024 images on an OpenAI tile model count at OpenAI's cost and leave the window", () => {
+    // gpt-4o-mini counts 2,833 + 5,667 a tile: 25,501 tokens an image, 127,505 for five.
+    const calls = ["1", "2", "3", "4", "5"].map((index) => `shot-${index}`)
+    const user = message("user", "user", [text("look at the frames")])
+    const assistant = message(
+      "calls",
+      "assistant",
+      calls.map((id) => call(id, "screenshot")),
+    )
+    const results = message(
+      "results",
+      "tool",
+      calls.map((id, index) => imageResult(id, "ToolImage", 1024, 1024, `${index + 1}`)),
+    )
+    const old = message("old", "assistant", [text("old")])
+    const window = [old, user, assistant, results]
+    const budgetAt = (imageCost: ImageCost) => ({ ...budget(111_616), imageCost })
+
+    const anthropic = success(
+      projectModelContext(window, budgetAt(ImageCost.cases.Pixels.make({ pixelsPerToken: 750 }))),
+    )
+    expect(anthropic.estimatedTokens).toBeLessThan(10_000)
+    const mini = ImageCost.cases.Tiles.make({ baseTokens: 2_833, tileTokens: 5_667 })
+    expect(estimateTokens([results], Option.some(mini))).toBeGreaterThanOrEqual(5 * 25_501)
+    expect(failure(projectModelContext(window, budgetAt(mini)))._tag).toBe("BudgetExceeded")
+    // A model whose API class names no cost counts the highest known one: it is refused too.
+    expect(failure(projectModelContext(window, budget(111_616)))._tag).toBe("BudgetExceeded")
+  })
+
   test("rejects an oversized newest user turn instead of returning an empty prompt", () => {
     const messages = [
       message("old", "assistant", [text("old")]),
@@ -483,6 +561,38 @@ describe("projectModelContext", () => {
       ),
     )
     expect(resultError._tag).toBe("ToolResultWrongRole")
+  })
+})
+
+// ── tool image bound ────────────────────────────────────────────────────────
+
+describe("tool image bound", () => {
+  const limit = { images: 20, base64Chars: 12_000_000 }
+  const small = (count: number) => Array.from({ length: count }, () => 1_000)
+
+  test("past the image count, the oldest leave five at a time", () => {
+    expect(
+      [0, 1, 20, 21, 25, 26, 30, 31].map((count) => toolImagesToDrop(small(count), limit)),
+    ).toEqual([0, 0, 0, 5, 5, 10, 10, 15])
+  })
+
+  test("past the character bound, the oldest leave five at a time and the newest stays", () => {
+    const twoMillion = Array.from({ length: 8 }, () => 2_000_000)
+    // 16M chars: two must go for 12M; the step makes it five.
+    expect(toolImagesToDrop(twoMillion, limit)).toBe(5)
+    // Three 5M images: one must go, the step asks five, the newest stays.
+    expect(toolImagesToDrop([5_000_000, 5_000_000, 5_000_000], limit)).toBe(2)
+  })
+
+  test("a newest image no request can carry leaves too, with every older one", () => {
+    expect(toolImagesToDrop([1_000, 13_000_000], limit)).toBe(2)
+    expect(toolImagesToDrop([13_000_000], limit)).toBe(1)
+    expect(toolImagesToDrop([], limit)).toBe(0)
+  })
+
+  test("a tighter class bound leaves more out", () => {
+    expect(toolImagesToDrop(small(6), { images: 5, base64Chars: 4_000_000 })).toBe(5)
+    expect(toolImagesToDrop(small(11), { images: 5, base64Chars: 4_000_000 })).toBe(10)
   })
 })
 
@@ -2181,6 +2291,7 @@ describe("turn window projection", () => {
         sessionId,
         branchId,
         modelId: modelIdTurnWindow,
+        agentName: agent.name,
         messages: [prompt, ...steps],
         budget,
         directive: Option.none(),
@@ -2306,6 +2417,7 @@ describe("turn window projection", () => {
         sessionId,
         branchId,
         modelId: modelIdTurnWindow,
+        agentName: agent.name,
         messages,
         budget,
         directive: Option.none(),
@@ -2366,6 +2478,7 @@ describe("turn window projection", () => {
             sessionId,
             branchId,
             modelId: modelIdTurnWindow,
+            agentName: agent.name,
             messages,
             budget,
             directive: Option.some(ContextDirective.cases.Compact.make({})),
@@ -2445,6 +2558,7 @@ describe("turn window projection", () => {
         sessionId,
         branchId,
         modelId: modelIdTurnWindow,
+        agentName: agent.name,
         messages,
         budget,
         directive: Option.none(),
@@ -2523,6 +2637,7 @@ describe("turn window projection", () => {
           sessionId,
           branchId,
           modelId: modelIdTurnWindow,
+          agentName: agent.name,
           messages,
           budget,
           directive: Option.none(),

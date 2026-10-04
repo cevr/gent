@@ -160,11 +160,12 @@ import {
   ToolInteractionPending,
   type TurnInterruption,
 } from "./tools.js"
-import { ConfigService, type UserConfig } from "./config.js"
+import { ConfigService, RuntimeEnvironment, type UserConfig } from "./config.js"
 import { type AgentLoopError, asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
   driverCacheWritesByLifetime,
   driverRetryPolicy,
+  limitResetAt,
   ModelRegistry,
   ModelResolver,
   type ResolveModelRequest,
@@ -195,9 +196,11 @@ import {
   projectCurrentWindow,
   type PromptCache,
   type StepMeasure,
+  toolImagePrompt,
   toPrompt,
   turnNoticesText,
 } from "./model-context.js"
+import { toolImageDirectory } from "./tool-image.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { LoopInbox } from "./agent-loop.js"
 
@@ -484,6 +487,11 @@ export interface CollectedTurnResponse {
    * still hand off.
    */
   readonly windowFull: boolean
+  /**
+   * When the usage limit the step failed on resets (`limitResetAt`): the
+   * provider named a time past the driver's retry cap. None for any other step.
+   */
+  readonly retryAt: Option.Option<number>
 }
 
 const publishEventOrDie = (event: AgentEvent) =>
@@ -516,6 +524,7 @@ export const collectNormalizedResponse = (params: {
     streamFailed: params.streamFailed,
     contextOverflow: false,
     windowFull: false,
+    retryAt: Option.none(),
   }
 }
 
@@ -579,6 +588,7 @@ const effortReceipt = (
  * Close the step on a stream failure: log it, end the stream, and surface the
  * error. The end names the model: the step ran on it, settled or not. A
  * `note` adds to the error; one the turn recovers from makes it a notice.
+ * The error carries the usage limit's reset time when the step failed on one.
  */
 const reportStreamFailure = (
   params: {
@@ -588,6 +598,7 @@ const reportStreamFailure = (
     branchId: BranchId
     modelId: ModelIdType
     reasoningLevel?: RunEffort
+    retryAt: Option.Option<number>
   },
   streamError: ProviderError,
   message: string,
@@ -606,20 +617,20 @@ const reportStreamFailure = (
         ...effortReceipt(Option.fromUndefinedOr(params.reasoningLevel)),
       }),
     )
-    const error = streamError.message
+    const failure = {
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      error: streamError.message,
+      ...omitUndefined({ retryAt: Option.getOrUndefined(params.retryAt) }),
+    }
     yield* publishEventOrDie(
       Option.match(note, {
-        onNone: () =>
-          ErrorOccurred.make({ sessionId: params.sessionId, branchId: params.branchId, error }),
+        onNone: () => ErrorOccurred.make(failure),
         onSome: (next) => {
-          const failure = {
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            error: `${error}; ${next.text}`,
-          }
+          const noted = { ...failure, error: `${failure.error}; ${next.text}` }
           // Only a recovery is a notice; a turn that ends on it stays an error.
-          if (next.notice) return ErrorOccurred.make({ ...failure, notice: true })
-          return ErrorOccurred.make(failure)
+          if (next.notice) return ErrorOccurred.make({ ...noted, notice: true })
+          return ErrorOccurred.make(noted)
         },
       }),
     )
@@ -671,7 +682,11 @@ export const collectModelTurnResponse = (params: {
           if (interrupted) return false
           // Nothing observable was produced yet: let the caller's retry policy try again.
           if (!hasObservableOutput) return yield* streamError
-          yield* reportStreamFailure(params, streamError, "stream error, persisting partial output")
+          yield* reportStreamFailure(
+            { ...params, retryAt: Option.none() },
+            streamError,
+            "stream error, persisting partial output",
+          )
           return true
         }),
       ),
@@ -699,10 +714,13 @@ export const collectFailedModelTurnResponse = (params: {
   contextOverflow: boolean
   /** The provider refused as too long a window this turn already handed off. */
   refusedAgain?: boolean
+  /** When the usage limit the step failed on resets (`limitResetAt`). */
+  retryAt: Option.Option<number>
 }) =>
   Effect.gen(function* () {
     const interrupted = yield* wasInterrupted(params.activeStream)
     const contextOverflow = params.contextOverflow && !interrupted
+    const retryAt = Option.filter(params.retryAt, () => !interrupted)
     if (!interrupted) {
       let note = Option.none<StreamFailureNote>()
       if (contextOverflow) note = Option.some({ text: CONTEXT_OVERFLOW_RECOVERY, notice: true })
@@ -724,6 +742,7 @@ export const collectFailedModelTurnResponse = (params: {
         interrupted,
       }),
       contextOverflow,
+      retryAt,
     }
   })
 
@@ -801,6 +820,10 @@ interface TurnLedger {
   readonly noteJoined: (messageId: MessageId) => Effect.Effect<void>
   /** The steering messages this process saw a step of this turn join. */
   readonly joined: Effect.Effect<ReadonlySet<MessageId>>
+  /** A model step settled: `retryAt` is its usage limit's reset, none for any other end. */
+  readonly noteStepEnd: (retryAt: Option.Option<number>) => Effect.Effect<void>
+  /** The reset of the usage limit this turn's last step failed on. */
+  readonly retryAt: Effect.Effect<Option.Option<number>>
 }
 
 /** A cache count the receipt records: zero is left out, as the steps leave it out. */
@@ -827,6 +850,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
   const metrics = yield* Ref.make(emptyTurnMetrics())
   const shown = yield* Ref.make<ReadonlyMap<ExtensionId, ReadonlySet<string>>>(new Map())
   const joined = yield* Ref.make<ReadonlySet<MessageId>>(new Set())
+  const lastRetryAt = yield* Ref.make(Option.none<number>())
   return {
     beginTurn: (messageId) =>
       Ref.modify(metrics, (m): readonly [boolean, TurnMetrics] => {
@@ -835,7 +859,10 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
       }).pipe(
         Effect.flatMap((fresh) => {
           if (!fresh) return Effect.void
-          return Ref.set(shown, new Map()).pipe(Effect.andThen(Ref.set(joined, new Set())))
+          return Ref.set(shown, new Map()).pipe(
+            Effect.andThen(Ref.set(joined, new Set())),
+            Effect.andThen(Ref.set(lastRetryAt, Option.none())),
+          )
         }),
       ),
     noteUnseenSteps: Ref.update(metrics, (m) => {
@@ -922,6 +949,8 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
     shownNotices: Ref.get(shown),
     noteJoined: (messageId) => Ref.update(joined, (current) => new Set([...current, messageId])),
     joined: Ref.get(joined),
+    noteStepEnd: (retryAt) => Ref.set(lastRetryAt, retryAt),
+    retryAt: Ref.get(lastRetryAt),
   }
 })
 
@@ -1882,7 +1911,7 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
                 onSome: (ttlMs) => now < at + ttlMs,
               }),
             ),
-          historyTokens: estimateHistoryTokens(resolved.messages, log.measure),
+          historyTokens: estimateHistoryTokens(resolved.messages, log.measure, model),
         })),
       ),
   })
@@ -2296,7 +2325,7 @@ const routeEffort = Effect.fn("TurnHelpers.routeEffort")(function* (params: {
     const current = Option.map(log.lastCallModel, (): ModelRouteCurrent => ({
       model,
       warm,
-      historyTokens: estimateHistoryTokens(resolved.messages, log.measure),
+      historyTokens: estimateHistoryTokens(resolved.messages, log.measure, model),
     }))
     const asked = yield* askRouter(served.router, {
       model: served.model,
@@ -2632,7 +2661,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   })
   const budget = ModelContextBudget.make({
     contextLimitTokens: contextLimit,
-    ...omitUndefined({ inputLimitTokens: Option.getOrUndefined(inputLimit) }),
+    ...omitUndefined({
+      inputLimitTokens: Option.getOrUndefined(inputLimit),
+      imageCost: modelOption.value.imageCost,
+    }),
     reservedSystemTokens:
       resolved.systemPrompt.reduce((sum, block) => sum + estimateTextTokens(block), 0) +
       Option.match(turnNoticesText(requestNotices(resolved)), {
@@ -2693,6 +2725,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     sessionId: params.sessionId,
     branchId: params.branchId,
     modelId: contextModelId,
+    agentName: resolved.agent.name,
     messages: resolved.messages,
     budget,
     measure: params.measure,
@@ -2763,10 +2796,18 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   )
   // The provider sees each tool under its wire name, in the declarations and
   // in the conversation's calls; the reply's parts name the tool ids again.
+  // Each tool image goes after its result, from the blob store: the stored
+  // result holds only its reference.
+  const toolImages = yield* toolImagePrompt({
+    messages: projection.messages,
+    model: modelOption.value,
+    directory: yield* toolImageDirectory((yield* RuntimeEnvironment).home),
+  })
   const prompt = toWirePrompt(
     toPrompt(projection.messages, {
       systemPrompt: resolved.systemPrompt,
       notices: requestNotices(resolved),
+      toolImages,
     }),
   )
   // The effort each assistant run of this prompt was sent at, by its
@@ -2884,23 +2925,26 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             ),
         }),
         Effect.catchTag("ProviderError", (streamError) =>
-          collectFailedModelTurnResponse({
-            messageId: params.messageId,
-            step: params.step,
-            streamError,
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            modelId: resolved.modelId,
-            reasoningLevel: Option.getOrUndefined(reasoningLevel),
-            activeStream: params.activeStream,
-            // One recovery per refusal: a step that already handed off, or the
-            // last step of the budget, fails the turn as any failure does.
-            contextOverflow:
-              !params.overflowed &&
-              !params.finalStep &&
-              retryPolicy.contextOverflow(streamError.cause),
-            refusedAgain: params.overflowed && retryPolicy.contextOverflow(streamError.cause),
-          }),
+          Effect.flatMap(Clock.currentTimeMillis, (nowMs) =>
+            collectFailedModelTurnResponse({
+              messageId: params.messageId,
+              step: params.step,
+              streamError,
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              modelId: resolved.modelId,
+              reasoningLevel: Option.getOrUndefined(reasoningLevel),
+              activeStream: params.activeStream,
+              // One recovery per refusal: a step that already handed off, or the
+              // last step of the budget, fails the turn as any failure does.
+              contextOverflow:
+                !params.overflowed &&
+                !params.finalStep &&
+                retryPolicy.contextOverflow(streamError.cause),
+              refusedAgain: params.overflowed && retryPolicy.contextOverflow(streamError.cause),
+              retryAt: limitResetAt(retryPolicy, streamError, nowMs),
+            }),
+          ),
         ),
         Effect.flatMap(withStopReason),
         Effect.tap((collected) => {
@@ -3102,6 +3146,11 @@ type AgentLoopTurnExecutionContext = {
   readonly inbox: LoopInbox
   /** The branch's services a turn's hooks run with; see `AgentLoopBehavior.branchContext`. */
   readonly branchContext: Context.Context<never>
+  /**
+   * True once the loop stops its turn (a close, or its scope's teardown).
+   * Set before the loop interrupts the turn, never by a user's cancel.
+   */
+  readonly loopStopping: Effect.Effect<boolean>
 }
 
 export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext) =>
@@ -3699,6 +3748,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           activeStream: params.activeStream,
         }),
       )
+      yield* scope.turnLedger.noteStepEnd(collected.retryAt)
 
       const outcome = classifyStep(collected)
       // The step whose messages carry this response.
@@ -3944,6 +3994,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const answered = !(params.turnInterrupted || params.streamFailed || params.unanswered)
       let readNotices: ReadonlyMap<ExtensionId, ReadonlySet<string>> = new Map()
       if (answered) readNotices = yield* scope.turnLedger.shownNotices
+      // Only a turn that failed on its own names the limit it stopped at.
+      let retryAt = Option.none<number>()
+      if (params.streamFailed && !params.turnInterrupted) retryAt = yield* scope.turnLedger.retryAt
       yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter(
         {
           sessionId: scope.sessionId,
@@ -3955,6 +4008,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           agentName: params.agentName,
           interrupted: params.turnInterrupted,
           streamFailed: params.streamFailed,
+          retryAt,
           unanswered: params.unanswered,
           usage: {
             known: {
@@ -4022,6 +4076,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const completeFailedTurn = Effect.fn("AgentLoop.completeFailedTurn")(function* (
       state: RunningState,
     ) {
+      // A turn that failed before it ran (the worker's agent read) never began
+      // its ledger: begin it here, so the receipt and hooks read this turn's
+      // record, not the turn before it. A turn that ran keeps its own.
+      yield* scope.turnLedger.beginTurn(state.message.id)
       const end: TurnEnd = {
         messageId: state.message.id,
         startedAtMs: state.startedAtMs,
@@ -4907,14 +4965,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
         .pipe(provideTurnContext)
         .pipe(
-          Effect.onExit((exit) =>
+          Effect.onExit(() =>
             Effect.gen(function* () {
               if (preserveReplayBindings) return
               yield* clearProcessLocalReplayBindingsForTurn(state.message.id)
               yield* clearProcessLocalToolResultsForTurn(state.message.id)
-              // A request lives no longer than its turn. A turn stopped by
-              // shutdown has not ended: it runs again after the restart.
-              if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) return
+              // A request lives no longer than its turn. A turn its loop
+              // stopped has not ended: it runs again after the restart, and
+              // its requests and answers stay for it. The loop says so; the
+              // exit's cause cannot, since a stop can land while a parked
+              // call's failure is still on its way out.
+              if (yield* scope.loopStopping) return
               const approval = yield* Effect.serviceOption(ApprovalService)
               if (Option.isSome(approval))
                 yield* approval.value.endTurn({

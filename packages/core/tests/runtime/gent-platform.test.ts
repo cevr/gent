@@ -52,7 +52,7 @@ describe("GentPlatform", () => {
       }).pipe(Effect.provide(BunGentPlatformLive)),
     )
 
-    it.live("pid and execPath match the live host process", () =>
+    it.live("pid is the host process and execPath the real path of its executable", () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
         const pid = yield* platform.pid
@@ -60,9 +60,10 @@ describe("GentPlatform", () => {
         expect(pid).toBe(process.pid)
         expect(Predicate.isNumber(pid)).toBe(true)
         expect(pid).toBeGreaterThan(0)
-        expect(execPath).toBe(process.execPath)
+        const fs = yield* FileSystem.FileSystem
+        expect(execPath).toBe(yield* fs.realPath(process.execPath))
         expect(execPath.length).toBeGreaterThan(0)
-      }).pipe(Effect.provide(BunGentPlatformLive)),
+      }).pipe(Effect.provide(Layer.merge(BunGentPlatformLive, BunFileSystem.layer))),
     )
 
     it.live("signal(pid, 0) succeeds for self-pid (liveness probe)", () =>

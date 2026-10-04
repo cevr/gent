@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "bun src/main.tsx",
     "build": "env -u FORCE_COLOR NO_COLOR=1 bun scripts/build.ts",
-    "install:global": "dir=\"${BUN_INSTALL:-$HOME/.bun}/bin\" && mkdir -p \"$dir\" && for f in gent-cell gent; do cp \"bin/$f\" \"$dir/.$f.new\" && mv -f \"$dir/.$f.new\" \"$dir/$f\"; done && echo \"Installed gent and gent-cell into $dir\"",
+    "install:global": "sh ../../install.sh --from bin",
     "typecheck": "tsc --noEmit",
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-preload.ts --parallel --path-ignore-patterns=\"**/headless-cli-exit.test.ts\" tests",
     "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-preload.ts --timeout=30000 integration tests/headless-cli-exit.test.ts"
@@ -28,6 +28,9 @@
     "diff": "^9.0.0",
     "match-sorter": "^8.3.0",
     "solid-js": "catalog:"
+  },
+  "devDependencies": {
+    "@xterm/headless": "^6.0.0"
   },
   "peerDependencies": {
     "effect": "catalog:"

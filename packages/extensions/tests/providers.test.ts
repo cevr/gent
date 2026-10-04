@@ -16,10 +16,12 @@ import {
   SynchronizedRef,
 } from "effect"
 import {
+  type ApiClassContribution,
   type CatalogModel,
   type CatalogProvider,
   type Model,
   type ModelCatalogView,
+  type ModelDriverContribution,
   ModelId,
   ProviderAuthError,
   type RunEffort,
@@ -30,6 +32,7 @@ import {
   LanguageModelLayers,
   listModelCatalog,
   modelCatalogFixture,
+  KNOWN_IMAGE_COSTS,
   storedCredentialModel,
   textStep,
 } from "@gent/core/test-utils"
@@ -42,12 +45,15 @@ import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/process"
 import {
   catalogModels,
+  CHAT_COMPLETIONS_CLASS,
   type CredentialCacheCell,
   type CredentialFailure,
   type CredentialStore,
   EMPTY_CREDENTIAL_CELL,
   freshEnoughAt,
   makeCredentialCache,
+  OPENAI_IMAGE_COSTS,
+  openAiImageCost,
 } from "../src/providers.js"
 import {
   AnthropicPlatform,
@@ -135,6 +141,92 @@ describe("driver catalog", () => {
     const models = catalogModels(catalog, "anthropic", Duration.minutes(5), MESSAGES_CLASS)
 
     expect(models.map((model) => model.promptCacheTtlMs)).toEqual([5 * 60_000])
+  })
+
+  it.live("a model takes the tool-image bound of the API class that speaks it", () =>
+    Effect.gen(function* () {
+      const compat: ModelDriverContribution = {
+        id: "compat",
+        name: "Compat",
+        endpoint: () =>
+          Effect.succeed({
+            apiKey: Option.some("compat-key"),
+            baseUrl: Option.none(),
+            transformClient: Option.none(),
+          }),
+      }
+      const catalog = catalogOf({
+        id: "compat",
+        name: "Compat",
+        env: [],
+        models: [
+          { id: "chat-model", name: "Chat", npm: "@ai-sdk/openai-compatible" },
+          { id: "messages-model", name: "Messages", npm: "@ai-sdk/anthropic" },
+        ],
+      })
+      const listed = yield* listModelCatalog(
+        { modelDrivers: new Map([[compat.id, compat]]), apiClasses: SHIPPED_API_CLASSES },
+        { ...catalog, providerIds: ["compat"], failure: Option.none() },
+      )
+      // Chat Completions upstreams take fewer images; the Messages API keeps the default bound.
+      expect(
+        listed.models.map((model) => [String(model.id), Option.fromUndefinedOr(model.imageLimit)]),
+      ).toEqual([
+        ["compat/chat-model", Option.some({ images: 5, base64Chars: 4_000_000 })],
+        ["compat/messages-model", Option.none()],
+      ])
+      const driverListed = catalogModels(
+        catalogOf({ id: "compat", name: "Compat", env: [], models: [{ id: "x", name: "X" }] }),
+        "compat",
+        Duration.minutes(5),
+        CHAT_COMPLETIONS_CLASS,
+      )
+      expect(driverListed.map((model) => model.imageLimit)).toEqual([
+        { images: 5, base64Chars: 4_000_000 },
+      ])
+    }),
+  )
+
+  test("a model counts and sends each image as the API class that speaks it does", () => {
+    const costOf = (id: string, apiClass: ApiClassContribution) =>
+      catalogModels(
+        catalogOf({ id: "p", name: "P", env: [], models: [{ id, name: id }] }),
+        "p",
+        Duration.minutes(5),
+        apiClass,
+      ).map((model) => [model.imageCost, Option.fromUndefinedOr(model.imagePartOptions)])
+    const high = Option.some({ openai: { imageDetail: "high" } })
+    // OpenAI tiles for gpt-4o-mini, at its own rates.
+    expect(costOf("gpt-4o-mini", RESPONSES_CLASS)).toEqual([
+      [{ _tag: "Tiles", baseTokens: 2_833, tileTokens: 5_667 }, high],
+    ])
+    expect(costOf("gpt-4o", RESPONSES_CLASS)).toEqual([
+      [{ _tag: "Tiles", baseTokens: 85, tileTokens: 170 }, high],
+    ])
+    // Newer OpenAI models count patches, shrunk to the `high` detail's budget.
+    expect(costOf("gpt-5.4", RESPONSES_CLASS)).toEqual([
+      [{ _tag: "Patches", multiplier: 1.2, maxPatches: 2_500 }, high],
+    ])
+    expect(costOf("openai/gpt-4.1-mini", CHAT_COMPLETIONS_CLASS)).toEqual([
+      [{ _tag: "Patches", multiplier: 1.62, maxPatches: 6_144 }, high],
+    ])
+    // Anthropic counts pixels and needs no part option.
+    expect(costOf("claude-sonnet-4-5", MESSAGES_CLASS)).toEqual([
+      [{ _tag: "Pixels", pixelsPerToken: 750 }, Option.none()],
+    ])
+  })
+
+  test("every cost a shipped API class counts is one core bounds a class with no cost by", () => {
+    // A model no table row names takes each class's default cost.
+    const entry: CatalogModel = { id: "no-such-model", name: "None" }
+    const shipped = [
+      ...OPENAI_IMAGE_COSTS.map(([, cost]) => cost),
+      openAiImageCost(entry),
+      ...[...SHIPPED_API_CLASSES.values()].flatMap((apiClass) =>
+        Option.toArray(Option.map(Option.fromUndefinedOr(apiClass.imageCost), (of) => of(entry))),
+      ),
+    ]
+    for (const cost of shipped) expect(KNOWN_IMAGE_COSTS).toContainEqual(cost)
   })
 
   test("a model lists the effort levels its API class sends", () => {

@@ -179,6 +179,7 @@ import {
 import { ChildProcessSpawner as ProcessSpawner } from "effect/process"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
 import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
+import { sweepToolImages } from "../runtime/tool-image.js"
 import { RpcSerialization, RpcServer, RpcTest } from "effect/rpc"
 
 // ── client origin ───────────────────────────────────────────────────────────
@@ -325,6 +326,16 @@ export const buildExtensionHealthSnapshot = (
         }),
       )
     } else {
+      // A failed reload: the new version failed, the last good one runs.
+      if (!Predicate.isUndefined(status.reloadFailed)) {
+        issues.push(
+          ExtensionHealthIssue.cases.ActivationFailed.make({
+            phase: status.reloadFailed.phase,
+            error: status.reloadFailed.error,
+            runningVersion: status.version,
+          }),
+        )
+      }
       issues.push(...(runtimeIssues.get(status.manifest.id) ?? []))
     }
 
@@ -1359,7 +1370,7 @@ const RpcHandlers = GentRpcs.toLayer(
             branchId: input.branchId,
             content: input.content,
             requestId: input.requestId,
-            metadata: clientMetadata(),
+            metadata: clientMetadata(omitUndefined({ unattended: input.unattended })),
           })
           .pipe(
             Effect.tap(() =>
@@ -2060,6 +2071,23 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
     }),
   )
 
+  // Tool images no stored message references go when the server starts, a
+  // day after their last use, on their own fiber: no request waits for the
+  // sweep.
+  const toolImageSweepLive = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const messages = yield* MessageStorage
+      yield* sweepToolImages(config.home, messages.toolImageReferenced)
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("tool-images.sweep.failed").pipe(
+          Effect.annotateLogs({ error: String(cause) }),
+        ),
+      ),
+      Effect.forkScoped,
+    ),
+  )
+
   // One graph, built bottom up: each level provides every level above it,
   // and each layer appears in it once, so each builds once. Effect memoizes
   // only leaf layers; a composite (`provide`, `merge`) builds once for every
@@ -2072,7 +2100,7 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
     platformServicesLive,
     runtimeEnvironmentLive,
   )
-  const stored = Layer.provideMerge(storageLive, host)
+  const stored = Layer.provideMerge(Layer.provideMerge(toolImageSweepLive, storageLive), host)
   const kernel = Layer.provideMerge(
     Layer.mergeAll(
       clusterRunnerLive,

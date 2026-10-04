@@ -72,8 +72,10 @@ export {
   DriverError,
   ProviderAuthError,
   ProviderAuthInfo,
+  rateLimitResponse,
   ReasoningOption,
   reportProviderStopReason,
+  retryAfterAt,
   modelFromCatalog,
   catalogModelEntry,
 } from "../domain/driver.js"
@@ -84,7 +86,9 @@ export type {
   ApiEndpoint,
   CatalogModel,
   CatalogOverride,
+  CatalogPlan,
   CatalogProvider,
+  FailureResponse,
   ModelCatalogView,
   ModelDriverContribution,
   ModelRouteChoice,
@@ -128,6 +132,7 @@ export {
   isSpawnedSession,
   latestAssistantText,
   messagePartsDisplayText,
+  sessionThread,
 } from "../domain/message.js"
 export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
@@ -167,9 +172,13 @@ export {
 } from "../runtime/gent-platform.js"
 export { headChars, headTailChars, lineCount, splitLines, tailChars } from "../domain/message.js"
 export { maximumModelToolResultChars } from "../runtime/model-context.js"
+// A tool hands the model an image by reference: save its bytes, put the `ToolImage` in the output.
+export { saveToolImage, ToolImage, ToolImageError, toolImageFile } from "../runtime/tool-image.js"
 // Launched from home, the project's `.gent` is the user's; every reader of project files asks this.
 // A project file whose entries run commands or spend on models counts only in a trusted project.
 export { hasProjectScope, isProjectTrusted } from "../runtime/config.js"
+// A config file's schema: an extension that writes a config refuses a file gent would not read.
+export { UserConfig } from "../runtime/config.js"
 // ── Public API ──
 
 export { ExtensionHost, type ExtensionHostService } from "../domain/extension.js"

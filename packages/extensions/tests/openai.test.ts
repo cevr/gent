@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
+  Clock,
   Crypto,
   Deferred,
   Effect,
@@ -9,6 +10,7 @@ import {
   Layer,
   Option,
   Ref,
+  Schedule,
   Schema,
   Semaphore,
   Stream,
@@ -28,6 +30,9 @@ import {
 } from "../src/openai.js"
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
 import {
+  defineExtension,
+  ExtensionHost,
+  ModelId,
   ProviderAuthError,
   ProviderAuthInfo,
   type ProviderHints,
@@ -35,6 +40,7 @@ import {
   RequestId,
   type RunEffort,
   type StoredOAuthCredentials,
+  type TurnAfterInput,
   type UpdateStoredOAuth,
 } from "@gent/core/extensions/api"
 import {
@@ -3297,6 +3303,291 @@ describe("OpenAI API-key requests", () => {
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       expect(yield* SynchronizedRef.get(cellRef)).toBe(EMPTY_CREDENTIAL_CELL)
+    }),
+  )
+})
+
+// ── usage limit ─────────────────────────────────────────────────────────────
+
+/**
+ * ChatGPT's answer when the plan's usage limit is reached: a 429 whose body
+ * names the reset in epoch seconds, with no retry-after header (the shape
+ * Codex decodes in `codex-api/src/api_bridge.rs`).
+ */
+const usageLimitReply = (resetsAtSeconds: number, headers: Record<string, string> = {}) => ({
+  status: 429,
+  headers: { "content-type": "application/json", ...headers },
+  body: encodeExternalJson({
+    error: {
+      type: "usage_limit_reached",
+      message: "The usage limit has been reached",
+      plan_type: "plus",
+      resets_at: resetsAtSeconds,
+    },
+  }),
+})
+
+/**
+ * A session on `openai/gpt-5.4` over the ChatGPT sign-in, whose requests
+ * `fetchState` answers; `turnAfters` holds what each turn's `turnAfter` got.
+ */
+const chatGptHarness = (responder: Parameters<typeof fakeFetchLayer>[1]) =>
+  Effect.gen(function* () {
+    const { driver } = yield* makeDriver({
+      cell: makeDurableCell({
+        access: "limited-token",
+        refresh: "r",
+        expires: FAR_FUTURE_MS,
+        accountId: Option.none(),
+      }),
+    })
+    const fetchState = makeFakeFetchState()
+    const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
+    const turnAfters = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
+    const watch = defineExtension({
+      id: "@gent/test-openai-turn-after",
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.on("turnAfter", (input: TurnAfterInput) =>
+          Ref.update(turnAfters, (all) => [...all, input]),
+        )
+      }),
+    })
+    const harness = yield* createRpcHarness({
+      ...e2ePreset,
+      extensionInputs: [...e2ePreset.extensionInputs, watch],
+      providerLayer: Layer.provide(model, fakeFetchLayer(fetchState, responder)),
+      admission: { runSpec: { overrides: { modelId: ModelId.make("openai/gpt-5.4") } } },
+    })
+    return { ...harness, fetchState, turnAfters }
+  })
+
+/**
+ * One turn on `responder`: the model requests it made, the reset each of its
+ * errors named, and the reset its `turnAfter` got.
+ */
+const failedTurn = (responder: Parameters<typeof fakeFetchLayer>[1]) =>
+  Effect.gen(function* () {
+    const { client, sessionId, branchId, fetchState, turnAfters } = yield* chatGptHarness(responder)
+    const events = yield* client.session.events({ sessionId, branchId }).pipe(
+      Stream.map(({ event }) => event),
+      Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+      Stream.runCollect,
+      Effect.forkScoped,
+    )
+    yield* client.message.send({ sessionId, branchId, content: "hello" })
+    const errorResets = (yield* Fiber.join(events))
+      .filter((event) => event._tag === "ErrorOccurred")
+      .map((event) => Option.fromUndefinedOr(event.retryAt))
+    const ended = yield* Ref.get(turnAfters).pipe(
+      Effect.repeat({ until: (all) => all.length > 0, schedule: Schedule.spaced("10 millis") }),
+    )
+    return {
+      requests: fetchState.captured.filter((request) => request.url.endsWith("/responses")).length,
+      errorResets,
+      hookReset: ended[0]?.retryAt,
+    }
+  })
+
+describe("OpenAI usage limit", () => {
+  it.scopedLive(
+    "a usage limit that resets past maxDelay fails at once without a retry",
+    () =>
+      Effect.gen(function* () {
+        const resetsAt = Math.floor((yield* Clock.currentTimeMillis) / 1000) + 5 * 60 * 60
+        const { client, sessionId, branchId, fetchState } = yield* chatGptHarness(() =>
+          usageLimitReply(resetsAt),
+        )
+        const ended = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+          Stream.runHead,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "hello" })
+        yield* Fiber.join(ended)
+        // No retry inside the 30 s cap can clear a limit that resets in hours.
+        const modelRequests = fetchState.captured.filter((request) =>
+          request.url.endsWith("/responses"),
+        )
+        expect(modelRequests).toHaveLength(1)
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a usage limit's turn error names the reset time the body gives",
+    () =>
+      Effect.gen(function* () {
+        const resetsAt = Math.floor((yield* Clock.currentTimeMillis) / 1000) + 5 * 60 * 60
+        const { client, sessionId, branchId } = yield* chatGptHarness(() =>
+          usageLimitReply(resetsAt),
+        )
+        const events = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.map(({ event }) => event),
+          Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "hello" })
+        const errors = (yield* Fiber.join(events)).filter((event) => event._tag === "ErrorOccurred")
+        expect(errors.map((event) => event.retryAt)).toEqual([resetsAt * 1000])
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  // A generic retry-after never shortens the reset the usage limit names.
+  it.scopedLive(
+    "a short retry-after does not shorten a usage limit's reset",
+    () =>
+      Effect.gen(function* () {
+        const resetsAt = Math.floor((yield* Clock.currentTimeMillis) / 1000) + 5 * 60 * 60
+        const turn = yield* failedTurn(() => usageLimitReply(resetsAt, { "retry-after": "2" }))
+        expect(turn.requests).toBe(1)
+        expect(turn.errorResets).toEqual([Option.some(resetsAt * 1000)])
+        expect(turn.hookReset).toEqual(Option.some(resetsAt * 1000))
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a refused request with spent-limit headers names no reset",
+    () =>
+      Effect.gen(function* () {
+        const turn = yield* failedTurn(() => ({
+          status: 400,
+          headers: {
+            "content-type": "application/json",
+            "x-ratelimit-remaining-requests": "0",
+            "x-ratelimit-reset-requests": "6m0s",
+          },
+          body: encodeExternalJson({
+            error: { type: "invalid_request_error", message: "Unsupported parameter" },
+          }),
+        }))
+        expect(turn.requests).toBe(1)
+        expect(turn.errorResets).toEqual([Option.none()])
+        expect(turn.hookReset).toEqual(Option.none())
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
+  )
+})
+
+// ── reset time decode ───────────────────────────────────────────────────────
+
+/** The failure the driver's model gives for one answered request. */
+const driverFailure = (
+  authInfo: ProviderAuthInfo,
+  reply: {
+    readonly status: number
+    readonly headers?: Record<string, string>
+    readonly body: string
+  },
+) =>
+  Effect.gen(function* () {
+    const { driver } = yield* makeDriver({
+      cell: makeDurableCell({
+        access: "limited-token",
+        refresh: "r",
+        expires: FAR_FUTURE_MS,
+        accountId: Option.none(),
+      }),
+    })
+    const model = yield* driver.resolveModel("gpt-5.4", authInfo)
+    const error = yield* LanguageModel.streamText({ prompt: "hi" }).pipe(
+      Stream.runDrain,
+      Effect.provide(
+        Layer.provideMerge(
+          model,
+          fakeFetchLayer(makeFakeFetchState(), () => reply),
+        ),
+      ),
+      Effect.scoped,
+      Effect.flip,
+    )
+    const retry = Option.getOrThrow(Option.fromUndefinedOr(driver.retry))
+    return { error, retryAt: retry.retryAt }
+  })
+
+const NOW = 1_800_000_000_000
+const errorBody = encodeExternalJson({
+  error: { type: "rate_limit_exceeded", message: "Rate limit reached" },
+})
+
+describe("OpenAI reset time", () => {
+  it.live("a usage limit body without resets_at resets after resets_in_seconds", () =>
+    Effect.gen(function* () {
+      const { error, retryAt } = yield* driverFailure(makeOAuthInfo(), {
+        status: 429,
+        body: encodeExternalJson({
+          error: { type: "usage_limit_reached", message: "limit", resets_in_seconds: 7200 },
+        }),
+      })
+      expect(retryAt(error, NOW)).toEqual(Option.some(NOW + 7_200_000))
+    }),
+  )
+
+  it.live("an API rate limit resets when its latest spent limit is full again", () =>
+    Effect.gen(function* () {
+      const { error, retryAt } = yield* driverFailure(makeApiAuthInfo("sk-limit"), {
+        status: 429,
+        headers: {
+          "content-type": "application/json",
+          "x-ratelimit-remaining-requests": "0",
+          "x-ratelimit-reset-requests": "6m0s",
+          "x-ratelimit-remaining-tokens": "0",
+          "x-ratelimit-reset-tokens": "1m30.5s",
+        },
+        body: errorBody,
+      })
+      expect(retryAt(error, NOW)).toEqual(Option.some(NOW + 360_000))
+    }),
+  )
+
+  it.live("a limit with some left does not hold the retry", () =>
+    Effect.gen(function* () {
+      const { error, retryAt } = yield* driverFailure(makeApiAuthInfo("sk-limit"), {
+        status: 429,
+        headers: {
+          "content-type": "application/json",
+          "x-ratelimit-remaining-requests": "12",
+          "x-ratelimit-reset-requests": "6m0s",
+        },
+        body: errorBody,
+      })
+      expect(retryAt(error, NOW)).toEqual(Option.none())
+    }),
+  )
+
+  it.live("the latest of the retry-after and the spent limits is the reset", () =>
+    Effect.gen(function* () {
+      const { error, retryAt } = yield* driverFailure(makeApiAuthInfo("sk-limit"), {
+        status: 429,
+        headers: {
+          "content-type": "application/json",
+          "retry-after": "2",
+          "x-ratelimit-remaining-tokens": "0",
+          "x-ratelimit-reset-tokens": "6m0s",
+        },
+        body: errorBody,
+      })
+      expect(retryAt(error, NOW)).toEqual(Option.some(NOW + 360_000))
+    }),
+  )
+
+  it.live("a refused request's limit headers name no reset", () =>
+    Effect.gen(function* () {
+      const { error, retryAt } = yield* driverFailure(makeApiAuthInfo("sk-limit"), {
+        status: 400,
+        headers: {
+          "content-type": "application/json",
+          "x-ratelimit-remaining-requests": "0",
+          "x-ratelimit-reset-requests": "6m0s",
+        },
+        body: encodeExternalJson({
+          error: { type: "invalid_request_error", message: "Unsupported parameter" },
+        }),
+      })
+      expect(retryAt(error, NOW)).toEqual(Option.none())
     }),
   )
 })

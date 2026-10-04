@@ -2409,6 +2409,7 @@ export function useSessionFeed(
         appendSessionEvent(setStore, {
           _tag: "error",
           error: event.error,
+          retryAt: event.retryAt,
           createdAt: stampedAt,
           seq: eventSeq++,
         })
@@ -3607,7 +3608,9 @@ export function createSessionController(props: {
   }
 
   // Esc steps back one layer: the open layer, disclosure, turn, then the
-  // draft, which the first press arms and the second clears. Esc never exits.
+  // draft, which the first press arms and the second clears. On an empty
+  // composer it stops what an extension holds pending (an auto-resume). Esc
+  // never exits.
   const handleEscape = () => {
     const second = armedFor("escape")
     disarm()
@@ -3620,7 +3623,10 @@ export function createSessionController(props: {
       cancelTurn()
       return
     }
-    if (interactionState().draft.length === 0) return
+    if (interactionState().draft.length === 0) {
+      ext.stopPending()
+      return
+    }
     if (second) {
       onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
       return

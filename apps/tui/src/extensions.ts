@@ -54,6 +54,7 @@ export {
   STATUS_YIELD,
   statusLabelContribution,
   type StatusLabelItem,
+  stoppableContribution,
   widgetContribution,
 } from "./extensions/client-facets.js"
 
@@ -84,6 +85,7 @@ export { textWidth } from "./bun-adapter"
 export {
   fitWidth,
   formatAge,
+  formatClock,
   formatCost,
   formatDuration,
   formatFileRef,

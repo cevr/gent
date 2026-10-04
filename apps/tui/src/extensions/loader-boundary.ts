@@ -192,6 +192,14 @@ export interface ResolvedNoticeRows {
   readonly rows: (session: ActiveExtensionSession) => Option.Option<ReadonlyArray<NoticeRow>>
 }
 
+/** A pending thing Esc stops, under the id it won, with the extension that contributed it. */
+interface ResolvedStoppable {
+  readonly id: string
+  readonly extensionId: string
+  readonly active: () => boolean
+  readonly stop: () => void
+}
+
 /** A tool renderer, with the extension that contributed it, named when its render fails. */
 interface ResolvedToolRenderer {
   readonly extensionId: string
@@ -218,6 +226,8 @@ export interface ResolvedTuiExtensions {
   readonly statusLabels: ReadonlyArray<ResolvedStatusLabel>
   readonly noticeRows: ReadonlyArray<ResolvedNoticeRows>
   readonly autocompleteItems: ReadonlyArray<ResolvedAutocomplete>
+  /** Highest scope first: Esc stops the first active one. */
+  readonly stoppables: ReadonlyArray<ResolvedStoppable>
   readonly failures: ReadonlyArray<ClientExtensionFailure>
 }
 
@@ -289,6 +299,20 @@ const resolveKeyed = <K, V>(
     }
   }
   return values
+}
+
+/**
+ * Entries by their extension's scope, highest first: a key a higher scope
+ * took over keeps the place the lower scope gave it in `resolveKeyed`.
+ */
+const highestScopeFirst = <V extends { readonly extensionId: string }>(
+  sorted: ReadonlyArray<LoadedTuiExtension>,
+  entries: ReadonlyArray<V>,
+): ReadonlyArray<V> => {
+  const precedence = new Map(sorted.map((ext) => [ext.id, SCOPE_PRECEDENCE[ext.scope]]))
+  const of = (entry: V) =>
+    Option.getOrElse(Option.fromUndefinedOr(precedence.get(entry.extensionId)), () => 0)
+  return entries.toSorted((a, b) => of(b) - of(a))
 }
 
 // ── command resolution ──
@@ -585,6 +609,13 @@ export const resolveTuiExtensions = (
       name: contribution.id,
     })),
   )
+  const stoppables = resolveKeyed(sorted, failures, "stoppable", (contributions, extensionId) =>
+    itemsOrEmpty(contributions.stoppables).map((contribution) => ({
+      key: contribution.id,
+      value: { ...contribution, extensionId },
+      name: contribution.id,
+    })),
+  )
   const interactionRenderers = resolveKeyed(
     sorted,
     failures,
@@ -624,6 +655,7 @@ export const resolveTuiExtensions = (
         extensionId: ext.id,
       })),
     ),
+    stoppables: highestScopeFirst(sorted, [...stoppables.values()]),
     failures,
   }
 }

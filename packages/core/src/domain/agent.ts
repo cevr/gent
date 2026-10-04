@@ -57,6 +57,44 @@ export const ReasoningEffort = Schema.Literals([
 export type ReasoningEffort = typeof ReasoningEffort.Type
 export const isReasoningEffort = Schema.is(ReasoningEffort)
 
+/**
+ * The tool images one request may carry: how many, and how many base64
+ * characters in all. A request past either leaves out its oldest images, a
+ * fixed number at a time, so its prefix changes only when the count of left
+ * out images does (`toolImagesToDrop` in `model-context.ts`).
+ */
+export const ImageLimit = Schema.Struct({
+  images: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  base64Chars: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+})
+export type ImageLimit = typeof ImageLimit.Type
+
+const PositiveCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
+
+/**
+ * How a model counts the tokens of one image, as its API class says
+ * (`imageTokens` in `model-context.ts`):
+ * - `Pixels`: `width * height / pixelsPerToken`, with no cap (Anthropic).
+ * - `Tiles`: OpenAI's tiles at the `high` detail: the image fit in 2048x2048,
+ *   its short side cut to 768, then `baseTokens` and `tileTokens` for each
+ *   512-pixel tile.
+ * - `Patches`: OpenAI's 32-pixel patches, the image shrunk to `maxPatches`,
+ *   each patch at `multiplier` tokens.
+ */
+export const ImageCost = Schema.TaggedUnion({
+  Pixels: { pixelsPerToken: PositiveCount },
+  Tiles: { baseTokens: PositiveCount, tileTokens: PositiveCount },
+  Patches: { multiplier: Schema.Finite, maxPatches: PositiveCount },
+})
+export type ImageCost = typeof ImageCost.Type
+
+/** Provider options an image part of a request carries, by provider (`Prompt.FilePart.options`). */
+export const ImagePartOptions = Schema.Record(
+  Schema.String,
+  Schema.Record(Schema.String, Schema.Json),
+)
+export type ImagePartOptions = typeof ImagePartOptions.Type
+
 // Model - individual model from a provider (built-in or custom)
 
 export class Model extends Schema.Class<Model>("Model")({
@@ -89,6 +127,30 @@ export class Model extends Schema.Class<Model>("Model")({
    * passes as it is.
    */
   efforts: Schema.optional(Schema.Array(ReasoningEffort)),
+  /**
+   * Whether the model reads images, as the catalog says (`modalities.input`).
+   * False: a request sends a line in place of each tool image. Absent when
+   * the catalog does not say: the request sends the images.
+   */
+  imageInput: Schema.optional(Schema.Boolean),
+  /**
+   * The tool images one request may carry, as the model's API class says
+   * (`ApiClassContribution.imageLimit`). Absent: the default bound
+   * (`toolImagesToDrop` in `model-context.ts`).
+   */
+  imageLimit: Schema.optional(ImageLimit),
+  /**
+   * What one tool image costs the model, as its API class says
+   * (`ApiClassContribution.imageCost`). Absent: the highest of the known
+   * costs, so an estimate never counts low.
+   */
+  imageCost: Schema.optional(ImageCost),
+  /**
+   * The provider options each image part of a request carries, as the
+   * model's API class says (`ApiClassContribution.imagePartOptions`): the
+   * detail its `imageCost` assumes, so the estimate and the request agree.
+   */
+  imagePartOptions: Schema.optional(ImagePartOptions),
   /**
    * How long the provider keeps a request's prompt cached after the request,
    * in milliseconds, as the model's driver says. A turn that starts on a large
@@ -341,7 +403,20 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
    */
   maxModelAttempts: Schema.optional(Schema.Natural),
   driver: Schema.optional(DriverRef),
-}) {}
+}) {
+  /**
+   * Whether a turn of this agent holds the tool `id`: the allow list, when
+   * set, names it, and the deny list does not. The lists are authoritative:
+   * an agent with `allowedTools` gets exactly those tools, and no extension
+   * adds one (`compileToolPolicy`). An extension that selects or describes
+   * its own tool asks this first.
+   */
+  admitsTool(id: string): boolean {
+    const allowed = Option.fromUndefinedOr(this.allowedTools)
+    if (Option.isSome(allowed) && !allowed.value.includes(id)) return false
+    return this.deniedTools?.includes(id) !== true
+  }
+}
 
 // Default model — used when an agent has no model set
 export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")

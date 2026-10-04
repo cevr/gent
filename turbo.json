@@ -9,12 +9,20 @@
     },
     "typecheck": {
       "dependsOn": ["transit"],
-      "inputs": ["src/**", "tests/**", "integration/**", "tsconfig.json", "package.json"],
+      "inputs": [
+        "src/**",
+        "tests/**",
+        "integration/**",
+        "alchemy.run.ts",
+        "tsconfig.json",
+        "package.json"
+      ],
       "outputs": []
     },
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["src/**", "tsconfig.json", "package.json"],
+      "env": ["GENT_COMPILE_TARGET"],
       "outputs": ["dist/**"]
     },
     "install:global": {

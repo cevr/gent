@@ -2383,7 +2383,7 @@ export const makeCellToolHost = (
 const CELL_WORKER_BINARY = "gent-cell"
 
 /**
- * Where the worker lives. A compiled build (`GentPlatform.compiled`) runs the
+ * Where the worker lives. A compiled build (`GentPlatform.build`) runs the
  * `gent-cell` binary beside its executable. A source run executes this
  * checkout's worker source with the running Bun, so it never launches a stale
  * built worker.
@@ -2392,7 +2392,7 @@ export const cellWorkerLaunch = Effect.gen(function* () {
   const platform = yield* GentPlatform
   const path = yield* Path.Path
   const execPath = yield* platform.execPath
-  if (yield* platform.compiled) {
+  if ((yield* platform.build)._tag === "Compiled") {
     return CellWorker.cases.Compiled.make({
       binaryPath: path.join(path.dirname(execPath), CELL_WORKER_BINARY),
     })
@@ -3185,6 +3185,8 @@ const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
  * listing the host ships with each changed turn; `await tools(id)` asks the
  * kernel for the rest of the entry.
  * The extension owns the model selection and catalog through ordinary hooks.
+ * An agent whose lists leave the cell out (`allowedTools` without it, or
+ * `deniedTools` with it) keeps its own tools as the model surface.
  */
 export const CellExtension = defineExtension({
   id: CELL_EXTENSION_ID,
@@ -3193,13 +3195,13 @@ export const CellExtension = defineExtension({
     yield* host.register("tool", CellTool)
     yield* host.on("turnProjection", ({ agent }) =>
       Effect.gen(function* () {
-        if (agent.deniedTools?.includes("cell") === true) return {}
+        if (!agent.admitsTool(getToolId(CellTool))) return {}
         // `models.decide` is listed only when a call that names no model can
         // resolve one; without a credential it can only reject.
         const decides = yield* (yield* ExtensionContext).Models.available
         let promptSections = [CELL_WORK_SECTION]
         if (decides) promptSections = [CELL_WORK_SECTION, CELL_MODELS_SECTION]
-        return { toolPolicy: { include: ["cell"], modelSet: ["cell"] }, promptSections }
+        return { toolPolicy: { modelSet: [getToolId(CellTool)] }, promptSections }
       }),
     )
     // The host tool list differs by agent, so it follows the shared prompt.

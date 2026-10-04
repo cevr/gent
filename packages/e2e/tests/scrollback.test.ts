@@ -244,8 +244,8 @@ describe("E2E: Scrollback ownership", () => {
   }
 
   // At 80x24 a 5-row prompt whose turn retries fills the screen: history
-  // takes the prompt's top rows as the turn ends. The rows read on with no
-  // row added or lost between history and the screen.
+  // takes the prompt's top rows while the turn's footer is tall. The rows
+  // read on with no row added or lost between history and the screen.
   it.scopedLive(
     "a multiline prompt whose turn retries keeps its rows together at 80x24",
     () =>
@@ -267,6 +267,71 @@ describe("E2E: Scrollback ownership", () => {
         const first = rows.findIndex((row) => row === "┃ longg")
         expect(first).toBeGreaterThanOrEqual(0)
         expect(rows.slice(first, first + prompt.length)).toEqual(prompt.map((row) => `┃ ${row}`))
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
+    TEST_TIMEOUT,
+  )
+
+  // At 45x15 in a long session with an open question (its tray row makes the
+  // footer tall), the same prompt's turn retries twice. The region shrinks as
+  // history takes rows and grows again: a growth that scrolls the screen must
+  // push the rows over it into scrollback, not drop them. Once the turn ends,
+  // the prompt and the answer each read once, in order, with one blank row
+  // around each and none inside.
+  it.scopedLive(
+    "a long session's retried multiline prompt keeps every prompt and answer row once at 45x15",
+    () =>
+      Effect.gen(function* () {
+        const ctx = yield* seedAndSpawn(["--debug"], { cols: 45, rows: 15 })
+        yield* screenWaitFor(
+          ctx,
+          (visible) =>
+            visible.some((row) => row.includes(DEBUG_SESSION_END)) &&
+            visible.some((row) => row.startsWith("ready")),
+          { timeout: 25_000, label: "the debug session at idle" },
+        )
+        yield* settlePty(ctx, SETTLE)
+        // `debug ask` leaves a question open, then runs a 20-second command.
+        ctx.pty.write("debug ask")
+        yield* settlePty(ctx, TYPED)
+        ctx.pty.write(keys.enter)
+        yield* ptyWaitFor(ctx, "Worked for", { timeout: 45_000 })
+        yield* settlePty(ctx, SETTLE)
+        const prompt = ["longg", "row two", "row three", "row four", "row five"]
+        ctx.pty.write(prompt.join("\n"))
+        yield* settlePty(ctx, TYPED)
+        ctx.pty.write(keys.enter)
+        yield* ptyWaitFor(ctx, "Retried 2/3", { timeout: 25_000 })
+        yield* ptyWaitFor(ctx, "scripted language", { timeout: 25_000 })
+        const promptBlock = ["", ...prompt.map((row) => `┃ ${row}`), ""]
+        const answerBlock = [
+          "",
+          "  gent debug response. Latest user message:",
+          "  longg",
+          "  row two",
+          "  row three",
+          "  row four",
+          "  row five. This turn is flowing through the",
+          "  real agent loop with a scripted language",
+          "  model.",
+          "",
+        ]
+        const rowsNow = settleAndCapture(ctx, { quietMs: 1_000, timeoutMs: 25_000 }).pipe(
+          Effect.map(allRows),
+        )
+        const textRows = [...promptBlock, ...answerBlock].filter((row) => row !== "")
+        const read = (rows: ReadonlyArray<string>) => [
+          blockAt(rows, promptBlock),
+          blockAt(rows, answerBlock),
+          textRows.map((row) => [row, rows.filter((value) => value === row).length]),
+        ]
+        const expected = [promptBlock, answerBlock, textRows.map((row) => [row, 1])]
+        const settled = yield* waitFor(
+          rowsNow,
+          (rows) => String(read(rows)) === String(expected),
+          10_000,
+          "every prompt and answer row once, in order",
+        ).pipe(Effect.catch(() => rowsNow))
+        expect(read(settled)).toEqual(expected)
       }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
@@ -335,15 +400,90 @@ describe("E2E: Scrollback ownership", () => {
       TEST_TIMEOUT,
     )
   }
+
+  // A turn that starts from idle grows the footer (the activity row, then the
+  // open question's tray row) while the region already has all its rows. The
+  // transcript rows the region no longer shows go to scrollback; none is left
+  // where neither the screen nor scrollback has it.
+  it.scopedLive(
+    "a turn that starts from idle keeps every transcript row once, in order, while it runs, at 60x20",
+    () =>
+      Effect.gen(function* () {
+        const ctx = yield* seedAndSpawn(["--debug"], { cols: 60, rows: 20 })
+        yield* screenWaitFor(
+          ctx,
+          (visible) =>
+            visible.some((row) => row.includes(DEBUG_SESSION_END)) &&
+            visible.some((row) => row.startsWith("ready")),
+          { timeout: 25_000, label: "the debug session at idle" },
+        )
+        const before = transcriptBlock(yield* settleAndCapture(ctx, SETTLE))
+        expect(before.length).toBeGreaterThan(10)
+
+        // `debug ask` asks in the background, then runs a 20-second command.
+        ctx.pty.write("debug ask")
+        yield* settlePty(ctx, TYPED)
+        ctx.pty.write(keys.enter)
+        yield* screenWaitFor(
+          ctx,
+          (visible) =>
+            visible.some((row) => row.includes("open question")) &&
+            visible.some((row) => row.includes("esc cancel")),
+          { timeout: 25_000, label: "the running turn with its open question" },
+        )
+
+        // The running turn animates, so a capture reads between two frames.
+        // Commits land a few frames after the footer grows: the rows are read
+        // until they match, then once more for the failure's diff. Blank rows
+        // count: a lost spacer joins two items.
+        const rowsNow = settleAndCapture(ctx, { quietMs: 50, timeoutMs: 5_000 }).pipe(
+          Effect.map((grid) => {
+            const rows = allRows(grid)
+            const start = rows.indexOf(before[0] ?? "")
+            return rows.slice(start, start + before.length)
+          }),
+        )
+        const during = yield* waitFor(
+          rowsNow,
+          (rows) => rows.length === before.length && rows.every((row, at) => row === before[at]),
+          8_000,
+          "every transcript row once while the turn runs",
+        ).pipe(Effect.catch(() => rowsNow))
+        expect(during).toEqual(before)
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
+    TEST_TIMEOUT,
+  )
 })
 
-/** The row the `--debug` session's seeded transcript ends on, at every width. */
-const DEBUG_SESSION_END = "renderer behavior directly."
+/** The row the `--debug` session's seeded transcript ends on, at 45 columns and wider. */
+const DEBUG_SESSION_END = "behavior directly."
 
 /** The transcript's rows, history first, up to the seeded session's last row. */
 const transcriptRows = (grid: Parameters<typeof gridText>[0]): string[] => {
   const rows = gridText(grid)
   return rows.slice(0, rows.findIndex((row) => row.includes(DEBUG_SESSION_END)) + 1)
+}
+
+/** Every row, history first, blank rows kept. */
+const allRows = (grid: Parameters<typeof gridText>[0]): string[] =>
+  [...grid.history, ...grid.visible].map((row) => row.trimEnd())
+
+/**
+ * The rows from the first row of `block` that holds text, as many as `block`
+ * holds, with the blank rows before it that `block` starts with.
+ */
+const blockAt = (rows: ReadonlyArray<string>, block: ReadonlyArray<string>): string[] => {
+  const lead = block.findIndex((row) => row !== "")
+  const start = rows.indexOf(block[lead] ?? "") - lead
+  if (start < 0) return []
+  return rows.slice(start, start + block.length)
+}
+
+/** The seeded transcript's rows with the blank rows between them, from its first row to its last. */
+const transcriptBlock = (grid: Parameters<typeof gridText>[0]): string[] => {
+  const rows = allRows(grid)
+  const start = rows.findIndex((row) => row.length > 0)
+  return rows.slice(start, rows.findIndex((row) => row.includes(DEBUG_SESSION_END)) + 1)
 }
 
 describe("E2E: Settle then capture", () => {
