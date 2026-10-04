@@ -1,16 +1,23 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Option } from "effect"
+import { Deferred, Effect, Option, Queue, Schema } from "effect"
 import { createRoot, createSignal } from "solid-js"
 import type { TextareaRenderable } from "@opentui/core"
-import { BranchId, SessionId } from "@gent/core/extensions/api"
-import type { ForkViewType } from "@gent/extensions/client"
-import btwExtension, { ForkPane, makeForkPane } from "../../src/extensions/btw.client"
+import { BranchId, MessageId, SessionId } from "@gent/core/extensions/api"
+import {
+  BTW_MERGE_TYPE,
+  ForkMergeDetails,
+  forkMergeText,
+  type ForkViewType,
+} from "@gent/extensions/client"
+import { QueueWidget } from "../../src/app"
+import btwExtension, { ForkMergeRow, ForkPane, makeForkPane } from "../../src/extensions/btw.client"
 import { createMockClient, renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame, waitUntil } from "../helpers-boundary"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
+  makePaneSlot,
   provideClientServices,
   runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
@@ -43,9 +50,16 @@ const makeServer = () => {
   let current: Option.Option<ForkViewType> = Option.none()
   const forked: Array<string> = []
   const asked: Array<string> = []
+  const merges: Array<string> = []
+  let mergeOutcome: Effect.Effect<{ readonly merged: boolean }, { readonly message: string }> =
+    Effect.succeed({ merged: true })
   return {
     forked,
     asked,
+    merges,
+    mergeWith: (outcome: typeof mergeOutcome) => {
+      mergeOutcome = outcome
+    },
     set: (next: Option.Option<ForkViewType>) => {
       current = next
     },
@@ -60,6 +74,11 @@ const makeServer = () => {
           asked.push(question)
         }),
       progress: () => Effect.sync(() => current),
+      merge: (session: { readonly sessionId: string }) =>
+        Effect.suspend(() => {
+          merges.push(session.sessionId)
+          return mergeOutcome
+        }),
     },
   }
 }
@@ -81,7 +100,13 @@ describe("fork pane", () => {
         })
         yield* queue.drain
         const setup = yield* renderScoped(() => (
-          <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+          <ForkPane
+            open={true}
+            onClose={() => {}}
+            onOpen={() => {}}
+            onMerge={() => {}}
+            controller={controller}
+          />
         ))
         expect(renderFrame(setup)).toContain("btw · fork")
         controller.ask("why?")
@@ -121,7 +146,7 @@ describe("fork pane", () => {
         yield* waitForFrame(setup, (frame) => frame.includes("then that"), "second answer")
         const frame = renderFrame(setup)
         expect(frame).toContain("btw: why?")
-        expect(frame).toContain("enter open · esc close")
+        expect(frame).toContain("enter open · ctrl+s merge · esc close")
       }),
   )
 
@@ -143,6 +168,7 @@ describe("fork pane", () => {
           ask: (_question, session) => record(session),
           // The first read (the pane following its session) stays out.
           progress: () => Deferred.await(hold).pipe(Effect.as(Option.none())),
+          merge: () => Effect.succeed({ merged: true }),
         }),
         { currentSession: () => current() },
       )
@@ -177,6 +203,7 @@ describe("fork pane", () => {
                 }
                 return Deferred.await(hold)
               }).pipe(Effect.as(Option.none())),
+            merge: () => Effect.succeed({ merged: true }),
           }),
           {
             currentSession: () => current(),
@@ -236,6 +263,7 @@ describe("fork pane", () => {
           open={true}
           onClose={() => {}}
           onOpen={() => (opened += 1)}
+          onMerge={() => {}}
           controller={controller}
         />
       ))
@@ -264,7 +292,13 @@ describe("fork pane", () => {
       })
       yield* queue.drain
       const setup = yield* renderScoped(() => (
-        <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+        <ForkPane
+          open={true}
+          onClose={() => {}}
+          onOpen={() => {}}
+          onMerge={() => {}}
+          controller={controller}
+        />
       ))
       yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
       yield* Effect.promise(() => setup.mockInput.typeText("and then?"))
@@ -289,7 +323,13 @@ describe("fork pane", () => {
       const setup = yield* renderScoped(() => (
         <box flexDirection="column">
           <textarea focused ref={(node: TextareaRenderable) => (composer = Option.some(node))} />
-          <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+          <ForkPane
+            open={true}
+            onClose={() => {}}
+            onOpen={() => {}}
+            onMerge={() => {}}
+            controller={controller}
+          />
         </box>
       ))
       yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
@@ -313,7 +353,15 @@ describe("fork pane", () => {
       })
       yield* queue.drain
       const setup = yield* renderScoped(
-        () => <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />,
+        () => (
+          <ForkPane
+            open={true}
+            onClose={() => {}}
+            onOpen={() => {}}
+            onMerge={() => {}}
+            controller={controller}
+          />
+        ),
         { kittyKeyboard: true },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
@@ -338,7 +386,13 @@ describe("fork pane", () => {
       })
       yield* queue.drain
       const setup = yield* renderScoped(() => (
-        <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+        <ForkPane
+          open={true}
+          onClose={() => {}}
+          onOpen={() => {}}
+          onMerge={() => {}}
+          controller={controller}
+        />
       ))
       yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText("ok 👍🏽🇺🇸"))
@@ -366,7 +420,13 @@ describe("fork pane", () => {
       })
       yield* queue.drain
       const setup = yield* renderScoped(() => (
-        <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+        <ForkPane
+          open={true}
+          onClose={() => {}}
+          onOpen={() => {}}
+          onMerge={() => {}}
+          controller={controller}
+        />
       ))
       yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
       yield* Effect.promise(() => setup.mockInput.typeText("foo bar"))
@@ -394,12 +454,19 @@ describe("fork pane", () => {
           fork: () => Effect.fail({ message: "model unavailable" }),
           ask: () => Effect.void,
           progress: () => Effect.succeedNone,
+          merge: () => Effect.succeed({ merged: true }),
         }),
         { ...onSession, shell: { cast: queue.cast } },
       )
       yield* queue.drain
       const setup = yield* renderScoped(() => (
-        <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+        <ForkPane
+          open={true}
+          onClose={() => {}}
+          onOpen={() => {}}
+          onMerge={() => {}}
+          controller={controller}
+        />
       ))
       controller.ask("why?")
       yield* queue.drain
@@ -424,6 +491,7 @@ describe("fork pane", () => {
           fork: () => Effect.fail({ message: "model unavailable" }),
           ask: () => Effect.void,
           progress: () => Effect.succeedNone,
+          merge: () => Effect.succeed({ merged: true }),
         }),
         {
           currentSession: () => current(),
@@ -438,6 +506,358 @@ describe("fork pane", () => {
       expect(notices[0]).toContain("why is the sky blue?")
       expect(notices[0]).toContain("model unavailable")
     }),
+  )
+})
+
+// ── merge ───────────────────────────────────────────────────────────────────
+
+const answered = () => view([{ question: "why?", answer: "because" }], false)
+
+const mergeDetails = {
+  fork: { sessionId: "fork", branchId: "fork-branch", name: "btw: why?" },
+  fromMessageId: "m-1",
+  replyId: "m-2",
+  turns: 1,
+  question: "What bird is that?",
+  reply: "A grey heron.",
+}
+
+describe("fork merge", () => {
+  // The merge key shows only when a merge can land: the fork answered and
+  // nothing is on its way to it.
+  it.scopedLive("the pane offers ctrl+s merge only once the fork has answered", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      server.set(Option.some(view([{ question: "why?", answer: "" }], true)))
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast },
+      })
+      yield* queue.drain
+      const setup = yield* renderScoped(
+        () => (
+          <ForkPane
+            open={true}
+            onClose={() => {}}
+            onOpen={() => {}}
+            onMerge={() => {}}
+            controller={controller}
+          />
+        ),
+        { width: 60 },
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("thinking"), "replying")
+      expect(renderFrame(setup)).not.toContain("merge")
+      server.set(Option.some(answered()))
+      controller.refresh()
+      yield* queue.drain
+      const frame = yield* waitForFrame(setup, (f) => f.includes("because"), "answered")
+      expect(frame).toContain("enter open · ctrl+s merge · esc close")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("ctrl+s in the pane merges, and a key it does not own types nothing", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      server.set(Option.some(answered()))
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast },
+      })
+      yield* queue.drain
+      let merged = 0
+      const setup = yield* renderScoped(() => (
+        <ForkPane
+          open={true}
+          onClose={() => {}}
+          onOpen={() => {}}
+          onMerge={() => (merged += 1)}
+          controller={controller}
+        />
+      ))
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+s merge"), "mergeable")
+      setup.mockInput.pressKey("s", { ctrl: true })
+      yield* waitUntil(() => merged === 1, "the merge")
+      expect(renderFrame(setup)).toContain("ask › ")
+      expect(renderFrame(setup)).not.toContain("ask › s")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a merge sends once for the session in view and then closes the pane", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      server.set(Option.some(answered()))
+      const notices: Array<string> = []
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast, notify: (message) => notices.push(message) },
+      })
+      yield* queue.drain
+      let closed = 0
+      controller.merge(() => (closed += 1))
+      yield* queue.drain
+      expect(server.merges).toEqual(["s"])
+      expect(closed).toBe(1)
+      expect(notices).toEqual([])
+      // The same reply again: the server posts nothing and the reader is told.
+      server.mergeWith(Effect.succeed({ merged: false }))
+      controller.merge(() => (closed += 1))
+      yield* queue.drain
+      expect(closed).toBe(2)
+      expect(notices).toEqual(["btw: this reply is already merged"])
+      // A refusal keeps the pane open and says why.
+      server.mergeWith(Effect.fail({ message: "The fork is still answering" }))
+      controller.merge(() => (closed += 1))
+      yield* queue.drain
+      expect(closed).toBe(2)
+      expect(notices.at(-1)).toBe("btw: not merged: The fork is still answering")
+    }),
+  )
+
+  it.scopedLive("a merge with no fork, no reply, or a reply on its way is refused here", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      const notices: Array<string> = []
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast, notify: (message) => notices.push(message) },
+      })
+      yield* queue.drain
+      controller.merge(() => {})
+      server.set(Option.some(view([], false)))
+      controller.refresh()
+      yield* queue.drain
+      controller.merge(() => {})
+      server.set(Option.some(view([{ question: "why?", answer: "bec" }], true)))
+      controller.refresh()
+      yield* queue.drain
+      controller.merge(() => {})
+      yield* queue.drain
+      expect(server.merges).toEqual([])
+      expect(notices).toEqual([
+        "btw: no fork to merge",
+        "btw: the fork has no reply to merge yet",
+        "btw: the fork is still answering; merge when it is done",
+      ])
+    }),
+  )
+})
+
+describe("ForkMergeRow", () => {
+  it.scopedLive("a merge draws one collapsed row: the question and the reply it merged", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(() => <ForkMergeRow details={mergeDetails} />, {
+        width: 120,
+        height: 4,
+      })
+      const frame = yield* waitForFrame(setup, (f) => f.includes("merged"), "the row")
+      expect(frame).toContain("↳ merged btw · What bird is that? → A grey heron.")
+      // The ids the model reads stay out of the row.
+      expect(frame).not.toContain("m-2")
+    }).pipe(Effect.timeout("6 seconds")),
+  )
+
+  it.scopedLive("a narrow row keeps one line and cuts its end", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(() => <ForkMergeRow details={mergeDetails} />, {
+        width: 30,
+        height: 4,
+      })
+      const frame = yield* waitForFrame(setup, (f) => f.includes("merged"), "the row")
+      const lines = frame.split("\n").filter((line) => line.includes("merged"))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain("…")
+      expect(frame).not.toContain("heron")
+    }).pipe(Effect.timeout("6 seconds")),
+  )
+
+  it.scopedLive("details it cannot read draw the plain row", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(() => <ForkMergeRow details={{ other: 1 }} />, {
+        width: 60,
+        height: 4,
+      })
+      const frame = yield* waitForFrame(setup, (f) => f.includes("merged"), "the row")
+      expect(frame).toContain("↳ merged a btw fork")
+    }).pipe(Effect.timeout("6 seconds")),
+  )
+
+  it.scopedLive("a merge waiting for the turn shows in the queue as the question it merges", () =>
+    Effect.gen(function* () {
+      const runtime = makeClientExtensionRuntime({
+        transport: { ...makeClientTestTransport(), client: createMockClient() },
+      })
+      const contributions = yield* runClientExtensionSetup(runtime, btwExtension)
+      const renderers = new Map(
+        (contributions.messageRenderers ?? []).map((entry) => [entry.customType, entry]),
+      )
+      const setup = yield* renderScoped(
+        () => (
+          <QueueWidget
+            steerMessages={[
+              {
+                _tag: "Steering",
+                id: MessageId.make("merge-1"),
+                content: "The user merged a /btw fork back into this session: …",
+                createdAt: 0,
+                metadata: { customType: BTW_MERGE_TYPE, details: mergeDetails },
+              },
+            ]}
+            queuedMessages={[]}
+            messageRenderers={renderers}
+          />
+        ),
+        { width: 120, height: 6 },
+      )
+      const frame = yield* waitForFrame(setup, (f) => f.includes("[steer 1]"), "the queue")
+      expect(frame).toContain("[steer 1] ↳ btw merge · What bird is that?")
+      expect(frame).not.toContain("The user merged")
+      yield* Effect.promise(() => runtime.dispose())
+    }).pipe(Effect.timeout("6 seconds")),
+  )
+
+  // The merge is the reader's own message: the transcript pins what they
+  // did, not the ids the model reads.
+  it.scopedLive("the pinned prompt of a merge names the fork, not the text the model reads", () =>
+    Effect.gen(function* () {
+      const runtime = makeClientExtensionRuntime({
+        transport: { ...makeClientTestTransport(), client: createMockClient() },
+      })
+      const contributions = yield* runClientExtensionSetup(runtime, btwExtension)
+      const merge = contributions.messageRenderers?.find(
+        (entry) => entry.customType === BTW_MERGE_TYPE,
+      )
+      const text = forkMergeText(yield* Schema.decodeEffect(ForkMergeDetails)(mergeDetails))
+      expect(merge?.prompt?.(text)).toBe("merged btw: why?")
+      expect(merge?.prompt?.("plain")).toBe("plain")
+      // A name a question over several lines gave is written on one line.
+      const multiline = forkMergeText(
+        yield* Schema.decodeEffect(ForkMergeDetails)({
+          ...mergeDetails,
+          fork: { ...mergeDetails.fork, name: "btw: why?\nwhat next?" },
+        }),
+      )
+      expect(merge?.prompt?.(multiline)).toBe("merged btw: why? what next?")
+      yield* Effect.promise(() => runtime.dispose())
+    }).pipe(Effect.timeout("6 seconds")),
+  )
+})
+
+describe("a merge response that lands late", () => {
+  /**
+   * The btw extension on a mock server where every session has an answered
+   * fork named after it and each merge waits for the test to release it.
+   */
+  const lateMerge = Effect.gen(function* () {
+    const sessionA = { sessionId: SessionId.make("a"), branchId: BranchId.make("a-branch") }
+    const sessionB = { sessionId: SessionId.make("b"), branchId: BranchId.make("b-branch") }
+    const [current, setCurrent] = createRoot(() => createSignal(sessionA))
+    const mergeAsked = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    let held = true
+    let casts = 0
+    const client = createMockClient({
+      extension: {
+        request: (input: { sessionId: string; capabilityId: string }) =>
+          Effect.gen(function* () {
+            if (input.capabilityId === "btw.merge") {
+              if (held) {
+                yield* Deferred.succeed(mergeAsked, void 0)
+                yield* Deferred.await(release)
+              }
+              return { merged: true }
+            }
+            const fork = {
+              ...view([{ question: `${input.sessionId}?`, answer: "because" }], false),
+              name: `btw: ${input.sessionId}?`,
+            }
+            return { fork }
+          }),
+      },
+    })
+    // Each cast runs on the test's scope, counted once it ends.
+    const castQueue = yield* Queue.unbounded<Effect.Effect<void>>()
+    yield* Queue.take(castQueue).pipe(
+      Effect.flatMap((effect) =>
+        Effect.forkScoped(effect.pipe(Effect.ensuring(Effect.sync(() => (casts += 1))))),
+      ),
+      Effect.forever,
+      Effect.forkScoped,
+    )
+    const pane = makePaneSlot()
+    const runtime = makeClientExtensionRuntime({
+      transport: { ...makeClientTestTransport({ currentSession: () => current() }), client },
+      shell: {
+        pane,
+        cast: (effect) => {
+          Queue.offerUnsafe(castQueue, Effect.ignore(effect))
+        },
+      },
+    })
+    const contributions = yield* runClientExtensionSetup(runtime, btwExtension)
+    const command = Option.getOrThrow(
+      Option.fromUndefinedOr(contributions.commands?.find((entry) => entry.id === "btw")),
+    )
+    const widget = Option.getOrThrow(Option.fromUndefinedOr(contributions.widgets?.[0]))
+    const setup = yield* renderScoped(() => widget.component())
+    return {
+      setup,
+      pane,
+      show: () => command.onSelect?.(),
+      switchTo: () => setCurrent(sessionB),
+      mergeAsked,
+      /** Lets the held merge answer and waits for its cast to end. */
+      releaseMerge: Effect.gen(function* () {
+        const before = casts
+        held = false
+        yield* Deferred.succeed(release, void 0)
+        yield* waitUntil(() => casts > before, "the merge answered")
+      }),
+      dispose: Effect.promise(() => runtime.dispose()),
+    }
+  })
+
+  it.scopedLive("a merge asked in one session never closes the pane of the next", () =>
+    Effect.gen(function* () {
+      const late = yield* lateMerge
+      late.show()
+      yield* waitForFrame(late.setup, (frame) => frame.includes("ctrl+s merge"), "a's fork")
+      late.setup.mockInput.pressKey("s", { ctrl: true })
+      yield* Deferred.await(late.mergeAsked).pipe(Effect.timeout("2 seconds"))
+      late.switchTo()
+      late.show()
+      yield* waitForFrame(late.setup, (frame) => frame.includes("btw: b?"), "b's fork")
+      yield* late.releaseMerge
+      yield* Effect.yieldNow
+      expect(late.pane.isOpen("btw.pane")).toBe(true)
+      expect(renderFrame(late.setup)).toContain("btw: b?")
+      yield* late.dispose
+    }).pipe(Effect.timeout("6 seconds")),
+  )
+
+  it.scopedLive("a merge answered after its pane closed and opened again leaves the new pane", () =>
+    Effect.gen(function* () {
+      const late = yield* lateMerge
+      late.show()
+      yield* waitForFrame(late.setup, (frame) => frame.includes("ctrl+s merge"), "the fork")
+      late.setup.mockInput.pressKey("s", { ctrl: true })
+      yield* Deferred.await(late.mergeAsked).pipe(Effect.timeout("2 seconds"))
+      late.setup.mockInput.pressEscape()
+      yield* waitUntil(() => !late.pane.isOpen("btw.pane"), "the pane closed")
+      late.show()
+      yield* waitForFrame(late.setup, (frame) => frame.includes("ctrl+s merge"), "reopened")
+      yield* late.releaseMerge
+      yield* Effect.yieldNow
+      expect(late.pane.isOpen("btw.pane")).toBe(true)
+      // A merge this pane asked for still closes it.
+      late.setup.mockInput.pressKey("s", { ctrl: true })
+      yield* waitUntil(() => !late.pane.isOpen("btw.pane"), "the merge closed its pane")
+      yield* late.dispose
+    }).pipe(Effect.timeout("6 seconds")),
   )
 })
 

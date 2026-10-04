@@ -12,7 +12,7 @@ import {
   Message,
   ModelId,
 } from "@gent/core/protocol"
-import { RequestId } from "@gent/core/extensions/api"
+import { ExtensionContext, RequestId } from "@gent/core/extensions/api"
 import {
   finishPart,
   LanguageModelLayers,
@@ -22,6 +22,8 @@ import {
   waitFor,
   createRpcHarness,
   systemTextOf,
+  testLeafContext,
+  testToolContext,
 } from "@gent/core/test-utils"
 import {
   estimateTextTokens,
@@ -45,6 +47,8 @@ import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 const sessionId = SessionId.make("compaction-session")
 const branchId = BranchId.make("compaction-branch")
 const modelId = ModelId.make("debug/compaction")
+/** The context a compactor runs with; the loop provides the compacted branch's own. */
+const leafContext = Layer.succeed(ExtensionContext, testLeafContext(testToolContext()))
 
 const budget = (contextLimitTokens = 20_000): ModelContextBudget =>
   ModelContextBudget.make({
@@ -223,6 +227,7 @@ describe("context handoff", () => {
             summaryProvider("focused", (prompt) => {
               user = promptText(prompt)
             }),
+            leafContext,
           ),
         ),
         Effect.timeout("10 seconds"),
@@ -553,7 +558,7 @@ describe("context handoff", () => {
       expect(result.notice).toContain(`Summary:\n${"dense".repeat(cap)}`)
       expect(result.notice).toContain("[Summary cut at the output limit.]")
     }).pipe(
-      Effect.provide(Layer.mergeAll(ModelContextCompactorLive, denseProvider)),
+      Effect.provide(Layer.mergeAll(ModelContextCompactorLive, denseProvider, leafContext)),
       Effect.timeout("10 seconds"),
     )
   })

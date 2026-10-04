@@ -893,16 +893,17 @@ const clientOnlyModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
 const importBoundClientModule = (moduleId: string) => import(moduleId)
 
 /**
- * Bind the names every extension file reads (the two authoring entries and
- * `effect`) under their own names, and the client names under a prefix drawn
- * once per loader, so every build of the same files gives the same code and
- * the same version. Return the two steps for a client file: `module` compiles
- * it and the relative modules it imports as the build compiles the shipped
- * ones (Solid JSX), rewriting each client name to its prefixed binding, within
- * the load timeout (the server's coherent build, `buildExtensionModule`, runs
- * it); `importBuild` binds the output under a fresh prefixed name and imports
- * it. A bound name stays an import of the running module. The server root
- * binds the other `effect` modules the shipped extensions read.
+ * Bind the names every extension file reads (the two authoring entries,
+ * `effect` and its modules) under their own names, and the client names under
+ * a prefix drawn once per loader, so every build of the same files gives the
+ * same code and the same version. Return the two steps for a client file:
+ * `module` compiles it and the relative modules it imports as the build
+ * compiles the shipped ones (Solid JSX), rewriting each client name to its
+ * prefixed binding, within the load timeout (the server's coherent build,
+ * `buildExtensionModule`, runs it); `importBuild` binds the output under a
+ * fresh prefixed name and imports it. A bound name stays an import of the
+ * running module. The server root binds the `@effect/*` packages the shipped
+ * extensions read.
  */
 const provideClientExtensionModules = (timeout: Duration.Input) =>
   Effect.gen(function* () {

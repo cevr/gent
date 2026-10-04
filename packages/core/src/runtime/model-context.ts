@@ -37,7 +37,7 @@ import {
 import { readToolImage, type ToolImage, toolImageBase64Chars, toolImagesOf } from "./tool-image.js"
 import { omitUndefined } from "../domain/guards.js"
 import type { ToolCapability } from "../domain/capability.js"
-import type { TurnNotice } from "../domain/extension.js"
+import type { ExtensionContext, TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
 import type { ProviderAuthError, RunEffort } from "../domain/driver.js"
 import type { ProviderError, StorageError } from "../domain/errors.js"
@@ -402,6 +402,28 @@ const toolImageName = (entry: PromptToolImage): string =>
   ].join(" ")
 
 /**
+ * The line above an image the model sees. A scaled image's line names the
+ * size the tool saved and the factors from the stored image to it, in pi's
+ * and Claude Code's words (`PRIOR_ARTS.md`), so the model can map a
+ * coordinate back. Whole-pixel sides leave the two factors apart, by a lot
+ * in a thin image (1x6000 stored as 1x2000): the line names one factor only
+ * when both read the same. Three decimals keep a mapped coordinate within one
+ * original pixel at the stored image's 2,000-pixel edge. It reads stored
+ * fields only, so it stays the same bytes.
+ */
+const toolImageLabel = (entry: PromptToolImage, name: string): string => {
+  const { width, height, originalWidth, originalHeight } = entry.image
+  if (Predicate.isUndefined(originalWidth) || Predicate.isUndefined(originalHeight)) {
+    return `Image from ${name}:`
+  }
+  const x = (originalWidth / width).toFixed(3)
+  const y = (originalHeight / height).toFixed(3)
+  const scaled = `Image from ${name}, scaled from ${originalWidth}x${originalHeight}`
+  if (x === y) return `${scaled} (multiply coordinates by ${x} to map to the original):`
+  return `${scaled} (multiply x by ${x} and y by ${y} to map to the original):`
+}
+
+/**
  * The tool images a request carries when the model's API class names no
  * bound (`Model.imageLimit`): the newest 20, and about 12 MB of base64. Both
  * sit well inside what the Messages and Responses APIs take in one request.
@@ -484,7 +506,7 @@ export const toolImagePrompt = Effect.fn("ModelContext.toolImagePrompt")(functio
             ToolImageContent.cases.Line.make({ text: `[image no longer stored: ${name}]` }),
           onSome: (data) =>
             ToolImageContent.cases.Bytes.make({
-              label: `Image from ${name}:`,
+              label: toolImageLabel(entry, name),
               mediaType: entry.image.mediaType,
               data,
               ...omitUndefined({ options: params.model.imagePartOptions }),
@@ -1712,9 +1734,18 @@ const measuredUnits = (
  * none installed, or each one refusing, an overflowing transcript is simply
  * truncated. The loop owns the marker, its ids, and the transaction; the
  * extension owns the summary prompt and the notice text.
+ *
+ * A compactor runs with the `ExtensionContext` of the session and branch whose
+ * window it compacts, under its own extension's id, as a tool call of that
+ * extension on that branch does: `ctx.cwd` is the session's cwd, not the cwd
+ * its extension's setup saw, so one process resource serves the sessions of
+ * every profile that shares it.
  */
 
-/** Why a summary was not produced. Every failure degrades to a truncated window. */
+/**
+ * Why a summary was not produced. The window goes to the next compactor of
+ * the chain; when none is left, the loop truncates it.
+ */
 export class ModelCompactionError extends Schema.TaggedError<ModelCompactionError>()(
   "ModelCompactionError",
   {
@@ -1735,8 +1766,9 @@ export interface CompactionRequest {
   readonly modelId: ModelId
   /**
    * The agent whose window is compacted. A compactor that serves only some
-   * agents fails with `ModelCompactionError` for the others, and the loop
-   * truncates their window instead.
+   * agents fails with `ModelCompactionError` for the others: the window goes
+   * to the next compactor of the chain, and the loop truncates it only when
+   * no compactor is left.
    */
   readonly agentName: AgentName
   readonly sessionId: SessionId
@@ -1755,9 +1787,10 @@ export interface CompactionRequest {
 }
 
 interface ModelContextCompactorService {
+  /** Runs with the compacted branch's `ExtensionContext`. */
   readonly compact: (
     request: CompactionRequest,
-  ) => Effect.Effect<CompactionSummary, ModelCompactionError, Scope.Scope>
+  ) => Effect.Effect<CompactionSummary, ModelCompactionError, Scope.Scope | ExtensionContext>
 }
 
 /** Installed by an extension as a process resource; absent when nothing summarises. */
@@ -2259,8 +2292,9 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
     .pipe(
       Effect.asSome,
       Effect.catchTag("ModelCompactionError", (error) =>
-        // A summary that cannot be produced must not cost the turn: the window
-        // is truncated instead, with a visible notice.
+        // Every compactor of the chain refused. A summary that cannot be
+        // produced must not cost the turn: the window is truncated instead,
+        // with a visible notice.
         Effect.gen(function* () {
           let outcome = "the history before the kept messages is dropped"
           if (!params.overflowed) {

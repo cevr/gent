@@ -289,6 +289,17 @@ Within each directory:
 **Scope precedence**: Higher scope wins for same-key contributions. Project
 overrides User overrides Builtin.
 
+An extension file resolves `@gent/core/extensions/api`,
+`@gent/core/extensions/branch-tools`, `effect`, and each `effect/*` module a
+shipped extension imports (`effect/ai`, `effect/http`, `effect/process`,
+`effect/sql` and the others `extensionEntryModules` in
+`packages/core/src/runtime/extension-host.ts` lists). Core binds them to the
+modules gent runs, so a Tag or Schema class the file imports is the one core
+uses, in tests as in the binary. The gent server also binds the `@effect/*`
+packages the shipped extensions import (the provider SDKs and
+`@effect/platform-bun`). Any other package import resolves from the file's
+own directory.
+
 ## Disabling Extensions
 
 List the extension ids under the `disabledExtensions` key of `.gent/config.json`:
@@ -348,12 +359,45 @@ export default defineExtension({
 grants. Host authority still comes from `ExtensionContext` or an
 extension-owned service.
 
+A tool that fails reaches the model as a failed tool result that holds only
+its error's message text (`{ "error": "Tool 'verse' failed: NotFound: …" }`);
+the error's other fields do not reach the model. A tool whose failure the
+model should read field by field fails with
+`ToolResultFailure({ message, result })` from `@gent/core/extensions/api`:
+its JSON `result` is the failed tool result the model reads, and `message`
+names the failure in logs.
+
+```ts
+import { tool, ToolResultFailure } from "@gent/core/extensions/api"
+import { Effect, Option, Schema } from "effect"
+
+const verses = new Map([["John 3:16", "For God so loved the world…"]])
+
+export const VerseTool = tool({
+  id: "verse",
+  description: "Read one verse by its reference",
+  params: Schema.Struct({ reference: Schema.String }),
+  output: Schema.String,
+  execute: ({ reference }) =>
+    Effect.fromOption(Option.fromUndefinedOr(verses.get(reference))).pipe(
+      Effect.mapError(
+        () =>
+          new ToolResultFailure({
+            message: `no verse ${reference}`,
+            result: { error: "NotFound", reference, known: [...verses.keys()] },
+          }),
+      ),
+    ),
+})
+```
+
 #### Tool images
 
 A tool hands the model an image by reference. `saveToolImage` stores the
 bytes once in the content-addressed blob store,
 `<data dir>/blobs/<sha256>.<ext>`, and returns a `ToolImage` (`sha256`,
-`mediaType`, `width`, `height`, `bytes`, `source`). Put it anywhere in the
+`mediaType`, `width`, `height`, `bytes`, `source`, and `originalWidth` and
+`originalHeight` when the store scaled it). Put it anywhere in the
 tool's output; the output schema holds it as `ToolImage`.
 
 ```ts
@@ -375,12 +419,26 @@ export const ScreenshotTool = tool({
 ```
 
 `saveToolImage` takes `{ bytes }` or `{ path }`, and an optional `source`
-label. It reads the format and size from the image's own header and takes
-PNG, JPEG, GIF and WebP up to 3.75 MiB and 2,000 pixels a side; anything
-else fails with `ToolImageError`, so an image the model API would refuse
-never enters a session. A tool downscales a larger image before it saves it. The stored tool result stays ordinary JSON. Each
-request reads the bytes back and sends the image right after the tool
-result, under the line `Image from <tool> <source> <width>x<height>:`. A model
+label. It takes PNG, JPEG, GIF and WebP. An upright image within 3.75 MiB and
+2,000 pixels a side is stored byte for byte. A larger image is scaled to fit
+with its aspect ratio kept (Lanczos3) and keeps its format; a GIF becomes a
+PNG. An image still past 3.75 MiB is encoded as JPEG at quality 80, 60, 40 and
+20, then at three quarters of the side, until it fits. A colour profile that
+an encode carries at more than a quarter of the byte limit is left out of that
+encode (the image then reads as sRGB); an ordinary one stays. A PNG deflates
+its profile, a JPEG or a WebP carries it whole, so the size is measured in each
+encode. The blob and its `sha256` are the
+scaled bytes, and `originalWidth` and `originalHeight` record the size before
+the scale, so a tool can map its coordinates back. Every size is of the
+upright image: a JPEG its EXIF orientation turns or mirrors is stored turned,
+and its original size is the turned size. Only bytes no codec decodes fail,
+with `ToolImageError`, so an image the model API would refuse never enters a
+session. The stored tool result stays ordinary JSON. Each request reads the
+bytes back and sends the image right after the tool result, under the line
+`Image from <tool> <source> <width>x<height>:`; a scaled image's line adds
+`scaled from <W>x<H> (multiply coordinates by <f> to map to the original)`,
+or `multiply x by <fx> and y by <fy>` when the two factors differ at three
+decimals. A model
 the catalog says reads no images gets a line that names the image instead. A
 request sends at most the newest 20 images (5 on Chat Completions); past that
 it leaves out the oldest five at a time, each as a line that names it, and
@@ -553,6 +611,69 @@ them from the same `host` value (`host.cwd`, `host.home`,
 `host.host.osInfo`, `host.host.homeDirectory`) before registering; the resource itself should
 still expose the smallest service Tag it needs.
 
+### Context compaction
+
+When a window hands off (it overflows, the model asks, or a turn starts on a
+large window whose prompt cache went cold), the loop asks a
+`ModelContextCompactor` for the summary the handoff marker carries. An
+extension installs one as a `process` Resource; the Tag, `CompactionRequest`,
+`CompactionSummary` and `ModelCompactionError` come from
+`@gent/core/extensions/branch-tools`. The installed compactors form one
+chain: project, then user, then builtin. The first summary wins. A compactor
+that fails with `ModelCompactionError` passes the window to the next one, and
+the loop truncates the window, with a visible notice, only when no compactor
+is left. `compact` runs with the `ExtensionContext` a tool call of the same
+extension on the compacted branch gets: `ctx.cwd` is the session's cwd, not
+the cwd setup saw, and `ctx.State.changed()` reports under the extension's id.
+
+```ts
+import {
+  defineExtension,
+  defineResource,
+  ExtensionContext,
+  ExtensionHost,
+} from "@gent/core/extensions/api"
+import {
+  CompactionSummary,
+  ModelCompactionError,
+  ModelContextCompactor,
+} from "@gent/core/extensions/branch-tools"
+import { Effect, Layer } from "effect"
+
+const ReviewCompactor = Layer.succeed(
+  ModelContextCompactor,
+  ModelContextCompactor.of({
+    compact: (request) =>
+      Effect.gen(function* () {
+        // Serve one agent; another agent's window goes to the next compactor.
+        if (request.agentName !== "review") {
+          return yield* new ModelCompactionError({ modelId: request.modelId, reason: "NotReview" })
+        }
+        const ctx = yield* ExtensionContext
+        return CompactionSummary.make({
+          notice: `${request.history.length} earlier messages of the review of ${ctx.cwd} left the window.`,
+          modelId: request.modelId,
+        })
+      }),
+  }),
+)
+
+export default defineExtension({
+  id: "review-compactor",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "review-compactor/compactor",
+        scope: "process",
+        layer: ReviewCompactor,
+      }),
+    )
+  }),
+})
+```
+
 ## Agent
 
 ```ts
@@ -594,7 +715,9 @@ of their choices at the start of each turn. Each choice names a model, an
 effort, or both, and a `reason`. Core calls `route` once per turn, before its
 first request, records the pick (`ModelRouted`) and runs every step on it. A
 route that fails, takes over 10 s or picks a choice the turn cannot run falls
-back to the default choice (`fallback`, an index). `route` may ask classifiers
+back to the default choice (`fallback`, an index). `route` runs with the
+`ExtensionContext` a tool of the same extension gets, so its
+`ctx.State.changed()` names the extension. It may ask classifiers
 through `ExtensionContext.Models`; `input.current` says whether the branch's
 prompt cache is warm and how many history tokens a switch writes again. The
 shipped `@gent/router` builds its routers from the `routers` config key.

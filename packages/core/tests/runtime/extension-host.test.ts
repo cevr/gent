@@ -22,6 +22,15 @@ import {
   Schema as S,
 } from "effect"
 import * as EffectEntry from "effect"
+import * as EffectAiEntry from "effect/ai"
+import * as EffectAiErrorEntry from "effect/ai/AiError"
+import * as EffectResponseEntry from "effect/ai/Response"
+import * as EffectEncodingEntry from "effect/encoding"
+import * as EffectHttpEntry from "effect/http"
+import * as EffectHttpClientErrorEntry from "effect/http/HttpClientError"
+import * as EffectProcessEntry from "effect/process"
+import * as EffectChildProcessSpawnerEntry from "effect/process/ChildProcessSpawner"
+import * as EffectSqlEntry from "effect/sql"
 import { describe, expect, it, test } from "effect-bun-test"
 import * as ExtensionApiEntry from "../../src/extensions/api"
 import * as BranchToolsEntry from "../../src/extensions/branch-tools"
@@ -84,6 +93,7 @@ import {
   makeModuleGraphs,
   scanRuntimeProfileExtensions,
   type RuntimeProfileInputs,
+  extensionEntryModules,
 } from "../../src/runtime/extension-host"
 import {
   ConfigService,
@@ -3985,6 +3995,17 @@ const boundEntries = {
   "@gent/core/extensions/api": ExtensionApiEntry,
   "@gent/core/extensions/branch-tools": BranchToolsEntry,
   effect: EffectEntry,
+  "effect/ai": EffectAiEntry,
+  "effect/ai/AiError": EffectAiErrorEntry,
+  "effect/ai/Prompt": Prompt,
+  "effect/ai/Response": EffectResponseEntry,
+  "effect/ai/Tool": AiTool,
+  "effect/encoding": EffectEncodingEntry,
+  "effect/http": EffectHttpEntry,
+  "effect/http/HttpClientError": EffectHttpClientErrorEntry,
+  "effect/process": EffectProcessEntry,
+  "effect/process/ChildProcessSpawner": EffectChildProcessSpawnerEntry,
+  "effect/sql": EffectSqlEntry,
 }
 
 // oxlint-disable-next-line effect/noDynamicImports -- the test reads the exports of an extension file it wrote
@@ -4007,6 +4028,8 @@ describe("extension entries", () => {
         const userDir = path.join(home, ".gent", "extensions")
         yield* fs.makeDirectory(userDir, { recursive: true })
         const specifiers = Object.keys(boundEntries)
+        // The table names exactly what the loader binds.
+        expect(specifiers.toSorted()).toEqual([...extensionEntryModules.keys()].toSorted())
         const extensionFile = path.join(userDir, "entries.ts")
         yield* fs.writeFileString(
           extensionFile,

@@ -6,18 +6,6 @@ import {
 } from "@gent/core/extensions/api"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import * as EffectPlatformBun from "@effect/platform-bun"
-import * as EffectRoot from "effect"
-import * as EffectAi from "effect/ai"
-import * as EffectAiError from "effect/ai/AiError"
-import * as EffectEncoding from "effect/encoding"
-import * as EffectPrompt from "effect/ai/Prompt"
-import * as EffectResponse from "effect/ai/Response"
-import * as EffectTool from "effect/ai/Tool"
-import * as EffectHttp from "effect/http"
-import * as EffectHttpClientError from "effect/http/HttpClientError"
-import * as EffectProcess from "effect/process"
-import * as EffectChildProcessSpawner from "effect/process/ChildProcessSpawner"
-import * as EffectSql from "effect/sql"
 import { CellBranchTools, CellExtension } from "./cell.js"
 import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
@@ -110,12 +98,14 @@ export const BuiltinExtensions: ReadonlyArray<
 // ── builtin peer modules ────────────────────────────────────────────────────
 
 /**
- * Every `effect`, `effect/*` and `@effect/*` specifier a shipped extension
- * imports, bound to the module this build bundles. A host binds them before it
- * loads user extensions, so a user extension can import what a shipped one
- * does, and gets the same instances. The keys are exactly the specifiers the
- * shipped extensions import; `tests/index.test.ts` derives that set from their
- * sources and fails when the two differ.
+ * Every `@effect/*` specifier a shipped extension imports, bound to the module
+ * this build bundles. A host binds them before it loads user extensions, so a
+ * user extension can import what a shipped one does, and gets the same
+ * instances. `effect` and its `effect/*` modules are core's own dependency:
+ * the core loader binds them (`extensionEntryModules`). The keys are exactly
+ * the `@effect/*` specifiers the shipped extensions import;
+ * `tests/index.test.ts` derives that set from their sources and fails when
+ * the two differ.
  *
  * The provider SDKs load when a module first imports them, as the shipped
  * drivers load them: their generated schemas cost a launch time to evaluate.
@@ -137,16 +127,4 @@ export const BuiltinExtensionModules: ReadonlyMap<string, () => object | Promise
   ["@effect/ai-typesafe", () => import("#unbound/ai-typesafe")],
   // oxlint-disable-next-line effect/noPlatformLayerOutsideEntry -- a user extension resolves @effect/platform-bun here to share the instances a shipped extension imports; it provides no layer
   ["@effect/platform-bun", () => EffectPlatformBun],
-  ["effect", () => EffectRoot],
-  ["effect/ai", () => EffectAi],
-  ["effect/ai/AiError", () => EffectAiError],
-  ["effect/ai/Prompt", () => EffectPrompt],
-  ["effect/ai/Response", () => EffectResponse],
-  ["effect/ai/Tool", () => EffectTool],
-  ["effect/encoding", () => EffectEncoding],
-  ["effect/http", () => EffectHttp],
-  ["effect/http/HttpClientError", () => EffectHttpClientError],
-  ["effect/process", () => EffectProcess],
-  ["effect/process/ChildProcessSpawner", () => EffectChildProcessSpawner],
-  ["effect/sql", () => EffectSql],
 ])

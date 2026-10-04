@@ -45,6 +45,7 @@ export const keys = {
   "ctrl+j": "\n",
   "ctrl+o": "\x0f",
   "ctrl+p": "\x10",
+  "ctrl+s": "\x13",
   "ctrl+t": "\x14",
   "ctrl+u": "\x15",
   "ctrl+w": "\x17",

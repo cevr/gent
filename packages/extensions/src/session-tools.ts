@@ -68,6 +68,12 @@ const ReadSessionParams = Schema.Struct({
         "Branch to mark as the target; the transcript shows every branch (defaults to the first branch)",
     }),
   ),
+  fromMessageId: Schema.optionalKey(
+    Schema.String.annotate({
+      description:
+        "Read only the branch that holds this message, from it on (a fork's own turns, not the history it copied)",
+    }),
+  ),
 })
 
 // Read Session Result
@@ -120,6 +126,46 @@ export function renderSessionTree(
 
 // Read Session Tool
 
+type SessionTreeBranches = ReadonlyArray<{
+  readonly branch: Branch
+  readonly messages: ReadonlyArray<Message>
+}>
+
+/**
+ * What a read shows: every branch, or with `fromMessageId` only the branch
+ * that holds that message, from it on. A fork's history is a copy of the
+ * branch it came from, which its reader already holds; the message a `/btw`
+ * merge names starts the fork's own turns.
+ */
+const readFrom = (
+  branches: SessionTreeBranches,
+  params: typeof ReadSessionParams.Type,
+): Effect.Effect<
+  { readonly branches: SessionTreeBranches; readonly preface: ReadonlyArray<string> },
+  ReadSessionError
+> => {
+  const from = params.fromMessageId
+  if (Predicate.isUndefined(from)) return Effect.succeed({ branches, preface: [] })
+  const held = Option.fromNullishOr(
+    branches.find((entry) => entry.messages.some((message) => String(message.id) === from)),
+  ).pipe(
+    Option.filter(
+      (entry) =>
+        Predicate.isUndefined(params.branchId) || String(entry.branch.id) === params.branchId,
+    ),
+  )
+  if (Option.isNone(held)) {
+    return Effect.fail(
+      new ReadSessionError({ message: `Session ${params.sessionId} has no message ${from}` }),
+    )
+  }
+  const start = held.value.messages.findIndex((message) => String(message.id) === from)
+  return Effect.succeed({
+    branches: [{ branch: held.value.branch, messages: held.value.messages.slice(start) }],
+    preface: [`(from message ${from}; ${start} earlier messages on this branch left out)`],
+  })
+}
+
 export const ReadSessionTool = tool({
   id: "read_session",
   description:
@@ -147,18 +193,19 @@ export const ReadSessionTool = tool({
         message: `Session ${params.sessionId} has no branch ${named}`,
       })
     }
+    const read = yield* readFrom(tree.branches, params)
     const targetBranchId = Option.fromNullishOr(params.branchId).pipe(
       Option.orElse(() =>
-        Option.fromNullishOr(tree.branches[0]).pipe(Option.map((entry) => entry.branch.id)),
+        Option.fromNullishOr(read.branches[0]).pipe(Option.map((entry) => entry.branch.id)),
       ),
     )
 
-    const markdown = renderSessionTree(tree.branches, targetBranchId)
+    const markdown = [...read.preface, renderSessionTree(read.branches, targetBranchId)].join("\n")
     return {
       sessionId: params.sessionId,
       content: headTailChars(markdown, MAX_TREE_CHARS).text,
-      messageCount: tree.branches.reduce((sum, b) => sum + b.messages.length, 0),
-      branchCount: tree.branches.length,
+      messageCount: read.branches.reduce((sum, b) => sum + b.messages.length, 0),
+      branchCount: read.branches.length,
     }
   }),
 })

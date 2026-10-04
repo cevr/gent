@@ -1752,10 +1752,11 @@ export const splitFooterHeight = (terminalHeight: number, requestedHeight: numbe
  * The text of a prompt the reader posted, or `None` when `item` is not one.
  * The one place that decides whose message it is, from its metadata:
  *
+ * - A custom type whose message renderer names it a prompt (`promptOf`), in
+ *   the text the reader asked: a `/btw` fork's question, or a `/btw` merge
+ *   the reader sent, whose text the model reads is not what they asked.
  * - The reader's own: a user message the server stamped as a client's
  *   (`fromClient`), typed or a steer that joined the running turn.
- * - A custom type whose message renderer names it a prompt (`promptOf`), in
- *   the text the reader asked: a `/btw` fork's question.
  * - Nothing else: a message another agent or an extension sent (a parent's
  *   `Session.send`, a wake, a delegate start) carries no client origin, and a
  *   row stored before the origin existed carries none either.
@@ -1769,11 +1770,12 @@ export const readerPrompt = (
   if (!isMessageItem(item) || item.role !== "user") return Option.none()
   if (Predicate.isNotUndefined(item.pendingMode) || item.metadata?.hidden === true)
     return Option.none()
-  if (item.metadata?.fromClient === true) return Option.some(item.content)
-  return Option.fromUndefinedOr(item.metadata?.customType).pipe(
+  const asked = Option.fromUndefinedOr(item.metadata?.customType).pipe(
     Option.flatMap(promptOf),
     Option.map((text) => text(item.content)),
   )
+  if (Option.isSome(asked) || item.metadata?.fromClient !== true) return asked
+  return Option.some(item.content)
 }
 
 /** `UserRow` opens with a one-row top margin; the prompt's text starts under it. */

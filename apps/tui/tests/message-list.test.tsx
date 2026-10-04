@@ -5761,6 +5761,15 @@ describe("readerPrompt", () => {
     )
     expect(read(user({ extensionId: "@gent/x", customType: "other" }), btwTypes)).toBeUndefined()
   })
+
+  // A pane action the reader took (a `/btw` merge) is their own message, and
+  // its renderer says what they asked; the text the model reads is not that.
+  test("the reader's own message of a custom type that names a prompt pins its asked text", () => {
+    expect(
+      read(user({ fromClient: true, extensionId: "@gent/btw", customType: "btw" }), btwTypes),
+    ).toBe("asked: TEXT")
+    expect(read(user({ fromClient: true, customType: "other" }), btwTypes)).toBe("TEXT")
+  })
 })
 
 describe("promptOnScreen", () => {

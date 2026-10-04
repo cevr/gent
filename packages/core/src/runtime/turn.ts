@@ -1734,15 +1734,18 @@ const routeCost = (calls: ReadonlyArray<RouteCall>): Option.Option<number> => {
 /**
  * Ask `router` for one pick, `ROUTE_DEADLINE_MS` at most. A router's
  * failure, timeout or defect is a reason to fall back, never the turn's. The
- * router's classifier calls go through the run's own facet; core records
- * each one's model and price for the event and the turn's cost, a call made
- * before a failure included.
+ * route runs as a leaf of the extension that registered the router, as its
+ * tools do, so its state pulse and its sends name it. The router's
+ * classifier calls go through the run's own facet; core records each one's
+ * model and price for the event and the turn's cost, a call made before a
+ * failure included.
  */
 const askRouter = Effect.fn("TurnHelpers.askRouter")(function* (
   router: ModelRouterContribution,
   input: ModelRouteInput,
 ) {
   const host = yield* CurrentExtensionHostContext
+  const owner = (yield* ExtensionRegistry).getResolved().modelRouterOwners.get(router.id)
   const calls = yield* Ref.make<ReadonlyArray<RouteCall>>([])
   const Models: ExtensionModelsService = {
     ...host.Models,
@@ -1757,7 +1760,7 @@ const askRouter = Effect.fn("TurnHelpers.askRouter")(function* (
       ),
   }
   const picked = yield* router.route(input).pipe(
-    provideExtensionLeaf({}),
+    provideExtensionLeaf(omitUndefined({ extensionId: owner })),
     Effect.provideService(CurrentExtensionHostContext, { ...host, Models }),
     Effect.map((pick): Result.Result<ModelRouteDecision, string> => Result.succeed(pick)),
     Effect.timeoutOrElse({
@@ -2723,6 +2726,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // Set once a summary model is admitted: from then on its call may spend
   // tokens whether or not a summary comes back.
   const summaryAdmitted = yield* Ref.make(false)
+  const hostCtx = yield* CurrentExtensionHostContext
   const { durableMessages, compacted, summary } = yield* projectContextWindow({
     sessionId: params.sessionId,
     branchId: params.branchId,
@@ -2745,7 +2749,14 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         ...modelRequest,
         hints: { ...turnHints, maxTokens, reasoning: "none" },
       }).pipe(Effect.tap(() => Ref.set(summaryAdmitted, true))),
-  })
+  }).pipe(
+    // The compactor runs with the context a tool call on this branch gets:
+    // the session's cwd and facets, and the agent whose window it compacts.
+    // An installed compactor runs as its owner's leaf (`ownedCompactor` in
+    // `extension-host.ts`); this frame serves one provided with no owner.
+    provideExtensionLeaf({}),
+    provideCurrentHostCtx({ ...hostCtx, agentName: resolved.agent.name }),
+  )
 
   // A summary is priced by the model its receipt names, as a step is by its
   // own. A summary that failed after its model was admitted has no receipt,

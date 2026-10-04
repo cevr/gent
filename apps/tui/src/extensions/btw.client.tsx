@@ -1,17 +1,21 @@
 /** @jsxImportSource @opentui/solid */
-import { Effect, Option } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { createSignal, For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
 import {
   BTW_EXTENSION_ID,
+  BTW_MERGE_TYPE,
   BTW_QUESTION_TYPE,
   BtwRpc,
+  ForkMergeDetails,
+  forkMergePrompt,
   forkQuestionBody,
   type ForkViewType,
 } from "@gent/extensions/client"
 import {
   type ActiveExtensionSession,
   ChromePanel,
+  CollapsedRow,
   clientCommandContribution,
   ClientContext,
   clientContributions,
@@ -22,7 +26,11 @@ import {
   KeyHints,
   lineEdit,
   PickerFrame,
+  type QueuedMessage,
+  repliesInView,
   sessionQuery,
+  textWidth,
+  truncate,
   typedKey,
   UserRow,
   useScopedKeyboard,
@@ -41,7 +49,9 @@ import {
  * reopens the pane on the fork this branch opened last, or forks without
  * asking. The pane docks under the composer; follow-ups type into its ask
  * line. Enter on an empty ask line opens the fork as the shell's session;
- * `esc` closes the pane and leaves the fork where it is.
+ * `ctrl+s` merges the fork's last reply into this branch (one message that
+ * names it, for the branch's model to read) and closes the pane; `esc`
+ * closes the pane and leaves the fork where it is.
  */
 
 interface ForkPaneController {
@@ -54,6 +64,13 @@ interface ForkPaneController {
   readonly ask: (question: string) => void
   /** Read the fork's view again. */
   readonly refresh: () => void
+  /** The fork answered and nothing is on its way to it: a merge can land. */
+  readonly mergeable: () => boolean
+  /**
+   * Merges the fork's last reply into the branch in view. `done` runs once it
+   * is there, and only while that branch is still in view.
+   */
+  readonly merge: (done: () => void) => void
 }
 
 interface ForkPaneActions {
@@ -68,6 +85,9 @@ interface ForkPaneActions {
   readonly progress: (
     session: ActiveExtensionSession,
   ) => Effect.Effect<Option.Option<ForkViewType>, { readonly message: string }>
+  readonly merge: (
+    session: ActiveExtensionSession,
+  ) => Effect.Effect<{ readonly merged: boolean }, { readonly message: string }>
 }
 
 interface Outgoing {
@@ -164,8 +184,77 @@ export const makeForkPane = (
       })
       view.refresh()
     }
-    return { fork: view.value, pending, error: view.error, ask, refresh: view.refresh }
+    const replying = () => Option.exists(view.value(), (current) => current.replying)
+    const answered = () =>
+      Option.exists(view.value(), (current) => (current.turns.at(-1)?.answer.length ?? 0) > 0)
+    const waiting = () => Option.isSome(outgoing) || Option.isSome(pending()) || replying()
+    const mergeable = () => answered() && !waiting()
+    const merges = repliesInView(transport.currentSession, sameSession)
+    // The reasons the server gives too; said here, the key costs no round trip.
+    const merge = (done: () => void): void => {
+      if (Option.isNone(view.value())) return shell.notify("btw: no fork to merge")
+      if (waiting()) return shell.notify("btw: the fork is still answering; merge when it is done")
+      if (!answered()) return shell.notify("btw: the fork has no reply to merge yet")
+      // A late answer for a session the reader left touches nothing in view.
+      const reply = merges.take()
+      shell.cast(
+        actions.merge(transport.currentSession()).pipe(
+          Effect.match({
+            // A failure is said out loud wherever the reader is: the merge is not there.
+            onFailure: (failure) => shell.notify(`btw: not merged: ${failure.message}`),
+            onSuccess: ({ merged }) =>
+              reply.write(() => {
+                if (!merged) shell.notify("btw: this reply is already merged")
+                done()
+              }),
+          }),
+        ),
+      )
+    }
+    return {
+      fork: view.value,
+      pending,
+      error: view.error,
+      ask,
+      refresh: view.refresh,
+      mergeable,
+      merge,
+    }
   })
+
+// ── merge row ──
+
+const decodeMergeDetails = Schema.decodeUnknownOption(ForkMergeDetails)
+
+const MERGED = "↳ merged btw · "
+
+/** `↳ merged btw · <question> → <reply>` in one line of `width` columns, cut at its end. */
+const mergedLabel = (details: ForkMergeDetails, width: number): string =>
+  truncate(`${MERGED}${details.question} → ${details.reply}`, width)
+
+/** A merge waiting for the turn in the queue widget: the question it merges, not its text. */
+const mergeQueueLabel = (message: QueuedMessage): string =>
+  Option.match(decodeMergeDetails(message.details), {
+    onNone: () => "↳ btw merge",
+    onSome: (details) => `↳ btw merge · ${details.question}`,
+  })
+
+/**
+ * A merge in the transcript: one collapsed row with the question and the
+ * reply it merged. The model reads the ids in the message's text; the row
+ * shows what the reader merged.
+ */
+export function ForkMergeRow(props: { readonly details: unknown }) {
+  const dimensions = useTerminalDimensions()
+  // The rail, its gap and the transcript's side margins.
+  const width = () => Math.max(textWidth(MERGED), dimensions().width - 4)
+  const label = () =>
+    Option.match(decodeMergeDetails(props.details), {
+      onNone: () => "↳ merged a btw fork",
+      onSome: (details) => mergedLabel(details, width()),
+    })
+  return <CollapsedRow label={label()} />
+}
 
 /**
  * One blank row between turns, none above the first. The gap sits above a turn,
@@ -186,6 +275,7 @@ export function ForkPane(props: {
   controller: ForkPaneController
   onClose: () => void
   onOpen: () => void
+  onMerge: () => void
 }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -218,6 +308,11 @@ export function ForkPane(props: {
   // Enter on an empty line goes to the fork, as Enter on an agents row goes
   // to that session.
   const openOnEnter = () => draft().length === 0 && Option.isSome(props.controller.fork())
+  // Shown only when a merge can land; the key still answers why it cannot.
+  const mergeHint = () => {
+    if (props.controller.mergeable()) return [keyHint("ctrl+s", "merge")]
+    return []
+  }
   const enterHint = () => {
     if (openOnEnter()) return keyHint("enter", "open")
     return KeyHints.submit
@@ -225,6 +320,10 @@ export function ForkPane(props: {
   const paneKey = (event: Parameters<Parameters<typeof useScopedKeyboard>[0]>[0]) => {
     if (event.name === "escape") {
       props.onClose()
+      return true
+    }
+    if (event.ctrl && event.name === "s") {
+      props.onMerge()
       return true
     }
     if (event.name === "return") {
@@ -264,7 +363,7 @@ export function ForkPane(props: {
         error={Option.none()}
         height={height()}
         title={title()}
-        keys={[enterHint(), KeyHints.close]}
+        keys={[enterHint(), ...mergeHint(), KeyHints.close]}
       >
         <ChromePanel.Body stickToBottom>
           <Show when={fork()}>
@@ -325,6 +424,7 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
             .request(ref(BtwRpc.Progress), {}, session)
             .pipe(Effect.map((result) => Option.fromUndefinedOr(result.fork))),
         ),
+      merge: (session) => asMessage(transport.request(ref(BtwRpc.Merge), {}, session)),
     })
     const open = () => shell.pane.isOpen(BTW_PANE)
     // Each pulse from the btw extension means the fork's view changed; read it again.
@@ -335,9 +435,17 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
         controller.refresh()
       }),
     )
+    // Each opening of the pane is its own: a merge closes the pane it was
+    // asked from, never one opened after it.
+    const openings = repliesInView(transport.currentSession, sameSession)
     const show = () => {
+      openings.take()
       shell.pane.open(BTW_PANE)
       controller.refresh()
+    }
+    const merge = () => {
+      const opening = openings.newest()
+      controller.merge(() => opening.write(() => shell.pane.close(BTW_PANE)))
     }
     return clientContributions(
       clientCommandContribution({
@@ -368,6 +476,13 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
         ),
         { prompt: forkQuestionBody },
       ),
+      // A merge on the branch the fork came from. The reader sent it, so the
+      // transcript pins it as their prompt: what they merged, not its ids.
+      messageRendererContribution(
+        BTW_MERGE_TYPE,
+        (props) => <ForkMergeRow details={props.details} />,
+        { prompt: forkMergePrompt, queueLabel: mergeQueueLabel },
+      ),
       widgetContribution({
         id: BTW_PANE,
         slot: "below-input",
@@ -376,6 +491,8 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
             open={open()}
             controller={controller}
             onClose={() => shell.pane.close(BTW_PANE)}
+            // The fork stays open: `/btw` reopens it, and a later reply merges again.
+            onMerge={merge}
             onOpen={() => {
               Option.map(controller.fork(), (fork) => {
                 shell.pane.close(BTW_PANE)

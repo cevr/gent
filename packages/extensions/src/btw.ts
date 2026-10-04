@@ -1,5 +1,6 @@
 import {
   Context,
+  Crypto,
   type Duration,
   Effect,
   Equal,
@@ -13,6 +14,7 @@ import {
   Schema,
   Stream,
 } from "effect"
+import { Hex } from "effect/encoding"
 import {
   type AgentEvent,
   assistantMessageIdForTurn,
@@ -24,8 +26,9 @@ import {
   ExtensionHost,
   ExtensionId,
   headChars,
+  interjectionMessageId,
   type Message,
-  type MessageId,
+  MessageId,
   request,
   SessionId,
 } from "@gent/core/extensions/api"
@@ -114,6 +117,26 @@ const ForkOutput = Schema.Struct({
 })
 type ForkOutput = typeof ForkOutput.Type
 
+/** `metadata.customType` on the message a merge posts to the branch the fork came from. */
+export const BTW_MERGE_TYPE = "btw-merge"
+
+/**
+ * `metadata.details` of a merge. The model reads the merge text, which names
+ * the fork and its messages by id; `question` and `reply` are one-line
+ * previews for the transcript row only.
+ */
+export const ForkMergeDetails = Schema.Struct({
+  fork: Schema.Struct({ sessionId: SessionId, branchId: BranchId, name: Schema.String }),
+  /** The fork's first own message: where its turns start, after the history it copied. */
+  fromMessageId: MessageId,
+  /** The last message of the reply merged. */
+  replyId: MessageId,
+  turns: Schema.Int,
+  question: Schema.String,
+  reply: Schema.String,
+})
+export type ForkMergeDetails = typeof ForkMergeDetails.Type
+
 const AskInput = Schema.Struct({
   question: Schema.String,
 })
@@ -125,7 +148,8 @@ type AskInput = typeof AskInput.Type
  * `/btw` forks the branch. The fork is a child session seeded with this
  * branch's context window, run by the session's own agent and model with its
  * tools; a parallel session, not a side channel. Nothing the fork does lands on this
- * branch. The pane reads it through `btw.progress`; opening it as the shell's
+ * branch until the user merges it: `btw.merge` posts one message that names the
+ * fork's last reply, and this branch's model reads the fork from there. The pane reads it through `btw.progress`; opening it as the shell's
  * session is the client's `switchSession`, because the fork already is one.
  *
  * The fork itself is durable. What this process keeps is the pane's view of
@@ -285,8 +309,95 @@ const forkTurns = (
   return turns
 }
 
+const PREVIEW_CHARS = 120
+
+/** One line of at most `PREVIEW_CHARS` characters, for a row or a sentence. */
+/** The text on one line: each run of whitespace, line breaks included, as one space. */
+const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim()
+
+const previewLine = (text: string): string => {
+  const line = oneLine(text)
+  if ([...line].length <= PREVIEW_CHARS) return line
+  return `${headChars(line, PREVIEW_CHARS)}…`
+}
+
+/**
+ * What a merge of the fork names: its first own message, its last reply, and
+ * one-line previews of the last question and answer. None while the last
+ * question has no assistant message after it.
+ */
+const forkMergeOf = (
+  fork: Pick<OpenFork, "sessionId" | "branchId" | "name">,
+  own: ReadonlyArray<Message>,
+): Option.Option<ForkMergeDetails> => {
+  const first = own[0]
+  const asked = own.findLastIndex(isAskedTurn)
+  const reply = own.findLast((message, index) => index > asked && message.role === "assistant")
+  if (Predicate.isUndefined(first) || asked === -1 || Predicate.isUndefined(reply)) {
+    return Option.none()
+  }
+  const turns = forkTurns(own, { partial: "", partialMessage: Option.none() })
+  const last = turns.at(-1)
+  return Option.some({
+    fork: { sessionId: fork.sessionId, branchId: fork.branchId, name: fork.name },
+    fromMessageId: first.id,
+    replyId: reply.id,
+    turns: turns.length,
+    question: previewLine(last?.question ?? ""),
+    reply: previewLine(last?.answer ?? ""),
+  })
+}
+
+const FORK_MERGE_PREFIX = 'The user merged a /btw fork back into this session: "'
+const FORK_MERGE_NAME_END = '" (session '
+
+/**
+ * The text the branch's model reads for a merge: ids, not content. The model
+ * reads the fork's own turns with `read_session` from `fromMessageId` when it
+ * needs them, so the merge appends a few lines to the branch, and no summary
+ * call runs. The question is named so the model can judge whether to read.
+ * The fork's name goes on one line: `forkMergePrompt` reads it from the first.
+ */
+export const forkMergeText = (details: ForkMergeDetails): string => {
+  let questions = `${details.turns} questions`
+  if (details.turns === 1) questions = "1 question"
+  return [
+    `${FORK_MERGE_PREFIX}${oneLine(details.fork.name)}${FORK_MERGE_NAME_END}${details.fork.sessionId}, branch ${details.fork.branchId}).`,
+    "The fork began as a copy of this branch and ran beside it in the same directory; what it said is not in this conversation.",
+    `Its own messages start at ${details.fromMessageId}: ${questions}, the last "${details.question}", answered in message ${details.replyId}.`,
+    `Before you go on, read them with read_session (sessionId ${details.fork.sessionId}, fromMessageId ${details.fromMessageId}).`,
+  ].join("\n")
+}
+
+/**
+ * What the reader asked with a merge, for the prompt the transcript pins:
+ * `merged <fork name>`, read from the first line of `forkMergeText`. The
+ * caller reads the message's type; other text comes back as it is.
+ */
+export const forkMergePrompt = (text: string): string => {
+  const first = text.split("\n", 1)[0] ?? ""
+  const end = first.lastIndexOf(FORK_MERGE_NAME_END)
+  if (!first.startsWith(FORK_MERGE_PREFIX) || end < FORK_MERGE_PREFIX.length) return text
+  return `merged ${first.slice(FORK_MERGE_PREFIX.length, end)}`
+}
+
+/**
+ * The steer's request id: one per fork reply, so a repeat merges nothing and
+ * a later reply merges again. A digest keeps it inside `RequestId`'s length
+ * for message ids of any length.
+ */
+const mergeRequestId = Effect.fn("Btw.mergeRequestId")(function* (details: ForkMergeDetails) {
+  const crypto = yield* Crypto.Crypto
+  const digest = yield* crypto.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${details.fork.sessionId}\n${details.replyId}`),
+  )
+  return `btw-merge:${Hex.encode(digest).slice(0, 32)}`
+})
+
+/** The fork's name, on one line: it titles the pane and the session, and a merge's first line. */
 const forkName = (question: string): string => {
-  const text = question.trim()
+  const text = oneLine(question)
   if (text.length === 0) return "btw"
   if (text.length <= FORK_NAME_CHARS) return `btw: ${text}`
   return `btw: ${headChars(text, FORK_NAME_CHARS)}…`
@@ -444,6 +555,21 @@ const sendToFork = (parentBranchId: string, fork: OpenFork, question: string) =>
     )
   })
 
+/** The fork's own messages: what came after the history it copied. */
+const forkOwnMessages = (fork: OpenFork) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const detail = yield* ctx.Session.getDetail(fork.sessionId).pipe(
+      Effect.mapError(
+        (error) => new ForkError({ message: `Cannot read the fork: ${error.message}` }),
+      ),
+    )
+    return detail.branches
+      .filter((entry) => entry.branch.id === fork.branchId)
+      .flatMap((entry) => entry.messages)
+      .slice(fork.inherited)
+  })
+
 export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
   Fork: request({
     id: "btw.fork",
@@ -545,6 +671,57 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
       return { asked: true }
     }),
   }),
+  Merge: request({
+    id: "btw.merge",
+    description:
+      "Post one message to this branch that names the open fork and its last reply, for this branch's model to read; a reply already merged posts nothing",
+    // A running turn takes the merge at its next step.
+    answersDuringTurn: true,
+    input: Schema.Struct({}),
+    output: Schema.Struct({ merged: Schema.Boolean }),
+    execute: Effect.fn("BtwRpc.Merge")(function* () {
+      const ctx = yield* ExtensionContext
+      const forks = yield* OpenForks
+      const fork = yield* forks.get(String(ctx.branchId))
+      if (Option.isNone(fork)) return yield* new ForkError({ message: "No fork is open here" })
+      if (fork.value.replying) {
+        return yield* new ForkError({
+          message: "The fork is still answering; merge when it is done",
+        })
+      }
+      const details = forkMergeOf(fork.value, yield* forkOwnMessages(fork.value))
+      if (Option.isNone(details)) {
+        return yield* new ForkError({ message: "The fork has no reply to merge yet" })
+      }
+      const requestId = yield* mergeRequestId(details.value)
+      // The steer names its message by the request id; the branch holds it once merged.
+      const here = yield* ctx.Session.getDetail(ctx.sessionId).pipe(
+        Effect.mapError(
+          (error) => new ForkError({ message: `Cannot read this session: ${error.message}` }),
+        ),
+      )
+      const merged = interjectionMessageId(requestId)
+      const already = here.branches.some(
+        (entry) =>
+          entry.branch.id === ctx.branchId &&
+          entry.messages.some((message) => message.id === merged),
+      )
+      if (already) return { merged: false }
+      // A steer: a running turn takes it at its next step, one message and no
+      // turn of its own; `wake` starts a turn on an idle branch, since the user
+      // asked for the merge now. A queued follow-up would always cost its own turn.
+      yield* ctx.Session.send({
+        delivery: "steer",
+        wake: true,
+        requestId,
+        content: forkMergeText(details.value),
+        metadata: { customType: BTW_MERGE_TYPE, details: details.value },
+      }).pipe(
+        Effect.mapError((error) => new ForkError({ message: `Cannot merge: ${error.message}` })),
+      )
+      return { merged: true }
+    }),
+  }),
   Progress: request({
     id: "btw.progress",
     description:
@@ -557,15 +734,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
       const forks = yield* OpenForks
       const fork = yield* forks.get(String(ctx.branchId))
       if (Option.isNone(fork)) return {}
-      const detail = yield* ctx.Session.getDetail(fork.value.sessionId).pipe(
-        Effect.mapError(
-          (error) => new ForkError({ message: `Cannot read the fork: ${error.message}` }),
-        ),
-      )
-      const messages = detail.branches
-        .filter((entry) => entry.branch.id === fork.value.branchId)
-        .flatMap((entry) => entry.messages)
-        .slice(fork.value.inherited)
+      const messages = yield* forkOwnMessages(fork.value)
       const view: ForkView = {
         sessionId: fork.value.sessionId,
         branchId: fork.value.branchId,
@@ -587,6 +756,6 @@ export const BtwExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("resource", OpenForksResource)
-    yield* host.register("request", BtwRpc.Fork, BtwRpc.Ask, BtwRpc.Progress)
+    yield* host.register("request", BtwRpc.Fork, BtwRpc.Ask, BtwRpc.Merge, BtwRpc.Progress)
   }),
 })

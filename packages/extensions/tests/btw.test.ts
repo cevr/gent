@@ -29,18 +29,22 @@ import {
 import {
   AgentName,
   BranchId,
-  type MessageId,
+  MessageId,
   ModelId,
   RequestId,
   SessionId,
+  ToolCallId,
 } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { AgentEvent } from "@gent/core/protocol"
 import {
   BTW_EXTENSION_ID,
+  BTW_MERGE_TYPE,
   BTW_QUESTION_TYPE,
   ForkProgress,
   foldForkEvent,
+  forkMergePrompt,
+  forkMergeText,
   forkQuestionBody,
   makeThrottledPulse,
 } from "../src/btw.js"
@@ -68,6 +72,7 @@ const asked = (text: string): string => forkQuestionBody(text)
 type Harness = Effect.Success<ReturnType<typeof createRpcHarness>>
 
 const ForkHandle = Schema.Struct({ sessionId: SessionId, branchId: BranchId })
+const MergeOutcome = Schema.Struct({ merged: Schema.Boolean })
 
 const btw = (
   harness: Harness,
@@ -97,6 +102,9 @@ const btw = (
         input: { question },
       }),
     progress,
+    merge: harness.client.extension
+      .request({ ...target, extensionId: BTW_EXTENSION_ID, capabilityId: "btw.merge", input: {} })
+      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(MergeOutcome))),
     /** The fork's view once its reply is durable. */
     replied: (turns: number) =>
       waitFor(
@@ -669,6 +677,290 @@ describe("btw forks", () => {
           expect((yield* harness.client.session.getSnapshot(fork)).messages).toEqual([])
         }
       }).pipe(Effect.timeout("6 seconds")),
+    ),
+  )
+})
+
+// ── merge ───────────────────────────────────────────────────────────────────
+
+/** One reply the scripted model streams whole. */
+const replyStream = (text: string) =>
+  Effect.succeed(Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })]))
+
+/** The tool results a request carries, as the model reads them. */
+const toolResultsText = (options: ProviderOptions): string =>
+  Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
+    [...Prompt.make(options.prompt).content].filter((message) => message.role === "tool"),
+  )
+
+const textOfMessage = (message: { readonly parts: ReadonlyArray<{ readonly type: string }> }) =>
+  message.parts
+    .flatMap((part) => {
+      if (part.type === "text" && "text" in part && Predicate.isString(part.text))
+        return [part.text]
+      return []
+    })
+    .join("")
+
+const sourceIdle = (harness: Harness, label: string) =>
+  waitFor(
+    harness.client.session.getSnapshot({
+      sessionId: harness.sessionId,
+      branchId: harness.branchId,
+    }),
+    (current) => current.runtime._tag === "Idle",
+    5_000,
+    label,
+  )
+
+describe("btw merge", () => {
+  // The merge is one message on the branch the fork came from. It names the
+  // fork and its last reply by id, and the branch's model reads the fork's
+  // own turns through read_session from that id: no summary call, and none
+  // of the history the fork copied comes back.
+  it.live(
+    "a merge posts one message naming the fork and its last reply, and the branch reads the fork by them",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const ids = { fork: "", from: "", reply: "" }
+          const seen = { merge: "", read: "" }
+          let calls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            calls += 1
+            if (calls === 1) return replyStream("Noted.")
+            if (calls === 2) return replyStream("A grey heron.")
+            if (calls === 3) {
+              seen.merge = lastText(options)
+              return Effect.succeed(
+                Stream.fromIterable([
+                  toolCallPart(
+                    "read_session",
+                    { sessionId: ids.fork, fromMessageId: ids.from },
+                    { toolCallId: ToolCallId.make("read-the-fork") },
+                  ),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            seen.read = toolResultsText(options)
+            return replyStream("Merged.")
+          })
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const { client, sessionId, branchId } = harness
+          const pane = btw(harness)
+          yield* firstTurn(harness, "Remember the codeword heron-7.")
+          const handle = yield* pane.fork("What bird?")
+          yield* pane.replied(1)
+          const forkMessages = (yield* client.session.getSnapshot(handle)).messages
+          // Two messages copied in, then the fork's own question and reply.
+          expect(forkMessages.length).toBe(4)
+          ids.fork = handle.sessionId
+          ids.from = forkMessages[2]?.id ?? ""
+          ids.reply = forkMessages[3]?.id ?? ""
+
+          expect(yield* pane.merge).toEqual({ merged: true })
+          const settled = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              current.messages.some((message) => textOfMessage(message) === "Merged."),
+            5_000,
+            "the merge turn ends",
+          )
+          const merges = settled.messages.filter(
+            (message) => message.metadata?.customType === BTW_MERGE_TYPE,
+          )
+          expect(merges.length).toBe(1)
+          expect(merges[0]?.metadata?.details).toEqual({
+            fork: {
+              sessionId: handle.sessionId,
+              branchId: handle.branchId,
+              name: "btw: What bird?",
+            },
+            fromMessageId: ids.from,
+            replyId: ids.reply,
+            turns: 1,
+            question: "What bird?",
+            reply: "A grey heron.",
+          })
+          // The model reads the ids, not the reply.
+          expect(seen.merge).toContain(handle.sessionId)
+          expect(seen.merge).toContain(ids.from)
+          expect(seen.merge).toContain(ids.reply)
+          expect(seen.merge).not.toContain("A grey heron.")
+          // read_session from the fork's first own message: its turns, not the copy.
+          expect(seen.read).toContain("What bird?")
+          expect(seen.read).toContain("A grey heron.")
+          expect(seen.read).not.toContain("heron-7")
+
+          // The same reply merges once: a repeat posts nothing and starts no turn.
+          expect(yield* pane.merge).toEqual({ merged: false })
+          yield* sourceIdle(harness, "still idle")
+          const after = yield* client.session.getSnapshot({ sessionId, branchId })
+          expect(after.messages.length).toBe(settled.messages.length)
+          expect(calls).toBe(4)
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live("a merge is refused with no fork, with no reply yet, and while the fork answers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const releaseFork = yield* Deferred.make<void>()
+        const forkStarted = yield* Deferred.make<void>()
+        let calls = 0
+        const providerLayer = LanguageModelLayers.testStream(() => {
+          calls += 1
+          if (calls === 1) {
+            return Effect.succeed(
+              Stream.fromEffect(
+                Deferred.succeed(forkStarted, void 0).pipe(
+                  Effect.andThen(Deferred.await(releaseFork)),
+                ),
+              ).pipe(
+                Stream.flatMap(() =>
+                  Stream.fromIterable([
+                    textDeltaPart("Later."),
+                    finishPart({ finishReason: "stop" }),
+                  ]),
+                ),
+              ),
+            )
+          }
+          return replyStream("ok")
+        })
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        const pane = btw(harness)
+        const refusal = (effect: typeof pane.merge) =>
+          Effect.exit(effect).pipe(
+            Effect.map((exit) => {
+              if (Exit.isSuccess(exit)) return "merged"
+              return Cause.pretty(exit.cause)
+            }),
+          )
+        expect(yield* refusal(pane.merge)).toContain("No fork is open here")
+        yield* pane.fork("")
+        expect(yield* refusal(pane.merge)).toContain("no reply to merge yet")
+        yield* pane.ask("Why?")
+        yield* Deferred.await(forkStarted)
+        expect(yield* refusal(pane.merge)).toContain("still answering")
+        yield* Deferred.succeed(releaseFork, void 0)
+        yield* pane.replied(1)
+        expect(yield* pane.merge).toEqual({ merged: true })
+        yield* sourceIdle(harness, "the merge turn ends")
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
+
+  // The pinned label reads the fork's name from the merge's first line, so
+  // the name is one line: a question typed over several lines names its fork
+  // with spaces, and the label still reads it.
+  it.live(
+    "a question over several lines names its fork on one line, and its merge pins that name",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const providerLayer = LanguageModelLayers.testStream(() => replyStream("Both."))
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const { client, sessionId, branchId } = harness
+          const pane = btw(harness)
+          yield* pane.fork("why?\nwhat next?")
+          const replied = yield* pane.replied(1)
+          expect(Option.map(replied, (fork) => fork.name)).toEqual(
+            Option.some("btw: why? what next?"),
+          )
+          expect(yield* pane.merge).toEqual({ merged: true })
+          const merged = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.messages.some((message) => message.metadata?.customType === BTW_MERGE_TYPE),
+            5_000,
+            "the merge lands",
+          )
+          const merge = merged.messages.find(
+            (message) => message.metadata?.customType === BTW_MERGE_TYPE,
+          )
+          expect(forkMergePrompt(textOfMessage(merge ?? { parts: [] }))).toBe(
+            "merged btw: why? what next?",
+          )
+          yield* sourceIdle(harness, "the merge turn ends")
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+  )
+
+  test("the merge text writes any fork name on one line, and the label reads it back", () => {
+    const details = {
+      fork: {
+        sessionId: SessionId.make("fork"),
+        branchId: BranchId.make("fork-branch"),
+        name: "btw: why?\n\twhat next?",
+      },
+      fromMessageId: MessageId.make("m-1"),
+      replyId: MessageId.make("m-2"),
+      turns: 1,
+      question: "why? what next?",
+      reply: "Both.",
+    }
+    expect(forkMergePrompt(forkMergeText(details))).toBe("merged btw: why? what next?")
+  })
+
+  // A busy branch takes the merge into the turn it runs, at its next step:
+  // one appended message and no turn of its own.
+  it.live("a merge while the branch runs joins its turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sourceStarted = yield* Deferred.make<void>()
+        const releaseSource = yield* Deferred.make<void>()
+        const seen = { joined: "" }
+        let calls = 0
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          calls += 1
+          if (calls === 1) {
+            return Effect.succeed(
+              Stream.fromEffect(
+                Deferred.succeed(sourceStarted, void 0).pipe(
+                  Effect.andThen(Deferred.await(releaseSource)),
+                ),
+              ).pipe(
+                Stream.flatMap(() =>
+                  Stream.fromIterable([
+                    textDeltaPart("Working."),
+                    finishPart({ finishReason: "stop" }),
+                  ]),
+                ),
+              ),
+            )
+          }
+          if (calls === 2) return replyStream("A grey heron.")
+          seen.joined = lastText(options)
+          return replyStream("Taken in.")
+        })
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        const { client, sessionId, branchId } = harness
+        const pane = btw(harness)
+        yield* client.message.send({ sessionId, branchId, content: "Do the work" })
+        yield* Deferred.await(sourceStarted)
+        const handle = yield* pane.fork("What bird?")
+        yield* pane.replied(1)
+        expect(yield* pane.merge).toEqual({ merged: true })
+        yield* Deferred.succeed(releaseSource, void 0)
+        const settled = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) =>
+            current.runtime._tag === "Idle" &&
+            current.messages.some((message) => textOfMessage(message) === "Taken in."),
+          5_000,
+          "the running turn takes the merge",
+        )
+        const merge = settled.messages.find(
+          (message) => message.metadata?.customType === BTW_MERGE_TYPE,
+        )
+        expect(merge?.metadata?.joinedTurn).toBe(true)
+        expect(seen.joined).toContain(handle.sessionId)
+        expect(calls).toBe(3)
+      }).pipe(Effect.timeout("8 seconds")),
     ),
   )
 })

@@ -18,12 +18,14 @@ import { realpathSync } from "node:fs"
 import * as os from "node:os"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter reads Bun's build record, whose paths are relative to the process's directory
 import * as path from "node:path"
-import { Effect, Layer, Option, Result, Schema } from "effect"
+import { Effect, Layer, Match, Option, Predicate, Result, Schema } from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
 import {
   GentBuild,
   GentPlatform,
+  ImageCodecError,
+  type ImageTranscode,
   type ModuleBundle,
   ModuleBundleError,
   type RuntimeModuleSource,
@@ -170,6 +172,61 @@ const serveBunModule = (specifier: string, code: string): Effect.Effect<void> =>
     })
   })
 
+/** A codec failure as the platform's reason, read from its `Bun.Image.ErrorCode`. */
+const imageCodecReason = (cause: unknown): ImageCodecError["reason"] => {
+  if (!Predicate.hasProperty(cause, "code")) return "failed"
+  return Match.value(cause.code).pipe(
+    Match.when("ERR_IMAGE_UNKNOWN_FORMAT", () => "not-an-image" as const),
+    Match.when("ERR_IMAGE_DECODE_FAILED", () => "undecodable" as const),
+    Match.when("ERR_IMAGE_TOO_MANY_PIXELS", () => "too-large" as const),
+    Match.orElse(() => "failed" as const),
+  )
+}
+
+const imageCodecError = (cause: unknown) =>
+  new ImageCodecError({ reason: imageCodecReason(cause), message: causeMessage(cause) })
+
+/**
+ * `GentPlatform.transcodeImage` on Bun: `Bun.Image`, Bun's own codec
+ * (libspng, libjpeg-turbo, libwebp, a built-in GIF decoder), so the compiled
+ * binary carries it with no file beside it. It resizes with Lanczos3 and
+ * applies a JPEG's EXIF orientation first; `metadata` names the oriented size.
+ */
+const transcodeBunImage = (bytes: Uint8Array, options: ImageTranscode) =>
+  Effect.tryPromise({
+    try: () => new Bun.Image(bytes).metadata(),
+    catch: imageCodecError,
+  }).pipe(
+    Effect.flatMap((source) => {
+      const fitted = new Bun.Image(bytes).resize(options.maxSide, options.maxSide, {
+        fit: "inside",
+        withoutEnlargement: true,
+        filter: "lanczos3",
+      })
+      const quality = Option.match(Option.fromUndefinedOr(options.quality), {
+        onNone: () => ({}),
+        onSome: (value) => ({ quality: value }),
+      })
+      const encoder = {
+        png: () => fitted.png(),
+        jpeg: () => fitted.jpeg(quality),
+        webp: () => fitted.webp(quality),
+      }[options.format]()
+      return Effect.tryPromise({
+        try: () => encoder.bytes(),
+        catch: imageCodecError,
+      }).pipe(
+        Effect.map((encoded) => ({
+          bytes: encoded,
+          width: encoder.width,
+          height: encoder.height,
+          sourceWidth: source.width,
+          sourceHeight: source.height,
+        })),
+      )
+    }),
+  )
+
 export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
   GentPlatform,
   GentPlatform.of({
@@ -207,6 +264,8 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
       }),
 
     hash: (algorithm, input) => new Bun.CryptoHasher(algorithm).update(input).digest("hex"),
+
+    transcodeImage: transcodeBunImage,
   }),
 )
 
