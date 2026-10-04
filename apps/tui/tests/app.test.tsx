@@ -2164,14 +2164,28 @@ describe("App status and activity rows", () => {
         }).pipe(Effect.timeout("4 seconds")),
     )
   }
-  // A routed model whose name another provider shares carries the provider's
-  // label on a wide row; a narrow row drops it so the pair stays whole.
-  for (const [width, routedName] of [
-    [120, "Auto → Claude Sonnet 5 (anthropic)"],
-    [60, "Auto → Claude Sonnet 5"],
+  // The row as a live session draws it: the phase, the cwd, a routed model
+  // whose name another provider shares, its effort, the debug mark, and the
+  // cache label beside the gauge and the cost. A row too narrow for every
+  // label in full takes their short forms by its budget: the debug mark, then
+  // the cwd, then the model (no provider label, no family word), then the
+  // phase word; a label that fits again in full after a later one shortened
+  // gets its full form back.
+  const cacheLabel = defineClientExtension("@test/cache-label", {
+    setup: Effect.succeed(
+      statusLabelContribution({
+        anchor: "right",
+        produce: () => [{ text: "cache cold", color: "textMuted" as const }],
+      }),
+    ),
+  })
+  for (const [width, left, hidden] of [
+    [120, "idle · work · Auto → Claude Sonnet 5 (anthropic) · high · debug", []],
+    [80, "idle · work · Auto → Sonnet 5 · high · debug", ["Claude", "(anthropic)"]],
+    [60, "Auto → Sonnet 5 · high", ["Claude", "(anthropic)", "debug", "idle", "work"]],
   ] as const) {
     it.scopedLive(
-      `a routed model's provider label shows at ${width} columns only when the row is wide`,
+      `the status row at ${width} columns takes the short forms its budget needs, the cwd before the model`,
       () =>
         Effect.gen(function* () {
           const sessionId = SessionId.make(`session-routed-shared-${width}`)
@@ -2210,8 +2224,8 @@ describe("App status and activity rows", () => {
                     metrics: {
                       turns: 1,
                       durationMs: 0,
-                      costUsd: 0.42,
-                      lastInputTokens: 50_000,
+                      costUsd: 0.0004,
+                      lastInputTokens: 500,
                       routed: {
                         selected: auto.id,
                         model: ModelId.make("anthropic/claude-sonnet-5"),
@@ -2223,20 +2237,22 @@ describe("App status and activity rows", () => {
               },
             },
             app: { debugMode: true },
+            builtins: [...builtinClientModules, cacheLabel],
+            cwd: "/work",
             width,
             initialSession: sessionNamed(sessionId, branchId, "Routed shared"),
           })
           const frame = yield* waitForFrame(
             setup,
-            (next) => next.includes(routedName) && next.includes("high"),
+            (next) => next.includes("cache cold") && next.includes("Auto →"),
             "the routed model in the status row",
           )
           const row = Option.getOrThrow(
-            Option.fromUndefinedOr(frame.split("\n").find((line) => line.includes(routedName))),
+            Option.fromUndefinedOr(frame.split("\n").find((line) => line.includes("Auto →"))),
           )
-          // The pair and its effort stay whole; the debug mark yields first.
-          expect(row).toContain(`${routedName} · high`)
-          if (width < 80) expect(row).not.toContain("(anthropic)")
+          expect(row.trimStart().slice(0, left.length)).toBe(left)
+          expect(row).toContain("cache cold")
+          for (const text of hidden) expect([text, row.includes(text)]).toEqual([text, false])
         }).pipe(Effect.timeout("4 seconds")),
     )
   }
@@ -3572,7 +3588,9 @@ describe("App slash commands", () => {
         "the failure",
       )
       const row = failed.split("\n").find((line) => line.includes("audit refused")) ?? ""
-      expect(row.trim()).toStartWith("/audit failed: audit refused on this branch ·")
+      // The error stays whole; the cwd and the model give way to it.
+      expect(row.trim()).toStartWith("/audit failed: audit refused on this branch")
+      expect(row).not.toContain("…")
       yield* typeCommand("/note")(setup)
       const frame = yield* waitForFrame(
         setup,

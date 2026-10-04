@@ -323,9 +323,57 @@ const layout = (labels: readonly StatusRowLabel[], budget: number) => {
   return { shown, used }
 }
 
+/** The columns the labels take in full, separators included; an empty label takes none. */
+const groupWidth = (labels: readonly StatusRowLabel[]): number => {
+  const drawn = labels.filter((label) => label.text.length > 0)
+  if (drawn.length === 0) return 0
+  return (
+    drawn.reduce((sum, label) => sum + textWidth(label.text), 0) +
+    SEPARATOR_WIDTH * (drawn.length - 1)
+  )
+}
+
+/**
+ * The labels in the forms the budget needs. While the group does not fit,
+ * the next label by `short.rank` takes its short form. Then each label that
+ * gave way gets its full form back, the last to give way first, when the
+ * group still fits with it: a cwd that yielded before the model shortened
+ * comes back once the short model leaves it room. What still does not fit is
+ * cut by `layout`.
+ */
+const fitForms = (labels: readonly StatusRowLabel[], budget: number): StatusRowLabel[] => {
+  const order = labels
+    .flatMap((label, index) =>
+      Option.match(Option.fromUndefinedOr(label.short), {
+        onNone: () => [],
+        onSome: (short) => [{ index, short }],
+      }),
+    )
+    .sort((left, right) => left.short.rank - right.short.rank)
+  let forms = [...labels]
+  const gaveWay: Array<number> = []
+  for (const { index, short } of order) {
+    if (groupWidth(forms) <= budget) break
+    forms = forms.map((label, at) => {
+      if (at !== index) return label
+      return { ...label, text: short.text }
+    })
+    gaveWay.push(index)
+  }
+  for (const index of gaveWay.toReversed()) {
+    const restored = forms.map((label, at) => {
+      if (at !== index) return label
+      return Option.getOrElse(Option.fromUndefinedOr(labels[at]), () => label)
+    })
+    if (groupWidth(restored) <= budget) forms = restored
+  }
+  return forms
+}
+
 /**
  * The status row: the phase word, the cwd, the model and the extension
- * labels, with the context gauge and the cost anchored right. It sits right
+ * labels, with the context gauge and the cost anchored right. A group too
+ * narrow for its labels in full takes their short forms (`fitForms`). It sits right
  * under the input (the composer places it, `Composer`'s `statusRow`), and
  * every docked pane, the autocomplete popup and the palette included, docks
  * under it: the row never moves when a pane opens. The blank row above it is
@@ -345,11 +393,11 @@ export function StatusRow(props: StatusRowProps) {
     // The right group is laid out first and keeps its columns; the left group
     // spends what is left. A right group that cannot fit the row on its own
     // still truncates rather than pushing the left group to nothing.
-    const right = layout(rightLabels, width)
+    const right = layout(fitForms(rightLabels, width), width)
     let rightGap = 0
     if (right.shown.length > 0) rightGap = SEPARATOR_WIDTH
     const leftBudget = Math.max(0, width - right.used - rightGap)
-    const left = layout(leftLabels, leftBudget)
+    const left = layout(fitForms(leftLabels, leftBudget), leftBudget)
     const gap = Math.max(0, width - left.used - right.used)
     return { left: left.shown, right: right.shown, gap }
   })

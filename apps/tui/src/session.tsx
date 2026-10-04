@@ -131,6 +131,41 @@ import type { ResolvedNoticeRows } from "./extensions/loader-boundary"
 export interface StatusRowLabel {
   text: string
   color: RGBA
+  /**
+   * The form the row draws when its group cannot fit every label in full
+   * (`StatusRow`). Absent, the label keeps its text, and only the row's last
+   * cut can shorten it.
+   */
+  short?: StatusLabelShort
+}
+
+/** A status label's short form, and when it gives way. */
+interface StatusLabelShort {
+  /** The shorter text; empty leaves the label out. */
+  readonly text: string
+  /** The order in which labels take their short forms, lowest first (`STATUS_YIELD`). */
+  readonly rank: number
+}
+
+/**
+ * When each core label takes its short form on a narrow row: the debug mark
+ * first, then the cwd, before the model, and the idle phase word last. The
+ * effort and the right-anchored numbers have none.
+ */
+export const STATUS_YIELD = { debug: 0, cwd: 1, model: 2, phase: 3 } as const
+
+/**
+ * The model's name without its family word, for a narrow row: `Claude
+ * Sonnet 5` reads `Sonnet 5`. A name whose rest does not start with a letter
+ * or has no version digit (`Gemini 3 Pro`, `GPT-6.1 Sol`) stays whole, so the
+ * short form still names one model.
+ */
+export const shortModelName = (name: string): string => {
+  const space = name.indexOf(" ")
+  if (space < 0) return name
+  const rest = name.slice(space + 1)
+  if (/^\p{L}/u.test(rest) && /\d/.test(rest)) return rest
+  return name
 }
 
 interface ThemeColors {
@@ -232,7 +267,11 @@ export function buildModelLabels(input: {
   }
 
   if (input.debugMode) {
-    items.push({ text: "debug", color: input.theme.warning })
+    items.push({
+      text: "debug",
+      color: input.theme.warning,
+      short: { text: "", rank: STATUS_YIELD.debug },
+    })
   }
 
   return items

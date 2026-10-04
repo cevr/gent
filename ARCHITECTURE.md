@@ -866,8 +866,9 @@ Shape:
   the clamp, and a change of it alone rides the in-conversation effort
   carrier like any other effort change. The session metrics keep the newest
   route (`SessionRuntimeMetrics.routed`); while the session runs on that
-  virtual model the TUI status row names both (`Auto → Sonnet 5`; under 80
-  columns the routed half drops its provider label), shows the level in the
+  virtual model the TUI status row names both (`Auto → Claude Sonnet 5
+(anthropic)`; a row too narrow for it takes the short form `Auto → Sonnet
+5`, after the debug mark and the cwd gave way), shows the level in the
   same order after the routed model's clamp, and reads the context gauge
   against the routed model's window. The effort picker lists the routed
   model's levels, and its `default` row names the route's level.

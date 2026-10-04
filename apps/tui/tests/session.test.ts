@@ -40,6 +40,7 @@ import {
   mergeRestored,
   noticeRowItems,
   runWithReconnect,
+  shortModelName,
   slashAutocompleteItems,
   useSessionFeed,
 } from "../src/session"
@@ -832,6 +833,16 @@ describe("buildContextLabels", () => {
 
   test("skips context when contextLength undefined", () => {
     expect(contextLabels(50_000, absent, absent).length).toBe(0)
+  })
+})
+
+describe("shortModelName", () => {
+  test("a narrow row names a model without its family word when the rest names one model", () => {
+    expect(
+      ["Claude Sonnet 5", "Claude Opus 5.5", "Gemini 3 Pro", "GPT-6.1 Sol", "Auto"].map(
+        shortModelName,
+      ),
+    ).toEqual(["Sonnet 5", "Opus 5.5", "Gemini 3 Pro", "GPT-6.1 Sol", "Auto"])
   })
 })
 
