@@ -65,6 +65,7 @@ import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
+  ImageCost,
   Model,
   ModelId,
   type ModelPricing,
@@ -117,6 +118,25 @@ const result = (id: string, name = "read"): MessagePart =>
     isFailure: false,
     providerExecuted: false,
     result: { value: id },
+  })
+
+/** A tool result whose JSON holds one image reference tagged `tag`, its digest `digit` repeated. */
+const imageResult = (id: string, tag: string, width: number, height: number, digit: string) =>
+  Prompt.toolResultPart({
+    id: ToolCallId.make(id),
+    name: "screenshot",
+    isFailure: false,
+    providerExecuted: false,
+    result: {
+      shot: {
+        _tag: tag,
+        sha256: digit.repeat(64),
+        mediaType: "image/png",
+        width,
+        height,
+        bytes: 4_000,
+      },
+    },
   })
 
 const message = (
@@ -309,33 +329,61 @@ describe("projectModelContext", () => {
     expect(projection.omittedMessageIds).toEqual([MessageId.make("old")])
   })
 
-  test("a tool result counts each image it holds at the tokens the image costs a model", () => {
+  test("a tool result counts each image it holds at the tokens the image costs its model", () => {
     const holding = (tag: string, width: number, height: number) =>
-      message(`${tag}-${width}`, "tool", [
-        Prompt.toolResultPart({
-          id: ToolCallId.make("call-1"),
-          name: "screenshot",
-          isFailure: false,
-          providerExecuted: false,
-          result: {
-            shot: {
-              _tag: tag,
-              sha256: "a".repeat(64),
-              mediaType: "image/png",
-              width,
-              height,
-              bytes: 4_000,
-            },
-          },
-        }),
-      ])
+      message(`${tag}-${width}`, "tool", [imageResult("call-1", tag, width, height, "a")])
     // A tag of the same length that is no image: the JSON is the same size.
-    const imageCost = (width: number, height: number) =>
-      estimateTokens([holding("ToolImage", width, height)]) -
-      estimateTokens([holding("ToolImagX", width, height)])
-    // w*h/750, as Anthropic counts it, up to the 1,600 a scaled image costs.
-    expect(imageCost(150, 100)).toBe(20)
-    expect(imageCost(1500, 1000)).toBe(1_600)
+    const imageCost = (cost: Option.Option<ImageCost>, width: number, height: number) =>
+      estimateTokens([holding("ToolImage", width, height)], cost) -
+      estimateTokens([holding("ToolImagX", width, height)], cost)
+    // Anthropic: w*h/750, up to the 1,600 a scaled image costs.
+    const pixels = Option.some(
+      ImageCost.cases.Pixels.make({ pixelsPerToken: 750, maxTokens: 1_600 }),
+    )
+    expect(imageCost(pixels, 150, 100)).toBe(20)
+    expect(imageCost(pixels, 1500, 1000)).toBe(1_600)
+    // OpenAI tiles: 1024x1024 cuts to 768x768, four 512-pixel tiles.
+    const gpt4o = Option.some(ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 }))
+    expect(imageCost(gpt4o, 1024, 1024)).toBe(85 + 4 * 170)
+    // OpenAI patches: 1024 patches at 1.2; a 2000x2000 image shrinks to the 2,500-patch budget.
+    const patches = Option.some(
+      ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 2_500 }),
+    )
+    expect(imageCost(patches, 1024, 1024)).toBe(Math.ceil(1024 * 1.2))
+    expect(imageCost(patches, 2000, 2000)).toBe(3_000)
+    // An unknown API class counts the highest known cost: here OpenAI's one tile.
+    expect(imageCost(Option.none(), 150, 100)).toBe(85 + 170)
+    expect(imageCost(Option.none(), 1500, 1000)).toBe(Math.ceil(47 * 32 * 1.2))
+  })
+
+  test("five 1024x1024 images on an OpenAI tile model count at OpenAI's cost and leave the window", () => {
+    // gpt-4o-mini counts 2,833 + 5,667 a tile: 25,501 tokens an image, 127,505 for five.
+    const calls = ["1", "2", "3", "4", "5"].map((index) => `shot-${index}`)
+    const user = message("user", "user", [text("look at the frames")])
+    const assistant = message(
+      "calls",
+      "assistant",
+      calls.map((id) => call(id, "screenshot")),
+    )
+    const results = message(
+      "results",
+      "tool",
+      calls.map((id, index) => imageResult(id, "ToolImage", 1024, 1024, `${index + 1}`)),
+    )
+    const old = message("old", "assistant", [text("old")])
+    const window = [old, user, assistant, results]
+    const budgetAt = (imageCost: ImageCost) => ({ ...budget(111_616), imageCost })
+
+    const anthropic = success(
+      projectModelContext(
+        window,
+        budgetAt(ImageCost.cases.Pixels.make({ pixelsPerToken: 750, maxTokens: 1_600 })),
+      ),
+    )
+    expect(anthropic.estimatedTokens).toBeLessThan(10_000)
+    const mini = ImageCost.cases.Tiles.make({ baseTokens: 2_833, tileTokens: 5_667 })
+    expect(estimateTokens([results], Option.some(mini))).toBeGreaterThanOrEqual(5 * 25_501)
+    expect(failure(projectModelContext(window, budgetAt(mini)))._tag).toBe("BudgetExceeded")
   })
 
   test("rejects an oversized newest user turn instead of returning an empty prompt", () => {

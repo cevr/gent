@@ -27,12 +27,15 @@ import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/
 import {
   type AgentName,
   cacheWriteRate,
+  ImageCost,
   type ImageLimit,
+  ImagePartOptions,
   type Model,
   ModelId,
   type ModelPricing,
 } from "../domain/agent.js"
 import { readToolImage, type ToolImage, toolImageBase64Chars, toolImagesOf } from "./tool-image.js"
+import { omitUndefined } from "../domain/guards.js"
 import type { ToolCapability } from "../domain/capability.js"
 import type { TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
@@ -279,14 +282,65 @@ const toolResultImages = (part: Prompt.ToolResultPart): ReadonlyArray<ToolImage>
   return images
 }
 
+/** `width` x `height` scaled by `factor`, never up, each side at least 1 pixel. */
+const scaledDown = (width: number, height: number, factor: number) => {
+  const scale = Math.min(1, factor)
+  return {
+    width: Math.max(1, Math.floor(width * scale)),
+    height: Math.max(1, Math.floor(height * scale)),
+  }
+}
+
+/** The tokens one `width` x `height` image costs at `cost` (`ImageCost`). */
+const tokensAtCost = (cost: ImageCost, width: number, height: number): number =>
+  ImageCost.match(cost, {
+    Pixels: ({ pixelsPerToken, maxTokens }) =>
+      Math.min(Math.ceil((width * height) / pixelsPerToken), maxTokens),
+    Tiles: ({ baseTokens, tileTokens }) => {
+      // Fit in 2048x2048, then cut the short side to 768, as OpenAI's `high` detail does.
+      const fit = scaledDown(width, height, 2_048 / Math.max(width, height))
+      const cut = scaledDown(fit.width, fit.height, 768 / Math.min(fit.width, fit.height))
+      const tiles = Math.ceil(cut.width / 512) * Math.ceil(cut.height / 512)
+      return baseTokens + tileTokens * tiles
+    },
+    Patches: ({ multiplier, maxPatches }) => {
+      const patchesOf = (size: { readonly width: number; readonly height: number }) =>
+        Math.ceil(size.width / 32) * Math.ceil(size.height / 32)
+      let patches = patchesOf({ width, height })
+      if (patches > maxPatches) {
+        const shrunk = scaledDown(
+          width,
+          height,
+          Math.sqrt((32 * 32 * maxPatches) / (width * height)),
+        )
+        patches = Math.min(patchesOf(shrunk), maxPatches)
+      }
+      return Math.ceil(patches * multiplier)
+    },
+  })
+
 /**
- * The tokens an image costs a model, high: Anthropic counts `w*h/750` and
- * scales an image down to about 1,600 tokens; OpenAI counts fewer. The
- * estimate counts every image of the window, whether the request sends it or
- * a line in its place.
+ * The costs a model of an unknown API class may count at: Anthropic's pixels,
+ * OpenAI's tiles at `gpt-4o`'s rates, and OpenAI's patches at the `high`
+ * detail of its newest models. Such a model counts each image at the highest.
  */
-const toolImageTokens = (image: ToolImage): number =>
-  Math.min(Math.ceil((image.width * image.height) / 750), 1_600)
+const KNOWN_IMAGE_COSTS: ReadonlyArray<ImageCost> = [
+  ImageCost.cases.Pixels.make({ pixelsPerToken: 750, maxTokens: 1_600 }),
+  ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 2_500 }),
+]
+
+/**
+ * The tokens `image` costs a model whose API class counts at `cost`; none:
+ * the highest of `KNOWN_IMAGE_COSTS`. The estimate counts every image of the
+ * window, whether the request sends it or a line in its place.
+ */
+const imageTokens = (cost: Option.Option<ImageCost>, image: ToolImage): number =>
+  Option.match(cost, {
+    onSome: (known) => tokensAtCost(known, image.width, image.height),
+    onNone: () =>
+      Math.max(...KNOWN_IMAGE_COSTS.map((known) => tokensAtCost(known, image.width, image.height))),
+  })
 
 /** One image of a tool result the prompt holds: the call, its tool, the image. */
 interface PromptToolImage {
@@ -316,7 +370,12 @@ const promptToolImages = (messages: ReadonlyArray<Message>): ReadonlyArray<Promp
  * bytes from one step to the next.
  */
 const ToolImageContent = Schema.TaggedUnion({
-  Bytes: { label: Schema.String, mediaType: Schema.String, data: Schema.String },
+  Bytes: {
+    label: Schema.String,
+    mediaType: Schema.String,
+    data: Schema.String,
+    options: Schema.optional(ImagePartOptions),
+  },
   Line: { text: Schema.String },
 })
 type ToolImageContent = typeof ToolImageContent.Type
@@ -381,7 +440,7 @@ export const toolImagesToDrop = (sizes: ReadonlyArray<number>, limit: ImageLimit
  */
 export const toolImagePrompt = Effect.fn("ModelContext.toolImagePrompt")(function* (params: {
   readonly messages: ReadonlyArray<Message>
-  readonly model: Pick<Model, "imageInput" | "imageLimit">
+  readonly model: Pick<Model, "imageInput" | "imageLimit" | "imagePartOptions">
   readonly directory: string
 }) {
   const images = promptToolImages(params.messages)
@@ -418,6 +477,7 @@ export const toolImagePrompt = Effect.fn("ModelContext.toolImagePrompt")(functio
               label: `Image from ${name}:`,
               mediaType: entry.image.mediaType,
               data,
+              ...omitUndefined({ options: params.model.imagePartOptions }),
             }),
         })
       }),
@@ -455,6 +515,7 @@ const toolImageMessage = (
           Prompt.filePart({
             mediaType: bytes.mediaType,
             data: `data:${bytes.mediaType};base64,${bytes.data}`,
+            ...omitUndefined({ options: bytes.options }),
           }),
         ],
         Line: (line) => [Prompt.textPart({ text: line.text })],
@@ -825,7 +886,10 @@ const tokensForChars = (chars: number): number => Math.ceil(chars / 4)
 export const estimateTextTokens = (text: string): number => tokensForChars(text.length)
 
 /** Estimate the tokens occupied by a run of messages, at `tokensForChars`. */
-export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
+export const estimateTokens = (
+  messages: ReadonlyArray<Message>,
+  imageCost: Option.Option<ImageCost> = Option.none(),
+): number => {
   let chars = 0
   for (const msg of messages) {
     for (const part of msg.parts) {
@@ -840,7 +904,7 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
           // The model sees the bounded result, so the budget counts that, not the stored one.
           chars += encodeToolOutput(modelToolResult(part).result).length
           // And each image the result holds, at the tokens it costs a model.
-          for (const image of toolResultImages(part)) chars += toolImageTokens(image) * 4
+          for (const image of toolResultImages(part)) chars += imageTokens(imageCost, image) * 4
           break
         case "file":
           chars += 1000 // ~250 tokens estimate for image references
@@ -871,6 +935,8 @@ export const estimateToolSchemaTokens = (tools: ReadonlyArray<ToolCapability>): 
 /** The separate context reservations supplied by the model host. */
 export const ModelContextBudget = Schema.Struct({
   contextLimitTokens: Schema.Natural,
+  /** What one tool image costs the model (`Model.imageCost`); absent: the highest known cost. */
+  imageCost: Schema.optional(ImageCost),
   /** The model's input cap, when it is below the window less the output (the GPT-5 family). */
   inputLimitTokens: Schema.optional(Schema.Natural),
   reservedSystemTokens: Schema.Natural,
@@ -878,6 +944,8 @@ export const ModelContextBudget = Schema.Struct({
   reservedOutputTokens: Schema.Natural,
 })
 export type ModelContextBudget = typeof ModelContextBudget.Type
+
+const imageCostOf = (budget: ModelContextBudget) => Option.fromUndefinedOr(budget.imageCost)
 
 /**
  * The input one request may carry: the window less the output reserve, and
@@ -1307,6 +1375,7 @@ const groupToolCalls = (
 const buildUnits = (
   messages: ReadonlyArray<Message>,
   groups: ReadonlyArray<ToolGroup>,
+  imageCost: Option.Option<ImageCost>,
 ): ReadonlyArray<ProjectionUnit> => {
   const groupByStart = new Map<number, ToolGroup>()
   const groupedIndexes = new Set<number>()
@@ -1324,7 +1393,7 @@ const buildUnits = (
         start: group.value.start,
         end: group.value.end,
         messages: groupMessages,
-        estimatedTokens: estimateTokens(groupMessages),
+        estimatedTokens: estimateTokens(groupMessages, imageCost),
       })
       index = group.value.end
       continue
@@ -1336,7 +1405,7 @@ const buildUnits = (
         start: index,
         end: index,
         messages: [message.value],
-        estimatedTokens: estimateTokens([message.value]),
+        estimatedTokens: estimateTokens([message.value], imageCost),
       })
     }
   }
@@ -1518,7 +1587,7 @@ const handoffAnchorWithinTurn = (
   budget: ModelContextBudget,
   measure: Option.Option<StepMeasure>,
 ): Option.Option<MessageId> => {
-  const measured = measuredUnits(messages, measure)
+  const measured = measuredUnits(messages, measure, imageCostOf(budget))
   if (Result.isFailure(measured)) return Option.none()
   const units = measured.success
   const target = Math.floor(messageBudget(budget) / 2)
@@ -1550,7 +1619,7 @@ export const projectModelContext = (
   budget: ModelContextBudget,
   measure: Option.Option<StepMeasure> = Option.none(),
 ): Result.Result<ModelContextProjection, ModelContextError> => {
-  const units = measuredUnits(messages, measure)
+  const units = measuredUnits(messages, measure, imageCostOf(budget))
   if (Result.isFailure(units)) return Result.fail(units.failure)
   return projectUnits(units.success, budget)
 }
@@ -1565,10 +1634,12 @@ export const projectModelContext = (
 export const estimateHistoryTokens = (
   messages: ReadonlyArray<Message>,
   measure: Option.Option<StepMeasure>,
+  model: Pick<Model, "imageCost">,
 ): number => {
   const window = messagesInCurrentWindow(messages)
-  const units = measuredUnits(window, measureInCurrentWindow(window, measure))
-  if (Result.isFailure(units)) return estimateTokens(window)
+  const imageCost = Option.fromUndefinedOr(model.imageCost)
+  const units = measuredUnits(window, measureInCurrentWindow(window, measure), imageCost)
+  if (Result.isFailure(units)) return estimateTokens(window, imageCost)
   return Option.match(anchorUnit(units.success), {
     onNone: () => 0,
     onSome: (anchor) =>
@@ -1587,13 +1658,14 @@ export const estimateHistoryTokens = (
 const measuredUnits = (
   messages: ReadonlyArray<Message>,
   measure: Option.Option<StepMeasure>,
+  imageCost: Option.Option<ImageCost>,
 ): Result.Result<ReadonlyArray<ProjectionUnit>, ModelContextError> => {
   const visible = messages.filter(isAiVisibleMessage)
   const records = collectToolRecords(visible)
   if (Result.isFailure(records)) return Result.fail(records.failure)
   const groups = groupToolCalls(visible, records.success)
   if (Result.isFailure(groups)) return Result.fail(groups.failure)
-  const units = buildUnits(visible, groups.success)
+  const units = buildUnits(visible, groups.success, imageCost)
 
   const reply = Option.flatMap(measure, (value) => {
     const index = visible.findIndex((message) => message.id === value.replyId)

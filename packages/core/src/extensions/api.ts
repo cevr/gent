@@ -86,6 +86,7 @@ export type {
   ApiEndpoint,
   CatalogModel,
   CatalogOverride,
+  CatalogPlan,
   CatalogProvider,
   FailureResponse,
   ModelCatalogView,

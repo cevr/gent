@@ -22,11 +22,13 @@ import * as Prompt from "effect/ai/Prompt"
 import type { ChildProcessSpawner } from "effect/process"
 import {
   AgentDefinition,
+  type CatalogPlan,
   defineExtension,
   ExtensionHost,
   isRecord,
   isRecordArray,
   Model,
+  modelFromCatalog,
   ModelId,
   omitUndefined,
   ProviderAuthInfo,
@@ -52,8 +54,9 @@ import {
   AnthropicPlatform,
   buildAnthropicModelDriver,
   type ClaudeCredentials,
+  MESSAGES_CLASS,
 } from "../src/anthropic.js"
-import { buildOpenAIModelDriver, type OpenAICredentials } from "../src/openai.js"
+import { buildOpenAIModelDriver, type OpenAICredentials, RESPONSES_CLASS } from "../src/openai.js"
 import {
   CHAT_COMPLETIONS_CLASS,
   type CredentialCacheCell,
@@ -536,8 +539,23 @@ describe("tool images in a request", () => {
     "each real driver sends the image where its API takes one",
     () =>
       Effect.gen(function* () {
-        const { prompts } = yield* imageTurn({ paths: ["shot.png"] })
-        const prompt = prompts[1] ?? Prompt.empty
+        // The turn runs on a model of each class, so its prompt carries that class's image options.
+        const classTurn = (id: string, apiClass: CatalogPlan) =>
+          Effect.gen(function* () {
+            const model = modelFromCatalog("p", { id, name: id }, apiClass)
+            const { prompts } = yield* imageTurn({
+              paths: ["shot.png"],
+              agent: AgentDefinition.make({
+                name: testAgent.name,
+                description: id,
+                model: model.id,
+              }),
+              models: [Model.make({ ...model, contextLength: 200_000 })],
+            })
+            return prompts[1] ?? Prompt.empty
+          })
+        const prompt = yield* classTurn("claude-sonnet-4-5", MESSAGES_CLASS)
+        const openAiPrompt = yield* classTurn("gpt-5.4", RESPONSES_CLASS)
         const dataUrl = `data:image/png;base64,${SHOT_DATA}`
 
         // Messages: the image joins the tool result in one user turn.
@@ -557,26 +575,30 @@ describe("tool images in a request", () => {
           data: SHOT_DATA,
         })
 
-        // Responses: a user input_image right after the function call output.
-        const responses = itemsOf(yield* requestBody(yield* responsesModel, prompt), "input")
+        // Responses: a user input_image right after the function call output, at
+        // the `high` detail its cost counts at.
+        const responses = itemsOf(yield* requestBody(yield* responsesModel, openAiPrompt), "input")
         const output = responses.findIndex((item) => item["type"] === "function_call_output")
         expect(output).toBeGreaterThan(-1)
         const imageItem = responses[output + 1]
         expect(imageItem?.["role"]).toBe("user")
         expect(itemsOf(imageItem ?? {}, "content")).toEqual([
           { type: "input_text", text: "Image from save_image shot.png 64x32:" },
-          { type: "input_image", image_url: dataUrl, detail: "auto" },
+          { type: "input_image", image_url: dataUrl, detail: "high" },
         ])
 
         // Chat Completions: a user image_url message right after the tool message.
-        const chat = itemsOf(yield* requestBody(yield* chatCompletionsModel, prompt), "messages")
+        const chat = itemsOf(
+          yield* requestBody(yield* chatCompletionsModel, openAiPrompt),
+          "messages",
+        )
         const toolMessage = chat.findIndex((message) => message["role"] === "tool")
         expect(toolMessage).toBeGreaterThan(-1)
         const imageMessage = chat[toolMessage + 1]
         expect(imageMessage?.["role"]).toBe("user")
         expect(itemsOf(imageMessage ?? {}, "content")).toEqual([
           { type: "text", text: "Image from save_image shot.png 64x32:" },
-          { type: "image_url", image_url: { url: dataUrl, detail: "auto" } },
+          { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
         ])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
     20_000,

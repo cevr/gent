@@ -16,6 +16,7 @@ import {
   SynchronizedRef,
 } from "effect"
 import {
+  type ApiClassContribution,
   type CatalogModel,
   type CatalogProvider,
   type Model,
@@ -182,6 +183,35 @@ describe("driver catalog", () => {
       ])
     }),
   )
+
+  test("a model counts and sends each image as the API class that speaks it does", () => {
+    const costOf = (id: string, apiClass: ApiClassContribution) =>
+      catalogModels(
+        catalogOf({ id: "p", name: "P", env: [], models: [{ id, name: id }] }),
+        "p",
+        Duration.minutes(5),
+        apiClass,
+      ).map((model) => [model.imageCost, Option.fromUndefinedOr(model.imagePartOptions)])
+    const high = Option.some({ openai: { imageDetail: "high" } })
+    // OpenAI tiles for gpt-4o-mini, at its own rates.
+    expect(costOf("gpt-4o-mini", RESPONSES_CLASS)).toEqual([
+      [{ _tag: "Tiles", baseTokens: 2_833, tileTokens: 5_667 }, high],
+    ])
+    expect(costOf("gpt-4o", RESPONSES_CLASS)).toEqual([
+      [{ _tag: "Tiles", baseTokens: 85, tileTokens: 170 }, high],
+    ])
+    // Newer OpenAI models count patches, shrunk to the `high` detail's budget.
+    expect(costOf("gpt-5.4", RESPONSES_CLASS)).toEqual([
+      [{ _tag: "Patches", multiplier: 1.2, maxPatches: 2_500 }, high],
+    ])
+    expect(costOf("openai/gpt-4.1-mini", CHAT_COMPLETIONS_CLASS)).toEqual([
+      [{ _tag: "Patches", multiplier: 1.62, maxPatches: 6_144 }, high],
+    ])
+    // Anthropic counts pixels and needs no part option.
+    expect(costOf("claude-sonnet-4-5", MESSAGES_CLASS)).toEqual([
+      [{ _tag: "Pixels", pixelsPerToken: 750, maxTokens: 1_600 }, Option.none()],
+    ])
+  })
 
   test("a model lists the effort levels its API class sends", () => {
     const efforts: CatalogModel["reasoningOptions"] = [

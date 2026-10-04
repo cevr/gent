@@ -69,6 +69,32 @@ export const ImageLimit = Schema.Struct({
 })
 export type ImageLimit = typeof ImageLimit.Type
 
+const PositiveCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
+
+/**
+ * How a model counts the tokens of one image, as its API class says
+ * (`imageTokens` in `model-context.ts`):
+ * - `Pixels`: `width * height / pixelsPerToken`, up to `maxTokens` (Anthropic).
+ * - `Tiles`: OpenAI's tiles at the `high` detail: the image fit in 2048x2048,
+ *   its short side cut to 768, then `baseTokens` and `tileTokens` for each
+ *   512-pixel tile.
+ * - `Patches`: OpenAI's 32-pixel patches, the image shrunk to `maxPatches`,
+ *   each patch at `multiplier` tokens.
+ */
+export const ImageCost = Schema.TaggedUnion({
+  Pixels: { pixelsPerToken: PositiveCount, maxTokens: PositiveCount },
+  Tiles: { baseTokens: PositiveCount, tileTokens: PositiveCount },
+  Patches: { multiplier: Schema.Finite, maxPatches: PositiveCount },
+})
+export type ImageCost = typeof ImageCost.Type
+
+/** Provider options an image part of a request carries, by provider (`Prompt.FilePart.options`). */
+export const ImagePartOptions = Schema.Record(
+  Schema.String,
+  Schema.Record(Schema.String, Schema.Json),
+)
+export type ImagePartOptions = typeof ImagePartOptions.Type
+
 // Model - individual model from a provider (built-in or custom)
 
 export class Model extends Schema.Class<Model>("Model")({
@@ -113,6 +139,18 @@ export class Model extends Schema.Class<Model>("Model")({
    * (`toolImagesToDrop` in `model-context.ts`).
    */
   imageLimit: Schema.optional(ImageLimit),
+  /**
+   * What one tool image costs the model, as its API class says
+   * (`ApiClassContribution.imageCost`). Absent: the highest of the known
+   * costs, so an estimate never counts low.
+   */
+  imageCost: Schema.optional(ImageCost),
+  /**
+   * The provider options each image part of a request carries, as the
+   * model's API class says (`ApiClassContribution.imagePartOptions`): the
+   * detail its `imageCost` assumes, so the estimate and the request agree.
+   */
+  imagePartOptions: Schema.optional(ImagePartOptions),
   /**
    * How long the provider keeps a request's prompt cached after the request,
    * in milliseconds, as the model's driver says. A turn that starts on a large

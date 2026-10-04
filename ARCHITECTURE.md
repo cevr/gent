@@ -72,8 +72,13 @@ updates this list in the same commit.
     says reads no images (`Model.imageInput` false), or an image whose blob is
     gone, gets one fixed line instead. Every text that stands for an image
     depends only on the image, its tool and the model, so a request prefix
-    stays the same bytes. The estimate counts each image at
-    `min(w*h/750, 1600)` tokens. Images are bounded too: a request carries
+    stays the same bytes. The estimate counts each image at the cost the
+    model's API class names (`Model.imageCost`): Anthropic's
+    `min(w*h/750, 1600)`, OpenAI's tiles or 32-pixel patches by model at the
+    `high` detail, which each OpenAI image part names
+    (`Model.imagePartOptions`) so the estimate and the request agree. A model
+    of an unknown class counts the highest of the known costs. Images are
+    bounded too: a request carries
     at most the newest 20 and about 12 MB of base64 (`Model.imageLimit`, from
     the API class: Chat Completions takes 5 and 4 MB), and past either it
     leaves out its oldest images five at a time, each as a fixed line. So

@@ -20,6 +20,7 @@ import {
   type ApiClassRequest,
   type CatalogModel,
   catalogModelEntry,
+  type CatalogPlan,
   clampEffort,
   isRecordArray,
   type JsonRecord,
@@ -1035,7 +1036,7 @@ export const catalogModels = (
   catalog: ModelCatalogView,
   providerId: string,
   promptCacheTtl: Duration.Duration,
-  apiClass: Pick<ApiClassContribution, "efforts" | "imageLimit">,
+  apiClass: CatalogPlan,
 ): ReadonlyArray<Model> =>
   Option.match(catalog.provider(providerId), {
     onNone: () => [],
@@ -1138,6 +1139,46 @@ const reasoningInField =
       }),
     })
 
+type ImageCostOf = NonNullable<ApiClassContribution["imageCost"]>
+type ImageCost = ReturnType<ImageCostOf>
+
+/**
+ * OpenAI's image costs at the `high` detail, by model name, most specific
+ * first, from its vision guide: tiles (base and per-tile tokens) for the
+ * older models, 32-pixel patches (a multiplier, and the patch budget the
+ * `high` detail shrinks an image to) for the newer ones.
+ */
+const OPENAI_IMAGE_COSTS: ReadonlyArray<readonly [RegExp, ImageCost]> = [
+  [/^gpt-4o-mini/, { _tag: "Tiles", baseTokens: 2_833, tileTokens: 5_667 }],
+  [/^gpt-4o/, { _tag: "Tiles", baseTokens: 85, tileTokens: 170 }],
+  [/^gpt-4\.1-mini/, { _tag: "Patches", multiplier: 1.62, maxPatches: 6_144 }],
+  [/^gpt-4\.1-nano/, { _tag: "Patches", multiplier: 2.46, maxPatches: 1_536 }],
+  [/^gpt-4\.1/, { _tag: "Tiles", baseTokens: 85, tileTokens: 170 }],
+  [/^o4-mini/, { _tag: "Patches", multiplier: 1.72, maxPatches: 1_536 }],
+  [/^o[13]/, { _tag: "Tiles", baseTokens: 75, tileTokens: 150 }],
+  [/^gpt-5-nano/, { _tag: "Patches", multiplier: 1.5, maxPatches: 1_536 }],
+  [/^gpt-5-mini/, { _tag: "Patches", multiplier: 1.2, maxPatches: 1_536 }],
+  [/^gpt-5\.2/, { _tag: "Patches", multiplier: 1.2, maxPatches: 6_144 }],
+  [/^gpt-5(\.1)?($|-)/, { _tag: "Tiles", baseTokens: 70, tileTokens: 140 }],
+]
+
+/** A newer OpenAI model (GPT-5.4 on) counts patches at 1.2, shrunk to 2,500 at the `high` detail. */
+const OPENAI_PATCH_COST: ImageCost = { _tag: "Patches", multiplier: 1.2, maxPatches: 2_500 }
+
+/** What one image costs an OpenAI model (`Model.imageCost`), read from its name. */
+export const openAiImageCost: ImageCostOf = (entry) => {
+  const name = entry.id.split("/").at(-1) ?? entry.id
+  const known = OPENAI_IMAGE_COSTS.find(([pattern]) => pattern.test(name))
+  return known?.[1] ?? OPENAI_PATCH_COST
+}
+
+/**
+ * Each image part of an OpenAI request names the `high` detail, the one its
+ * cost counts at: `auto` lets a newer model send an image whole, up to
+ * 30,000 patches, which no estimate could foresee.
+ */
+export const OPENAI_IMAGE_PART_OPTIONS = { openai: { imageDetail: "high" } }
+
 /**
  * OpenAI Chat Completions, as OpenAI-compatible upstreams speak it. Its
  * upstreams cache implicitly with no write price, so a model on it has no
@@ -1146,7 +1187,7 @@ const reasoningInField =
  *
  * Its upstreams take fewer images than the Messages and Responses APIs (Groq
  * takes 5 a request and 4 MB of base64 an image), so its requests keep within
- * that tighter bound.
+ * that tighter bound. It counts and sends images as OpenAI does.
  */
 export const CHAT_COMPLETIONS_CLASS: ApiClassContribution = {
   id: "openai-chat",
@@ -1154,6 +1195,8 @@ export const CHAT_COMPLETIONS_CLASS: ApiClassContribution = {
   protocols: ["completions"],
   promptCacheTtl: Option.none(),
   imageLimit: { images: 5, base64Chars: 4_000_000 },
+  imageCost: openAiImageCost,
+  imagePartOptions: OPENAI_IMAGE_PART_OPTIONS,
   resolveModel: (request) =>
     Effect.map(loadChatSdk, ({ OpenAiClient, OpenAiLanguageModel }) => {
       const reasoningField = Option.fromUndefinedOr(request.model.reasoningField)

@@ -98,6 +98,8 @@ import {
   ModelHttpClient,
   latestReset,
   spentLimitsReset,
+  openAiImageCost,
+  OPENAI_IMAGE_PART_OPTIONS,
 } from "./providers.js"
 import type {
   OpenAiClient as OpenAiResponsesClient,
@@ -1445,6 +1447,8 @@ export const RESPONSES_CLASS: ApiClassContribution = {
   npm: ["@ai-sdk/openai"],
   protocols: ["responses"],
   promptCacheTtl: Option.some(RESPONSES_PROMPT_CACHE_TTL),
+  imageCost: openAiImageCost,
+  imagePartOptions: OPENAI_IMAGE_PART_OPTIONS,
   resolveModel: (request) =>
     Effect.map(loadOpenAiSdk, ({ OpenAiClient, OpenAiLanguageModel }) => {
       const reasons = modelReasons(request.model, request.hints)

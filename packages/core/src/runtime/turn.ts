@@ -1911,7 +1911,7 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
                 onSome: (ttlMs) => now < at + ttlMs,
               }),
             ),
-          historyTokens: estimateHistoryTokens(resolved.messages, log.measure),
+          historyTokens: estimateHistoryTokens(resolved.messages, log.measure, model),
         })),
       ),
   })
@@ -2325,7 +2325,7 @@ const routeEffort = Effect.fn("TurnHelpers.routeEffort")(function* (params: {
     const current = Option.map(log.lastCallModel, (): ModelRouteCurrent => ({
       model,
       warm,
-      historyTokens: estimateHistoryTokens(resolved.messages, log.measure),
+      historyTokens: estimateHistoryTokens(resolved.messages, log.measure, model),
     }))
     const asked = yield* askRouter(served.router, {
       model: served.model,
@@ -2661,7 +2661,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   })
   const budget = ModelContextBudget.make({
     contextLimitTokens: contextLimit,
-    ...omitUndefined({ inputLimitTokens: Option.getOrUndefined(inputLimit) }),
+    ...omitUndefined({
+      inputLimitTokens: Option.getOrUndefined(inputLimit),
+      imageCost: modelOption.value.imageCost,
+    }),
     reservedSystemTokens:
       resolved.systemPrompt.reduce((sum, block) => sum + estimateTextTokens(block), 0) +
       Option.match(turnNoticesText(requestNotices(resolved)), {

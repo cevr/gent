@@ -25,7 +25,9 @@ import {
 } from "effect/ai"
 import {
   type CacheWriteByLifetime,
+  type ImageCost,
   type ImageLimit,
+  type ImagePartOptions,
   Model,
   ModelId,
   ProviderId,
@@ -531,17 +533,25 @@ export const acceptedEfforts = (entry: CatalogModel): ReadonlyArray<ReasoningEff
     },
   )
 
+/** What an API class decides about a catalog model it speaks (`modelFromCatalog`). */
+export type CatalogPlan = Pick<
+  ApiClassContribution,
+  "efforts" | "imageLimit" | "imageCost" | "imagePartOptions"
+>
+
 /**
  * A catalog model as gent's `Model`, under `providerId` (a driver id, which
  * may differ from the catalog provider's). A decision model is a classifier.
  * `apiClass` is the class that speaks it: its requests name the class's
- * effort levels (`Model.efforts`; by default the catalog's effort list) and
- * carry at most the class's tool images (`Model.imageLimit`).
+ * effort levels (`Model.efforts`; by default the catalog's effort list),
+ * carry at most the class's tool images (`Model.imageLimit`), and count and
+ * send each image as the class does (`Model.imageCost`,
+ * `Model.imagePartOptions`).
  */
 export const modelFromCatalog = (
   providerId: string,
   entry: CatalogModel,
-  apiClass: Pick<ApiClassContribution, "efforts" | "imageLimit"> = {},
+  apiClass: CatalogPlan = {},
 ): Model => {
   const levels = (apiClass.efforts ?? acceptedEfforts)(entry)
   const model = Model.make({
@@ -563,6 +573,8 @@ export const modelFromCatalog = (
       reasoning: entry.reasoning,
       imageInput: entry.imageInput,
       imageLimit: apiClass.imageLimit,
+      imageCost: apiClass.imageCost?.(entry),
+      imagePartOptions: apiClass.imagePartOptions,
       efforts: Option.getOrUndefined(Option.liftPredicate(levels, (each) => each.length > 0)),
     }),
   })
@@ -653,6 +665,16 @@ export interface ApiClassContribution {
    * take fewer than the default bound (`Model.imageLimit`).
    */
   readonly imageLimit?: ImageLimit
+  /**
+   * What one tool image costs `entry` (`Model.imageCost`). Absent: the
+   * highest of the known costs.
+   */
+  readonly imageCost?: (entry: CatalogModel) => ImageCost
+  /**
+   * The provider options each image part of this class's requests carries
+   * (`Model.imagePartOptions`): the detail its `imageCost` counts at.
+   */
+  readonly imagePartOptions?: ImagePartOptions
   readonly resolveModel: (
     request: ApiClassRequest,
   ) => Effect.Effect<ProviderResolution, DriverError>
