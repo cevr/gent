@@ -473,7 +473,7 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                           |
 | `@gent/cache`                             | `cache.client.tsx`       | Cache-miss rows, waste total, cache timer  |
 | `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child-completion row |
-| `@gent/git`                               | `git.client.tsx`         | Branch, pull request, changed `+/-` labels |
+| `@gent/git`                               | `git.client.tsx`         | Git labels, `/git` pane, `/diff` to hunk   |
 | `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                             |
 | `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row            |
 

@@ -411,15 +411,24 @@ const toInitialSession = (session: Option.Option<DomainSession | Session>): Sess
     },
   })
 
+/**
+ * The platform `services` a render takes, with `tools` standing in for `gh`
+ * and `hunk` (`testPlatformLayer`); the enclosing scope releases them.
+ */
+export const testPlatformServices = (tools: TestTools = {}) =>
+  Effect.gen(function* () {
+    const scope = yield* Effect.scope
+    const context = yield* Layer.buildWithScope(testPlatformLayer(tools), scope)
+    return Context.makeUnsafe<unknown>(Context.add(context, Scope.Scope, scope).mapUnsafe)
+  })
+
 const getServices = (): Promise<Context.Context<unknown>> => {
   if (Option.isSome(sharedServices)) return Effect.runPromise(Effect.succeed(sharedServices.value))
   return Effect.runPromise(
     Effect.gen(function* () {
+      // The shared services live as long as the test process.
       const scope = yield* Scope.make()
-      const context = yield* Layer.buildWithScope(testPlatformLayer(), scope)
-      const services = Context.makeUnsafe<unknown>(
-        Context.add(context, Scope.Scope, scope).mapUnsafe,
-      )
+      const services = yield* testPlatformServices().pipe(Effect.provideService(Scope.Scope, scope))
       sharedServices = Option.some(services)
       return services
     }),

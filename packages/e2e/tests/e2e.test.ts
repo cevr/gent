@@ -236,4 +236,36 @@ describe("E2E: Terminal handover", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     TEST_TIMEOUT,
   )
+
+  // `@gent/git` runs `hunk` from PATH; a stand-in prints its arguments and exits.
+  it.scopedLive(
+    "/diff hands the terminal to hunk and takes it back",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* makeTempDirectoryScoped("gent-e2e-hunk-")
+        yield* fs.writeFileString(
+          `${dir}/hunk`,
+          ["#!/bin/sh", "printf 'HUNK-PROBE %s\\n' \"$*\"", ""].join("\n"),
+        )
+        yield* fs.chmod(`${dir}/hunk`, 0o755)
+        const ctx = yield* seedAndSpawn(["--mock-empty"], DEFAULT_PTY_SIZE, {
+          // oxlint-disable-next-line effect/noGlobals -- the stand-in goes ahead of the test's own PATH
+          PATH: `${dir}:${Bun.env["PATH"] ?? ""}`,
+        })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        ctx.pty.write("/diff")
+        yield* settlePty(ctx, REPAINT)
+        ctx.pty.write(keys.enter)
+        yield* ptyWaitFor(ctx, "HUNK-PROBE diff --watch", { timeout: 10_000 })
+        yield* screenWaitFor(
+          ctx,
+          (visible) =>
+            visible.some((line) => line.includes("ctrl+p commands")) &&
+            visible.some((line) => line.includes("ready")),
+          { timeout: 10_000, label: "the screen back after hunk" },
+        )
+      }).pipe(Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
 })

@@ -1,8 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Option, Result } from "effect"
+import { Effect, FileSystem, Option, Result, Schedule } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { BunServices } from "@effect/platform-bun"
+import { RendererControlState } from "@opentui/core"
 import {
   AgentEvent,
   BranchId,
@@ -21,6 +22,8 @@ import gitExtension, {
   parseStatus,
   readCheckout,
   readPullRequest,
+  reviewTarget,
+  workTreeCommand,
 } from "../../src/extensions/git.client"
 import type { StatusLabelItem } from "../../src/extensions/client-facets"
 import { App } from "../../src/app"
@@ -31,6 +34,7 @@ import {
   renderScoped,
   type TestTools,
   testPlatformLayer,
+  testPlatformServices,
 } from "../render-harness-boundary"
 import { waitForFrame, waitUntil } from "../helpers-boundary"
 
@@ -597,3 +601,253 @@ describe("git status row", () => {
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
+
+// ── review ──────────────────────────────────────────────────────────────────
+
+describe("git review commands", () => {
+  test("/diff names the work tree, some paths in it, or the branch's pull request", () => {
+    expect(reviewTarget("", "/r")).toEqual({ _tag: "WorkTree", cwd: "/r", pathspecs: [] })
+    expect(reviewTarget(" a.ts  src/b.ts ", "/r")).toEqual({
+      _tag: "WorkTree",
+      cwd: "/r",
+      pathspecs: ["a.ts", "src/b.ts"],
+    })
+    expect(reviewTarget("pr", "/r")).toEqual({ _tag: "PullRequest", cwd: "/r" })
+  })
+
+  test("hunk reviews the work tree as it changes, and the reader's git pager stands in for it", () => {
+    const all = { _tag: "WorkTree" as const, cwd: "/r", pathspecs: [] }
+    const one = { ...all, pathspecs: ["a.ts"] }
+    expect(workTreeCommand(all, "hunk", "HEAD")).toEqual(["hunk", ["diff", "--watch"]])
+    expect(workTreeCommand(one, "hunk", "HEAD")).toEqual([
+      "hunk",
+      ["diff", "--watch", "--", "a.ts"],
+    ])
+    expect(workTreeCommand(one, "pager", "HEAD")).toEqual([
+      "git",
+      ["--no-optional-locks", "--paginate", "diff", "HEAD", "--", "a.ts"],
+    ])
+    // An unborn branch has no HEAD: its staged lines are the change.
+    expect(workTreeCommand(all, "pager", "--cached")).toEqual([
+      "git",
+      ["--no-optional-locks", "--paginate", "diff", "--cached"],
+    ])
+  })
+})
+
+/**
+ * A stand-in program: a shell script, in its own directory, made of the lines
+ * `script` gives for that directory. `log` reads `<dir>/log`.
+ */
+const fakeProgram = (name: string, script: (dir: string) => ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const dir = yield* makeTempDirectoryScoped(`gent-fake-${name}-`)
+    const program = `${dir}/${name}`
+    yield* fs.writeFileString(program, ["#!/bin/sh", ...script(dir), ""].join("\n"))
+    yield* fs.chmod(program, 0o755)
+    const log = fs.readFileString(`${dir}/log`).pipe(Effect.orElseSucceed(() => ""))
+    return { program, dir, log }
+  })
+
+/** A `hunk` that logs where it ran and its arguments, and the patch it was handed. */
+const fakeHunk = fakeProgram("hunk", (dir) => [
+  `echo "$PWD|$*" >> '${dir}/log'`,
+  `if [ "$1" = patch ]; then cat "$2" >> '${dir}/log'; fi`,
+])
+
+/** A `gh` whose `pr view` answers `view` and whose `pr diff` prints `patch`. */
+const fakePullRequestGh = (view: string, patch: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const gh = yield* fakeProgram("gh", (dir) => [
+      `if [ "$2" = diff ]; then cat '${dir}/patch'; else cat '${dir}/view'; fi`,
+    ])
+    yield* fs.writeFileString(`${gh.dir}/view`, view)
+    yield* fs.writeFileString(`${gh.dir}/patch`, patch)
+    return gh
+  })
+
+/** Open pull request 7 with a title too long for a narrow pane, whose one check passed. */
+const LONG_PR_JSON = PR_JSON.replace(
+  '"title":"Show the branch"',
+  '"title":"Show the branch, its pull request and the changed lines in the composer"',
+)
+
+const PATCH = "diff --git a/kept.txt b/kept.txt\n--- a/kept.txt\n+++ b/kept.txt\n"
+
+/** The app on `cwd`, with `tools` for `gh` and `hunk`. */
+const renderApp = (cwd: string, width: number, tools: TestTools) =>
+  Effect.gen(function* () {
+    const services = yield* testPlatformServices(tools)
+    return yield* renderScoped(() => <App />, {
+      client: createMockClient(),
+      runtime: createMockRuntime(),
+      builtins: [gitExtension],
+      services,
+      cwd,
+      width,
+      height: 30,
+      initialSession: {
+        id: sessionId,
+        activeBranchId: branchId,
+        name: "Git",
+        createdAt: dateFromMillis(0),
+        updatedAt: dateFromMillis(0),
+      },
+    })
+  })
+
+type RenderSetup = Effect.Success<ReturnType<typeof renderApp>>
+
+/** Run `/<command>` from the composer. */
+const slash = (setup: RenderSetup, command: string) =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() => setup.mockInput.typeText(command))
+    setup.mockInput.pressEnter()
+  })
+
+const frameLine = (frame: string, text: string) =>
+  frame.split("\n").find((line) => line.includes(text)) ?? ""
+
+describe("git pane", () => {
+  it.live(
+    "/git lists the changed files and the pull request, fits a narrow terminal, and esc or ctrl+c closes it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* makeRepo("gent-git-pane-")
+        yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\nthree\n")
+        const deep = "docs/notes/of/the/review/pane/in/a/narrow/terminal.md"
+        yield* fs.makeDirectory(`${repo}/docs/notes/of/the/review/pane/in/a/narrow`, {
+          recursive: true,
+        })
+        yield* fs.writeFileString(`${repo}/${deep}`, "a\nb\nc\n")
+        const gh = yield* fakePullRequestGh(LONG_PR_JSON, PATCH)
+        const setup = yield* renderApp(repo, 120, { gh: gh.program })
+        yield* waitForFrame(setup, (frame) => frame.includes("#7 ✓"), "the pull request label")
+        yield* slash(setup, "/git")
+        const wide = yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("git · trunk · 2 files +4 -0"),
+          "the git pane",
+        )
+        expect(frameLine(wide, "kept.txt")).toMatch(/M {2}kept\.txt +\+1 -0/)
+        expect(frameLine(wide, "terminal.md")).toMatch(new RegExp(`\\? {2}${deep} +\\+3`))
+        expect(frameLine(wide, "#7 Show")).toContain(
+          "#7 Show the branch, its pull request and the changed lines in the composer · open · checks ✓",
+        )
+        expect(wide).toContain("↑↓ move · enter review · esc close")
+
+        // Narrow: the long path keeps its end, the request its number and verdict.
+        setup.resize(60, 30)
+        const narrow = yield* waitForFrame(
+          setup,
+          (frame) => frameLine(frame, "#7 Show").includes("· open · ✓"),
+          "the narrow pane",
+        )
+        expect(frameLine(narrow, "terminal.md")).toMatch(/\? {2}…\/.*narrow\/terminal\.md +\+3/)
+        expect(frameLine(narrow, "#7 Show")).not.toContain("checks")
+        setup.resize(120, 30)
+        yield* waitForFrame(
+          setup,
+          (frame) => frameLine(frame, "#7 Show").includes("· open · checks ✓"),
+          "the wide pane again",
+        )
+
+        setup.mockInput.pressEscape()
+        yield* waitForFrame(setup, (frame) => !frame.includes("git · trunk"), "esc closes")
+        yield* slash(setup, "/git")
+        yield* waitForFrame(setup, (frame) => frame.includes("git · trunk"), "the pane again")
+        setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(setup, (frame) => !frame.includes("git · trunk"), "ctrl+c closes")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.live(
+    "the pane names a gh that is not signed in in its note row",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* makeRepo("gent-git-note-")
+        yield* fs.writeFileString(`${repo}/kept.txt`, "one\n")
+        const gh = yield* fakeGh({
+          stderr: "To get started with GitHub CLI, please run:  gh auth login\n",
+          code: 4,
+        })
+        const setup = yield* renderApp(repo, 80, { gh: gh.program })
+        yield* slash(setup, "/git")
+        yield* waitForFrame(
+          setup,
+          (frame) =>
+            frame.includes("git · trunk · 1 file +0 -1") &&
+            frame.includes("gh is not signed in · gh auth login"),
+          "the note row",
+        )
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    12_000,
+  )
+
+  it.live(
+    "enter on a file hands the terminal to hunk at the checkout's root, and on the request hands it gh's patch",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* makeRepo("gent-git-enter-")
+        yield* fs.makeDirectory(`${repo}/sub`)
+        yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\nthree\n")
+        const hunk = yield* fakeHunk
+        const gh = yield* fakePullRequestGh(PR_JSON, PATCH)
+        const setup = yield* renderApp(`${repo}/sub`, 100, { gh: gh.program, hunk: hunk.program })
+        yield* waitForFrame(setup, (frame) => frame.includes("#7 ✓"), "the pull request label")
+        yield* slash(setup, "/git")
+        yield* waitForFrame(setup, (frame) => frame.includes("#7 Show the branch"), "the pane")
+        setup.mockInput.pressEnter()
+        const realRepo = yield* fs.realPath(repo)
+        yield* waitForLog(hunk.log, (log) => log.includes(`${realRepo}|diff --watch -- kept.txt`))
+        // Keys belong to hunk until the renderer takes the terminal back.
+        yield* waitUntil(
+          () => setup.renderer.controlState !== RendererControlState.EXPLICIT_SUSPENDED,
+          "the terminal back",
+        )
+        // The pane stays open for the next row.
+        yield* waitForFrame(setup, (frame) => frame.includes("#7 Show the branch"), "the pane")
+        setup.mockInput.pressArrow("down")
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        const log = yield* waitForLog(hunk.log, (text) => text.includes(PATCH))
+        expect(log).toMatch(/\|patch .*gent-pr-.*\.patch\n/)
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    12_000,
+  )
+
+  it.live(
+    "without hunk, /diff runs the git pager and says hunk was not found",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* makeRepo("gent-git-pager-")
+        // Only an untracked file: `git diff HEAD` prints nothing into the test's output.
+        yield* fs.writeFileString(`${repo}/new.txt`, "x\n")
+        const setup = yield* renderApp(repo, 100, {})
+        yield* waitForFrame(setup, (frame) => frame.includes("1 file +1 -0"), "the checkout")
+        yield* slash(setup, "/diff")
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("hunk not found · using the git pager"),
+          "the note",
+        )
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    12_000,
+  )
+})
+
+/** Poll a stand-in's log until `done` holds, and answer it. */
+const waitForLog = (log: Effect.Effect<string>, done: (text: string) => boolean) =>
+  log.pipe(
+    Effect.filterOrFail(done),
+    // 250 polls 20 ms apart: five seconds.
+    Effect.retry({ schedule: Schedule.spaced("20 millis"), times: 250 }),
+    Effect.orDie,
+  )

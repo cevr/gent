@@ -11,17 +11,32 @@ import {
   Stream,
 } from "effect"
 import type { ChildProcessSpawner } from "effect/process"
-import { createEffect, createMemo, createRoot, on } from "solid-js"
+import { createEffect, createMemo, createRoot, type JSX, on, Show } from "solid-js"
 import { lineCount } from "@gent/core/protocol"
 import { runProcess } from "@gent/core/extensions/api"
 import {
+  clientCommandContribution,
+  clientContributions,
   ClientContext,
   defineClientExtension,
+  fitWidth,
+  keyHint,
+  KeyHints,
+  PickerFrame,
+  plainRow,
   plural,
+  SelectList,
+  type SelectListRow,
   sessionQuery,
   STATUS_YIELD,
   statusLabelContribution,
   type StatusLabelItem,
+  textWidth,
+  truncate,
+  truncatePath,
+  usePickerGeometry,
+  useTheme,
+  widgetContribution,
 } from "@gent/tui/extensions"
 
 /**
@@ -566,6 +581,45 @@ const NO_PULL_REQUEST = [
 ]
 
 /**
+ * One `gh pr <verb>` in `cwd`, with prompts, the update notice and the
+ * spinner off, answered with its output. `GhMissing` when `gh` cannot run;
+ * a timeout, or an exit that is not zero, fails with the reason, a sign-in
+ * named as such. `absent` says which refusals mean "nothing to name".
+ */
+const ghPr = (
+  cwd: string,
+  args: readonly [string, ...Array<string>],
+  absent: (said: string) => boolean = () => false,
+): Effect.Effect<
+  Option.Option<string>,
+  GhMissing | GhReadError,
+  ChildProcessSpawner.ChildProcessSpawner
+> => {
+  const name = `gh pr ${args[0]}`
+  return runProcess("gh", ["pr", ...args], {
+    cwd,
+    env: { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_SPINNER_DISABLED: "1" },
+    extendEnv: true,
+    timeout: GH_TIMEOUT,
+  }).pipe(
+    Effect.catchTag("ProcessError", (error): Effect.Effect<never, GhMissing | GhReadError> => {
+      if (error.timedOut === true)
+        return Effect.fail(new GhReadError({ message: `${name} timed out` }))
+      if (commandNotFound(error.cause)) return Effect.fail(new GhMissing())
+      return Effect.fail(new GhReadError({ message: error.message }))
+    }),
+    Effect.flatMap((result) => {
+      if (result.exitCode === 0) return Effect.succeedSome(result.stdout)
+      const said = result.stderr.toLowerCase()
+      if (absent(said)) return Effect.succeedNone
+      if (said.includes("gh auth login"))
+        return Effect.fail(new GhReadError({ message: "gh is not signed in · gh auth login" }))
+      return Effect.fail(new GhReadError({ message: `${name}: ${firstLine(result.stderr)}` }))
+    }),
+  )
+}
+
+/**
  * The pull request of the branch checked out in `cwd`, as `gh pr view`
  * names it. None when the branch has none, or the checkout has no GitHub
  * remote. `GhMissing` when `gh` cannot run.
@@ -577,31 +631,20 @@ export const readPullRequest = (
   GhMissing | GhReadError,
   ChildProcessSpawner.ChildProcessSpawner
 > =>
-  runProcess("gh", ["pr", "view", "--json", PULL_REQUEST_FIELDS], {
-    cwd,
-    env: { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_SPINNER_DISABLED: "1" },
-    extendEnv: true,
-    timeout: GH_TIMEOUT,
-  }).pipe(
-    Effect.catchTag("ProcessError", (error): Effect.Effect<never, GhMissing | GhReadError> => {
-      if (error.timedOut === true)
-        return Effect.fail(new GhReadError({ message: "gh pr view timed out" }))
-      if (commandNotFound(error.cause)) return Effect.fail(new GhMissing())
-      return Effect.fail(new GhReadError({ message: error.message }))
-    }),
-    Effect.flatMap((result) => {
-      if (result.exitCode === 0) {
-        return Option.match(decodePullRequest(result.stdout), {
-          onNone: () => Effect.fail(new GhReadError({ message: "gh pr view: unreadable answer" })),
-          onSome: (pr) => Effect.succeedSome(pr),
-        })
-      }
-      const said = result.stderr.toLowerCase()
-      if (NO_PULL_REQUEST.some((phrase) => said.includes(phrase))) return Effect.succeedNone
-      if (said.includes("gh auth login"))
-        return Effect.fail(new GhReadError({ message: "gh is not signed in · gh auth login" }))
-      return Effect.fail(new GhReadError({ message: `gh pr view: ${firstLine(result.stderr)}` }))
-    }),
+  ghPr(cwd, ["view", "--json", PULL_REQUEST_FIELDS], (said) =>
+    NO_PULL_REQUEST.some((phrase) => said.includes(phrase)),
+  ).pipe(
+    Effect.flatMap((answer) =>
+      Option.match(answer, {
+        onNone: () => Effect.succeedNone,
+        onSome: (stdout) =>
+          Option.match(decodePullRequest(stdout), {
+            onNone: () =>
+              Effect.fail(new GhReadError({ message: "gh pr view: unreadable answer" })),
+            onSome: (pr) => Effect.succeedSome(pr),
+          }),
+      }),
+    ),
   )
 
 /**
@@ -625,6 +668,240 @@ const pullRequestKey = (checkout: Option.Option<Checkout>): string =>
         }),
     },
   )
+
+// ── review ──────────────────────────────────────────────────────────────────
+
+/**
+ * What a review shows: the work tree against `HEAD` in `cwd` (all of it, or
+ * the paths `pathspecs` names), or the pull request of the branch checked out
+ * in `cwd`.
+ */
+const ReviewTarget = Schema.TaggedUnion({
+  WorkTree: { cwd: Schema.String, pathspecs: Schema.Array(Schema.String) },
+  PullRequest: { cwd: Schema.String },
+})
+type ReviewTarget = typeof ReviewTarget.Type
+type WorkTree = Extract<ReviewTarget, { readonly _tag: "WorkTree" }>
+
+/** `/diff` reviews the work tree, `/diff <paths>` those paths of it, `/diff pr` the branch's pull request. */
+export const reviewTarget = (args: string, cwd: string): ReviewTarget => {
+  const words = args.split(/\s+/).filter((word) => word.length > 0)
+  if (words.length === 1 && words[0] === "pr") return ReviewTarget.cases.PullRequest.make({ cwd })
+  return ReviewTarget.cases.WorkTree.make({ cwd, pathspecs: words })
+}
+
+/**
+ * The program that shows the work tree. `hunk diff --watch` follows the
+ * agent's edits while it is open. Without hunk, `git --paginate diff` against
+ * `base` runs the reader's own pager (`core.pager`, `$PAGER`, `less`).
+ */
+export const workTreeCommand = (
+  target: WorkTree,
+  viewer: "hunk" | "pager",
+  base: string,
+): readonly [string, ReadonlyArray<string>] => {
+  let paths: ReadonlyArray<string> = []
+  if (target.pathspecs.length > 0) paths = ["--", ...target.pathspecs]
+  if (viewer === "hunk") return ["hunk", ["diff", "--watch", ...paths]]
+  return ["git", ["--no-optional-locks", "--paginate", "diff", base, ...paths]]
+}
+
+/** No program by this name on `PATH`. */
+class ProgramMissing extends Schema.TaggedError<ProgramMissing>()("ProgramMissing", {
+  program: Schema.String,
+}) {}
+
+/** A review that did not run to its end; the status row names the reason. */
+class ReviewFailed extends Schema.TaggedError<ReviewFailed>()("ReviewFailed", {
+  message: Schema.String,
+}) {}
+
+/** A pager exits 141 (SIGPIPE) when the reader quits it before the end: not a failure. */
+const QUIT_EARLY = 141
+
+/** The status row's note when `/diff` first finds no hunk. */
+const HUNK_MISSING = "hunk not found · using the git pager"
+
+/** Run a program on the terminal a handover gives it, in `cwd`. */
+const onTerminal = (
+  cwd: string,
+  [command, args]: readonly [string, ReadonlyArray<string>],
+): Effect.Effect<void, ProgramMissing | ReviewFailed, ChildProcessSpawner.ChildProcessSpawner> =>
+  runProcess(command, args, { cwd, stdin: "inherit", stdout: "inherit", stderr: "inherit" }).pipe(
+    Effect.catchTag(
+      "ProcessError",
+      (error): Effect.Effect<never, ProgramMissing | ReviewFailed> => {
+        if (commandNotFound(error.cause))
+          return Effect.fail(new ProgramMissing({ program: command }))
+        return Effect.fail(new ReviewFailed({ message: `${command}: ${error.message}` }))
+      },
+    ),
+    Effect.flatMap((result) => {
+      if (result.exitCode === 0 || result.exitCode === QUIT_EARLY) return Effect.void
+      return Effect.fail(new ReviewFailed({ message: `${command} exited with ${result.exitCode}` }))
+    }),
+  )
+
+// ── pane ────────────────────────────────────────────────────────────────────
+
+const GIT_PANE = "git.pane"
+
+/** `M  apps/tui/src/app.tsx   +12 -3`: the path cut from its start to fit `width`. */
+const fileLine = (file: ChangedFile, width: number): string => {
+  const counts = Option.match(file.lines, {
+    onNone: () => "",
+    onSome: (lines) => {
+      if (file.status === "?") return `+${lines.added}`
+      return lineDelta(lines)
+    },
+  })
+  const name = Option.match(file.from, {
+    onNone: () => file.path,
+    onSome: (from) => `${from} → ${file.path}`,
+  })
+  const lead = `${file.status}  `
+  const room = Math.max(0, width - textWidth(lead) - textWidth(counts) - 2)
+  return `${lead}${fitWidth(truncatePath(name, room), room)}  ${counts}`
+}
+
+const CHECK_GLYPH = { pass: "✓", fail: "✗", pending: "…", none: "" }
+
+/** GitHub's `CHANGES_REQUESTED` as `changes requested`. */
+const spoken = (word: string): string => word.toLowerCase().replaceAll("_", " ")
+
+/**
+ * `#123 Title · open · checks ✓ · review required`. Too wide, the request
+ * keeps its number, state and checks glyph, and its title gives way.
+ */
+const pullRequestLine = (pr: PullRequest, width: number): string => {
+  let state = spoken(pr.state)
+  if (pr.isDraft && pr.state === "OPEN") state = "draft"
+  const glyph = CHECK_GLYPH[checksVerdict(pr.statusCheckRollup ?? [])]
+  const checks = Option.match(
+    Option.liftPredicate(glyph, (text) => text.length > 0),
+    {
+      onNone: () => "",
+      onSome: (text) => `checks ${text}`,
+    },
+  )
+  const review = spoken(Option.getOrElse(Option.fromNullishOr(pr.reviewDecision), () => ""))
+  const said = (parts: ReadonlyArray<string>) => parts.filter((part) => part.length > 0).join(" · ")
+  const full = said([state, checks, review])
+  const head = `#${pr.number} ${pr.title}`
+  if (textWidth(head) + 3 + textWidth(full) <= width) return `${head} · ${full}`
+  const compact = said([state, glyph])
+  return `${truncate(head, Math.max(0, width - 3 - textWidth(compact)))} · ${compact}`
+}
+
+/** `git · main ↑2 → origin/main · 4 files +120 -31`; the upstream goes first on a narrow pane. */
+const paneTitle = (checkout: Option.Option<Checkout>, width: number): string =>
+  Option.match(checkout, {
+    onNone: () => "git",
+    onSome: ({ head, files }) => {
+      const branch = Option.getOrElse(branchText(head), () => "no branch")
+      let changes = "no changes"
+      if (files.length > 0)
+        changes = `${plural(files.length, "file")} ${lineDelta(changeTotals(files))}`
+      const upstream = Option.match(head.upstream, {
+        onNone: () => "",
+        onSome: (name) => ` → ${name}`,
+      })
+      const full = `git · ${branch}${upstream} · ${changes}`
+      if (textWidth(full) <= width) return full
+      return `git · ${branch} · ${changes}`
+    },
+  })
+
+const reviewKey = (target: ReviewTarget): string =>
+  ReviewTarget.match(target, {
+    WorkTree: ({ pathspecs }) => `file:${pathspecs.join("\0")}`,
+    PullRequest: () => "pull-request",
+  })
+
+interface GitPaneProps {
+  readonly open: boolean
+  readonly checkout: () => Option.Option<Checkout>
+  readonly pullRequest: () => Option.Option<PullRequest>
+  /** The last read's failure, the checkout's or the pull request's. */
+  readonly error: () => Option.Option<string>
+  readonly loading: () => boolean
+  readonly onReview: (target: ReviewTarget) => void
+  readonly onClose: () => void
+}
+
+/**
+ * The `/git` pane: one row per changed file with its `+/-` lines, then the
+ * branch's pull request. Enter hands the terminal to hunk for the row and
+ * the pane stays open for the next one; esc or ctrl+c closes it.
+ */
+function GitPane(props: GitPaneProps) {
+  const { theme } = useTheme()
+  const { rowWidth } = usePickerGeometry()
+  const rows = (): ReadonlyArray<SelectListRow<ReviewTarget>> =>
+    Option.match(props.checkout(), {
+      onNone: () => [],
+      onSome: (checkout) => [
+        ...checkout.files.map((file) =>
+          plainRow(
+            ReviewTarget.cases.WorkTree.make({
+              cwd: checkout.root,
+              pathspecs: Option.match(file.from, {
+                onNone: () => [file.path],
+                onSome: (from) => [from, file.path],
+              }),
+            }),
+            () => fileLine(file, rowWidth()),
+          ),
+        ),
+        ...Option.match(props.pullRequest(), {
+          onNone: () => [],
+          onSome: (pr) => [
+            plainRow(ReviewTarget.cases.PullRequest.make({ cwd: checkout.root }), () =>
+              pullRequestLine(pr, rowWidth()),
+            ),
+          ],
+        }),
+      ],
+    })
+  const empty = (): Option.Option<JSX.Element> => {
+    if (props.loading() && Option.isNone(props.checkout())) return Option.none()
+    let text = "No changes against HEAD"
+    if (Option.isNone(props.checkout())) text = "Not a git checkout"
+    return Option.some(
+      <box paddingLeft={1}>
+        <text style={{ fg: theme.textMuted }}>{text}</text>
+      </box>,
+    )
+  }
+  return (
+    <Show when={props.open}>
+      <PickerFrame
+        title={paneTitle(props.checkout(), rowWidth())}
+        keys={[KeyHints.move, keyHint("enter", "review"), KeyHints.close]}
+        error={props.error()}
+      >
+        <SelectList
+          id="git"
+          open={props.open}
+          rows={rows}
+          rowKey={reviewKey}
+          loading={props.loading}
+          empty={empty}
+          extraKeys={(event) => {
+            // ctrl+c closes the pane as esc does, as over the host's panes.
+            if (event.ctrl === true && event.name === "c") {
+              props.onClose()
+              return true
+            }
+            return false
+          }}
+          onSelect={props.onReview}
+          onDismiss={props.onClose}
+        />
+      </PickerFrame>
+    </Show>
+  )
+}
 
 // ── refresh ─────────────────────────────────────────────────────────────────
 
@@ -661,7 +938,7 @@ const gitStateChanges = (gitDir: string): Stream.Stream<void, never, FileSystem.
 
 export default defineClientExtension(GIT_EXTENSION_ID, {
   setup: Effect.gen(function* () {
-    const { transport, workspace, lifecycle } = yield* ClientContext
+    const { transport, workspace, lifecycle, shell } = yield* ClientContext
     // Reads, the watch and the settle timer run outside the setup, from sync
     // callbacks, so the setup keeps the platform services they need.
     const services = yield* Effect.context<GitServices>()
@@ -759,13 +1036,133 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
         Option.flatMap((answer) => answer.pr),
       )
 
-    return statusLabelContribution({
-      priority: 20,
-      produce: () =>
-        Option.match(local.value(), {
-          onNone: () => [],
-          onSome: (checkout) => checkoutLabels(checkout, currentPullRequest()),
+    // The review: the terminal goes to hunk, or to the git pager once a run
+    // found no hunk on `PATH`, which the status row says once. A note waits
+    // for the handover's end: the status row is not drawn while it runs.
+    let hunkMissing = false
+    const learnHunkMissing = (): Option.Option<string> => {
+      if (hunkMissing) return Option.none()
+      hunkMissing = true
+      return Option.some(HUNK_MISSING)
+    }
+    // An unborn branch has no `HEAD`: its staged lines are its change.
+    const base = () =>
+      Option.match(
+        Option.filter(local.value(), (checkout) => Option.isNone(checkout.head.oid)),
+        { onNone: () => "HEAD", onSome: () => "--cached" },
+      )
+    const showWorkTree = (target: WorkTree) =>
+      shell.handover(
+        Effect.gen(function* () {
+          if (!hunkMissing) {
+            const ran = yield* onTerminal(target.cwd, workTreeCommand(target, "hunk", base())).pipe(
+              Effect.as(true),
+              Effect.catchTag("ProgramMissing", () => Effect.succeed(false)),
+            )
+            if (ran) return Option.none<string>()
+          }
+          const note = learnHunkMissing()
+          yield* onTerminal(target.cwd, workTreeCommand(target, "pager", base()))
+          return note
         }),
-    })
+      )
+    // `gh pr diff` pages itself without hunk; with it, its patch goes to a
+    // file for `hunk patch`, so the reader's `gh` sign-in reads a private one.
+    const pagedPullRequest = (cwd: string) =>
+      shell.handover(onTerminal(cwd, ["gh", ["pr", "diff"]]))
+    const showPullRequest = (cwd: string) =>
+      Effect.gen(function* () {
+        if (hunkMissing) {
+          yield* pagedPullRequest(cwd)
+          return Option.none<string>()
+        }
+        const patch = yield* ghPr(cwd, ["diff"])
+        const fs = yield* FileSystem.FileSystem
+        const file = yield* fs.makeTempFileScoped({ prefix: "gent-pr-", suffix: ".patch" })
+        yield* fs.writeFileString(
+          file,
+          Option.getOrElse(patch, () => ""),
+        )
+        const ran = yield* shell.handover(
+          onTerminal(cwd, ["hunk", ["patch", file]]).pipe(
+            Effect.as(true),
+            Effect.catchTag("ProgramMissing", () => Effect.succeed(false)),
+          ),
+        )
+        if (ran) return Option.none<string>()
+        const note = learnHunkMissing()
+        yield* pagedPullRequest(cwd)
+        return note
+      }).pipe(Effect.scoped)
+    const review = (target: Effect.Effect<ReviewTarget, never, GitServices>) =>
+      shell.cast(
+        target.pipe(
+          Effect.flatMap((value) =>
+            ReviewTarget.match(value, {
+              WorkTree: showWorkTree,
+              PullRequest: ({ cwd }) => showPullRequest(cwd),
+            }),
+          ),
+          Effect.flatMap((note) => Effect.sync(() => Option.map(note, shell.notify))),
+          Effect.catchTags({
+            ProgramMissing: ({ program }) =>
+              Effect.sync(() => shell.notify(`${program} not found`)),
+            GhMissing: () => Effect.sync(() => shell.notify("gh not found")),
+            GhReadError: ({ message }) => Effect.sync(() => shell.notify(message)),
+            ReviewFailed: ({ message }) => Effect.sync(() => shell.notify(message)),
+            PlatformError: (error) => Effect.sync(() => shell.notify(error.message)),
+          }),
+          Effect.provideContext(services),
+        ),
+      )
+    const openPane = () => {
+      shell.pane.open(GIT_PANE)
+      local.refresh()
+      pullRequest.refresh()
+    }
+
+    return clientContributions(
+      statusLabelContribution({
+        priority: 20,
+        produce: () =>
+          Option.match(local.value(), {
+            onNone: () => [],
+            onSome: (checkout) => checkoutLabels(checkout, currentPullRequest()),
+          }),
+      }),
+      clientCommandContribution({
+        id: "git.view",
+        title: "Git",
+        description: "Changed files and the branch's pull request; enter reviews one",
+        category: "Workflow",
+        slash: "git",
+        onSelect: openPane,
+      }),
+      clientCommandContribution({
+        id: "git.diff",
+        title: "Review changes",
+        description: "Review the work tree in hunk or the git pager: /diff [paths | pr]",
+        category: "Workflow",
+        slash: "diff",
+        onSelect: () => review(Effect.map(workspace.sessionCwd, (cwd) => reviewTarget("", cwd))),
+        onSlash: (args) =>
+          review(Effect.map(workspace.sessionCwd, (cwd) => reviewTarget(args, cwd))),
+      }),
+      widgetContribution({
+        id: GIT_PANE,
+        slot: "below-input",
+        component: () => (
+          <GitPane
+            open={shell.pane.isOpen(GIT_PANE)}
+            checkout={local.value}
+            pullRequest={currentPullRequest}
+            error={() => Option.orElse(local.error(), pullRequest.error)}
+            loading={local.loading}
+            onReview={(target) => review(Effect.succeed(target))}
+            onClose={() => shell.pane.close(GIT_PANE)}
+          />
+        ),
+      }),
+    )
   }),
 })
