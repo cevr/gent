@@ -3541,6 +3541,20 @@ const debugRateLimit = (method: string) =>
     reason: new AiError.RateLimitError({ retryAfter: Duration.seconds(1) }),
   })
 
+/** A user message holding it makes the debug model answer with a usage limit. */
+const USAGE_LIMIT_PHRASE = "debug usage limit"
+
+/**
+ * The debug model's usage limit: a 429 whose limit resets in five hours, past
+ * every retry cap, so the turn fails at once and names the reset time.
+ */
+const debugUsageLimit = (method: string) =>
+  AiError.make({
+    module: "LanguageModelLayers",
+    method,
+    reason: new AiError.RateLimitError({ retryAfter: Duration.hours(5) }),
+  })
+
 const extractLatestUserText = (promptInput: Prompt.RawInput): string => {
   const latest = [...Prompt.make(promptInput).content]
     .reverse()
@@ -3678,6 +3692,10 @@ export const multiToolCallStep = (
  * `debug ask` asks one background question with `ask_user_async`, works on
  * its assumption in a bash step that sleeps, and answers. The sleep keeps
  * the turn open long enough to answer the question while it runs.
+ *
+ * `debug usage limit` (not a scenario) fails the step with a rate limit that
+ * resets in five hours (`debugUsageLimit`), so a scripted run shows the
+ * error row that names the reset time.
  *
  * A step calls the tools the request advertises: each op as its own call, or,
  * on a turn narrowed to `cell`, one `cell` call whose code awaits the ops.
@@ -3897,6 +3915,9 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
     streamText: (modelOptions) =>
       Effect.suspend(() => {
         const latestUserText = extractLatestUserText(modelOptions.prompt)
+        if (latestUserText.toLowerCase().includes(USAGE_LIMIT_PHRASE)) {
+          return Effect.fail(debugUsageLimit("Debug.streamText"))
+        }
         const scenario = Option.fromUndefinedOr(
           DEBUG_SCENARIOS.find((entry) => latestUserText.toLowerCase().includes(entry.phrase)),
         )

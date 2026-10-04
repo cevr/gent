@@ -2306,6 +2306,26 @@ describe("a usage limit's reset time", () => {
       expect(ended?.retryAt).toEqual(Option.none())
     }).pipe(Effect.timeout("8 seconds")),
   )
+
+  it.scopedLive("the debug model's usage limit fails the turn with a reset time", () =>
+    Effect.gen(function* () {
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: LanguageModelLayers.debug(),
+      })
+      const events = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map(({ event }) => event),
+        Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      const before = yield* Clock.currentTimeMillis
+      yield* client.message.send({ sessionId, branchId, content: "debug usage limit" })
+      const errors = (yield* Fiber.join(events)).filter((event) => event._tag === "ErrorOccurred")
+      const retryAt = Option.getOrThrow(Option.fromUndefinedOr(errors[0]?.retryAt))
+      expect(retryAt).toBeGreaterThanOrEqual(before + Duration.toMillis(Duration.hours(5)))
+    }).pipe(Effect.timeout("8 seconds")),
+  )
 })
 
 describe("a step that does not settle", () => {
