@@ -22,6 +22,7 @@ import {
   Option,
   Path,
   Predicate,
+  Random,
   Schema,
 } from "effect"
 import { Base64, Hex } from "effect/encoding"
@@ -250,14 +251,27 @@ const blobPath = (path: Path.Path, directory: string, image: ToolImage) =>
 const SHA256_HEX = /^[0-9a-f]{64}$/
 
 /**
+ * A blob the sweep moved aside: `.sweep-<blob name>-<id>`, in the store's
+ * directory. One left by a sweep that stopped is settled by the next one.
+ */
+const SWEPT_NAME = /^\.sweep-([0-9a-f]{64})(\.[a-z]+)-[0-9a-f]{8}$/
+
+/**
  * Removes the blobs under `home`'s data directory that no stored message
  * references (`referenced`, the durable reference count storage keeps) and
  * that were last written or read more than `UNREFERENCED_BLOB_GRACE` ago. A
  * blob a stored message references stays however old it is, so a session
  * resumed after months still shows its images. The server runs it once when
- * it starts. Each file is checked right before it is removed; a save that
- * finds its file gone writes it again, and a request that finds it gone
- * sends a line instead.
+ * it starts.
+ *
+ * A save on another server may reuse a blob while the sweep looks at it, and
+ * no lock spans the processes. So the sweep moves each candidate aside with
+ * one rename, then reads its time and its references again. A save that
+ * touched the blob before the move shows in that time, and the blob goes
+ * back; a save after the move finds its file gone and writes it again (the
+ * same bytes, as the name is their digest). Only a moved blob still old and
+ * unreferenced is removed. A request that finds a blob gone sends a line
+ * instead.
  */
 export const sweepToolImages = Effect.fn("ToolImage.sweep")(function* <E>(
   home: string,
@@ -267,21 +281,48 @@ export const sweepToolImages = Effect.fn("ToolImage.sweep")(function* <E>(
   const path = yield* Path.Path
   const directory = yield* toolImageDirectory(home)
   const now = yield* Clock.currentTimeMillis
+  /** Whether `file` was written or read inside the grace; false when it is gone. */
+  const recent = (file: string) =>
+    Effect.map(Effect.option(fs.stat(file)), (info) =>
+      Option.exists(
+        Option.flatMap(info, (stat) => stat.mtime),
+        (at) => now - at.getTime() <= Duration.toMillis(UNREFERENCED_BLOB_GRACE),
+      ),
+    )
+  /** A moved blob goes back to `file` when used or referenced since; else it is removed. */
+  const settle = Effect.fnUntraced(function* (moved: string, file: string, sha256: string) {
+    if ((yield* recent(moved)) || (yield* referenced(sha256))) {
+      yield* fs.rename(moved, file).pipe(Effect.ignore)
+      return
+    }
+    yield* fs.remove(moved).pipe(Effect.ignore)
+  })
   const names = yield* fs
     .readDirectory(directory)
     .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
   for (const name of names) {
     const file = path.join(directory, name)
-    const written = Option.flatMap(yield* Effect.option(fs.stat(file)), (info) => info.mtime)
-    const old = Option.exists(
-      written,
-      (at) => now - at.getTime() > Duration.toMillis(UNREFERENCED_BLOB_GRACE),
-    )
-    if (!old) continue
-    // A file whose name is no digest (a write that never finished) has no reference.
+    const swept = Option.fromNullishOr(SWEPT_NAME.exec(name))
+    if (Option.isSome(swept)) {
+      const [, sha256 = "", extension = ""] = swept.value
+      yield* settle(file, path.join(directory, `${sha256}${extension}`), sha256)
+      continue
+    }
+    if (yield* recent(file)) continue
     const digest = Option.liftPredicate(name.split(".")[0] ?? "", (head) => SHA256_HEX.test(head))
-    if (Option.isSome(digest) && (yield* referenced(digest.value))) continue
-    yield* fs.remove(file).pipe(Effect.ignore)
+    if (Option.isNone(digest)) {
+      // No digest (a write that never finished): no save reuses it, and nothing references it.
+      yield* fs.remove(file).pipe(Effect.ignore)
+      continue
+    }
+    if (yield* referenced(digest.value)) continue
+    const id = (yield* Random.nextIntBetween(0, 0xffffffff)).toString(16).padStart(8, "0")
+    const moved = path.join(directory, `.sweep-${name}-${id}`)
+    const movedAside = yield* fs.rename(file, moved).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    )
+    if (movedAside) yield* settle(moved, file, digest.value)
   }
 })
 

@@ -1999,7 +1999,10 @@ host-owned design. It should expose:
   Storage counts each blob's references (`tool_image_references`, one row
   for each stored message that holds the image, written in the message's
   transaction and removed with it), and a server start removes only a blob
-  no stored message references and nobody used for a day;
+  no stored message references and nobody used for a day. With no lock
+  across servers, the sweep moves a candidate aside with one rename and
+  checks its time and references again: a save that reused the blob before
+  the move brings it back, and a save after the move writes it again;
 - author-facing errors: load, driver, provider-auth, service, process and
   interaction errors that extension code can intentionally return or inspect;
   an error only tests read (the capability errors) stays in core, where core
