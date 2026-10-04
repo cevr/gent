@@ -340,7 +340,8 @@ extension-owned service.
 A tool hands the model an image by reference. `saveToolImage` stores the
 bytes once in the content-addressed blob store,
 `<data dir>/blobs/<sha256>.<ext>`, and returns a `ToolImage` (`sha256`,
-`mediaType`, `width`, `height`, `bytes`, `source`). Put it anywhere in the
+`mediaType`, `width`, `height`, `bytes`, `source`, and `originalWidth` and
+`originalHeight` when the store scaled it). Put it anywhere in the
 tool's output; the output schema holds it as `ToolImage`.
 
 ```ts
@@ -362,12 +363,19 @@ export const ScreenshotTool = tool({
 ```
 
 `saveToolImage` takes `{ bytes }` or `{ path }`, and an optional `source`
-label. It reads the format and size from the image's own header and takes
-PNG, JPEG, GIF and WebP up to 3.75 MiB and 2,000 pixels a side; anything
-else fails with `ToolImageError`, so an image the model API would refuse
-never enters a session. A tool downscales a larger image before it saves it. The stored tool result stays ordinary JSON. Each
-request reads the bytes back and sends the image right after the tool
-result, under the line `Image from <tool> <source> <width>x<height>:`. A model
+label. It takes PNG, JPEG, GIF and WebP. An image within 3.75 MiB and 2,000
+pixels a side is stored byte for byte. A larger image is scaled to fit with
+its aspect ratio kept (Lanczos3) and keeps its format; a GIF becomes a PNG.
+An image still past 3.75 MiB is encoded as JPEG at quality 80, 60, 40 and
+20, then at three quarters of the side, until it fits. The blob and its
+`sha256` are the scaled bytes, and `originalWidth` and `originalHeight` record
+the size before the scale, so a tool can map its coordinates back. Only bytes
+no codec decodes fail, with `ToolImageError`, so an image the model API would
+refuse never enters a session. The stored tool result stays ordinary JSON.
+Each request reads the bytes back and sends the image right after the tool
+result, under the line `Image from <tool> <source> <width>x<height>:`; a
+scaled image's line adds `scaled from <W>x<H> (multiply coordinates by <f> to
+map to the original)`. A model
 the catalog says reads no images gets a line that names the image instead. A
 request sends at most the newest 20 images (5 on Chat Completions); past that
 it leaves out the oldest five at a time, each as a line that names it, and

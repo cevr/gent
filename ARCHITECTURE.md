@@ -84,9 +84,15 @@ updates this list in the same commit.
     the API class: Chat Completions takes 5 and 4 MB), and past either it
     leaves out its oldest images five at a time, each as a fixed line. So
     the prefix changes only at the 21st and 26th image, never at each
-    one, and the stored session never changes. Receipts: `toolImagePrompt`,
-    `toolImagesToDrop` and `toPrompt` in
-    `packages/core/src/runtime/model-context.ts`.
+    one, and the stored session never changes. The store fits each image
+    to one fixed profile when a tool saves it, not to each model: 2,000
+    pixels a side and 3.75 MiB, scaled with its aspect ratio kept and its
+    original size recorded (`originalWidth`, `originalHeight`), which the
+    image's line names with the factor that maps coordinates back (the
+    prior arts' settled entry "Tool image scaling" holds why). Receipts:
+    `toolImagePrompt`, `toolImagesToDrop` and `toPrompt` in
+    `packages/core/src/runtime/model-context.ts`; `saveToolImage` in
+    `packages/core/src/runtime/tool-image.ts`.
 11. **A model change is a durable user-role notice the loop writes.** The
     settings update only records the choice. At each step boundary the loop
     compares the model the branch last ran on or was told it continues with
@@ -154,7 +160,8 @@ updates this list in the same commit.
     (through `@gent/core/extensions/api`) and the TUI (through
     `@gent/core/host`) all call it. Host facts core cannot get from
     Effect (OS info, executable path, home directory, the build the process
-    runs) stay on `GentPlatform`.
+    runs) and the image codec (`transcodeImage`, `Bun.Image`) stay on
+    `GentPlatform`.
     The lint holds the edge outside the platform impl, the adapters, the
     tooling and test code: `effect/noGlobals` and `effect/noNodeBuiltinImport`
     ban `Bun.*`, the `bun` and `crypto` modules, `process.execPath`, `kill`,
@@ -1822,7 +1829,7 @@ add a worker, runtime owner, or model-facing cell dispatch path.
 Explicit platform/runtime seams:
 
 - `GentPlatform` owns host capabilities such as process identity, signals, env,
-  executable path, ids, hashing, and OS info. Time comes from Effect's `Clock`,
+  executable path, ids, hashing, the image codec, and OS info. Time comes from Effect's `Clock`,
   so a test can drive it.
 - `RuntimeEnvironment` carries launch/session configuration values:
   `cwd`, `home`, and platform name.
@@ -1957,7 +1964,7 @@ fails the call. A result of text alone is its joined text, and one of
 `structuredContent` alone (its text only repeating it) is that value; any
 other result is an object of `structuredContent`, `text`, the other blocks as
 `content`, `images`, and `omitted`, beside a `note`. An image block the tool
-image store takes (`saveToolImage`: PNG, JPEG, GIF or WebP within its limits)
+image store takes (`saveToolImage`: PNG, JPEG, GIF or WebP, scaled to fit)
 is a `ToolImage` in `images`, so the model sees it after the call's result as
 it sees any tool image, and its entry names the `path` of the image's
 content-addressed file (`toolImageFile`), which cell code reads; a typed tool returns only its `structuredContent`, so
@@ -2149,7 +2156,8 @@ host-owned design. It should expose:
   platform facts such as OS info, executable path, and home directory;
 - `runProcess` / `ProcessError`: the one command helper over the Effect
   `ChildProcessSpawner`;
-- `saveToolImage` / `ToolImage` / `ToolImageError`: a tool's image, stored
+- `saveToolImage` / `ToolImage` / `ToolImageError`: a tool's image, scaled
+  to fit the fixed limits, stored
   once by content (`<data dir>/blobs/<sha256>.<ext>`) and returned by
   reference in its output (`packages/core/src/runtime/tool-image.ts`).
   Storage counts each blob's references (`tool_image_references`, one row
