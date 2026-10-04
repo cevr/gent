@@ -2312,6 +2312,17 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 
 Other notes:
 
+- Each tool call reads the stop of its turn (`CurrentTurnStop`, exported by
+  the branch-tools entry): `stopped` completes on the turn's interrupt or the
+  loop's close, `isStopped` polls it, and `closing` says which. The loop's
+  close completes it after it interrupted the turn, as the close stopped
+  branch work before. A tool that runs uninterruptibly stops its own work
+  there: it cancels and reports what that cost on an interrupt, and records
+  nothing on a close, as a crash would, so a restart recovers it. Any other
+  tool is interrupted on an interrupt (`stopWithTurn`) and ends with the
+  turn on a close. The loop builds one `ModelContextLedger` per branch and
+  puts it in the branch's services, so a directive any dispatching tool
+  schedules reaches the next step; there is no inert ledger.
 - Process and branch Resources build through one builder,
   `buildScopeResources` in `runtime/extension-host.ts`: extension by
   extension in resolution order, each in its own child scope. Every build

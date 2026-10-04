@@ -156,7 +156,11 @@ import {
   TurnCompleted,
 } from "../../src/domain/event"
 import { type ActiveStreamHandle, ToolResultReplayError, TurnOutcome } from "../../src/runtime/turn"
-import { windowMarkerMessage } from "../../src/runtime/model-context"
+import {
+  ContextDirective,
+  ModelContextLedger,
+  windowMarkerMessage,
+} from "../../src/runtime/model-context"
 import { e2ePreset, testAgents } from "../helpers/test-preset"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { type ModelDriverContribution, ProviderAuthError } from "../../src/domain/driver"
@@ -168,6 +172,7 @@ import {
   resolveExtensions,
 } from "../../src/runtime/extension-host"
 import {
+  CurrentTurnStop,
   noBranchTools,
   ProcessLocalToolReplay,
   ToolRunner,
@@ -3290,6 +3295,146 @@ describe("branch resources follow the profile", () => {
         ])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
     20_000,
+  )
+})
+
+/** A tool that runs uninterruptibly until its turn stops, and reports whether the loop closed. */
+const turnStopProbe = (started: Deferred.Deferred<void>, seen: Deferred.Deferred<boolean>) =>
+  defineExtension({
+    id: "@test/turn-stop",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: "stop_probe",
+          description: "Wait for the turn to stop",
+          params: Schema.Struct({}),
+          output: Schema.Boolean,
+          execute: () =>
+            Effect.gen(function* () {
+              const stop = yield* CurrentTurnStop
+              yield* Deferred.succeed(started, void 0)
+              yield* stop.stopped
+              const closing = yield* stop.closing
+              expect(yield* stop.isStopped).toBe(true)
+              yield* Deferred.succeed(seen, closing)
+              return closing
+            }).pipe(Effect.uninterruptible),
+        }),
+      )
+    }),
+  })
+
+describe("turn stop", () => {
+  it.scopedLive("a tool sees an interrupt as its turn's stop, and not as a close", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const seen = yield* Deferred.make<boolean>()
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("stop_probe", {}),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [testAgent],
+        extensionInputs: [testTurnExtension, turnStopProbe(started, seen)],
+        providerLayer,
+      })
+      const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkScoped,
+      )
+      yield* client.message.send({ sessionId, branchId, content: "wait" })
+      yield* Deferred.await(started)
+      yield* client.steer.command({
+        command: {
+          _tag: "Cancel",
+          sessionId,
+          branchId,
+          requestId: "req-turn-stop-interrupt",
+        } satisfies SteerCommand,
+      })
+      expect(yield* Deferred.await(seen)).toBe(false)
+      yield* Fiber.join(completed)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a tool sees the loop's close as its turn's stop", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const seen = yield* Deferred.make<boolean>()
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("stop_probe", {}),
+      ])
+      // The harness closes with its scope, and its loop with it.
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: [testAgent],
+            extensionInputs: [testTurnExtension, turnStopProbe(started, seen)],
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "wait" })
+          yield* Deferred.await(started)
+        }),
+      )
+      expect(yield* Deferred.await(seen)).toBe(true)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "every branch has a ledger: a directive a plain tool schedules reaches the next step",
+    () =>
+      Effect.gen(function* () {
+        const notice = "A plain tool asked for a fresh window."
+        const freshWindow = defineExtension({
+          id: "@test/fresh-window",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "tool",
+              tool({
+                id: "fresh_window",
+                description: "Ask for a fresh window",
+                params: Schema.Struct({}),
+                output: Schema.Boolean,
+                execute: () =>
+                  Effect.gen(function* () {
+                    const ledger = yield* Effect.serviceOption(ModelContextLedger)
+                    if (Option.isNone(ledger)) return false
+                    yield* ledger.value.schedule(ContextDirective.cases.NewWindow.make({ notice }))
+                    return true
+                  }),
+              }),
+            )
+          }),
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("fresh_window", {}),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          extensionInputs: [testTurnExtension, freshWindow],
+          providerLayer,
+        })
+        const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "fresh" })
+        yield* Fiber.join(completed)
+        yield* controls.assertDone
+        const messages = yield* client.message.list({ branchId })
+        const texts = messages
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+        expect(texts).toContain(notice)
+      }).pipe(Effect.timeout("8 seconds")),
   )
 })
 

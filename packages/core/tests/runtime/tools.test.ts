@@ -256,7 +256,11 @@ describe("tool execution", () => {
         const hiddenTurn = yield* run("replacement-hidden", Option.none<ResolvedToolCapability>())
         const hostEntry = yield* Effect.fromOption(currentEntry)
         const hiddenOuterTurn = yield* executeToolCalls({
-          interruption: Effect.never,
+          stop: {
+            stopped: Effect.never,
+            isStopped: Effect.succeed(false),
+            closing: Effect.succeed(false),
+          },
           onParked: () => Effect.void,
           assistantMessageId: MessageId.make("outer-message"),
           sessionId,

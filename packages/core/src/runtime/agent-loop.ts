@@ -117,10 +117,12 @@ import {
   BranchToolWork,
   CurrentBranchToolFeature,
   makeTurnInterruption,
+  type TurnStop,
   ProcessLocalToolReplay,
   ToolRunner,
   type TurnInterruption,
 } from "./tools.js"
+import { ModelContextLedger } from "./model-context.js"
 import { withWideEvent } from "effect-wide-event"
 import { Entity, Sharding, ShardingConfig } from "effect/cluster"
 import type { SqlClient } from "effect/sql"
@@ -1974,7 +1976,10 @@ const makeAgentLoopBehavior = (
     const branchToolContext = yield* Layer.build(
       branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
     ).pipe(Scope.provide(loopScope))
-    const branchContext = branchToolContext
+    // The branch's model context ledger: a dispatching tool schedules a
+    // directive into it, and each step of a turn reads it.
+    const ledger = yield* ModelContextLedger.make
+    const branchContext = Context.add(branchToolContext, ModelContextLedger, ledger)
     const branchAddress = Context.make(
       BranchAddress,
       BranchAddress.of({ sessionId, branchId, cwd: branchCwd, home: runtimeEnvironment.home }),
@@ -2326,6 +2331,17 @@ const makeAgentLoopBehavior = (
     // teardown), and never by a user's cancel: a turn the loop stops has not
     // ended, so what it owns stays for the restart.
     const stopping = yield* Deferred.make<void>()
+    // Completed by the close once it interrupted the turn: a tool that runs
+    // uninterruptibly then stops its own work and records nothing.
+    const closingTools = yield* Deferred.make<void>()
+    const turnStop: TurnStop = {
+      stopped: Effect.raceFirst(turnInterruption.awaitInterrupt, Deferred.await(closingTools)),
+      isStopped: Effect.map(
+        Effect.all([turnInterruption.interrupted, Deferred.isDone(stopping)]),
+        ([interrupted, closing]) => interrupted || closing,
+      ),
+      closing: Deferred.isDone(stopping),
+    }
     const startedRef = yield* Ref.make(false)
 
     const inbox = yield* makeLoopInbox({
@@ -2379,6 +2395,8 @@ const makeAgentLoopBehavior = (
       activeStreamRef,
       turnLedger,
       turnInterruption,
+      turnStop,
+      ledger,
       inbox,
       branchContext,
       loopStopping: Deferred.isDone(stopping),
@@ -2533,6 +2551,7 @@ const makeAgentLoopBehavior = (
         const turn = yield* Ref.get(turnWorkerFiber)
         if (Option.isSome(turn))
           yield* Effect.forkDetach(Fiber.interrupt(turn.value), { startImmediately: true })
+        yield* Deferred.succeed(closingTools, void 0)
         yield* stopToolWork
         yield* Deferred.succeed(closed, void 0).pipe(Effect.ignore)
         yield* Scope.close(loopScope, Exit.void)

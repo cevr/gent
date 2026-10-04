@@ -160,6 +160,7 @@ import {
   ToolCallRecoveryService,
   ToolInteractionPending,
   type TurnInterruption,
+  type TurnStop,
 } from "./tools.js"
 import { ConfigService, RuntimeEnvironment, type UserConfig } from "./config.js"
 import { type AgentLoopError, asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
@@ -189,7 +190,7 @@ import {
   ModelContextBudget,
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
-  ModelContextLedger,
+  type ModelContextLedger,
   announcedModel,
   assistantRunEfforts,
   modelChangeNotice,
@@ -2558,6 +2559,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
    * hands the window off first, and a second refusal ends the turn.
    */
   overflowed: boolean
+  /** The branch's model context ledger (`AgentLoopTurnExecutionContext.ledger`). */
+  ledger: ModelContextLedger["Service"]
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const { resolved } = params
@@ -2716,12 +2719,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // does: once, with a delivered event.
   const persistDurableMessage = (message: Message) => persistMessageReceived({ message })
   // The model can ask, from inside a dispatching tool, for a fresh window or a
-  // focused summary. A branch with no such tool has no ledger and no
-  // directives, so the read falls back to an inert one.
-  const ledger = Option.getOrElse(
-    yield* Effect.serviceOption(ModelContextLedger),
-    () => ModelContextLedger.inert,
-  )
+  // focused summary, through the branch's ledger.
+  const ledger = params.ledger
   // A directive belongs to the turn whose tool call scheduled it: the first
   // projection of a new turn drops whatever an earlier turn left behind.
   if (params.step <= 1) yield* ledger.discardDirective
@@ -3159,6 +3158,10 @@ type AgentLoopTurnExecutionContext = {
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption
+  /** The stop each tool call of a turn reads (`CurrentTurnStop`). */
+  readonly turnStop: TurnStop
+  /** The branch's model context ledger; the loop builds one for every branch. */
+  readonly ledger: ModelContextLedger["Service"]
   readonly inbox: LoopInbox
   /** The branch's services a turn's hooks run with; see `AgentLoopBehavior.branchContext`. */
   readonly branchContext: Context.Context<never>
@@ -3627,7 +3630,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             markLock.withPermits(1),
           )
         const executedResults = yield* executeToolCalls({
-          interruption: scope.turnInterruption.awaitInterrupt,
+          stop: scope.turnStop,
           hostToolBindings: params.hostToolBindings,
           assistantMessageId: address.assistant,
           toolCalls: pendingToolCalls,
@@ -3732,6 +3735,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         lastCallModel: params.lastCallModel,
         stepEfforts: params.stepEfforts,
         overflowed: params.overflowed,
+        ledger: scope.ledger,
       })
       if (Option.isSome(source.compaction))
         yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)

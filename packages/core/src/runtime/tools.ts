@@ -139,29 +139,57 @@ export const neverInterrupted: TurnInterruptionStatus = {
   interrupted: Effect.succeed(false),
 }
 
+/** The stop of the turn a tool call runs in, as the call sees it. */
+export interface TurnStop {
+  /** Completes when the turn is interrupted or its loop closes; work races it to stop. */
+  readonly stopped: Effect.Effect<void>
+  /** Whether the turn is stopped now: interrupted, or its loop closing. */
+  readonly isStopped: Effect.Effect<boolean>
+  /**
+   * Whether the loop closes. Work a close stops records nothing, as a crash
+   * would, so a restart recovers it; work an interrupt stops reports what it
+   * did.
+   */
+  readonly closing: Effect.Effect<boolean>
+}
+
 /**
- * The running turn's interrupt, as a tool call sees it. The loop provides it
- * for every call it dispatches; a tool run with no turn -- a test, a direct
- * host call -- is never interrupted.
+ * The stop of the running turn, for each tool call. The loop provides it for
+ * every call it dispatches; a tool run with no turn -- a test, a direct host
+ * call -- is never stopped. A tool that runs uninterruptibly reads it to stop
+ * its own work: it cancels on an interrupt, and stops on a close.
  */
-const TurnInterruptSignal = Context.Reference<Effect.Effect<void>>(
-  "@gent/core/src/runtime/tools/TurnInterruptSignal",
-  { defaultValue: () => Effect.never },
+export const CurrentTurnStop = Context.Reference<TurnStop>(
+  "@gent/core/src/runtime/tools/CurrentTurnStop",
+  {
+    defaultValue: () => ({
+      stopped: Effect.never,
+      isStopped: Effect.succeed(false),
+      closing: Effect.succeed(false),
+    }),
+  },
 )
 
 /**
  * A tool stops with its turn, and its call still gets a result. The interrupt
  * waits for the tool to exit: a tool that runs uninterruptible and cancels its
- * own work reports what it chose to; any other tool reports the interrupt.
+ * own work reports what it chose to; any other tool reports the interrupt. A
+ * close interrupts the turn itself, which ends the call.
  */
 const stopWithTurn = <A, E, R>(execute: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
-    const interruption = yield* TurnInterruptSignal
+    const stop = yield* CurrentTurnStop
     const fiber = yield* Effect.forkChild(execute)
-    const exit = yield* Effect.raceFirst(
-      Fiber.await(fiber),
-      interruption.pipe(Effect.andThen(Fiber.interrupt(fiber)), Effect.andThen(Fiber.await(fiber))),
+    const interruptOnStop = stop.stopped.pipe(
+      Effect.andThen(
+        Effect.when(
+          Fiber.interrupt(fiber),
+          Effect.map(stop.closing, (closing) => !closing),
+        ),
+      ),
+      Effect.andThen(Fiber.await(fiber)),
     )
+    const exit = yield* Effect.raceFirst(Fiber.await(fiber), interruptOnStop)
     if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
       return yield* new ToolResultFailure({
         message: "The turn was interrupted.",
@@ -1086,8 +1114,8 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
   currentTurnAgent: AgentNameType
   toolBindings: ReadonlyMap<string, ResolvedToolCapability>
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
-  /** Completes when the turn is interrupted; a call still running then stops. */
-  interruption: Effect.Effect<void>
+  /** The turn's stop; a call still running then stops (`CurrentTurnStop`). */
+  stop: TurnStop
   /**
    * Records a call that parked on an interaction as soon as it parks, before
    * its siblings finish. The call's exit waits for it.
@@ -1147,7 +1175,7 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
                 assistantMessageId: params.assistantMessageId,
                 toolCallId: toolCallInput.toolCallId,
               }),
-              Effect.provideService(TurnInterruptSignal, params.interruption),
+              Effect.provideService(CurrentTurnStop, params.stop),
               ownCall(toolCallInput.toolCallId),
             )
         }),

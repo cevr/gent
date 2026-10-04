@@ -2446,17 +2446,13 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         const worker = yield* cellWorkerLaunch
         const live = CellExecution.Live({ ...address, worker })
         // The loop cancels branch work through `BranchToolWork`; the cell's
-        // own cancel is what that means here. The context ledger ships with the
-        // cell too: the cell is what schedules directives into it.
+        // own cancel is what that means here.
         return Layer.provideMerge(
-          Layer.merge(
-            Layer.effect(
-              BranchToolWork,
-              Effect.map(CellExecution, (cells) =>
-                BranchToolWork.of({ cancel: cells.cancel, stop: cells.stop }),
-              ),
+          Layer.effect(
+            BranchToolWork,
+            Effect.map(CellExecution, (cells) =>
+              BranchToolWork.of({ cancel: cells.cancel, stop: cells.stop }),
             ),
-            ModelContextLedger.Branch,
           ),
           live,
         )
