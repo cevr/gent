@@ -1407,13 +1407,15 @@ own `driver`; a config `driverOverrides` entry routes the model call only.
 
 Agents are one schema, `AgentDefinition` (`domain/agent.ts`), written two ways:
 an extension registers one (`host.register("agent", ...)`), and the config
-`agents` key writes one in JSON as an `AgentPatch`, the definition's fields
+`agents` key writes one in JSON as an agent patch, the definition's fields
 without `name`, all optional (`Struct.omit` of the class fields, not a copy).
+A config entry decodes through `AuthoredAgentPatch`, which refuses a key the
+schema does not name and names the agent and the key.
 The roster (`resolveAgentRoster`) is the extension agents with each config
 entry of their name applied, plus a new agent for each entry that names none.
 A patch replaces the fields it names; `systemPromptAddendum` appends. A field
 resolves project entry > user entry > extension (`mergeAgentPatches` in
-`mergeConfigs`), and a run's `RunSpec.overrides` (the same `AgentPatch`) wins
+`mergeConfigs`), and a run's `RunSpec.overrides` (`StoredRunOverrides`, a pick of the patch) wins
 over all (`resolveSessionAgent`), so a workspace pins its orchestrator model
 under `main` and its children's model under `delegate`, and a `delegate.start`
 call can still pick a different model and effort for one child. The turn,
@@ -1426,9 +1428,21 @@ confines the shipped file tools: `fs-tools` reads the agent through
 `ctx.Session.getAgent()` and refuses a target outside its entries
 (`PathScopeError`) after links and `..` resolve; `read` and `grep` accept any
 entry, `write` and `edit` only a write entry. It is not a sandbox: bash and the
-cell are not confined. Config entries and stored runs written before `tools`
-(`allowedTools`, `deniedTools`, `modelId`) decode through `StoredAgentPatch`
-into `tools` and `model`; gent writes only the new shape. `AgentDefinition.make` refuses a key the schema does not name, so TypeScript
+cell are not confined. One codec owns the encoded agent: `StoredAgentPatch` for
+config entries, `StoredRunOverrides` for `sessions.admission_json` and the
+`delegate.start` overrides, and `StoredAgentDefinition` for `driver.list`. It
+reads the keys before `tools` (`allowedTools`, `deniedTools`, `modelId`) and
+prefers the new ones. A `deniedTools` list alone keeps an internal
+`legacyTools` edit that the merge resolves against the inherited tools (they
+minus those ids); an `allowedTools` list alone replaces and keeps the
+inherited denials; both replace. An explicit `tools` replaces. It writes the
+new keys and also the old ones, so the previous gent, SDK and TUI read a row
+or a reply the same way: `model` also as `modelId`, patterns the old lists
+can express as those lists, and any other patterns as `allowedTools: []`, so
+an old reader holds no tool rather than every tool. `paths` has no old form:
+an old reader drops it. Stored and wire readers stay tolerant of unknown keys;
+authoring is strict: a config entry, `AgentDefinition.make` and
+`new AgentDefinition` refuse a key the schema does not name, so TypeScript
 that still passes `allowedTools` fails to load rather than run with every tool. Each turn reads the config files as
 they are then, so an edit reaches the next turn without a restart. The loop has no `cell` name rule
 for selection or allow lists. The server root still composes the extension before

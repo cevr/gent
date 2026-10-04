@@ -747,13 +747,22 @@ tools directly. An extension that selects or describes its own tool in a
 `turnProjection` hook asks `agent.admitsTool(id)` first, the one predicate
 over the patterns.
 
-A config entry or a stored run written before `tools` still loads: an
-`allowedTools` list becomes its ids, a `deniedTools` list becomes `"*"` and
-then each id with `!`, and both become the allowed ids and then the denied
-ones with `!`. `modelId` becomes `model`. Gent writes only the new fields. TypeScript source has no
-such reading: `AgentDefinition.make` refuses a key the schema does not name,
-so an extension that still passes `allowedTools` fails to load and the failure
-names the key, where it would otherwise run with every tool.
+A config entry or a stored run written before `tools` still loads, with its
+old meaning: a `deniedTools` list alone takes those ids from the tools the
+agent already holds; an `allowedTools` list alone replaces them and keeps the
+inherited denials; both become the allowed ids and then the denied ones with
+`!`. `modelId` becomes `model`. A `tools` list always replaces. When gent
+writes an agent back (a stored run, a rewritten config file, `driver.list`),
+it also writes the old keys for an older gent: `modelId`, and the old lists
+when they can say what the patterns say, else `allowedTools: []`, so an older
+gent gives the agent no tool rather than every tool. `paths` has no old form.
+
+A config entry with a key the schema does not name fails to load, and the
+error names the agent and the key: a misspelled `toolz` would otherwise give
+an agent every tool. TypeScript source has no old reading either:
+`AgentDefinition.make` and `new AgentDefinition` refuse a key the schema does
+not name, so an extension that still passes `allowedTools` fails to load and
+the failure names the key.
 
 ### Paths
 
@@ -763,8 +772,8 @@ is a `write` entry. `read` and `grep` accept any entry; `write` and `edit`
 accept only a `write` entry. A call outside every entry it accepts fails with
 a `PathScopeError` that names the entries, and the model reads it. Links and
 `..` resolve before the check, so a link under an entry that points out of it
-is outside. `grep` checks its search root. No `paths`: the file tools reach
-every path.
+is outside. `grep` checks its search root and does not follow a link under
+it. No `paths`: the file tools reach every path.
 
 `paths` is not a sandbox. `bash`, the cell and every other tool reach the file
 system without the check, so leave them out of the `tools` of an agent you
