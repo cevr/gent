@@ -52,6 +52,8 @@ const durable = (overrides: {
   createdAt?: number
   updatedAt?: number
   sideThread?: boolean
+  /** The thread key; a session is its own thread unless a handoff names its first. */
+  thread?: string
 }): DurableAgentRow => ({
   sessionId: sid(overrides.session),
   branchId: bid(overrides.branch),
@@ -69,6 +71,7 @@ const durable = (overrides: {
   createdAt: overrides.createdAt ?? 0,
   updatedAt: overrides.updatedAt ?? 0,
   sideThread: overrides.sideThread ?? false,
+  thread: sid(overrides.thread ?? overrides.session),
 })
 
 const find = (rows: ReadonlyArray<AgentRow>, session: string, branch: string) =>
@@ -293,6 +296,108 @@ describe("agents view projection", () => {
     })
   })
 
+  describe("threads", () => {
+    // first → second → third is one handoff chain: one thread, keyed by `first`.
+    // `starter`: the session that started the thread, when one did.
+    const chain = (starter: Option.Option<string>): ReadonlyArray<DurableAgentRow> => [
+      {
+        ...durable({
+          session: "first",
+          branch: "b",
+          name: "fix auth",
+          createdAt: 100,
+          updatedAt: 150,
+        }),
+        parent: Option.map(starter, (session) => ({ sessionId: sid(session), branchId: bid("b") })),
+        sideThread: Option.isSome(starter),
+      },
+      durable({
+        session: "second",
+        branch: "b",
+        name: "fix auth, part 2",
+        createdAt: 200,
+        updatedAt: 400,
+        parentSession: "first",
+        parentBranch: "b",
+        thread: "first",
+      }),
+      durable({
+        session: "third",
+        branch: "b",
+        name: "fix auth, part 3",
+        createdAt: 300,
+        updatedAt: 350,
+        parentSession: "second",
+        parentBranch: "b",
+        thread: "first",
+      }),
+    ]
+
+    test("a handoff chain is one row that opens its newest session and counts its sessions", () => {
+      const rows = projectAgentRows({
+        // The middle session still has a loop; the newest has none yet.
+        live: [live({ session: "second", branch: "b", status: "Running" })],
+        durable: chain(Option.none()),
+      })
+      expect(rows).toHaveLength(1)
+      const row = rows[0]
+      expect(row?.sessionId).toBe(sid("third"))
+      expect(row?.name).toEqual(Option.some("fix auth, part 3"))
+      expect(row?.members.map((member) => member.sessionId)).toEqual(
+        ["first", "second", "third"].map(sid),
+      )
+      // The most active session's state, the first one's start, the latest update.
+      expect(row?.section).toBe("running")
+      expect(row?.live).toBe(false)
+      expect(row?.createdAt).toEqual(Option.some(100))
+      expect(row?.updatedAt).toEqual(Option.some(400))
+      expect(row?.depth).toBe(0)
+    })
+
+    test("a started thread nests under its starter as one row, and so do children of its older sessions", () => {
+      const rows = projectAgentRows({
+        live: [],
+        durable: [
+          durable({ session: "starter", branch: "b", createdAt: 10, updatedAt: 500 }),
+          ...chain(Option.some("starter")),
+          // A delegate child of the thread's first session.
+          durable({
+            session: "child",
+            branch: "b",
+            createdAt: 120,
+            parentSession: "first",
+            parentBranch: "b",
+            sideThread: true,
+          }),
+        ],
+      })
+      expect(rows.map((row) => [row.sessionId, row.depth, row.sideThread])).toEqual([
+        [sid("starter"), 0, false],
+        [sid("third"), 1, true],
+        [sid("child"), 2, true],
+      ])
+      expect(find(rows, "child", "b")?.parent).toEqual(
+        Option.some({ sessionId: sid("third"), branchId: bid("b") }),
+      )
+    })
+
+    test("a single session's row stands for itself, and a branch without a session row stays apart", () => {
+      const rows = projectAgentRows({
+        live: [live({ session: "first", branch: "other", status: "Idle" })],
+        durable: [durable({ session: "first", branch: "b" })],
+      })
+      expect(rows).toHaveLength(2)
+      for (const row of rows) {
+        expect(row.members).toEqual([{ sessionId: row.sessionId, branchId: row.branchId }])
+      }
+    })
+
+    test("an older session's id finds its thread's row", () => {
+      const rows = projectAgentRows({ live: [], durable: chain(Option.none()) })
+      expect(filterRows(rows, "second").map((row) => row.sessionId)).toEqual([sid("third")])
+    })
+  })
+
   describe("sections by own state", () => {
     test("an idle middle parent sits in the idle section while its grandchild runs", () => {
       // main → a → b. a started b and its own turn ended; only b works.
@@ -471,6 +576,7 @@ const ReplySchema = Schema.Struct({
       depth: Schema.Finite,
       parentSessionId: Schema.optional(Schema.String),
       sideThread: Schema.Boolean,
+      sessions: Schema.optional(Schema.Array(Schema.String)),
       activity: Schema.optional(Schema.String),
       createdAt: Schema.optional(Schema.Finite),
       runningSince: Schema.optional(Schema.Finite),
@@ -947,7 +1053,7 @@ describe("AgentsViewExtension via RPC", () => {
   )
 
   it.live(
-    "a stored child with no loop is listed, and only a spawned one is a side thread",
+    "a stored child with no loop is listed, only a spawned one is a side thread, and a handoff shares its parent's row",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -982,8 +1088,15 @@ describe("AgentsViewExtension via RPC", () => {
           expect(handoffRow?.live).toBe(false)
           expect(spawnedRow?.sideThread).toBe(true)
           expect(rowFor(sessionOnly.sessionId)?.sideThread).toBe(true)
+          // The handoff and its parent are one thread: one row, opened on the
+          // newest session, in the section of the parent's idle loop.
           expect(handoffRow?.sideThread).toBe(false)
-          expect(rowFor(harness.sessionId)?.sideThread).toBe(false)
+          expect(handoffRow?.sessions).toEqual([harness.sessionId, handoff.sessionId])
+          expect(handoffRow?.section).toBe("idle")
+          expect(rowFor(harness.sessionId)).toBeUndefined()
+          expect(spawnedRow?.sessions).toBeUndefined()
+          // A child of the parent links to the thread's row.
+          expect(spawnedRow?.parentSessionId).toBe(handoff.sessionId)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

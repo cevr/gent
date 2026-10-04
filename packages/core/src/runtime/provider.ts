@@ -3667,6 +3667,11 @@ export const multiToolCallStep = (
  * its assumption in a bash step that sleeps, and answers. The sleep keeps
  * the turn open long enough to answer the question while it runs.
  *
+ * `debug threads` starts two threads with `thread.start` (one plays `debug
+ * tools`, one answers at once), lists them with `thread.list`, and answers.
+ * `debug handoff` calls `handoff`; on a yes the new session continues the
+ * thread, so the Sessions pane shows one row with two sessions.
+ *
  * A step calls the tools the request advertises: each op as its own call, or,
  * on a turn narrowed to `cell`, one `cell` call whose code awaits the ops.
  */
@@ -3768,6 +3773,37 @@ const ASK_STEPS: ReadonlyArray<ScenarioStep> = [
   { reasoning: "Summarize.", ops: [] },
 ]
 
+const THREAD_STEPS: ReadonlyArray<ScenarioStep> = [
+  {
+    reasoning: "Two jobs apart from this one; each gets a thread of its own.",
+    ops: [
+      { tool: "thread.start", input: { task: "debug tools", name: "widen the greeting" } },
+      {
+        tool: "thread.start",
+        input: { task: "Draft the release notes.", name: "draft release notes" },
+      },
+    ],
+  },
+  { reasoning: "See how they run.", ops: [{ tool: "thread.list", input: {} }] },
+  { reasoning: "Summarize.", ops: [] },
+]
+
+const HANDOFF_STEPS: ReadonlyArray<ScenarioStep> = [
+  {
+    reasoning: "The user asked to hand off.",
+    ops: [
+      {
+        tool: "handoff",
+        input: {
+          context: `Go on with the greeting in ${scenarioFile("a.ts")}.`,
+          reason: "debug handoff",
+        },
+      },
+    ],
+  },
+  { reasoning: "Summarize.", ops: [] },
+]
+
 const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
   {
     phrase: "debug tools",
@@ -3779,6 +3815,16 @@ const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
     steps: ASK_STEPS,
     answer:
       "Wired an in-memory LRU cache. The backend question is still open; I assumed in-memory LRU.",
+  },
+  {
+    phrase: "debug threads",
+    steps: THREAD_STEPS,
+    answer: "Started two threads; the Sessions pane shows them under this session.",
+  },
+  {
+    phrase: "debug handoff",
+    steps: HANDOFF_STEPS,
+    answer: "Handed off.",
   },
 ]
 

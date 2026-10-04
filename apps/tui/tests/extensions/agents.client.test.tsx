@@ -19,7 +19,7 @@ import {
 } from "../../src/extensions/agents.client"
 import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 import { DockProvider, PickerFrame } from "../../src/ui"
-import { renderFrame, renderScoped } from "../render-harness-boundary"
+import { createMockClient, renderFrame, renderScoped } from "../render-harness-boundary"
 import { useCommand } from "../../src/commands"
 import { useScopedKeyboard } from "../../src/terminal"
 import { waitForFrame, waitUntil, waitUntilAdvancing } from "../helpers-boundary"
@@ -274,9 +274,12 @@ describe("Agents pane refresh while open", () => {
     Effect.gen(function* () {
       let childLive = false
       let listings = 0
-      const listed = (): ReadonlyArray<AgentRowEntry> => [
-        { ...row("child", childLive), parentSessionId: parentKey.sessionId },
-      ]
+      const listed = (): ReadonlyArray<AgentRowEntry> => {
+        const entry = { ...row("child", childLive), parentSessionId: parentKey.sessionId }
+        if (childLive) return [entry]
+        // A stored child has no loop, so it is inactive.
+        return [{ ...entry, section: "inactive" }]
+      }
       const clock = yield* TestClock.make()
       const controller = yield* provideClientServices(
         makeAgentsController(
@@ -1400,6 +1403,142 @@ describe("idle middle parent", () => {
       expect(lineOf("delegate: a task")).toContain("• delegate: a task")
       expect(lineOf("delegate: b task")).not.toContain("• delegate: b task")
     }),
+  )
+})
+
+describe("thread rows", () => {
+  // first → second → third: one handoff chain, listed as one row on its newest session.
+  const members = ["first", "second", "third"].map((id) => SessionId.make(id))
+  const thread: AgentRowEntry = {
+    ...root("third", "idle"),
+    name: "fix auth refresh",
+    sideThread: true,
+    parentSessionId: SessionId.make("starter"),
+    sessions: members,
+  }
+  const controllerOver = (listed: ReadonlyArray<AgentRowEntry>, current: string) => ({
+    rows: () => listed,
+    current: () => ({ sessionId: SessionId.make(current), branchId: BranchId.make("any") }),
+    error: () => Option.none(),
+    loading: () => false,
+    refresh: () => {},
+    reload: () => {},
+    detail: () => Option.none(),
+    select: () => {},
+    open: () => true,
+  })
+  const paneAt = (listed: ReadonlyArray<AgentRowEntry>, current: string, width: number) =>
+    renderScoped(
+      () => (
+        <AgentsPane
+          open={true}
+          controller={controllerOver(listed, current)}
+          onSelect={() => {}}
+          onDelete={() => {}}
+          onClose={() => {}}
+        />
+      ),
+      { width, height: 20 },
+    )
+
+  it.scopedLive(
+    "a thread's row counts its sessions, and a narrow pane drops the side-thread mark first",
+    () =>
+      Effect.gen(function* () {
+        const wide = yield* paneAt([thread], "elsewhere", 120)
+        const wideFrame = yield* waitForFrame(
+          wide,
+          (next) => next.includes("fix auth"),
+          "wide pane",
+        )
+        const wideRow = wideFrame.split("\n").find((line) => line.includes("fix auth")) ?? ""
+        expect(wideRow).toContain("side thread  3 sessions")
+
+        const narrow = yield* paneAt([thread], "elsewhere", 60)
+        const narrowFrame = yield* waitForFrame(
+          narrow,
+          (next) => next.includes("fix auth"),
+          "narrow pane",
+        )
+        const narrowRow = narrowFrame.split("\n").find((line) => line.includes("fix auth")) ?? ""
+        expect(narrowRow).toContain("3 sessions")
+        expect(narrowRow).not.toContain("side thread")
+      }),
+  )
+
+  it.scopedLive("the shell on an older session of a thread finds itself on the thread's row", () =>
+    Effect.gen(function* () {
+      const setup = yield* paneAt([root("other", "idle"), thread], "second", 100)
+      const frame = yield* waitForFrame(setup, (next) => next.includes("fix auth"), "pane")
+      const lineOf = (text: string) => frame.split("\n").find((line) => line.includes(text)) ?? ""
+      expect(lineOf("fix auth")).toContain("› ")
+      expect(lineOf("other")).not.toContain("› ")
+    }),
+  )
+
+  it.scopedLive(
+    "the tray of an older session lists the work its thread's newer session started",
+    () =>
+      Effect.gen(function* () {
+        const listed = [thread, child("worker", "running", "third")]
+        const setup = yield* renderScoped(() => (
+          <SubagentTray controller={{ ...controllerOver(listed, "first"), open: () => false }} />
+        ))
+        const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "tray")
+        expect(frame).toContain("working · delegate: worker task")
+        expect(frame).not.toContain("fix auth")
+      }),
+  )
+
+  it.scopedLive(
+    "a second Ctrl+X on a thread's row deletes each of its sessions, newest first",
+    () =>
+      Effect.gen(function* () {
+        const deleted: Array<string> = []
+        const reply = { rows: [thread] }
+        const runtime = makeClientExtensionRuntime({
+          transport: {
+            ...makeClientTestTransport({ requestReply: reply }),
+            client: createMockClient({
+              extension: { request: () => Effect.succeed(reply) },
+              session: {
+                delete: (input: { readonly sessionId: string }) =>
+                  Effect.sync(() => {
+                    deleted.push(input.sessionId)
+                  }),
+              },
+            }),
+          },
+        })
+        const contributions = yield* runClientExtensionSetup(runtime, agentsExtension)
+        const commands = contributions.commands ?? []
+        const pane = Option.getOrThrow(
+          Option.fromUndefinedOr(contributions.widgets?.find((w) => w.id === "agents.pane")),
+        )
+        const Session = () => {
+          const command = useCommand()
+          useScopedKeyboard((event) => command.handleKeybind(event, commands, false))
+          return <pane.component />
+        }
+        const setup = yield* renderScoped(() => <Session />, { width: 120, height: 20 })
+        setup.mockInput.pressKey("t", { ctrl: true })
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("fix auth"),
+          "the pane lists the thread",
+        )
+
+        setup.mockInput.pressKey("x", { ctrl: true })
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("delete this thread's 3 sessions and their children"),
+          "armed",
+        )
+        setup.mockInput.pressKey("x", { ctrl: true })
+        yield* waitUntil(() => deleted.length === 3, "each session deleted")
+        expect(deleted).toEqual(["third", "second", "first"])
+        yield* Effect.promise(() => runtime.dispose())
+      }),
   )
 })
 

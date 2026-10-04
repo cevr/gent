@@ -1042,6 +1042,17 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   refreshes on the delegate's `ExtensionStateChanged` pulses, matched by
   `DELEGATE_EXTENSION_ID`. Completion rows read the completion message's
   details. Core publishes no `AgentRun*` events.
+- `ListAgents` lists one row per thread: `buildRowTree` folds the sessions of
+  one `sessionThread` key (a handoff chain) into one row with the newest
+  session's ids, name and liveness, the most active session's status, the
+  first session's start, parent and side-thread mark, and the additive
+  `sessions` field (the member ids, oldest first, when there are two or
+  more). A parent link that names a folded session moves to its thread's
+  row. The activity watchers follow the loops before the fold. The pane shows
+  `N sessions` in the right column (a narrow pane drops the side-thread mark
+  first), marks the row current when the shell is on any of its sessions,
+  and a second Ctrl+X deletes each session of the thread, newest first, since
+  a session delete keeps a same-thread handoff.
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
   root depth; a parent at the depth limit cannot spawn. Only spawn edges count:

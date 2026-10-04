@@ -53,14 +53,29 @@ import { ref } from "@gent/core/extensions/api"
  * @module
  */
 
-/** Descendants of `root` at any depth, in the server's parent-before-child order. */
+/** The sessions a row stands for: a thread's handoff chain, else its own session. */
+const membersOf = (row: AgentRowEntry): ReadonlyArray<AgentRowEntry["sessionId"]> =>
+  row.sessions ?? [row.sessionId]
+
+/** Whether the row stands for `sessionId`, as its own session or an older one of its thread. */
+const holds = (row: AgentRowEntry, sessionId: string): boolean =>
+  membersOf(row).some((member) => member === sessionId)
+
+/**
+ * Descendants of `root` at any depth, in the server's parent-before-child
+ * order. The root may be an older session of a thread whose row the newest
+ * session names, so the root's own row is the one that holds it.
+ */
 const subtreeRows = (
   rows: ReadonlyArray<AgentRowEntry>,
   root: { readonly sessionId: string },
 ): ReadonlyArray<AgentRowEntry> => {
   const known = new Set<string>([root.sessionId])
+  for (const row of rows) {
+    if (holds(row, root.sessionId)) known.add(row.sessionId)
+  }
   const descendants: Array<AgentRowEntry> = []
-  let pending = rows.filter((row) => row.sessionId !== root.sessionId)
+  let pending = rows.filter((row) => !holds(row, root.sessionId))
   for (;;) {
     const next = pending.filter(
       (row) => Predicate.isNotUndefined(row.parentSessionId) && known.has(row.parentSessionId),
@@ -343,12 +358,14 @@ export const makeAgentsController = (
     // A child's own turns raise no event in this session, so while the pane is
     // open or a descendant has a live loop the listing is re-read on a slow
     // clock. Stored children alone never change on their own: a delegate pulse
-    // announces a new or woken one, so the tray stops polling for them.
+    // announces a new or woken one, so the tray stops polling for them. A
+    // thread's row is live by its newest session, so its section says whether
+    // any of its sessions has a loop.
     yield* lifecycle.scoped(
       Effect.forkScoped(
         Effect.sync(() => {
           const watching = subtreeRows(listing.value(), transport.currentSession()).some(
-            (row) => row.live,
+            (row) => row.section !== "inactive",
           )
           if (open() || watching) tick()
         }).pipe(Effect.repeat(Schedule.spaced(POLL_EVERY))),
@@ -446,6 +463,27 @@ const sideThreadMark = (row: AgentRowEntry): string => {
   return ""
 }
 
+/** `3 sessions` for a thread whose handoffs fold into the row; blank for one session. */
+const sessionsMark = (row: AgentRowEntry): string => {
+  const count = membersOf(row).length
+  if (count < 2) return ""
+  return `${count} sessions`
+}
+
+/** Rows narrower than this drop the side-thread mark. */
+const NARROW_ROW = 80
+
+/**
+ * The right column: the side-thread mark, the session count, the time. In
+ * a narrow pane the side-thread mark goes first, so the name keeps its
+ * room; the tree shape still shows the nesting.
+ */
+const rightColumn = (row: AgentRowEntry, now: number, rowWidth: number): string => {
+  const join = (parts: ReadonlyArray<string>) => parts.filter((part) => part.length > 0).join("  ")
+  if (rowWidth < NARROW_ROW) return join([sessionsMark(row), timeFor(row, now)])
+  return join([sideThreadMark(row), sessionsMark(row), timeFor(row, now)])
+}
+
 /**
  * One pane row: the left text, padded, and the right column drawn muted. The
  * status glyph is the column at `glyphAt` in `left`, drawn in its own colour;
@@ -455,6 +493,13 @@ interface RowLine {
   readonly left: string
   readonly glyphAt: Option.Option<number>
   readonly right: string
+}
+
+/** What a second Ctrl+X deletes: the row's session, or each session of its thread. */
+const deletePrompt = (row: AgentRowEntry): string => {
+  const count = membersOf(row).length
+  if (count < 2) return "ctrl+x again to delete this session and its children"
+  return `ctrl+x again to delete this thread's ${count} sessions and their children`
 }
 
 /** Marks the loop the shell is on, so a reader can find themselves in the list. */
@@ -522,9 +567,12 @@ export function AgentsPane(props: {
   // The row a first Ctrl+X armed; the second press on it deletes, any other key disarms.
   const [armed, setArmed] = createSignal(Option.none<string>())
 
+  // A thread's row holds the shell's session when the reader went back to an
+  // older session of it; a row for one session matches on the branch too.
   const isCurrent = (row: AgentRowEntry): boolean => {
     const active = props.controller.current()
-    return active.sessionId === row.sessionId && active.branchId === row.branchId
+    if (active.sessionId === row.sessionId) return active.branchId === row.branchId
+    return holds(row, active.sessionId)
   }
 
   // Filtering is the server's job — it owns the same search the projection
@@ -581,15 +629,9 @@ export function AgentsPane(props: {
    */
   const rowLine = (row: AgentRowEntry, selected: boolean): RowLine => {
     if (Option.contains(armed(), row.sessionId)) {
-      return {
-        left: "ctrl+x again to delete this session and its children",
-        glyphAt: Option.none(),
-        right: "",
-      }
+      return { left: deletePrompt(row), glyphAt: Option.none(), right: "" }
     }
-    const right = [sideThreadMark(row), timeFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))]
-      .filter((part) => part.length > 0)
-      .join("  ")
+    const right = rightColumn(row, DateTime.toEpochMillis(DateTime.nowUnsafe()), rowWidth())
     const width = Math.max(0, rowWidth() - textWidth(right) - 2)
     const lead = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}`
     const label = rowLabel(
@@ -788,7 +830,12 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
             onClose={() => shell.pane.close(AGENTS_PANE)}
             onDelete={(row) =>
               shell.cast(
-                transport.deleteSession(row.sessionId).pipe(
+                // A thread's row is all its sessions. A delete keeps a handoff
+                // of the session it removes, so the newest goes first and each
+                // older one then has no handoff left to keep.
+                Effect.forEach(membersOf(row).toReversed(), (sessionId) =>
+                  transport.deleteSession(sessionId),
+                ).pipe(
                   // The reader asked for the delete, so a refusal shows on the
                   // status row; the row stays in the listing.
                   Effect.catch((error) =>

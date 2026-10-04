@@ -430,16 +430,16 @@ at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 
 ### Slash Commands
 
-| Command            | Action                                                             |
-| ------------------ | ------------------------------------------------------------------ |
-| `/new`, `/clear`   | Start a new session                                                |
-| `/help`            | Open the command palette                                           |
-| `/sessions`        | Sessions pane: every session, live and stored; side threads marked |
-| `/agents`, `/tree` | Aliases of `/sessions`                                             |
-| `/branch`          | Create new branch                                                  |
-| `/fork`            | Fork from a message                                                |
-| `/thread`          | Thread pane: the sessions and windows this one runs on             |
-| `/btw`, `/side`    | Fork pane: ask a parallel session on the side                      |
+| Command            | Action                                                                  |
+| ------------------ | ----------------------------------------------------------------------- |
+| `/new`, `/clear`   | Start a new session                                                     |
+| `/help`            | Open the command palette                                                |
+| `/sessions`        | Sessions pane: one row per thread, live and stored; side threads marked |
+| `/agents`, `/tree` | Aliases of `/sessions`                                                  |
+| `/branch`          | Create new branch                                                       |
+| `/fork`            | Fork from a message                                                     |
+| `/thread`          | Thread pane: the sessions and windows this one runs on                  |
+| `/btw`, `/side`    | Fork pane: ask a parallel session on the side                           |
 
 A command sent before every command source has answered (the client
 extensions' load and the session's server slash list, `commandsSettled` in
