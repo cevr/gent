@@ -7,6 +7,7 @@ import {
   formatActivityRow,
   formatCellRowLabel,
   formatCost,
+  formatClock,
   formatDuration,
   collapsedOperations,
   formatFailureRow,
@@ -248,22 +249,6 @@ const stepSummary = (steps: TurnSteps): ReadonlyArray<string> => {
   return parts
 }
 
-/** A clock field (0 to 59, a month, a day) as two digits. */
-const twoDigits = (n: number) => `${Math.floor(n / 10)}${n % 10}`
-
-/**
- * The wall-clock time a limit resets in `zone`: "17:05" on the day of `now`,
- * else "2026-10-05 09:30". A clock time stays true on a row that does not
- * redraw, where a countdown goes stale.
- */
-const resetClock = (retryAt: number, now: number, zone: DateTime.TimeZone): string => {
-  const at = DateTime.toParts(DateTime.makeZonedUnsafe(retryAt, { timeZone: zone }))
-  const today = DateTime.toParts(DateTime.makeZonedUnsafe(now, { timeZone: zone }))
-  const time = `${twoDigits(at.hour)}:${twoDigits(at.minute)}`
-  if (at.year === today.year && at.month === today.month && at.day === today.day) return time
-  return `${at.year}-${twoDigits(at.month)}-${twoDigits(at.day)} ${time}`
-}
-
 /** The error's text, its first line ending with the reset time when the failure names one. */
 const errorLabel = (
   event: Extract<SessionEvent, { _tag: "error" }>,
@@ -272,7 +257,7 @@ const errorLabel = (
 ): string => {
   if (Predicate.isUndefined(event.retryAt)) return event.error
   const [first = "", ...rest] = event.error.split("\n")
-  return [`${first} · resets ${resetClock(event.retryAt, now, zone())}`, ...rest].join("\n")
+  return [`${first} · resets ${formatClock(event.retryAt, now, zone())}`, ...rest].join("\n")
 }
 
 /**

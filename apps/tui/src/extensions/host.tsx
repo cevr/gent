@@ -142,6 +142,12 @@ interface ExtensionUIContextValue {
    * fails its extension (`recordRenderFailure`) and is offered no more.
    */
   readonly autocompleteItems: Accessor<ReadonlyArray<ResolvedAutocomplete>>
+  /**
+   * Stop the first active extension stoppable, highest scope first; false
+   * when none is active. A throw in `active` or `stop` fails its extension
+   * (`recordRenderFailure`).
+   */
+  readonly stopPending: () => boolean
   /** Client extensions, or contributions, that did not load. */
   readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
   /** Register dynamic autocomplete contributions (e.g. from session controller) */
@@ -160,6 +166,7 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   statusLabels: [],
   noticeRows: [],
   autocompleteItems: [],
+  stoppables: [],
   failures: [],
 }
 
@@ -299,6 +306,21 @@ export function ExtensionUIProvider(props: {
     resolved()
       .statusLabels.filter((label) => label.anchor === anchor && !renderFailed(label.extensionId))
       .flatMap((label) => guarded(label.extensionId, label.produce, () => []))
+  const stopPending = (): boolean =>
+    Option.match(
+      Option.fromUndefinedOr(
+        resolved()
+          .stoppables.filter((stoppable) => !renderFailed(stoppable.extensionId))
+          .find((stoppable) => guarded(stoppable.extensionId, stoppable.active, () => false)),
+      ),
+      {
+        onNone: () => false,
+        onSome: (stoppable) => {
+          guarded(stoppable.extensionId, stoppable.stop, () => {})
+          return true
+        },
+      },
+    )
   const noticeRows = createMemo((): ReadonlyArray<ResolvedNoticeRows> =>
     resolved()
       .noticeRows.filter((source) => !renderFailed(source.extensionId))
@@ -599,6 +621,7 @@ export function ExtensionUIProvider(props: {
         renderFailed,
         noticeRows,
         autocompleteItems,
+        stopPending,
         failures: () => [
           ...resolved().failures,
           ...resolvedCommands().failures,
