@@ -2175,16 +2175,22 @@ export const buildKeychainTransformClient = (
  *   - `Off`: thinking stays off until the request sets `{type: "adaptive"}`.
  *   - `On`: thinking is on, and `{type: "disabled"}` turns it off.
  *   - `AlwaysOn`: thinking is on, and a request that disables it gets HTTP 400.
+ *   - `Budget`: thinking stays off until the request sets `{type: "enabled",
+ *     budget_tokens}`; the family has no adaptive thinking, and its effort
+ *     does not turn thinking on (Claude Opus 4.5, platform.claude.com/docs/en/build-with-claude/extended-thinking).
  */
-type ThinkingDefault = "Off" | "On" | "AlwaysOn"
+type ThinkingDefault = "Off" | "On" | "AlwaysOn" | "Budget"
 
 /**
  * The Claude families whose thinking default the table above names, first
  * match wins, by the lowercased id. models.dev lists each model's efforts,
  * budget and toggle, and whether it takes a `temperature`; it does not carry
  * the default, so this rule is all the Messages class keeps per family. A
- * family a row names thinks adaptively at a level, which an `Off` family
- * needs to reason, and shows its thinking (`THINKING_CONFIG`).
+ * family a row names thinks at a level, which an `Off` or `Budget` family
+ * needs to reason: adaptively, showing its thinking (`THINKING_CONFIG`), or
+ * a `Budget` family with its budget beside the effort. Opus 4.5 lists the
+ * same controls (an effort list and a budget) as Opus 4.6, which takes
+ * adaptive thinking, so the catalog alone cannot tell them apart.
  */
 const THINKING_DEFAULTS: ReadonlyArray<{
   readonly pattern: RegExp
@@ -2194,6 +2200,7 @@ const THINKING_DEFAULTS: ReadonlyArray<{
   // Opus 5 accepts `disabled` only at effort `high` or below; `none` names no effort.
   { pattern: /(opus-5|sonnet-5)(-|$)/, thinking: "On" },
   { pattern: /(opus-4-[78]|(opus|sonnet)-4-6)(-|$)/, thinking: "Off" },
+  { pattern: /opus-4-5(-|$)/, thinking: "Budget" },
 ]
 
 const thinkingDefault = (modelId: string): Option.Option<ThinkingDefault> =>
@@ -2248,7 +2255,10 @@ const PLAIN_REQUEST: AnthropicRequestPlan = { effort: Option.none(), thinking: O
  *   summary can come back cut or empty.
  * - A level with an effort list: the lowest effort the model accepts at or
  *   above it, else its highest, with adaptive thinking for a family the
- *   default rule names.
+ *   default rule names. A `Budget` family (Claude Opus 4.5) has no adaptive
+ *   thinking and its effort alone does not turn thinking on, so it gets
+ *   thinking `enabled` with the budget beside the effort, as OpenCode sends
+ *   it (`anthropicEffort`).
  * - A level with a thinking budget and no effort list: thinking `enabled`
  *   with the budget.
  * - A level with only a toggle (MiniMax M3, which thinks only when asked):
@@ -2261,7 +2271,7 @@ const anthropicRequestPlan = (
   const rule = thinkingDefault(entry.id)
   const hint = reasoningHint(entry, hints)
   if (Option.isNone(hint)) {
-    if (Option.exists(rule, (value) => value !== "Off")) {
+    if (Option.exists(rule, (value) => value === "On" || value === "AlwaysOn")) {
       return { effort: Option.none(), thinking: Option.some(THINKING_CONFIG.adaptive) }
     }
     return PLAIN_REQUEST
@@ -2276,16 +2286,15 @@ const anthropicRequestPlan = (
     return PLAIN_REQUEST
   }
   const effort = effortFor(entry, hint.value)
+  const budget = Option.map(thinkingBudget(entry, hint.value, hints), (tokens): JsonRecord => ({
+    type: "enabled",
+    budget_tokens: tokens,
+  }))
   if (Option.isSome(effort)) {
+    if (Option.contains(rule, "Budget")) return { effort, thinking: budget }
     return { effort, thinking: Option.map(rule, () => THINKING_CONFIG.adaptive) }
   }
-  const budget = thinkingBudget(entry, hint.value, hints)
-  if (Option.isSome(budget)) {
-    return {
-      effort: Option.none(),
-      thinking: Option.some({ type: "enabled", budget_tokens: budget.value }),
-    }
-  }
+  if (Option.isSome(budget)) return { effort: Option.none(), thinking: budget }
   if (hasToggle(entry))
     return { effort: Option.none(), thinking: Option.some({ type: "adaptive" }) }
   return PLAIN_REQUEST

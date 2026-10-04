@@ -595,41 +595,44 @@ describe("OpenCode reasoning", () => {
 
   // The Messages class plans as the Anthropic driver does: an effort list wins
   // over a budget, and the Claude family picks the thinking mode. A manual
-  // budget cannot think between tool calls on the adaptive families.
-  it.live("Messages prefers the effort list, and sends a budget only to a model with none", () =>
-    Effect.gen(function* () {
-      const { zen } = yield* fixtureDrivers
-      const state = makeFakeFetchState()
-      const sent = (modelName: string, reasoning: ProviderHints["reasoning"]) =>
-        generate(zen, modelName, state, { cacheKey: "s", reasoning, maxTokens: 8192 }).pipe(
-          Effect.andThen(Effect.suspend(() => bodyOf(lastRequest(state)))),
-          Effect.map((body) => ({
-            thinking: field(body, "thinking"),
-            output: field(body, "output_config"),
-          })),
-        )
+  // budget cannot think between tool calls on the adaptive families; Opus 4.5
+  // has no adaptive thinking, so it thinks only with the budget beside its effort.
+  it.live(
+    "Messages prefers the effort list, and adds the budget where no adaptive thinking exists",
+    () =>
+      Effect.gen(function* () {
+        const { zen } = yield* fixtureDrivers
+        const state = makeFakeFetchState()
+        const sent = (modelName: string, reasoning: ProviderHints["reasoning"]) =>
+          generate(zen, modelName, state, { cacheKey: "s", reasoning, maxTokens: 8192 }).pipe(
+            Effect.andThen(Effect.suspend(() => bodyOf(lastRequest(state)))),
+            Effect.map((body) => ({
+              thinking: field(body, "thinking"),
+              output: field(body, "output_config"),
+            })),
+          )
 
-      expect(yield* sent("claude-opus-4-6", "high")).toEqual({
-        thinking: Option.some(ADAPTIVE_THINKING),
-        output: Option.some({ effort: "high" }),
-      })
-      expect(yield* sent("claude-opus-4-5", "high")).toEqual({
-        thinking: Option.none(),
-        output: Option.some({ effort: "high" }),
-      })
-      expect(yield* sent("qwen3.8-flash", "high")).toEqual({
-        thinking: Option.none(),
-        output: Option.some({ effort: "xhigh" }),
-      })
-      expect(yield* sent("claude-sonnet-4", "high")).toEqual({
-        thinking: Option.some({ type: "enabled", budget_tokens: 4096 }),
-        output: Option.none(),
-      })
-      expect(yield* sent("claude-sonnet-4", "max")).toEqual({
-        thinking: Option.some({ type: "enabled", budget_tokens: 8191 }),
-        output: Option.none(),
-      })
-    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+        expect(yield* sent("claude-opus-4-6", "high")).toEqual({
+          thinking: Option.some(ADAPTIVE_THINKING),
+          output: Option.some({ effort: "high" }),
+        })
+        expect(yield* sent("claude-opus-4-5", "high")).toEqual({
+          thinking: Option.some({ type: "enabled", budget_tokens: 4096 }),
+          output: Option.some({ effort: "high" }),
+        })
+        expect(yield* sent("qwen3.8-flash", "high")).toEqual({
+          thinking: Option.none(),
+          output: Option.some({ effort: "xhigh" }),
+        })
+        expect(yield* sent("claude-sonnet-4", "high")).toEqual({
+          thinking: Option.some({ type: "enabled", budget_tokens: 4096 }),
+          output: Option.none(),
+        })
+        expect(yield* sent("claude-sonnet-4", "max")).toEqual({
+          thinking: Option.some({ type: "enabled", budget_tokens: 8191 }),
+          output: Option.none(),
+        })
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
   it.live("a model the catalog says does not reason gets no reasoning field", () =>

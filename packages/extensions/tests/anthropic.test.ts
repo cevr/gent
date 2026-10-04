@@ -2771,16 +2771,14 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
           display: "summarized",
         })
       }
-      // Extended-thinking-only models reject adaptive thinking with a 400; a
-      // budget-only model thinks on a budget, and Opus 4.5 takes effort alone.
-      for (const model of ["claude-haiku-4-5", "claude-sonnet-4-5"]) {
+      // Extended-thinking-only models reject adaptive thinking with a 400: they
+      // think on a budget. Opus 4.5's effort alone does not turn thinking on,
+      // so it gets the budget beside the effort.
+      for (const model of ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5"]) {
         expect((yield* sentOnBothPaths(model, { reasoning: "high" })).thinking).toEqual({
           type: "enabled",
         })
       }
-      expect(
-        (yield* sentOnBothPaths("claude-opus-4-5", { reasoning: "high" })).thinking,
-      ).toBeUndefined()
     }),
   )
 
