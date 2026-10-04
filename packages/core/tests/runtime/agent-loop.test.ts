@@ -2331,6 +2331,29 @@ describe("a usage limit's reset time", () => {
     }).pipe(Effect.timeout("8 seconds")),
   )
 
+  // A live check of auto-resume needs a reset that comes inside the run.
+  it.scopedLive("the debug model's usage limit resets when the message says", () =>
+    Effect.gen(function* () {
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: LanguageModelLayers.debug(),
+      })
+      const events = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map(({ event }) => event),
+        Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      const before = yield* Clock.currentTimeMillis
+      yield* client.message.send({ sessionId, branchId, content: "debug usage limit 2m" })
+      const errors = (yield* Fiber.join(events)).filter((event) => event._tag === "ErrorOccurred")
+      const after = yield* Clock.currentTimeMillis
+      const retryAt = Option.getOrThrow(Option.fromUndefinedOr(errors[0]?.retryAt))
+      expect(retryAt).toBeGreaterThanOrEqual(before + Duration.toMillis(Duration.minutes(2)))
+      expect(retryAt).toBeLessThanOrEqual(after + Duration.toMillis(Duration.minutes(2)))
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
   // The worker reads the session's agent before the turn runs; a turn that
   // fails there never reached a model and stopped at no limit.
   it.live("a later turn that fails before its model call names no earlier reset", () =>

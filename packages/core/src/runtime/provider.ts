@@ -3544,15 +3544,29 @@ const debugRateLimit = (method: string) =>
 /** A user message holding it makes the debug model answer with a usage limit. */
 const USAGE_LIMIT_PHRASE = "debug usage limit"
 
+/** `debug usage limit 2m`: the reset the message names, in seconds, minutes or hours. */
+const USAGE_LIMIT_RESET = /debug usage limit (\d+)([smh])\b/
+
+const usageLimitReset = (text: string): Duration.Duration => {
+  const match = Option.fromNullishOr(USAGE_LIMIT_RESET.exec(text))
+  if (Option.isNone(match)) return Duration.hours(5)
+  const amount = Number(match.value[1])
+  if (match.value[2] === "s") return Duration.seconds(amount)
+  if (match.value[2] === "m") return Duration.minutes(amount)
+  return Duration.hours(amount)
+}
+
 /**
- * The debug model's usage limit: a 429 whose limit resets in five hours, past
- * every retry cap, so the turn fails at once and names the reset time.
+ * The debug model's usage limit: a 429 whose limit resets in five hours, or
+ * when the message says (`debug usage limit 2m`). Past every retry cap (a
+ * reset more than 30 s away), the turn fails at once and names the reset
+ * time; a shorter one is retried as any rate limit is.
  */
-const debugUsageLimit = (method: string) =>
+const debugUsageLimit = (method: string, text: string) =>
   AiError.make({
     module: "LanguageModelLayers",
     method,
-    reason: new AiError.RateLimitError({ retryAfter: Duration.hours(5) }),
+    reason: new AiError.RateLimitError({ retryAfter: usageLimitReset(text) }),
   })
 
 const extractLatestUserText = (promptInput: Prompt.RawInput): string => {
@@ -3694,8 +3708,9 @@ export const multiToolCallStep = (
  * the turn open long enough to answer the question while it runs.
  *
  * `debug usage limit` (not a scenario) fails the step with a rate limit that
- * resets in five hours (`debugUsageLimit`), so a scripted run shows the
- * error row that names the reset time.
+ * resets in five hours, or when the message says (`debug usage limit 2m`;
+ * `debugUsageLimit`), so a scripted run shows the error row that names the
+ * reset time, and an auto-resume that fires inside the run.
  *
  * A step calls the tools the request advertises: each op as its own call, or,
  * on a turn narrowed to `cell`, one `cell` call whose code awaits the ops.
@@ -3915,8 +3930,9 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
     streamText: (modelOptions) =>
       Effect.suspend(() => {
         const latestUserText = extractLatestUserText(modelOptions.prompt)
-        if (latestUserText.toLowerCase().includes(USAGE_LIMIT_PHRASE)) {
-          return Effect.fail(debugUsageLimit("Debug.streamText"))
+        const lowered = latestUserText.toLowerCase()
+        if (lowered.includes(USAGE_LIMIT_PHRASE)) {
+          return Effect.fail(debugUsageLimit("Debug.streamText", lowered))
         }
         const scenario = Option.fromUndefinedOr(
           DEBUG_SCENARIOS.find((entry) => latestUserText.toLowerCase().includes(entry.phrase)),
