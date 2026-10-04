@@ -14,6 +14,7 @@ import { SocketCloseError } from "effect/socket/Socket"
 import {
   type ActivityCall,
   activityRows,
+  failedOperations,
   describeCellCode,
   dropLastGrapheme,
   expandFileRefs,
@@ -21,6 +22,7 @@ import {
   fileHref,
   formatActivityHeader,
   formatActivityRow,
+  formatFailureRow,
   formatAge,
   formatCost,
   formatCellRowLabel,
@@ -949,6 +951,15 @@ describe("activity rows", () => {
     ])
   })
 
+  test("failed ops never fold, and a command's row ends with its exit status", () => {
+    const exited = (detail: string, exit: number) => ({ ...op("bash", detail, "failed"), exit })
+    expect(rows([cell([exited("a", 1), exited("b", 2), op("bash", "c", "failed")])])).toEqual([
+      "Ran a · exit 1",
+      "Ran b · exit 2",
+      "Ran c · failed",
+    ])
+  })
+
   test("a cell's own failure is a row after its ops; a cell with no ops names its verbs", () => {
     expect(rows([cell([op("read", "a.ts")], "error")])).toEqual(["Read a.ts", "cell · failed"])
     expect(rows([{ ...cell([], "error"), code: "await tools.ask_user({})" }])).toEqual([
@@ -1195,5 +1206,40 @@ describe("truncateStart", () => {
     expect(truncateStart("abcdefghij", 4)).toBe("ghij")
     expect(truncateStart("漢字漢字", 3)).toBe("字")
     expect(truncateStart("fits", 10)).toBe("fits")
+  })
+})
+
+describe("failure rows", () => {
+  const failure = (detail: string, reason: string, exit: number) => ({
+    ...op("bash", detail, "failed"),
+    reason,
+    exit,
+  })
+
+  test("the failures of a run are its failed ops in order, a cell's own failure included", () => {
+    const calls = [
+      cell([op("read", "a.ts"), failure("x", "boom", 2)]),
+      { ...cell([op("bash", "y")], "error"), reason: "cell died" },
+    ]
+    expect(failedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+      "Ran x · exit 2 · boom",
+      "cell · failed · cell died",
+    ])
+  })
+
+  test("a narrow row cuts the reason first, then drops it, then cuts the subject", () => {
+    const row = failure("sleep 2; ls d.ts", "ls: cannot access 'd.ts': No such file", 2)
+    expect(formatFailureRow(row, 80)).toBe(
+      "Ran sleep 2; ls d.ts · exit 2 · ls: cannot access 'd.ts': No such file",
+    )
+    expect(formatFailureRow(row, 40)).toBe("Ran sleep 2; ls d.ts · exit 2 · ls: can…")
+    expect(formatFailureRow(row, 30)).toBe("Ran sleep 2; ls d.ts · exit 2")
+    expect(formatFailureRow(row, 20)).toBe("Ran sleep … · exit 2")
+    for (const width of [80, 40, 30, 20])
+      expect(textWidth(formatFailureRow(row, width))).toBeLessThanOrEqual(width)
+  })
+
+  test("a failure with no reason ends with its outcome word", () => {
+    expect(formatFailureRow(op("write", "out.json", "failed"))).toBe("Wrote out.json · failed")
   })
 })

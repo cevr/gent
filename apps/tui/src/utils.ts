@@ -763,6 +763,12 @@ export interface ActivityOperation {
   readonly detail: string
   /** The lines an edit op changed, read from its input. */
   readonly diff?: DiffCount
+  /** The status a command that ran and failed exited with. */
+  readonly exit?: number
+  /** The first line of why a failed op failed; empty when it gives none. */
+  readonly reason?: string
+  /** The call the op was read from: none for a saved receipt. A preview head reads its output. */
+  readonly source?: ToolCall
 }
 
 export interface ActivityCall {
@@ -777,6 +783,10 @@ export interface ActivityCall {
   readonly code: string
   /** Wall time of the call once it has a terminal receipt. */
   readonly durationMs?: number
+  /** The first line of why the call itself failed, as its failure row says it. */
+  readonly reason?: string
+  /** The call itself: its own failure's preview head reads it. */
+  readonly source?: ToolCall
 }
 
 /** The group's wall time: the sum of its finished calls, absent until one has a duration. */
@@ -910,7 +920,7 @@ interface ActivityEntry {
 
 /**
  * What a call with no ops did: its source's verbs, else its first line. A
- * failed call's reason is its frame's, which every level draws.
+ * failed call's reason is its failure row's, which every level draws.
  */
 const opLessDetail = (call: ActivityCall): string => {
   const verbs = describeCellCode(call.code).join(" · ")
@@ -931,12 +941,20 @@ const activityEntries = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<Acti
         tool: call.toolName,
         outcome: callOutcome(call.status),
         detail: opLessDetail(call),
+        reason: call.reason ?? "",
+        source: call.source,
       }
       return [{ operation, tool: true }]
     }
     const entries = call.operations.map((operation) => ({ operation, tool: true }))
     if (call.status !== "error" || call.operations.some(isFailedOp)) return entries
-    const failure: ActivityOperation = { tool: call.toolName, outcome: "failed", detail: "" }
+    const failure: ActivityOperation = {
+      tool: call.toolName,
+      outcome: "failed",
+      detail: "",
+      reason: call.reason ?? "",
+      source: call.source,
+    }
     return [...entries, { operation: failure, tool: false }]
   })
 
@@ -1020,6 +1038,8 @@ interface ActivityRow {
   readonly subjects: ReadonlyArray<string>
   /** The summed lines the row's edits changed; none for a row with no edit. */
   readonly diff: Option.Option<DiffCount>
+  /** The ops the row stands for, in order: the last one's output is the row's head. */
+  readonly operations: ReadonlyArray<ActivityOperation>
 }
 
 const addDiff = (
@@ -1043,7 +1063,8 @@ const addDiff = (
 /**
  * The rows of a group, one per run of ops: consecutive ops of one tool and
  * one outcome fold into one row, so a cell that reads 3 files draws one
- * `Read` row. A running op keeps its own row, last.
+ * `Read` row. A running op and a failed op each keep a row of their own: a
+ * failure is one row, with its own exit status and reason.
  */
 export const activityRows = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<ActivityRow> => {
   const rows: ActivityRow[] = []
@@ -1057,7 +1078,8 @@ export const activityRows = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<
       (row) =>
         row.tool === operation.tool &&
         row.outcome === operation.outcome &&
-        operation.outcome !== "running",
+        operation.outcome !== "running" &&
+        operation.outcome !== "failed",
     )
     if (Option.isSome(previous)) {
       const row = previous.value
@@ -1065,13 +1087,35 @@ export const activityRows = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<
         ...row,
         subjects: [...row.subjects, ...subjects],
         diff: addDiff(row.diff, diff),
+        operations: [...row.operations, operation],
       }
     } else {
-      rows.push({ tool: operation.tool, outcome: operation.outcome, subjects, diff })
+      rows.push({
+        tool: operation.tool,
+        outcome: operation.outcome,
+        subjects,
+        diff,
+        operations: [operation],
+      })
     }
   }
   return rows
 }
+
+/** The failed ops of a group in call order: the collapsed level draws a row for each. */
+export const failedOperations = (
+  calls: ReadonlyArray<ActivityCall>,
+): ReadonlyArray<ActivityOperation> =>
+  activityEntries(calls)
+    .map((entry) => entry.operation)
+    .filter(isFailedOp)
+
+/** What a failure row says ended the op: a command's exit status, else `failed`. */
+const failureWord = (operation: ActivityOperation): string =>
+  Option.match(Option.fromUndefinedOr(operation.exit), {
+    onNone: () => "failed",
+    onSome: (status) => `exit ${status}`,
+  })
 
 /** A row as text, in parts: the diff counts draw in their own colours between head and tail. */
 interface ActivityRowText {
@@ -1082,7 +1126,7 @@ interface ActivityRowText {
 
 /**
  * A row in past-tense words, fitted to `width` columns: `Read a.ts, b.ts +1`,
- * `Edited x.ts +12 / -3`, `Ran bun test · failed`, `Running bun test`. The
+ * `Edited x.ts +12 / -3`, `Ran bun test · exit 1`, `Running bun test`. The
  * subjects that fit the width show, then `+N` counts the rest.
  */
 export function formatActivityRow(
@@ -1093,7 +1137,11 @@ export function formatActivityRow(
   let verb = tense[0]
   if (row.outcome === "running") verb = tense[1]
   let tail = ""
-  if (row.outcome === "failed") tail = " · failed"
+  // A failed row holds one op: the row ends with its exit status, or `failed`.
+  if (row.outcome === "failed") {
+    const words = row.operations.map(failureWord)
+    tail = ` · ${words[0] ?? "failed"}`
+  }
   if (row.outcome === "incomplete") tail = " · incomplete"
   const diffWidth = Option.match(row.diff, {
     onNone: () => 0,
@@ -1110,6 +1158,31 @@ export function formatActivityRow(
   while (kept > 1 && textWidth(listed(kept)) > room) kept -= 1
   if (subjects.length === 0) return { head: verb, diff: row.diff, tail }
   return { head: `${verb} ${listed(kept)}`, diff: row.diff, tail }
+}
+
+/** The narrowest reason a failure row still draws: a word start and the ellipsis. */
+const MIN_REASON_COLUMNS = 4
+
+/**
+ * A failed op as the collapsed level's one line, fitted to `width` columns:
+ * `Ran ls d.ts · exit 2 · ls: cannot access…`, `Read a.ts · failed · no such
+ * file`. A narrow row cuts the reason first, then drops it, then cuts the
+ * subject; the verb and the outcome always show.
+ */
+export function formatFailureRow(
+  operation: ActivityOperation,
+  width = Number.POSITIVE_INFINITY,
+): string {
+  const verb = (TOOL_VERBS.get(operation.tool) ?? [operation.tool, operation.tool])[0]
+  const outcome = ` · ${failureWord(operation)}`
+  let head = verb
+  if (operation.detail.length > 0) head = `${verb} ${operation.detail}`
+  const reason = oneLine(operation.reason ?? "").trim()
+  const room = width - textWidth(head + outcome) - 3
+  if (reason.length > 0 && room >= Math.min(MIN_REASON_COLUMNS, textWidth(reason)))
+    return `${head}${outcome} · ${truncate(reason, room)}`
+  if (textWidth(head + outcome) <= width) return `${head}${outcome}`
+  return `${truncate(head, Math.max(textWidth(verb), width - textWidth(outcome)))}${outcome}`
 }
 
 /** `+12 / -3` */

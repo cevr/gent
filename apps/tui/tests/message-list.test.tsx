@@ -1268,57 +1268,76 @@ describe("tool frame identity", () => {
     }),
   )
 
-  it.scopedLive("a failed call with no renderer shows its identity and reason in both views", () =>
-    Effect.gen(function* () {
-      const error = `Tool 'unknown_fx_tool' failed: ${LONG_TOOL_ERROR}`
-      const items: SessionItem[] = [
-        unknownFailureMessage("call-unknown-7"),
-        // A reloaded call whose output did not come through reads its summary,
-        // in the shape the runner stores today and in the older JSON shape.
-        assistantToolMessage("assistant-unknown-summary", {
-          ...runnerFailure("call-unknown-8", "unknown_fx_tool", absent, error),
-          output: absent,
-        }),
-        assistantToolMessage("assistant-unknown-json-summary", {
-          ...jsonSummaryFailure("call-unknown-9", "unknown_fx_tool", absent, error),
-          output: absent,
-        }),
-      ]
-      const setup = yield* renderScoped(
-        () => (
-          <>
-            <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
-            <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
-          </>
-        ),
-        { width: 160, height: 40 },
-      )
-      const frame = renderFrame(setup)
-      for (const id of ["call-unknown-7", "call-unknown-8", "call-unknown-9"])
-        expect(frame.match(new RegExp(`#${id}\\b`, "g"))?.length).toBe(2)
-      expect(frame.match(/\[x unknown_fx_tool\]/g)?.length).toBe(6)
-      expect(frame.match(/failed: connection refused by the upstream/g)?.length).toBe(6)
-      expect(frame).not.toContain('{"error"')
-    }),
+  it.scopedLive(
+    "a failed call with no renderer names its reason on its row, its identity only when open",
+    () =>
+      Effect.gen(function* () {
+        const error = `Tool 'unknown_fx_tool' failed: ${LONG_TOOL_ERROR}`
+        const items: SessionItem[] = [
+          unknownFailureMessage("call-unknown-7"),
+          // A reloaded call whose output did not come through reads its summary,
+          // in the shape the runner stores today and in the older JSON shape.
+          assistantToolMessage("assistant-unknown-summary", {
+            ...runnerFailure("call-unknown-8", "unknown_fx_tool", absent, error),
+            output: absent,
+          }),
+          assistantToolMessage("assistant-unknown-json-summary", {
+            ...jsonSummaryFailure("call-unknown-9", "unknown_fx_tool", absent, error),
+            output: absent,
+          }),
+        ]
+        const setup = yield* renderScoped(
+          () => (
+            <>
+              <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+              <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
+            </>
+          ),
+          { width: 160, height: 40 },
+        )
+        const frame = renderFrame(setup)
+        // A row says the tool and `failed` once; the reason follows without the runner's lead.
+        expect(frame.match(/unknown_fx_tool · failed/g)?.length).toBe(6)
+        expect(frame.match(/connection refused by the upstream/g)?.length).toBe(6)
+        expect(frame).not.toContain("Tool 'unknown_fx_tool' failed")
+        for (const id of ["call-unknown-7", "call-unknown-8", "call-unknown-9"])
+          expect(frame).not.toContain(`#${id}`)
+        expect(frame).not.toContain("[x unknown_fx_tool]")
+        expect(frame).not.toContain('{"error"')
+        const open = yield* renderScoped(
+          () => <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />,
+          { width: 160, height: 40 },
+        ).pipe(Effect.map(renderFrame))
+        for (const id of ["call-unknown-7", "call-unknown-8", "call-unknown-9"])
+          expect(open.match(new RegExp(`#${id}\\b`, "g"))?.length).toBe(1)
+        expect(open.match(/failed: connection refused by the upstream/g)?.length).toBe(3)
+      }),
   )
 
-  it.scopedLive("propagates identity through a registered renderer at narrow width", () =>
-    Effect.gen(function* () {
-      const setup = yield* renderScoped(
-        () => <RegisteredToolMessageLists items={[registeredFailureMessage("call-reg-7")]} />,
-        { width: 42, height: 20 },
-      )
-      const frame = yield* waitForFrame(
-        setup,
-        (next) => next.includes("#call-reg-7") && next.includes("failed"),
-        "registered renderer failure",
-      )
-      expect(frame.match(/#call-reg-7/g)?.length).toBe(2)
-      expect(frame.match(/failed/g)?.length).toBeGreaterThanOrEqual(2)
-      expect(frame.match(/✕ failed/g)?.length).toBe(2)
-      expect(frame).not.toContain("[x read]")
-      expect(frame.match(/read/g)?.length).toBeGreaterThanOrEqual(2)
-    }),
+  it.scopedLive(
+    "a registered renderer's failure keeps its identity for the open view at narrow width",
+    () =>
+      Effect.gen(function* () {
+        const setup = yield* renderScoped(
+          () => (
+            <RegisteredToolMessageLists
+              items={[registeredFailureMessage("call-reg-7")]}
+              fullDetail
+            />
+          ),
+          { width: 42, height: 20 },
+        )
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => next.includes("#call-reg-7") && next.includes("✕ failed"),
+          "registered renderer failure",
+        )
+        // Collapsed and preview draw one row each; only the open frame names the call id.
+        expect(frame.match(/└ Read \/tmp\/failure\.txt · failed/g)?.length).toBe(2)
+        expect(frame.match(/#call-reg-7/g)?.length).toBe(1)
+        expect(frame.match(/✕ failed/g)?.length).toBe(1)
+        expect(frame).not.toContain("[x read]")
+      }),
   )
 
   it.scopedLive("a failed builtin call shows its reason in every view, and as a cell op", () =>
@@ -1378,10 +1397,11 @@ describe("tool frame identity", () => {
       for (const tool of ["bash", "edit", "write", "read_session", "summary"]) {
         expect(frame.match(new RegExp(`REASON-${tool}\\b`, "g"))?.length).toBe(3)
       }
-      // The cell's ops draw in full detail only, each as its collapsed sub-row:
-      // the direct read in its three views, plus the read the cell admitted.
-      expect(frame.match(/REASON-read\b/g)?.length).toBe(4)
-      expect(frame.match(/REASON-grep\b/g)?.length).toBe(1)
+      // A cell's failed ops are rows of the run in every view, like direct calls:
+      // the direct read and the read the cell admitted, each in three views.
+      expect(frame.match(/REASON-read\b/g)?.length).toBe(6)
+      expect(frame.match(/REASON-grep\b/g)?.length).toBe(3)
+      expect(frame).toContain("Read gone.txt · failed · REASON-read")
       expect(frame).toContain("✕ mcp_fetch Tool 'mcp_fetch' failed: REASON-mcp_fetch")
       expect(frame).toContain("✕ mcp_search Tool 'mcp_search' failed: REASON-mcp_search")
       // A reason reads as its sentence, never as the stored JSON.
@@ -1789,10 +1809,10 @@ describe("cell rows", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("● 1 tool · 1 command")
       expect(frame).toContain("└ Ran seq 25")
-      expect(frame).toContain("row 1")
-      expect(frame).toContain("row 20")
-      expect(frame).not.toContain("row 21")
-      expect(frame).toContain("… +5 lines (ctrl+o)")
+      expect(frame).toContain("│ row 1")
+      expect(frame).toContain("│ row 5")
+      expect(frame).not.toContain("row 6")
+      expect(frame).toContain("│ … +20 lines (ctrl+o)")
     }),
   )
 
@@ -1825,11 +1845,13 @@ describe("cell rows", () => {
         )
         const preview = yield* waitForFrame(
           setup,
-          (frame) => frame.includes("… +5 lines (ctrl+o)"),
+          (frame) => frame.includes("└ Wrote · failed"),
           "cell preview",
         )
-        // The preview rows name the ops in past-tense words and no call id.
-        expect(preview).toContain("└ Wrote · failed")
+        // The preview rows name the ops in past-tense words and no call id;
+        // the failed op heads its own reason, never the cell's display.
+        expect(preview).toContain("│ denied")
+        expect(preview).not.toContain("CELL-OUTPUT")
         expect(preview).not.toContain("#call-stable")
         yield* Effect.sync(() => setDisclosure("full"))
         const full = yield* waitForFrame(
@@ -2548,9 +2570,9 @@ describe("expanded grep body", () => {
 })
 
 describe("write body", () => {
-  // The preview level draws the last call as the full level does, cut short:
-  // one call has one owner for what shows beneath it, never its raw result.
-  it.scopedLive("the preview draws a write through its renderer, not its JSON", () =>
+  // Preview draws one row a call, and the full level opens the renderer's body;
+  // neither draws the call's raw result.
+  it.scopedLive("a write is one row in the preview and its renderer's body when open", () =>
     Effect.gen(function* () {
       const cwd = "/work/proj"
       const path = `${cwd}/apps/tui/src/ops.ts`
@@ -2574,13 +2596,15 @@ describe("write body", () => {
           return (
             <Show when={renderers().size > 0}>
               <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
+              <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />
             </Show>
           )
         },
         { width: 100, height: 20, cwd },
       )
-      const frame = yield* waitForFrame(setup, (next) => next.includes("written"), "the preview")
-      expect(frame).toContain("7.2 KB written")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("written"), "the open body")
+      expect(frame.split("\n").map((line) => line.trim())).toContain("└ Wrote apps/tui/src/ops.ts")
+      expect(frame.match(/7\.2 KB written/g)).toHaveLength(1)
       expect(frame).not.toContain("bytesWritten")
       expect(frame).not.toContain(cwd)
     }),
@@ -5629,8 +5653,6 @@ describe("tool runs across steps", () => {
       readonly after?: ReadonlyArray<AssistantSegment>
       readonly tool?: string
       readonly stdout?: string
-      /** What the cell's last expression showed: the preview draws it under the rows. */
-      readonly display?: string
     } = {},
   ): ListMessage => {
     const tool = options.tool ?? "bash"
@@ -5640,7 +5662,7 @@ describe("tool runs across steps", () => {
       status: "completed",
       input: { code: "await tools.bash({ command: 'x' })" },
       summary: absent,
-      output: encodeJson({ display: options.display ?? "", bindings: [], truncated: false }),
+      output: encodeJson({ display: "", bindings: [], truncated: false }),
       operations: commands.map((command, index) => ({
         id: `${id}-op-${index}`,
         toolName: tool,
@@ -5702,12 +5724,12 @@ describe("tool runs across steps", () => {
   // still join, that call changes with each step: a head drawn for one step
   // and dropped at the next would shrink the live tail, and the rows it
   // pushed into scrollback come back blank. So the head waits for the run's end.
-  it.scopedLive("the preview draws the last call's output only once the run has ended", () =>
+  it.scopedLive("the preview heads the last command's output only once the run has ended", () =>
     Effect.gen(function* () {
       const open: SessionItem[] = [
         clientPrompt("head-prompt", "look around"),
-        step("o1", ["ls"], { display: "FIRST-STEP-OUTPUT" }),
-        step("o2", ["git status"], { display: "SECOND-STEP-OUTPUT" }),
+        step("o1", ["ls"], { stdout: "FIRST-STEP-OUTPUT\n" }),
+        step("o2", ["git status"], { stdout: "SECOND-STEP-OUTPUT\n" }),
       ]
       const [streaming, setStreaming] = createSignal(true)
       const committed: string[] = []
@@ -5738,7 +5760,7 @@ describe("tool runs across steps", () => {
       // A turn that ends with no answer (an interrupt) ends the run.
       setStreaming(false)
       const ended = yield* shown()
-      expect(ended).toContain("SECOND-STEP-OUTPUT")
+      expect(ended).toContain("│ SECOND-STEP-OUTPUT")
       expect(ended).not.toContain("FIRST-STEP-OUTPUT")
     }).pipe(Effect.timeout("8 seconds")),
   )
@@ -5994,5 +6016,213 @@ describe("tool runs across steps", () => {
       expect(committedText.join("")).toContain("● 2 tools · 2 commands")
       expect(committedText.join("")).toContain("GROW-PROMPT")
     }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+// ── collapse ladder ─────────────────────────────────────────────────────────
+
+/**
+ * Every block is a node on one ladder. Collapsed is the head line and one
+ * line a failure; preview is the head and a `├`/`└` row a child, one line
+ * each, with a five-row head of its own output under a failed row and the
+ * run's last command; full opens the bodies.
+ */
+describe("collapse ladder", () => {
+  const DENIED = "ls: cannot access 'gent-debug-tools/d.ts': No such file or directory"
+  /** What a cell's last expression showed: an inspect dump no preview draws. */
+  const DUMP = `{ stdout: '', stderr: "${DENIED}\\n", exitCode: 2 }`
+  const op = (
+    id: string,
+    toolName: string,
+    input: Readonly<Record<string, string>>,
+    output: string,
+  ): ToolCall => ({ id, toolName, status: "completed", input, summary: absent, output })
+  const bashOutput = (stdout: string, stderr: string, exitCode: number) =>
+    encodeJson({ stdout, stderr, exitCode })
+  /** One step of the scripted `debug tools` turn: reasoning, then one cell that runs `ops`. */
+  const cellStep = (
+    id: string,
+    reasoningText: string,
+    operations: ReadonlyArray<ToolCall>,
+    display = "",
+  ): ListMessage => ({
+    _tag: "regular-message",
+    id,
+    role: "assistant",
+    content: "",
+    reasoning: reasoningText,
+    images: [],
+    createdAt: 0,
+    segments: [
+      { _tag: "reasoning", content: reasoningText },
+      {
+        _tag: "tool-call",
+        toolCall: {
+          id: `${id}-cell`,
+          toolName: "cell",
+          status: "completed",
+          input: { code: "await tools.bash({ command: 'x' })" },
+          summary: absent,
+          output: encodeJson({ display, bindings: [], truncated: false }),
+          operations: [...operations],
+        },
+      },
+    ],
+  })
+  const file = (name: string) => `gent-debug-tools/${name}.ts`
+  /** The scripted `debug tools` turn: six steps, the last bash exits 2, then the answer. */
+  const debugTurn = (): SessionItem[] => [
+    clientPrompt("dbg-prompt", "debug tools"),
+    cellStep("dbg-0", "Set up a scratch fixture to work on.", [
+      op(
+        "dbg-0-0",
+        "bash",
+        { command: "mkdir -p gent-debug-tools && sleep 1" },
+        bashOutput("", "", 0),
+      ),
+    ]),
+    cellStep(
+      "dbg-1",
+      "Read the three files together.",
+      ["a", "b", "c"].map((name) =>
+        op(
+          `dbg-1-${name}`,
+          "read",
+          { path: file(name) },
+          encodeJson({ content: "1\tx", path: file(name), lineCount: 1, truncated: false }),
+        ),
+      ),
+    ),
+    cellStep("dbg-2", "Find the open TODOs.", [
+      op(
+        "dbg-2-0",
+        "grep",
+        { pattern: "TODO", path: "gent-debug-tools" },
+        encodeJson({ matches: [], truncated: false }),
+      ),
+    ]),
+    cellStep("dbg-3", "Widen the greeting.", [
+      {
+        ...op(
+          "dbg-3-0",
+          "edit",
+          { path: file("a"), oldString: '"hello"', newString: '"hello, world"' },
+          encodeJson({ path: file("a"), replacements: 1 }),
+        ),
+      },
+    ]),
+    cellStep(
+      "dbg-4",
+      "Check for the file the TODO wants; it does not exist yet.",
+      [
+        op(
+          "dbg-4-0",
+          "bash",
+          { command: "sleep 2; ls gent-debug-tools/d.ts" },
+          bashOutput("", `${DENIED}\n`, 2),
+        ),
+      ],
+      DUMP,
+    ),
+    {
+      ...assistant("dbg-answer", "The check for d.ts failed: it does not exist yet."),
+      reasoning: "Summarize.",
+      segments: [
+        { _tag: "reasoning", content: "Summarize." },
+        { _tag: "text", content: "The check for d.ts failed: it does not exist yet." },
+      ],
+    },
+  ]
+  const draw = (items: SessionItem[], disclosure: DisclosureLevel, width: number) =>
+    renderScoped(
+      () => <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />,
+      { width, height: 60 },
+    ).pipe(Effect.map(renderFrame))
+  const lines = (frame: string) => frame.split("\n").map((line) => line.trimEnd())
+  /** The rows under the group header, up to the first blank row. */
+  const groupRows = (frame: string) => {
+    const all = lines(frame)
+    const header = all.findIndex((line) => /^ {2}[●✗] \d+ tools?\b/.test(line))
+    const end = all.findIndex((line, index) => index > header && line.trim().length === 0)
+    return all.slice(header + 1, end)
+  }
+
+  it.scopedLive(
+    "collapsed draws each failure as one row under the header, at 120 and 60 columns",
+    () =>
+      Effect.gen(function* () {
+        const wide = yield* draw(debugTurn(), "collapsed", 120)
+        const [failure, ...rest] = groupRows(wide)
+        expect(rest).toEqual([])
+        expect(failure).toStartWith(
+          "  └ Ran sleep 2; ls gent-debug-tools/d.ts · exit 2 · ls: cannot access",
+        )
+        expect(failure?.length ?? 0).toBeLessThanOrEqual(119)
+        expect(wide).not.toContain("Ran mkdir")
+        const narrow = yield* draw(debugTurn(), "collapsed", 60)
+        // The reason is cut first; the verb, the command and the exit status stay.
+        expect(groupRows(narrow)).toEqual([
+          "  └ Ran sleep 2; ls gent-debug-tools/d.ts · exit 2 · ls: c…",
+        ])
+        expect(lines(narrow).every((line) => line.length <= 59)).toBe(true)
+      }),
+  )
+
+  it.scopedLive("a failed call's collapsed row names its reason, not its frame or call id", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        assistantToolMessage(
+          "assistant-read-failed",
+          runnerFailure(
+            "call-read-failed",
+            "read",
+            { path: "/tmp/missing.txt" },
+            "ENOENT: no such file",
+          ),
+        ),
+      ]
+      for (const width of [120, 60]) {
+        const frame = yield* draw(items, "collapsed", width)
+        expect(groupRows(frame)).toEqual([
+          "  └ Read /tmp/missing.txt · failed · ENOENT: no such file",
+        ])
+        expect(frame).not.toContain("#call-read-failed")
+      }
+    }),
+  )
+
+  it.scopedLive("preview heads the failed row with its own output, never the cell's display", () =>
+    Effect.gen(function* () {
+      const wide = yield* draw(debugTurn(), "preview", 120)
+      expect(groupRows(wide)).toEqual([
+        "  ├ Ran mkdir -p gent-debug-tools && sleep 1",
+        "  ├ Read gent-debug-tools/a.ts, gent-debug-tools/b.ts, gent-debug-tools/c.ts",
+        "  ├ Searched /TODO/ in gent-debug-tools",
+        "  ├ Edited gent-debug-tools/a.ts +1 / -1",
+        "  └ Ran sleep 2; ls gent-debug-tools/d.ts · exit 2",
+        `    │ ${DENIED}`,
+      ])
+      expect(wide).not.toContain("stdout:")
+      const narrow = yield* draw(debugTurn(), "preview", 60)
+      expect(groupRows(narrow).at(-1)).toStartWith("    │ ls: cannot access")
+      expect(lines(narrow).every((line) => line.length <= 59)).toBe(true)
+    }),
+  )
+
+  it.scopedLive("a command's preview head is five rows, then a count of the rest", () =>
+    Effect.gen(function* () {
+      for (const width of [120, 60]) {
+        const frame = yield* draw([bashMessage("call-bash-head", 25)], "preview", width)
+        expect(groupRows(frame)).toEqual([
+          "  └ Ran seq 25",
+          "    │ row 1",
+          "    │ row 2",
+          "    │ row 3",
+          "    │ row 4",
+          "    │ row 5",
+          "    │ … +20 lines (ctrl+o)",
+        ])
+      }
+    }),
   )
 })

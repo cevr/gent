@@ -552,6 +552,36 @@ export const bashOutputRows = (call: ToolCall): OutputRows =>
     },
   })
 
+/** The first lines of a call's own output, and how many lines of it are left out. */
+export interface OutputHead {
+  readonly lines: ReadonlyArray<string>
+  readonly hidden: number
+}
+
+/**
+ * What a group's preview draws under a row: the first `max` lines of why a
+ * failed call failed, or of what a command printed, stdout then stderr. A cut
+ * output counts the lines of its whole output. None for any other call, and
+ * for a call that printed nothing.
+ */
+export const outputHead = (call: ToolCall, max: number): Option.Option<OutputHead> => {
+  if (call.status === "error") {
+    return Option.map(failureReason(call), (reason) => {
+      const lines = splitLines(withoutRunnerPrefix(reason).replace(/\s+$/, ""))
+      return { lines: lines.slice(0, max), hidden: Math.max(0, lines.length - max) }
+    })
+  }
+  if (call.toolName !== "bash" || Option.isNone(parseBashOutput(call.output))) return Option.none()
+  const { rows, total } = bashOutputRows(call)
+  const lines: string[] = []
+  for (const row of rows) {
+    if (row._tag !== "line" || lines.length === max) break
+    lines.push(drawnText(row))
+  }
+  if (lines.length === 0) return Option.none()
+  return Option.some({ lines, hidden: Math.max(0, total - lines.length) })
+}
+
 function getCommand(input: ToolInput): string {
   return getString(input, "command")
 }
@@ -709,27 +739,62 @@ interface OperationLine {
 }
 
 /**
- * A bash call that returned a command which exited nonzero. The call
- * succeeded, but the command failed; one still running in the background has
- * no exit code yet.
+ * The exit status of a bash call that returned a command which exited
+ * nonzero. The call succeeded, but the command failed; one still running in
+ * the background has no exit status yet.
  */
-const commandFailed = (call: ToolCall): boolean =>
-  call.toolName === "bash" &&
-  call.status === "completed" &&
-  Option.exists(
-    parseBashOutput(call.output),
+const failedExit = (call: ToolCall): Option.Option<number> =>
+  Option.filter(
+    Option.flatMap(
+      Option.liftPredicate(
+        call,
+        (value) => value.toolName === "bash" && value.status === "completed",
+      ),
+      (value) => parseBashOutput(value.output),
+    ),
     (value) => Option.isNone(value.status) && value.exitCode !== 0,
-  )
+  ).pipe(Option.map((value) => value.exitCode))
 
-/** One call as the tool a group counts: its outcome, its arguments, and an edit's line counts. */
+/** The first line of a text that is not blank; empty when every line is. */
+const firstLine = (text: string): string =>
+  splitLines(text).find((line) => line.trim().length > 0) ?? ""
+
+/**
+ * A reason without the runner's `Tool '<name>' failed: ` lead. A row already
+ * names the tool and says `failed`; the full view keeps the whole sentence.
+ */
+const withoutRunnerPrefix = (reason: string): string =>
+  reason.replace(/^Tool '[^']*' failed:\s*/, "")
+
+/**
+ * Why a failed call failed, in one line: the reason it gives, or for a
+ * command that exited nonzero its first line of output, stderr first.
+ */
+export const failureLine = (call: ToolCall): string => {
+  if (call.status === "error")
+    return firstLine(withoutRunnerPrefix(Option.getOrElse(failureReason(call), () => "")))
+  return Option.match(parseBashOutput(call.output), {
+    onNone: () => "",
+    onSome: (value) => firstLine(`${value.stderr}\n${value.stdout}`),
+  })
+}
+
+/**
+ * One call as the tool a group counts: its outcome, its arguments, an edit's
+ * line counts, and for a failure its exit status and reason.
+ */
 export const callOperation = (call: ToolCall, place: PathPlace): ActivityOperation => {
+  const exit = failedExit(call)
   let outcome = callOutcome(call.status)
-  if (commandFailed(call)) outcome = "failed"
-  const operation = {
+  if (Option.isSome(exit)) outcome = "failed"
+  let operation: ActivityOperation = {
     tool: call.toolName,
     outcome,
     detail: toolArgSummary(call.toolName, call.input, place),
+    source: call,
   }
+  if (outcome === "failed") operation = { ...operation, reason: failureLine(call) }
+  if (Option.isSome(exit)) operation = { ...operation, exit: exit.value }
   if (call.toolName !== "edit") return operation
   return Option.match(getEditUnifiedDiff(call.input), {
     onNone: () => operation,
@@ -799,11 +864,12 @@ export const cellOperations = (
   return Option.match(decodeToolOutputOption(CellOperationReceipts, call.output), {
     onNone: () => [],
     onSome: (value) =>
-      (value.operations ?? []).map((operation) => ({
-        tool: operation.tool,
-        outcome: operation.outcome,
-        detail: "",
-      })),
+      (value.operations ?? []).map((operation): ActivityOperation => {
+        const receipt = { tool: operation.tool, outcome: operation.outcome, detail: "" }
+        if (operation.outcome !== "failed") return receipt
+        // A failed receipt's summary says why: its failure row draws it.
+        return { ...receipt, reason: firstLine(withoutRunnerPrefix(operation.summary)) }
+      }),
   })
 }
 

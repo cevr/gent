@@ -7,6 +7,8 @@ import {
   formatCellRowLabel,
   formatCost,
   formatDuration,
+  failedOperations,
+  formatFailureRow,
   formatPreviewFooter,
   formatRowCounts,
   getString,
@@ -16,7 +18,6 @@ import {
   plural,
   repliesInView,
   type ReplyWriter,
-  previewOutput,
   truncate,
   workingIconFrame,
 } from "./utils"
@@ -80,9 +81,11 @@ import {
   bashOutputRows,
   callOperation,
   cellOperations,
-  failureReason,
+  failureLine,
   FoldOperationsProvider,
   GenericToolRenderer,
+  type OutputHead,
+  outputHead,
   RegisteredToolCall,
   type ToolCall,
   ToolCallSchema,
@@ -313,11 +316,18 @@ const HandoffDetails = Schema.Struct({
 type HandoffDetails = typeof HandoffDetails.Type
 const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
 
-const PREVIEW_LINES = 20
+/** The rows of a call's own output a preview draws under its row: fx's command head. */
+const HEAD_LINES = 5
 
 /** A call as its group counts it: a cell by its ops, any other call as the one tool it is. */
 const toActivityCall = (call: ToolCall, place: PathPlace): ActivityCall => {
-  const base = { toolName: call.toolName, status: call.status, durationMs: call.durationMs }
+  const base = {
+    toolName: call.toolName,
+    status: call.status,
+    durationMs: call.durationMs,
+    reason: failureLine(call),
+    source: call,
+  }
   if (call.toolName !== "cell") {
     return { ...base, operations: [callOperation(call, place)], code: "" }
   }
@@ -333,10 +343,7 @@ const cellResultText = (call: ToolCall) =>
     }),
   })
 
-/**
- * The text a cell or bash row shows beneath itself: the cell display, or the
- * command output. Any other call shows its renderer's body instead.
- */
+/** The text a cell or bash row counts beneath itself: the cell display, or the command output. */
 const rowOutputText = (call: ToolCall): Option.Option<string> => {
   if (call.toolName === "cell") {
     const result = cellResultText(call)
@@ -369,38 +376,6 @@ const rowOutputLines = (call: ToolCall): number => {
     return bashOutputRows(call).total
   }
   return lineCount(Option.getOrElse(rowOutputText(call), () => ""))
-}
-
-/**
- * A call's renderer body at the preview level: the body the full level draws,
- * cut to the preview's rows, with the preview's footer for the rest.
- */
-function PreviewBody(props: { call: ToolCall }) {
-  const { theme } = useTheme()
-  const [height, setHeight] = createSignal(0)
-  const hidden = () => Math.max(0, height() - PREVIEW_LINES)
-  return (
-    <box flexDirection="column">
-      <box flexDirection="column" maxHeight={PREVIEW_LINES} overflow="hidden">
-        <box
-          flexDirection="column"
-          flexShrink={0}
-          onSizeChange={function () {
-            setHeight(this.height)
-          }}
-        >
-          <ToolFrameBody>
-            <SingleToolCall toolCall={props.call} expanded={true} />
-          </ToolFrameBody>
-        </box>
-      </box>
-      <Show when={hidden() > 0}>
-        <text>
-          <span style={{ fg: theme.textMuted, dim: true }}>{formatPreviewFooter(hidden())}</span>
-        </text>
-      </Show>
-    </box>
-  )
 }
 
 /** A declined command (stored by an earlier version) never ran and a background one has not ended: neither has lines to count. */
@@ -1034,40 +1009,48 @@ function ToolCallGroup(props: {
   // commit) keeps the terminal's last column free.
   const lineWidth = () => dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN - 2
   const header = createMemo(() => formatActivityHeader(activity(), lineWidth()))
-  // The transcript view and the full level both open every row; collapsed keeps only failures.
+  // The transcript view and the full level both open every row.
   const rowsOpen = () => props.fullDetail || props.disclosure === "full"
+  // Collapsed draws one line under the header for each failure, so a failure
+  // shows at every level.
+  const failureRows = createMemo(() => {
+    if (props.fullDetail || props.disclosure !== "collapsed") return []
+    return failedOperations(activity())
+  })
   // Preview draws a row per run of one tool, in past-tense words.
   const toolRows = createMemo(() => {
     if (props.fullDetail || props.disclosure !== "preview") return []
     return activityRows(activity())
   })
-  // A failed call draws its frame, with its id and reason, at every level.
-  const visibleCalls = () => {
-    if (rowsOpen()) return props.calls
-    return props.calls.filter((call) => call.status === "error")
-  }
-  // Preview shows the head of the last finished call beneath the rows: a cell
-  // or bash row its output text, any other call its renderer body. An open
-  // run's last call changes with each step, and a head drawn for one step and
-  // dropped at the next would shrink the live tail (its freed rows reach
-  // scrollback blank), so the head waits for the run's end.
-  const previewed = createMemo(() => {
-    if (props.fullDetail || props.disclosure !== "preview" || props.runOpen)
-      return Option.none<ToolCall>()
-    return Option.filter(
-      Option.fromNullishOr(props.calls.at(-1)),
-      (last) => last.status === "completed",
-    )
+  // The run's last command row draws the head of its output, but only once
+  // the run has ended: while a step may still join, the last command changes,
+  // and a head drawn for one step and dropped at the next would shrink the
+  // live tail (its freed rows reach scrollback blank). A failed row's op has
+  // settled, so its head is final at once.
+  const lastCommandRow = createMemo(() => {
+    if (props.runOpen) return -1
+    return toolRows().findLastIndex((row) => row.tool === "bash")
   })
-  const preview = createMemo(() =>
-    previewed().pipe(
-      Option.flatMap(rowOutputText),
-      Option.map((text) => previewOutput(text, PREVIEW_LINES)),
-      Option.getOrElse(() => previewOutput("")),
-    ),
-  )
-  const previewBody = () =>
-    Option.toArray(Option.filter(previewed(), (last) => Option.isNone(rowOutputText(last))))
+  const rowHead = (row: ReturnType<typeof activityRows>[number], index: number) => {
+    if (row.outcome !== "failed" && index !== lastCommandRow()) return Option.none<OutputHead>()
+    const operation = Option.fromUndefinedOr(row.operations.at(-1))
+    return Option.flatMap(operation, (value) =>
+      Option.fromUndefinedOr(value.source).pipe(
+        Option.flatMap((source) => outputHead(source, HEAD_LINES)),
+        // A saved receipt has no output to read: its reason is the head.
+        Option.orElse(() =>
+          Option.map(
+            Option.liftPredicate(value.reason ?? "", (reason) => reason.length > 0),
+            (reason): OutputHead => ({ lines: [reason], hidden: 0 }),
+          ),
+        ),
+      ),
+    )
+  }
+  const connector = (index: number, count: number) => {
+    if (index === count - 1) return "└"
+    return "├"
+  }
   return (
     <Show when={props.calls.length > 0}>
       <box flexDirection="column">
@@ -1076,47 +1059,50 @@ function ToolCallGroup(props: {
             {symbol()} {header()}
           </text>
         </Show>
+        <For each={failureRows()}>
+          {(operation, index) => (
+            <text wrapMode="none" truncate style={{ fg: theme.error }}>
+              {connector(index(), failureRows().length)} {formatFailureRow(operation, lineWidth())}
+            </text>
+          )}
+        </For>
         <For each={toolRows()}>
           {(row, index) => {
             const text = () => formatActivityRow(row, lineWidth())
-            const connector = () => {
-              if (index() === toolRows().length - 1) return "└"
-              return "├"
-            }
             const color = () => {
               if (row.outcome === "failed" || row.outcome === "incomplete") return theme.error
               return theme.textMuted
             }
             return (
-              <text wrapMode="none" truncate style={{ fg: color() }}>
-                {connector()} {text().head}
-                <Show when={Option.getOrUndefined(text().diff)}>
-                  {(diff) => (
-                    <>
-                      <span style={{ fg: theme.success }}> +{diff().added}</span>
-                      <span style={{ fg: color() }}> / </span>
-                      <span style={{ fg: theme.error }}>-{diff().removed}</span>
-                    </>
-                  )}
+              <box flexDirection="column">
+                <text wrapMode="none" truncate style={{ fg: color() }}>
+                  {connector(index(), toolRows().length)} {text().head}
+                  <Show when={Option.getOrUndefined(text().diff)}>
+                    {(diff) => (
+                      <>
+                        <span style={{ fg: theme.success }}> +{diff().added}</span>
+                        <span style={{ fg: color() }}> / </span>
+                        <span style={{ fg: theme.error }}>-{diff().removed}</span>
+                      </>
+                    )}
+                  </Show>
+                  {text().tail}
+                </text>
+                <Show when={Option.getOrUndefined(rowHead(row, index()))}>
+                  {(head) => <OutputHeadRows head={head()} width={lineWidth() - 2} />}
                 </Show>
-                {text().tail}
-              </text>
+              </box>
             )
           }}
         </For>
-        <Show when={visibleCalls().length > 0}>
-          <For each={visibleCalls()}>
+        <Show when={rowsOpen()}>
+          <For each={props.calls}>
             {(call, index) => {
               const color = () => {
                 if (call.status === "error") return theme.error
                 return theme.textMuted
               }
-              const connector = () => {
-                if (index() === visibleCalls().length - 1) return "└"
-                return "├"
-              }
               const status = () => {
-                if (call.status === "error") return " · failed"
                 if (call.status === "running") return " · running"
                 if (Predicate.isNotUndefined(call.durationMs))
                   return ` · ${formatDuration(call.durationMs, "precise")}`
@@ -1143,25 +1129,23 @@ function ToolCallGroup(props: {
                 if (text.length === 0) return ""
                 return ` · ${text}`
               }
-              // The open rows draw the reasoning a step gave before this call.
-              const reasoningBefore = () => {
-                if (!rowsOpen()) return []
-                return props.reasoning.get(call.id) ?? []
-              }
-              // Open rows draw their bodies: a blank line parts each from the last,
-              // as it parts transcript blocks.
+              // A blank line parts each open row from the last, as it parts
+              // transcript blocks.
               const gap = () => {
-                if (rowsOpen() && index() > 0) return 1
+                if (index() > 0) return 1
                 return 0
               }
               return (
                 <box flexDirection="column" marginTop={gap()}>
-                  <For each={reasoningBefore()}>{(content) => props.renderReasoning(content)}</For>
+                  {/* The open rows draw the reasoning a step gave before this call. */}
+                  <For each={props.reasoning.get(call.id) ?? []}>
+                    {(content) => props.renderReasoning(content)}
+                  </For>
+                  {/* A failed call draws its renderer's frame, which names its id and reason. */}
                   <Show
                     when={call.status === "error"}
                     fallback={
                       <box flexDirection="column">
-                        {/* The raw call id is detail: the open frame (ctrl+o) names it, the row does not. */}
                         <box flexDirection="row">
                           <text
                             flexGrow={1}
@@ -1170,76 +1154,71 @@ function ToolCallGroup(props: {
                             truncate
                             style={{ fg: color() }}
                           >
-                            {connector()} {call.toolName} {label()}
+                            {connector(index(), props.calls.length)} {call.toolName} {label()}
                             {counts()}
                             {status()}
                           </text>
-                          <Show when={rowsOpen()}>
-                            <text flexShrink={0} wrapMode="none" style={{ fg: theme.textMuted }}>
-                              {" "}
-                              #{formatToolCallIdentity(call.id)}
-                            </text>
-                          </Show>
+                          <text flexShrink={0} wrapMode="none" style={{ fg: theme.textMuted }}>
+                            {" "}
+                            #{formatToolCallIdentity(call.id)}
+                          </text>
                         </box>
-                        <Show when={rowsOpen()}>
-                          <ToolFrameBody>
-                            <SingleToolCall toolCall={call} expanded={true} />
-                          </ToolFrameBody>
-                        </Show>
+                        <ToolFrameBody>
+                          <OpenToolCall toolCall={call} />
+                        </ToolFrameBody>
                       </box>
                     }
                   >
-                    <SingleToolCall toolCall={call} expanded={rowsOpen()} />
+                    <OpenToolCall toolCall={call} />
                   </Show>
                 </box>
               )
             }}
           </For>
         </Show>
-        <Show when={preview().lines.length > 0}>
-          <box flexDirection="column" paddingLeft={2}>
-            <For each={preview().lines}>
-              {(line) => <text style={{ fg: theme.textMuted }}>{line}</text>}
-            </For>
-            <Show when={preview().hidden > 0}>
-              <text>
-                <span style={{ fg: theme.textMuted, dim: true }}>
-                  {formatPreviewFooter(preview().hidden)}
-                </span>
-              </text>
-            </Show>
-          </box>
-        </Show>
-        <For each={previewBody()}>{(call) => <PreviewBody call={call} />}</For>
       </box>
     </Show>
   )
 }
 
-function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
+/**
+ * A call's own output under its preview row, one line a row behind a `│ `
+ * gutter, then the count of the lines left out and the key that shows them.
+ */
+/** A row's output head under a `│` gutter; `width` is the columns a line has after the gutter. */
+function OutputHeadRows(props: { head: OutputHead; width: number }) {
   const { theme } = useTheme()
+  return (
+    <box flexDirection="column" paddingLeft={2}>
+      <For each={[...props.head.lines]}>
+        {(line) => (
+          <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+            │ {truncate(line, props.width)}
+          </text>
+        )}
+      </For>
+      <Show when={props.head.hidden > 0}>
+        <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+          │{" "}
+          <span style={{ fg: theme.textMuted, dim: true }}>
+            {formatPreviewFooter(props.head.hidden)}
+          </span>
+        </text>
+      </Show>
+    </box>
+  )
+}
+
+/** A call opened at the full level: its registered renderer, else the generic frame. */
+function OpenToolCall(props: { toolCall: ToolCall }) {
   return (
     <RegisteredToolCall
       toolCall={props.toolCall}
-      expanded={props.expanded}
+      expanded={true}
       fallback={
-        <Show
-          when={props.expanded}
-          fallback={
-            <Show when={props.toolCall.status === "error"}>
-              <text>
-                <span style={{ fg: theme.error }}>
-                  [x {props.toolCall.toolName}] #{formatToolCallIdentity(props.toolCall.id)}{" "}
-                  {Option.getOrElse(failureReason(props.toolCall), () => "failed")}
-                </span>
-              </text>
-            </Show>
-          }
-        >
-          <ToolCallIdentityProvider id={props.toolCall.id}>
-            <GenericToolRenderer toolCall={props.toolCall} expanded />
-          </ToolCallIdentityProvider>
-        </Show>
+        <ToolCallIdentityProvider id={props.toolCall.id}>
+          <GenericToolRenderer toolCall={props.toolCall} expanded />
+        </ToolCallIdentityProvider>
       }
     />
   )
