@@ -9,6 +9,7 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Match,
   Option,
   Path,
   Predicate,
@@ -230,24 +231,38 @@ const iccSegments = (profile: Uint8Array) => {
   })
 }
 
-/** The APP1 segment of an EXIF block whose only tag is the orientation, big-endian. */
-const exifOrientation = (orientation: number): readonly [number, Uint8Array] => [
-  0xe1,
-  bytesOf(
-    "Exif",
-    [0, 0],
-    "MM",
-    [0, 42],
-    be32(8),
-    be16(1),
-    [0x01, 0x12],
-    be16(3),
-    be32(1),
-    be16(orientation),
-    [0, 0],
-    be32(0),
-  ),
-]
+/**
+ * The APP1 segment of a big-endian EXIF block whose only tag is the
+ * orientation: by default a valid one, a SHORT (type 3) of count 1.
+ */
+const exifOrientation = (
+  orientation: number,
+  tag: { readonly magic?: number; readonly type?: number; readonly count?: number } = {},
+): readonly [number, Uint8Array] => {
+  const type = tag.type ?? 3
+  // The value sits left-aligned in the entry's four bytes, in the size its type names.
+  const value = Match.value(type).pipe(
+    Match.when(1, () => [orientation, 0, 0, 0]),
+    Match.when(4, () => be32(orientation)),
+    Match.orElse(() => [...be16(orientation), 0, 0]),
+  )
+  return [
+    0xe1,
+    bytesOf(
+      "Exif",
+      [0, 0],
+      "MM",
+      be16(tag.magic ?? 42),
+      be32(8),
+      be16(1),
+      [0x01, 0x12],
+      be16(type),
+      be32(tag.count ?? 1),
+      value,
+      be32(0),
+    ),
+  ]
+}
 
 /** `png` with `profile` in an `iCCP` chunk right after its `IHDR`. */
 const withPngProfile = (png: Uint8Array, profile: Uint8Array) =>
@@ -682,6 +697,37 @@ describe("tool image store", () => {
             width: fixture.size[0],
             height: fixture.size[1],
             format: "jpeg",
+          })
+        }
+      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a small JPEG whose EXIF orientation the codec ignores is stored byte for byte",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("tool-image-home-")
+        const jpeg = yield* encodeAs(realPng(400, 100), "jpeg")
+        // The codec shows each of these upright: a wrong TIFF magic, or a tag not a single SHORT.
+        const cases = [
+          { name: "magic 43", tag: { magic: 43 } },
+          { name: "BYTE", tag: { type: 1 } },
+          { name: "LONG", tag: { type: 4 } },
+          { name: "two SHORTs", tag: { count: 2 } },
+        ] as const
+        for (const fixture of cases) {
+          const bytes = withJpegSegments(jpeg, [exifOrientation(6, fixture.tag)])
+          expect(yield* imageMetadata(bytes)).toEqual({ width: 400, height: 100, format: "jpeg" })
+          const { image } = yield* saveIn(home, home, { base64: base64(bytes) })
+          expect({
+            name: fixture.name,
+            size: [image.width, image.height],
+            sha256: image.sha256,
+          }).toEqual({
+            name: fixture.name,
+            size: [400, 100],
+            sha256: sha256Hex(bytes),
           })
         }
       }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),

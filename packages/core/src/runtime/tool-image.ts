@@ -209,7 +209,8 @@ const jpegSegments = (bytes: Uint8Array): ReadonlyArray<JpegSegment> => {
 
 /**
  * The orientation a JPEG's EXIF block names (`0x0112` in its first image
- * directory), 1 (upright) when it names none.
+ * directory), read as the codec reads it: a TIFF header of `II` or `MM` and
+ * 42, and the tag one SHORT. 1 (upright) when it names none the codec honours.
  */
 const jpegOrientation = (bytes: Uint8Array, segments: ReadonlyArray<JpegSegment>): number => {
   const exif = segments.find(
@@ -218,6 +219,7 @@ const jpegOrientation = (bytes: Uint8Array, segments: ReadonlyArray<JpegSegment>
   if (Predicate.isUndefined(exif)) return 1
   const tiff = exif.start + 10
   const little = startsWith(bytes, ascii("II"), tiff)
+  if (!little && !startsWith(bytes, ascii("MM"), tiff)) return 1
   const read16 = (at: number) => {
     if (little) return uint16LE(bytes, at)
     return uint16BE(bytes, at)
@@ -226,11 +228,16 @@ const jpegOrientation = (bytes: Uint8Array, segments: ReadonlyArray<JpegSegment>
     if (little) return uint32LE(bytes, at)
     return uint32BE(bytes, at)
   }
+  if (read16(tiff + 2) !== 42) return 1
   const directory = tiff + read32(tiff + 4)
+  if (directory + 2 > exif.end) return 1
   for (let index = 0; index < read16(directory); index += 1) {
     const entry = directory + 2 + index * 12
     if (entry + 12 > exif.end) return 1
-    if (read16(entry) === 0x0112) return read16(entry + 8)
+    if (read16(entry) !== 0x0112) continue
+    // The codec reads the tag only as one SHORT (type 3); it shows any other upright.
+    if (read16(entry + 2) !== 3 || read32(entry + 4) !== 1) return 1
+    return read16(entry + 8)
   }
   return 1
 }
@@ -449,9 +456,11 @@ const encodesFor = (format: ImageTranscode["format"]): ReadonlyArray<ImageTransc
  * limit. A profile is colour, not pixels. Ordinary ones (sRGB, Display P3,
  * Adobe RGB) take a few kilobytes and stay; a larger one would take the bytes
  * the pixels need, and one that alone fills the limit would keep every encode
- * past it. The store leaves a larger one out before it encodes. With at most
- * this much profile, the pixels keep three quarters of the limit, and JPEG at
- * quality 20 of 2,000 x 2,000 pixels of noise takes under 0.8 MB.
+ * past it. The store measures the profile in each encode, where it takes its
+ * real bytes (a PNG deflates it, a JPEG or a WebP carries it whole), and
+ * leaves a larger one out of that encode. With at most this much profile, the
+ * pixels keep three quarters of the limit, and JPEG at quality 20 of 2,000 x
+ * 2,000 pixels of noise takes under 0.8 MB.
  */
 const TOOL_IMAGE_MAX_PROFILE_BYTES = TOOL_IMAGE_MAX_BYTES / 4
 
@@ -474,21 +483,25 @@ const fitToolImage = Effect.fn("ToolImage.fit")(
       onNone: (): ImageTranscode["format"] => "png",
       onSome: ({ mediaType }) => SCALED_FORMATS[mediaType],
     })
-    const input = header.pipe(
-      Option.flatMap(({ mediaType }) => withoutColorProfile(bytes, mediaType)),
-      Option.filter((plain) => bytes.length - plain.length > TOOL_IMAGE_MAX_PROFILE_BYTES),
-      Option.getOrElse(() => bytes),
-    )
     for (const encode of encodesFor(format)) {
-      const encoded = yield* platform.transcodeImage(input, encode)
-      if (encoded.bytes.length > TOOL_IMAGE_MAX_BYTES) continue
+      const encoded = yield* platform.transcodeImage(bytes, encode)
+      const mediaType = ENCODED_MEDIA_TYPES[encode.format]
+      // The profile counts at the size this encode carries it: a PNG deflates
+      // it, a JPEG or a WebP carries it whole.
+      const candidate = withoutColorProfile(encoded.bytes, mediaType).pipe(
+        Option.filter(
+          (plain) => encoded.bytes.length - plain.length > TOOL_IMAGE_MAX_PROFILE_BYTES,
+        ),
+        Option.getOrElse(() => encoded.bytes),
+      )
+      if (candidate.length > TOOL_IMAGE_MAX_BYTES) continue
       const original = Option.liftPredicate(
         { width: encoded.sourceWidth, height: encoded.sourceHeight },
         (source) => source.width !== encoded.width || source.height !== encoded.height,
       )
       return {
-        bytes: encoded.bytes,
-        mediaType: ENCODED_MEDIA_TYPES[encode.format],
+        bytes: candidate,
+        mediaType,
         width: encoded.width,
         height: encoded.height,
         original,
@@ -700,9 +713,9 @@ type SaveToolImageInput = ({ readonly bytes: Uint8Array } | { readonly path: str
  * fit, its aspect ratio kept, and encoded again where its bytes are still past
  * the limit (a GIF, or another format the codec decodes, becomes a PNG); its
  * `ToolImage` then names its `originalWidth` and `originalHeight`, and the
- * model reads them beside the image. A colour profile past a quarter of the
- * byte limit is left out before the encode. A JPEG its EXIF orientation turns
- * is stored upright. Only bytes no codec decodes fail, with `ToolImageError`.
+ * model reads them beside the image. A colour profile an encode carries at
+ * more than a quarter of the byte limit is left out of that encode. A JPEG its
+ * EXIF orientation turns is stored upright. Only bytes no codec decodes fail, with `ToolImageError`.
  */
 export const saveToolImage = Effect.fn("saveToolImage")(function* (input: SaveToolImageInput) {
   const ctx = yield* ExtensionContext

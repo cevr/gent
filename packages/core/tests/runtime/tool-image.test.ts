@@ -1,6 +1,6 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Deferred, Effect, Fiber, FileSystem, Layer, Option, Path } from "effect"
+import { Clock, Deferred, Effect, Fiber, FileSystem, Layer, Option, Path, Ref } from "effect"
 import { crc32, deflateSync } from "node:zlib"
 import { ExtensionContext } from "../../src/domain/extension"
 import {
@@ -145,34 +145,71 @@ describe("tool image sweep", () => {
 /** The byte limit of the store: its base64 fits Anthropic's 5 MiB an image. */
 const TOOL_IMAGE_MAX_BYTES = (5 * 1024 * 1024 * 3) / 4
 
-/** A truecolor gradient PNG of `width` x `height`. */
-const gradientPng = (width: number, height: number) => {
-  const chunk = (type: string, data: Uint8Array) => {
-    const body = Buffer.concat([Buffer.from(type, "latin1"), data])
-    const head = Buffer.alloc(4)
-    head.writeUInt32BE(data.length)
-    const tail = Buffer.alloc(4)
-    tail.writeUInt32BE(crc32(body))
-    return Buffer.concat([head, body, tail])
-  }
+const pngChunk = (type: string, data: Uint8Array) => {
+  const body = Buffer.concat([Buffer.from(type, "latin1"), data])
+  const head = Buffer.alloc(4)
+  head.writeUInt32BE(data.length)
+  const tail = Buffer.alloc(4)
+  tail.writeUInt32BE(crc32(body))
+  return Buffer.concat([head, body, tail])
+}
+
+/** A truecolor PNG of `width` x `height`, each pixel as `pixel` paints it, with `chunks` after its `IHDR`. */
+const paintedPng = (
+  width: number,
+  height: number,
+  pixel: (x: number, y: number) => readonly [number, number, number],
+  chunks: ReadonlyArray<Uint8Array> = [],
+) => {
   const header = Buffer.alloc(13)
   header.writeUInt32BE(width, 0)
   header.writeUInt32BE(height, 4)
   header.set([8, 2], 8)
   const raw = Buffer.alloc((width * 3 + 1) * height)
   for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1)
-      raw.set([x % 256, y % 256, 90], y * (width * 3 + 1) + 1 + x * 3)
+    for (let x = 0; x < width; x += 1) raw.set(pixel(x, y), y * (width * 3 + 1) + 1 + x * 3)
   }
   return Uint8Array.from(
     Buffer.concat([
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-      chunk("IHDR", header),
-      chunk("IDAT", deflateSync(raw)),
-      chunk("IEND", new Uint8Array()),
+      pngChunk("IHDR", header),
+      ...chunks,
+      pngChunk("IDAT", deflateSync(raw)),
+      pngChunk("IEND", new Uint8Array()),
     ]),
   )
 }
+
+/** A truecolor gradient PNG of `width` x `height`. */
+const gradientPng = (width: number, height: number) =>
+  paintedPng(width, height, (x, y) => [x % 256, y % 256, 90])
+
+/** Noise from a fixed seed, one byte at each call. */
+const noiseSource = () => {
+  let state = 2_463_534_242
+  return () => {
+    state ^= state << 13
+    state ^= state >>> 17
+    state ^= state << 5
+    return (state >>> 0) & 0xff
+  }
+}
+
+/** The real codec, counting each encode in `count`. */
+const countingCodec = (count: Ref.Ref<number>) =>
+  Layer.effect(
+    GentPlatform,
+    Effect.gen(function* () {
+      const platform = yield* GentPlatform
+      return GentPlatform.of({
+        ...platform,
+        transcodeImage: (bytes, options) =>
+          Ref.update(count, (n) => n + 1).pipe(
+            Effect.andThen(platform.transcodeImage(bytes, options)),
+          ),
+      })
+    }),
+  ).pipe(Layer.provide(BunGentPlatformLive))
 
 /**
  * The real codec, except that each encode to a side over `side` comes out
@@ -219,5 +256,40 @@ describe("tool image scaling", () => {
         })
       }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
     15_000,
+  )
+
+  it.scopedLive(
+    "a colour profile that compresses small in a PNG counts at the size each encode carries it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-tool-image-scale-" })
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-tool-image-scale-cwd-" })
+        // 4 MiB of profile deflates to a few kilobytes in the PNG; a JPEG carries it whole.
+        const profile = new Uint8Array(4 * 1024 * 1024)
+        new DataView(profile.buffer).setUint32(0, profile.length)
+        const next = noiseSource()
+        const png = paintedPng(1800, 1800, () => [next(), next(), next()], [
+          pngChunk("iCCP", Buffer.concat([Buffer.from("icc\0\0", "latin1"), deflateSync(profile)])),
+        ])
+        const count = yield* Ref.make(0)
+        const image = yield* saveToolImage({ bytes: png }).pipe(
+          Effect.provideService(ExtensionContext, testLeafContext(testToolContext({ home, cwd }))),
+          Effect.provide(countingCodec(count)),
+        )
+        // Its pixels fit at their own size, as they do without the profile.
+        expect({
+          width: image.width,
+          height: image.height,
+          scaled: "originalWidth" in image,
+        }).toEqual({
+          width: 1800,
+          height: 1800,
+          scaled: false,
+        })
+        expect(image.bytes).toBeLessThanOrEqual(TOOL_IMAGE_MAX_BYTES)
+        expect(yield* Ref.get(count)).toBeLessThanOrEqual(5)
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+    25_000,
   )
 })
