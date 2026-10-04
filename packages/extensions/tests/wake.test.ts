@@ -20,6 +20,8 @@ import {
 import { ChildProcessSpawner } from "effect/process"
 import { BunServices } from "@effect/platform-bun"
 import {
+  ConfigService,
+  RuntimeEnvironment,
   finishPart,
   interruptAtEachStep,
   LanguageModelLayers,
@@ -71,8 +73,12 @@ import {
 } from "@gent/core/protocol"
 import {
   RequestId,
+  defineExtension,
   ExtensionContext,
+  ExtensionHost,
+  ExtensionId,
   ExtensionServiceError,
+  request,
   type ExtensionContextService,
 } from "@gent/core/extensions/api"
 
@@ -2212,5 +2218,102 @@ describe("wake store", () => {
       expect(result.cancelled).toEqual(["repeating"])
       expect(yield* wakeFileExists(home)).toBe(false)
     }).pipe(storeTest),
+  )
+})
+
+describe("wake across a disable", () => {
+  const TimersOutput = Schema.Struct({ timers: Schema.optional(Schema.Array(Schema.String)) })
+  const encodeDisabled = Schema.encodeEffect(
+    Schema.fromJsonString(Schema.Struct({ disabledExtensions: Schema.Array(Schema.String) })),
+  )
+  // Reads the running timers of wake's branch Resource, or none while wake
+  // is off.
+  const timersProbe = defineExtension({
+    id: "@test/wake-timers",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "request",
+        request({
+          id: "timers",
+          input: Schema.Struct({}),
+          output: TimersOutput,
+          answersDuringTurn: true,
+          execute: () =>
+            Effect.gen(function* () {
+              const alarms = yield* Effect.serviceOption(WakeAlarms)
+              if (Option.isNone(alarms)) return {}
+              return { timers: yield* alarms.value.pending }
+            }),
+        }),
+      )
+    }),
+  })
+
+  it.scopedLive(
+    "an alarm armed before wake was turned off and on again has its timer back",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* makeTempDirectoryScoped("wake-disable-")
+        yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
+        const writeDisabled = (ids: ReadonlyArray<string>) =>
+          encodeDisabled({ disabledExtensions: ids }).pipe(
+            Effect.flatMap((text) => fs.writeFileString(`${home}/.gent/config.json`, text)),
+          )
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("wake", { afterSeconds: 3600, note: "much later" }),
+          textStep("alarm set"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          extensionInputs: [...e2ePreset.extensionInputs, timersProbe],
+          providerLayer,
+          home,
+          // The user config on disk, read fresh by each resolve.
+          configServiceLayer: ConfigService.Live.pipe(
+            Layer.provide(RuntimeEnvironment.Live({ cwd: home, home })),
+            Layer.provide(BunServices.layer),
+          ),
+        })
+        // A watching client holds the loop resident, as an open TUI does.
+        yield* client.session
+          .watchRuntime({ sessionId, branchId })
+          .pipe(Stream.runDrain, Effect.forkScoped)
+        const timers = client.extension
+          .request({
+            sessionId,
+            branchId,
+            extensionId: ExtensionId.make("@test/wake-timers"),
+            capabilityId: "timers",
+            input: {},
+          })
+          .pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(TimersOutput)),
+            Effect.map((output) => output.timers),
+          )
+        yield* client.message.send({ sessionId, branchId, content: "wake me later" })
+        const armed = yield* waitFor(
+          timers,
+          (current) => current?.length === 1,
+          8_000,
+          "the alarm's timer runs",
+        )
+        // Turned off, wake's branch Resource closes and its timer stops; the
+        // alarm row stays in the branch file.
+        yield* writeDisabled([WAKE_EXTENSION_ID])
+        expect(yield* timers).toBeUndefined()
+        yield* writeDisabled([])
+        // Turned on again, the new build has the stored alarm's timer, once.
+        const rearmed = yield* waitFor(
+          timers,
+          (current) => current?.length === 1,
+          5_000,
+          "the stored alarm's timer runs again",
+        )
+        expect(rearmed).toEqual(armed)
+        expect((yield* pendingOf(client, { sessionId, branchId })).entries).toHaveLength(1)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
   )
 })

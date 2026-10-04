@@ -15,6 +15,7 @@ import {
   Option,
   Path,
   Predicate,
+  Queue,
   Record,
   Ref,
   Result,
@@ -30,6 +31,7 @@ import {
   ActorCommandId,
   type BranchId,
   ClientRequestGrant,
+  type ExtensionId,
   type InteractionRequestId,
   MessageId,
   RpcId,
@@ -1447,6 +1449,10 @@ interface BranchGeneration {
   readonly context: Context.Context<unknown>
   readonly lease: ProfileLease
   users: number
+  /** The extension whose Resources these are. */
+  readonly extensionId: ExtensionId
+  /** Whether its extension's `loopOpen` hooks ran for this generation. */
+  activated: boolean
 }
 
 // Closing ends in an exit, never in a failure: a finalizer that fails or
@@ -1579,7 +1585,7 @@ type AgentLoopBehavior = {
   withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   /** Mark the per-entity behavior ready to accept state mutations. */
   start: Effect.Effect<void, AgentLoopError>
-  /** Fork the extensions' `loopOpen` hooks as the loop's own fiber; the opening loop calls it once. */
+  /** Start the loop's activations of the extensions' `loopOpen` hooks; the opening loop calls it once. */
   runOpenHooks: Effect.Effect<void>
   /** Resolves once the loop scope is closed. */
   awaitExit: Effect.Effect<void>
@@ -1890,6 +1896,60 @@ const makeAgentLoopBehavior = (
     // until an edit gives it a new key.
     const failedBuilds = new Map<string, FailedExtension>()
     let currentKeys: ReadonlySet<string> = new Set()
+    // Generations out of the map whose close has not ended: still alive, so
+    // the next generation of their extension is not activated yet.
+    const retiring = new Set<BranchGeneration>()
+    const retire = (key: string, generation: BranchGeneration, into: Array<BranchGeneration>) => {
+      generations.delete(key)
+      retiring.add(generation)
+      into.push(generation)
+    }
+    // ── activation ──
+    // The loop's `loopOpen` hooks run for each activation of an extension in
+    // this loop, and the loop is their one owner. An extension with branch
+    // Resources activates with each new generation of them, once no older
+    // generation of it is alive, so state a hook restores into the branch
+    // Resources (wake's timers) is restored once, into the generation that
+    // keeps it. One without branch Resources activates when it joins the
+    // newest profile: at open, and again after a disable left it out.
+    // `resolveCount` names the newest resolve: only an activation that
+    // resolved the newest profile claims, and each resolve or close that
+    // leaves an activation due asks for one.
+    let resolveCount = 0
+    let newestOpeners: ReadonlyArray<{
+      readonly extensionId: ExtensionId
+      /** Its branch generation's key; none when it has no branch Resources. */
+      readonly key: Option.Option<string>
+    }> = []
+    const openedWithoutResources = new Set<ExtensionId>()
+    const olderAlive = (generation: BranchGeneration) =>
+      [...generations.values(), ...retiring].some(
+        (other) => other !== generation && other.extensionId === generation.extensionId,
+      )
+    const dueOpeners = (claim: boolean): ReadonlySet<ExtensionId> => {
+      const due = new Set<ExtensionId>()
+      for (const { extensionId, key } of newestOpeners) {
+        if (Option.isNone(key)) {
+          if (openedWithoutResources.has(extensionId)) continue
+          if (claim) openedWithoutResources.add(extensionId)
+          due.add(extensionId)
+          continue
+        }
+        const generation = generations.get(key.value)
+        if (Predicate.isUndefined(generation) || generation.activated) continue
+        if (olderAlive(generation)) continue
+        if (claim) generation.activated = true
+        due.add(extensionId)
+      }
+      return due
+    }
+    // One pending ask is enough: the activation that takes it reads the
+    // newest state.
+    const activationRequests = yield* Queue.sliding<void>(1)
+    const requestActivation = Effect.suspend(() => {
+      if (dueOpeners(false).size === 0) return Effect.void
+      return Queue.offer(activationRequests, void 0).pipe(Effect.asVoid)
+    })
     // Let go of the given generations; the ones no run uses and the newest
     // profile does not name leave the map at once, and close here, the last
     // built first.
@@ -1901,13 +1961,22 @@ const makeAgentLoopBehavior = (
           if (Predicate.isUndefined(generation)) continue
           generation.users -= 1
           if (generation.users > 0 || currentKeys.has(key)) continue
-          generations.delete(key)
-          retired.push(generation)
+          retire(key, generation, retired)
         }
         return closeGenerations(retired)
       }).pipe(Effect.uninterruptible)
+    // A closed generation no longer holds back the next one of its extension.
     const closeGenerations = (retired: ReadonlyArray<BranchGeneration>) =>
-      closeBranchGenerations(retired).pipe(Effect.annotateLogs({ sessionId, branchId }))
+      closeBranchGenerations(retired).pipe(
+        Effect.annotateLogs({ sessionId, branchId }),
+        Effect.ensuring(
+          Effect.suspend(() => {
+            for (const generation of retired) retiring.delete(generation)
+            if (retired.length === 0) return Effect.void
+            return requestActivation
+          }),
+        ),
+      )
     // A run's capability context: the profile's services and the branch
     // services of its generations, with the suspended extensions left out
     // of the registry, so none of their tools, requests or hooks is offered
@@ -1956,7 +2025,7 @@ const makeAgentLoopBehavior = (
       byKey.set(memoKey, context)
       return context
     }
-    const resolveTurnProfile = (opener: RunOpener) =>
+    const resolveBranchProfile = (opener: RunOpener) =>
       Effect.gen(function* () {
         const runScope = yield* Scope.Scope
         // The lock is taken interruptibly, and the rest runs uninterruptibly
@@ -1965,7 +2034,7 @@ const makeAgentLoopBehavior = (
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             yield* restore(branchResourceLock.take(1))
-            const { profile, retired } = yield* Effect.gen(function* () {
+            const { profile, retired, resolveNumber } = yield* Effect.gen(function* () {
               const lease: ProfileLease = {
                 scope: yield* Scope.fork(loopScope),
                 holds: 1,
@@ -2012,7 +2081,15 @@ const makeAgentLoopBehavior = (
                   if (Predicate.isUndefined(key)) return
                   lease.holds += 1
                   nextGenerationId += 1
-                  generations.set(key, { id: nextGenerationId, scope, context, lease, users: 1 })
+                  generations.set(key, {
+                    id: nextGenerationId,
+                    scope,
+                    context,
+                    lease,
+                    users: 1,
+                    extensionId: extension.manifest.id,
+                    activated: false,
+                  })
                   used.push(key)
                 },
               })
@@ -2056,18 +2133,38 @@ const makeAgentLoopBehavior = (
               const retired: Array<BranchGeneration> = []
               for (const [key, generation] of generations) {
                 if (generation.users > 0 || currentKeys.has(key)) continue
-                generations.delete(key)
-                retired.push(generation)
+                retire(key, generation, retired)
               }
               const context = runContext(resolved, used, suspended)
-              return { profile: { ...resolved, turnCapabilityContext: context }, retired }
+              const profile = { ...resolved, turnCapabilityContext: context }
+              // The openers of the newest profile, as the run reads it: a
+              // suspended extension's hooks are not in its registry.
+              const registry = turnRegistry(profile).getResolved()
+              newestOpeners = registry.extensions.flatMap((extension) => {
+                if (!registry.extensionHooks.loopOpenExtensions.has(extension.manifest.id)) {
+                  return []
+                }
+                const key = Option.fromUndefinedOr(keys.get(extension))
+                return [{ extensionId: extension.manifest.id, key }]
+              })
+              const present = new Set(newestOpeners.map((opener) => opener.extensionId))
+              for (const id of openedWithoutResources) {
+                if (!present.has(id)) openedWithoutResources.delete(id)
+              }
+              resolveCount += 1
+              return { profile, retired, resolveNumber: resolveCount }
             }).pipe(Effect.ensuring(branchResourceLock.release(1)))
             // An extension finalizer never runs under the lock.
             yield* closeGenerations(retired)
-            return profile
+            return { profile, newest: () => resolveNumber === resolveCount }
           }),
         )
       })
+    const resolveTurnProfile = (opener: RunOpener) =>
+      resolveBranchProfile(opener).pipe(
+        Effect.tap(() => requestActivation),
+        Effect.map(({ profile }) => profile),
+      )
     const turnWorkerQueue = yield* TxQueue.unbounded<TurnWork>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnLedger = yield* makeTurnLedger
@@ -2197,27 +2294,44 @@ const makeAgentLoopBehavior = (
     // open, a hook that never returns delays no turn, and a follow-up a hook
     // queues on this branch starts at once. No client opened the run, so a
     // hook cannot ask.
-    const runOpenHooks = Effect.forkIn(
-      Effect.gen(function* () {
-        const profile = yield* resolveTurnProfile(
-          RunOpener.cases.Turn.make({ openedByClient: false }),
-        )
-        yield* turnRegistry(profile)
-          .getResolved()
-          .extensionHooks.emitLoopOpen.pipe(
-            runAgentLoopTurnProfile(profile),
-            Effect.provideContext(branchContext),
+    //
+    // One activation at a time resolves and claims (see activation above);
+    // the hooks it claimed run on their own fiber, which holds the run's
+    // generations until they end, so a hook that never returns holds up no
+    // later activation.
+    const activate = Effect.gen(function* () {
+      const claimed = yield* Deferred.make<void>()
+      yield* Effect.forkIn(
+        Effect.gen(function* () {
+          const { profile, newest } = yield* resolveBranchProfile(
+            RunOpener.cases.Turn.make({ openedByClient: false }),
           )
-      }).pipe(
-        Effect.scoped,
-        Effect.catchCause((cause) =>
-          Effect.logWarning("agent-loop.loop-open-hooks.failed").pipe(
-            Effect.annotateLogs({ sessionId, branchId, error: Cause.pretty(cause) }),
+          // A newer resolve asked again if this one left an activation due.
+          if (!newest()) return
+          const due = dueOpeners(true)
+          yield* Deferred.succeed(claimed, void 0)
+          if (due.size === 0) return
+          yield* turnRegistry(profile)
+            .getResolved()
+            .extensionHooks.emitLoopOpen(due)
+            .pipe(runAgentLoopTurnProfile(profile), Effect.provideContext(branchContext))
+        }).pipe(
+          Effect.scoped,
+          Effect.ensuring(Deferred.succeed(claimed, void 0)),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("agent-loop.loop-open-hooks.failed").pipe(
+              Effect.annotateLogs({ sessionId, branchId, error: Cause.pretty(cause) }),
+            ),
           ),
         ),
-      ),
+        loopScope,
+      )
+      yield* Deferred.await(claimed)
+    })
+    const runOpenHooks = Effect.forkIn(
+      Queue.take(activationRequests).pipe(Effect.andThen(activate), Effect.forever),
       loopScope,
-    ).pipe(Effect.asVoid)
+    ).pipe(Effect.andThen(Queue.offer(activationRequests, void 0)), Effect.asVoid)
 
     const close = Effect.suspend(
       Effect.fn("AgentLoop.close")(function* () {

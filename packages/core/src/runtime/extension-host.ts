@@ -304,7 +304,12 @@ interface CompiledExtensionHooks {
     input: Omit<TurnAfterInput, "readNotices">,
     readNotices: ReadonlyMap<ExtensionId, ReadonlySet<string>>,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
-  readonly emitLoopOpen: Effect.Effect<void, never, CurrentExtensionHostContext>
+  /** The extensions with a `loopOpen` hook. */
+  readonly loopOpenExtensions: ReadonlySet<ExtensionId>
+  /** Runs the `loopOpen` hooks of the named extensions; the loop says which (see its activation). */
+  readonly emitLoopOpen: (
+    extensionIds: ReadonlySet<ExtensionId>,
+  ) => Effect.Effect<void, never, CurrentExtensionHostContext>
   readonly emitSessionDeleted: (
     input: SessionDeletedInput,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
@@ -553,12 +558,16 @@ export const compileExtensionHooks = (
         }
       }),
 
+    loopOpenExtensions: new Set(loopOpenSlots.map((slot) => slot.extensionId)),
     // Each hook runs on its own: one that never returns holds up no other.
     // The slots are fixed when the registry compiles, one per registration.
-    emitLoopOpen: Effect.forEach(loopOpenSlots, (slot) => runHook(void 0, slot), {
-      concurrency: Math.max(loopOpenSlots.length, 1),
-      discard: true,
-    }),
+    emitLoopOpen: (extensionIds) => {
+      const slots = loopOpenSlots.filter((slot) => extensionIds.has(slot.extensionId))
+      return Effect.forEach(slots, (slot) => runHook(void 0, slot), {
+        concurrency: Math.max(slots.length, 1),
+        discard: true,
+      })
+    },
 
     // Each extension removes its own data, so no handler waits for another.
     // Each runs up to its bound; one that never returns is cut and logged.
