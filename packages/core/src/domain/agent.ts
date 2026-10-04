@@ -107,9 +107,10 @@ export class Model extends Schema.Class<Model>("Model")({
   /**
    * `classifier`: the model answers typed decisions (`effect/ai/Decision`)
    * through its driver's `resolveDecisionModel` and never runs a turn.
-   * Absent for a chat model.
+   * `virtual`: a model router's id (`router/auto`); each turn runs on the
+   * concrete model the router picks (`ModelRouted`). Absent for a chat model.
    */
-  kind: Schema.optional(Schema.Literal("classifier")),
+  kind: Schema.optional(Schema.Literals(["classifier", "virtual"])),
 }) {}
 
 /**

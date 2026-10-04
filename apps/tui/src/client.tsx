@@ -575,6 +575,12 @@ export interface SessionMetrics {
   readonly context: Option.Option<ModelContextMetrics>
 }
 
+/** What a virtual model's newest route chose (`ModelRouted`). */
+interface RoutedModel {
+  readonly model: Model
+  readonly effort: Option.Option<ReasoningEffort>
+}
+
 interface ClientAgentValue {
   // Agent state (derived from events)
   /** None until a snapshot names the session's agent. */
@@ -582,7 +588,10 @@ interface ClientAgentValue {
   cost: () => number
   /** The model the next turn would use: session setting, else the server-resolved default. */
   model: () => string
-  /** The session's level, else the default one; None before either is known. */
+  /**
+   * The level the next turn asks for: the session's, else its route's (a
+   * virtual model), else the default one; None before any is known.
+   */
   reasoningLevel: () => Option.Option<ReasoningEffort>
   /** The reasoning level config/agent would apply without a session override. */
   defaultReasoningLevel: () => Option.Option<ReasoningEffort>
@@ -598,6 +607,12 @@ interface ClientAgentValue {
   sessionMetrics: () => SessionMetrics
   /** None until the model registry loads the model in use. */
   modelInfo: () => Option.Option<Model>
+  /**
+   * The concrete model the newest route of the virtual model in use chose,
+   * and the effort that route set. None for a concrete model, before the
+   * first route, and after a switch away from the virtual model.
+   */
+  routedModel: () => Option.Option<RoutedModel>
   /**
    * The chat models the session's profile serves, in catalog order: a
    * registered driver's, and an active models.dev provider's. Empty until
@@ -1467,10 +1482,14 @@ export function ClientProvider(props: ClientProviderProps) {
       if (Option.isSome(resolved)) return resolveAgentModel(resolved.value)
       return DEFAULT_MODEL_ID
     },
+    // The turn's order (`applyTurnRoute`): the session's own level, else the
+    // route's, else the agent or config default.
     reasoningLevel: () =>
-      Option.orElse(
-        Option.fromUndefinedOr(session().reasoningLevel),
-        () => agentStore.defaultReasoningLevel,
+      Option.orElse(Option.fromUndefinedOr(session().reasoningLevel), () =>
+        Option.orElse(
+          Option.flatMap(agentValue.routedModel(), (route) => route.effort),
+          () => agentStore.defaultReasoningLevel,
+        ),
       ),
     defaultReasoningLevel: () => agentStore.defaultReasoningLevel,
     // Derived accessors
@@ -1480,6 +1499,16 @@ export function ClientProvider(props: ClientProviderProps) {
     error: () => agentStore.error,
     sessionMetrics,
     modelInfo: () => Option.fromNullishOr(catalog().modelsById[agentValue.model()]),
+    routedModel: () =>
+      Option.fromUndefinedOr(runtimeMetrics().routed).pipe(
+        Option.filter((routed) => routed.selected === agentValue.model()),
+        Option.flatMap((routed) =>
+          Option.map(Option.fromNullishOr(catalog().modelsById[routed.model]), (model) => ({
+            model,
+            effort: Option.fromUndefinedOr(routed.effort),
+          })),
+        ),
+      ),
     models: runnableModels,
     modelCatalog: () => {
       if (!catalog().settled) return Option.none()

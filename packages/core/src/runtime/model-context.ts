@@ -1338,6 +1338,27 @@ export const projectModelContext = (
 }
 
 /**
+ * The tokens of the current window before the turn's prompt: what a request
+ * on another model writes to its cache again. It is the estimate
+ * `coldHandoffPays` reads (`ModelContextProjection.historyTokens`) for a
+ * window that fits: chars/4 per unit, raised by the last measure. A history
+ * whose tool calls do not pair counts at chars/4.
+ */
+export const estimateHistoryTokens = (
+  messages: ReadonlyArray<Message>,
+  measure: Option.Option<StepMeasure>,
+): number => {
+  const window = messagesInCurrentWindow(messages)
+  const units = measuredUnits(window, measureInCurrentWindow(window, measure))
+  if (Result.isFailure(units)) return estimateTokens(window)
+  return Option.match(anchorUnit(units.success), {
+    onNone: () => 0,
+    onSome: (anchor) =>
+      units.success.slice(0, anchor).reduce((sum, unit) => sum + unit.estimatedTokens, 0),
+  })
+}
+
+/**
  * The projection units of `messages`, each with its estimate. chars/4 counts
  * low: it leaves out the wire encoding, and code and JSON tokenize denser.
  * When the provider measured a step of this window (`measure`), the units

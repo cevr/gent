@@ -52,7 +52,7 @@ import {
   defineResource,
   ExtensionContext,
   ExtensionHost,
-  hasProjectScope,
+  isProjectTrusted,
   isRecord,
   omitUndefined,
   request,
@@ -341,29 +341,6 @@ const readConfigFile = Effect.fn("Mcp.readConfigFile")(function* (file: string) 
   )
 })
 
-const UserTrust = Schema.fromJsonString(
-  Schema.Struct({ trustedProjects: Schema.optional(Schema.Array(Schema.String)) }),
-)
-
-/**
- * A project's servers run commands, so its `.gent/mcp.json` counts only when
- * the user config trusts the project root, the rule project extensions follow.
- */
-const projectTrusted = Effect.fn("Mcp.projectTrusted")(function* (home: string, cwd: string) {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  if (!(yield* hasProjectScope({ user: home, project: cwd }))) return false
-  const trusted = yield* fs.readFileString(path.join(home, ".gent", "config.json")).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(UserTrust)),
-    Effect.map((config) => config.trustedProjects ?? []),
-    Effect.orElseSucceed((): ReadonlyArray<string> => []),
-  )
-  return yield* fs.realPath(cwd).pipe(
-    Effect.map((root) => trusted.includes(root)),
-    Effect.orElseSucceed(() => false),
-  )
-})
-
 const fromSource = (
   entries: ConfigEntries,
   source: McpConfigSource,
@@ -374,13 +351,14 @@ const fromSource = (
  * The servers `~/.gent/mcp.json` names, and a trusted project's
  * `.gent/mcp.json` over them by name, each with the file it came from. A
  * project entry that does not decode still replaces the user entry of its
- * name, and is reported instead of started.
+ * name, and is reported instead of started. A project's servers run
+ * commands, so its file counts only when the user config trusts the project.
  */
 const readMcpConfig = Effect.fn("Mcp.readConfig")(function* (home: string, cwd: string) {
   const path = yield* Path.Path
   const user = fromSource(yield* readConfigFile(path.join(home, ".gent", "mcp.json")), "user")
   let project: Readonly<Record<string, McpConfigEntry>> = {}
-  if (yield* projectTrusted(home, cwd)) {
+  if (yield* isProjectTrusted({ home, cwd })) {
     project = fromSource(yield* readConfigFile(path.join(cwd, ".gent", "mcp.json")), "project")
   }
   return { ...user, ...project }

@@ -15,6 +15,7 @@ import {
   Predicate,
   Random,
   Ref,
+  Result,
   Schedule,
   Schema,
   Scope,
@@ -25,9 +26,11 @@ import {
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { Database } from "bun:sqlite"
 import { ModelCatalogSnapshotStorage } from "../storage/storage.js"
+import { type ExtensionModelsService, ExtensionServiceError } from "../domain/extension.js"
 import {
   AgentName,
   byReleaseDateDesc,
+  calculateCost,
   Model,
   ModelId,
   type ModelPricing,
@@ -55,6 +58,7 @@ import {
   DriverFailureId,
   type ModelCatalogView,
   type ModelDriverContribution,
+  type ModelRouterContribution,
   modelFromCatalog,
   ReasoningOption,
   type PersistAuth,
@@ -64,6 +68,7 @@ import {
   type ProviderResolution,
   type RetryPolicy,
   type StoredOAuthCredentials,
+  type VirtualModel,
 } from "../domain/driver.js"
 import { GentPlatform, writeFileAtomic } from "./gent-platform.js"
 import type { ProviderConfig, ProviderConfigEntry } from "./config.js"
@@ -2402,9 +2407,10 @@ class DecisionModelError extends Schema.TaggedError<DecisionModelError>()("Decis
   message: Schema.String,
 }) {}
 
-/** A classifier model ready to answer, and the catalog id it resolved to. */
+/** A classifier model ready to answer, and the catalog entry it resolved to. */
 interface ResolvedDecisionModel {
   readonly modelId: ModelId
+  readonly entry: Model
   readonly model: DecisionModel.DecisionModel
 }
 
@@ -2425,6 +2431,8 @@ interface ProfileClassifiers {
    * that fails to read counts as none.
    */
   readonly hasCredential: Effect.Effect<boolean>
+  /** The classifier models whose driver has a credential, cheapest first; unpriced ones last. */
+  readonly usable: Effect.Effect<ReadonlyArray<Model>, DecisionModelError>
 }
 
 interface DecisionModelResolverService {
@@ -2549,13 +2557,7 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
       ),
     onNone: () =>
       Effect.gen(function* () {
-        const usable = yield* Effect.filter(classifiers, (entry) =>
-          Effect.gen(function* () {
-            const stored = yield* storedAuth(entry.driver.id)
-            const fromEnv = yield* driverEnvReady(entry.driver)
-            return Option.isSome(stored) || fromEnv
-          }),
-        )
+        const usable = yield* credentialedClassifiers(auth, allDrivers, classifiers)
         // A `-latest` alias tracks its provider's newest model, so it wins
         // over a pinned version wherever the driver order puts it.
         const chosenEntry = Option.orElse(
@@ -2603,7 +2605,48 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
         }),
     ),
   )
-  return { modelId: chosen.model.id, model }
+  return { modelId: chosen.model.id, entry: chosen.model, model }
+})
+
+/** The classifier entries whose driver has a stored or env credential, in catalog order. */
+const credentialedClassifiers = (
+  auth: AuthService,
+  allDrivers: ModelDrivers,
+  classifiers: ReadonlyArray<ClassifierEntry>,
+) =>
+  Effect.filter(classifiers, (entry) =>
+    Effect.gen(function* () {
+      const stored = yield* classifierAuth(auth, allDrivers, entry.driver.id)
+      const fromEnv = yield* driverEnvReady(entry.driver)
+      return Option.isSome(stored) || fromEnv
+    }),
+  )
+
+/** A classifier's price per million tokens, input and output together; none when unpriced. */
+const classifierPrice = (model: Model): Option.Option<number> =>
+  Option.map(Option.fromUndefinedOr(model.pricing), (pricing) => pricing.input + pricing.output)
+
+/** Cheapest first; an unpriced model sorts after every priced one. */
+const byClassifierPrice: Order.Order<Model> = (left, right) => {
+  const leftPrice = classifierPrice(left)
+  const rightPrice = classifierPrice(right)
+  if (Option.isNone(leftPrice) && Option.isNone(rightPrice)) return 0
+  if (Option.isNone(leftPrice)) return 1
+  if (Option.isNone(rightPrice)) return -1
+  return Order.Number(leftPrice.value, rightPrice.value)
+}
+
+const usableClassifiers = Effect.fn("DecisionModelResolver.usable")(function* (
+  auth: AuthService,
+  catalogSource: ModelCatalogSourceService,
+  allDrivers: ModelDrivers,
+) {
+  const { classifiers } = yield* classifierCatalog(auth, catalogSource, allDrivers)
+  const usable = yield* credentialedClassifiers(auth, allDrivers, classifiers)
+  return Arr.sort(
+    usable.map((entry) => entry.model),
+    byClassifierPrice,
+  )
 })
 
 /**
@@ -2626,12 +2669,111 @@ export class DecisionModelResolver extends Context.Service<
           return {
             resolve: (modelId) => resolveDecisionModel(auth, catalogSource, drivers, modelId),
             hasCredential: classifierAvailable(auth, drivers),
+            usable: usableClassifiers(auth, catalogSource, drivers),
           }
         }),
       })
     }),
   )
 }
+
+// ── extension-models ────────────────────────────────────────────────────────
+
+/**
+ * The most one `Models.decide` may take, from resolving the model to its
+ * answer. Nothing else bounds a classifier call: the provider's HTTP client
+ * has no deadline of its own. A call may ask for less.
+ */
+const DECIDE_DEADLINE_MS = 60_000
+
+const modelsError = (operation: string, message: string) =>
+  new ExtensionServiceError({ service: "ExtensionModels", operation, message })
+
+/**
+ * The `ExtensionContext.Models` facet over the runtime's classifier models.
+ * The resolver is the runtime's; the drivers are those of the caller's
+ * profile, read from the `ExtensionRegistry` an extension leaf runs under.
+ * A runtime or a caller without them answers that no classifier is there.
+ */
+export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect.gen(function* () {
+  const resolver = yield* Effect.serviceOption(DecisionModelResolver)
+  const profile = Effect.gen(function* () {
+    const registry = yield* Effect.serviceOption(ExtensionRegistry)
+    if (Option.isNone(resolver) || Option.isNone(registry)) return Option.none()
+    return Option.some(
+      yield* resolver.value.profile.pipe(Effect.provideService(ExtensionRegistry, registry.value)),
+    )
+  })
+  const decide: ExtensionModelsService["decide"] = (params) =>
+    Effect.gen(function* () {
+      const classifiers = yield* profile
+      if (Option.isNone(classifiers))
+        return yield* modelsError("decide", "models.decide is not available in this runtime")
+      const deadlineMs = Option.match(Option.fromUndefinedOr(params.timeoutMs), {
+        onNone: () => DECIDE_DEADLINE_MS,
+        onSome: (asked) => Math.min(Math.max(Math.round(asked), 1), DECIDE_DEADLINE_MS),
+      })
+      const named = params.model ?? "default classifier"
+      return yield* Effect.gen(function* () {
+        const resolved = yield* classifiers.value
+          .resolve(Option.fromUndefinedOr(params.model))
+          .pipe(
+            Effect.mapError((error) => modelsError("decide", `models.decide: ${error.message}`)),
+          )
+        const response = yield* resolved.model
+          .decide(params.definition, { input: params.input })
+          .pipe(
+            Effect.mapError((error) =>
+              modelsError("decide", `models.decide (${resolved.modelId}) failed: ${error.message}`),
+            ),
+          )
+        const usage = omitUndefined({
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+        })
+        const costUsd = Option.map(Option.fromUndefinedOr(resolved.entry.pricing), (pricing) =>
+          calculateCost(
+            { inputTokens: usage.inputTokens ?? 0, outputTokens: usage.outputTokens ?? 0 },
+            Option.some(pricing),
+          ),
+        )
+        return {
+          model: resolved.modelId,
+          answers: response.answers,
+          usage,
+          ...omitUndefined({ costUsd: Option.getOrUndefined(costUsd) }),
+        }
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: Duration.millis(deadlineMs),
+          orElse: () =>
+            Effect.fail(
+              modelsError(
+                "decide",
+                `models.decide (${named}) gave no answer within ${deadlineMs} ms`,
+              ),
+            ),
+        }),
+        Effect.scoped,
+      )
+    })
+  return {
+    decide,
+    available: Effect.flatMap(profile, (classifiers) =>
+      Option.match(classifiers, {
+        onNone: () => Effect.succeed(false),
+        onSome: (found) => found.hasCredential,
+      }),
+    ),
+    classifiers: Effect.flatMap(profile, (classifiers) =>
+      Option.match(classifiers, {
+        onNone: () => Effect.succeed([]),
+        onSome: (found) =>
+          found.usable.pipe(Effect.mapError((error) => modelsError("classifiers", error.message))),
+      }),
+    ),
+  } satisfies ExtensionModelsService
+})
 
 // ── model-registry ──────────────────────────────────────────────────────────
 
@@ -2729,9 +2871,130 @@ const servedModelCatalog = Effect.fn("ModelRegistry.servedModelCatalog")(functio
       ),
     ),
   )
-  yield* catalogRecord.record(profile, catalog.failures)
-  return { served, models: byReleaseDateDesc(catalog.models), failures: catalog.failures }
+  const virtual = virtualModelCatalog(profile)
+  const failures = [...catalog.failures, ...virtual.failures]
+  yield* catalogRecord.record(profile, failures)
+  return {
+    served,
+    models: [...byReleaseDateDesc(catalog.models), ...virtual.models],
+    failures,
+  }
 })
+
+// ── virtual models ──────────────────────────────────────────────────────────
+
+/** A virtual model the profile serves: its router and its definition. */
+export interface ServedVirtualModel {
+  readonly router: ModelRouterContribution
+  readonly model: VirtualModel
+}
+
+/** Why `<router>/<name>` cannot be served; none when it can. */
+const virtualModelProblem = (
+  profile: Pick<ResolvedProfile, "modelDrivers" | "modelRouters">,
+  model: VirtualModel,
+): Option.Option<string> => {
+  const routed = model.choices.flatMap((choice) =>
+    Option.toArray(Option.fromUndefinedOr(choice.model)),
+  )
+  const nested = routed.find((id) =>
+    Option.exists(
+      parseModelId(id),
+      ([provider]) => profile.modelRouters.has(provider) && !profile.modelDrivers.has(provider),
+    ),
+  )
+  if (Predicate.isNotUndefined(nested))
+    return Option.some(`a router cannot route to a router: choice "${nested}"`)
+  if (model.choices.length === 0) return Option.some("it has no choices")
+  if (model.fallback < 0 || model.fallback >= model.choices.length)
+    return Option.some(`its default choice ${model.fallback} is not one of its choices`)
+  return Option.none()
+}
+
+/**
+ * The profile's routers' virtual models as catalog entries (`kind:
+ * "virtual"`), and each one refused as a catalog failure under its router.
+ * A virtual model none of whose choices names a model only sets an effort:
+ * it is not a model, so it is not listed. A router whose id a model driver
+ * holds serves nothing: the driver wins the id.
+ */
+const virtualModelCatalog = (profile: Pick<ResolvedProfile, "modelDrivers" | "modelRouters">) => {
+  const models: Array<Model> = []
+  const failures: Array<ModelCatalogFailure> = []
+  for (const router of profile.modelRouters.values()) {
+    if (profile.modelDrivers.has(router.id)) {
+      failures.push({
+        driverId: router.id,
+        error: `router id "${router.id}" is a model driver's id; the driver serves it`,
+      })
+      continue
+    }
+    for (const problem of router.problems ?? [])
+      failures.push({
+        driverId: router.id,
+        error: `${router.id}/${problem.name}: ${problem.reason}`,
+      })
+    for (const model of router.models) {
+      if (!model.choices.some((choice) => Predicate.isNotUndefined(choice.model))) continue
+      const problem = virtualModelProblem(profile, model)
+      if (Option.isSome(problem)) {
+        failures.push({
+          driverId: router.id,
+          error: `${router.id}/${model.name}: ${problem.value}`,
+        })
+        continue
+      }
+      models.push(
+        Model.make({
+          id: ModelId.make(`${router.id}/${model.name}`),
+          name: model.label,
+          provider: ProviderId.make(router.id),
+          kind: "virtual",
+        }),
+      )
+    }
+  }
+  return { models, failures }
+}
+
+/**
+ * The virtual model `modelId` names, or why it cannot run; none when the id
+ * is no router's (a driver with the router's id wins).
+ */
+export const servedVirtualModel = (
+  profile: Pick<ResolvedProfile, "modelDrivers" | "modelRouters">,
+  modelId: string,
+): Option.Option<Result.Result<ServedVirtualModel, string>> =>
+  Option.flatMap(parseModelId(modelId), ([provider, name]) => {
+    const router = profile.modelRouters.get(provider)
+    if (Predicate.isUndefined(router) || profile.modelDrivers.has(provider)) return Option.none()
+    const model = router.models.find((entry) => entry.name === name)
+    if (Predicate.isUndefined(model)) {
+      const problem = (router.problems ?? []).find((entry) => entry.name === name)
+      if (Predicate.isNotUndefined(problem))
+        return Option.some(Result.fail(`Model router "${modelId}": ${problem.reason}`))
+      return Option.some(
+        Result.fail(
+          `Unknown virtual model "${modelId}": router "${router.id}" serves no "${name}"`,
+        ),
+      )
+    }
+    const problem = virtualModelProblem(profile, model)
+    if (Option.isSome(problem))
+      return Option.some(Result.fail(`Model router "${modelId}": ${problem.value}`))
+    return Option.some(Result.succeed({ router, model }))
+  })
+
+/**
+ * The model a virtual model runs on when its router does not choose: its
+ * default choice's, else the first model a choice names.
+ */
+export const virtualDefaultModel = (model: VirtualModel): Option.Option<ModelId> =>
+  Option.orElse(Option.fromUndefinedOr(model.choices[model.fallback]?.model), () =>
+    Option.fromUndefinedOr(
+      model.choices.find((choice) => Predicate.isNotUndefined(choice.model))?.model,
+    ),
+  )
 
 /** One model of the caller's profile catalog: the turn's context limit and pricing. */
 interface ModelRegistryService {

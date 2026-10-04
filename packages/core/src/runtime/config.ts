@@ -686,3 +686,28 @@ export const isProjectExtensionDirectoryTrusted = Effect.fn("ExtensionLoader.pro
     return yield* isProjectRootTrusted(trustedProjects, directories.projectDir)
   },
 )
+
+/**
+ * Whether the user config trusts the project `cwd` is in: gent runs outside
+ * home, and `trustedProjects` names the project root. A project file whose
+ * entries run commands or spend on models (MCP servers, model routers)
+ * counts only then.
+ */
+export const isProjectTrusted = Effect.fn("Config.projectTrusted")(function* (sides: {
+  readonly home: string
+  readonly cwd: string
+}) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  if (!(yield* hasProjectScope({ user: sides.home, project: sides.cwd }))) return false
+  const userConfig = path.join(sides.home, GENT_CONFIG_DIRECTORY, GENT_CONFIG_FILENAME)
+  const trustedProjects = yield* fs.readFileString(userConfig).pipe(
+    Effect.flatMap(Schema.decodeEffect(TrustConfig)),
+    Effect.map((config) => config.trustedProjects ?? []),
+    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+  )
+  return yield* fs.realPath(sides.cwd).pipe(
+    Effect.map((root) => trustedProjects.includes(root)),
+    Effect.orElseSucceed(() => false),
+  )
+})

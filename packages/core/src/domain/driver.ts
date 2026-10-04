@@ -26,6 +26,8 @@ import {
 import { type CacheWriteByLifetime, Model, ModelId, ProviderId, ReasoningEffort } from "./agent.js"
 import { omitUndefined } from "./guards.js"
 import type { SessionId } from "./ids.js"
+import type { ExtensionContext, ExtensionServiceError } from "./extension.js"
+import type { Message } from "./message.js"
 
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
 export type DriverFailureId = typeof DriverFailureId.Type
@@ -714,4 +716,89 @@ export interface ModelDriverContribution {
   readonly cacheWritesByLifetime?: (
     metadata: Response.ProviderMetadata,
   ) => ReadonlyArray<CacheWriteByLifetime>
+}
+
+// ── ModelRouterContribution — virtual models ──
+
+/**
+ * One choice of a virtual model: a concrete model, an effort, or both. A
+ * choice with no model keeps the model the branch runs on and sets only the
+ * effort. `reason` says when the choice fits; the router's classifier reads it.
+ */
+export interface VirtualModelChoice {
+  readonly model?: ModelId
+  readonly effort?: ReasoningEffort
+  readonly reason: string
+}
+
+/**
+ * A model id that names no model: `<router id>/<name>` picks one of its
+ * choices at the start of each turn. Selectable wherever a model id goes.
+ */
+export interface VirtualModel {
+  readonly name: string
+  /** What the picker and the status row show (`Auto`). */
+  readonly label: string
+  /** At least one; at least one names a model. */
+  readonly choices: ReadonlyArray<VirtualModelChoice>
+  /** The index of the default choice: a turn takes it when no route answers. */
+  readonly fallback: number
+}
+
+/** A virtual model the router could not offer, and why; it shows as a catalog failure. */
+export interface VirtualModelProblem {
+  readonly name: string
+  readonly reason: string
+}
+
+/** The model the branch's last request ran on, and what a switch away from it costs. */
+export interface ModelRouteCurrent {
+  readonly model: Model
+  /** The provider still holds that request's prompt cache; a switch writes it again. */
+  readonly warm: boolean
+  /** The estimate of the prefix a switch writes again on the new model, in tokens. */
+  readonly historyTokens: number
+}
+
+/** What a router reads to pick a choice for one turn. */
+export interface ModelRouteInput {
+  /** The selected virtual model. */
+  readonly model: VirtualModel
+  /** The model-visible messages, the newest (a user message) last. */
+  readonly messages: ReadonlyArray<Message>
+  /**
+   * Aligned with `model.choices`: the catalog entry each choice runs on (a
+   * choice with no model, the current model's); none for a model the
+   * catalog does not list, which the turn cannot run.
+   */
+  readonly candidates: ReadonlyArray<Option.Option<Model>>
+  /** None on the branch's first request. */
+  readonly current: Option.Option<ModelRouteCurrent>
+  /** The session is a spawned child: its requests ask for the child cache lifetime. */
+  readonly child: boolean
+}
+
+/** The choice a router picked, and why, in a few words. */
+export interface ModelRouteDecision {
+  readonly choice: number
+  readonly reason: string
+}
+
+/**
+ * A router of virtual models. Its `id` is the provider segment of the ids it
+ * serves (`router/auto`); a model driver with the same id wins. Core routes
+ * once per turn, at its first step: it calls `route` (10 s at most), records
+ * the pick as a `ModelRouted` event, and runs every step of the turn on it.
+ * A route that fails, times out or picks a choice the turn cannot run takes
+ * the current model when it is a choice, else the default choice. The router
+ * asks classifiers through `ExtensionContext.Models`.
+ */
+export interface ModelRouterContribution {
+  readonly id: string
+  readonly name: string
+  readonly models: ReadonlyArray<VirtualModel>
+  readonly problems?: ReadonlyArray<VirtualModelProblem>
+  readonly route: (
+    input: ModelRouteInput,
+  ) => Effect.Effect<ModelRouteDecision, ExtensionServiceError, ExtensionContext>
 }

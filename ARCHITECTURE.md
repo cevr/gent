@@ -103,7 +103,7 @@ updates this list in the same commit.
     relative paths against `ctx.cwd`; `runProcess` is the one command helper.
     No `ExtensionContext` facet duplicates an Effect platform service; the
     facets are host authority only (`Session`, `Interaction`,
-    `FileLock`, `State`). An atomic write has one owner, `writeFileAtomic` in
+    `FileLock`, `Models`, `State`). An atomic write has one owner, `writeFileAtomic` in
     `packages/core/src/runtime/gent-platform.ts`; core config, extensions
     (through `@gent/core/extensions/api`) and the TUI (through
     `@gent/core/host`) all call it. Host facts core cannot get from
@@ -751,11 +751,21 @@ Shape:
   network reads and `bun:sqlite` on the data directory's `data.db` for past sessions. No
   `webfetch` or `search_sessions` tool ships; `read_session` stays as the
   parent-to-child output seam.
-- Classifier models (Jev) are one cell primitive, not a feature: the cell's
-  `models.decide(input, decisions, { model })` answers `effect/ai/Decision`
-  questions (`models.classify`, `models.rate`, `models.probability`) about a
-  JSON input in one provider call, and the model composes it with other tools
-  in its own code (gate, route, retry). A driver serves classifiers through the
+- Classifier models (Jev, Clef) are one host verb, not a feature:
+  `ExtensionContext.Models.decide({ definition, input, model?, timeoutMs? })`
+  answers `effect/ai/Decision` questions about an input in one provider call
+  and returns the answering model, the usage and the cost at the catalog's
+  price. `Models.available` says whether a call that names no model has a
+  credentialed classifier (no catalog read); `Models.classifiers` lists the
+  credentialed classifiers, cheapest first and unpriced last. Every
+  extension gets the same facet (`makeExtensionModels`, `runtime/provider.ts`,
+  built by each host-context provider over `DecisionModelResolver` and read
+  against the caller's profile registry). The cell's
+  `models.decide(input, decisions, { model })` is one caller: it builds the
+  questions (`models.classify`, `models.rate`, `models.probability`) from the
+  cell's JSON, and the model composes it with other tools in its own code
+  (gate, route, retry). A model router is another (virtual models, below).
+  A driver serves classifiers through the
   optional `resolveDecisionModel` beside `resolveModel` and lists them with
   `Model.kind: "classifier"`, so they share its id, auth, env credential and
   catalog; the TUI picker leaves them out, and the turn refuses one by name
@@ -765,7 +775,8 @@ Shape:
   cell shows its `models.decide` guideline when such a driver has a stored or
   env credential, with no catalog read.
   `DecisionModelResolver`
-  (`runtime/provider.ts`, in the loop's runtime services) picks the named
+  (`runtime/provider.ts`, in the loop's runtime services; no extension
+  imports it) picks the named
   catalog classifier. With none named it takes a classifier whose driver has a
   stored or env credential: a `-latest` alias first (drivers are ordered by
   extension id, so the order cannot pick it), else the first listed. It fails
@@ -791,6 +802,52 @@ Shape:
   `packages/extensions/src/cell.ts` (models host),
   `packages/extensions/src/typesafe.ts`, `packages/extensions/src/cloudflare.ts`
   (Clef decisions section), `packages/core/src/domain/driver.ts`.
+- Virtual models (owner, Pass 30: "the virtual router should be some sort of
+  json, with models that have a reason or description"). A `modelRouter`
+  contribution (`ModelRouterContribution`, `domain/driver.ts`) serves ids
+  `<router id>/<name>` that name no model: each is a list of choices (a
+  model, an effort, or both, with the `reason` a classifier reads) and a
+  default. The catalog lists one as `Model.kind: "virtual"` under its label;
+  one the router reports as a problem, or one whose choice names a router, is
+  a catalog failure (extension health lists it under the router's
+  extension), and a turn on it fails with `ErrorOccurred` naming why.
+  The turn routes once, before its first request (`routeTurn`,
+  `runtime/turn.ts`, model-routing section): it calls `route` with the
+  model-visible messages, each choice's catalog entry, and the model the
+  branch last ran on with whether its prompt cache is warm and the history
+  tokens a switch writes again (`estimateHistoryTokens`, the estimate
+  `coldHandoffPays` reads). It records the pick as `ModelRouted` (selected,
+  model, choice, effort, reason, fallback, classifier, cost, duration) and
+  runs the turn on it. Every later step, a replay and a recovered turn read
+  the recorded event; nothing routes again. A route that fails, dies, takes
+  over 10 s or picks a choice the turn cannot run falls back to the current
+  model when it is a choice, else the default; a turn never fails on its
+  route. The turn routes only where the request ends on the user's input: at
+  a later step (the selection changed mid-turn) or on a history that ends on
+  an assistant message (Anthropic 4.6 and later refuse that prefill) it keeps
+  the model the branch runs on. Routing writes nothing the model reads: it
+  happens before the model-change check, so a routed switch writes the notice
+  a hand switch writes and sends the same bytes, and the earlier model's
+  reasoning goes back as text only (`toPromptMessages`). The router's
+  classifier calls go through the run's own `ExtensionContext.Models`; their
+  cost lands on the event and the session's cost. The auth gate asks for the
+  driver of a virtual model's default choice (`routeCredentialDriver`).
+  The shipped router (`packages/extensions/src/router.ts`, `@gent/router`)
+  reads `routers` from `~/.gent/config.json` and from a trusted project's
+  `.gent/config.json` (by name over the user's) when the extensions load; a
+  bad entry (two `default` choices, no choices, a name with `/`) is a
+  problem with its reason. It asks one classifier (the entry's `classifier`,
+  else the cheapest credentialed one) which choice's reason fits the latest
+  request (head and tail, 3,000 characters, with the end of the request
+  before it; 4,000 at most) and holds a warm model unless the switch pays: a
+  stronger choice needs confidence 0.6; a cheaper one must cost less on the
+  turn with the history written to its cache (the cache-write rate of the
+  lifetime it asks for) than staying costs with the history read. A pick on
+  the current model is no switch, whatever its effort. The session metrics
+  keep the newest route (`SessionRuntimeMetrics.routed`); while the session
+  runs on that virtual model the TUI status row names both (`Auto → Sonnet
+5`), shows the route's effort unless the session sets one, and reads the
+  context gauge against the routed model's window.
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in
@@ -1801,12 +1858,12 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `agent`, `modelDriver`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `host`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. The loader (`runtime/extension-host.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
+One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `agent`, `modelDriver`, `apiClass`, `modelRouter`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `host`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. The loader (`runtime/extension-host.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/extension.ts`) is the compiled record consumed by the registry, hook compiler, and profile build; adding a new kind means adding a registration domain and a record field, not a new union arm. Each extension's process resources build once into their own child of the profile scope, which owns acquisition and release.
 
 - **Resource** — `defineResource({ id, scope, layer })`. Start work runs in the layer build and disposal is a finalizer in it. Long-lived state has a stable identity and explicit `scope`; resources build in extension resolution order. `scope` is `"process"` (built once per profile, released when the profile scope closes) or `"branch"` (built per branch loop, released when the loop closes). Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/extension.ts` and `buildScopeResources` in `runtime/extension-host.ts`.
-- **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Interaction`, `FileLock`, `State`); files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`); extension-private authority comes from extension-owned Effect service Tags. The `FileLock` facet wraps the host-internal `FileLockService`, and the `State` facet publishes `ExtensionStateChanged` on `EventStore`, so shipped and external extensions share the same surface. See `packages/core/src/domain/capability.ts`; `runtime/extension-host.ts` compiles the model, RPC, and slash registries. A request that fails answers the client with the extension's own reason as the `ExtensionProtocolError` message (a handler's error message, or `"<extension>" has no request "<id>"`), with no loop or runtime wrapper; the TUI shows a failed slash command as `/<name> failed: <reason>` on the status row.
+- **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Interaction`, `FileLock`, `Models`, `State`); files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`); extension-private authority comes from extension-owned Effect service Tags. The `FileLock` facet wraps the host-internal `FileLockService`, the `Models` facet the `DecisionModelResolver`, and the `State` facet publishes `ExtensionStateChanged` on `EventStore`, so shipped and external extensions share the same surface. See `packages/core/src/domain/capability.ts`; `runtime/extension-host.ts` compiles the model, RPC, and slash registries. A request that fails answers the client with the extension's own reason as the `ExtensionProtocolError` message (a handler's error message, or `"<extension>" has no request "<id>"`), with no loop or runtime wrapper; the TUI shows a failed slash command as `/<name> failed: <reason>` on the status row.
 - **Addressed session verbs** — `ExtensionContext.Session` reaches other branches through the same verbs the server uses: `create` (durable-once by `requestId`, optional `historyBranchId` copies the visible rows in, depth admitted by the host), `send` (one user message with a `delivery` mode: `"turn"` starts a turn on another branch with the loop `completion` modes, and the own branch refuses it and points at `"queue"`; `"queue"` is a follow-up keyed by `sourceId`; `"steer"` joins the running turn as an `Interject`), `stop` (writes a `Cancel` steer that stops the running turn, whichever message opened it; `Interrupt` has no writer and only decodes), `stopMessage` (the persisted `StopMessage` actor operation, through `stopMessageOn`: it records the durable cancellation of one message id, so a turn that message opens later starts interrupted, takes back a steer with that id that no step has read, and interrupts the running turn that message opened. A step's join of steers and the take-back hold the same queue permit, so a message is either joined or taken back, never both. It answers true only when this stop reached the message; false when the loop no longer holds it (its turn ended, or a step joined it into a turn another message opened, which runs on) or an earlier interrupt already stops its turn. A steer taken back answers true, unless an earlier stop from the same requesting branch already stops the turn the steer waited to join: the turn's latch records the requester of its first stop, and that stop's caller already reports the branch. A stop that reaches a running turn also takes back, under the interrupt permit, every waiting steer its own requesting branch sent (the `sender` a loop records on a steer into another branch's `Steer` operation and queue item, never a client): the turn's end cannot hand such a steer on as the next turn, so a later stop of that steer reaches nothing and the branch is reported once, however late that stop comes. A `Cancel` steer that names a `messageId` still decodes and runs the same routine), `events` (replay, then the `StreamSynchronized` marker, then live; `from: "now"` skips the replay and starts at the newest stored event), `delete` (cascade), `dequeueFollowUp`, and `holdResident` (a scoped hold that keeps the own branch's loop resident; see Residency). `send` and `stop` are a facade over the unchanged actor operations `SubmitDurable`, `QueueFollowUp`, and `Steer`, except that a `queue` or `steer` into the loop's own branch is admitted re-entrantly inside the caller: a client request's grant is read at admission, while the request provably runs, and a send from a context kept past it is an extension send; the raw `SteerCommand` stays on the RPC contract, not in the extension API. The bodies live in the `agent-loop.client` section of `packages/core/src/domain/agent-loop.ts`; The loop's `sessionControl` calls the queue bodies (`queueFollowUpOn`, `dequeueFollowUpOn`), and both `SessionRuntime` and `sessionControl` call `submitUserMessage` and `steerLoop`, so the facade and the RPC path cannot drift. The verbs are uniform: no extension, shipped or not, holds a grant another lacks. `AgentDefinition.maxModelAttempts` (and the RunSpec override) is the generic per-turn model-attempt budget, reserved durably per turn message id.
 - **Hooks** — `host.on("systemPrompt" | "turnProjection" | "turnAfter" | "loopOpen" | "sessionDeleted", handler)` registers the five runtime hooks; each kind is typed by `ExtensionHookSignatures`. `loopOpen` takes no input and runs once each time a branch's loop is built in this process (the first operation after a restart, or after the loop closed), after the loop resumed any turn a restart cut short. It is where an extension repairs what a previous process left on the branch: re-arm timers, resume children, report lost work. It runs as the loop's own fiber, with the branch Resources and a non-client opener (it cannot ask). Nothing in it takes the side-mutation permit, which a running turn holds: the profile resolves under the profile cache's place lock and the Resources build under the branch's own lock, so the hooks run beside a turn the open resumed. Each hook runs on its own fiber, so a hook that never returns delays no turn and no other hook. A follow-up it queues on its own branch starts a turn like any other send, and the operation that opened the loop never waits on it. User extensions register it the same way. `sessionDeleted` runs once for each session a delete removed (`SessionMutations.deleteSessionCascade`: the session and the descendants it spawned; a handoff that continues its thread stays and is not named), after the rows are gone, with that `sessionId`. Each session is heard under the profile of its own cwd, resolved before the delete, so a descendant in another cwd reaches that cwd's extensions; a descendant created after the delete collected its tree is heard under the deleted session's profile. The host context names that session and has a non-client opener. Each extension's handler runs on its own fiber; a failure is logged (`extension.hook.handler.failed`). The delete waits for each handler up to `SESSION_DELETED_HOOK_TIMEOUT` (30 s); a handler past it is interrupted and logged (`extension.hook.session-deleted.timeout`), so a handler that never returns does not hold the delete once the rows are gone. An extension removes there what it keeps for a session outside the database. Hooks, tools, and requests all cross one membrane: `provideExtensionLeaf(frame)` in `runtime/extension-host.ts` reads the run's `CurrentExtensionHostContext` and provides `ExtensionContext`; `turnProjection` receives the agent the turn dispatches (`TurnProjectionInput`). Hook handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. `turnAfter` carries `usage: { known, complete }`: the tokens of the steps that reported usable counts, and whether that is the whole turn (`TurnCompleted.usage` carries a total only when it is complete). See `packages/core/src/domain/extension.ts` and `runtime/extension-host.ts`.
 - **Model catalog** — models.dev is the catalog, and core reads it. The owner's direction (Pass 30) replaces the rule that core fetches nothing: "models.dev is integral to discovery of models via providers so we don't really need to hardcode anything, only limiting factor is classes of api's we support", and "snapshotting will be good so we don't constantly ping … we can put that in our sqlite db". `ModelCatalogSource` (`packages/core/src/runtime/provider.ts`, model catalog source section) keeps the two sources, `api.json` (chat models) and `api.json?type=decision` (decision models), as served in the `model_catalog_snapshots` table with their ETags. A read answers from the snapshot at once; a snapshot checked more than an hour ago starts one background `If-None-Match` revalidation (a 304 moves `checked_at` only); only a first read with no row waits on a fetch (10 s). The two sources load apart: `read` waits only for the chat source, so a stored chat snapshot serves a turn or a model list at once while a decision source with no row is fetched; `readWithDecisions` waits for both, and the classifier listing and a turn model the chat catalog does not list read it, so a classifier still runs no turn. There is no bundled snapshot: an offline first start has no catalog, says so, and tries again a minute later. A scripted model (`--debug`, `server start --mock`) runs on `ModelRegistry.Scripted`: the catalog's entry when there is one, else an entry made up from the id with a 1M window, so a scripted turn runs with no catalog. `GENT_MODEL_CATALOG_URL` names a mirror; the test preload points it at a closed local port and refuses every request or connection to a host other than this machine, and a spawned test child reads the fixture from `serveModelCatalogFixture` (`@gent/core/test-utils`). A driver or API class never fetches the catalog: core hands each leaf the entry it needs as input.
