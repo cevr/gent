@@ -29,6 +29,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Fiber,
   Match,
   Option,
   Predicate,
@@ -1859,6 +1860,13 @@ type CommitOutcome = "landed" | "refused" | "unsettled" | "stale"
 /** How long exit waits for the live view's last commits. */
 const EXIT_FLUSH_MS = 1500
 
+/**
+ * How long blank rows inside an item stay before the transcript is written
+ * again: a tail that grows into them meanwhile (a streamed answer, the rows
+ * a turn's end adds) closes them itself.
+ */
+const GAP_SETTLE_MS = 300
+
 /** An item's rows from `from` up to `to`, or to its last row when `to` is `None`. */
 interface RowRange {
   readonly from: number
@@ -2523,6 +2531,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
 
   onCleanup(() => {
     disposed = true
+    stopGapWatch()
     if (exitFlushes.get(renderer) === flushForExit) exitFlushes.delete(renderer)
     Queue.endUnsafe(nativeTasks)
     renderer.off("frame", finishNativeReturn)
@@ -2699,6 +2708,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         turnRunning,
         runs,
       })
+      // A pass that offers nothing can still leave a gap: a taller canvas
+      // gave back the rows in flight, and no commit sizes the region again.
+      watchGap()
     })
   })
 
@@ -2844,7 +2856,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * which the commit then writes into the space the region left. Any other
    * shrink there would leave its rows empty under the status row, so the
    * region keeps them: they sit above the live tail, under history, and the
-   * next rows the tail grows take them. A region above the bottom (a short
+   * next rows the tail grows take them. Kept rows inside an item that history
+   * holds the top of replay the transcript once they stay (`watchGap`).
+   * A region above the bottom (a short
    * session) has the terminal's own empty rows under it, so it shrinks to
    * what it wants, and a pane grows it into those rows. A replay clears the
    * screen and starts from the rows the region wants.
@@ -2866,9 +2880,54 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     // `afterCommitFrame` grows it then.
     if (!replaying && unflushedRows > 0) {
       renderer.footerHeight = Math.min(rows, renderer.footerHeight)
-      return
-    }
-    renderer.footerHeight = rows
+    } else renderer.footerHeight = rows
+    watchGap()
+  }
+
+  /**
+   * Whether the region holds rows above the live tail at the terminal's
+   * bottom while history holds the top rows of the first live item: blank
+   * rows inside that item, between its rows in history and its rows on
+   * screen. Scrollback takes no row back, so only a replay closes them.
+   */
+  const gapInsideItem = () => {
+    if (disposed || renderer.isDestroyed || renderer.screenMode !== "split-footer") return false
+    if (props.expanded || props.overlayOpen || replayPending() || settlingNative) return false
+    if (partialRows() === 0 || pendingRows > 0 || unflushedRows > 0) return false
+    const place = regionPlace(renderer)
+    if (place.top + place.rows < renderer.terminalHeight) return false
+    const height = dimensions().height
+    const wanted = splitFooterHeight(
+      height,
+      props.footerHeight + stickyRows() + Math.max(1, liveHeight()),
+    )
+    return renderer.footerHeight > wanted
+  }
+  let gapWatch = Option.none<Fiber.Fiber<void>>()
+  const stopGapWatch = () => {
+    if (Option.isSome(gapWatch)) Effect.runFork(Fiber.interrupt(gapWatch.value))
+    gapWatch = Option.none()
+  }
+  /**
+   * Replays the transcript once blank rows inside an item outlast
+   * `GAP_SETTLE_MS`. Each new size starts the wait again, so only a gap the
+   * tail left settled replays, not one it is about to grow into.
+   */
+  function watchGap() {
+    stopGapWatch()
+    if (!untrack(gapInsideItem)) return
+    gapWatch = Option.some(
+      Effect.runFork(
+        Effect.sleep(GAP_SETTLE_MS).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              gapWatch = Option.none()
+              if (untrack(gapInsideItem)) requestReplay()
+            }),
+          ),
+        ),
+      ),
+    )
   }
 
   /**

@@ -4126,6 +4126,56 @@ describe("native transcript region at the terminal's bottom", () => {
     25_000,
   )
 
+  // History holds a prompt's top rows and the tail the rest. A footer that
+  // shrinks gives the region rows the tail does not fill; held, they would
+  // sit inside the prompt, between its rows in history and on screen.
+  // Scrollback takes no row back, so the transcript is written again: the
+  // prompt and the answer read with the spacing they had.
+  it.scopedLive(
+    "a footer that shrinks while history holds an item's top rows leaves no blank row inside it",
+    () =>
+      Effect.gen(function* () {
+        const [footer, setFooter] = createSignal(3)
+        const prompt = Array.from({ length: 6 }, (_, index) => `PROMPT-0 line ${index + 1}`)
+        const answer = Array.from({ length: 16 }, (_, index) => `ANSWER-0 line ${index + 1}`)
+        const { setup, renderer } = yield* settledLongSession(
+          {
+            items: () => [
+              ...longSession(),
+              clientPrompt("ask", prompt.join("\n")),
+              assistant("answer", answer.join("\n\n")),
+            ],
+            streaming: () => false,
+            footer,
+            paneOpen: () => false,
+            overlayOpen: () => false,
+          },
+          (text) => bodyRowCounts(text).has("ANSWER-0 line 16"),
+        )
+        /** The rows from the prompt's first row to the answer's last, history first. */
+        const block = (text: string) => {
+          const rows = text.split("\n").map((row) => row.trimEnd())
+          const start = rows.findIndex((row) => row.includes("PROMPT-0 line 1"))
+          const end = rows.findIndex((row) => row.includes("ANSWER-0 line 16"))
+          return rows.slice(start, end + 1)
+        }
+        const before = block(terminalText(setup))
+        expect(before.length).toBeGreaterThan(prompt.length + answer.length)
+        setFooter(1)
+        yield* waitForFrame(
+          setup,
+          () => block(terminalText(setup)).join("\n") === before.join("\n"),
+          "the prompt and the answer with their spacing",
+          6_000,
+        ).pipe(Effect.ignore)
+        yield* waitForStableFrame(setup)
+        expect(block(terminalText(setup))).toEqual(before)
+        expect(renderer.footerHeight).toBe(regionRows)
+        expect(rowsUnderRegion(renderer)).toBe(0)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
   // A footer row that goes (an activity row a resumed turn drew, a status
   // row) leaves the region a row the tail does not fill. The row sits above
   // the tail, under history: the tail and the composer stay together.

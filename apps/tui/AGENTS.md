@@ -191,14 +191,18 @@ region holds over the footer's base as it is now: a base that grows (the
 activity row as a turn starts) moves the tail's top rows into history, and
 one that shrinks (the activity row going at a turn's end) leaves blank rows
 above the tail until it grows into them, never above the composer; so does a
-tail that shrinks after history took its top rows (a tool run that folds). The rows
-above the canvas go to native history in order, only from final items
+tail that shrinks after history took its top rows (a tool run that folds).
+Blank rows inside an item (history holds its top rows) that stay for 300 ms
+replay the transcript (`watchGap`). Patched OpenTUI grows the region with line
+feeds at the screen's last row, which keep the rows they push in scrollback
+(its own `CSI S` drops them). The rows above the canvas go to native history in order, only from final items
 (`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits for
 its stored answer, a message waits while a call of it runs, and the head of
 a tool run waits until the run ends): an item whole, or its top rows
 (`partialRows`; the live view cuts them off), during a turn too, so each
-final row is in history or on screen, once. Patched OpenTUI clips a box's
-border to the boxes around it, so a cut prompt draws no rail above the tail. A commit shrinks the region by its rows
+final row is in history or on screen, once. Patched OpenTUI crops a box's
+border to the scissor of the boxes around it, with the box's own geometry and
+titles, so a cut prompt draws no rail above the tail. A commit shrinks the region by its rows
 first and then writes them, so they land where they were drawn; a write
 OpenTUI refuses, or rows drawn from an item that changed while they settled
 (`stillOffered`), give the rows back to the live view; an item that changes
