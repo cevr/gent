@@ -1178,6 +1178,7 @@ const ChildOverrides = AgentPatch.mapFields(
   Struct.pick([
     "model",
     "tools",
+    "paths",
     "reasoningEffort",
     "contextLength",
     "maxSteps",

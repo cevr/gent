@@ -93,6 +93,22 @@ describe("run spec", () => {
   })
 })
 
+// ── agent paths ─────────────────────────────────────────────────────────────
+
+describe("agent paths", () => {
+  // A bare string is a write entry; an object without access is one too.
+  test("a paths entry decodes with its access spelled out", () => {
+    const decoded = Schema.decodeSync(Schema.fromJsonString(RunSpecSchema))(
+      '{"overrides":{"paths":["films",{"path":"skill","access":"read"},{"path":"notes"}]}}',
+    )
+    expect(decoded.overrides?.paths).toEqual([
+      { path: "films", access: "write" },
+      { path: "skill", access: "read" },
+      { path: "notes", access: "write" },
+    ])
+  })
+})
+
 // ── model ids ───────────────────────────────────────────────────────────────
 
 describe("model id parsing", () => {

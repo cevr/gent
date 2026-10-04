@@ -1,4 +1,4 @@
-import { Option, Predicate, Schema, SchemaGetter, Struct } from "effect"
+import { Effect, Option, Predicate, Schema, SchemaGetter, Struct } from "effect"
 import { omitUndefined } from "./guards.js"
 import { SessionId } from "./ids.js"
 
@@ -377,7 +377,7 @@ export const DriverOverridesFromConfig = Schema.Record(AgentName, StoredDriverRe
 
 export const DEFAULT_AGENT_NAME = AgentName.make("main")
 
-// ── tool patterns ───────────────────────────────────────────────────────────
+// ── tools and paths ─────────────────────────────────────────────────────────
 
 /** `text` with every regular-expression metacharacter escaped. */
 const escapeRegExp = (text: string): string => text.replaceAll(/[.+?^${}()|[\]\\]/g, "\\$&")
@@ -407,14 +407,39 @@ const toolPatternsAdmit = (patterns: Option.Option<ReadonlyArray<string>>, id: s
       }, false),
   })
 
+/** What an agent may do under a path: `write` includes `read`. */
+const AgentPathAccess = Schema.Literals(["read", "write"])
+
+/** One `paths` entry with its access spelled out. */
+const AgentPathEntry = Schema.Struct({ path: Schema.String, access: AgentPathAccess })
+
+/**
+ * One folder or file the shipped file tools confine an agent to, relative to
+ * the session cwd: `{ path, access }`, where `access` absent is `write`, or a
+ * bare string, a `write` entry. Both decode to the entry with its access;
+ * the entry encodes as the object.
+ */
+const AgentPath = Schema.Union([
+  Schema.Struct({
+    path: Schema.String,
+    access: AgentPathAccess.pipe(Schema.withDecodingDefaultKey(Effect.succeed("write" as const))),
+  }),
+  Schema.String.pipe(
+    Schema.decodeTo(Schema.toType(AgentPathEntry), {
+      decode: SchemaGetter.transform((path: string) => ({ path, access: "write" as const })),
+      encode: SchemaGetter.transform((entry: typeof AgentPathEntry.Type) => entry.path),
+    }),
+  ),
+])
+
 // ── agent definition ────────────────────────────────────────────────────────
 
 /**
  * AgentDefinition — agent identity + defaults.
  *
  * Per `composability-not-flags`, agent specs carry only what makes the agent
- * what it is: name, description, model, prompt, tool patterns, sampling
- * defaults, and driver routing. One schema, written two ways: TS through
+ * what it is: name, description, model, prompt, tool patterns, the paths
+ * its file tools may touch, sampling defaults, and driver routing. One schema, written two ways: TS through
  * `host.register("agent", AgentDefinition.make(...))`, and JSON in a config
  * file's `agents` key, an `AgentPatch` by name that creates an agent or
  * reshapes a registered one (`resolveAgentRoster`). Per-run overrides are the
@@ -432,6 +457,13 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
    * only: a held tool still asks the user where it asks (`admitsTool`).
    */
   tools: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * The folders the shipped file tools (`read`, `write`, `edit`, `grep`)
+   * confine the agent to, relative to the session cwd. `read` and `grep`
+   * take any entry, `write` and `edit` only `write` entries. Absent: no
+   * confinement. Not a sandbox: the cell and bash are not confined.
+   */
+  paths: Schema.optional(Schema.Array(AgentPath)),
   temperature: Schema.optional(Schema.Finite),
   reasoningEffort: Schema.optional(ReasoningEffort),
   /** Input window in tokens. Overrides the model catalog's limit; a smaller value hands off sooner. */
@@ -532,8 +564,27 @@ export const mergeAgentPatches = (first: AgentPatch, second: AgentPatch): AgentP
 }
 
 /** `agent` reshaped by `patch` as `mergeAgentPatches` merges: config entries, then a run's overrides. */
-export const applyAgentPatch = (agent: AgentDefinition, patch: AgentPatch): AgentDefinition =>
+const applyAgentPatch = (agent: AgentDefinition, patch: AgentPatch): AgentDefinition =>
   AgentDefinition.make({ ...mergeAgentPatches(agent, patch), name: agent.name })
+
+/**
+ * The agent a session runs as: `name` from the roster (`resolveAgentRoster`)
+ * with the session's run overrides applied; none when no agent has the name.
+ */
+export const resolveSessionAgent = (params: {
+  readonly agents: Iterable<AgentDefinition>
+  readonly configAgents: Option.Option<Readonly<Record<AgentName, AgentPatch>>>
+  readonly name: AgentName
+  readonly overrides: Option.Option<AgentPatch>
+}): Option.Option<AgentDefinition> =>
+  Option.map(
+    Option.fromUndefinedOr(resolveAgentRoster(params.agents, params.configAgents).get(params.name)),
+    (agent) =>
+      Option.match(params.overrides, {
+        onNone: () => agent,
+        onSome: (patch) => applyAgentPatch(agent, patch),
+      }),
+  )
 
 /**
  * The agents a session can run as: each extension agent with the config

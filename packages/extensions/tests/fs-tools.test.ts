@@ -25,14 +25,20 @@ import {
   WriteTool,
 } from "../src/fs-tools.js"
 import {
+  ConfigService,
   createRpcHarness,
   LanguageModelLayers,
+  makeTempDirectoryScoped,
+  multiToolCallStep,
   runToolWithCtx,
   testToolContext,
   textStep,
+  RuntimeEnvironment,
   toolCallStep,
+  waitFor,
 } from "@gent/core/test-utils"
-import { ref, runProcess } from "@gent/core/extensions/api"
+import { BunPlatformLive } from "@gent/core/host"
+import { AgentName, ref, runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { e2ePreset } from "./helpers/test-preset"
@@ -2061,5 +2067,122 @@ describe("FsToolsExtension via model turn", () => {
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
+  )
+})
+
+// ── agent paths ─────────────────────────────────────────────────────────────
+
+/**
+ * The film painter's scope, written as JSON in the project config: the films
+ * folder to write (a bare string), the skill folder to read only. Each call
+ * the model makes outside its entries is refused as the call's result, and
+ * the file is left as it was. A link and a `..` resolve before the check.
+ */
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+describe("agent paths", () => {
+  it.scopedLive(
+    "an agent's paths confine the file tools and a read entry refuses a write",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTempDirectoryScoped("gent-paths-home-")
+        const cwd = yield* makeTempDirectoryScoped("gent-paths-cwd-")
+        yield* fs.makeDirectory(path.join(cwd, "films"))
+        yield* fs.makeDirectory(path.join(cwd, "skill"))
+        yield* fs.makeDirectory(path.join(cwd, "outside-dir"))
+        yield* fs.writeFileString(path.join(cwd, "films", "scene.ts"), "scene")
+        yield* fs.writeFileString(path.join(cwd, "skill", "SKILL.md"), "rules")
+        yield* fs.writeFileString(path.join(cwd, "outside.txt"), "untouched")
+        yield* fs.symlink(path.join(cwd, "outside-dir"), path.join(cwd, "films", "escape"))
+        yield* fs.makeDirectory(path.join(cwd, ".gent"))
+        yield* fs.writeFileString(
+          path.join(cwd, ".gent", "config.json"),
+          encodeJson({
+            agents: {
+              painter: {
+                tools: ["read", "write", "edit", "grep"],
+                paths: ["films", { path: "skill", access: "read" }],
+              },
+            },
+          }),
+        )
+        const calls = [
+          // Inside: each succeeds.
+          { toolName: "write", input: { path: "films/new.ts", content: "painted" } },
+          {
+            toolName: "edit",
+            input: { path: "films/scene.ts", oldString: "scene", newString: "scene 2" },
+          },
+          { toolName: "read", input: { path: "skill/SKILL.md" } },
+          { toolName: "grep", input: { pattern: "rules", path: "skill" } },
+          // Outside, or a write under a read entry: each is refused.
+          { toolName: "write", input: { path: "outside.txt", content: "x" } },
+          { toolName: "write", input: { path: "skill/SKILL.md", content: "x" } },
+          {
+            toolName: "edit",
+            input: { path: "skill/SKILL.md", oldString: "rules", newString: "x" },
+          },
+          { toolName: "read", input: { path: "outside.txt" } },
+          { toolName: "read", input: { path: "films/../outside.txt" } },
+          { toolName: "write", input: { path: "films/escape/x.txt", content: "x" } },
+          { toolName: "grep", input: { pattern: "untouched" } },
+        ]
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          multiToolCallStep(...calls),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [],
+          extensionInputs: [AgentsExtension, FsToolsExtension],
+          providerLayer,
+          cwd,
+          home,
+          admission: { agent: AgentName.make("painter") },
+          configServiceLayer: ConfigService.Live.pipe(
+            Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+            Layer.provide(BunPlatformLive),
+          ),
+        })
+        yield* client.message.send({ sessionId, branchId, content: "Paint the scene." })
+        const messages = yield* waitFor(
+          client.message.list({ branchId }),
+          (list) =>
+            list.some(
+              (message) =>
+                message.role === "assistant" &&
+                message.parts.some((part) => part.type === "text" && part.text === "done"),
+            ),
+          6000,
+          "reply after the file calls",
+        )
+        yield* controls.assertDone
+        const results = messages
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result")
+        expect(results.map((part) => part.isFailure)).toEqual([
+          false,
+          false,
+          false,
+          false,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+        ])
+        for (const refused of results.slice(4)) {
+          expect(encodeJson(refused.result)).toContain("outside this agent's paths")
+        }
+        expect(yield* fs.readFileString(path.join(cwd, "films", "new.ts"))).toBe("painted")
+        expect(yield* fs.readFileString(path.join(cwd, "films", "scene.ts"))).toBe("scene 2")
+        expect(yield* fs.readFileString(path.join(cwd, "outside.txt"))).toBe("untouched")
+        expect(yield* fs.readFileString(path.join(cwd, "skill", "SKILL.md"))).toBe("rules")
+        expect(yield* fs.exists(path.join(cwd, "outside-dir", "x.txt"))).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
   )
 })

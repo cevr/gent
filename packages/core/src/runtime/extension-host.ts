@@ -93,7 +93,7 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "../domain/capability.js"
-import type { AgentDefinition } from "../domain/agent.js"
+import { type AgentDefinition, DEFAULT_AGENT_NAME, resolveSessionAgent } from "../domain/agent.js"
 import { causeChainMessage, causeMessage, omitUndefined } from "../domain/guards.js"
 import type {
   ApiClassContribution,
@@ -3501,6 +3501,29 @@ export const makeExtensionHostContextProvider = (
         getDetail: (sessionId) =>
           relationships((storage) => storage.getSessionDetail(sessionId)).pipe(
             Effect.mapError(sessionError("getDetail")),
+            inWorkspace,
+          ),
+        getAgent: (sessionId) =>
+          sessions((storage) => storage.getSession(sessionId ?? runInfo.sessionId)).pipe(
+            Effect.flatMap((session) => {
+              const cwd = session?.cwd ?? environment.cwd
+              const admission = session?.admission
+              return profiles((cache) =>
+                configs((configService) =>
+                  Effect.gen(function* () {
+                    const profile = yield* cache.resolve(cwd)
+                    const config = yield* configService.get(cwd)
+                    return resolveSessionAgent({
+                      agents: profile.resolved.agents.values(),
+                      configAgents: Option.fromUndefinedOr(config.agents),
+                      name: admission?.agent ?? DEFAULT_AGENT_NAME,
+                      overrides: Option.fromUndefinedOr(admission?.runSpec?.overrides),
+                    })
+                  }).pipe(Effect.scoped),
+                ),
+              )
+            }),
+            Effect.mapError(sessionError("getAgent")),
             inWorkspace,
           ),
         renameCurrent: (name, options) =>

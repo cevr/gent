@@ -892,6 +892,15 @@ export interface ExtensionSessionService {
     ExtensionServiceError
   >
   /**
+   * The agent a session runs as, resolved as its turns resolve it: the
+   * roster (extension agents and config `agents` entries) with the
+   * session's run overrides applied. The current session when none is named;
+   * none when the agent is gone from the roster.
+   */
+  readonly getAgent: (
+    sessionId?: SessionId,
+  ) => Effect.Effect<Option.Option<AgentDefinition>, ExtensionServiceError>
+  /**
    * Rename the current session. With `expectedName` it renames only while
    * the stored name is still that one, checked in the transaction that
    * writes it, so a name another rename set first wins.

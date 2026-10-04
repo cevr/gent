@@ -2,9 +2,7 @@ import {
   type AgentDefinition,
   AgentName,
   type AgentName as AgentNameType,
-  type AgentPatch,
-  applyAgentPatch,
-  resolveAgentRoster,
+  resolveSessionAgent,
   calculateCost,
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
@@ -1339,16 +1337,6 @@ const requestNotices = (resolved: ResolvedTurnContext): ReadonlyArray<TurnNotice
   ...resolved.notices.map(({ notice }) => notice),
 ]
 
-/** A run's `RunSpec.overrides` reshape the agent as a config entry does (`applyAgentPatch`). */
-const applyAgentOverrides = (
-  agent: AgentDefinition,
-  overrides: Option.Option<AgentPatch>,
-): AgentDefinition =>
-  Option.match(overrides, {
-    onNone: () => agent,
-    onSome: (patch) => applyAgentPatch(agent, patch),
-  })
-
 interface SessionSettingsSource {
   readonly modelId?: ModelId
   readonly reasoningLevel?: ReasoningEffort
@@ -1359,9 +1347,9 @@ interface SessionRoute {
   /** The agent the session names; the default one when it names none. */
   readonly name: AgentNameType
   /**
-   * That agent from the roster (`resolveAgentRoster`: extension agents and
-   * config `agents` entries) with the run's overrides applied; none when no
-   * agent has the name. Its `driver` is its own: a config
+   * That agent from the roster (extension agents and config `agents`
+   * entries) with the run's overrides applied (`resolveSessionAgent`); none
+   * when no agent has the name. Its `driver` is its own: a config
    * `driverOverrides` entry reaches `modelDriver` only.
    */
   readonly definition: Option.Option<AgentDefinition>
@@ -1396,17 +1384,14 @@ export const resolveSessionRoute = (params: {
     Option.flatMap(params.admission, (admission) => Option.fromUndefinedOr(admission.agent)),
     () => DEFAULT_AGENT_NAME,
   )
-  const roster = resolveAgentRoster(params.agents, Option.fromUndefinedOr(params.config.agents))
-  const definition = Option.fromUndefinedOr(roster.get(name)).pipe(
-    Option.map((agent) =>
-      applyAgentOverrides(
-        agent,
-        Option.flatMap(params.admission, (admission) =>
-          Option.fromUndefinedOr(admission.runSpec?.overrides),
-        ),
-      ),
+  const definition = resolveSessionAgent({
+    agents: params.agents,
+    configAgents: Option.fromUndefinedOr(params.config.agents),
+    name,
+    overrides: Option.flatMap(params.admission, (admission) =>
+      Option.fromUndefinedOr(admission.runSpec?.overrides),
     ),
-  )
+  })
   const modelId = Option.getOrElse(Option.fromUndefinedOr(params.session.modelId), () =>
     Option.match(definition, {
       onNone: () => DEFAULT_MODEL_ID,
