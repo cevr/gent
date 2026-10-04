@@ -6,8 +6,13 @@
  * - `prod` also owns the hostname: the `gent.cvr.im` Railway custom domain,
  *   and in the `cvr.im` Cloudflare zone the two records Railway asks for, a
  *   DNS-only CNAME to the domain's edge host and the `_railway-verify` TXT
- *   record. The zone is adopted and retained: the stack never changes or
- *   deletes it, and records it does not declare are left alone.
+ *   record. The zone is not a resource of this stack: its id is read from
+ *   Cloudflare (`lookupZoneId`), so no plan can create, change or delete it, and
+ *   records the stack does not declare are left alone.
+ * - Earlier prod state held the zone as an adopted, retained resource. With
+ *   its declaration gone, the next deploy plans it as `orphaned`: Alchemy
+ *   drops the state row and never calls the provider's delete, because the
+ *   row's removal policy is `retain`.
  * - Prod adopts what it finds under its own names (the `gent` project, the
  *   `site` service, the domain, the two records), so a deploy after lost
  *   local state takes them back instead of failing or making copies.
@@ -81,6 +86,22 @@ const verifyValue = (token: Option.Option<string>) =>
     }),
   )
 
+/**
+ * The id of the `cvr.im` zone, read from Cloudflare (`GET /zones?name=`). The
+ * zone belongs to the owner's account, not to this stack: a missing zone stops
+ * the plan instead of creating one.
+ */
+const lookupZoneId = Effect.gen(function* () {
+  const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment
+  const zone = yield* Cloudflare.Zone.findZoneByName({ accountId, name: ZONE })
+  return yield* Option.fromUndefinedOr(zone).pipe(
+    Option.match({
+      onNone: () => Effect.die(new Error(`Cloudflare has no ${ZONE} zone in this account`)),
+      onSome: (found) => Effect.succeed(found.id),
+    }),
+  )
+}).pipe(Effect.orDie)
+
 /** The deployed site service and its project, as the stack yields them. */
 type DeployedSite = Effect.Success<typeof Server>
 type DeployedProject = Effect.Success<typeof GentProject>
@@ -90,9 +111,7 @@ const Hostname = Effect.fn("Site.hostname")(function* (
   service: DeployedSite,
   project: DeployedProject,
 ) {
-  const zone = yield* Cloudflare.Zone.Zone("Zone", { name: ZONE }).pipe(
-    Alchemy.RemovalPolicy.retain(),
-  )
+  const zoneId = yield* lookupZoneId
   // The yielded project, not its declaration: the domain reads the
   // environment id from the project's attributes, and a declaration passed
   // as a prop resolves to none (`CustomDomainNotCreated`).
@@ -103,7 +122,7 @@ const Hostname = Effect.fn("Site.hostname")(function* (
     targetPort: PORT,
   })
   yield* Cloudflare.DNS.Record("Cname", {
-    zoneId: zone.zoneId,
+    zoneId,
     name: DOMAIN,
     type: "CNAME",
     content: Output.all(domain.customDomainId, domain.projectId).pipe(
@@ -113,7 +132,7 @@ const Hostname = Effect.fn("Site.hostname")(function* (
     comment: "Railway custom domain (alchemy: gent apps/site)",
   })
   yield* Cloudflare.DNS.Record("Verify", {
-    zoneId: zone.zoneId,
+    zoneId,
     name: `_railway-verify.${DOMAIN}`,
     type: "TXT",
     content: domain.verificationToken.pipe(
