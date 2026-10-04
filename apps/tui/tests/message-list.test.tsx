@@ -64,9 +64,9 @@ import {
   splitProps,
 } from "solid-js"
 import { useRenderer } from "@opentui/solid"
-import type { DisclosureLevel } from "../src/session"
+import type { DisclosureLevel } from "../src/extensions/client-facets"
 import { useTheme } from "../src/theme"
-import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
+import { FrameClicks, ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import {
   BUILTIN_TOOL_RENDERERS,
   FoldOperationsProvider,
@@ -1241,20 +1241,46 @@ describe("tool frame identity", () => {
       }),
   )
 
-  it.scopedLive("a click toggles a tool frame, and a new expanded from its owner starts over", () =>
+  it.scopedLive("inline, a frame draws no open mark and a click leaves it as it is", () =>
     Effect.gen(function* () {
-      const [expanded, setExpanded] = createSignal(false)
       const setup = yield* renderScoped(() => (
         <ToolFrame
           title="read"
           status="completed"
-          expanded={expanded()}
+          expanded={false}
           collapsedContent={<text>FRAME-CLOSED</text>}
         >
           <text>FRAME-OPEN</text>
         </ToolFrame>
       ))
       const closed = yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "closed")
+      expect(closed).not.toMatch(/[▸▾]/)
+      const row = closed.split("\n").findIndex((line) => line.includes("read"))
+      yield* Effect.promise(() => setup.mockMouse.click(2, row))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("FRAME-CLOSED")
+      expect(renderFrame(setup)).not.toContain("FRAME-OPEN")
+    }),
+  )
+
+  it.scopedLive("a click toggles a tool frame, and a new expanded from its owner starts over", () =>
+    Effect.gen(function* () {
+      const [expanded, setExpanded] = createSignal(false)
+      // The transcript view turns the mouse on; there a frame takes clicks.
+      const setup = yield* renderScoped(() => (
+        <FrameClicks on>
+          <ToolFrame
+            title="read"
+            status="completed"
+            expanded={expanded()}
+            collapsedContent={<text>FRAME-CLOSED</text>}
+          >
+            <text>FRAME-OPEN</text>
+          </ToolFrame>
+        </FrameClicks>
+      ))
+      const closed = yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "closed")
+      expect(closed).toContain("▸")
       const row = closed.split("\n").findIndex((line) => line.includes("read"))
       yield* Effect.promise(() => setup.mockMouse.click(2, row))
       yield* waitForFrame(setup, (next) => next.includes("FRAME-OPEN"), "opened by the click")
@@ -2347,11 +2373,14 @@ describe("transcript block spacing", () => {
         id: "cell-thirty-reads",
         operations: [...reads, ...(twoOpCell.operations ?? [])],
       }
+      // The transcript view, where the mouse is on and a frame takes clicks.
       const setup = yield* renderScoped(
         () => (
-          <ToolRenderersProvider value={builtinRenderers}>
-            <CellToolRenderer expanded={true} toolCall={foldedCell} />
-          </ToolRenderersProvider>
+          <FrameClicks on>
+            <ToolRenderersProvider value={builtinRenderers}>
+              <CellToolRenderer expanded={true} toolCall={foldedCell} />
+            </ToolRenderersProvider>
+          </FrameClicks>
         ),
         { width: 100, height: 120 },
       )
@@ -2740,13 +2769,16 @@ describe("read_session row", () => {
           },
         ],
       }
+      // The transcript view, where the mouse is on and a frame takes clicks.
       const setup = yield* renderScoped(
         () => (
-          <MessageList
-            items={[assistantToolMessage("assistant-cell-read", cell)]}
-            disclosure="full"
-            syntaxStyle={syntaxStyle}
-          />
+          <FrameClicks on>
+            <MessageList
+              items={[assistantToolMessage("assistant-cell-read", cell)]}
+              disclosure="full"
+              syntaxStyle={syntaxStyle}
+            />
+          </FrameClicks>
         ),
         { width: 100, height: 40 },
       )
@@ -6387,5 +6419,77 @@ describe("collapse ladder", () => {
         expect(history).not.toContain("THOUGHT")
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
+  )
+
+  // ── full level ──
+
+  it.scopedLive(
+    "an edit op's body reads its hunks, and its frame shows a mark only in the transcript view",
+    () =>
+      Effect.gen(function* () {
+        const items: SessionItem[] = [
+          clientPrompt("edit-prompt", "widen it"),
+          cellStep("edit-step", "", [
+            op(
+              "edit-op",
+              "edit",
+              {
+                path: "src/a.ts",
+                oldString: "const greeting = 1",
+                newString: "const greeting = 2",
+              },
+              encodeJson({ path: "src/a.ts", replacements: 1 }),
+            ),
+          ]),
+        ]
+        for (const width of [120, 60]) {
+          for (const expanded of [false, true]) {
+            const setup = yield* renderScoped(
+              () => <Transcript items={items} disclosure="full" expanded={expanded} />,
+              { width, height: 40 },
+            )
+            const frame = yield* waitForFrame(setup, (next) => next.includes("@@"), "the edit body")
+            expect(frame).toContain("-const greeting = 1")
+            expect(frame).toContain("+const greeting = 2")
+            expect(frame).not.toMatch(/Index:|={10}|\+\+\+ |--- src|No newline/)
+            // Inline the mouse is off: no frame promises a click.
+            expect(/[▸▾]/.test(frame)).toBe(expanded)
+            destroyRenderSetup(setup)
+          }
+        }
+      }),
+  )
+
+  // ── session error ──
+
+  it.scopedLive("a long session error keeps four lines below full and counts the rest", () =>
+    Effect.gen(function* () {
+      const body = Array.from({ length: 10 }, (_, index) => `PROVIDER-LINE-${index + 1}`).join("\n")
+      const items: SessionItem[] = [{ _tag: "error", error: body, createdAt: 1, seq: 1 }]
+      for (const width of [120, 60]) {
+        for (const disclosure of ["collapsed", "preview"] as const) {
+          const frame = lines(yield* draw(items, disclosure, width)).filter(
+            (line) => line.length > 0,
+          )
+          expect(frame).toEqual([
+            "● PROVIDER-LINE-1",
+            "  PROVIDER-LINE-2",
+            "  PROVIDER-LINE-3",
+            "  PROVIDER-LINE-4",
+            "  … +6 lines (ctrl+o)",
+          ])
+        }
+        const full = yield* draw(items, "full", width)
+        expect(full).toContain("PROVIDER-LINE-10")
+        expect(full).not.toContain("(ctrl+o)")
+      }
+      // A short error shows whole at every level.
+      const short = yield* draw(
+        [{ _tag: "error", error: "one\ntwo", createdAt: 1, seq: 1 }],
+        "collapsed",
+        60,
+      )
+      expect(lines(short).filter((line) => line.length > 0)).toEqual(["● one", "  two"])
+    }),
   )
 })

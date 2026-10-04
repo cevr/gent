@@ -23,6 +23,7 @@ import {
   formatActivityHeader,
   formatActivityRow,
   formatFailureRow,
+  formatRunningCall,
   formatAge,
   formatCost,
   formatCellRowLabel,
@@ -960,6 +961,35 @@ describe("activity rows", () => {
       "Running a",
       "Running b",
     ])
+  })
+
+  test("an MCP call reads as Called <server>.<tool>, and the header counts it by server", () => {
+    const calls = [
+      cell([
+        op("mcp.linear.list_issues", "team=core"),
+        op("mcp.linear.get_issue", "GEN-12"),
+        op("mcp.github.search", "", "failed"),
+      ]),
+    ]
+    expect(rows(calls)).toEqual([
+      "Called linear.list_issues team=core",
+      "Called linear.get_issue GEN-12",
+      "Called github.search · failed",
+    ])
+    expect(formatActivityHeader(calls)).toBe("3 tools · 2 linear · 1 github · 1 failed")
+    expect(failedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
+      "Called github.search · failed",
+    ])
+  })
+
+  test("a running call reads in its row's running words", () => {
+    expect(formatRunningCall("bash", "mkdir -p gent-debug-tools")).toBe(
+      "Running mkdir -p gent-debug-tools",
+    )
+    expect(formatRunningCall("mcp.linear.list_issues", "team=core")).toBe(
+      "Calling linear.list_issues team=core",
+    )
+    expect(formatRunningCall("cell", "")).toBe("cell")
   })
 
   test("failed ops never fold, and a command's row ends with its exit status", () => {

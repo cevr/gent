@@ -1624,6 +1624,20 @@ export function NoToolCallIdentity(props: { children: JSX.Element }) {
 
 const ToolFrameBodyContext = createContext(false)
 
+const FrameClicksContext = createContext(false)
+
+/**
+ * Frames inside take a click to open or close, and draw the `▸`/`▾` mark
+ * that says so. Only a surface whose mouse is on may say yes: the transcript
+ * view. Inline the mouse is off and the wheel scrolls the terminal, so a
+ * mark there would promise a click that never comes.
+ */
+export function FrameClicks(props: { on: boolean; children: JSX.Element }) {
+  return (
+    <FrameClicksContext.Provider value={props.on}>{props.children}</FrameClicksContext.Provider>
+  )
+}
+
 /**
  * The transcript row owns the header; registered renderers supply its body.
  * It holds for one frame: a frame nested in that body (a cell's op) draws its
@@ -1665,8 +1679,9 @@ export function ToolFrame(props: ToolFrameProps) {
   const { theme } = useTheme()
   const callIdentity = useContext(ToolCallIdentityContext)
   const bodyOnly = useContext(ToolFrameBodyContext)
-  // A click toggles the frame; a new `expanded` from the owner starts over
-  // from it. Each value of the prop gets its own toggle signal.
+  const clicks = useContext(FrameClicksContext)
+  // A click toggles the frame where clicks arrive; a new `expanded` from the
+  // owner starts over from it. Each value of the prop gets its own toggle signal.
   const toggle = createMemo(() => {
     const [open, setOpen] = createSignal(props.expanded)
     return { open, setOpen }
@@ -1697,7 +1712,12 @@ export function ToolFrame(props: ToolFrameProps) {
   return (
     <box flexDirection="column">
       <Show when={!bodyOnly}>
-        <box flexDirection="row" onMouseDown={() => toggle().setOpen((prev) => !prev)}>
+        <box
+          flexDirection="row"
+          onMouseDown={() => {
+            if (clicks) toggle().setOpen((prev) => !prev)
+          }}
+        >
           <text flexGrow={1} flexShrink={1} wrapMode="none" truncate>
             <span style={{ fg: statusColor() }}>{statusIcon()} </span>
             <Show when={props.status === "error"}>
@@ -1721,7 +1741,9 @@ export function ToolFrame(props: ToolFrameProps) {
             <Show when={callIdentityLabel()}>
               {(identity) => <span style={{ fg: theme.textMuted }}> {identity()}</span>}
             </Show>
-            <span style={{ fg: theme.textMuted }}> {expandIndicator()}</span>
+            <Show when={clicks}>
+              <span style={{ fg: theme.textMuted }}> {expandIndicator()}</span>
+            </Show>
           </text>
         </box>
       </Show>

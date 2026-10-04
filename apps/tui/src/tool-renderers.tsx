@@ -1291,6 +1291,18 @@ function diffLineKind(text: string): DiffLineKind {
   return "context"
 }
 
+/**
+ * The hunks of a unified diff: from its first `@@` header on, without the
+ * `\ No newline at end of file` notes. The patch preamble (`Index:`, `===`,
+ * `---`, `+++`) names the file the row's header already names, and its `-`
+ * and `+` would read as changed lines.
+ */
+export const diffHunkLines = (diff: string): ReadonlyArray<string> => {
+  const lines = diff.split("\n")
+  const first = lines.findIndex((line) => line.startsWith("@@"))
+  return lines.slice(Math.max(0, first)).filter((line) => !line.startsWith("\\ "))
+}
+
 function diffLineColor(kind: DiffLineKind, theme: ReturnType<typeof useTheme>["theme"]) {
   if (kind === "add") return theme.diffAdded
   if (kind === "remove") return theme.diffRemoved
@@ -1327,9 +1339,11 @@ export function EditToolRenderer(props: ToolRendererProps) {
       // An input that does not decode draws no diff.
       onNone: () => [],
       onSome: (data) => {
-        const lines: DiffLine[] = data.diff
-          .split("\n")
-          .map((text) => ({ _tag: "line", text, kind: diffLineKind(text) }))
+        const lines: DiffLine[] = diffHunkLines(data.diff).map((text) => ({
+          _tag: "line",
+          text,
+          kind: diffLineKind(text),
+        }))
         const { head, tail, truncatedCount } = headTail(lines, 6)
         if (truncatedCount === 0) return head
         return [...head, { _tag: "elision", count: truncatedCount }, ...tail]

@@ -5940,14 +5940,14 @@ describe("TUI renderer surfaces", () => {
     Effect.gen(function* () {
       // ConnectionWidget reads the client itself. The default mock client has
       // no connection issue, so the widget draws nothing.
-      const setup = yield* renderScoped(() => <ConnectionWidget />)
+      const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />)
       const frame = renderFrame(setup)
       expect(frame).not.toContain("connection")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget surfaces failed extension activation", () =>
     Effect.gen(function* () {
-      const setup = yield* renderScoped(() => <ConnectionWidget />, {
+      const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />, {
         client: createMockClient({
           extension: {
             listStatus: () =>
@@ -5975,14 +5975,14 @@ describe("TUI renderer surfaces", () => {
       })
       const frame = renderFrame(setup)
       expect(frame).toContain("connection")
-      expect(frame).toContain("failed extensions")
+      expect(frame).toContain("1 extension failed")
       // The reason, not only the id: a broken config names its parse error.
       expect(frame).toContain("@gent/memory: startup boom")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget names a model catalog that did not load", () =>
     Effect.gen(function* () {
-      const setup = yield* renderScoped(() => <ConnectionWidget />, {
+      const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />, {
         client: createMockClient({
           extension: {
             listStatus: () =>
@@ -6009,15 +6009,116 @@ describe("TUI renderer surfaces", () => {
         }),
       })
       const frame = renderFrame(setup)
-      expect(frame).toContain("some models unavailable")
+      expect(frame).toContain("1 model catalog unavailable")
       expect(frame).toContain("ollama: connect ECONNREFUSED")
-      expect(frame).not.toContain("failed extensions")
+      expect(frame).not.toContain("1 extension failed")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // The widget is a node on the ctrl+o ladder: collapsed counts the issues on
+  // one line; preview and full list one tree row each.
+  const catalogFailures = (count: number) =>
+    createMockClient({
+      extension: {
+        listStatus: () =>
+          Effect.succeed({
+            _tag: "Degraded",
+            healthyExtensions: [],
+            degradedExtensions: [
+              {
+                manifest: { id: "@gent/providers" },
+                scope: "builtin",
+                sourcePath: "builtin",
+                _tag: "Degraded",
+                issues: Array.from({ length: count }, (_, index) => ({
+                  _tag: "ModelCatalogFailed" as const,
+                  driverId: `driver-${index + 1}`,
+                  error:
+                    "models.dev catalog unavailable: no snapshot stored and models.dev unreachable",
+                })),
+              },
+            ],
+          }),
+      },
+    })
+  it.scopedLive("ConnectionWidget folds to one line at collapsed, at 120 and 60 columns", () =>
+    Effect.gen(function* () {
+      for (const width of [120, 60]) {
+        const setup = yield* renderScoped(() => <ConnectionWidget disclosure="collapsed" />, {
+          client: catalogFailures(6),
+          width,
+          height: 12,
+        })
+        const lines = renderFrame(setup)
+          .split("\n")
+          .map((line) => line.trimEnd())
+          .filter((line) => line.length > 0)
+        expect(lines).toEqual(["  • connection · 6 model catalogs unavailable · ctrl+o"])
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("ConnectionWidget lists one tree row per issue at preview, cut to the width", () =>
+    Effect.gen(function* () {
+      for (const width of [120, 60]) {
+        const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />, {
+          client: catalogFailures(3),
+          width,
+          height: 12,
+        })
+        const lines = renderFrame(setup)
+          .split("\n")
+          .map((line) => line.trimEnd())
+          .filter((line) => line.length > 0)
+        expect(lines[0]).toBe("  • connection · 3 model catalogs unavailable")
+        expect(lines.slice(1).map((line) => line.slice(0, 15))).toEqual([
+          "  ├ driver-1: m",
+          "  ├ driver-2: m",
+          "  └ driver-3: m",
+        ])
+        expect(lines.every((line) => line.length <= width - 1)).toBe(true)
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("ConnectionWidget keeps a failed extension's row at collapsed", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(() => <ConnectionWidget disclosure="collapsed" />, {
+        client: createMockClient({
+          extension: {
+            listStatus: () =>
+              Effect.succeed({
+                _tag: "Degraded",
+                healthyExtensions: [],
+                degradedExtensions: [
+                  {
+                    manifest: { id: "@gent/memory" },
+                    scope: "builtin",
+                    sourcePath: "builtin",
+                    _tag: "Degraded",
+                    issues: [
+                      { _tag: "ActivationFailed", phase: "startup", error: "startup boom" },
+                      { _tag: "ModelCatalogFailed", driverId: "ollama", error: "ECONNREFUSED" },
+                    ],
+                  },
+                ],
+              }),
+          },
+        }),
+        width: 60,
+        height: 12,
+      })
+      const lines = renderFrame(setup)
+        .split("\n")
+        .map((line) => line.trimEnd())
+        .filter((line) => line.length > 0)
+      expect(lines).toEqual([
+        "  • connection · 1 extension failed · 1 model cat… · ctrl+o",
+        "  └ @gent/memory: startup boom",
+      ])
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget surfaces failed extensions for the active session", () =>
     Effect.gen(function* () {
       const scopes: Array<ExtensionStatusScope> = []
-      const setup = yield* renderScoped(() => <ConnectionWidget />, {
+      const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />, {
         initialSession: testSession,
         client: createMockClient({
           extension: {
@@ -6048,7 +6149,7 @@ describe("TUI renderer surfaces", () => {
       })
       const frame = renderFrame(setup)
       expect(frame).toContain("connection")
-      expect(frame).toContain("failed extensions")
+      expect(frame).toContain("1 extension failed")
       expect(frame).toContain("@gent/plan")
       expect(scopes).not.toHaveLength(0)
       for (const scope of scopes) expect(scope).toEqual({ _tag: "Session", id: testSession.id })
@@ -6082,7 +6183,7 @@ describe("TUI renderer surfaces", () => {
             },
           ],
         }
-        const setup = yield* renderScoped(() => <ConnectionWidget />, {
+        const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />, {
           initialSession: testSession,
           runtime: lifecycle.runtime,
           client: createMockClient({
@@ -6095,7 +6196,7 @@ describe("TUI renderer surfaces", () => {
             },
           }),
         })
-        expect(renderFrame(setup)).toContain("failed extensions")
+        expect(renderFrame(setup)).toContain("1 extension failed")
         expect(callCount).toBe(1)
         currentHealth = {
           _tag: "Healthy",
@@ -6112,7 +6213,7 @@ describe("TUI renderer surfaces", () => {
         )
         expect(callCount).toBe(2)
         for (const scope of scopes) expect(scope).toEqual({ _tag: "Session", id: testSession.id })
-        expect(frame).not.toContain("failed extensions")
+        expect(frame).not.toContain("1 extension failed")
         expect(frame).not.toContain("@gent/plan")
       }).pipe(Effect.timeout("10 seconds")),
   )
@@ -6124,7 +6225,7 @@ describe("TUI renderer surfaces", () => {
       const setup = yield* renderScoped(
         () => (
           <>
-            <ConnectionWidget />
+            <ConnectionWidget disclosure="preview" />
             <HealthControlsProbe expose={(next) => (controls = Option.some(next))} />
           </>
         ),
@@ -6163,7 +6264,7 @@ describe("TUI renderer surfaces", () => {
         () => (
           <>
             <HealthControlsProbe expose={(value) => (controls = Option.some(value))} />
-            <ConnectionWidget />
+            <ConnectionWidget disclosure="preview" />
           </>
         ),
         {
@@ -6188,7 +6289,7 @@ describe("TUI renderer surfaces", () => {
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
-      expect(frame).toContain("failed extensions")
+      expect(frame).toContain("1 extension failed")
       expect(frame).toContain("@gent/plan")
     }).pipe(Effect.timeout("10 seconds")),
   )

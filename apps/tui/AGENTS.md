@@ -240,27 +240,75 @@ A tool group reads in tool words, as fx does, not in the cell mechanism
 (`ToolCallGroup` in `message-list.tsx`, the projections in `utils.ts`). Its
 header counts the tools a group ran (a cell's ops; any other call is the one
 tool it is; a cell with no ops is one tool that names its source's verbs) by
-kind, largest first: `● 7 tools · 4 read · 2 edit · 1 command · 1 failed · 4.2s`
-(`formatActivityHeader`). A narrow header drops kinds from the right and keeps
-the count, the failures and the time. The glyph is `●` when done, the pulse
+kind, largest first, then the reasoning the run took as thoughts:
+`● 7 tools · 4 read · 2 edit · 1 command · 6 thoughts · 1 failed · 4.2s`
+(`formatActivityHeader`). An MCP tool (`mcp.<server>.<tool>`) counts as its
+server (`2 linear`) and its rows read `Called linear.list_issues …`. A narrow
+header drops the thoughts first, then kinds from the right, and keeps the
+count, the failures and the time. The glyph is `●` when done, the pulse
 while a call runs, `✗` in the error colour when a call failed, and `●` in the
 warning colour when only ops failed inside a cell that recovered. A bash op
 whose command exits nonzero is a failed op, as fx counts it, though its call
-succeeded (`callOperation`). The
-`ctrl+o` ladder keeps three levels: collapsed draws the header and each failed
-call's frame; preview adds one row per run of one tool and one outcome, in
-past-tense words (`activityRows`, `formatActivityRow`): `├ Read a.ts, b.ts +1`
-(the subjects that fit, then a count), `├ Edited x.ts +12 / -3` (the diff
-counts in the success and error colours), `└ Ran bun test · failed`, and the
-running op last as `Running …`; one line a row, never a second. Under the
-rows preview draws the head of the last call's output, but only once the run
-has ended: while a turn can still add a step, the last call changes each step,
-and a body that came and went would shrink the live tail and leave blank rows
-in native scrollback. Full opens a
-row per call with its renderer body and its line counts. Inside a cell's body
-a run of one tool's ops folds into one frame (`read 30 files`), its body a
-tight list and a click opening each op's frame; the transcript view (full
-detail) draws every op on its own (`FoldOperationsProvider`).
+succeeded (`callOperation`).
+
+The `ctrl+o` ladder (`DisclosureLevel` in `extensions/client-facets.ts`) keeps
+three levels for every block, as opencode's web app folds tool calls to one
+line and fx draws them as a tree. Collapsed (the default) is one head line a
+block, plus one line a failure, so a failure shows at every level. Preview is
+the tree: one line a child. Full opens the bodies. `esc` collapses.
+
+- **Tool group.** Collapsed draws the header and, under it, one row for each
+  failed call or op (`failedOperations`, `formatFailureRow`):
+  `└ Ran ls d.ts · exit 2 · ls: cannot access …`. The row keeps the verb, the
+  subject and the outcome word, and cuts the reason first; the reason drops
+  the runner's `Tool '<name>' failed:` lead. Preview draws one row per run of
+  one tool and one outcome, in past-tense words (`activityRows`,
+  `formatActivityRow`): `├ Read a.ts, b.ts +1` (the subjects that fit, then a
+  count), `├ Edited x.ts +12 / -3` (the diff counts in the success and error
+  colours), `└ Ran bun test · exit 1`, and the running op last as
+  `Running …`. A failed op never folds: each has its own row. Under a failed
+  row, and under the run's last command row, preview draws up to five rows of
+  that op's own output (`outputHead`: a command's stdout and stderr, a failed
+  call's reason; never the cell's display) behind a `│ ` gutter, then
+  `│ … +N lines (ctrl+o)`. The last command's head waits for the run's end:
+  while a turn can still add a step, the last command changes each step, and
+  a head that came and went would shrink the live tail and leave blank rows
+  in native scrollback. A failed op has settled, so its head draws at once.
+  Full opens a row per call with its renderer body and its line counts; only
+  there does a call show its `#id`. Inside a cell's body a run of one tool's
+  ops folds into one frame (`read 30 files`), its body a tight list; the
+  transcript view (full detail) draws every op on its own
+  (`FoldOperationsProvider`). An edit's collapsed body draws its hunks only
+  (`diffHunkLines`: no `Index:`/`===`/`---`/`+++` preamble).
+- **Reasoning.** A run takes the reasoning just before its first call (from
+  that call's own message only: an earlier message may already be in
+  history), the reasoning between its calls, and the reasoning just before the
+  answer text that ends it; the header counts each as a thought, and full
+  draws each where it came. Reasoning with no run is one line at collapsed and
+  preview, `∴ Thought · <first summary> · N summaries`, and its markdown at
+  full and in the transcript view.
+- **Child completion** (`delegate.client.tsx`). Collapsed is one line,
+  `✓ explore completed · 9f3a2c1d · 14 tools · ↑1.2k ↓300 $0.01`, with a
+  failed child's error last; narrow, the error is cut first, then the usage
+  drops, then the call count. Preview adds the child's last five calls as
+  tree rows (`├ … 9 earlier calls`) and a five-line head of its answer. Full
+  draws every call the details kept and the whole answer. It draws no user
+  rail: it is a tree node like a tool group.
+- **Connection notice** (`ConnectionWidget` in `app.tsx`). Collapsed is one
+  line that counts the issues (`• connection · 6 model catalogs unavailable ·
+ctrl+o`), with a tree row for each failed extension; preview and full list
+  every issue on its own row. It is in the live tail, so a level change costs
+  no replay.
+- **Session error.** Below full, an error over four lines shows four, then
+  `… +N lines (ctrl+o)`.
+- **Activity row.** A running call reads in the words its row will use once
+  it ends (`formatRunningCall`): `Running mkdir -p x`, `Reading src/app.tsx`,
+  `Calling linear.list_issues team=core`.
+
+A `ToolFrame` draws its `▸`/`▾` mark and takes a click only inside
+`FrameClicks on` (`ui.tsx`), which `NativeTranscript` sets in the transcript
+view, where the mouse is on. Inline the mouse is off and the wheel scrolls
+the terminal, so a mark there would promise a click that never comes.
 
 A group is one run of tool calls across the steps of a turn, as in fx
 (`projectToolRuns` in `message-list.tsx`): reasoning and blank text between
@@ -268,12 +316,13 @@ calls do not end it; answer text, a user message, a session row, or a call
 that asks the reader (`ask_user`, `prompt`, `handoff`, in a cell's ops too)
 does. A queued follow-up and a pending retry end nothing. The run draws at its
 first tool-call segment (its head); the later steps skip the segments it took.
-The reasoning it took draws before its call at the full level only. The
+The reasoning it took draws where it came at the full level only; a closing
+thought from a streamed answer keeps the head waiting for the stored answer. The
 native transcript draws each item on its own, so it projects the runs once over
 every displayed item and gives them to the live view and to each history
 surface (`ToolRunsContext`). A message that heads a run is final only once the
 run has ended, holds no streamed step and no running call; its fingerprint
-holds the run's calls (`historyFingerprints`), so a run that grows after
+holds the run's calls and thoughts (`historyFingerprints`), so a run that grows after
 history took its top rows at idle replays history. The transcript view (full
 detail) groups each message's calls on their own.
 
@@ -444,7 +493,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - `useExtensionUI()` provides the resolved contributions (tool renderers excepted: `useToolRenderers()`), the load `failures`, and `clientRuntime`; widgets read the session from `transport.currentSession()`
 - **Tool renderers**: `rendererContribution(toolNames, component)` keys a renderer on a real tool id. The model sees only `cell`, so the cell renderer hands each live op to the renderer registered for the op's tool (`RegisteredToolCall` in `tool-renderers.tsx`, the one lookup the transcript also uses). An op draws collapsed, as a sub-row with its own header: a cell that reads thirty files must not draw thirty file bodies, and outside the transcript view consecutive ops of one tool fold into one frame. `ToolFrameBody` hides the header of one frame only; a frame nested in its body draws its header again. An op with no renderer keeps its one-line receipt. After a reload the session snapshot projects each cell's ops from the branch's stored tool events (`ToolInteraction.operations`), keyed by the cell's message and call id. A projected op carries only what its collapsed row draws, within one 8 KB encoded budget, keys included: the tool, the status, the summary, the scalar input fields (each whole or left out, up to 4 KB), and a bounded output (top-level scalars such as a bash `exitCode`; each string whole, or its head, a marker line and its tail, cut at code points). A cut string has a `cuts` record with its whole line count, the line its tail starts on, and whether its head or tail keeps only part of a line; renderers count and number lines through `outputRows` in `tool-renderers.tsx`, so a cut output draws true counts and line numbers, and marks a part of a line with `…` on the side it lost. A cut array (a grep's matches) draws its whole total and a `· ··· N more matches` gap between its head and tail. Every line count, the cut record's included, uses `lineCount` from `@gent/core/protocol`: a final newline ends the last line. A head or tail that keeps nothing is absent from the excerpt. It draws through its renderer again, with the same collapsed row as before the reload. A forked branch copies messages, not events, so there the saved result's receipts draw as lines. The host provides the map through `ToolRenderersProvider`. The "tool renderer reach" test in `loader-boundary.test.ts` fails on a renderer name that no shipped extension registers as a tool
 - A setup that returns a key outside the contribution buckets fails to load with `unknown contribution "<key>"`
-- **Message rows**: `messageRendererContribution(customType, component, { prompt? })` draws the user-role messages whose `metadata.customType` matches exactly. `prompt(content)` marks the type as a prompt the reader asked though an extension sent it, and gives its text; the transcript pins it (see the sticky prompt above). The component composes `UserRow` or `CollapsedRow` from `src/ui.tsx`. `message-list.tsx` names only the runtime's own kinds (`context-window`, `model-change`), and full detail draws every message as the plain row
+- **Message rows**: `messageRendererContribution(customType, component, { prompt? })` draws the user-role messages whose `metadata.customType` matches exactly. Its props carry the transcript's `disclosure`, so a row folds with `ctrl+o` like every other block (the child completion row does). `prompt(content)` marks the type as a prompt the reader asked though an extension sent it, and gives its text; the transcript pins it (see the sticky prompt above). The component composes `UserRow` or `CollapsedRow` from `src/ui.tsx`. `message-list.tsx` names only the runtime's own kinds (`context-window`, `model-change`), and full detail draws every message as the plain row
 - Status labels (`statusLabelContribution`) draw on the composer's one status row, ordered by `priority`: in the left group after the host's labels, or, with `anchor: "right"`, in the right group before the context gauge and cost. The right group is laid out first and keeps its place on a narrow row. A host label may give a short form (`StatusRowLabel.short`, ranked by `STATUS_YIELD`): a group that cannot fit its labels in full takes short forms in rank order (the debug mark, the cwd, the model as `Auto → Sonnet 5`, the idle phase word), then gives back each full form that fits again (`fitForms` in `composer.tsx`); what still does not fit truncates. A glance number anchors right (the `@gent/cache` timer); a label that needs more than one row is a widget
 - `transport.selectedModel()` is the model the session in view runs next, as the status row names it: a model switch changes it before any request goes out
 - The status row's effort is the running turn's while a turn runs (`turnReasoningLevel` in `client.tsx`, from the metrics fold's `turnEffort`), and the session's next level (`reasoningLevel`) otherwise: a turn keeps its first step's level, so an `/effort` change shows once the turn completes. The effort picker reads the session's setting

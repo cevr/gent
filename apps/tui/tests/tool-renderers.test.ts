@@ -5,6 +5,7 @@ import {
   bashOutputRows,
   callOperation,
   cellOperations,
+  diffHunkLines,
   getEditUnifiedDiff,
   getFiletype,
   type ToolCall,
@@ -176,6 +177,23 @@ describe("edit diff", () => {
     expect(diff).toContain("+++ /foo/bar.ts")
     expect(diff).toContain("-const x = 1")
     expect(diff).toContain("+const x = 2")
+  })
+
+  test("the collapsed body reads the hunks only: no patch preamble, no newline notes", () => {
+    const diff = Option.getOrElse(
+      Option.map(
+        getEditUnifiedDiff({ path: "/foo/bar.ts", oldString: "a\nb", newString: "a\nc" }),
+        (value) => value.diff,
+      ),
+      () => "",
+    )
+    expect(diff).toContain("\\ No newline at end of file")
+    const hunks = diffHunkLines(diff)
+    expect(hunks[0]).toMatch(/^@@ /)
+    expect(hunks).toEqual(expect.arrayContaining([" a", "-b", "+c"]))
+    expect(hunks.some((line) => /^(Index:|===|---|\+\+\+|\\ )/.test(line))).toBe(false)
+    // Text with no hunk header is kept whole.
+    expect(diffHunkLines("plain\ntext")).toEqual(["plain", "text"])
   })
 
   // The renderer falls back to the summary line for each of these.

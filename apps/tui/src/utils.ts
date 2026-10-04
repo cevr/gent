@@ -972,6 +972,25 @@ const TOOL_KINDS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["ask_user_async", ["question", "questions"]],
 ])
 
+/** An MCP tool's id, `mcp.<server>.<tool>`, as its server and its call `<server>.<tool>`. */
+const mcpTool = (
+  tool: string,
+): Option.Option<{ readonly server: string; readonly call: string }> => {
+  if (!tool.startsWith("mcp.")) return Option.none()
+  const call = tool.slice("mcp.".length)
+  const dot = call.indexOf(".")
+  if (dot <= 0) return Option.none()
+  return Option.some({ server: call.slice(0, dot), call })
+}
+
+/** The kind a header counts a tool as; an MCP tool counts as its server, as Codex names it. */
+const toolKind = (tool: string): readonly [string, string] =>
+  TOOL_KINDS.get(tool) ??
+  Option.match(mcpTool(tool), {
+    onNone: () => [tool, tool] as const,
+    onSome: ({ server }) => [server, server] as const,
+  })
+
 /**
  * Header for a group of calls: `7 tools · 4 read · 2 edit · 1 command ·
  * 1 failed · 4.2s`. Kinds go largest first, ties in the order they ran. A
@@ -994,7 +1013,7 @@ export function formatActivityHeader(
   >()
   for (const { operation } of tools) {
     if (operation.tool === "cell") continue
-    const words = TOOL_KINDS.get(operation.tool) ?? [operation.tool, operation.tool]
+    const words = toolKind(operation.tool)
     const count = (kinds.get(words[0])?.count ?? 0) + 1
     kinds.set(words[0], { count, words })
   }
@@ -1035,6 +1054,31 @@ const TOOL_VERBS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["ask_user_async", ["Asked", "Asking"]],
 ])
 
+/** Past and running tense of a tool's verb: an MCP tool was `Called`, and one not named shows its id. */
+const toolVerbs = (tool: string): readonly [string, string] =>
+  TOOL_VERBS.get(tool) ??
+  Option.match(mcpTool(tool), {
+    onNone: () => [tool, tool] as const,
+    onSome: () => ["Called", "Calling"] as const,
+  })
+
+/** What an op's row names: its argument, after the server's call for an MCP tool. */
+const operationSubject = (operation: ActivityOperation): string =>
+  Option.match(mcpTool(operation.tool), {
+    onNone: () => operation.detail,
+    onSome: ({ call }) => [call, operation.detail].filter((part) => part.length > 0).join(" "),
+  })
+
+/**
+ * A running call as the activity row names it, in the words its group row
+ * will use once it ends: `Running mkdir -p x`, `Reading src/app.tsx`,
+ * `Calling linear.list_issues team=core`.
+ */
+export const formatRunningCall = (tool: string, detail: string): string =>
+  [toolVerbs(tool)[1], operationSubject({ tool, detail, outcome: "running" })]
+    .filter((part) => part.length > 0)
+    .join(" ")
+
 /** One row of a group at the preview level: a run of ops of one tool and one outcome. */
 interface ActivityRow {
   readonly tool: string
@@ -1074,7 +1118,7 @@ export const activityRows = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<
   const rows: ActivityRow[] = []
   for (const { operation } of activityEntries(calls)) {
     const subjects = Option.toArray(
-      Option.liftPredicate(operation.detail, (detail) => detail.length > 0),
+      Option.liftPredicate(operationSubject(operation), (subject) => subject.length > 0),
     )
     const diff = Option.fromUndefinedOr(operation.diff)
     const previous = Option.filter(
@@ -1137,7 +1181,7 @@ export function formatActivityRow(
   row: ActivityRow,
   width = Number.POSITIVE_INFINITY,
 ): ActivityRowText {
-  const tense = TOOL_VERBS.get(row.tool) ?? [row.tool, row.tool]
+  const tense = toolVerbs(row.tool)
   let verb = tense[0]
   if (row.outcome === "running") verb = tense[1]
   let tail = ""
@@ -1177,10 +1221,11 @@ export function formatFailureRow(
   operation: ActivityOperation,
   width = Number.POSITIVE_INFINITY,
 ): string {
-  const verb = (TOOL_VERBS.get(operation.tool) ?? [operation.tool, operation.tool])[0]
+  const verb = toolVerbs(operation.tool)[0]
   const outcome = ` · ${failureWord(operation)}`
+  const subject = operationSubject(operation)
   let head = verb
-  if (operation.detail.length > 0) head = `${verb} ${operation.detail}`
+  if (subject.length > 0) head = `${verb} ${subject}`
   const reason = oneLine(operation.reason ?? "").trim()
   const room = width - textWidth(head + outcome) - 3
   if (reason.length > 0 && room >= Math.min(MIN_REASON_COLUMNS, textWidth(reason)))

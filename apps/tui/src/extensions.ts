@@ -86,6 +86,7 @@ export {
   formatCost,
   formatDuration,
   formatFileRef,
+  formatPreviewFooter,
   formatTokens,
   formatUsageStats,
   isReferenceablePath,

@@ -41,6 +41,7 @@ import {
   CollapsedRow,
   formatToolCallIdentity,
   ToolCallIdentityProvider,
+  FrameClicks,
   ToolFrameBody,
   UserRow,
   useSpinnerClock,
@@ -94,6 +95,7 @@ import {
 import { useExtensionUI } from "./extensions/host"
 import {
   type MessageRenderer,
+  type DisclosureLevel,
   type MessageRowProps,
   StatusLabelColor,
 } from "./extensions/client-facets"
@@ -104,7 +106,6 @@ import {
   MODEL_CHANGE_MESSAGE_TYPE,
 } from "@gent/core/protocol"
 import { DiagramLibraryContext, diagramsDrawable, useDiagramCodeBlocks } from "./mermaid"
-import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 
 // ── reasoning text ──────────────────────────────────────────────────────────
@@ -266,6 +267,20 @@ export const getSessionEventLabel = (event: SessionEvent, now = currentMillis())
 
 interface SessionEventIndicatorProps {
   event: SessionEvent
+  /** Below it an error keeps its first lines; open, it shows whole. */
+  open: boolean
+}
+
+/** The lines a session error keeps below the full level: a provider body can run long. */
+const ERROR_LINES = 4
+
+/** An error's first `ERROR_LINES` lines, then the count of the rest and the key that shows them. */
+const cappedError = (text: string): string => {
+  const lines = text.replace(/\s+$/, "").split("\n")
+  if (lines.length <= ERROR_LINES) return text
+  return [...lines.slice(0, ERROR_LINES), formatPreviewFooter(lines.length - ERROR_LINES)].join(
+    "\n",
+  )
 }
 
 function SessionEventIndicator(props: SessionEventIndicatorProps) {
@@ -277,7 +292,9 @@ function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const content = () => {
     const event = props.event
     if (event._tag === "retrying" && event.outcome === "pending") tick()
-    return getSessionEventLabel(event, currentMillis())
+    const label = getSessionEventLabel(event, currentMillis())
+    if (event._tag === "error" && !props.open) return cappedError(label)
+    return label
   }
 
   const color = () => {
@@ -1388,7 +1405,12 @@ export function MessageList(props: MessageListProps) {
           {(item) =>
             (() => {
               if (!isMessageItem(item)) {
-                return <SessionEventIndicator event={item} />
+                return (
+                  <SessionEventIndicator
+                    event={item}
+                    open={props.fullDetail === true || props.disclosure === "full"}
+                  />
+                )
               }
               return (
                 <Show
@@ -1414,6 +1436,7 @@ export function MessageList(props: MessageListProps) {
                     pendingMode={item.pendingMode}
                     customType={item.metadata?.customType}
                     details={item.metadata?.details}
+                    disclosure={props.disclosure}
                     fullDetail={props.fullDetail === true}
                   />
                 </Show>
@@ -2931,33 +2954,36 @@ export function NativeTranscript(props: NativeTranscriptProps) {
             setLiveHeight(this.height)
           }}
         >
-          <ToolRunsContext.Provider value={Option.some(toolRuns)}>
-            <For each={liveItems()}>
-              {(item, index) => (
-                <box
-                  flexDirection="column"
-                  flexShrink={0}
-                  overflow={cutOverflow(index())}
-                  height={cutHeight(item, index())}
-                >
+          {/* The transcript view turns the mouse on: there its frames take clicks. */}
+          <FrameClicks on={props.expanded}>
+            <ToolRunsContext.Provider value={Option.some(toolRuns)}>
+              <For each={liveItems()}>
+                {(item, index) => (
                   <box
                     flexDirection="column"
                     flexShrink={0}
-                    marginTop={-cutRows(index())}
-                    onSizeChange={function () {
-                      measureItem(item, this)
-                    }}
-                    // A change between no row and one sends no size change.
-                    renderBefore={function () {
-                      measureItem(item, this)
-                    }}
+                    overflow={cutOverflow(index())}
+                    height={cutHeight(item, index())}
                   >
-                    {props.renderItems([item])}
+                    <box
+                      flexDirection="column"
+                      flexShrink={0}
+                      marginTop={-cutRows(index())}
+                      onSizeChange={function () {
+                        measureItem(item, this)
+                      }}
+                      // A change between no row and one sends no size change.
+                      renderBefore={function () {
+                        measureItem(item, this)
+                      }}
+                    >
+                      {props.renderItems([item])}
+                    </box>
                   </box>
-                </box>
-              )}
-            </For>
-          </ToolRunsContext.Provider>
+                )}
+              </For>
+            </ToolRunsContext.Provider>
+          </FrameClicks>
           {props.children}
         </box>
       </scrollbox>
