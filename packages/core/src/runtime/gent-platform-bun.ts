@@ -14,13 +14,32 @@
  */
 
 import * as os from "node:os"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option, Result, Schema } from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
-import { GentPlatform, type RuntimeModuleSource, SignalError } from "./gent-platform.js"
+import { GentBuild, GentPlatform, type RuntimeModuleSource, SignalError } from "./gent-platform.js"
 
-/** The compiled build defines this symbol; a source run leaves it undeclared. */
-declare const __GENT_COMPILED__: unknown
+/**
+ * The compiled build defines this symbol as `{ id, version }`
+ * (`apps/tui/scripts/build.ts`); a source run leaves it undeclared. The
+ * builtin extensions read its `id` too, as their artifact identity
+ * (`packages/extensions/src/index.ts`).
+ */
+declare const __GENT_BUILD__: unknown
+
+/** An undeclared symbol throws a ReferenceError: a source run. */
+const thisBuild: GentBuild = Result.try(() => __GENT_BUILD__).pipe(
+  Result.getSuccess,
+  Option.flatMap(
+    Schema.decodeUnknownOption(
+      Schema.Struct({ id: Schema.NonEmptyString, version: Schema.NonEmptyString }),
+    ),
+  ),
+  Option.match({
+    onNone: () => GentBuild.cases.Source.make({}),
+    onSome: (fields) => GentBuild.cases.Compiled.make(fields),
+  }),
+)
 
 /** The specifiers bound in this process. Bun keeps a plugin for the process lifetime. */
 const boundModules = new Set<string>()
@@ -74,9 +93,7 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
     execPath: Effect.sync(() => process.execPath),
 
-    // The one reader of the build's define. An undeclared symbol throws a
-    // ReferenceError: a source run.
-    compiled: Effect.try(() => __GENT_COMPILED__ === true).pipe(Effect.orElseSucceed(() => false)),
+    build: Effect.succeed(thisBuild),
 
     homeDirectory: Effect.sync(() => os.homedir()),
 

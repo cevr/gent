@@ -129,8 +129,8 @@ updates this list in the same commit.
     `packages/core/src/runtime/gent-platform.ts`; core config, extensions
     (through `@gent/core/extensions/api`) and the TUI (through
     `@gent/core/host`) all call it. Host facts core cannot get from
-    Effect (OS info, executable path, home directory, whether the process is
-    the compiled binary) stay on `GentPlatform`.
+    Effect (OS info, executable path, home directory, the build the process
+    runs) stay on `GentPlatform`.
     The lint holds the edge outside the platform impl, the adapters, the
     tooling and test code: `effect/noGlobals` and `effect/noNodeBuiltinImport`
     ban `Bun.*`, the `bun` and `crypto` modules, `process.execPath`, `kill`,
@@ -1264,7 +1264,11 @@ never runs inside the worker. The worker starts in its session's working
 directory: the loop resolves it once per branch with `sessionWorkingDirectory`
 (the stored session cwd, else the host's, the same rule as
 `ExtensionContext.cwd`) and gives it to the branch-tool layer as `cwd`. The TUI
-build sets the compiled-host marker `__GENT_COMPILED__` explicitly.
+build names itself with one define, `__GENT_BUILD__` (`{ id, version }`: a
+fresh id per build and the version of `apps/tui/package.json`). It has two
+readers: `GentPlatform.build` (`Compiled` with the id and version, else
+`Source`), by which the cell picks its worker and discovery names the build,
+and the builtin extensions, whose artifact identity is `build:<id>`.
 The actor section of `runtime/agent-loop.ts` allocates a child of the actor scope for each loop rebuild.
 It publishes the loop handle before it transfers scope ownership. Failure or
 interruption during construction closes that child immediately. A build that
@@ -1796,7 +1800,7 @@ Production rule:
 - `server.lock.db` is the kernel lock. The owning server holds an exclusive SQLite lock on it (`BEGIN EXCLUSIVE`, `busy_timeout` 0) for the life of its scope. The OS releases it when the process exits. A server is alive exactly when this lock cannot be taken, so a crash, a reboot, or a reused pid cannot leave a live-looking lock, and two concurrent starts give one owner: the other waits for the owner's entry and attaches.
 - `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. An entry whose kernel lock is free names a server that is gone. Only the holder of the kernel lock removes the entry, whatever server it names: under the lock, the entry is the holder's own or a gone server's. Taking the lock (`serverLock.hold`, by a start, by `gent storage reset`, or by `gent server stop`) removes that entry at once, so a start that waits on the new owner never probes it, and a server removes its own entry before its scope releases the lock. `gent server stop` sends SIGTERM only after the identity probe; `--all` removes an entry whose kernel lock is free by taking the lock and letting it go, and when a new owner holds the lock first, the entry is the new owner's and stays. `gent storage reset` takes the kernel lock as a server start does (`serverLock.hold`) and holds it from the first look at the database files to the last move, so no server opens them mid-move; it refuses while a server holds the lock.
 
-A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it. The build fingerprint (`buildFingerprint` in `packages/sdk/src/discovery.ts`, read once per start, so the lock entry and the identity endpoint name one build) is the binary's mtime for the compiled gent, wherever it is installed (`GentPlatform.compiled`, the one reader of the build's `__GENT_COMPILED__` define, which the cell reads too), and the checkout's git hash for a source run. A build neither names is `unknown`, and `unknown` matches no build, itself included: such a start never attaches.
+A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it. The build fingerprint (`buildFingerprint` in `packages/sdk/src/discovery.ts`, read once per start, so the lock entry and the identity endpoint name one build) is `<version>+<build id>` for the compiled gent, wherever it is installed (`GentPlatform.build`, read from the build's `__GENT_BUILD__` define), and the checkout's git hash for a source run. A file's mtime names no build: an archive or a package keeps the mtimes it was packed with, so two versions' binaries can share one. A build neither names is `unknown`, and `unknown` matches no build, itself included: such a start never attaches.
 
 A fixed port (`gent server start --port`) changes only the attach decision. A SQLite server on a fixed port still takes the kernel lock and writes its entry, so the TUI finds and attaches to it; it never attaches to another server itself, and fails with the holder's pid when the database is owned. The standalone server runs until a signal stops it: there is no idle shutdown and no shared launch mode.
 

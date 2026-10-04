@@ -85,10 +85,11 @@ const gitFindsNoRepository = Effect.acquireRelease(
 )
 
 /**
- * The services of a compiled gent whose executable is `execPath`, over a
- * filesystem whose stat counts calls. The spawner dies if it reaches git.
+ * The services of a compiled gent of build `id` at version 0.1.0, over a
+ * filesystem whose stat counts calls and answers one mtime for every file.
+ * The spawner dies if it reaches git.
  */
-const compiledServices = (execPath: string, counter: Ref.Ref<number>, mtime: Option.Option<Date>) =>
+const compiledServices = (id: string, counter: Ref.Ref<number>) =>
   Layer.mergeAll(
     Layer.effect(
       GentPlatform,
@@ -96,12 +97,12 @@ const compiledServices = (execPath: string, counter: Ref.Ref<number>, mtime: Opt
         const platform = yield* GentPlatform
         return GentPlatform.of({
           ...platform,
-          execPath: Effect.succeed(execPath),
-          compiled: Effect.succeed(true),
+          execPath: Effect.succeed("/nonexistent/gent-probe-x/gent"),
+          build: Effect.succeed({ _tag: "Compiled", id, version: "0.1.0" }),
         })
       }),
     ).pipe(Layer.provide(GentPlatform.Test("bf"))),
-    makeCountingFs(counter, mtime),
+    makeCountingFs(counter, Option.some(dateFromMillis(36_000))),
     Path.layer,
     Layer.succeed(
       ChildProcessSpawnerNs.ChildProcessSpawner,
@@ -113,30 +114,28 @@ const compiledServices = (execPath: string, counter: Ref.Ref<number>, mtime: Opt
 
 describe("buildFingerprint", () => {
   // `resolveServer` reads the fingerprint once, so the lock entry and the
-  // identity endpoint name one build; the fingerprint itself stats once.
-  it.live("a compiled build names itself by its binary's mtime, in one stat", () =>
+  // identity endpoint name one build. The build names itself: no file is read.
+  it.live("a compiled build names itself by its version and build id, with no file read", () =>
     Effect.gen(function* () {
       const counter = yield* Ref.make(0)
-      const mtime = dateFromMillis(36_000)
       const fingerprint = yield* ownBuildFingerprint.pipe(
-        Effect.provide(
-          compiledServices("/nonexistent/gent-probe-x/gent", counter, Option.some(mtime)),
-        ),
+        Effect.provide(compiledServices("4f9c2e1a", counter)),
       )
-      expect(fingerprint).toBe(`bin-${(36_000).toString(36)}`)
-      expect(yield* Ref.get(counter)).toBe(1)
+      expect(fingerprint).toBe("0.1.0+4f9c2e1a")
+      expect(yield* Ref.get(counter)).toBe(0)
     }),
   )
 
-  // Two builds whose stats both lack an mtime must not share a fingerprint,
-  // or one attaches to the other's server.
-  it.live("a binary whose stat has no mtime names no build", () =>
+  // An archive or a package keeps the mtimes it was packed with (npm writes
+  // one fixed date into every file), so two builds' binaries can share one.
+  // They must still name two builds, or one attaches to the other's server.
+  it.live("two compiled builds whose binaries share an mtime name two builds", () =>
     Effect.gen(function* () {
       const counter = yield* Ref.make(0)
-      const fingerprint = yield* ownBuildFingerprint.pipe(
-        Effect.provide(compiledServices("/nonexistent/gent-probe-x/gent", counter, Option.none())),
+      const fingerprints = yield* Effect.forEach(["4f9c2e1a", "b07d33e5"], (id) =>
+        ownBuildFingerprint.pipe(Effect.provide(compiledServices(id, counter))),
       )
-      expect(fingerprint).toBe("unknown")
+      expect(new Set(fingerprints).size).toBe(2)
     }),
   )
 })

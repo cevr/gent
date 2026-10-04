@@ -2383,7 +2383,7 @@ export const makeCellToolHost = (
 const CELL_WORKER_BINARY = "gent-cell"
 
 /**
- * Where the worker lives. A compiled build (`GentPlatform.compiled`) runs the
+ * Where the worker lives. A compiled build (`GentPlatform.build`) runs the
  * `gent-cell` binary beside its executable. A source run executes this
  * checkout's worker source with the running Bun, so it never launches a stale
  * built worker.
@@ -2392,7 +2392,7 @@ export const cellWorkerLaunch = Effect.gen(function* () {
   const platform = yield* GentPlatform
   const path = yield* Path.Path
   const execPath = yield* platform.execPath
-  if (yield* platform.compiled) {
+  if ((yield* platform.build)._tag === "Compiled") {
     return CellWorker.cases.Compiled.make({
       binaryPath: path.join(path.dirname(execPath), CELL_WORKER_BINARY),
     })
