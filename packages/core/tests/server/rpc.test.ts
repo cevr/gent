@@ -3396,6 +3396,65 @@ describe("interaction.respondInteraction", () => {
   )
 
   it.live(
+    "an answer sent before the asking call's run ends resumes the turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const answered = yield* Deferred.make<void>()
+          // The asking call's run ends only once the answer is in, so the
+          // answer arrives between the ask and the end of the run that parked.
+          const extension = orderedApprovalExtension((params, attempt) => {
+            if (attempt > 1) return approveAs(params)
+            return approveAs(params).pipe(Effect.onError(() => Deferred.await(answered)))
+          })
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("ordered_approval", { label: "ask", text: "Proceed?" }),
+            textStep("answered early"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              agents: e2ePreset.agents,
+              providerLayer,
+              extensions: [extension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({})
+          yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filterMap((envelope) => {
+              if (envelope.event._tag === "InteractionPresented")
+                return Result.succeed(envelope.event)
+              return Result.failVoid
+            }),
+            Stream.take(1),
+            Stream.runForEach((presented) =>
+              client.interaction
+                .respondInteraction({
+                  sessionId,
+                  branchId,
+                  requestId: presented.requestId,
+                  approved: true,
+                  notes: "early",
+                })
+                .pipe(Effect.andThen(Deferred.completeWith(answered, Effect.void))),
+            ),
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "ask and hold the run" })
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "answered early",
+          }).pipe(Effect.timeout("5 seconds"))
+          const results = toolResultTexts(snapshot.messages)
+          expect(results.some((result) => result.includes("ask=early"))).toBe(true)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
     "the first answer wins: a different second reply is refused and the call gets the first",
     () =>
       Effect.scoped(
@@ -6374,6 +6433,178 @@ describe("a resumed call that had taken its answer", () => {
           }).pipe(Effect.timeout("8 seconds")),
         )
         expect(MutableRef.get(approvedRuns)).toBe(1)
+      }),
+    20_000,
+  )
+})
+
+describe("a shutdown while a parked call's run still ends", () => {
+  it.scopedLive(
+    "keeps the answer the call already has, and the call takes it after the restart",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-parked-shutdown-")
+        const dbPath = `${tempDir}/gent.db`
+        const approvedRuns = MutableRef.make(0)
+        const presentedIds: Array<string> = []
+        const siblingRunning = yield* Deferred.make<void>()
+        // The parked call's run end waits until the shutdown has interrupted
+        // the sibling's run, so that run end straddles the shutdown.
+        const shutdownLanded = yield* Deferred.make<void>()
+        const extension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/parked-shutdown") },
+          scope: "builtin",
+          sourcePath: "test",
+          artifactIdentity: LoadedArtifactIdentity.make("@test/parked-shutdown@artifact-1"),
+          contributions: {
+            tools: [
+              tool({
+                id: "asking_work",
+                description: "Ask, then do work",
+                params: Schema.Struct({}),
+                output: Schema.String,
+                execute: Effect.fn("asking_work")(function* () {
+                  const ctx = yield* ExtensionContext
+                  const decision = yield* ctx.Interaction.approve({ text: "do the work?" })
+                  if (!decision.approved) return "declined"
+                  MutableRef.update(approvedRuns, (n) => n + 1)
+                  return "worked"
+                }),
+              }),
+              tool({
+                id: "long_sibling",
+                description: "Work that outlives the process",
+                params: Schema.Struct({}),
+                output: Schema.String,
+                execute: Effect.fn("long_sibling")(function* () {
+                  yield* Deferred.succeed(siblingRunning, void 0)
+                  return yield* Effect.never
+                }),
+              }),
+            ],
+          },
+        }
+        // In the first process, a run that ends with a failure waits,
+        // uninterruptibly, for a run that ends interrupted.
+        const heldRunEnds = Layer.effect(
+          ApprovalService,
+          Effect.gen(function* () {
+            const live = yield* ApprovalService
+            return ApprovalService.of({
+              ...live,
+              ownCall: (branch, toolCallId) => (self) =>
+                live
+                  .ownCall(
+                    branch,
+                    toolCallId,
+                  )(self)
+                  .pipe(
+                    Effect.onError((cause) => {
+                      if (Cause.hasInterrupts(cause))
+                        return Deferred.succeed(shutdownLanded, void 0)
+                      return Deferred.await(shutdownLanded)
+                    }),
+                  ),
+            })
+          }),
+        ).pipe(Layer.provide(ApprovalService.Live))
+        const layerFor = (
+          providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+          approvalLayer: NonNullable<Parameters<typeof createE2ELayer>[0]["approvalLayer"]>,
+        ) =>
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensions: [extension],
+            approvalLayer,
+            storagePath: dbPath,
+          })
+        const collectPresented = (
+          client: GentNamespacedClient,
+          target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+        ) =>
+          client.session.events(target).pipe(
+            Stream.runForEach((envelope) =>
+              Effect.sync(() => {
+                if (envelope.event._tag === "InteractionPresented")
+                  presentedIds.push(envelope.event.requestId)
+              }),
+            ),
+            Effect.forkScoped,
+          )
+
+        // First process: the call asks and is answered while its sibling
+        // runs; the process stops while the asking call's run still ends.
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          multiToolCallStep(
+            { toolName: "asking_work", input: {} },
+            { toolName: "long_sibling", input: {} },
+          ),
+        ])
+        const target = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layerFor(firstProvider.layer, heldRunEnds))
+            const { sessionId, branchId } = yield* client.session.create({})
+            const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.filterMap((envelope) => {
+                if (envelope.event._tag === "InteractionPresented")
+                  return Result.succeed(envelope.event)
+                return Result.failVoid
+              }),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+            yield* client.message.send({ sessionId, branchId, content: "do both" })
+            const dialog = Array.from(yield* Fiber.join(presented))[0]
+            if (Predicate.isUndefined(dialog)) return yield* Effect.die("no dialog")
+            yield* Deferred.await(siblingRunning)
+            yield* client.interaction.respondInteraction({
+              sessionId,
+              branchId,
+              requestId: dialog.requestId,
+              approved: true,
+            })
+            return { sessionId, branchId, requestId: dialog.requestId }
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+        expect(MutableRef.get(approvedRuns)).toBe(0)
+
+        // Second process: the answered call takes its answer; no dialog asks again.
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep("both settled")])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              layerFor(secondProvider.layer, ApprovalService.Live),
+            )
+            const target2 = { sessionId: target.sessionId, branchId: target.branchId }
+            yield* collectPresented(client, target2)
+            const snapshot = yield* waitFor(
+              client.session.getSnapshot(target2),
+              (current) =>
+                current.runtime._tag === "Idle" &&
+                current.messages.some(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.parts.some(
+                      (part) => part.type === "text" && part.text === "both settled",
+                    ),
+                ),
+              5_000,
+              "the resumed turn answered",
+            )
+            const results = snapshot.messages.flatMap((message) =>
+              message.parts.filter((part) => part.type === "tool-result"),
+            )
+            expect(results.find((part) => part.name === "asking_work")).toMatchObject({
+              isFailure: false,
+              result: "worked",
+            })
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+        expect(MutableRef.get(approvedRuns)).toBe(1)
+        // Only the first process's dialog was ever shown.
+        expect(presentedIds.filter((id) => id !== target.requestId)).toEqual([])
       }),
     20_000,
   )

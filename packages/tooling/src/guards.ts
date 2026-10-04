@@ -3851,8 +3851,9 @@ interface PackageSurface {
  * package and exposes only its root and `./client`; `@gent/sdk` exposes the
  * stable root client contract and nothing else. `@gent/tui` is the terminal
  * app; its one entry, `./extensions`, is the client-extension authoring
- * surface. The e2e harness, the tooling and the examples are leaves: nothing
- * imports them, so they expose nothing.
+ * surface. The e2e harness, the tooling, the examples and the site (the
+ * gent.cvr.im deploy unit) are leaves: nothing imports them, so they expose
+ * nothing.
  */
 const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
   {
@@ -3900,6 +3901,12 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
   {
     packageJson: "examples/package.json",
     alias: "@gent/examples",
+    mustBePrivate: true,
+    entryPoints: [],
+  },
+  {
+    packageJson: "apps/site/package.json",
+    alias: "@gent/site",
     mustBePrivate: true,
     entryPoints: [],
   },

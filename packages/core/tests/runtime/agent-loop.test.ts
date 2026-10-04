@@ -193,7 +193,11 @@ import { SessionRuntime } from "../../src/runtime/session"
 import { test } from "bun:test"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import * as Response from "effect/ai/Response"
-import type { AnyResourceContribution, ExtensionContributions } from "../../src/domain/extension"
+import {
+  type AnyResourceContribution,
+  type ExtensionContributions,
+  hook,
+} from "../../src/domain/extension"
 
 // ── op primary keys ─────────────────────────────────────────────────────────
 
@@ -2198,6 +2202,216 @@ describe("a turn's joined steers", () => {
       )
       expect([...(ended?.joinedMessageIds ?? [])]).toEqual([interjectionMessageId(requestId)])
       expect(ended?.messageId).not.toBe(interjectionMessageId(requestId))
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+})
+
+/**
+ * A model whose every call fails with a rate limit that resets in five hours,
+ * the HTTP answer attached as a driver sees it.
+ */
+const limitedForHours = (calls: Ref.Ref<number>) =>
+  LanguageModelLayers.testStream(() =>
+    Effect.gen(function* () {
+      yield* Ref.update(calls, (n) => n + 1)
+      return Stream.fail(
+        AiError.make({
+          module: "Test",
+          method: "streamText",
+          reason: new AiError.RateLimitError({
+            retryAfter: Duration.hours(5),
+            http: {
+              request: {
+                method: "POST",
+                url: "https://model.test/v1/responses",
+                urlParams: [],
+                headers: {},
+              },
+              response: { status: 429, headers: { "retry-after": "18000" } },
+            },
+          }),
+        }),
+      )
+    }),
+  )
+
+describe("a usage limit's reset time", () => {
+  it.scopedLive("the turn's error and its turnAfter name the same reset time", () =>
+    Effect.gen(function* () {
+      const inputs = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
+      const watch = defineExtension({
+        id: "@gent/test-turn-after-reset",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("turnAfter", (input: TurnAfterInput) =>
+            Ref.update(inputs, (all) => [...all, input]),
+          )
+        }),
+      })
+      const calls = yield* Ref.make(0)
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: limitedForHours(calls),
+        extensionInputs: [...e2ePreset.extensionInputs, watch],
+      })
+      const events = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map(({ event }) => event),
+        Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      const before = yield* Clock.currentTimeMillis
+      yield* client.message.send({ sessionId, branchId, content: "answer me" })
+      const errors = (yield* Fiber.join(events)).filter((event) => event._tag === "ErrorOccurred")
+      const after = yield* Clock.currentTimeMillis
+      const [ended] = yield* waitFor(
+        Ref.get(inputs),
+        (all) => all.length === 1,
+        5_000,
+        "turnAfter fired",
+      )
+      const fiveHours = Duration.toMillis(Duration.hours(5))
+      const retryAt = Option.getOrThrow(Option.fromUndefinedOr(errors[0]?.retryAt))
+      expect(errors).toHaveLength(1)
+      expect(retryAt).toBeGreaterThanOrEqual(before + fiveHours)
+      expect(retryAt).toBeLessThanOrEqual(after + fiveHours)
+      expect(ended?.streamFailed).toBe(true)
+      expect(ended?.retryAt).toEqual(Option.some(retryAt))
+      // No retry inside the cap can clear a limit that resets in hours.
+      expect(yield* Ref.get(calls)).toBe(1)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a turn that answers gives turnAfter no reset time", () =>
+    Effect.gen(function* () {
+      const inputs = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
+      const watch = defineExtension({
+        id: "@gent/test-turn-after-no-reset",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("turnAfter", (input: TurnAfterInput) =>
+            Ref.update(inputs, (all) => [...all, input]),
+          )
+        }),
+      })
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: answeringProvider(),
+        extensionInputs: [...e2ePreset.extensionInputs, watch],
+      })
+      yield* client.message.send({ sessionId, branchId, content: "answer me" })
+      const [ended] = yield* waitFor(
+        Ref.get(inputs),
+        (all) => all.length === 1,
+        5_000,
+        "turnAfter fired",
+      )
+      expect(ended?.streamFailed).toBe(false)
+      expect(ended?.retryAt).toEqual(Option.none())
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("the debug model's usage limit fails the turn with a reset time", () =>
+    Effect.gen(function* () {
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: LanguageModelLayers.debug(),
+      })
+      const events = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map(({ event }) => event),
+        Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      const before = yield* Clock.currentTimeMillis
+      yield* client.message.send({ sessionId, branchId, content: "debug usage limit" })
+      const errors = (yield* Fiber.join(events)).filter((event) => event._tag === "ErrorOccurred")
+      const retryAt = Option.getOrThrow(Option.fromUndefinedOr(errors[0]?.retryAt))
+      expect(retryAt).toBeGreaterThanOrEqual(before + Duration.toMillis(Duration.hours(5)))
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  // The worker reads the session's agent before the turn runs; a turn that
+  // fails there never reached a model and stopped at no limit.
+  it.live("a later turn that fails before its model call names no earlier reset", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("reset-inherit-session")
+      const branchId = BranchId.make("reset-inherit-branch")
+      // Armed, the next read of the session's agent fails, as a busy database
+      // does: the worker's read before the turn. Every other read passes.
+      const armed = yield* Ref.make(false)
+      const storage = Layer.effect(
+        SessionStorage,
+        Effect.map(SessionStorage, (real) =>
+          SessionStorage.of({
+            ...real,
+            getSession: (id) =>
+              Effect.flatMap(
+                Effect.flatMap(Effect.currentSpan, (span) =>
+                  Ref.modify(armed, (on): [boolean, boolean] => {
+                    if (on && span.name === "TurnHelpers.sessionAgentName") return [true, false]
+                    return [false, on]
+                  }),
+                ).pipe(Effect.orElseSucceed(() => false)),
+                (failing) => {
+                  if (failing) return Effect.fail(new StorageError({ message: "database busy" }))
+                  return real.getSession(id)
+                },
+              ),
+          }),
+        ),
+      ).pipe(Layer.provideMerge(testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)))
+      const inputs = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
+      const resolved = resolveExtensions([
+        {
+          manifest: { id: ExtensionId.make("reset-watch") },
+          scope: "builtin",
+          sourcePath: "test",
+          contributions: {
+            agents: testAgents,
+            hooks: [
+              hook("turnAfter", (input: TurnAfterInput) =>
+                Ref.update(inputs, (all) => [...all, input]),
+              ),
+            ],
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      const calls = yield* Ref.make(0)
+      const layer = actorTestRoot({
+        provider: limitedForHours(calls),
+        storage,
+        registry: ExtensionRegistry.fromResolved(resolved),
+        eventStore: recordingEventStore(eventsRef),
+      })
+      yield* Effect.gen(function* () {
+        const hooksFired = (count: number) =>
+          waitForOption(
+            () =>
+              Ref.get(inputs).pipe(
+                Effect.map((all) => Option.liftPredicate(all, () => all.length >= count)),
+              ),
+            `${count} turnAfter hooks`,
+          )
+        // Turn A stops at the usage limit and names its reset.
+        yield* submitAgentLoop(makeMessage(sessionId, branchId, "turn A"))
+        const [first] = yield* hooksFired(1)
+        expect(Option.isSome(first?.retryAt ?? Option.none())).toBe(true)
+        // Turn B fails at the worker's agent read, before any model call.
+        yield* Ref.set(armed, true)
+        yield* submitAgentLoop(makeMessage(sessionId, branchId, "turn B"))
+        const all = yield* hooksFired(2)
+        const second = all[1]
+        expect(yield* Ref.get(calls)).toBe(1)
+        expect(second?.streamFailed).toBe(true)
+        expect(second?.retryAt).toEqual(Option.none())
+        const errors = (yield* Ref.get(eventsRef)).filter((event) => event._tag === "ErrorOccurred")
+        expect(errors.map((event) => Predicate.isNotUndefined(event.retryAt))).toEqual([
+          true,
+          false,
+        ])
+      }).pipe(Effect.scoped, Effect.provide(layer))
     }).pipe(Effect.timeout("8 seconds")),
   )
 })

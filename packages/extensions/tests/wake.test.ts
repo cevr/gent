@@ -973,6 +973,7 @@ const wakeTurnHooks = (home: string) =>
             agentName: builtinAgent.name,
             interrupted: false,
             streamFailed: false,
+            retryAt: Option.none(),
             unanswered: false,
             readNotices: new Set(readNotices),
             usage: {

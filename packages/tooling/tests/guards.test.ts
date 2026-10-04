@@ -3575,6 +3575,7 @@ const VALID_MANIFESTS: ReadonlyArray<readonly [string, PackageJson]> = [
   ["packages/e2e/package.json", { private: true }],
   ["packages/tooling/package.json", { private: true }],
   ["examples/package.json", { private: true }],
+  ["apps/site/package.json", { private: true }],
 ]
 
 const PACKAGE_NAMES = new Map([
@@ -3585,6 +3586,7 @@ const PACKAGE_NAMES = new Map([
   ["packages/e2e/package.json", "@gent/e2e"],
   ["packages/tooling/package.json", "@gent/tooling"],
   ["examples/package.json", "@gent/examples"],
+  ["apps/site/package.json", "@gent/site"],
 ])
 
 /** The workspace with `changes` laid over the valid manifests, less the `removed` ones. */
@@ -3790,6 +3792,7 @@ describe("package entry points", () => {
       "packages/e2e/package.json",
       "packages/tooling/package.json",
       "examples/package.json",
+      "apps/site/package.json",
     ]) {
       expect(
         messages(packageSurface([[file, { private: true, exports: { ".": "./src/index.ts" } }]])),
