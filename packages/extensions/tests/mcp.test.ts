@@ -67,8 +67,8 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * this process served. `MCP_FIXTURE_FAIL_ON_START=n` exits the nth start;
  * `MCP_FIXTURE_EXIT_AFTER_CALL` exits once it answered a call;
  * `count` is not listed while `MCP_FIXTURE_HIDE_COUNT` names a file that
- * exists, and with it `hide` writes that file and sends `list_changed`, and
- * `drop` writes it silently; with it, `MCP_FIXTURE_SWAP_LOG` adds `swap`,
+ * exists, and with it `hide` writes that file and sends `list_changed`,
+ * `drop` writes it silently, and `show` removes it and sends `list_changed`; with it, `MCP_FIXTURE_SWAP_LOG` adds `swap`,
  * which sends `list_changed` and holds the answer to the next `tools/list`
  * (count still listed) while it hides count and sends `list_changed` again,
  * until a newer list is answered or 500 ms pass, and logs `list` for each
@@ -114,6 +114,7 @@ if (hideFile) {
   tools.push(
     { name: "hide", description: "Stop listing count, and say so.", inputSchema: { type: "object" } },
     { name: "drop", description: "Stop listing count silently.", inputSchema: { type: "object" } },
+    { name: "show", description: "List count again, and say so.", inputSchema: { type: "object" } },
   )
 }
 const swapLog = process.env.MCP_FIXTURE_SWAP_LOG
@@ -200,6 +201,9 @@ const answer = (request) => {
     case "drop":
       fs.writeFileSync(hideFile, "")
       return { result: { content: [{ type: "text", text: "count hidden" }] } }
+    case "show":
+      fs.rmSync(hideFile, { force: true })
+      return { result: { content: [{ type: "text", text: "count shown" }] } }
     case "echo":
       return { result: { content: [{ type: "text", text: String(input.text).repeat(input.times ?? 1) }] } }
     case "structured":
@@ -267,7 +271,7 @@ process.stdin.on("data", (chunk) => {
       return
     }
     send({ id: request.id, ...answered })
-    if (request.method === "tools/call" && (request.params.name === "hide" || request.params.name === "swap")) {
+    if (request.method === "tools/call" && ["hide", "show", "swap"].includes(request.params.name)) {
       send({ method: "notifications/tools/list_changed" })
     }
   }
@@ -2908,6 +2912,66 @@ describe("mcp tools in the cell", () => {
         expect(next).toContain("mcp.fixture.echo")
         // The open connection relisted; no server started for it.
         expect(yield* fixture.starts).toBe(2)
+      }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a tool a list_changed notification adds is offered from the next turn of the open session",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const hide = path.join(fixture.directory, "hide-count")
+        // Setup lists the server while count is hidden.
+        yield* fs.writeFileString(hide, "")
+        const extensionId = "@test/mcp-added"
+        const servers = McpServers(extensionId, {
+          fixture: { ...fixture.stdio({ MCP_FIXTURE_HIDE_COUNT: hide }), cwd: fixture.directory },
+        })
+        const { systems, recordSystem } = systemRecorder()
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          recordSystem(toolCallStep("cell", { code: "await tools.mcp.fixture.show()" })),
+          textStep("shown"),
+          recordSystem(toolCallStep("cell", { code: "await tools.mcp.fixture.count()" })),
+          textStep("counted"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [...shippedWithoutMcp, servers],
+          providerLayer,
+        })
+        const texts = client.message
+          .list({ branchId })
+          .pipe(Effect.map((all) => all.map((message) => messagePartsText(message.parts))))
+        const shown = (needle: string) =>
+          waitFor(texts, (all) => all.some((text) => text.includes(needle)), 10_000, needle)
+        yield* client.message.send({ sessionId, branchId, content: "show count" })
+        yield* shown("shown")
+        // `/mcp` counts the new tool once the session's extensions registered it.
+        yield* waitFor(
+          client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: ExtensionId.make(extensionId),
+              capabilityId: "mcp-command",
+              input: "",
+            })
+            .pipe(Effect.andThen(texts)),
+          (all) => all.some((text) => text.includes("8 tools")),
+          10_000,
+          "/mcp lists 8 tools",
+        )
+        yield* client.message.send({ sessionId, branchId, content: "count" })
+        yield* shown("counted")
+        const results = (yield* client.message.list({ branchId }))
+          .flatMap((message) => message.parts)
+          .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+        expect(results.at(-1)).toMatchObject({ name: "cell", isFailure: false })
+        expect(systems[0]).not.toContain("mcp.fixture.count")
+        expect(systems[1]).toContain("mcp.fixture.count")
       }).pipe(Effect.timeout("25 seconds"), withDataDir, Effect.provide(platformLayer)),
     30_000,
   )

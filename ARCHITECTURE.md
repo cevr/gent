@@ -1941,11 +1941,17 @@ the entry signs in with OAuth and has no stored login.
 The tools are listed again when a connection opens, when the server sends
 `notifications/tools/list_changed`, and when it answers a call as an unknown
 tool. One server's lists run one at a time, so an older list never lands
-last: a list that differs is written to the cache (under one permit), so the
-next session registers it, and a call to a tool the server no longer lists
-fails with a message naming the stale catalog. An empty or failed relist keeps
-the cached tools. The current session keeps the tools it registered; replacing
-them live needs a host seam.
+last: a list that differs is written to the cache (under one permit), and a
+call to a tool the server no longer lists fails with a message naming the
+stale catalog. An empty or failed relist keeps the cached tools. After the
+write, the pool reloads the extension (`ctx.Extensions.reload`) in each place
+a loop opened in: each loop's `loopOpen` hook hands the pool its place's
+reload, and reloads at once when a list since its setup read the cache
+already changed it. The reloaded setup registers the cached list, so the next
+turn there offers the new tools; only then does the server's state (and
+`/mcp`) take the new list. A place with no open loop catches up when a loop
+opens there: the open's reload lands after the profile the open resolved, so
+that place's first turn may still run on the list it had.
 
 The read-only `mcp.status` host tool and the `/mcp` slash command report each
 server's transport, tool count, connection, and health: `healthy` (listed or
