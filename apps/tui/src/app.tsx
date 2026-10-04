@@ -581,15 +581,27 @@ export function Session(props: SessionProps) {
 
   const modelLabels = (): StatusRowLabel[] => {
     const model = client.modelInfo()
+    const routed = client.routedModel()
     const items: StatusRowLabel[] = []
+    const name = (entry: Model) =>
+      statusModelName(entry, client.models(), controller.authProviders())
     if (Option.isSome(model))
       items.push({
-        text: statusModelName(model.value, client.models(), controller.authProviders()),
+        text: Option.match(routed, {
+          onNone: () => name(model.value),
+          onSome: (route) => `${name(model.value)} → ${name(route.model)}`,
+        }),
         color: theme.textMuted,
       })
+    // The route's effort runs the turn unless the session sets its own.
+    const routedEffort = Option.flatMap(routed, (route) => route.effort)
+    const reasoningLevel = Option.orElse(
+      Option.fromUndefinedOr(client.session().reasoningLevel),
+      () => Option.orElse(routedEffort, () => client.resolvedReasoningLevel()),
+    )
     return items.concat(
       buildModelLabels({
-        reasoningLevel: client.reasoningLevel(),
+        reasoningLevel,
         theme,
         debugMode: props.debugMode === true,
       }),
@@ -608,7 +620,11 @@ export function Session(props: SessionProps) {
       ...extensionLabels("right"),
       ...buildContextLabels({
         metrics: client.sessionMetrics(),
-        model: client.modelInfo(),
+        // A virtual model has no window: the gauge reads the routed model's.
+        model: Option.orElse(
+          Option.map(client.routedModel(), (route) => route.model),
+          () => client.modelInfo(),
+        ),
         theme,
       }),
       ...costLabels(),

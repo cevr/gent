@@ -573,6 +573,12 @@ export interface SessionMetrics {
   readonly context: Option.Option<ModelContextMetrics>
 }
 
+/** What a virtual model's newest route chose (`ModelRouted`). */
+interface RoutedModel {
+  readonly model: Model
+  readonly effort: Option.Option<ReasoningEffort>
+}
+
 interface ClientAgentValue {
   // Agent state (derived from events)
   /** None until a snapshot names the session's agent. */
@@ -596,6 +602,12 @@ interface ClientAgentValue {
   sessionMetrics: () => SessionMetrics
   /** None until the model registry loads the model in use. */
   modelInfo: () => Option.Option<Model>
+  /**
+   * The concrete model the newest route of the virtual model in use chose,
+   * and the effort that route set. None for a concrete model, before the
+   * first route, and after a switch away from the virtual model.
+   */
+  routedModel: () => Option.Option<RoutedModel>
   /**
    * The chat models the session's profile serves, in catalog order: a
    * registered driver's, and an active models.dev provider's. Empty until
@@ -1478,6 +1490,16 @@ export function ClientProvider(props: ClientProviderProps) {
     error: () => agentStore.error,
     sessionMetrics,
     modelInfo: () => Option.fromNullishOr(catalog().modelsById[agentValue.model()]),
+    routedModel: () =>
+      Option.fromUndefinedOr(runtimeMetrics().routed).pipe(
+        Option.filter((routed) => routed.selected === agentValue.model()),
+        Option.flatMap((routed) =>
+          Option.map(Option.fromNullishOr(catalog().modelsById[routed.model]), (model) => ({
+            model,
+            effort: Option.fromUndefinedOr(routed.effort),
+          })),
+        ),
+      ),
     models: runnableModels,
     modelCatalog: () => {
       if (!catalog().settled) return Option.none()

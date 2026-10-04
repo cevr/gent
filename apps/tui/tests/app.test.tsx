@@ -2088,6 +2088,137 @@ describe("App status and activity rows", () => {
     })
     expect(statusModelName(model, [model], [])).toBe("Claude Opus 5")
   })
+  // A virtual model routes each turn: the row names it, the model its newest
+  // route chose and that route's effort, and the gauge reads the chosen
+  // model's window. A narrow row keeps the pair.
+  for (const width of [120, 60]) {
+    it.scopedLive(
+      `the status row names a virtual model and the model its route chose at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const sessionId = SessionId.make(`session-routed-${width}`)
+          const branchId = BranchId.make(`branch-routed-${width}`)
+          const auto = new Model({
+            id: ModelId.make("router/auto"),
+            name: "Auto",
+            provider: ProviderId.make("router"),
+            kind: "virtual",
+          })
+          const sonnet = new Model({
+            id: ModelId.make("anthropic/claude-sonnet-5"),
+            name: "Sonnet 5",
+            provider: ProviderId.make("anthropic"),
+            contextLength: 1_000_000,
+            inputLimit: 100_000,
+            outputLimit: 8_000,
+          })
+          const { setup } = yield* mountApp({
+            client: {
+              model: { list: () => Effect.succeed([sonnet, auto]) },
+              session: {
+                getSnapshot: () =>
+                  Effect.succeed({
+                    sessionId,
+                    branchId,
+                    messages: [],
+                    lastEventId: nullValue,
+                    reasoningLevel: absent,
+                    resolvedModelId: auto.id,
+                    agent: AgentName.make("main"),
+                    runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                    metrics: {
+                      turns: 1,
+                      durationMs: 0,
+                      costUsd: 0,
+                      lastInputTokens: 50_000,
+                      routed: {
+                        selected: auto.id,
+                        model: sonnet.id,
+                        effort: "high",
+                        reason: "choice 2: difficult work",
+                      },
+                    },
+                  }),
+              },
+            },
+            width,
+            initialSession: sessionNamed(sessionId, branchId, "Routed"),
+          })
+          const frame = yield* waitForFrame(
+            setup,
+            (next) => next.includes("Auto → Sonnet 5"),
+            "the routed model in the status row",
+          )
+          expect(frame).toContain("high")
+          expect(frame).toContain("(50%)")
+          // The picker lists the virtual model by its label, beside its id.
+          yield* typeCommand("/model")(setup)
+          const picker = yield* waitForFrame(
+            setup,
+            (next) => next.includes("Model ·") && next.includes("router/auto"),
+            "the virtual model in the picker",
+          )
+          expect(
+            picker.split("\n").some((row) => row.includes("Auto") && row.includes("router/auto")),
+          ).toBe(true)
+        }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
+  // The route belongs to the virtual model: once the session leaves it, the
+  // row names the concrete model alone.
+  it.scopedLive("a route of a virtual model the session left is not named", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-left-router")
+      const branchId = BranchId.make("branch-left-router")
+      const opus = new Model({
+        id: ModelId.make("anthropic/claude-opus-5"),
+        name: "Opus 5",
+        provider: ProviderId.make("anthropic"),
+      })
+      const sonnet = new Model({
+        id: ModelId.make("anthropic/claude-sonnet-5"),
+        name: "Sonnet 5",
+        provider: ProviderId.make("anthropic"),
+      })
+      const { setup } = yield* mountApp({
+        client: {
+          model: { list: () => Effect.succeed([opus, sonnet]) },
+          session: {
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId,
+                branchId,
+                messages: [],
+                lastEventId: nullValue,
+                reasoningLevel: absent,
+                resolvedModelId: opus.id,
+                agent: AgentName.make("main"),
+                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                metrics: {
+                  turns: 1,
+                  durationMs: 0,
+                  costUsd: 0,
+                  lastInputTokens: 0,
+                  routed: {
+                    selected: ModelId.make("router/auto"),
+                    model: sonnet.id,
+                    reason: "choice 1",
+                  },
+                },
+              }),
+          },
+        },
+        width: 120,
+        initialSession: sessionNamed(sessionId, branchId, "Left"),
+      })
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Opus 5"),
+        "the concrete model in the status row",
+      )
+      expect(frame).not.toContain("→ Sonnet 5")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
 })
 
 describe("App drafts, queue restore and forks across session switches", () => {
