@@ -300,15 +300,18 @@ const requestExtensionAt = <Input, Output>(
         branchId: session.branchId,
       })
       .pipe(
-        Effect.mapError(
-          (cause) =>
-            new ClientTransportRequestError({
-              extensionId: ref.extensionId,
-              tag: ref.capabilityId,
-              message: `request failed: ${String(cause)}`,
-              cause,
-            }),
-        ),
+        Effect.mapError((cause) => {
+          // The server reports an extension's refusal in its own words; a pane
+          // that draws the message names the reason, not the transport.
+          let message = `request failed: ${String(cause)}`
+          if (cause._tag === "ExtensionProtocolError") message = cause.message
+          return new ClientTransportRequestError({
+            extensionId: ref.extensionId,
+            tag: ref.capabilityId,
+            message,
+            cause,
+          })
+        }),
       )
     return yield* Schema.decodeUnknownEffect(ref.output)(reply).pipe(
       Effect.mapError(
