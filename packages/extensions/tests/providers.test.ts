@@ -36,7 +36,7 @@ import {
   storedCredentialModel,
   textStep,
 } from "@gent/core/test-utils"
-import { BuiltinExtensions } from "../src/index.js"
+import { shippedPreset } from "./helpers/test-preset.js"
 import { SHIPPED_API_CLASSES } from "./helpers/api-classes.js"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 import { makeFakeFetchState, oneGenerate } from "./helpers/fake-http-client.js"
@@ -472,9 +472,8 @@ describe("generic providers on the shipped classes", () => {
             const fixture = yield* modelCatalogFixture
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
             const { client, sessionId } = yield* createRpcHarness({
-              agents: [],
+              ...shippedPreset,
               modelCatalogHttpLayer: fixture.layer,
-              extensionInputs: BuiltinExtensions,
               providerLayer,
             })
             const models = (yield* client.model.list({ sessionId })).map((model) => model.id)

@@ -10,6 +10,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  FileSystem,
   Layer,
   Logger,
   Option,
@@ -21,6 +22,7 @@ import {
   Stream,
 } from "effect"
 import { Base64 } from "effect/encoding"
+import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { RpcClientError } from "effect/rpc/RpcClientError"
 import { SocketCloseError } from "effect/socket/Socket"
@@ -83,6 +85,7 @@ import {
   createMockRuntime,
   createMutableRuntime,
   holdingReplies,
+  mountClient,
   renderFrame,
   renderScoped,
   TerminalOutput,
@@ -107,6 +110,7 @@ import {
   waitUntilAdvancing,
 } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
+import { useWorkspace } from "../src/workspace"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
@@ -6314,6 +6318,41 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("@gent/memory: startup boom")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  it.scopedLive("ConnectionWidget names the version a failed reload still runs", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />, {
+        width: 100,
+        client: createMockClient({
+          extension: {
+            listStatus: () =>
+              Effect.succeed({
+                _tag: "Degraded",
+                healthyExtensions: [],
+                degradedExtensions: [
+                  {
+                    manifest: { id: "@user/notes" },
+                    scope: "user",
+                    sourcePath: "/home/u/.gent/extensions/notes.ts",
+                    _tag: "Degraded",
+                    issues: [
+                      {
+                        _tag: "ActivationFailed",
+                        phase: "setup",
+                        error: "setup boom",
+                        runningVersion: "0123456789abcdef0123",
+                      },
+                    ],
+                  },
+                ],
+              }),
+          },
+        }),
+      })
+      const frame = renderFrame(setup)
+      expect(frame).toContain("1 extension failed")
+      expect(frame).toContain("@user/notes: setup boom; version 0123456789ab still runs")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("ConnectionWidget names a model catalog that did not load", () =>
     Effect.gen(function* () {
       const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />, {
@@ -6751,6 +6790,207 @@ describe("client extension status", () => {
       yield* waitUntil(() => healthReads >= 3, "the live pulse reads health")
       yield* waitForFrame(setup, () => true)
       expect(healthReads).toBe(3)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive(
+    "a turn's end loads a client file written since the last load, and the shell's reload loads an edit at once",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const sessionId = SessionId.make("session-client-reload")
+        const branchId = BranchId.make("branch-client-reload")
+        let shell = Option.none<ClientContext["Service"]["shell"]>()
+        const shellProbe = defineClientExtension("@test/shell-probe", {
+          setup: Effect.gen(function* () {
+            shell = Option.some((yield* ClientContext).shell)
+            return {}
+          }),
+        })
+        let held = Option.none<{
+          readonly ext: ReturnType<typeof useExtensionUI>
+          readonly home: string
+        }>()
+        const Probe = () => {
+          const ext = useExtensionUI()
+          const workspace = useWorkspace()
+          held = Option.some({ ext, home: workspace.home })
+          return <box />
+        }
+        const { client } = yield* mountClient({
+          builtins: [shellProbe],
+          initialSession: sessionNamed(sessionId, branchId, "Reload"),
+          view: () => <Probe />,
+        })
+        const { ext, home } = yield* Effect.fromOption(held)
+        yield* waitUntil(() => ext.loaded(), "the first load")
+        const commandIds = () => ext.commands().map((command) => command.id)
+        const dir = `${home}/.gent/extensions`
+        yield* fs.makeDirectory(dir, { recursive: true })
+        const hello = (command: string) =>
+          `import { Effect } from "effect"
+import { clientCommandContribution, defineClientExtension } from "@gent/tui/extensions"
+export default defineClientExtension("@test/hello", {
+  setup: Effect.succeed(clientCommandContribution({ id: "${command}", title: "${command}", onSelect: () => {} })),
+})
+`
+        yield* fs.writeFileString(`${dir}/hello.client.ts`, hello("hello-v1"))
+        expect(commandIds()).not.toContain("hello-v1")
+        client.applySessionEvent(
+          EventEnvelope.make({
+            id: EventId.make(1),
+            createdAt: 1,
+            event: AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }),
+          }),
+        )
+        yield* waitUntil(() => commandIds().includes("hello-v1"), "the new file after the turn")
+        yield* fs.writeFileString(`${dir}/hello.client.ts`, hello("hello-v22"))
+        ;(yield* Effect.fromOption(shell)).reloadExtensions()
+        yield* waitUntil(
+          () => commandIds().includes("hello-v22") && !commandIds().includes("hello-v1"),
+          "the edit after the shell's reload",
+        )
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+  it.live("a client reload keeps the widgets of an extension it kept mounted", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      let mounts = 0
+      let home = Option.none<string>()
+      let shell = Option.none<ClientContext["Service"]["shell"]>()
+      const counted = defineClientExtension("@test/counted-widget", {
+        setup: Effect.gen(function* () {
+          shell = Option.some((yield* ClientContext).shell)
+          return clientContributions(
+            widgetContribution({
+              id: "counted",
+              slot: "below-input",
+              component: () => {
+                mounts += 1
+                home = Option.some(useWorkspace().home)
+                return <text>counted widget</text>
+              },
+            }),
+          )
+        }),
+      })
+      const { setup, ext } = yield* mountApp({
+        builtins: [counted],
+        initialSession: sessionNamed(
+          SessionId.make("session-kept-widget"),
+          BranchId.make("branch-kept-widget"),
+          "Kept",
+        ),
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("counted widget"), "the widget")
+      const dir = `${yield* Effect.fromOption(home)}/.gent/extensions`
+      yield* fs.makeDirectory(dir, { recursive: true })
+      yield* fs.writeFileString(
+        `${dir}/added.client.ts`,
+        `import { Effect } from "effect"
+import { clientCommandContribution, defineClientExtension } from "@gent/tui/extensions"
+export default defineClientExtension("@test/added", {
+  setup: Effect.succeed(clientCommandContribution({ id: "added", title: "added", onSelect: () => {} })),
+})
+`,
+      )
+      ;(yield* Effect.fromOption(shell)).reloadExtensions()
+      yield* waitUntil(() => ext.commands().some((command) => command.id === "added"), "the reload")
+      expect(renderFrame(setup)).toContain("counted widget")
+      expect(mounts).toBe(1)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+  // The pane turns an extension off in the configs of the session in view,
+  // and the server loads that session's project: a move to a session rooted
+  // in another project loads that project's client files, with no turn.
+  it.scopedLive("a move to a session in another project loads that project's client files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "gent-session-place-" }),
+      )
+      const launch = `${root}/launch`
+      const project = `${root}/project`
+      yield* fs.makeDirectory(launch, { recursive: true })
+      yield* fs.makeDirectory(`${project}/.gent/extensions`, { recursive: true })
+      yield* fs.writeFileString(
+        `${project}/.gent/extensions/there.client.ts`,
+        `import { Effect } from "effect"
+import { clientCommandContribution, defineClientExtension } from "@gent/tui/extensions"
+export default defineClientExtension("@test/there", {
+  setup: Effect.succeed(clientCommandContribution({ id: "there", title: "there", onSelect: () => {} })),
+})
+`,
+      )
+      const there = SessionId.make("session-place-there")
+      let held = Option.none<{
+        readonly ext: ReturnType<typeof useExtensionUI>
+        readonly home: string
+      }>()
+      const Probe = () => {
+        held = Option.some({ ext: useExtensionUI(), home: useWorkspace().home })
+        return <box />
+      }
+      const { client } = yield* mountClient({
+        cwd: launch,
+        client: createMockClient({
+          session: {
+            get: (input: { readonly sessionId: SessionId }) =>
+              Effect.succeed({
+                ...sessionA,
+                id: input.sessionId,
+                cwd: Option.getOrElse(
+                  Option.as(
+                    Option.liftPredicate(input.sessionId, (id) => id === there),
+                    project,
+                  ),
+                  () => launch,
+                ),
+              }),
+          },
+        }),
+        initialSession: sessionNamed("session-place-here", "branch-place-here", "Here"),
+        view: () => <Probe />,
+      })
+      const { ext, home } = yield* Effect.fromOption(held)
+      yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
+      const grant = yield* Schema.encodeEffect(
+        Schema.fromJsonString(Schema.Struct({ trustedProjects: Schema.Array(Schema.String) })),
+      )({ trustedProjects: [launch, project] })
+      yield* fs.writeFileString(`${home}/.gent/config.json`, grant)
+      yield* waitUntil(() => ext.loaded(), "the first load")
+      const commandIds = () => ext.commands().map((command) => command.id)
+      expect(commandIds()).not.toContain("there")
+      client.switchSession(there, BranchId.make("branch-place-there"), "There")
+      yield* waitUntil(() => commandIds().includes("there"), "the project of the session in view")
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+  it.scopedLive("a turn's end in the session in view reads extension health again", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-health-turn")
+      const branchId = BranchId.make("branch-health-turn")
+      let healthReads = 0
+      const { client } = yield* mountClient({
+        client: createMockClient({
+          extension: {
+            listStatus: () =>
+              Effect.sync(() => {
+                healthReads += 1
+                return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
+              }),
+          },
+        }),
+        initialSession: sessionNamed(sessionId, branchId, "Health"),
+      })
+      yield* waitUntil(() => healthReads >= 1, "the mount's health read")
+      const before = healthReads
+      client.applySessionEvent(
+        EventEnvelope.make({
+          id: EventId.make(1),
+          createdAt: 1,
+          event: AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }),
+        }),
+      )
+      yield* waitUntil(() => healthReads === before + 1, "the turn's health read")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a /driver usage hint lands in the footer and never starts a model turn", () =>

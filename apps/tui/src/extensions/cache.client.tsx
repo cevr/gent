@@ -73,6 +73,12 @@ export const CacheMissCause = Schema.TaggedUnion({
   ModelSwitch: {},
   /** Same model inside the cache lifetime, on a provider that writes its cache: the prefix itself changed. */
   PrefixChanged: {},
+  /**
+   * A changed prefix whose two requests ran on different extension profiles
+   * (`StreamStarted.profileRevision`): an extension change rewrote it, as a
+   * model switch would, not a regression.
+   */
+  ExtensionsChanged: {},
   /** The previous response itself took most of the lifetime, measured from its start. */
   Response: { ms: Schema.Finite },
   /** The cache expired while one tool call ran between two steps of a turn. */
@@ -124,6 +130,8 @@ interface ScannedMiss extends Omit<CacheMiss, "cause"> {
   readonly modelSwitch: boolean
   /** The model reported cache writes: it holds a written prefix for the lifetime. */
   readonly explicitCache: boolean
+  /** Both requests name their extension profile, and the two differ. */
+  readonly extensionsChanged: boolean
   /** What took that time, if it outlived the lifetime. */
   readonly lapse: CacheMissCause
   /** The step ran in a spawned child session, whose requests ask for the child lifetime. */
@@ -133,17 +141,30 @@ interface ScannedMiss extends Omit<CacheMiss, "cause"> {
 /**
  * The miss and its cause by the model's cache lifetime. Time past the
  * lifetime since the previous request started is the lapse's doing.
- * Otherwise only an explicit cache's miss counts, as a changed prefix.
- * With no lifetime only a model switch counts.
+ * Otherwise only an explicit cache's miss counts, as a changed prefix, named
+ * an extension change when the two requests ran on different profiles. With
+ * no lifetime only a model switch counts.
  */
 export const resolveMiss = (
   scanned: ScannedMiss,
   lifetimeMs: Option.Option<number>,
 ): Option.Option<CacheMiss> => {
-  const { sinceRefreshMs, modelSwitch, explicitCache, lapse, child: _child, ...miss } = scanned
+  const {
+    sinceRefreshMs,
+    modelSwitch,
+    explicitCache,
+    extensionsChanged,
+    lapse,
+    child: _child,
+    ...miss
+  } = scanned
+  const changed = Option.getOrElse(
+    Option.liftPredicate(CacheMissCause.cases.ExtensionsChanged.make({}), () => extensionsChanged),
+    () => CacheMissCause.cases.PrefixChanged.make({}),
+  )
   const cause = Option.flatMap(lifetimeMs, (lifetime) => {
     if (sinceRefreshMs > lifetime) return Option.some(lapse)
-    return Option.liftPredicate(CacheMissCause.cases.PrefixChanged.make({}), () => explicitCache)
+    return Option.liftPredicate(changed, () => explicitCache)
   })
   const switched = Option.liftPredicate(
     CacheMissCause.cases.ModelSwitch.make({}),
@@ -159,6 +180,8 @@ export const resolveMiss = (
 interface CachedRequest {
   readonly promptTokens: number
   readonly model: string
+  /** The extension profile it ran on; none on a row written before the field. */
+  readonly profileRevision: Option.Option<string>
   /**
    * Some request since the last reset reported cache activity. A later step
    * that reads nothing is then a total miss (a provider that reports reads
@@ -176,6 +199,13 @@ interface Refresh {
   readonly startedAt: number
   readonly endedAt: number
   readonly input: Option.Option<string>
+}
+
+/** A request that went out: when, for which input, on which extension profile. */
+interface Begun {
+  readonly at: number
+  readonly input: Option.Option<string>
+  readonly profileRevision: Option.Option<string>
 }
 
 interface Span {
@@ -251,7 +281,7 @@ export const makeCacheScan = (): CacheScan => {
   let lastId = Number.NEGATIVE_INFINITY
   let previous = Option.none<CachedRequest>()
   let refreshed = Option.none<Refresh>()
-  let started = Option.none<{ readonly at: number; readonly input: Option.Option<string> }>()
+  let started = Option.none<Begun>()
   const openTools = new Map<string, { readonly name: string; readonly at: number }>()
   const openWaits = new Map<string, number>()
   let tools: Array<Span> = []
@@ -324,7 +354,7 @@ export const makeCacheScan = (): CacheScan => {
   const scanMiss = (
     envelope: EventEnvelope,
     event: Extract<AgentEvent, { _tag: "StreamEnded" }>,
-    begun: { readonly at: number; readonly input: Option.Option<string> },
+    begun: Begun,
   ): Option.Option<ScannedMiss> => {
     const usage = Option.fromUndefinedOr(event.usage)
     // A step with no usage (an interrupted stream) has no tokens to compare.
@@ -360,6 +390,12 @@ export const makeCacheScan = (): CacheScan => {
           sinceRefreshMs,
           modelSwitch: model !== prior.model,
           explicitCache: writers.has(model),
+          extensionsChanged: Option.isSome(
+            Option.filter(
+              Option.all([prior.profileRevision, begun.profileRevision]),
+              ([before, now]) => before !== now,
+            ),
+          ),
           lapse: expiredCause(refresh, sinceRefreshMs, begun.input),
           child: event.child ?? false,
         })
@@ -368,6 +404,7 @@ export const makeCacheScan = (): CacheScan => {
     previous = Option.some({
       promptTokens,
       model,
+      profileRevision: begun.profileRevision,
       reportedCache: reported || Option.exists(previous, (prior) => prior.reportedCache),
     })
     return miss
@@ -377,9 +414,10 @@ export const makeCacheScan = (): CacheScan => {
     envelope: EventEnvelope,
     event: Extract<AgentEvent, { _tag: "StreamEnded" }>,
   ): Option.Option<ScannedMiss> => {
-    const begun = Option.getOrElse(started, () => ({
+    const begun = Option.getOrElse(started, (): Begun => ({
       at: envelope.createdAt,
       input: Option.fromUndefinedOr(event.messageId),
+      profileRevision: Option.none(),
     }))
     started = Option.none()
     const miss = scanMiss(envelope, event, begun)
@@ -437,6 +475,7 @@ export const makeCacheScan = (): CacheScan => {
         started = Option.some({
           at: envelope.createdAt,
           input: Option.fromUndefinedOr(event.messageId),
+          profileRevision: Option.fromUndefinedOr(event.profileRevision),
         })
         return Option.none()
       case "ProviderRetrying":
@@ -648,6 +687,7 @@ export const showsMissRow = (miss: CacheMiss, costUsd: number): boolean =>
 const causeText = CacheMissCause.match({
   ModelSwitch: () => "cache miss after model switch",
   PrefixChanged: () => "cache miss: prefix changed",
+  ExtensionsChanged: () => "cache miss after an extension change",
   Response: (cause) => `cache expired during a ${formatAge(cause.ms)} response`,
   Tool: (cause) => `cache expired during ${formatAge(cause.ms)} ${cause.toolName}`,
   Approval: (cause) => `cache expired waiting ${formatAge(cause.ms)} for approval`,

@@ -1604,11 +1604,39 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
   }),
 )
 
+// A job still marked running that an earlier server process started has lost
+// its server. A crash skips the finalizers, so its process may still run:
+// stop each recorded process group that still holds the job (its leader
+// is the recorded process, or exited and left descendants in the group),
+// then mark the jobs interrupted before the supervisor takes new
+// work. A job this process runs stays running when another profile builds.
+const ReconcileInterruptedJobs = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const storage = yield* BackgroundBashStorage
+    const stale = yield* storage.staleProcesses
+    const stopped = yield* Effect.forEach(stale, stopStaleProcess, { concurrency: 8 })
+    yield* storage.reconcileInterrupted(stale.filter((_, i) => !stopped[i]).map((job) => job.pid))
+  }),
+)
+
+export const BackgroundBashLayer = BackgroundBashSupervisorLive.pipe(
+  Layer.provideMerge(ReconcileInterruptedJobs),
+  Layer.provideMerge(BackgroundBashStorage.Live),
+)
+
+/** The background shell supervisor: one per process, for every bash call. */
+const BackgroundBashResource = defineResource({
+  id: "@gent/exec-tools/background-bash",
+  scope: "process",
+  layer: BackgroundBashLayer,
+})
+
 // Bash Tool
 
 export const BashTool = tool({
   id: "bash",
   destructive: true,
+  resources: [BackgroundBashResource],
   description: `Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops. stdout and stderr each come back whole up to ${wholeCommandOutputText} characters; past that the result keeps each one's head and tail, and outputFile names a file with all the output (outputChars long, stdout and stderr in arrival order): page it with the read tool's offset and limit.`,
   promptSnippet: "Execute shell commands",
   params: BashParams,
@@ -1714,39 +1742,12 @@ export const BashTool = tool({
 
 const EXEC_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/exec-tools")
 
-// A job still marked running that an earlier server process started has lost
-// its server. A crash skips the finalizers, so its process may still run:
-// stop each recorded process group that still holds the job (its leader
-// is the recorded process, or exited and left descendants in the group),
-// then mark the jobs interrupted before the supervisor takes new
-// work. A job this process runs stays running when another profile builds.
-const ReconcileInterruptedJobs = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const storage = yield* BackgroundBashStorage
-    const stale = yield* storage.staleProcesses
-    const stopped = yield* Effect.forEach(stale, stopStaleProcess, { concurrency: 8 })
-    yield* storage.reconcileInterrupted(stale.filter((_, i) => !stopped[i]).map((job) => job.pid))
-  }),
-)
-
-export const BackgroundBashLayer = BackgroundBashSupervisorLive.pipe(
-  Layer.provideMerge(ReconcileInterruptedJobs),
-  Layer.provideMerge(BackgroundBashStorage.Live),
-)
-
 export const ExecToolsExtension = defineExtension({
   id: EXEC_TOOLS_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", BashTool)
-    yield* host.register(
-      "resource",
-      defineResource({
-        id: "@gent/exec-tools/background-bash",
-        scope: "process",
-        layer: BackgroundBashLayer,
-      }),
-    )
+    yield* host.register("resource", BackgroundBashResource)
     yield* host.on("turnProjection", () =>
       jobNotices().pipe(
         Effect.catchCause((cause) =>

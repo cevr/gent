@@ -1303,34 +1303,33 @@ describe("branch-scoped resources", () => {
       const extensionId = ExtensionId.make("@gent/tests/branch-resource")
       const readId = "read-branch-instance"
 
+      const counterResource = defineResource({
+        id: "@gent/tests/branch-resource/counter",
+        scope: "branch",
+        layer: Layer.effect(
+          BranchCounter,
+          Effect.acquireRelease(
+            Effect.sync(() => {
+              const instance = ++nextInstance
+              events.push(`acquire:${instance}`)
+              return BranchCounter.of({ instance })
+            }),
+            (service) => Effect.sync(() => events.push(`release:${service.instance}`)),
+          ),
+        ),
+      })
       const BranchResourceExtension = defineExtension({
         id: extensionId,
         setup: Effect.gen(function* () {
           const host = yield* ExtensionHost
-          yield* host.register(
-            "resource",
-            defineResource({
-              id: "@gent/tests/branch-resource/counter",
-              scope: "branch",
-              layer: Layer.effect(
-                BranchCounter,
-                Effect.acquireRelease(
-                  Effect.sync(() => {
-                    const instance = ++nextInstance
-                    events.push(`acquire:${instance}`)
-                    return BranchCounter.of({ instance })
-                  }),
-                  (service) => Effect.sync(() => events.push(`release:${service.instance}`)),
-                ),
-              ),
-            }),
-          )
+          yield* host.register("resource", counterResource)
           yield* host.register(
             "request",
             request({
               id: readId,
               input: Schema.String,
               output: Schema.String,
+              resources: [counterResource],
               execute: () =>
                 Effect.gen(function* () {
                   const counter = yield* BranchCounter

@@ -1,8 +1,6 @@
 import {
   Context,
-  type Crypto,
   Effect,
-  type FileSystem,
   HashMap,
   Layer,
   Option,
@@ -39,8 +37,7 @@ import type {
   ModelDriverContribution,
   ModelRouterContribution,
 } from "./driver.js"
-import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
-import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
+import type { ExtensionPlatformServices, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import {
   ActorCommandId,
   BranchId,
@@ -157,6 +154,13 @@ interface ResourceContribution<A, S extends ResourceScope, R = never, E = never>
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
 export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any>
+
+/**
+ * The services a resource definition's layer provides. A tool that names the
+ * resource in `tool({ resources })` may yield them.
+ */
+export type ResourceServices<Resource> =
+  Resource extends ResourceContribution<infer A, ResourceScope, infer _R, infer _E> ? A : never
 
 // ── Smart constructor ───────────────────────────────────────────────────────
 
@@ -630,16 +634,8 @@ export interface ExtensionHostPlatform extends ExtensionHostFacts {
   readonly randomId: Effect.Effect<string>
 }
 
-/** Platform services the loader itself runs against. */
-export type ExtensionLoaderServices =
-  | FileSystem.FileSystem
-  | Path.Path
-  | ChildProcessSpawner
-  | Crypto.Crypto
-  | GentPlatform
-
-/** Services available to every `setup` Effect: the loader platform plus the registration host. */
-export type ExtensionSetupServices = ExtensionLoaderServices | ExtensionHost
+/** Services available to every `setup` Effect: the extension platform plus the registration host. */
+export type ExtensionSetupServices = ExtensionPlatformServices | ExtensionHost
 
 export interface GentExtension<R = ExtensionSetupServices> {
   readonly manifest: ExtensionManifest
@@ -1107,7 +1103,8 @@ export interface ExtensionExtensionsService {
    * Run the setup of every extension of the profile again, then report as
    * `status` does. The process and branch Resources of an unchanged
    * extension stay up, with their state. A run that is going on keeps the
-   * profile it started with. An id the profile does not name fails.
+   * profile it started with. An id the profile does not name fails, and so
+   * does one a config turns off: it is never set up.
    */
   readonly reload: (
     id: string,
@@ -1346,6 +1343,42 @@ const validateResources = (contribs: ExtensionContributions): Option.Option<stri
   return Option.none()
 }
 
+/**
+ * Each resource a tool or a request names is a definition its own extension
+ * registers. The check is by identity: a leaf yields the services of the
+ * definition it names, so another definition under the same id does not
+ * provide them.
+ */
+const validateLeafResources = (contribs: ExtensionContributions): Option.Option<string> => {
+  const registered = contribs.resources ?? []
+  const leaves = [
+    ...(contribs.tools ?? []).flatMap((capability, i) => {
+      if (!isToolCapability(capability)) return []
+      const metadata = getToolMetadata(capability)
+      return [{ label: `tools[${i}] (${metadata.id})`, resources: metadata.resources }]
+    }),
+    ...(contribs.requests ?? []).map((capability, i) => ({
+      label: `requests[${i}] (${capability.id})`,
+      resources: capability.resources,
+    })),
+  ]
+  for (const leaf of leaves) {
+    for (const resource of leaf.resources) {
+      if (registered.includes(resource)) continue
+      const sameId = registered.findIndex((candidate) => candidate.id === resource.id)
+      if (sameId >= 0) {
+        return Option.some(
+          `${leaf.label}: names resource "${resource.id}", but this extension registers resources[${sameId}] (${resource.id}), another definition under that id`,
+        )
+      }
+      return Option.some(
+        `${leaf.label}: names resource "${resource.id}", which this extension does not register`,
+      )
+    }
+  }
+  return Option.none()
+}
+
 const validateDriverIds = (contribs: ExtensionContributions): Option.Option<string> => {
   const allDriverIds = new Map<string, string>()
   for (const [i, d] of (contribs.modelDrivers ?? []).entries()) {
@@ -1410,6 +1443,7 @@ export const validateExtensionPackage = (
       validateKnownBuckets,
       validateResources,
       validateCapabilities,
+      validateLeafResources,
       validateAgents,
       validateDriverIds,
     ]

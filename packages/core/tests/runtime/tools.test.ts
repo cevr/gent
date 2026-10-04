@@ -13,6 +13,7 @@ import {
   AgentDefinition,
   AgentName,
   defineExtension,
+  defineResource,
   ExtensionContext,
   ExtensionHost,
   getToolId,
@@ -73,6 +74,22 @@ class ToolWriteToken extends Context.Service<
     readonly write: Effect.Effect<string>
   }
 >()("@gent/core/tests/runtime/tools.test/ToolWriteToken") {}
+
+/** The resources that provide the profile tokens; the tools below name them. */
+const ToolProfileTokenResource = defineResource({
+  id: "tools-test/profile-token",
+  scope: "process",
+  layer: Layer.succeed(
+    ToolProfileToken,
+    ToolProfileToken.of({ read: Effect.succeed("selected-profile") }),
+  ),
+})
+
+const ToolReadTokenResource = defineResource({
+  id: "tools-test/read-token",
+  scope: "process",
+  layer: Layer.succeed(ToolReadToken, ToolReadToken.of({ read: Effect.succeed("read-ok") })),
+})
 
 class ToolRunnerTestError extends Schema.TaggedError<ToolRunnerTestError>()(
   "@gent/core/tests/runtime/tools.test/ToolRunnerTestError",
@@ -359,6 +376,7 @@ describe("tool execution", () => {
         description: "Reads profile-scoped context",
         params: Schema.Struct({}),
         output: Schema.Struct({ value: Schema.String }),
+        resources: [ToolProfileTokenResource],
         execute: () =>
           Effect.gen(function* () {
             const token = yield* ToolProfileToken
@@ -387,6 +405,7 @@ describe("tool execution", () => {
           readValue: Schema.String,
           writeTokenProvided: Schema.Boolean,
         }),
+        resources: [ToolReadTokenResource],
         execute: () =>
           Effect.gen(function* () {
             const readToken = yield* ToolReadToken

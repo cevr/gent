@@ -2,6 +2,7 @@ import {
   Cause,
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Option,
   Order,
@@ -9,7 +10,10 @@ import {
   Predicate,
   Random,
   Ref,
+  Result,
   Schema,
+  Scope,
+  Semaphore,
 } from "effect"
 import {
   type ExtensionScope,
@@ -19,9 +23,13 @@ import {
 } from "@gent/core/protocol"
 import {
   bindBunModules,
+  buildExtensionModule,
   extensionEntryModules,
+  extensionModuleChanged,
   hasProjectScope,
   isProjectExtensionDirectoryTrusted,
+  makeModuleGraphs,
+  type ModuleGraphs,
   readDisabledExtensions,
   type RuntimeModuleSource,
 } from "@gent/core/host"
@@ -39,6 +47,8 @@ import {
   type StatusLabelAnchor,
   type StatusLabelItem,
   type ClientContributions,
+  ClientContext,
+  type ClientLifecycle,
   type ClientRuntime,
   type ClientRuntimeServices,
   type InteractionRendererComponent,
@@ -48,7 +58,12 @@ import {
   type WidgetSlot,
   decodeContributions,
 } from "./client-facets.js"
-import { bindModuleSource, buildClientExtension, type ClientBuildNames } from "../bun-adapter"
+import {
+  bindModuleSource,
+  buildClientExtension,
+  type ClientBuildNames,
+  sha256Hex,
+} from "../bun-adapter"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
 
@@ -663,14 +678,21 @@ export const resolveTuiExtensions = (
 // ── extension loading ───────────────────────────────────────────────────────
 
 /**
- * TUI extension loader — discover → import → set up → resolve, as one Effect
- * over the client runtime's services.
+ * TUI extension loader — discover → build → import → set up → resolve, as
+ * one Effect over the client runtime's services, and again on each reload.
  *
  * Builtins are passed as pre-imported modules (static imports at the call site)
  * so Bun's bundler includes them in compiled binaries. User/project extensions
- * are discovered via filesystem scan and dynamic import(). A module that does
- * not import, has the wrong shape, or whose setup fails becomes a failure;
- * the rest still load.
+ * are discovered via filesystem scan, built, and dynamically imported. A module
+ * that does not build or import, has the wrong shape, or whose setup fails
+ * becomes a failure; the rest still load.
+ *
+ * Each extension sets up in its own lifetime (`ClientLifecycle`). A reload
+ * keeps an extension whose file and imports are unchanged (by stat, then by
+ * the built code's hash), sets up a changed one from its new version and ends
+ * the old one's lifetime, and ends the lifetime of a removed or disabled one.
+ * A new version that fails to build, import or set up keeps the last good one,
+ * and the failure is reported.
  */
 
 /** The shape problem with a dynamically imported module, if any. */
@@ -701,6 +723,8 @@ interface ImportedExtension {
   readonly module: AnyExtensionClientModule
   readonly scope: ExtensionScope
   readonly filePath: string
+  /** The built code's hash; `builtin` for a builtin, which never changes in a process. */
+  readonly version: string
 }
 
 /**
@@ -754,29 +778,89 @@ const readContributions = (
     ),
   )
 
-/** Run one extension's setup; any failure, defect or timeout becomes a recorded failure. */
+/**
+ * One extension's lifecycle over its own scope. `scoped` allocates in a child
+ * scope forked before the cleanups' finalizer is added, so the scope's close
+ * runs the cleanups first, in registration order, then releases what
+ * `scoped` allocated.
+ */
+const runCleanup = (fn: () => void) => Effect.ignore(Effect.try(fn))
+
+/** A cleanup registered after its lifetime ended runs at once, from the caller's sync code. */
+const runLateCleanup = (fn: () => void): void => Effect.runSync(runCleanup(fn))
+
+const extensionLifecycle = (scope: Scope.Closeable): Effect.Effect<ClientLifecycle> =>
+  Effect.gen(function* () {
+    const allocations = yield* Scope.fork(scope)
+    const cleanups: Array<() => void> = []
+    let ended = false
+    yield* Scope.addFinalizer(
+      scope,
+      Effect.suspend(() => {
+        ended = true
+        return Effect.forEach(cleanups.splice(0), runCleanup, { discard: true })
+      }),
+    )
+    return {
+      addCleanup: (fn) => {
+        if (ended) runLateCleanup(fn)
+        else cleanups.push(fn)
+      },
+      scoped: (effect) => Scope.provide(allocations)(effect),
+    }
+  })
+
+/** A client extension the loader set up, with the lifetime a later load keeps or ends. */
+interface LiveExtension {
+  readonly loaded: LoadedTuiExtension
+  readonly module: AnyExtensionClientModule
+  readonly version: string
+  readonly lifetime: Scope.Closeable
+}
+
+/**
+ * Run one extension's setup in a new lifetime forked from the client
+ * runtime's scope; any failure, defect or timeout becomes a recorded failure
+ * and ends that lifetime at once.
+ */
 const setupExtension = (
   ext: ImportedExtension,
   timeout: Duration.Input,
-): Effect.Effect<LoadedTuiExtension, ClientExtensionFailure, ClientRuntimeServices> =>
-  ext.module.setup.pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning("tui-ext.setup.failed").pipe(
-        Effect.annotateLogs({ filePath: ext.filePath, error: Cause.pretty(cause) }),
-        Effect.andThen(
-          Effect.fail({ id: ext.module.id, reason: `setup failed: ${Cause.squash(cause)}` }),
+): Effect.Effect<LiveExtension, ClientExtensionFailure, ClientRuntimeServices> =>
+  Effect.gen(function* () {
+    const context = yield* ClientContext
+    const lifetime = yield* context.lifecycle.scoped(
+      Effect.gen(function* () {
+        return yield* Scope.fork(yield* Scope.Scope)
+      }),
+    )
+    const lifecycle = yield* extensionLifecycle(lifetime)
+    return yield* ext.module.setup.pipe(
+      Effect.provideService(ClientContext, ClientContext.of({ ...context, lifecycle })),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("tui-ext.setup.failed").pipe(
+          Effect.annotateLogs({ filePath: ext.filePath, error: Cause.pretty(cause) }),
+          Effect.andThen(
+            Effect.fail({ id: ext.module.id, reason: `setup failed: ${Cause.squash(cause)}` }),
+          ),
         ),
       ),
-    ),
-    Effect.flatMap((value) => readContributions(ext.module.id, value)),
-    Effect.map((contributions): LoadedTuiExtension => ({
-      id: ext.module.id,
-      scope: ext.scope,
-      filePath: ext.filePath,
-      contributions,
-    })),
-    withinLoadTimeout(ext.module.id, "setup", timeout),
-  )
+      Effect.flatMap((value) => readContributions(ext.module.id, value)),
+      Effect.map((contributions): LiveExtension => ({
+        loaded: {
+          id: ext.module.id,
+          scope: ext.scope,
+          filePath: ext.filePath,
+          contributions,
+        },
+        module: ext.module,
+        version: ext.version,
+        lifetime,
+      })),
+      withinLoadTimeout(ext.module.id, "setup", timeout),
+      Effect.onError(() => Scope.close(lifetime, Exit.void)),
+    )
+  })
 
 /**
  * The names a client extension file imports and a server extension file does
@@ -789,8 +873,8 @@ const setupExtension = (
  *
  * Bun resolves a bare import from a runtime plugin without the importer, so a
  * global binding would also reach a server extension in the same process.
- * The names are bound under a prefix drawn for each load instead, and only the
- * client build below rewrites a client file's imports to that prefix.
+ * The names are bound under a prefix drawn for each loader instead, and only
+ * the client build below rewrites a client file's imports to that prefix.
  */
 const clientOnlyModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
   string,
@@ -811,99 +895,267 @@ const importBoundClientModule = (moduleId: string) => import(moduleId)
 /**
  * Bind the names every extension file reads (the two authoring entries,
  * `effect` and its modules) under their own names, and the client names under
- * a prefix drawn for this load. Return the loader for client files: it compiles a file and
- * the relative modules it imports as the build compiles the shipped ones
- * (Solid JSX), rewrites each client name to its prefixed binding, binds the
- * output under a fresh prefixed name, and imports it. A bound name stays an
- * import of the running module. The server root binds the `@effect/*`
- * packages the shipped extensions read.
+ * a prefix drawn once per loader, so every build of the same files gives the
+ * same code and the same version. Return the two steps for a client file:
+ * `module` compiles it and the relative modules it imports as the build
+ * compiles the shipped ones (Solid JSX), rewriting each client name to its
+ * prefixed binding, within the load timeout (the server's coherent build,
+ * `buildExtensionModule`, runs it); `importBuild` binds the output under a
+ * fresh prefixed name and imports it. A bound name stays an import of the
+ * running module. The server root binds the `@effect/*` packages the shipped
+ * extensions read.
  */
-const provideClientExtensionModules = Effect.gen(function* () {
-  const prefix = `gent-client-${(yield* Random.nextInt).toString(36)}${(yield* Random.nextInt).toString(36)}:`
-  const clientModuleId = (specifier: string) => `${prefix}${specifier}`
-  yield* bindBunModules(
-    new Map<string, RuntimeModuleSource>([
-      ...extensionEntryModules,
-      ...[...clientOnlyModules].map(([specifier, source]): [string, RuntimeModuleSource] => [
-        clientModuleId(specifier),
-        source,
+const provideClientExtensionModules = (timeout: Duration.Input) =>
+  Effect.gen(function* () {
+    const prefix = `gent-client-${(yield* Random.nextInt).toString(36)}${(yield* Random.nextInt).toString(36)}:`
+    const clientModuleId = (specifier: string) => `${prefix}${specifier}`
+    yield* bindBunModules(
+      new Map<string, RuntimeModuleSource>([
+        ...extensionEntryModules,
+        ...[...clientOnlyModules].map(([specifier, source]): [string, RuntimeModuleSource] => [
+          clientModuleId(specifier),
+          source,
+        ]),
       ]),
-    ]),
-  )
-  const names: ClientBuildNames = {
-    external: [...extensionEntryModules.keys(), `${prefix}*`],
-    rename: (specifier) =>
-      Option.map(
-        Option.liftPredicate(specifier, (name: string) => clientOnlyModules.has(name)),
-        clientModuleId,
-      ),
-    solidRuntime: clientModuleId("@opentui/solid"),
-  }
-  const builds = yield* Ref.make(0)
-  return (filePath: string) =>
-    Effect.gen(function* () {
-      const contents = yield* buildClientExtension(filePath, names).pipe(
-        Effect.mapError(
-          (error) =>
-            new TuiExtensionImportError({
-              message: `Failed to build ${filePath}`,
-              cause: error.cause,
-            }),
+    )
+    const names: ClientBuildNames = {
+      external: [...extensionEntryModules.keys(), `${prefix}*`],
+      rename: (specifier) =>
+        Option.map(
+          Option.liftPredicate(specifier, (name: string) => clientOnlyModules.has(name)),
+          clientModuleId,
         ),
-      )
-      const name = clientModuleId(
-        `file:${filePath}#${yield* Ref.updateAndGet(builds, (n) => n + 1)}`,
-      )
-      yield* bindModuleSource(name, contents)
-      return yield* Effect.tryPromise({
-        try: () => importBoundClientModule(name),
-        catch: (cause) =>
-          new TuiExtensionImportError({ message: `Failed to load ${filePath}`, cause }),
-      })
-    })
+      solidRuntime: clientModuleId("@opentui/solid"),
+    }
+    const imports = yield* Ref.make(0)
+    return {
+      module: {
+        bundle: (filePath: string) =>
+          buildClientExtension(filePath, names).pipe(
+            Effect.mapError((error) => ({ message: String(error.cause) })),
+            Effect.timeoutOrElse({
+              duration: timeout,
+              orElse: () =>
+                Effect.fail({
+                  message: `timed out after ${Duration.format(Duration.fromInputUnsafe(timeout))}`,
+                }),
+            }),
+          ),
+        hash: sha256Hex,
+      },
+      importBuild: (filePath: string, code: string) =>
+        Effect.gen(function* () {
+          const name = clientModuleId(
+            `file:${filePath}#${yield* Ref.updateAndGet(imports, (n) => n + 1)}`,
+          )
+          yield* bindModuleSource(name, code)
+          return yield* Effect.tryPromise({
+            try: () => importBoundClientModule(name),
+            catch: (cause) =>
+              new TuiExtensionImportError({ message: `Failed to load ${filePath}`, cause }),
+          })
+        }),
+    }
+  })
+
+type ClientModuleBuilder = Effect.Success<ReturnType<typeof provideClientExtensionModules>>
+
+const LiveHandle = Schema.declare<LiveExtension>((value): value is LiveExtension =>
+  Predicate.hasProperty(value, "lifetime"),
+)
+const ImportedHandle = Schema.declare<ImportedExtension>((value): value is ImportedExtension =>
+  Predicate.hasProperty(value, "module"),
+)
+
+/**
+ * What a load found for one discovered file: the extension it keeps (with
+ * the failure of a new version that did not load, if one did not: the load
+ * reports it over the kept one, or alone when the kept one does not stay), or
+ * the new version to set up.
+ */
+const FileOutcome = Schema.TaggedUnion({
+  Keep: {
+    live: LiveHandle,
+    failure: Schema.Option(Schema.Struct({ id: Schema.String, reason: Schema.String })),
+  },
+  Fresh: { imported: ImportedHandle },
+})
+type FileOutcome = typeof FileOutcome.Type
+
+/** The live extension a load keeps as it is. */
+const keep = (live: LiveExtension): FileOutcome =>
+  FileOutcome.cases.Keep.make({ live, failure: Option.none() })
+
+/** One discovered file's outcome. */
+interface FileResult {
+  readonly filePath: string
+  readonly outcome: Result.Result<FileOutcome, ClientExtensionFailure>
+}
+
+/**
+ * A version of a file that failed to import or to set up, and why. The
+ * failure stands while the file builds to that version: a load does not
+ * import or set it up again, and reports the failure again, until the file
+ * builds to another version, is removed or its extension is disabled.
+ */
+interface FailedAttempt {
+  readonly version: string
+  readonly failure: ClientExtensionFailure
+}
+
+/** The failure of a new version, while the last good version runs on. */
+const keptOver = (
+  live: LiveExtension,
+  failure: ClientExtensionFailure,
+): ClientExtensionFailure => ({
+  id: live.loaded.id,
+  reason: `${failure.reason}; version ${live.version.slice(0, 12)} still runs`,
 })
 
-type ClientExtensionLoader = Effect.Success<typeof provideClientExtensionModules>
+/**
+ * The failures of the new versions behind kept extensions: each over the
+ * kept one when it stays, or alone when the kept one is disabled or lost its
+ * id to another file. A disabled id's failure is not reported.
+ */
+const keptFailures = (
+  outcomes: ReadonlyArray<FileOutcome>,
+  staying: ReadonlySet<FileOutcome>,
+  disabled: ReadonlySet<string>,
+): ReadonlyArray<ClientExtensionFailure> =>
+  outcomes.flatMap((outcome) => {
+    if (outcome._tag !== "Keep" || Option.isNone(outcome.failure)) return []
+    if (staying.has(outcome)) return [keptOver(outcome.live, outcome.failure.value)]
+    if (disabled.has(outcome.failure.value.id)) return []
+    return [outcome.failure.value]
+  })
 
-const importExtension = (
-  load: ClientExtensionLoader,
-  entry: DiscoveredTuiExtension,
-  timeout: Duration.Input,
-): Effect.Effect<ImportedExtension, ClientExtensionFailure> =>
-  Effect.gen(function* () {
-    const mod = yield* load(entry.filePath)
-    const candidate = Option.getOrElse(Option.fromNullishOr(mod.default), () => mod)
-    if (!isExtensionClientModule(candidate)) {
-      return yield* Effect.fail({
-        id: entry.filePath,
-        reason: Option.getOrElse(clientModuleProblem(candidate), () => "invalid module shape"),
-      })
-    }
-    return { module: candidate, scope: entry.scope, filePath: entry.filePath }
-  }).pipe(
-    Effect.catchTag("TuiExtensionImportError", (err) =>
-      Effect.fail({ id: entry.filePath, reason: `import failed: ${String(err.cause)}` }),
-    ),
-    Effect.tapError((failure) =>
-      Effect.logWarning("tui-ext.import.failed").pipe(
-        Effect.annotateLogs({ filePath: entry.filePath, error: failure.reason }),
-      ),
-    ),
-    withinLoadTimeout(entry.filePath, "import", timeout),
+/**
+ * Whether the last good version of a file may run on after its new version
+ * failed setup. The load chose the new version by its own id, so the last
+ * one's id is checked here: it runs on only while it is not disabled and no
+ * other extension of the load holds its id in its scope.
+ */
+const mayRunOn = (
+  prior: LiveExtension,
+  replacement: FileOutcome,
+  chosen: ReadonlyArray<{
+    readonly outcome: FileOutcome
+    readonly module: AnyExtensionClientModule
+    readonly scope: ExtensionScope
+  }>,
+  disabled: ReadonlySet<string>,
+) =>
+  !disabled.has(prior.loaded.id) &&
+  !chosen.some(
+    (other) =>
+      other.outcome !== replacement &&
+      other.module.id === prior.loaded.id &&
+      other.scope === prior.loaded.scope,
   )
+
+/** A failed version's failure ends with its file, and with its disabled id. */
+const forgetEndedAttempts = (
+  attempts: Map<string, FailedAttempt>,
+  seen: ReadonlySet<string>,
+  disabled: ReadonlySet<string>,
+) => {
+  for (const [filePath, attempt] of attempts) {
+    if (!seen.has(filePath) || disabled.has(attempt.failure.id)) attempts.delete(filePath)
+  }
+}
+
+/**
+ * Build and import one discovered file, or keep its live extension. The
+ * build is the server's coherent build (`buildExtensionModule`): a file whose
+ * inputs' stats are unchanged is not read, and one that builds to the
+ * running version is not imported again. A version that failed before is not
+ * imported again either: its failure stands (`FailedAttempt`). A build or
+ * import that fails keeps the live extension of the same file.
+ */
+const loadFile = (
+  builder: ClientModuleBuilder,
+  graphs: ModuleGraphs,
+  attempts: Map<string, FailedAttempt>,
+  entry: DiscoveredTuiExtension,
+  previous: Option.Option<LiveExtension>,
+  timeout: Duration.Input,
+): Effect.Effect<FileResult, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const built = yield* buildExtensionModule(entry.filePath, graphs, builder.module)
+    const outcome = yield* Effect.gen(function* () {
+      const code = yield* Effect.fromResult(built.build).pipe(
+        Effect.mapError((error) => ({ id: entry.filePath, reason: `import failed: ${error}` })),
+      )
+      if (Option.isSome(previous) && previous.value.version === built.version) {
+        attempts.delete(entry.filePath)
+        return keep(previous.value)
+      }
+      const attempt = Option.filter(
+        Option.fromUndefinedOr(attempts.get(entry.filePath)),
+        (failed) => failed.version === built.version,
+      )
+      if (Option.isSome(attempt)) return yield* Effect.fail(attempt.value.failure)
+      const mod = yield* builder.importBuild(entry.filePath, code).pipe(
+        Effect.mapError((err) => ({
+          id: entry.filePath,
+          reason: `import failed: ${String(err.cause)}`,
+        })),
+        withinLoadTimeout(entry.filePath, "import", timeout),
+        Effect.tapError((failure) =>
+          Effect.sync(() => attempts.set(entry.filePath, { version: built.version, failure })),
+        ),
+      )
+      const candidate = Option.getOrElse(Option.fromNullishOr(mod.default), () => mod)
+      if (!isExtensionClientModule(candidate)) {
+        const failure = {
+          id: entry.filePath,
+          reason: Option.getOrElse(clientModuleProblem(candidate), () => "invalid module shape"),
+        }
+        attempts.set(entry.filePath, { version: built.version, failure })
+        return yield* Effect.fail(failure)
+      }
+      return FileOutcome.cases.Fresh.make({
+        imported: {
+          module: candidate,
+          scope: entry.scope,
+          filePath: entry.filePath,
+          version: built.version,
+        },
+      })
+    }).pipe(
+      Effect.tapError((failure) =>
+        Effect.logWarning("tui-ext.import.failed").pipe(
+          Effect.annotateLogs({ filePath: entry.filePath, error: failure.reason }),
+        ),
+      ),
+      Effect.catch((failure) =>
+        Option.match(previous, {
+          onNone: () => Effect.fail(failure),
+          onSome: (live) =>
+            Effect.succeed(FileOutcome.cases.Keep.make({ live, failure: Option.some(failure) })),
+        }),
+      ),
+      Effect.result,
+    )
+    return { filePath: entry.filePath, outcome } satisfies FileResult
+  })
 
 /**
  * The server's duplicate-id rule: every extension that shares its id with
  * another in the same scope fails, so neither half of a duplicate loads.
  */
-const rejectDuplicateIds = (extensions: ReadonlyArray<ImportedExtension>) => {
-  const keyOf = (ext: ImportedExtension) => `${ext.scope}:${ext.module.id}`
+const rejectDuplicateIds = <
+  A extends { readonly module: AnyExtensionClientModule; readonly scope: ExtensionScope },
+>(
+  extensions: ReadonlyArray<A>,
+) => {
+  const keyOf = (ext: A) => `${ext.scope}:${ext.module.id}`
   const counts = new Map<string, number>()
   for (const ext of extensions) {
     const key = keyOf(ext)
     counts.set(key, Option.getOrElse(Option.fromUndefinedOr(counts.get(key)), () => 0) + 1)
   }
-  const unique: Array<ImportedExtension> = []
+  const unique: Array<A> = []
   const failures: Array<ClientExtensionFailure> = []
   for (const ext of extensions) {
     if (Option.getOrElse(Option.fromUndefinedOr(counts.get(keyOf(ext))), () => 0) > 1) {
@@ -916,13 +1168,200 @@ const rejectDuplicateIds = (extensions: ReadonlyArray<ImportedExtension>) => {
   return { unique, failures }
 }
 
+/** One load's result: what to show, and the lifetimes the load ended. */
+export interface TuiExtensionLoad {
+  readonly resolved: ResolvedTuiExtensions
+  /** The ids this load set up: a render failure of an earlier instance no longer stands. */
+  readonly setUp: ReadonlySet<string>
+  /**
+   * End the lifetime of each extension this load replaced or removed. Run it
+   * once the new set is in view, so nothing on screen draws from a closed one.
+   */
+  readonly retire: Effect.Effect<void>
+}
+
+interface TuiExtensionLoader {
+  /** Load the extensions, or load them again over the last load. One load runs at a time. */
+  readonly load: Effect.Effect<TuiExtensionLoad, never, ClientRuntimeServices>
+  /**
+   * Whether a load would change something: a client file came or went, a
+   * file a build read has another stat, or the disabled list changed, at the
+   * place it reads now (a move to a session in another project finds other
+   * files or other lists). Reads stats and configs only.
+   */
+  readonly stale: Effect.Effect<boolean, never, ClientRuntimeServices>
+}
+
 /**
- * Load all TUI extensions: discover files, import modules, run setups, resolve
- * with scope precedence.
+ * The project a load reads and the extension ids it skips (builtins and
+ * discovered alike): the place of the session in view, read again on each
+ * load and each look.
+ */
+interface TuiExtensionPlace {
+  readonly projectDir: string
+  readonly disabled: ReadonlyArray<string>
+}
+
+/** Where a builtin sits in the live set: its id names it, as a path names a file. */
+const builtinKey = (module: AnyExtensionClientModule) => `builtin:${module.id}`
+
+/**
+ * The client extension loader of one client runtime. It keeps the live set
+ * between loads: `load` keeps what did not change, sets up what did, and
+ * says which lifetimes to end.
  *
  * @param opts.builtins — pre-imported builtin modules (static imports for bundler reachability)
+ * @param opts.readPlace — the project directory and the extension ids to skip, read again on
+ *   each load and each look (`TuiExtensionPlace`). A discovered extension is imported to read
+ *   its id, but its setup is skipped.
+ */
+export const makeTuiExtensionLoader = (opts: {
+  readonly builtins?: ReadonlyArray<AnyExtensionClientModule>
+  readonly userDir: string
+  readonly readPlace: Effect.Effect<TuiExtensionPlace, never, ClientRuntimeServices>
+  /** Bound on each import and each setup; a test shortens it. */
+  readonly loadTimeout?: Duration.Input
+}): Effect.Effect<TuiExtensionLoader, never, ClientRuntimeServices> =>
+  Effect.gen(function* () {
+    const timeout = Option.getOrElse(
+      Option.fromNullishOr(opts.loadTimeout),
+      () => EXTENSION_LOAD_TIMEOUT,
+    )
+    const builtins = Option.getOrElse(Option.fromNullishOr(opts.builtins), () => [])
+    const builder = yield* provideClientExtensionModules(timeout)
+    const permit = yield* Semaphore.make(1)
+    let live = new Map<string, LiveExtension>()
+    /** Each discovered file's build, as the server keeps its own (`buildExtensionModule`). */
+    const graphs = makeModuleGraphs()
+    /** The version of each file that failed to import or set up, while it stands. */
+    const attempts = new Map<string, FailedAttempt>()
+    /** Each discovered file of the last load, loaded or failed. */
+    let seen: ReadonlySet<string> = new Set()
+    let lastDisabled: ReadonlySet<string> = new Set()
+
+    const load = Effect.gen(function* () {
+      const place = yield* opts.readPlace
+      const disabled = new Set(place.disabled)
+      const discovered = yield* discoverTuiExtensions({
+        userDir: opts.userDir,
+        projectDir: place.projectDir,
+      })
+      // Results, failures included, keep discovery order whatever order the imports finish in.
+      const files = yield* Effect.forEach(
+        discovered,
+        (entry) =>
+          loadFile(
+            builder,
+            graphs,
+            attempts,
+            entry,
+            Option.fromUndefinedOr(live.get(entry.filePath)),
+            timeout,
+          ),
+        { concurrency: EXTENSION_IMPORT_CONCURRENCY },
+      )
+      const importFailures: Array<ClientExtensionFailure> = []
+      const outcomes: Array<FileOutcome> = []
+      for (const file of files) {
+        // A failure with no live version behind it names the id its version
+        // failed under, when one is known: a disabled id's is not reported.
+        if (Result.isSuccess(file.outcome)) outcomes.push(file.outcome.success)
+        else if (!disabled.has(file.outcome.failure.id)) importFailures.push(file.outcome.failure)
+      }
+      const builtinOutcomes = builtins.map((module): FileOutcome => {
+        const previous = Option.fromUndefinedOr(live.get(builtinKey(module)))
+        if (Option.isSome(previous) && previous.value.module === module) return keep(previous.value)
+        return FileOutcome.cases.Fresh.make({
+          imported: { module, scope: "builtin", filePath: builtinKey(module), version: "builtin" },
+        })
+      })
+      const candidates = [...builtinOutcomes, ...outcomes].map((outcome) => {
+        if (outcome._tag === "Keep") {
+          return { outcome, module: outcome.live.module, scope: outcome.live.loaded.scope }
+        }
+        return { outcome, module: outcome.imported.module, scope: outcome.imported.scope }
+      })
+      const enabled = rejectDuplicateIds(
+        candidates.filter((candidate) => !disabled.has(candidate.module.id)),
+      )
+      const next = new Map<string, LiveExtension>()
+      const setUp = new Set<string>()
+      const setupFailures: Array<ClientExtensionFailure> = []
+      importFailures.push(
+        ...keptFailures(
+          candidates.map(({ outcome }) => outcome),
+          new Set(enabled.unique.map(({ outcome }) => outcome)),
+          disabled,
+        ),
+      )
+      for (const { outcome } of enabled.unique) {
+        if (outcome._tag === "Keep") {
+          next.set(outcome.live.loaded.filePath, outcome.live)
+          continue
+        }
+        const previous = Option.fromUndefinedOr(live.get(outcome.imported.filePath))
+        const set = yield* setupExtension(outcome.imported, timeout).pipe(Effect.result)
+        if (Result.isSuccess(set)) {
+          next.set(outcome.imported.filePath, set.success)
+          setUp.add(set.success.loaded.id)
+          attempts.delete(outcome.imported.filePath)
+          continue
+        }
+        attempts.set(outcome.imported.filePath, {
+          version: outcome.imported.version,
+          failure: set.failure,
+        })
+        const fallback = Option.filter(previous, (prior) =>
+          mayRunOn(prior, outcome, enabled.unique, disabled),
+        )
+        if (Option.isSome(fallback)) {
+          next.set(outcome.imported.filePath, fallback.value)
+          setupFailures.push(keptOver(fallback.value, set.failure))
+        } else setupFailures.push(set.failure)
+      }
+      const kept = new Set(next.values())
+      const retired = [...live.values()].filter((ext) => !kept.has(ext))
+      live = next
+      seen = new Set(files.map((file) => file.filePath))
+      forgetEndedAttempts(attempts, seen, disabled)
+      lastDisabled = disabled
+      return {
+        resolved: resolveTuiExtensions(
+          [...next.values()].map((ext) => ext.loaded),
+          [...importFailures, ...enabled.failures, ...setupFailures],
+        ),
+        setUp,
+        retire: Effect.forEach(retired, (ext) => Scope.close(ext.lifetime, Exit.void), {
+          discard: true,
+        }),
+      } satisfies TuiExtensionLoad
+    }).pipe(permit.withPermits(1))
+
+    const stale = Effect.gen(function* () {
+      const place = yield* opts.readPlace
+      const disabled = new Set(place.disabled)
+      if (disabled.size !== lastDisabled.size || [...disabled].some((id) => !lastDisabled.has(id)))
+        return true
+      const discovered = yield* discoverTuiExtensions({
+        userDir: opts.userDir,
+        projectDir: place.projectDir,
+      })
+      if (discovered.length !== seen.size) return true
+      for (const entry of discovered) {
+        if (!seen.has(entry.filePath)) return true
+        if (yield* extensionModuleChanged(entry.filePath, graphs)) return true
+      }
+      return false
+    })
+
+    return { load, stale } satisfies TuiExtensionLoader
+  })
+
+/**
+ * Load all TUI extensions once: discover files, import modules, run setups,
+ * resolve with scope precedence. Each lifetime ends with the client runtime.
+ *
  * @param opts.disabled — extension ids to skip (applies to builtins and discovered alike).
- *   Discovered extensions are imported to read their id, but setup is skipped when disabled.
  */
 export const loadTuiExtensions = (opts: {
   readonly builtins?: ReadonlyArray<AnyExtensionClientModule>
@@ -933,61 +1372,91 @@ export const loadTuiExtensions = (opts: {
   readonly loadTimeout?: Duration.Input
 }): Effect.Effect<ResolvedTuiExtensions, never, ClientRuntimeServices> =>
   Effect.gen(function* () {
-    const disabled = new Set(Option.getOrElse(Option.fromNullishOr(opts.disabled), () => []))
-    const timeout = Option.getOrElse(
-      Option.fromNullishOr(opts.loadTimeout),
-      () => EXTENSION_LOAD_TIMEOUT,
-    )
-    const discovered = yield* discoverTuiExtensions(opts)
-    const load = yield* provideClientExtensionModules
-    // Results, failures included, keep discovery order whatever order the imports finish in.
-    const [imported, importFailures] = yield* Effect.partition(
-      discovered,
-      (entry) => importExtension(load, entry, timeout),
-      { concurrency: EXTENSION_IMPORT_CONCURRENCY },
-    )
-    const builtins = Option.getOrElse(Option.fromNullishOr(opts.builtins), () => []).map(
-      (module): ImportedExtension => ({
-        module,
-        scope: "builtin",
-        filePath: `builtin:${module.id}`,
+    const loader = yield* makeTuiExtensionLoader({
+      ...opts,
+      readPlace: Effect.succeed({
+        projectDir: opts.projectDir,
+        disabled: Option.getOrElse(Option.fromNullishOr(opts.disabled), () => []),
       }),
-    )
-    const enabled = rejectDuplicateIds(
-      [...builtins, ...imported].filter((ext) => !disabled.has(ext.module.id)),
-    )
-    const [loaded, setupFailures] = yield* Effect.partition(enabled.unique, (ext) =>
-      setupExtension(ext, timeout),
-    )
-    return resolveTuiExtensions(loaded, [...importFailures, ...enabled.failures, ...setupFailures])
+    })
+    return (yield* loader.load).resolved
   })
 
 // ── extension context ───────────────────────────────────────────────────────
 
+/** The Promise edge of a client runtime's loader, for `ExtensionUIProvider`. */
+interface ExtensionUiLoader {
+  /** Load, or load again; `retire` ends the lifetimes the load replaced. */
+  readonly load: () => Promise<{
+    readonly resolved: ResolvedTuiExtensions
+    readonly setUp: ReadonlySet<string>
+    readonly retire: () => Promise<void>
+  }>
+  readonly stale: () => Promise<boolean>
+}
+
 /**
- * The one boundary where extension loading leaves Effect: `onMount` in
- * `ExtensionUIProvider` awaits it. It reads the disabled list and runs
- * `loadTuiExtensions` on the provider's client runtime.
+ * The place of the session in view: its project's extension directory and
+ * the disabled lists of the configs that hold it, from its cwd as the server
+ * reads it (resolved, `ClientWorkspace.sessionCwd`). The pane turns an
+ * extension off in that session's configs, and the server loads that
+ * session's project, so the client reads the same ones.
  */
-export const loadExtensionUi = (
+const sessionPlace = (home: string) =>
+  Effect.gen(function* () {
+    const { workspace } = yield* ClientContext
+    const path = yield* Path.Path
+    const cwd = path.resolve(yield* workspace.sessionCwd)
+    const disabled = yield* readDisabledExtensions({ home, cwd })
+    return {
+      projectDir: path.join(cwd, ".gent", "extensions"),
+      disabled: [...disabled],
+    } satisfies TuiExtensionPlace
+  })
+
+/**
+ * The one boundary where extension loading leaves Effect: `ExtensionUIProvider`
+ * awaits each load and each staleness check. The loader reads the place of
+ * the session in view on each load and each look (`sessionPlace`), and runs
+ * every setup on the provider's client runtime.
+ */
+export const extensionUiLoader = (
   clientRuntime: ClientRuntime,
   params: {
     readonly builtins: ReadonlyArray<AnyExtensionClientModule>
     readonly home: string
-    readonly cwd: string
   },
-): Promise<ResolvedTuiExtensions> =>
-  clientRuntime.runPromise(
-    Effect.gen(function* () {
-      const disabled = yield* readDisabledExtensions({ home: params.home, cwd: params.cwd })
-      return yield* loadTuiExtensions({
+): ExtensionUiLoader => {
+  // Made on the first load: the bindings and the build prefix last as long as the runtime.
+  let made = Option.none<Promise<TuiExtensionLoader>>()
+  const loader = (): Promise<TuiExtensionLoader> => {
+    if (Option.isSome(made)) return made.value
+    const making = clientRuntime.runPromise(
+      makeTuiExtensionLoader({
         builtins: params.builtins,
         userDir: `${params.home}/.gent/extensions`,
-        projectDir: `${params.cwd}/.gent/extensions`,
-        disabled: [...disabled],
-      })
-    }),
-  )
+        readPlace: sessionPlace(params.home),
+      }),
+    )
+    made = Option.some(making)
+    return making
+  }
+  return {
+    load: () =>
+      loader().then((current) =>
+        clientRuntime.runPromise(
+          current.load.pipe(
+            Effect.map((result) => ({
+              resolved: result.resolved,
+              setUp: result.setUp,
+              retire: () => clientRuntime.runPromise(result.retire),
+            })),
+          ),
+        ),
+      ),
+    stale: () => loader().then((current) => clientRuntime.runPromise(current.stale)),
+  }
+}
 
 // ── autocomplete popup edge ─────────────────────────────────────────────────
 

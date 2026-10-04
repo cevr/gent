@@ -16,7 +16,11 @@ import {
   type ToolInput,
 } from "@gent/core/extensions/api"
 import { ExtensionId } from "../../src/domain/ids"
-import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability"
+import {
+  type CapabilityError,
+  GentToolMetadataTag,
+  getToolMetadata,
+} from "../../src/domain/capability"
 import {
   ExtensionLoadError,
   type LoadedExtension,
@@ -562,6 +566,139 @@ describe("defineExtension", () => {
       }
     }))
 
+  test("a tool that names a resource its extension does not register fails package validation", () =>
+    Effect.gen(function* () {
+      const counter = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(
+          ReadOnlyService,
+          ReadOnlyService.of({ read: Effect.succeed("count") }),
+        ),
+      })
+      const ext = defineExtension({
+        id: "named-resource",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("tool", readOnlyTool(counter))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(Cause.pretty(exit.cause)).toContain(
+          'tools[0] (read-only): names resource "named-resource/counter", which this extension does not register',
+        )
+      }
+    }))
+
+  test("a tool that names a resource its extension registers passes package validation", () =>
+    Effect.gen(function* () {
+      const counter = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(
+          ReadOnlyService,
+          ReadOnlyService.of({ read: Effect.succeed("count") }),
+        ),
+      })
+      const ext = defineExtension({
+        id: "named-resource",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("resource", counter)
+          yield* host.register("tool", readOnlyTool(counter))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Success")
+    }))
+
+  test("a tool whose resource id the extension registers under another definition fails package validation", () =>
+    Effect.gen(function* () {
+      const declared = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(
+          ReadOnlyService,
+          ReadOnlyService.of({ read: Effect.succeed("count") }),
+        ),
+      })
+      const registered = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(WriteCapableService, WriteCapableService.of({ write: Effect.void })),
+      })
+      const ext = defineExtension({
+        id: "named-resource",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("resource", registered)
+          yield* host.register("tool", readOnlyTool(declared))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(Cause.pretty(exit.cause)).toContain(
+          'tools[0] (read-only): names resource "named-resource/counter", but this extension registers resources[0] (named-resource/counter), another definition under that id',
+        )
+      }
+    }))
+
+  test("a request that names a resource its extension does not register fails package validation", () =>
+    Effect.gen(function* () {
+      const counter = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(
+          ReadOnlyService,
+          ReadOnlyService.of({ read: Effect.succeed("count") }),
+        ),
+      })
+      const ext = defineExtension({
+        id: "named-resource",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("request", readOnlyRequest(counter))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(Cause.pretty(exit.cause)).toContain(
+          'requests[0] (read-only-request): names resource "named-resource/counter", which this extension does not register',
+        )
+      }
+    }))
+
+  test("a request that names a resource its extension registers passes package validation", () =>
+    Effect.gen(function* () {
+      const counter = defineResource({
+        id: "named-resource/counter",
+        scope: "process",
+        layer: Layer.succeed(
+          ReadOnlyService,
+          ReadOnlyService.of({ read: Effect.succeed("count") }),
+        ),
+      })
+      const ext = defineExtension({
+        id: "named-resource",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("resource", counter)
+          yield* host.register("request", readOnlyRequest(counter))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Success")
+    }))
+
   test("defineResource rejects an empty resource id", () =>
     Effect.sync(() => {
       expect(() => defineResource({ id: "", scope: "process", layer: Layer.empty })).toThrow()
@@ -662,6 +799,34 @@ class ReadOnlyService extends Context.Service<ReadOnlyService, ReadOnlyApi>()(
 const NoInput = Schema.Struct({})
 const StringOutput = Schema.String
 
+type NoParams = typeof NoInput
+type StringOut = typeof StringOutput
+type Readers = readonly [ReturnType<typeof defineResource<ReadOnlyService, "process">>]
+type None = ReadonlyArray<never>
+type Reader = ReadOnlyService
+type Failure = CapabilityError
+
+/** A tool that reads `ReadOnlyService` from the resource it names. */
+const readOnlyTool = (resource: ReturnType<typeof defineResource<ReadOnlyService, "process">>) =>
+  tool({
+    id: "read-only",
+    description: "Read the service",
+    params: NoInput,
+    output: StringOutput,
+    resources: [resource],
+    execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+  })
+
+/** A request that reads `ReadOnlyService` from the resource it names. */
+const readOnlyRequest = (resource: ReturnType<typeof defineResource<ReadOnlyService, "process">>) =>
+  request({
+    id: "read-only-request",
+    input: NoInput,
+    output: StringOutput,
+    resources: [resource],
+    execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+  })
+
 describe("Capability factory-shape locks (compile-time)", () => {
   test("tool({...}) — happy path compiles", () => {
     const ok = tool({
@@ -710,6 +875,178 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("tool({...}) body may yield the services of the resources it names", () => {
+    const reader = defineResource({
+      id: "locks/reader",
+      scope: "process",
+      layer: Layer.succeed(ReadOnlyService, ReadOnlyService.of({ read: Effect.succeed("x") })),
+    })
+    tool({
+      id: "declared-resource",
+      description: "ok",
+      params: NoInput,
+      output: StringOutput,
+      resources: [reader],
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    expect(true).toBe(true)
+  })
+
+  test("tool({...}) body that needs a service it does not declare does not compile", () => {
+    tool({
+      id: "undeclared-resource",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      // @ts-expect-error -- `ReadOnlyService` is no tool service and no named resource provides it
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    expect(true).toBe(true)
+  })
+
+  test("a typed tool input or explicit type arguments cannot grant services without their declarations", () => {
+    // @ts-expect-error -- the type grants the reader's services, so `resources` is required
+    const typedResources: ToolInput<NoParams, StringOut, never, ReadOnlyService, Readers> = {
+      id: "typed-resources",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    }
+    // @ts-expect-error -- the type grants the feature's storage, so `branchTools` is required
+    const typedFeature: ToolInput<NoParams, StringOut, never, ReadOnlyService, None, Reader> = {
+      id: "typed-feature",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    }
+    // @ts-expect-error -- the type arguments grant the reader's services, so `resources` is required
+    tool<NoParams, StringOut, never, ReadOnlyService, Readers>({
+      id: "explicit-resources",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    // @ts-expect-error -- the type arguments grant the feature's storage, so `branchTools` is required
+    tool<NoParams, StringOut, never, ReadOnlyService, None, Reader>({
+      id: "explicit-feature",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    void typedResources
+    void typedFeature
+    expect(true).toBe(true)
+  })
+
+  test("a typed request input or explicit type arguments cannot grant services without their declarations", () => {
+    // @ts-expect-error -- the type grants the reader's services, so `resources` is required
+    const typedResources: RequestInput<{}, string, ReadOnlyService, Failure, Readers> = {
+      id: "typed-resources",
+      input: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    }
+    // @ts-expect-error -- the type grants the feature's storage, so `branchTools` is required
+    const typedFeature: RequestInput<{}, string, ReadOnlyService, Failure, None, Reader> = {
+      id: "typed-feature",
+      input: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    }
+    // @ts-expect-error -- the type arguments grant the reader's services, so `resources` is required
+    request<{}, string, ReadOnlyService, Failure, Readers>({
+      id: "explicit-resources",
+      input: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    // @ts-expect-error -- the type arguments grant the feature's storage, so `branchTools` is required
+    request<{}, string, ReadOnlyService, Failure, None, Reader>({
+      id: "explicit-feature",
+      input: NoInput,
+      output: StringOutput,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    void typedResources
+    void typedFeature
+    expect(true).toBe(true)
+  })
+
+  test("a resources array whose type is not a tuple grants no services to a tool", () => {
+    const reader = defineResource({
+      id: "locks/reader",
+      scope: "process",
+      layer: Layer.succeed(ReadOnlyService, ReadOnlyService.of({ read: Effect.succeed("x") })),
+    })
+    const writer = defineResource({
+      id: "locks/writer",
+      scope: "process",
+      layer: Layer.succeed(WriteCapableService, WriteCapableService.of({ write: Effect.void })),
+    })
+    const none: ReadonlyArray<typeof reader> = []
+    const some: ReadonlyArray<typeof reader | typeof writer> = [writer]
+    tool({
+      id: "empty-typed-array",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      resources: none,
+      // @ts-expect-error -- an empty array typed as readers proves no reader is present
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    tool({
+      id: "incomplete-union-array",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      resources: some,
+      // @ts-expect-error -- an array typed as readers or writers proves no reader is present
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    expect(true).toBe(true)
+  })
+
+  test("a resources array whose type is not a tuple grants no services to a request", () => {
+    const reader = defineResource({
+      id: "locks/reader",
+      scope: "process",
+      layer: Layer.succeed(ReadOnlyService, ReadOnlyService.of({ read: Effect.succeed("x") })),
+    })
+    const writer = defineResource({
+      id: "locks/writer",
+      scope: "process",
+      layer: Layer.succeed(WriteCapableService, WriteCapableService.of({ write: Effect.void })),
+    })
+    const none: ReadonlyArray<typeof reader> = []
+    const some: ReadonlyArray<typeof reader | typeof writer> = [writer]
+    request({
+      id: "empty-typed-array",
+      input: NoInput,
+      output: StringOutput,
+      resources: none,
+      // @ts-expect-error -- an empty array typed as readers proves no reader is present
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    request({
+      id: "incomplete-union-array",
+      input: NoInput,
+      output: StringOutput,
+      resources: some,
+      // @ts-expect-error -- an array typed as readers or writers proves no reader is present
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    expect(true).toBe(true)
+  })
+
   test("state change notifications use the current ExtensionContext identity", () => {
     type StateChanged = PublicExtensionApi.ExtensionContextService["State"]["changed"]
 
@@ -723,11 +1060,17 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("request({...}) — write-capable Tag in R is allowed", () => {
+  test("request({...}) body may yield the services of the resources it names", () => {
+    const writer = defineResource({
+      id: "locks/writer",
+      scope: "process",
+      layer: Layer.succeed(WriteCapableService, WriteCapableService.of({ write: Effect.void })),
+    })
     const ok = request({
       id: "ok-write",
       input: NoInput,
       output: StringOutput,
+      resources: [writer],
       execute: () =>
         Effect.gen(function* () {
           const svc = yield* WriteCapableService
@@ -737,6 +1080,18 @@ describe("Capability factory-shape locks (compile-time)", () => {
     })
 
     void ok
+    expect(true).toBe(true)
+  })
+
+  test("request({...}) body that needs a service it does not declare does not compile", () => {
+    request({
+      id: "undeclared-write",
+      input: NoInput,
+      output: Schema.Void,
+      // @ts-expect-error -- `WriteCapableService` is no request service and no named resource provides it
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
+      execute: () => Effect.flatMap(WriteCapableService, (svc) => svc.write),
+    })
     expect(true).toBe(true)
   })
 

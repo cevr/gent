@@ -54,8 +54,8 @@ const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Result.tr
 
 /**
  * The branch-tool feature the cell in `BuiltinExtensions` needs. A root that
- * installs the builtins passes this too -- a `cell` tool whose storage and
- * kernel are missing fails on first use.
+ * installs the builtins passes this too: in a root without it, the cell
+ * extension fails to load, because its `cell` tool declares this feature.
  */
 export { CellBranchTools }
 

@@ -71,6 +71,7 @@ import {
   useExit,
 } from "./session"
 import { ExtensionRenderBoundary, useExtensionUI } from "./extensions/host"
+import type { ResolvedWidget } from "./extensions/loader-boundary"
 import { Auth, providerLabel } from "./auth"
 import {
   type MessageRendererEntry,
@@ -344,6 +345,14 @@ export const resolveInteractiveState = (input: {
  * history replay.
  */
 
+/** A failed new version whose last good one still runs says which one. */
+// eslint-disable-next-line effect/noNullish -- an optional wire field.
+const stillRuns = (runningVersion: string | undefined): string =>
+  Option.match(Option.fromUndefinedOr(runningVersion), {
+    onNone: () => "",
+    onSome: (version) => `; version ${version.slice(0, 12)} still runs`,
+  })
+
 export function ConnectionWidget(props: { readonly disclosure: DisclosureLevel }) {
   const client = useClient()
   const ext = useExtensionUI()
@@ -361,7 +370,9 @@ export function ConnectionWidget(props: { readonly disclosure: DisclosureLevel }
     ...degradedExtensions().flatMap((extension) =>
       extension.issues
         .filter((issue) => issue._tag === "ActivationFailed")
-        .map((issue) => `${extension.manifest.id}: ${issue.error}`),
+        .map(
+          (issue) => `${extension.manifest.id}: ${issue.error}${stillRuns(issue.runningVersion)}`,
+        ),
     ),
     ...ext.failures().map((failure) => `${failure.id}: ${failure.reason}`),
   ]
@@ -527,17 +538,23 @@ interface SessionProps {
 function ExtensionWidgets(props: { slot: WidgetSlot }) {
   const ext = useExtensionUI()
   const slotWidgets = () => ext.widgets().filter((w) => w.slot === props.slot)
+  // Keyed on the component, not the resolved entry each load makes anew: an
+  // extension a client reload kept hands back the same component, so its
+  // widget stays mounted with its state. A new version's component mounts.
+  const extensionOf = (component: ResolvedWidget["component"]) =>
+    Option.fromUndefinedOr(slotWidgets().find((widget) => widget.component === component))
 
   return (
-    <For each={slotWidgets()}>
-      {(widget) => {
-        const Widget = widget.component
-        return (
-          <ExtensionRenderBoundary extensionId={widget.extensionId}>
-            <Widget />
-          </ExtensionRenderBoundary>
-        )
-      }}
+    <For each={slotWidgets().map((widget) => widget.component)}>
+      {(Widget) => (
+        <Show when={Option.getOrUndefined(extensionOf(Widget))}>
+          {(widget) => (
+            <ExtensionRenderBoundary extensionId={widget().extensionId}>
+              <Widget />
+            </ExtensionRenderBoundary>
+          )}
+        </Show>
+      )}
     </For>
   )
 }

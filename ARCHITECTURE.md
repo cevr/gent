@@ -154,9 +154,13 @@ updates this list in the same commit.
 14. **A child's completion arrives as a user message, never a tool result.**
     Receipt: `packages/extensions/src/delegate.ts`.
 15. **Platform edges stay explicit.** Extensions reach files, paths,
-    processes, and ids through the Effect platform services
-    (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`) and resolve
+    processes, ids, and HTTP through the Effect platform services
+    (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`, `HttpClient`) and resolve
     relative paths against `ctx.cwd`; `runProcess` is the one command helper.
+    `ExtensionPlatformServices` names that set with `GentPlatform`, and
+    `extensionPlatformServicesLive` re-provides it: the server root and the
+    tool test harness (`runToolWithCtx`) build an extension's platform through
+    that one layer.
     No `ExtensionContext` facet duplicates an Effect platform service; the
     facets are host authority only (`Session`, `Interaction`,
     `FileLock`, `Models`, `Extensions`, `State`). An atomic write has one owner, `writeFileAtomic` in
@@ -296,6 +300,34 @@ updates this list in the same commit.
     `packages/extensions/src/compaction.ts`,
     `packages/extensions/src/anthropic.ts` (`PromptCacheTtl`),
     `apps/tui/src/extensions/cache.client.tsx`.
+18. **A leaf requires only the services it is given.** `tool` and `request`
+    bound the services their `execute` may require (`LeafServices`):
+    `ExtensionContext`, `ExtensionPlatformServices`, the core services the
+    branch-tools entry exports (`BranchToolHostServices`), the services of the
+    resources the leaf names in `resources`, and the storage of the feature it
+    names in `branchTools`. A body that requires any other service does not
+    compile. A type argument that grants services makes its declaration
+    required, so a typed input cannot grant a service without the value that
+    provides it. Only a tuple type proves which resources a value holds, so
+    an array type (`ReadonlyArray<typeof Counter>`) grants nothing; the
+    factories infer an inline `resources: [Counter]` as a tuple. The bound is on the type: it limits the services `execute`
+    requires (its `R`). It does not hide the runtime context, so
+    `Effect.serviceOption` still reads a service the root holds
+    (`registry_probe` in `packages/core/tests/server/rpc.test.ts`). The
+    resource services derive from each `defineResource` value; there is no
+    hand-written list. Package validation fails an extension that does not
+    register the resource definition a leaf names; the check is by identity,
+    so another definition under the same id fails too. Profile validation
+    fails an extension whose leaf names a branch-tool feature other than the
+    one the root installs (`CurrentBranchToolFeature`, which the session
+    profile cache reads once when the root builds it). The feature stays a
+    root input, not an extension resource: its tables join core's migration
+    chain and its storage builds over core's SQL client before any profile
+    loads. Receipts: `packages/core/src/domain/capability.ts` (`tool`,
+    `request`, `RequiredDeclarations`), `packages/core/src/domain/extension.ts`
+    (`validateLeafResources`), `packages/core/src/runtime/extension-host.ts`
+    (`branchToolFeatureErrors`), `packages/core/tests/extensions/api.test.ts`,
+    `packages/core/tests/runtime/extension-host.test.ts`.
 
 ### Known gaps
 
@@ -314,6 +346,15 @@ names the decision that left it open.
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
   snapshot read per session per tick. Rejected as R6 in the same ledger.
+- **Open: a user extension cannot get a branch-tool feature.** This breaks
+  the owner rule that a shipped extension is never more privileged than a
+  user extension (`NORTH_STAR.md`), and nothing here waives it. A root
+  installs one feature (`createDependencies({ branchTools })`) and the
+  shipped cell declares it. A user extension cannot bring a feature of its
+  own, and the loader does not bind `@gent/extensions` for user files, so a
+  user leaf cannot name `CellBranchTools` either. Binding that value would
+  only let a user leaf share the cell's private storage. The repair is
+  queued as its own design batch (pass 30 orchestrator queue).
 - **Compaction is measured on long sessions only by hand.** The handoff
   count (`ModelContextProjected.compacted`) after the spill comes from gamut
   runs, not from a test; the receipt in
@@ -438,7 +479,9 @@ serves the build at the entry's path with the version in the query
 (`serveModule`), so a new version is imported afresh, the same version comes
 from Bun's module cache, and a package import still resolves from the entry's
 directory. The cache keeps each entry's last build with a stat stamp and a
-content hash of every input (`buildEntry`, `ModuleGraphs`): a resolve with no
+content hash of every input (`buildExtensionModule`, `ModuleGraphs`, exported
+from `@gent/core/host`, so the TUI's client loader builds through the same
+code with its own bundler): a resolve with no
 input touched costs a stat of each and reads no input (about 1.5 ms for the
 scan); a save of the same bytes reads and hashes the inputs and builds nothing;
 an edit builds again (about 10 ms; the first build of a process about 70 ms).
@@ -448,8 +491,11 @@ a save during a build is never kept as the new version, even one that puts the
 earlier bytes back (A, then B, then A: the inode and mtime moved). A build that found an import not known before it, or
 that a save overlapped, builds again with what it found (the first build of an
 entry with relative imports builds twice); after three tries the build runs
-that resolve and is not kept. A failed build is not
-kept, so a relative module created later is found. An untrusted project's
+that resolve and is not kept. A failed build is never reused, so a relative
+module created later is found; it keeps the last good build and records the
+stats, taken before it, of every module the entry was known to read
+(`extensionModuleChanged`), so a fix to a broken imported module is a change
+to look at. An untrusted project's
 files are listed, not built. Project trust comes from
 `isProjectExtensionDirectoryTrusted` (`runtime/config.ts`), the reader the TUI's
 client-extension loader calls too: it reads `trustedProjects` from the user
@@ -509,6 +555,11 @@ file, a disabled id and an untrusted project keep nothing. Branch Resources
 have no fallback yet. An extension the disabled list names is reported `disabled`
 (`resolveExtensions` takes it as a third list): `ExtensionHealth.Disabled` on
 the wire, in the optional `disabledExtensions` field of both snapshot cases.
+The TUI reads `extension.listStatus` again at each `TurnCompleted` of the
+session in view (the turn resolved the extensions from their files) and on an
+extension's pulse; the connection widget names a failed reload's running
+version (`<id>: <error>; version <12 hex> still runs`), and `gent doctor`
+names it too and lists the disabled ids (`Disabled: <ids>`).
 The `Extensions` facet (`status`, `reload`) reads and reloads the session's
 profile. The shipped `@gent/extension-admin` gives both to the agent
 (`extensions.status`, `extensions.reload`), with four verbs over public entries
@@ -524,6 +575,10 @@ a rename cannot cross file systems. The four ask once
 that runs again after the ask writes once; a headless run declines. `project`
 needs a trusted project; trust stays the user's step. `resume` queues one
 follow-up on the tool's own branch, which runs on the profile the change made.
+The `/extensions` pane's two requests (`ExtensionAdminRpc`) make the same
+changes without an ask, since the pane is the user's own act: a toggle off
+writes the narrowest config that holds the session (the trusted project's,
+else the user's), a toggle on takes the id from every config that names it.
 No verb installs npm or git packages, and no watcher exists: the scan at each
 turn start is the one apply point.
 `buildSessionProfile` then stages the `ExtensionRegistry` and the base
@@ -587,7 +642,20 @@ The production server uses one live profile owner:
   names no session is a type error").
 
 Turn profiles carry the process identity that built them. A process-local tool
-binding names that process and is valid only inside it.
+binding names that process and is valid only inside it. A tool of a user or
+project extension file binds to the file's version instead (`version:<hash>`,
+`sourceRevisionFor` in `runtime/tools.ts`): after a restart the same bytes
+replay, an edited file fails with `SourceMismatch`. Each profile also has a
+revision, a short hash of what its extensions put in the request prefix
+(`modelSurface`: each model tool in request order, with its name, description,
+input and result schemas, prompt lines and whether it asks the user, then each
+agent), not of their code: a body edit or a reload keeps it. What a hook
+computes per turn (a turn projection's sections, a system-prompt rewrite) is
+not a profile property and is not in it; a miss from it stays `PrefixChanged`. Every
+`StreamStarted` of a turn names it (`profileRevision`, optional), so the cache
+fold of the TUI names a prefix miss between two revisions `ExtensionsChanged`,
+not a regression. The binding keeps the code identity; the revision keeps
+only what the model reads.
 Native source-mode approval, public repair, direct-command cleanup, and external
 callback limits have focused validation. Full gate and terminal/server E2E pass.
 See `plans/live-composition-review.md` for evidence and recovery limits.
@@ -2001,11 +2069,17 @@ the entry signs in with OAuth and has no stored login.
 The tools are listed again when a connection opens, when the server sends
 `notifications/tools/list_changed`, and when it answers a call as an unknown
 tool. One server's lists run one at a time, so an older list never lands
-last: a list that differs is written to the cache (under one permit), so the
-next session registers it, and a call to a tool the server no longer lists
-fails with a message naming the stale catalog. An empty or failed relist keeps
-the cached tools. The current session keeps the tools it registered; replacing
-them live needs a host seam.
+last: a list that differs is written to the cache (under one permit), and a
+call to a tool the server no longer lists fails with a message naming the
+stale catalog. An empty or failed relist keeps the cached tools. After the
+write, the pool reloads the extension (`ctx.Extensions.reload`) in each place
+a loop opened in: each loop's `loopOpen` hook hands the pool its place's
+reload, and reloads at once when a list since its setup read the cache
+already changed it. The reloaded setup registers the cached list, so the next
+turn there offers the new tools; only then does the server's state (and
+`/mcp`) take the new list. A place with no open loop catches up when a loop
+opens there: the open's reload lands after the profile the open resolved, so
+that place's first turn may still run on the list it had.
 
 The read-only `mcp.status` host tool and the `/mcp` slash command report each
 server's transport, tool count, connection, and health: `healthy` (listed or
@@ -2367,13 +2441,14 @@ Runtime code yields `EventStore` (`domain/event.ts`) directly. `publish` appends
 
 - Builtins live in `apps/tui/src/extensions/builtins.tsx`; a builtin with its own view keeps its own `apps/tui/src/extensions/*.client.tsx` file
 - Each is an `ExtensionClientModule` from `defineClientExtension` — same pipeline as user/project extensions
-- Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup` runs
+- Loader (`apps/tui/src/extensions/loader-boundary.ts`) reads the place of the session in view on each load and each look (`sessionPlace`): the project directory and the configs' `disabledExtensions` of that session's cwd, resolved as the server resolves it (`ClientWorkspace.sessionCwd`), so the client loads the project the server loads and the configs the `/extensions` pane writes, whatever directory the TUI was launched in. It filters extensions by id before `setup` runs
+- One loader per provider (`makeTuiExtensionLoader`) keeps the live set between loads (C7). Each file builds through the server's coherent build (`buildExtensionModule`, with the client bundler and its own `ModuleGraphs`): a load keeps an extension whose file and the files its build read have their last stats (`fileVersion`), or whose new build is the same code (the version is the built code's sha256; the client names bind under one prefix per loader, so the same files build the same text); it sets up a changed one from its new version and ends the old one's lifetime; it ends the lifetime of a removed or disabled one. A new version that does not build, import or set up keeps the last good one, and the failure (`…; version <12 hex> still runs`) joins the failures. The last good one runs on only under its own id: a new version with another id that fails setup brings it back only while its id is not disabled and no other extension of the load holds that id in its scope (`mayRunOn`). A version that failed to import or set up is not imported again: its failure stands over every load (`FailedAttempt`) until the file builds to another version, is removed, or its id is disabled; a disabled id's failure is not reported, also for an extension that never set up. A failed build runs again on each load, so its failure stands the same way. The host shows the new set first and ends the replaced lifetimes after. A kept extension hands back the same widget components, and the host keys its widgets on the component, so a reload leaves them mounted with their state. It loads again when the shell asks (`shell.reloadExtensions`, the `/extensions` pane's `r`) and at each `TurnCompleted` of the session in view when a look at the stats finds a client file added, removed or saved, or another disabled list (`stale`), and on a move to a session in another directory: the turn's end is when the server applies a changed file too. One look runs at a time.
 - Client extensions author against one public entry, `@gent/tui/extensions` (`apps/tui/src/extensions.ts`): `defineClientExtension`, `ClientContext`, the contribution constructors, `sessionQuery` and the rendering kit. A shipped `*.client.tsx` imports the TUI only through that entry.
 - One `setup` shape: `Effect<ClientContributions, never, R>`. A setup handles its own failures; a defect is recorded as a load failure. A returned key that is no contribution bucket, or a bucket whose entries lack what the host reads (`CONTRIBUTION_BUCKETS` in `client-facets.ts`), fails that extension by name before the host resolves every extension together, so the healthy ones keep their contributions. The loader reads each known bucket of a setup's result once by property access (a class instance's getter counts), inside that extension's failure, where any throw, a defect included, fails only that extension, and decodes it to new plain data; the shared resolution never reads the extension's own object. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ChildProcessSpawner | ClientContext`: every client extension, shipped or not, reaches files, paths and processes as a server extension does (rule 15), and runs a command through `runProcess`. `ClientContext` is the client twin of `ExtensionContext`: one Tag with the `transport`, `shell`, `workspace`, `lifecycle`, and `activity` facets, which a setup yields (`const { transport, shell } = yield* ClientContext`) and never threads as a parameter. There is no imperative `ctx` argument, no sync `(ctx) => Array` arm, and no package wrapper around paired server/client modules: a server extension and its `.client.{ts,tsx}` module are separate artifacts that share an extension id.
 - `shell.handover(effect)` hands the terminal to a program that draws on it (a diff viewer, an editor): the renderer suspends, the effect runs, and the renderer resumes when the effect ends, however it ends. The host's own editor (ctrl+g, Edit in a review prompt) runs through the same verb, and one semaphore holds it, so two programs never draw at once and the renderer never resumes under a program still running (`makeHandover` in `apps/tui/src/os.ts`). The terminal's signal keys go to the program, as for a program a shell runs: every process the effect spawns joins gent's process group, the terminal's foreground group (`detached: false`; the spawner's default puts a child in a session of its own, where ctrl+c never reaches it), and gent takes its SIGINT and SIGQUIT listeners off until the terminal is back, as POSIX `system()` and git's editor launch ignore those two. The process runs a signal's listeners later than it takes the signal, in the order the signals came, so a ctrl+c the program ended on may still wait when its end is seen: before gent's listeners and the renderer's go back, the handover sends itself SIGURG (ignored by default, heard by nothing else) and waits up to 1 s for it, which runs after every signal before it. The listeners are held inside the suspended span, so the renderer's own (OpenTUI's ctrl+\ exit listener, which suspend takes off and resume puts back) never hear that mark or go on twice. A wrapper that relays signals to gent (a `timeout`, a script runner) can still deliver one after the mark. Ctrl+z keeps its default, so the shell stops gent and the program together and `fg` resumes both. In gent's group a child has no group of its own, so the spawner's group kill reaches only that child: an interrupt stops each process the effect spawned (SIGTERM, then SIGKILL after its `forceKillAfter`) and waits for it, and a process that child started lives on. A handover therefore spawns every program it runs itself, the pager pipeline of `@gent/git` included. The handover runs in a fiber of the holder's own scope, not of its caller (a command or a key runs on a fiber gent's exit does not reach); interrupting the caller interrupts it too. The root makes the holder with the renderer (`main.tsx`) and hands its verb to `ExtensionUIProvider`; gent's exit, on SIGTERM, SIGHUP, SIGINT outside a handover or the reader's quit, closes the holder before it leaves the terminal (`holdUntilRendererDestroyed`): every handover is interrupted and awaited, its programs stopped and its renderer resumed, so no program outlives gent on a terminal that stays open, and the live view moves into history from a running renderer (a renderer destroyed while suspended writes `[snapshot WxH]` placeholders in place of the rows).
 - Widgets are transport-only: subscribe to `transport.onSessionEvent` for event-backed invalidation or `transport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `transport.request` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins.tsx` for the canonical pattern.
-- `lifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and event unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
-- `lifecycle.scoped` allocates Effect resources in the client-provider lifetime. The main TUI scope awaits provider disposal before process exit.
+- `lifecycle` is the extension's own lifetime: the loader forks one scope per extension from the client runtime's scope and provides a `ClientContext` with that lifecycle around the setup. `lifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and event unsubscribes; they run in order when a reload replaces or removes the extension, or when the provider unmounts, so widget setups leave no detached roots behind. A cleanup registered after the lifetime ended runs at once.
+- `lifecycle.scoped` allocates Effect resources in the extension's lifetime; they are released after its cleanups ran. The main TUI scope awaits provider disposal before process exit.
 - `activity` exposes a reactive view of the active UI session and its working, blocked, idle, or unavailable state. A surface with no activity to report reads `"unknown"`.
 - `@gent/herdr` is a built-in client extension. It reports that UI activity through Herdr's local socket when `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are present. It sends ordered reports with the session ID and releases its authority on exit. The shared server and child agents do not own this reporter.
 - `useExtensionUI()` (`extensions/host.tsx`) is host-side, not extension API: the shell reads the resolved contributions, load failures and `clientRuntime` through it. A widget reads the active session from `transport.currentSession()` or `sessionQuery`.
@@ -2382,7 +2457,8 @@ Runtime code yields `EventStore` (`domain/event.ts`) directly. `publish` appends
 - An extension draws its own transcript rows with `messageRendererContribution`, keyed by the message's `metadata.customType`. The core transcript names only the runtime's own kinds and falls back to the plain row. Its `queueLabel` names a waiting message of that type in the queue widget (a queue entry carries its message's `metadata`); without one the widget shows the message's first line, and a restore takes the text either way.
 - A row that is not a message comes from `noticeRowContribution`: the extension derives it per branch from `transport.onSessionEvent`, and the session view merges it into the transcript by time. Nothing stores it and the model never reads it. The session feed opens without waiting for client extensions; the client keeps what the feed delivered on the branch and hands it to a subscriber that joins late before the live envelopes, so each one sees the branch from its first event. A reconnect repeats envelope ids, which the subscriber skips. A source answers `None` until it can say its rows, and native history commits nothing until every source answers, so a committed row never changes. History holds for a source only 5 s after the client extensions loaded, so a source that never answers cannot hold it for good; after that, history commits without the source. The source is not a failure and stays: a later answer draws its rows among those history has not yet committed.
 - `@gent/interaction-tools` (`interaction-tools.client.tsx`) draws the asks of the interaction tools by `metadata.type`: `prompt`, `ask-user` and `handoff`. The ask-user metadata and answer schemas belong to the server extension and come through `@gent/extensions/client`; they check shape only, so a question stored before a call limit still shows its choices. The host keeps the option list and the prompt renderer, its fallback for any other type. The option list reads its free-text row through its keyboard scope (`typedKey`, a paste, and `caretLineEdit` in `ui.tsx`: the `lineEdit` erase keys at the caret, left/right, home/end, delete and ctrl+k as the composer's textarea binds them), so typed text from any row is the free answer and the list works docked under a composer that keeps the focus; a line wider than the row scrolls so the caret stays in view (`caretWindow`); in a `PickerFrame` it fits the rows the frame gives it and leaves the title and key hints to the frame. The extension also draws the background questions of `ask_user_async`: a tray line in the `below-input` slot (`? 1 open question · <label> · assuming <assume> · /answer`; optional parts drop at narrow widths; it hides while a pane is open), read from `questions.open` on a session move, a finished `ask_user_async` call, a message, a turn end and the extension's pulse. `/answer` docks a pane that asks the oldest open question with the option list and the `ask_user` keys: the cursor starts on the assumed option (or on the assumption as its own first row), enter answers, typed text is a free answer, `ctrl+x` arms and a second `ctrl+x` dismisses (the arm belongs to one question: a new question or a close drops it), `esc` closes and the question stays open. A question sent leaves the pane at once; a failed send brings it back with a notice. A `question-answer` message draws as `↳ answered · <question> → <answer>`, the question cut first at narrow widths; while it waits in the queue it shows as `↳ answer · <question>`.
-- `@gent/cache` (`cache.client.tsx`) folds a branch's stream, tool, interaction, message and compaction events into prompt-cache misses above a 1,024-token noise floor. Each miss gets a cause over the interval the TTL runs on, from the start of the request that refreshed the cache: a model switch, a changed prefix inside the lifetime the model catalog names (the regression alarm for a moved cache marker), or an expiry during a long response, a tool call, an approval wait, a paused turn, before a child completion, before a wake, or after idle time. The missed tokens fill the step's cache writes first, at the write rate, and the rest paid the input rate; each is priced over the cache-read rate, by the model the runtime priced the step by (`StreamEnded.pricedModel`, which follows a driver override) in `transport.modelCatalog()`. A miss is priced once, when the catalog is there; its row is born with that text. A row shows a miss of 20k tokens or $0.10; the status row shows the branch's `cache waste $X`. The row is telemetry for the reader, not context for the model. The same fold keeps the clock the loop's cold handoff reads: the start of the branch's last request (a retry's when it went out, an interrupted one's too; none after a compaction until the next request) and its model. A right-anchored status label (`anchor: "right"`, before `ctx`) counts the lifetime down: `cache 42m`, minutes rounded up, the warning color in its last fifth, `cache <1m`, then `cache cold`; a model that reports no cache writes caches implicitly, so its catalog lifetime is a measured guess and the count reads `cache ~28m`. A model other than the request's (`transport.selectedModel()`) reads cold at once. A lapsed cache on a window the loop's own cost rule hands off (`coldHandoffPays`, `@gent/core/protocol`, over the catalog entry's price and lifetime) reads `cache cold · next turn compacts`. A slow fiber on the client runtime reads `Clock` every 5 s, so a test clock moves it; a branch that never reported cache activity, or a model whose catalog names no lifetime, shows no timer.
+- `@gent/cache` (`cache.client.tsx`) folds a branch's stream, tool, interaction, message and compaction events into prompt-cache misses above a 1,024-token noise floor. Each miss gets a cause over the interval the TTL runs on, from the start of the request that refreshed the cache: a model switch, a changed prefix inside the lifetime the model catalog names (the regression alarm for a moved cache marker; named `ExtensionsChanged`, "cache miss after an extension change", when the two requests' `StreamStarted.profileRevision` differ), or an expiry during a long response, a tool call, an approval wait, a paused turn, before a child completion, before a wake, or after idle time. The missed tokens fill the step's cache writes first, at the write rate, and the rest paid the input rate; each is priced over the cache-read rate, by the model the runtime priced the step by (`StreamEnded.pricedModel`, which follows a driver override) in `transport.modelCatalog()`. A miss is priced once, when the catalog is there; its row is born with that text. A row shows a miss of 20k tokens or $0.10; the status row shows the branch's `cache waste $X`. The row is telemetry for the reader, not context for the model. The same fold keeps the clock the loop's cold handoff reads: the start of the branch's last request (a retry's when it went out, an interrupted one's too; none after a compaction until the next request) and its model. A right-anchored status label (`anchor: "right"`, before `ctx`) counts the lifetime down: `cache 42m`, minutes rounded up, the warning color in its last fifth, `cache <1m`, then `cache cold`; a model that reports no cache writes caches implicitly, so its catalog lifetime is a measured guess and the count reads `cache ~28m`. A model other than the request's (`transport.selectedModel()`) reads cold at once. A lapsed cache on a window the loop's own cost rule hands off (`coldHandoffPays`, `@gent/core/protocol`, over the catalog entry's price and lifetime) reads `cache cold · next turn compacts`. A slow fiber on the client runtime reads `Clock` every 5 s, so a test clock moves it; a branch that never reported cache activity, or a model whose catalog names no lifetime, shows no timer.
+- `@gent/extension-admin` (`extension-admin.client.tsx`) draws the `/extensions` pane from the server extension's `extensions.pane.status` request: a row per extension with its scope, its state and, after a failed reload, the version that still runs; a narrow row drops the version, then the scope. `space` turns a row off or on and `r` reloads it through the pane's own requests, which never ask; each change pulses the extension's state (`State.changed`), so the health line reads again, and the pane calls `shell.reloadExtensions` so the client set follows. The pane runs one change at a time, in key order, each on the row's status as the change before it left it (read again with `extensions.pane.status`), so `space` then `r` on an extension that is off turns it on, then sets it up; the replies of keys pressed while a change ran show together on the row, a refusal included. `enter` shows a failure's whole text.
 - `@gent/git` (`git.client.tsx`) shows the checkout of the session in view on the status row: the branch with its ahead and behind counts (`main ↑2 ↓1`, `detached @1a2b3c4`, an unborn branch by its name) and the files changed against its base (`HEAD`, or the empty tree on an unborn branch), untracked ones included, with their line counts (`3 files +120 -31`, short form `+120 -31`). It reads git in `workspace.sessionCwd` through `runProcess`, every read read only (`--no-optional-locks -c diff.autoRefreshIndex=false`: `git diff` refreshes a file whose time moved and writes the index, `post-index-change` hook included, even under `--no-optional-locks`): `git status --porcelain=v2 --branch -z --untracked-files=all`, then `git diff --numstat -z --no-ext-diff --no-textconv <base>` (the base is `HEAD`, or on an unborn branch the empty tree of the repository's object format, which `rev-parse --show-object-format` names, so staged and unstaged lines count alike), then the lines of up to 200 untracked files of at most 512 KiB through `FileSystem`. So a read never takes `index.lock` from the agent's own `git commit`; `--no-ext-diff --no-textconv` keep repository config from choosing a program. A read runs on a session or branch move, on a write to `HEAD`, `index`, `MERGE_HEAD`, `ORIG_HEAD` or `FETCH_HEAD` in the checkout's git directory (a 200 ms debounced watch), 1 s after the last of a burst of tool calls, and at a turn's end or a message, one at a time (`sessionQuery`). It does not poll: an edit made in another program shows at the next trigger. A directory outside git, or no `git` on `PATH`, shows no labels; a read that fails or times out (5 s) keeps the last labels. The branch's pull request comes from `gh pr view --json` (8 s timeout, prompts off): `#123 ✓` when its checks pass, `#123 ✗` (the `error` color) when one failed, `#123 …` while one runs, `#123 draft`, `merged` or `closed`; it gives way first on a narrow row. It is asked again only when the root, the branch, the upstream or the ahead/behind counts move (a commit, a push, a pull, a fetch, a checkout), never for an edit, and never for a detached head or an unborn branch; each answer keeps the key it was asked for, so a branch move never shows the last branch's request. A branch with no request, or a checkout with no GitHub remote, shows none. No `gh` on `PATH` (the spawn finds no program) hides the label for the extension's life; `gh` that is not signed in or fails keeps the last answer. `/git` opens a docked pane (`PickerFrame`): its title names the branch, the upstream (which goes first on a narrow pane) and the totals, then one row per changed file (`M  path  +12 -3`, the path cut from its start) and one row for the pull request (`#123 Title · open · checks ✓ · review required`, `· open · ✓` when narrow); its note row names the last read's failure, such as `gh is not signed in · gh auth login`. Opening it reads the checkout and the request again. Enter on a row reviews it and leaves the pane open; esc or ctrl+c closes it. A review hands the terminal over (`shell.handover`): a file row runs `hunk diff --watch <base> -- <path>` in the checkout's root (with no base, hunk compares the index with the work tree and leaves a staged change out), the request row writes `gh pr diff` to a temp file and runs `hunk patch <file>`, so the reader's own `gh` sign-in reads a private request. `/diff` reviews the work tree in the session's directory, `/diff <paths>` those paths, `/diff pr` the request. When the spawn finds no `hunk`, the review pages the patch with the reader's git pager, and the status row says `hunk not found · using the git pager` once; gent never installs hunk. gent picks the pager as git does for `git diff` (`git var GIT_PAGER`, with a `pager.diff` that names a program in as `core.pager`; `pager.diff=false`, `cat` or nothing is `cat`), gives it `LESS=FRX` and `LV=-c` when they are unset, and colors the patch as git would for a pager (`git config --get-colorbool color.diff true`, and `color.pager`). The pager and each program that writes the patch are gent's own children, the patch piped through gent into the pager's stdin, so an interrupt stops and awaits them all before the renderer resumes (`git --paginate` and `gh pr diff` would start the pager as their own child, out of reach). A pager setting of words runs as that program; one with shell syntax runs in `sh -c`, as git runs it, and what that shell starts is the shell's. The work tree's patch is `git diff <base> [-- paths]`, then for each file `git ls-files --others --exclude-standard --full-name` lists, `git diff --no-index -- /dev/null <path>` at the checkout's root, one after the other: no object, no index write and no hook. Their errors go to the pager with the patch, as `git --paginate` sends them; a patch program that ends on a signal (the reader's ctrl+c reaches it, in the terminal's group) ends the patch there, as it ends `git --paginate`, and the pager reads to the end. The request's patch is `gh pr diff --color=<git's choice>`, read before the handover. A program that exits with a code other than 0 or 141 (a pager quit early) is named on the status row; a program that ends on a signal (the reader's ctrl+c or ctrl+\ reaches it) is not, and the host's editor reads it as a cancelled edit. `gh` and `hunk` are optional programs on `PATH`, never dependencies: the TUI tests run them from a path that does not exist unless a test names a stand-in (`testPlatformLayer`), and the PTY tests run `gh` signed out. The host reads no git: it names the cwd label `repo/sub` from the project root a stat walk for `.git` finds (`projectRoot` in `workspace.tsx`).
 
 ### Extension State

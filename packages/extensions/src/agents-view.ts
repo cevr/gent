@@ -705,6 +705,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
     answersDuringTurn: true,
     input: ListAgentsInput,
     output: ListAgentsOutput,
+    resources: [AgentActivityResource],
     execute: Effect.fn("AgentsViewRpc.ListAgents")(function* (input) {
       const { loops, listed } = yield* collectRows(Option.fromUndefinedOr(input.root))
       const activity = yield* AgentActivity

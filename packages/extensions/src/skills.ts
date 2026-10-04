@@ -506,6 +506,24 @@ When you see \`$skill-name\`, read the local skill first, or the global skill if
 </available_skills>`
 }
 
+/**
+ * Where a profile's skills live: its working directory and the gent home.
+ * The extension's setup knows them and registers them as a process
+ * resource, so the skills resource that reads them can be a top-level value
+ * the `skills-list` request names.
+ */
+class SkillsLocation extends Context.Service<
+  SkillsLocation,
+  { readonly cwd: string; readonly home: string }
+>()("@gent/extensions/src/skills/SkillsLocation") {}
+
+/** The branch's skills, read once from the profile's `SkillsLocation`. */
+const SkillsResource = defineResource({
+  id: "@gent/skills/service",
+  scope: "branch",
+  layer: Layer.unwrap(Effect.map(SkillsLocation, Skills.Live)),
+})
+
 // ── protocol ────────────────────────────────────────────────────────────────
 
 const SKILLS_EXTENSION_ID = ExtensionId.make("@gent/skills")
@@ -517,6 +535,7 @@ export const SkillsRpc = defineRequests(SKILLS_EXTENSION_ID, {
     answersDuringTurn: true,
     input: Schema.Struct({}),
     output: Schema.Array(SkillEntry),
+    resources: [SkillsResource],
     execute: Effect.fn("SkillsRpc.ListSkills")(function* () {
       const skills = yield* Skills
       return yield* skills.list
@@ -545,11 +564,12 @@ export const SkillsExtension = defineExtension({
     yield* host.register(
       "resource",
       defineResource({
-        id: "@gent/skills/service",
-        scope: "branch",
-        layer: Skills.Live({ cwd: host.cwd, home: host.home }),
+        id: "@gent/skills/location",
+        scope: "process",
+        layer: Layer.succeed(SkillsLocation, SkillsLocation.of({ cwd: host.cwd, home: host.home })),
       }),
     )
+    yield* host.register("resource", SkillsResource)
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
         const service = yield* Skills

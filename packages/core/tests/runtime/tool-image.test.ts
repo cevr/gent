@@ -1,17 +1,30 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Deferred, Effect, Fiber, FileSystem, Layer, Option, Path, Ref } from "effect"
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Ref,
+  Schema,
+} from "effect"
 import { crc32, deflateSync } from "node:zlib"
+import { tool } from "../../src/domain/capability"
 import { ExtensionContext } from "../../src/domain/extension"
 import {
   readToolImage,
   saveToolImage,
   sweepToolImages,
+  ToolImage,
   toolImageDirectory,
 } from "../../src/runtime/tool-image"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { testLeafContext, testToolContext } from "../../src/test-utils/harness"
+import { runToolWithCtx, testLeafContext, testToolContext } from "../../src/test-utils/harness"
 
 /** A 1x1 PNG, base64. */
 const DOT_PNG =
@@ -291,5 +304,42 @@ describe("tool image scaling", () => {
         expect(yield* Ref.get(count)).toBeLessThanOrEqual(5)
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
     25_000,
+  )
+})
+
+// ── tool test ────────────────────────────────────────────────────────────────
+
+/** A tool that saves an image past the side bound, so the store scales it. */
+const SaveWideImageTool = tool({
+  id: "save-wide-image",
+  description: "Save an image wider than the side bound",
+  params: Schema.Struct({}),
+  output: Schema.Struct({ image: ToolImage }),
+  execute: () =>
+    Effect.map(saveToolImage({ bytes: gradientPng(4000, 1000) }), (image) => ({ image })),
+})
+
+describe("a tool run by the test harness", () => {
+  it.scopedLive(
+    "scales an image it saves on the platform production gives a tool",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-tool-image-harness-" })
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-tool-image-harness-cwd-" })
+        // The test supplies only the Effect platform: the harness gives the rest.
+        const { image } = yield* runToolWithCtx(
+          SaveWideImageTool,
+          {},
+          testToolContext({ home, cwd }),
+        )
+        expect(image).toMatchObject({
+          width: 2000,
+          height: 500,
+          originalWidth: 4000,
+          originalHeight: 1000,
+        })
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
+    15_000,
   )
 })

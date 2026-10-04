@@ -1,14 +1,18 @@
 import { BunServices } from "@effect/platform-bun"
 import { test } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, FileSystem, Layer, Path } from "effect"
+import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
+import { tool } from "../../src/domain/capability"
+import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
   type E2ELayerConfig,
   hostProfileRegistry,
+  runToolWithCtx,
+  testToolContext,
 } from "../../src/test-utils/harness"
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import { CurrentWorkspaceId } from "../../src/domain/ids"
@@ -109,6 +113,30 @@ describe("createE2ELayer agents", () => {
           toolRunner: "test",
         }),
       ),
+    ),
+  )
+})
+
+// ── tool test runner ────────────────────────────────────────────────────────
+
+/** A tool that reports the host name its platform gives. */
+const HostNameTool = tool({
+  id: "host-name",
+  description: "Report the host name",
+  params: Schema.Struct({}),
+  output: Schema.String,
+  execute: () =>
+    Effect.flatMap(GentPlatform, (platform) =>
+      Effect.map(platform.osInfo, (info) => info.hostname),
+    ),
+})
+
+describe("a tool run over a stub host", () => {
+  it.live("a platform service the test provides replaces the harness one", () =>
+    runToolWithCtx(HostNameTool, {}, testToolContext()).pipe(
+      Effect.provide(GentPlatform.Test()),
+      Effect.map((hostname) => expect(hostname).toBe("test-host")),
+      Effect.timeout("5 seconds"),
     ),
   )
 })

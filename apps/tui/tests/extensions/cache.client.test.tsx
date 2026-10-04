@@ -164,6 +164,8 @@ const makeHistory = () => {
     readonly child?: boolean
     /** Refused attempts inside the step: when each was refused, and the delay before its retry. */
     readonly retries?: ReadonlyArray<{ readonly at: number; readonly delayMs: number }>
+    /** The extension profile the request ran on. */
+    readonly profileRevision?: string
   }) => {
     at(
       opts.start,
@@ -172,6 +174,7 @@ const makeHistory = () => {
         branchId,
         messageId: MessageId.make(opts.turn),
         step: 1,
+        profileRevision: opts.profileRevision,
       }),
     )
     for (const refused of opts.retries ?? []) retry(refused.at, refused.delayMs)
@@ -305,7 +308,7 @@ const makeHistory = () => {
 }
 
 /** The first step caches a 30k prefix; every scenario starts from it. */
-const cachedFirstStep = () => {
+const cachedFirstStep = (profileRevision?: string) => {
   const history = makeHistory()
   history.input(0, "t1")
   history.step({
@@ -313,6 +316,7 @@ const cachedFirstStep = () => {
     end: 10 * SECOND,
     turn: "t1",
     usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+    profileRevision,
   })
   return history
 }
@@ -574,6 +578,80 @@ describe("scanCacheMisses", () => {
       const miss = onlyMiss(scanCacheMisses(history.envelopes))
       expect(miss.cause._tag).toBe("PrefixChanged")
       expect(missText(miss, 0)).toStartWith("cache miss: prefix changed")
+    }),
+  )
+
+  it.live("a miss inside the TTL on another extension profile names the extension change", () =>
+    Effect.sync(() => {
+      const history = cachedFirstStep("profile-a")
+      history.input(20 * SECOND, "t2")
+      history.step({
+        start: 21 * SECOND,
+        end: 30 * SECOND,
+        turn: "t2",
+        usage: missedStep,
+        profileRevision: "profile-b",
+      })
+      const miss = onlyMiss(scanCacheMisses(history.envelopes))
+      expect(miss.cause._tag).toBe("ExtensionsChanged")
+      expect(missText(miss, 0)).toStartWith("cache miss after an extension change")
+    }),
+  )
+
+  it.live("a miss inside the TTL on the same extension profile is still a changed prefix", () =>
+    Effect.sync(() => {
+      const history = cachedFirstStep("profile-a")
+      history.input(20 * SECOND, "t2")
+      history.step({
+        start: 21 * SECOND,
+        end: 30 * SECOND,
+        turn: "t2",
+        usage: missedStep,
+        profileRevision: "profile-a",
+      })
+      expect(onlyMiss(scanCacheMisses(history.envelopes)).cause._tag).toBe("PrefixChanged")
+    }),
+  )
+
+  it.live("a request that names no profile cannot blame an extension change", () =>
+    Effect.sync(() => {
+      const history = cachedFirstStep()
+      history.input(20 * SECOND, "t2")
+      history.step({
+        start: 21 * SECOND,
+        end: 30 * SECOND,
+        turn: "t2",
+        usage: missedStep,
+        profileRevision: "profile-b",
+      })
+      expect(onlyMiss(scanCacheMisses(history.envelopes)).cause._tag).toBe("PrefixChanged")
+    }),
+  )
+
+  it.live("a model switch or a lapsed lifetime outranks an extension change", () =>
+    Effect.sync(() => {
+      const switched = cachedFirstStep("profile-a")
+      switched.input(20 * SECOND, "t2")
+      switched.step({
+        start: 21 * SECOND,
+        end: 30 * SECOND,
+        turn: "t2",
+        usage: missedStep,
+        model: OPUS,
+        profileRevision: "profile-b",
+      })
+      expect(onlyMiss(scanCacheMisses(switched.envelopes)).cause._tag).toBe("ModelSwitch")
+
+      const lapsed = cachedFirstStep("profile-a")
+      lapsed.input(2 * SECOND + CACHE_LIFETIME_MS, "t2")
+      lapsed.step({
+        start: 2 * SECOND + CACHE_LIFETIME_MS,
+        end: 3 * SECOND + CACHE_LIFETIME_MS,
+        turn: "t2",
+        usage: missedStep,
+        profileRevision: "profile-b",
+      })
+      expect(onlyMiss(scanCacheMisses(lapsed.envelopes)).cause._tag).toBe("Idle")
     }),
   )
 })

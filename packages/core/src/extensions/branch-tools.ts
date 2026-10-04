@@ -23,6 +23,7 @@
  * import { type BranchToolFeature, BranchToolWork } from "@gent/core/extensions/branch-tools"
  *
  * export const MyBranchTools: BranchToolFeature<MyStorageTags> = {
+ *   id: "my-feature",
  *   migrations: myMigrations,
  *   storage: myStorageLayer,
  *   branchLayer: myBranchLayer,
@@ -35,6 +36,7 @@
 // The feature contract itself: what a root installs, and what the loop reads.
 export {
   type BranchToolFeature,
+  type BranchToolHostServices,
   type BranchToolLayerFactory,
   BranchToolWork,
 } from "../runtime/tools.js"

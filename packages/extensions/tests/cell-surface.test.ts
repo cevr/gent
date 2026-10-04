@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  Cause,
   Effect,
   Exit,
   Fiber,
@@ -13,7 +14,7 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { GentPlatform, MessageStorage } from "@gent/core/host"
+import { BunPlatformLive, GentPlatform, MessageStorage } from "@gent/core/host"
 import {
   type LoadedExtension,
   captureTurnTools,
@@ -43,6 +44,7 @@ import {
   ApprovalService,
   turnRequestText,
   systemTextOf,
+  ConfigService,
   testLeafContext,
   testToolContext,
 } from "@gent/core/test-utils"
@@ -921,6 +923,27 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
 
 describe("shipped model surface", () => {
   it.scopedLive(
+    "the shipped extensions without the cell feature stop the root at load",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(
+          createRpcHarness({
+            agents: [],
+            extensionInputs: shippedPreset.extensionInputs,
+            providerLayer: LanguageModelLayers.debug(),
+          }),
+        )
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(Cause.pretty(exit.cause)).toContain(
+            'tools[0] (cell): runs on the branch-tool feature "cell", which this root does not install (it installs "none")',
+          )
+        }
+      }).pipe(Effect.timeout("15 seconds")),
+    20000,
+  )
+
+  it.scopedLive(
     "a cell starts in its session's working directory, not the host's",
     () =>
       Effect.gen(function* () {
@@ -946,6 +969,122 @@ describe("shipped model surface", () => {
         ])
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
     20000,
+  )
+
+  it.scopedLive(
+    "a cell turn's request across extension changes: a body edit sends the same bytes, an added tool or a disabled extension rewrites from the Host Tools section on",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-cell-change-home-" })
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-cell-change-cwd-" })
+        const probeFile = path.join(home, ".gent", "extensions", "probe.ts")
+        yield* fs.makeDirectory(path.dirname(probeFile), { recursive: true })
+        /** A user extension whose tools carry a guideline; `reply` is their body. */
+        const probeSource = (reply: string, ids: ReadonlyArray<string>) =>
+          [
+            'import { Effect, Schema } from "effect";',
+            'import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api";',
+            "const probe = (id) =>",
+            "  tool({",
+            "    id,",
+            "    description: `Probe ${id}`,",
+            '    promptGuidelines: ["Probe guideline"],',
+            "    params: Schema.Struct({ text: Schema.String }),",
+            "    output: Schema.String,",
+            `    execute: () => Effect.succeed(${encodeJson(reply)}),`,
+            "  });",
+            "export default defineExtension({",
+            '  id: "@test/probe",',
+            "  setup: Effect.gen(function* () {",
+            "    const host = yield* ExtensionHost;",
+            ...ids.map((id) => `    yield* host.register("tool", probe(${encodeJson(id)}));`),
+            "  }),",
+            "});",
+            "",
+          ].join("\n")
+        yield* fs.writeFileString(probeFile, probeSource("v1", ["probe_one"]))
+        const captured = yield* Ref.make<ReadonlyArray<{ system: string; tools: string }>>([])
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            yield* Ref.update(captured, (all) => [
+              ...all,
+              {
+                system: systemTextOf(options.prompt),
+                tools: encodeJson(options.tools.map((tool) => tool.name)),
+              },
+            ])
+            return Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })])
+          }),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+          home,
+          cwd,
+          configServiceLayer: ConfigService.Live.pipe(
+            Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+            Layer.provide(BunPlatformLive),
+          ),
+        })
+        const turn = (content: string) =>
+          Effect.gen(function* () {
+            // The feed replays the history first: wait for this turn's own end.
+            const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.dropWhile(
+                ({ event }) =>
+                  !(
+                    event._tag === "MessageReceived" &&
+                    messagePartsText(event.message.parts) === content
+                  ),
+              ),
+              Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkScoped,
+            )
+            yield* client.message.send({ sessionId, branchId, content })
+            yield* Fiber.join(completed)
+            return Option.getOrThrow(Option.fromUndefinedOr((yield* Ref.get(captured)).at(-1)))
+          })
+        const commonPrefix = (left: string, right: string) => {
+          let at = 0
+          while (at < left.length && left[at] === right[at]) at += 1
+          return at
+        }
+
+        const base = yield* turn("base")
+        yield* fs.writeFileString(probeFile, probeSource("v2", ["probe_one"]))
+        const bodyEdit = yield* turn("body edit")
+        yield* fs.writeFileString(probeFile, probeSource("v2", ["probe_one", "probe_two"]))
+        const added = yield* turn("added tool")
+        yield* fs.writeFileString(
+          path.join(home, ".gent", "config.json"),
+          encodeJson({ disabledExtensions: ["@test/probe"] }),
+        )
+        const disabled = yield* turn("disabled")
+
+        // A cell turn advertises only the cell, whatever the extensions.
+        for (const request of [base, bodyEdit, added, disabled]) {
+          expect(request.tools).toBe(encodeJson(["cell"]))
+          // A host tool's guideline is not in the system prompt of a cell turn.
+          expect(request.system).not.toContain("Probe guideline")
+        }
+        // A body edit costs nothing: the bytes stay.
+        expect(bodyEdit).toEqual(base)
+        // An added tool and a disabled extension change the request first
+        // inside the Host Tools listing: the cached prefix holds up to there,
+        // and the rest of the system prompt and the whole history are written
+        // again (the measurement for the catalog pin, Option C).
+        const hostTools = base.system.indexOf("## Host Tools")
+        expect(hostTools).toBeGreaterThan(0)
+        expect(added.system).toContain("tools.probe_two(")
+        expect(disabled.system).not.toContain("tools.probe_one(")
+        expect(commonPrefix(bodyEdit.system, added.system)).toBeGreaterThan(hostTools)
+        expect(commonPrefix(added.system, disabled.system)).toBeGreaterThan(hostTools)
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platform)),
+    30_000,
   )
 
   it.scopedLive(

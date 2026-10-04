@@ -515,7 +515,8 @@ export interface GentServerOptions {
   /**
    * The branch-tool feature these extensions run on -- storage plus the
    * per-branch kernel. A server naming its own `extensions` names this too;
-   * a tool surface whose feature is missing fails on first use.
+   * an extension whose tool declares a feature the server does not install
+   * fails to load.
    */
   readonly branchTools?: BranchToolFeature<never>
   readonly state?: StateSpec

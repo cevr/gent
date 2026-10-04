@@ -135,7 +135,8 @@ running: a newer version of its file failed at that phase. It reads the extensio
 just wrote shows there. `Extensions.reload(id)` runs every setup of the
 profile again and returns the new statuses; an unchanged extension keeps its
 process and branch Resources, a run that is going on keeps its profile, and
-an id the profile does not name fails. Any extension gets this facet. The
+an id the profile does not name fails, as does one a config turns off (it is
+never set up). Any extension gets this facet. The
 shipped `@gent/extension-admin` extension (`packages/extensions/src/extension-admin.ts`)
 gives the agent `extensions.status`, `extensions.reload`, and four verbs that
 change what the next turn loads: `extensions.enable` and `extensions.disable`
@@ -151,15 +152,27 @@ a headless run declines. The `project` scope needs a project the user trusts,
 and `user` is the default only when the session runs from home. A verb's
 optional `resume` queues one message on its own branch (`Session.send`,
 `delivery: "queue"`), so the agent goes on in the same task on the new
-profile. The bundled `extensions` skill carries the guide and a template. `Models.decide({ definition, input, model?, timeoutMs? })` asks a
+profile. Three requests serve the `/extensions` pane, the user's own hand, so
+they never ask: `extensions.pane.status` reads the session's statuses with the
+profile resolved again, `extensions.pane.set-enabled` turns an extension off in
+the narrowest config that holds the session (the trusted project's, else the
+user's) and on in every config that names it, and `extensions.pane.reload`
+reloads one. A change pulses the extension's state, so every client reads its
+health again. The pane (`apps/tui/src/extensions/extension-admin.client.tsx`)
+draws a row per extension with its scope, its state (`on`, `reload failed`,
+`failed`, `off`) and, after a failed reload, the version that still runs; a
+narrow row drops the version, then the scope, and keeps the id and the state.
+It opens on the first row that is not `on`. `space` turns the row off or on,
+`r` sets it up again, `enter` shows a failure's whole text, and `esc` goes
+back or closes. After each change the TUI loads its client extensions again. The bundled `extensions` skill carries the guide and a template. `Models.decide({ definition, input, model?, timeoutMs? })` asks a
 classifier model (System One: Jev, Clef) every `effect/ai/Decision` of the
 definition in one call and returns the answers, the model, the usage and the
 cost; `Models.available` and `Models.classifiers` say which classifiers have
 a credential. The `FileLock` / `Models` / `State` facets wrap the
 host-internal `FileLockService`, `DecisionModelResolver` and `EventStore` so authors
 never reach into runtime Tags. No facet duplicates an Effect platform
-service: files, paths, processes, and ids come from `FileSystem`, `Path`,
-`ChildProcessSpawner`, and `Crypto`, and a relative path resolves against
+service: files, paths, processes, ids, and HTTP come from `FileSystem`, `Path`,
+`ChildProcessSpawner`, `Crypto`, and `HttpClient`, and a relative path resolves against
 `ctx.cwd` with `path.resolve(ctx.cwd, p)`. `ctx.State.changed()` uses the current
 extension identity, session, and branch supplied by the host. If an
 extension needs private state, it
@@ -337,9 +350,68 @@ export default defineExtension({
   returned to the model
 - `execute(params)` — returns `Effect`; host access comes from
   `yield* ExtensionContext`
+- `resources` — the `defineResource` values whose services the body yields.
+  Write the array inline (`resources: [Counter]`) or type it as a tuple: an
+  array type such as `ReadonlyArray<typeof Counter>` can be empty, so it
+  grants no services.
+  The same extension must register each one, or the extension fails to load
+  with `tools[i] (id): names resource "…", which this extension does not register`.
+- `branchTools` — the branch-tool feature whose storage the body yields (see
+  `@gent/core/extensions/branch-tools`). The composition root installs one
+  feature (`createDependencies({ branchTools })`); in a root that installs
+  another, the extension fails to load with
+  `tools[i] (id): runs on the branch-tool feature "…", which this root does not install (it installs "…")`.
 - Optional: `readonly`, `destructive`, `interactive`, `dispatches`,
   `promptSnippet`, `promptGuidelines`, `summary` (the one-line result summary
   a client shows for a call)
+
+The body may yield only the services every root gives a tool: `ExtensionContext`,
+the platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`,
+`HttpClient`, and the `GentPlatform` that helpers such as `saveToolImage` read),
+the core services the branch-tools entry exports (`BranchToolHostServices`:
+`EventStore`, `MessageStorage`, `InteractionStorage`, `ToolRunner`), the
+services of its `resources`, and the storage of its `branchTools`. A body that
+requires any other service does not compile. The bound is on the services
+the body requires (its `R`), not on the runtime context:
+`Effect.serviceOption` still reads a service the root holds. A tool that
+keeps state names the
+resource that holds it:
+
+```ts
+import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
+
+class Tally extends Context.Service<Tally, Ref.Ref<number>>()("tally-ext/Tally") {}
+
+const TallyResource = defineResource({
+  id: "tally-ext/tally",
+  scope: "process",
+  layer: Layer.effect(Tally, Ref.make(0)),
+})
+
+const CountTool = tool({
+  id: "count",
+  description: "Count the calls of this tool in this process",
+  params: Schema.Struct({}),
+  output: Schema.Finite,
+  resources: [TallyResource],
+  execute: () => Effect.flatMap(Tally, (tally) => Ref.updateAndGet(tally, (n) => n + 1)),
+})
+
+export default defineExtension({
+  id: "tally-ext",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("resource", TallyResource)
+    yield* host.register("tool", CountTool)
+  }),
+})
+```
+
+A tool test runs the body with `runToolWithCtx` from `@gent/core/test-utils`.
+It gives the body a stub `ExtensionContext` and the platform services
+production gives it; a service the test provides replaces the harness one. The
+test provides the services of the tool's resources itself.
 
 `readonly` and `destructive` are provider hints lowered to Effect AI's
 `AiTool.Readonly` / `AiTool.Destructive` annotations. They are not authority
@@ -476,7 +548,13 @@ request a client sends while the agent works needs it.
 Request handlers receive params only. Host authority comes from
 `yield* ExtensionContext`, and extension-owned services are ordinary Effect
 services; authors import the smallest service Tag they need rather than
-declaring capability labels. The loader binds every registered request to the
+declaring capability labels. A handler yields the same services a tool body
+does, with the same two declarations: `resources` names the `defineResource`
+values whose services it yields, and `branchTools` the feature whose storage
+it yields. A handler that requires any other service does not compile (the
+same type bound), and the
+loader checks both declarations as it checks a tool's, reporting
+`requests[i] (id): …`. The loader binds every registered request to the
 enclosing `defineExtension({ id })`, so the extension id is written once. Client-only protocol modules that export refs before server setup can use
 `defineRequests(extensionId, { ...requests })` to bind a whole request map with
 one id.
@@ -878,6 +956,8 @@ The framework validates all loaded extensions before creating the registry:
 
 - **Duplicate IDs** in same scope degrade the conflicting extension
 - **Model-callable tools** require a non-empty `description`
+- **A tool's or request's `resources`** must be registered by the same extension
+- **A tool's or request's `branchTools`** must be the feature the root installs
 - Same-name tools/agents/drivers in same scope degrade
 
 Cross-scope: higher scope wins silently (project overrides user overrides
@@ -907,10 +987,13 @@ builtin).
 - Builtins are the starting extension set, not privileged APIs or registry
   shortcuts.
 - Handlers take input only; host authority comes from `yield* ExtensionContext`.
-- Extension-private authority is an imported service Tag from a resource layer,
-  not a read/write or capability declaration.
-- Runtime services such as `GentPlatform`, `ToolRunner`,
-  storage Tags, event stores, and process helpers are not public extension API.
+- Extension-private authority is an imported service Tag from a resource layer
+  that the tool or request names in `resources`, not a read/write or capability
+  declaration.
+- Runtime services such as `GentPlatform`, `ToolRunner`, storage Tags and event
+  stores are not on `@gent/core/extensions/api`. The branch-tools entry exports
+  the core services a branch tool reads, and any extension that imports it may
+  yield them.
 - Tagged-union variant tags are PascalCase. Extension health reports
   `"Healthy"` or `"Degraded"`, and a degraded extension carries
   `"ActivationFailed"` or `"ModelCatalogFailed"` issues. An

@@ -70,12 +70,13 @@ const SCROLL_SYNC_INTERVAL_MS = 30
 
 /**
  * Keeps the row with the selected id in the scrollbox's viewport, scrolling
- * the least that shows it. The scrollbox is absent before it attaches and
- * after cleanup.
+ * the least that shows it, when the selection or the viewport's rows change.
+ * The scrollbox is absent before it attaches and after cleanup.
  */
 function useScrollSync(
   selectedId: Accessor<string>,
   getRef: () => Option.Option<ScrollBoxRenderable>,
+  viewportRows: Accessor<Option.Option<number>>,
 ) {
   const renderer = useRenderer()
 
@@ -101,6 +102,8 @@ function useScrollSync(
 
   createEffect(() => {
     const id = selectedId()
+    // Read for its change only: a viewport that shrank can hide the row.
+    viewportRows()
     let fiber = Option.none<Fiber.Fiber<void>>()
     const afterLayout = () => {
       fiber = Option.some(
@@ -143,6 +146,8 @@ interface ChromePanelBodyProps {
   ref?: (el: ScrollBoxRenderable) => void
   /** Hold the view on the last row as rows arrive, so a squeezed body shows the newest. */
   stickToBottom?: boolean
+  /** Told the body's laid-out rows each time a draw changes them. */
+  onRows?: (rows: number) => void
   paddingLeft?: number
   paddingRight?: number
   children: JSX.Element
@@ -172,7 +177,10 @@ function ChromePanelBody(props: ChromePanelBodyProps) {
       }}
       renderBefore={function () {
         const laidOut = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
-        if (!Option.contains(rows(), laidOut)) setRows(Option.some(laidOut))
+        if (!Option.contains(rows(), laidOut)) {
+          setRows(Option.some(laidOut))
+          if (props.onRows) props.onRows(laidOut)
+        }
       }}
       flexGrow={1}
       stickyScroll={sticky()}
@@ -1370,11 +1378,6 @@ export function SelectList<A>(props: SelectListProps<A>) {
     }),
   )
 
-  useScrollSync(
-    () => `${props.id}-row-${state().selectedIndex}`,
-    () => scrollRef,
-  )
-
   // Report the cursor, closed panes included: a pane that fetches for the
   // selected row has to be told to stop when it closes. A pane that unmounts
   // instead of closing is covered by the cleanup above.
@@ -1490,6 +1493,15 @@ export function SelectList<A>(props: SelectListProps<A>) {
     required: 1,
   })
   const bodyRows = usePickerBody(lines)
+  // The body's rows can change after the cursor settles (a note row laid out
+  // a draw later, a squeezed dock, a resize): the cursor's row is kept in
+  // view at each, by the rows the body was laid out with.
+  const [viewportRows, setViewportRows] = createSignal(Option.none<number>())
+  useScrollSync(
+    () => `${props.id}-row-${state().selectedIndex}`,
+    () => scrollRef,
+    viewportRows,
+  )
   const fits = (needed: number) =>
     Option.match(bodyRows(), {
       onNone: () => true,
@@ -1526,7 +1538,10 @@ export function SelectList<A>(props: SelectListProps<A>) {
         </ChromePanel.Section>
       </Show>
 
-      <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
+      <ChromePanel.Body
+        ref={(value) => (scrollRef = Option.some(value))}
+        onRows={(rows) => setViewportRows(Option.some(rows))}
+      >
         <Show when={values().length > 0} fallback={emptyRow()}>
           <For each={indexed()}>
             {(entry) =>

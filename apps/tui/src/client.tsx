@@ -752,6 +752,12 @@ interface ClientProviderProps extends ParentProps {
   services: Context.Context<unknown>
 }
 
+/** The events after which an extension may report another health. */
+const isHealthPulse = Predicate.or(
+  Predicate.isTagged("ExtensionStateChanged"),
+  Predicate.isTagged("TurnCompleted"),
+)
+
 export function ClientProvider(props: ClientProviderProps) {
   const client = props.client
   const runtime = props.runtime
@@ -1221,9 +1227,11 @@ export function ClientProvider(props: ClientProviderProps) {
     }
   }
 
-  // An extension that has news may report another health: read it again.
+  // An extension that has news may report another health: read it again. A
+  // turn's end too: the turn resolved the session's extensions from their
+  // files, so an extension added, edited, broken or disabled since shows now.
   const isActivePulse = (event: EventEnvelope["event"]): boolean =>
-    event._tag === "ExtensionStateChanged" && activeSessionId() === event.sessionId
+    isHealthPulse(event) && activeSessionId() === event.sessionId
   const invalidateHealthOn = (event: EventEnvelope["event"]): void => {
     if (isActivePulse(event)) setExtensionPulses((count) => count + 1)
   }

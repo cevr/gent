@@ -41,7 +41,6 @@ import {
   ToolImageError,
 } from "@gent/core/extensions/api"
 import {
-  BunGentPlatformLive,
   createRpcHarness,
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -379,9 +378,6 @@ const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64")
 const saveIn = (home: string, cwd: string, params: typeof SaveTool.parametersSchema.Type) =>
   runToolWithCtx(SaveTool, params, testToolContext({ home, cwd }))
 
-/** The platform a saved image runs on: the Bun services and gent's own, the image codec's owner. */
-const storePlatform = Layer.merge(BunServices.layer, BunGentPlatformLive)
-
 const sha256Hex = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
 
 describe("tool image store", () => {
@@ -438,7 +434,7 @@ describe("tool image store", () => {
         const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.${fixture.ext}`)
         expect(Buffer.from(stored).equals(Buffer.from(fixture.bytes))).toBe(true)
       }
-    }).pipe(Effect.provide(storePlatform)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("the same bytes saved twice keep one file, and a path saves from the cwd", () =>
@@ -457,7 +453,7 @@ describe("tool image store", () => {
       expect(yield* fs.readDirectory(path.join(home, ".gent", "blobs"))).toEqual([
         `${first.image.sha256}.png`,
       ])
-    }).pipe(Effect.provide(storePlatform)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("bytes no codec decodes fail and store nothing", () =>
@@ -496,7 +492,7 @@ describe("tool image store", () => {
       expect(yield* fs.exists(`${home}/.gent/blobs`)).toBe(false)
       // Inside both limits the store keeps the bytes as they are, with no decode.
       expect(yield* failureOf({ base64: base64(pngBytes(2000, 2000)) })).toBe("stored")
-    }).pipe(Effect.provide(storePlatform)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive(
@@ -559,7 +555,7 @@ describe("tool image store", () => {
             format: fixture.ext,
           })
         }
-      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -580,7 +576,7 @@ describe("tool image store", () => {
         expect([image.width, image.height]).toEqual([1800, 1800])
         expect(image.originalWidth).toBeUndefined()
         expect(yield* imageMetadata(stored)).toEqual({ width: 1800, height: 1800, format: "jpeg" })
-      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -641,7 +637,7 @@ describe("tool image store", () => {
             format: fixture.format,
           })
         }
-      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -659,7 +655,7 @@ describe("tool image store", () => {
         const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.jpg`)
         expect([image.width, image.height]).toEqual([2000, 500])
         expect(Buffer.from(stored).includes("ICC_PROFILE")).toBe(true)
-      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -699,7 +695,7 @@ describe("tool image store", () => {
             format: "jpeg",
           })
         }
-      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -730,7 +726,7 @@ describe("tool image store", () => {
             sha256: sha256Hex(bytes),
           })
         }
-      }).pipe(Effect.provide(storePlatform), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
     25_000,
   )
 

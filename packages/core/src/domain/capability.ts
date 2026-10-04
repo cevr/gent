@@ -10,7 +10,14 @@ import {
 import * as Prompt from "effect/ai/Prompt"
 import type * as Response from "effect/ai/Response"
 import * as AiTool from "effect/ai/Tool"
-import type { TurnNotice } from "./extension.js"
+import type {
+  AnyResourceContribution,
+  ExtensionContext,
+  ResourceServices,
+  TurnNotice,
+} from "./extension.js"
+import type { ExtensionPlatformServices } from "../runtime/gent-platform.js"
+import type { BranchToolFeature, BranchToolHostServices } from "../runtime/tools.js"
 import { clipSummary, summarizeToolResult } from "./message.js"
 
 // ── prompt ──────────────────────────────────────────────────────────────────
@@ -199,6 +206,10 @@ interface RequestCapabilityApi {
   readonly description?: string
   /** See `RequestInput.answersDuringTurn`. */
   readonly answersDuringTurn?: boolean
+  /** The resources the handler names; its extension must register each of these definitions. */
+  readonly resources: ReadonlyArray<AnyResourceContribution>
+  /** The branch-tool feature the handler names; its root must install it. */
+  readonly branchTools?: BranchToolFeature<never>
 }
 
 /**
@@ -211,6 +222,14 @@ export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly input: Schema.Decoder<Input, never>
   readonly output: Schema.Decoder<Output, never>
 }
+
+/**
+ * The services every root gives a tool body and a request handler: its
+ * `ExtensionContext`, the extension platform, and the core services the
+ * branch-tools entry exports. Any other service a leaf yields comes from a
+ * resource or a branch-tool feature it names.
+ */
+type LeafServices = ExtensionContext | ExtensionPlatformServices | BranchToolHostServices
 
 // ── request capability ──────────────────────────────────────────────────────
 
@@ -269,12 +288,46 @@ interface RequestFailure {
   readonly message: string
 }
 
+/**
+ * A leaf type that grants services makes the declaration that grants them
+ * required: a `Resources` argument other than the empty default requires
+ * `resources`, and a `Feature` other than `never` requires `branchTools`. So
+ * no typed input or explicit type argument grants a service without the value
+ * that provides it.
+ */
+type RequiredDeclarations<Resources, Feature> = ([Resources] extends [ReadonlyArray<never>]
+  ? unknown
+  : { readonly resources: Resources }) &
+  ([Feature] extends [never] ? unknown : { readonly branchTools: BranchToolFeature<Feature> })
+
+/**
+ * The services a `resources` declaration proves present. Only a tuple type
+ * proves which definitions the value holds; an array type such as
+ * `ReadonlyArray<typeof Counter>` also types an empty or partial array, so it
+ * grants nothing. The factories take `Resources` as a `const` type parameter,
+ * so an inline `resources: [Counter]` infers as a tuple.
+ */
+type DeclaredResourceServices<Resources extends ReadonlyArray<AnyResourceContribution>> =
+  number extends Resources["length"] ? never : ResourceServices<Resources[number]>
+
 /** Author-facing input to `request({...})`. */
-export interface RequestInput<
+export type RequestInput<
   Input = unknown,
   Output = unknown,
   R = never,
   E extends RequestFailure = CapabilityError,
+  Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
+  Feature = never,
+> = RequestInputFields<Input, Output, R, E, Resources, Feature> &
+  RequiredDeclarations<Resources, Feature>
+
+interface RequestInputFields<
+  Input,
+  Output,
+  R,
+  E extends RequestFailure,
+  Resources extends ReadonlyArray<AnyResourceContribution>,
+  Feature,
 > {
   /** Stable id (capability-local). Used for routing. */
   readonly id: string
@@ -306,9 +359,23 @@ export interface RequestInput<
     readonly keybind?: string
   }
   /**
+   * The resources whose services the handler yields. Each is a
+   * `defineResource` value the same extension registers; the loader fails
+   * the extension when it does not.
+   */
+  readonly resources?: Resources
+  /**
+   * The branch-tool feature whose storage the handler yields. The loader
+   * fails the extension in a root that installs another feature.
+   */
+  readonly branchTools?: BranchToolFeature<Feature>
+  /**
    * The request handler. It fails with its own tagged error; the factory
    * wraps that into the `CapabilityError` the wire carries, under the id
    * this input names and the extension `defineRequests`/`defineExtension` bind.
+   * It may yield `LeafServices`, the services of its `resources`, and the
+   * storage of its `branchTools`; a handler that needs any other service
+   * does not compile.
    */
   readonly execute: CapabilityEffect<Input, Output, R, E>
 }
@@ -319,9 +386,14 @@ export interface RequestInput<
  * read via the `ref(capability)` accessor, so a caller needs no separate
  * `*Ref` const next to each request.
  */
-export function request<Input, Output, R = never, E extends RequestFailure = CapabilityError>(
-  input: RequestInput<Input, Output, R, E>,
-): RequestCapability<Input, Output>
+export function request<
+  Input,
+  Output,
+  R extends LeafServices | DeclaredResourceServices<Resources> | Feature = never,
+  E extends RequestFailure = CapabilityError,
+  const Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
+  Feature = never,
+>(input: RequestInput<Input, Output, R, E, Resources, Feature>): RequestCapability<Input, Output>
 export function request(input: {
   readonly id: string
   readonly input: Schema.Codec<unknown, unknown, never, never>
@@ -329,6 +401,8 @@ export function request(input: {
   readonly description?: string
   readonly answersDuringTurn?: boolean
   readonly slash?: RequestInput<unknown, unknown>["slash"]
+  readonly resources?: ReadonlyArray<AnyResourceContribution>
+  readonly branchTools?: BranchToolFeature<never>
   readonly execute: ErasedCapabilityEffect<RequestFailure>
 }): RequestCapability {
   const rpcId = RpcId.make(input.id)
@@ -378,6 +452,8 @@ export function request(input: {
     slash: input.slash,
     description: input.description,
     answersDuringTurn: input.answersDuringTurn,
+    resources: input.resources ?? [],
+    ...(Predicate.isNotUndefined(input.branchTools) && { branchTools: input.branchTools }),
     input: input.input,
     output: input.output,
     effect,
@@ -461,6 +537,10 @@ interface GentToolMetadata<
   /** The author's one-line result summary over wire values; see `ToolInput.summary`. */
   // oxlint-disable-next-line effect/noUnknownParameters -- Stored results are wire values; the author's typed function reads them.
   readonly summary?: (input: unknown, output: unknown) => string
+  /** The resources the tool names; its extension must register each of these definitions. */
+  readonly resources: ReadonlyArray<AnyResourceContribution>
+  /** The branch-tool feature the tool names; its root must install it. */
+  readonly branchTools?: BranchToolFeature<never>
 }
 
 // oxlint-disable-next-line effect/noNullish -- The metadata annotation is absent on native tools outside the Gent factory.
@@ -585,13 +665,27 @@ export const getToolPrompt = (
  *  `Params` is a `Schema.Codec<I, E, never, never>` — the tool adapter
  *  decodes JSON synchronously, and Effect AI encodes the streamed tool-call
  *  parameters, so neither direction may have a context requirement. */
-export interface ToolInput<
+export type ToolInput<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Params extends Schema.Codec<any, any, never, never> = Schema.Codec<any, any, never, never>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Output extends Schema.Encoder<any, never> = Schema.Encoder<any, never>,
   Error = never,
   Deps = never,
+  Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
+  Feature = never,
+> = ToolInputFields<Params, Output, Error, Deps, Resources, Feature> &
+  RequiredDeclarations<Resources, Feature>
+
+interface ToolInputFields<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Params extends Schema.Codec<any, any, never, never>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Output extends Schema.Encoder<any, never>,
+  Error,
+  Deps,
+  Resources extends ReadonlyArray<AnyResourceContribution>,
+  Feature,
 > extends ToolDeclarations {
   /** Stable id (extension-local). Used by the LLM as the tool name. */
   readonly id: string
@@ -613,8 +707,23 @@ export interface ToolInput<
    *  through this schema, and Gent stores the same schema in metadata for
    *  lifecycle hooks and direct tool-runner invocation. */
   readonly output: Output
-  /** The tool body. Receives decoded `params`; host capabilities are imported
-   *  as constrained Effect services such as `ExtensionContext`. */
+  /**
+   * The resources whose services the body yields. Each is a `defineResource`
+   * value the same extension registers; the loader fails the extension when
+   * it does not.
+   */
+  readonly resources?: Resources
+  /**
+   * The branch-tool feature whose storage the body yields. The composition
+   * root installs it (`createDependencies({ branchTools })`); the loader
+   * fails the extension in a root that installs another feature.
+   */
+  readonly branchTools?: BranchToolFeature<Feature>
+  /**
+   * The tool body. Receives decoded `params`. It may yield `LeafServices`, the
+   * services of its `resources`, and the storage of its `branchTools`; a body
+   * that needs any other service does not compile.
+   */
   readonly execute: (
     params: Schema.Schema.Type<Params>,
   ) => Effect.Effect<Schema.Schema.Type<Output>, Error, Deps>
@@ -639,9 +748,11 @@ export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Output extends Schema.Encoder<any, never>,
   Error,
-  Deps,
+  Deps extends LeafServices | DeclaredResourceServices<Resources> | Feature,
+  const Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
+  Feature = never,
 >(
-  input: ToolInput<Params, Output, Error, Deps>,
+  input: ToolInput<Params, Output, Error, Deps, Resources, Feature>,
 ): ToolCapability<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error> => {
   const params = input.params
   const id = ToolId.make(input.id)
@@ -656,9 +767,11 @@ export const tool = <
     output: input.output,
     effect: (params) => {
       const decoded = Schema.decodeUnknownSync(Schema.toType(input.params))(params)
-      // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The factory erases author service requirements; the runtime provides them at execution boundaries.
+      // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The bound on `Deps` admits only services every tool body gets; the runtime provides them at execution boundaries.
       return input.execute(decoded) as Effect.Effect<Schema.Schema.Type<Output>, Error, never>
     },
+    resources: input.resources ?? [],
+    ...(Predicate.isNotUndefined(input.branchTools) && { branchTools: input.branchTools }),
   }
   Object.assign(metadata, declarationsOf(input))
   const summarize = input.summary

@@ -688,6 +688,7 @@ const stoppedTurnNotices = Effect.fn("SessionTools.stoppedTurnNotices")(function
 
 const SendSessionTool = tool({
   id: "session.send",
+  resources: [SentTurnsResource],
   description:
     "Send a message to another session: `parent` for the one that started you, or a session id from delegate.list or thread.list. A running session reads it at its next step; an idle one wakes to answer. Use it to ask your parent a question, hand a child a correction, or pass a sibling a fact.",
   params: SendSessionParams,
@@ -1013,6 +1014,7 @@ const ThreadStartResult = Schema.Struct({
 
 const ThreadStartTool = tool({
   id: "thread.start",
+  resources: [ThreadStartsResource],
   description:
     "Start a thread: a new session that works on a task unrelated to yours, beside you, and returns at admission. Its replies go to the user in that thread, never to you, and nothing wakes you when it ends. Use delegate.start instead when you need the result.",
   promptSnippet: "Start a thread for unrelated work",

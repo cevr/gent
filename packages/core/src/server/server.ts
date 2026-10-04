@@ -1,11 +1,9 @@
 import {
   type Context,
-  Crypto,
   DateTime,
   Duration,
   Effect,
   Exit,
-  FileSystem,
   Layer,
   Option,
   Path,
@@ -111,7 +109,7 @@ import {
   SessionSettingsUpdated,
   SessionStarted,
 } from "../domain/event.js"
-import { GentPlatform } from "../runtime/gent-platform.js"
+import { extensionPlatformServicesLive, GentPlatform } from "../runtime/gent-platform.js"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../runtime/agent-loop.js"
 import {
   admitChildSessionDepth,
@@ -176,7 +174,6 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/http"
-import { ChildProcessSpawner as ProcessSpawner } from "effect/process"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
 import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
 import { sweepToolImages } from "../runtime/tool-image.js"
@@ -1940,31 +1937,15 @@ interface DependenciesConfig<A = never> {
   /**
    * The branch-tool feature this deployment ships — its migrations, storage,
    * and per-branch factory as one value. Required, not defaulted: a root that
-   * ships a stateful tool surface and forgets this would get a tool that
-   * fails on first use, and a default would hide that until run time. A
-   * deployment whose tools are all stateless passes `noBranchTools`.
+   * ships a stateful tool surface must name its feature. A tool or request
+   * that declares another feature (`branchTools`) fails its extension's load
+   * with the reason. A deployment whose tools are all stateless passes
+   * `noBranchTools`.
    */
   branchTools: BranchToolFeature<A>
   /** Internal composition-root knobs used by tests to preset the production root. */
   overrides?: DependencyOverrides
 }
-
-const childProcessSpawnerLive = Layer.effect(
-  ProcessSpawner.ChildProcessSpawner,
-  Effect.service(ProcessSpawner.ChildProcessSpawner),
-)
-
-// The platform services extension leaves yield directly: files, paths,
-// processes, and ids. Re-provided here so every root must supply them.
-const platformServicesLive = Layer.provideMerge(
-  Layer.mergeAll(
-    Layer.effect(FileSystem.FileSystem, Effect.service(FileSystem.FileSystem)),
-    Layer.effect(Path.Path, Effect.service(Path.Path)),
-    Layer.effect(Crypto.Crypto, Effect.service(Crypto.Crypto)),
-    Layer.effect(GentPlatform, Effect.service(GentPlatform)),
-  ),
-  childProcessSpawnerLive,
-)
 
 const makeStorageLayer = <A>(config: DependenciesConfig<A>) => {
   const branchTools = config.branchTools
@@ -2111,7 +2092,9 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
     // The app names the branch-tool feature it ships. The loop builds its
     // layer without knowing what it is.
     Layer.succeed(CurrentBranchToolFeature, config.branchTools),
-    platformServicesLive,
+    // The platform services extension leaves yield directly, re-provided
+    // here so every root must supply them.
+    extensionPlatformServicesLive,
     runtimeEnvironmentLive,
   )
   const stored = Layer.provideMerge(Layer.provideMerge(toolImageSweepLive, storageLive), host)
@@ -2144,7 +2127,6 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
       FileLockService.layer,
       AgentLoopSessionGovernance.Live,
       ...Option.getOrElse(Option.fromUndefinedOr(config.overrides?.extraLayers), () => []),
-      FetchHttpClient.layer,
     ),
     launchProfile,
   )

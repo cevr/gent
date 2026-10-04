@@ -300,15 +300,18 @@ const requestExtensionAt = <Input, Output>(
         branchId: session.branchId,
       })
       .pipe(
-        Effect.mapError(
-          (cause) =>
-            new ClientTransportRequestError({
-              extensionId: ref.extensionId,
-              tag: ref.capabilityId,
-              message: `request failed: ${String(cause)}`,
-              cause,
-            }),
-        ),
+        Effect.mapError((cause) => {
+          // The server reports an extension's refusal in its own words; a pane
+          // that draws the message names the reason, not the transport.
+          let message = `request failed: ${String(cause)}`
+          if (cause._tag === "ExtensionProtocolError") message = cause.message
+          return new ClientTransportRequestError({
+            extensionId: ref.extensionId,
+            tag: ref.capabilityId,
+            message,
+            cause,
+          })
+        }),
       )
     return yield* Schema.decodeUnknownEffect(ref.output)(reply).pipe(
       Effect.mapError(
@@ -422,6 +425,14 @@ export interface ClientShell {
    * was open. A pane widget renders while `isOpen` answers true for its name.
    */
   readonly pane: PaneOwner
+  /**
+   * Load the client extensions again, as the host does when a turn ends and
+   * a client file changed: an unchanged one stays as it is, a changed one
+   * sets up from its new version and the old one's lifetime ends, a removed
+   * or disabled one goes. A new version that fails keeps the last good one,
+   * and the failure is reported. The `/extensions` pane's `r` calls it.
+   */
+  readonly reloadExtensions: () => void
 }
 
 /** Open and close panes by name; at most one is open. */
@@ -433,20 +444,26 @@ export interface PaneOwner {
   readonly isOpen: (id: string) => boolean
 }
 
-interface ClientLifecycle {
-  /** Allocate resources in the client provider lifetime, not the setup request. */
+/**
+ * The lifetime of the extension that yields it. The loader gives each
+ * extension its own: it ends when a later load replaces the extension (a new
+ * version of its file) or removes it (its file is gone, or a config disables
+ * it), and at the latest when the `ExtensionUIProvider` unmounts.
+ */
+export interface ClientLifecycle {
+  /** Allocate resources in the extension's lifetime, not the setup request. */
   readonly scoped: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, Exclude<R, Scope.Scope>>
   /**
-   * Register a cleanup callback to run when the surrounding
-   * `ExtensionUIProvider` unmounts (i.e. when the per-provider runtime is
-   * disposed). Use for Solid `createRoot(dispose)` disposers, event
-   * unsubscribes, and any other resource a widget setup detaches.
+   * Register a cleanup callback to run when the extension's lifetime ends.
+   * Use for Solid `createRoot(dispose)` disposers, event unsubscribes, and any
+   * other resource a widget setup detaches.
    *
    * Setups call this synchronously during `Effect.gen`; cleanups fire in
-   * registration order. Failures inside a cleanup are swallowed so one
-   * broken disposer cannot block the rest.
+   * registration order, before what `scoped` allocated is released. Failures
+   * inside a cleanup are swallowed so one broken disposer cannot block the
+   * rest. A cleanup registered after the lifetime ended runs at once.
    */
   readonly addCleanup: (fn: () => void) => void
 }
@@ -483,7 +500,11 @@ export interface ClientContextDeps {
   readonly lifecycle: Pick<ClientLifecycle, "addCleanup">
 }
 
-/** `lifecycle.scoped` allocates in the scope that builds this layer: the client runtime's. */
+/**
+ * `lifecycle.scoped` allocates in the scope that builds this layer: the
+ * client runtime's. The loader gives each extension's setup its own
+ * lifecycle in a scope forked from this one.
+ */
 export const makeClientContextLayer = (deps: ClientContextDeps): Layer.Layer<ClientContext> =>
   Layer.effect(
     ClientContext,

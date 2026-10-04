@@ -338,7 +338,11 @@ export const resetStorage = (
 const formatIssue = (issue: ExtensionHealthIssue): string =>
   Match.value(issue).pipe(
     Match.tagsExhaustive({
-      ActivationFailed: (issue) => `activation failed during ${issue.phase}: ${issue.error}`,
+      ActivationFailed: (issue) =>
+        `activation failed during ${issue.phase}: ${issue.error}${Option.match(
+          Option.fromUndefinedOr(issue.runningVersion),
+          { onNone: () => "", onSome: (version) => `; version ${version.slice(0, 12)} still runs` },
+        )}`,
       ModelCatalogFailed: (issue) =>
         `model driver ${issue.driverId} could not list its models: ${issue.error}`,
     }),
@@ -349,7 +353,12 @@ const formatExtensions = (extensions: ExtensionDoctorHealth): ReadonlyArray<stri
   const error = Option.fromNullishOr(extensions.error)
   if (Option.isSome(error)) lines.push(`  Error: ${error.value}`)
   const snapshot = Option.fromNullishOr(extensions.snapshot)
-  if (Option.isNone(snapshot) || snapshot.value._tag !== "Degraded") return lines
+  if (Option.isNone(snapshot)) return lines
+  const disabled = snapshot.value.disabledExtensions ?? []
+  if (disabled.length > 0) {
+    lines.push(`  Disabled: ${disabled.map((extension) => extension.manifest.id).join(", ")}`)
+  }
+  if (snapshot.value._tag !== "Degraded") return lines
 
   for (const extension of snapshot.value.degradedExtensions) {
     lines.push(`  ${extension.manifest.id}:`)
