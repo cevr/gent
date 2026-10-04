@@ -15,6 +15,7 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["src/**", "tsconfig.json", "package.json"],
+      "env": ["GENT_COMPILE_TARGET"],
       "outputs": ["dist/**"]
     },
     "install:global": {

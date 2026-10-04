@@ -48,6 +48,7 @@ import {
   waitForHeadlessReady,
 } from "./headless"
 import { type GentClientBundle } from "@gent/sdk"
+import { version } from "../package.json"
 import {
   CliStartupError,
   connectFlag,
@@ -445,10 +446,9 @@ const command = main.pipe(
   Command.withDescription("Gent - minimal, opinionated agent harness"),
 )
 
-// CLI
-const cli = Command.run(command, {
-  version: "0.0.0",
-})
+// CLI. The version is the one apps/tui/package.json names: the release sets it
+// there once, and the compiled build bundles the file.
+const cli = Command.run(command, { version })
 const TraceLoggerLayer = Layer.unwrap(
   clientTraceLogger.pipe(Effect.map((logger) => Logger.layer([logger]))),
 )

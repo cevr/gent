@@ -1272,7 +1272,11 @@ build names itself with one define, `__GENT_BUILD__` (`{ id, version }`: a
 fresh id per build and the version of `apps/tui/package.json`). It has two
 readers: `GentPlatform.build` (`Compiled` with the id and version, else
 `Source`), by which the cell picks its worker and discovery names the build,
-and the builtin extensions, whose artifact identity is `build:<id>`.
+and the builtin extensions, whose artifact identity is `build:<id>`. The CLI's
+`--version` reads the same `apps/tui/package.json`, which the bundle carries.
+`GENT_COMPILE_TARGET` (a turbo build env input) names the Bun runtime both
+compiles embed, such as `bun-linux-x64-baseline`; unset, each embeds the
+host's.
 The actor section of `runtime/agent-loop.ts` allocates a child of the actor scope for each loop rebuild.
 It publishes the loop handle before it transfers scope ownership. Failure or
 interruption during construction closes that child immediately. A build that

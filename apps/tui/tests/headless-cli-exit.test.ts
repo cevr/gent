@@ -73,6 +73,10 @@ const runGent = (args: ReadonlyArray<string>, options: { readonly keyless?: bool
   })
 const runHeadless = (args: ReadonlyArray<string>) => runGent(["-H", ...args])
 
+const decodeManifest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
+)
+
 describe("headless CLI", () => {
   it.scopedLive(
     "exits after a successful headless turn",
@@ -160,6 +164,26 @@ describe("headless CLI", () => {
         })
         expect(stderr).toBe("HeadlessUnansweredError: the turn ended without an answer\n")
         expect(exitCode).toBe(1)
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
+  // The release sets the version once, in apps/tui/package.json.
+  it.scopedLive(
+    "--version prints the version apps/tui/package.json names",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const manifest = path.resolve(
+          yield* path.fromFileUrl(new URL("../package.json", import.meta.url)),
+        )
+        const { version } = decodeManifest(yield* fs.readFileString(manifest))
+        const { exitCode, stdout } = yield* runGent(["--version"])
+        expect({ exitCode, stdout: stdout.trim() }).toEqual({
+          exitCode: 0,
+          stdout: `gent v${version}`,
+        })
       }).pipe(Effect.provide(BunServices.layer)),
     20000,
   )

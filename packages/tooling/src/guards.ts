@@ -1655,6 +1655,7 @@ export const findUnenabledPluginRules = (
 const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_LOG_LEVEL", "a developer sets this by hand to raise log verbosity"],
   ["GENT_AUTH_DIRECTORY", "the operator names the auth directory"],
+  ["GENT_COMPILE_TARGET", "the release build names the Bun runtime each platform embeds"],
 ])
 
 /**

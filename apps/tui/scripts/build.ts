@@ -1,6 +1,6 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import solidTransformPlugin from "@opentui/solid/bun-plugin"
-import { Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Config, Crypto, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 
 class BuildError extends Schema.TaggedError<BuildError>()("BuildError", {
   message: Schema.String,
@@ -8,6 +8,26 @@ class BuildError extends Schema.TaggedError<BuildError>()("BuildError", {
 
 /** The version field of `apps/tui/package.json`: the gent version. */
 const PackageVersion = Schema.fromJsonString(Schema.Struct({ version: Schema.NonEmptyString }))
+
+/**
+ * The release builds each platform on its own runner and names the Bun
+ * runtime to embed (x64 takes the baseline build, which runs on CPUs without
+ * AVX2). Unset, the build embeds the host's own runtime. The cell worker's
+ * build reads the same variable (`packages/extensions/package.json`).
+ */
+const compileTarget = Config.option(
+  Config.Literals(
+    [
+      "bun-darwin-arm64",
+      "bun-darwin-x64",
+      "bun-darwin-x64-baseline",
+      "bun-linux-arm64",
+      "bun-linux-x64",
+      "bun-linux-x64-baseline",
+    ],
+    "GENT_COMPILE_TARGET",
+  ),
+)
 
 /** `__GENT_BUILD__`: an object literal the bundler puts where the source names it. */
 const encodeBuildDefine = Schema.encodeSync(
@@ -45,6 +65,8 @@ const build = Effect.gen(function* () {
   const { version } = yield* fs
     .readFileString(path.join(rootDir, "package.json"))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageVersion)))
+  const target = yield* compileTarget
+  yield* Effect.log(`Compile target: ${Option.getOrElse(target, () => "this host")}`)
   const buildResult = yield* Effect.promise(() =>
     // oxlint-disable-next-line effect/noGlobals -- the build script is its own process entry, and Bun.build has no Effect service
     Bun.build({
@@ -60,6 +82,7 @@ const build = Effect.gen(function* () {
         __GENT_BUILD__: encodeBuildDefine({ id, version }),
       },
       compile: {
+        ...Option.match(target, { onNone: () => ({}), onSome: (name) => ({ target: name }) }),
         outfile,
         // One shared server serves many projects, so the directory gent starts
         // in sets nothing for it: no `.env`, `bunfig.toml`, `tsconfig.json` or
