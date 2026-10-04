@@ -3324,6 +3324,76 @@ describe("virtual model routing", () => {
   )
 
   it.scopedLive(
+    "a route with no choice signed in asks no classifier, falls back, and names the providers without a sign-in",
+    () =>
+      Effect.gen(function* () {
+        // The classifier has a sign-in; neither choice's provider has one.
+        const mainModel = ModelId.make("unsigned-main/main")
+        const altModel = ModelId.make("unsigned-alt/alt")
+        const chatDriver = (id: string): ModelDriverContribution => ({
+          id,
+          name: id,
+          envCredential: "GENT_TEST_ROUTE_SIGN_IN_KEY_NEVER_SET",
+          resolveModel: () => Effect.die("the test resolver serves the scripted model"),
+        })
+        const routes = yield* Ref.make(0)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("on the default"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          signIn: "checked",
+          extensionInputs: [
+            routingExtension({
+              choices: [
+                { model: mainModel, reason: "everyday work" },
+                { model: altModel, reason: "hard work" },
+              ],
+              drivers: [chatDriver("unsigned-main"), chatDriver("unsigned-alt"), routeJudgeDriver],
+              route: () =>
+                Effect.gen(function* () {
+                  yield* Ref.update(routes, (count) => count + 1)
+                  const ctx = yield* ExtensionContext
+                  yield* ctx.Models.decide({
+                    definition: Decision.make({
+                      input: Schema.String,
+                      decisions: {
+                        choice: Decision.classify({
+                          instructions: "Which choice",
+                          criteria: { choice1: "light work", choice2: "hard work" },
+                        }),
+                      },
+                    }),
+                    input: "route me",
+                  })
+                  return { choice: 1, reason: "hard" }
+                }),
+            }),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "route me" })
+        const events = yield* afterTurns(1)
+        expect(yield* Ref.get(routes)).toBe(0)
+        const [routed] = routedEvents(events)
+        expect(routed).toMatchObject({
+          model: mainModel,
+          choice: 0,
+          fallback: true,
+          reason:
+            'no choice can run: the providers "unsigned-main" and "unsigned-alt" have no sign-in',
+        })
+        expect(routed?.classifier).toBeUndefined()
+        expect(routed?.costUsd).toBeUndefined()
+        expect(stepModels(events)).toEqual([mainModel])
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
     "a route that falls back keeps the model the branch runs on when it is a choice",
     () =>
       Effect.gen(function* () {

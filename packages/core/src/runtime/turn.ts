@@ -1731,24 +1731,11 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
   const candidates = listed.map((entry, index) =>
     Option.filter(entry, () => Option.isNone(unsignedAt(index))),
   )
-  const candidateAt = (index: number) => Option.flatten(Option.fromUndefinedOr(candidates[index]))
+  const entryAt = (models: ReadonlyArray<Option.Option<Model>>) => (index: number) =>
+    Option.flatten(Option.fromUndefinedOr(models[index]))
+  const candidateAt = entryAt(candidates)
   const runnable = (index: number) => Option.isSome(candidateAt(index))
-  const runsOnCurrent = (index: number) =>
-    Option.exists(candidateAt(index), (model) => Option.contains(log.current, model.id))
   const indexes = choices.map((_, index) => index)
-  // The current model when it is a choice (the default first, then one
-  // that names it), else the default choice, else the first that runs.
-  const fallbackIndex = Option.liftPredicate(served.model.fallback, runsOnCurrent).pipe(
-    Option.orElse(() =>
-      Option.fromUndefinedOr(
-        indexes.find(
-          (index) => runsOnCurrent(index) && Predicate.isNotUndefined(choices[index]?.model),
-        ),
-      ),
-    ),
-    Option.orElse(() => Option.liftPredicate(served.model.fallback, runnable)),
-    Option.orElse(() => Option.fromUndefinedOr(indexes.find(runnable))),
-  )
   const atChoice = (index: number, reason: string, fellBack: boolean) =>
     Option.map(candidateAt(index), (model) => ({
       choice: Option.some(index),
@@ -1756,8 +1743,48 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
       reason,
       fellBack,
     }))
-  const fallback = (reason: string) =>
-    Option.flatMap(fallbackIndex, (index) => atChoice(index, reason, true))
+  // The current model when it is a choice (the default first, then one
+  // that names it), else the default choice, else the first that runs.
+  const fallbackAmong = (at: (index: number) => Option.Option<Model>, reason: string) => {
+    const runs = (index: number) => Option.isSome(at(index))
+    const runsOnCurrent = (index: number) =>
+      Option.exists(at(index), (model) => Option.contains(log.current, model.id))
+    const index = Option.liftPredicate(served.model.fallback, runsOnCurrent).pipe(
+      Option.orElse(() =>
+        Option.fromUndefinedOr(
+          indexes.find(
+            (index) => runsOnCurrent(index) && Predicate.isNotUndefined(choices[index]?.model),
+          ),
+        ),
+      ),
+      Option.orElse(() => Option.liftPredicate(served.model.fallback, runs)),
+      Option.orElse(() => Option.fromUndefinedOr(indexes.find(runs))),
+    )
+    return Option.flatMap(index, (choice) =>
+      Option.map(at(choice), (model) => ({
+        choice: Option.some(choice),
+        model,
+        reason,
+        fellBack: true,
+      })),
+    )
+  }
+  // With no choice signed in the router is not asked: the turn falls back
+  // among the listed choices, and the provider's own sign-in error stops the
+  // request, as it does on a model selected by hand.
+  const unsigned = [...new Set(unsignedDriver.flatMap(Option.toArray))].map(
+    (driverId) => `"${driverId}"`,
+  )
+  const unsignedProviders = () => {
+    if (unsigned.length <= 1) return `the provider ${unsigned.join("")} has`
+    return `the providers ${unsigned.slice(0, -1).join(", ")} and ${unsigned.at(-1)} have`
+  }
+  const noneSignedIn = `no choice can run: ${unsignedProviders()} no sign-in`
+  const anyRunnable = indexes.some(runnable)
+  const fallback = (reason: string) => {
+    if (anyRunnable) return fallbackAmong(candidateAt, reason)
+    return fallbackAmong(entryAt(listed), noneSignedIn)
+  }
 
   const host = yield* CurrentExtensionHostContext
   const calls = yield* Ref.make<ReadonlyArray<RouteCall>>([])
@@ -1837,7 +1864,9 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
   const firstRequest = params.step <= 1
   if (firstRequest && !endsOnInput(resolved.messages))
     decision = keep("the conversation ends on an assistant message, so the turn keeps its model")
-  if (firstRequest && endsOnInput(resolved.messages)) {
+  if (firstRequest && endsOnInput(resolved.messages) && !anyRunnable)
+    decision = fallback(noneSignedIn)
+  if (firstRequest && endsOnInput(resolved.messages) && anyRunnable) {
     const picked = yield* askRouter
     if (Result.isFailure(picked)) {
       yield* Effect.logWarning("turn.route-fell-back").pipe(

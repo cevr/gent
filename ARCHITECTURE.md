@@ -838,7 +838,10 @@ Shape:
   the recorded event; nothing routes again. A route that fails, dies, takes
   over 10 s or picks a choice the turn cannot run falls back to the current
   model when it is a choice, else the default; a turn never fails on its
-  route. The turn routes only where the request ends on the user's input: at
+  route. With no choice signed in, the router is not asked (no classifier
+  call): the turn falls back the same way among the listed choices, the
+  reason names each provider with no sign-in, and that provider's sign-in
+  error stops the request, as on a model selected by hand. The turn routes only where the request ends on the user's input: at
   a later step (the selection changed mid-turn) or on a history that ends on
   an assistant message (Anthropic 4.6 and later refuse that prefill) it keeps
   the model the branch runs on. Routing writes nothing the model reads: it
