@@ -1211,6 +1211,20 @@ const runOneTurn = (params: {
     return { client, sessionId }
   })
 
+/** The ```json block under `## Agents` in the extension guide, read as a config file. */
+const guideAgentsConfig = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const guide = yield* fs.readFileString(
+    yield* path.fromFileUrl(new URL("../../../../docs/extensions.md", import.meta.url)),
+  )
+  const section = guide.slice(guide.indexOf("## Agents\n"))
+  const block = section.slice(section.indexOf("```json\n") + "```json\n".length)
+  return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.toEncoded(UserConfig)))(
+    block.slice(0, block.indexOf("```")),
+  )
+})
+
 describe("agents from config over RPC", () => {
   it.scopedLive("a project config entry with a new name creates an agent a session runs as", () =>
     Effect.gen(function* () {
@@ -1244,6 +1258,30 @@ describe("agents from config over RPC", () => {
       )
       expect(listed?.description).toBe("Paints one scene")
       expect(listed?.tools).toEqual(["film.*", "!film.check", "read"])
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive("the JSON agent in the extension guide runs as written", () =>
+    Effect.gen(function* () {
+      const painter = AgentName.make("painter")
+      const { client, sessionId } = yield* runOneTurn({
+        agents: [],
+        user: {},
+        project: yield* guideAgentsConfig,
+        agent: Option.some(painter),
+        step: {
+          ...textStep("done"),
+          assertRequest: (request) => expect(request.model).toBe("anthropic/claude-sonnet-4-6"),
+          assertOptions: (options) => expect(advertised(options)).toEqual(["film__look", "read"]),
+        },
+      })
+      const listed = (yield* client.driver.list({ sessionId })).agents.find(
+        (agent) => agent.name === painter,
+      )
+      expect(listed?.paths).toEqual([
+        { path: "apps/animations/src/films", access: "write" },
+        { path: ".claude/skills/film", access: "read" },
+      ])
     }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
   )
 

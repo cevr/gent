@@ -148,8 +148,9 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    * `AgentPatch`). A name no extension registers creates an agent; one that
    * names a registered agent replaces the fields it sets. A project entry
    * replaces the fields it names over the user entry, and a run's own
-   * `RunSpec.overrides` over both (`resolveAgentRoster`). An entry written before `tools` (`allowedTools`, `deniedTools`,
-   * `modelId`) decodes into `tools` and `model`.
+   * `RunSpec.overrides` over both (`resolveAgentRoster`). An entry written
+   * before `tools` (`allowedTools`, `deniedTools`, `modelId`) decodes into
+   * `tools` and `model`.
    */
   agents: Schema.optional(Schema.Record(AgentName, StoredAgentPatch)),
   /**

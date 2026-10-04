@@ -1187,9 +1187,9 @@ const collectProjectionPromptSections = (
  * Compile the active tool set and prompt sections for a turn.
  *
  * Pipeline:
- * 1. The agent's lists: an agent with `allowedTools` gets exactly those
- *    tools, less its `deniedTools` (`AgentDefinition.admitsTool`); no
- *    extension adds a tool to the set
+ * 1. The agent's `tools` patterns: the agent gets exactly the tools they
+ *    admit (`AgentDefinition.admitsTool`); no extension adds a tool to the
+ *    set
  * 2. Drop interactive tools in a non-interactive turn
  * 3. The last `modelSet` picks the model-facing subset
  * 4. Collect extension-contributed prompt sections
@@ -1200,7 +1200,7 @@ export const compileToolPolicy = (
   turn: { readonly interactive?: boolean },
   extensionProjections: ReadonlyArray<TurnProjection>,
 ): CompiledToolPolicy => {
-  // 1. The agent's lists
+  // 1. The agent's tool patterns
   let tools = allTools.filter((tool) => agent.admitsTool(String(getToolId(tool))))
 
   // 2. Filter interactive tools in a turn no user watches (`turnCanAsk`)
