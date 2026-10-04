@@ -299,6 +299,39 @@ export default defineExtension({
 grants. Host authority still comes from `ExtensionContext` or an
 extension-owned service.
 
+#### Tool images
+
+A tool hands the model an image by reference. `saveToolImage` stores the
+bytes once in the content-addressed blob store,
+`<data dir>/blobs/<sha256>.<ext>`, and returns a `ToolImage` (`sha256`,
+`mediaType`, `width`, `height`, `bytes`, `source`). Put it anywhere in the
+tool's output; the output schema holds it as `ToolImage`.
+
+```ts
+import { saveToolImage, tool, ToolImage } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+
+export const ScreenshotTool = tool({
+  id: "screenshot",
+  description: "Show the model the picture at a path",
+  params: Schema.Struct({ path: Schema.String }),
+  output: Schema.Struct({ image: ToolImage }),
+  execute: ({ path }) =>
+    Effect.gen(function* () {
+      // A relative path resolves against the session cwd; it is the image's
+      // `source` unless the input names one.
+      return { image: yield* saveToolImage({ path }) }
+    }),
+})
+```
+
+`saveToolImage` takes `{ bytes }` or `{ path }`, and an optional `source`
+label. It reads the format and size from the image's own header and takes
+PNG, JPEG, GIF and WebP up to 3.75 MiB and 8,000 pixels a side; anything
+else fails with `ToolImageError`, so an image the model API would refuse
+never enters a session. The stored tool result stays ordinary JSON. A server
+start removes a blob nobody saved or sent for 14 days.
+
 ### request — extension-to-extension RPC
 
 ```ts

@@ -1959,6 +1959,10 @@ host-owned design. It should expose:
   platform facts such as OS info, executable path, and home directory;
 - `runProcess` / `ProcessError`: the one command helper over the Effect
   `ChildProcessSpawner`;
+- `saveToolImage` / `ToolImage` / `ToolImageError`: a tool's image, stored
+  once by content (`<data dir>/blobs/<sha256>.<ext>`) and returned by
+  reference in its output (`packages/core/src/runtime/tool-image.ts`; the
+  server sweeps blobs unused for 14 days at start);
 - author-facing errors: load, driver, provider-auth, service, process and
   interaction errors that extension code can intentionally return or inspect;
   an error only tests read (the capability errors) stays in core, where core

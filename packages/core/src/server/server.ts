@@ -179,6 +179,7 @@ import {
 import { ChildProcessSpawner as ProcessSpawner } from "effect/process"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
 import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
+import { sweepToolImages } from "../runtime/tool-image.js"
 import { RpcSerialization, RpcServer, RpcTest } from "effect/rpc"
 
 // ── client origin ───────────────────────────────────────────────────────────
@@ -2060,6 +2061,19 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
     }),
   )
 
+  // Tool images nobody saved or sent for 14 days go when the server starts,
+  // on their own fiber: no request waits for the sweep.
+  const toolImageSweepLive = Layer.effectDiscard(
+    sweepToolImages(config.home).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("tool-images.sweep.failed").pipe(
+          Effect.annotateLogs({ error: String(cause) }),
+        ),
+      ),
+      Effect.forkScoped,
+    ),
+  )
+
   // One graph, built bottom up: each level provides every level above it,
   // and each layer appears in it once, so each builds once. Effect memoizes
   // only leaf layers; a composite (`provide`, `merge`) builds once for every
@@ -2072,7 +2086,7 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
     platformServicesLive,
     runtimeEnvironmentLive,
   )
-  const stored = Layer.provideMerge(storageLive, host)
+  const stored = Layer.provideMerge(Layer.merge(storageLive, toolImageSweepLive), host)
   const kernel = Layer.provideMerge(
     Layer.mergeAll(
       clusterRunnerLive,
