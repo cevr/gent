@@ -331,7 +331,11 @@ const drained = (emulator: Terminal, bytes = ""): Effect.Effect<void> =>
     emulator.write(bytes, () => resume(Effect.void))
   })
 
-/** Rows `from` (inclusive) to `to` (exclusive) of the active buffer. */
+/**
+ * Rows `from` (inclusive) to `to` (exclusive) of the active buffer, each cut
+ * at the terminal's width: after a shrink a line of the alternate screen keeps
+ * the cells drawn past the new last column, and a terminal does not show them.
+ */
 const readRows = (emulator: Terminal, from: number, to: number): string[] => {
   const buffer = emulator.buffer.active
   const rows: string[] = []
@@ -339,7 +343,7 @@ const readRows = (emulator: Terminal, from: number, to: number): string[] => {
     rows.push(
       Option.match(Option.fromNullishOr(buffer.getLine(y)), {
         onNone: () => "",
-        onSome: (line) => line.translateToString(false),
+        onSome: (line) => line.translateToString(false, 0, emulator.cols),
       }),
     )
   }

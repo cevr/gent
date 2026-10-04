@@ -47,4 +47,40 @@ describe("drive scripts", () => {
       }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
     TEST_TIMEOUT,
   )
+
+  it.scopedLive(
+    "after a shrink a capture shows only the columns the terminal has, as a terminal draws them",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const out = yield* makeTempDirectoryScoped("gent-drive-")
+        // The alternate screen does not reflow: its rows keep the cells drawn
+        // at the wider size, past the new last column.
+        yield* runDriveScript({
+          command: [
+            "bash",
+            "-c",
+            "printf '\\033[?1049h\\033[H%s' \"$(printf 'x%.0s' $(seq 1 60))PAST-THE-EDGE\"; while true; do sleep 0.05; done",
+          ],
+          cwd: out,
+          cols: 80,
+          rows: 6,
+          out,
+          steps: [
+            ["waitFor", "PAST-THE-EDGE", 5_000],
+            ["resize", 40, 6],
+            ["wait", 200],
+            ["cap", "after-shrink"],
+            ["capAll", "after-shrink-all"],
+          ],
+        })
+        for (const name of ["after-shrink", "after-shrink-all"]) {
+          const rows = (yield* fs.readFileString(`${out}/${name}.txt`)).split("\n").slice(1)
+          expect(rows.join("\n")).not.toContain("PAST-THE-EDGE")
+          // Each row is `NNN|` and at most the 40 columns on screen.
+          expect(Math.max(...rows.map((row) => row.length))).toBeLessThanOrEqual(4 + 40)
+        }
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
 })
