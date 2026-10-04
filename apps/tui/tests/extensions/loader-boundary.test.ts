@@ -2190,6 +2190,29 @@ export default {
   )
 
   it.scopedLive(
+    "a disable ends the failure of an extension that never set up, and an enable tries it again",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        yield* fixture.write(
+          "refused.client.ts",
+          `import { Effect } from "effect"
+export default { id: "@test/refused", setup: Effect.fail(new Error("setup refused")) }`,
+        )
+        const reasons = (load: TuiExtensionLoad) =>
+          load.resolved.failures.map((failure) => failure.reason)
+        expect(reasons(yield* fixture.load)).toEqual(["setup failed: Error: setup refused"])
+        yield* Ref.set(fixture.disabled, ["@test/refused"])
+        expect(yield* fixture.stale).toBe(true)
+        expect(reasons(yield* fixture.load)).toEqual([])
+        expect(yield* fixture.stale).toBe(false)
+        expect(reasons(yield* fixture.load)).toEqual([])
+        yield* Ref.set(fixture.disabled, [])
+        expect(reasons(yield* fixture.load)).toEqual(["setup failed: Error: setup refused"])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
     "a replacement that fails setup brings back no disabled extension and no claimed id",
     () =>
       Effect.gen(function* () {

@@ -1262,8 +1262,10 @@ export const makeTuiExtensionLoader = (opts: {
       const importFailures: Array<ClientExtensionFailure> = []
       const outcomes: Array<FileOutcome> = []
       for (const file of files) {
-        if (Result.isFailure(file.outcome)) importFailures.push(file.outcome.failure)
-        else outcomes.push(file.outcome.success)
+        // A failure with no live version behind it names the id its version
+        // failed under, when one is known: a disabled id's is not reported.
+        if (Result.isSuccess(file.outcome)) outcomes.push(file.outcome.success)
+        else if (!disabled.has(file.outcome.failure.id)) importFailures.push(file.outcome.failure)
       }
       const builtinOutcomes = builtins.map((module): FileOutcome => {
         const previous = Option.fromUndefinedOr(live.get(builtinKey(module)))
