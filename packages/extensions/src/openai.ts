@@ -17,6 +17,7 @@ import {
   Ref,
   Result,
   Schema,
+  SchemaGetter,
   Scope,
   Semaphore,
   SynchronizedRef,
@@ -41,10 +42,13 @@ import {
   DEFAULT_RETRY_POLICY,
   defineExtension,
   ExtensionHost,
+  type FailureResponse,
   isRecord,
   Model,
   type ModelDriverContribution,
   ProviderAuthError,
+  rateLimitResponse,
+  retryAfterAt,
   type UpdateStoredOAuth,
   type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
@@ -92,6 +96,8 @@ import {
   withHeaders,
   ResponsesTransientStreamEvent,
   ModelHttpClient,
+  latestReset,
+  spentLimitsReset,
 } from "./providers.js"
 import type {
   OpenAiClient as OpenAiResponsesClient,
@@ -1694,6 +1700,97 @@ const reasoningReplayClient =
       ),
     )
 
+// ── Usage limit reset ──
+
+/**
+ * ChatGPT's 429 when the plan's usage limit is reached: the body names the
+ * reset in epoch seconds (`resets_at`) or as seconds from now
+ * (`resets_in_seconds`), and no retry-after header comes with it. Codex
+ * decodes the same shape (`codex-api/src/api_bridge.rs`).
+ */
+const UsageLimitBody = Schema.fromJsonString(
+  Schema.Struct({
+    error: Schema.Struct({
+      type: Schema.Literal("usage_limit_reached"),
+      resets_at: Schema.optional(Schema.Finite),
+      resets_in_seconds: Schema.optional(Schema.Finite),
+    }),
+  }),
+)
+
+/** Milliseconds per unit of the API's reset durations. */
+const DURATION_UNIT_MS = { h: 3_600_000, m: 60_000, s: 1000, ms: 1 } as const
+const isDurationUnit = Schema.is(Schema.Literals(["h", "m", "s", "ms"]))
+
+/** One `<number><unit>` term of a reset duration; `ms` before `m`. */
+const DURATION_TERM = /(\d+(?:\.\d+)?)(h|ms|m|s)/g
+
+/** The API's reset duration (`1s`, `6m0s`, `20ms`) as milliseconds. */
+const ResetDuration = Schema.String.check(
+  Schema.isPattern(/^(?:\d+(?:\.\d+)?(?:h|ms|m|s))+$/),
+).pipe(
+  Schema.decodeTo(Schema.Finite, {
+    decode: SchemaGetter.transform((text: string) =>
+      Array.from(text.matchAll(DURATION_TERM)).reduce((total, [, amount, unit]) => {
+        if (!isDurationUnit(unit)) return total
+        return total + Number(amount) * DURATION_UNIT_MS[unit]
+      }, 0),
+    ),
+    encode: SchemaGetter.transform((ms: number) => `${ms}ms`),
+  }),
+)
+
+/** The API's rate-limit headers: what is left of each limit, and how long until it is full again. */
+const RateLimitHeaders = Schema.Struct({
+  "x-ratelimit-remaining-requests": Schema.OptionFromOptionalKey(Schema.FiniteFromString),
+  "x-ratelimit-reset-requests": Schema.OptionFromOptionalKey(ResetDuration),
+  "x-ratelimit-remaining-tokens": Schema.OptionFromOptionalKey(Schema.FiniteFromString),
+  "x-ratelimit-reset-tokens": Schema.OptionFromOptionalKey(ResetDuration),
+})
+
+/** The reset a usage-limit body names, in epoch milliseconds. */
+const usageLimitReset = (body: string, nowMs: number): Option.Option<number> =>
+  Option.flatMap(Schema.decodeOption(UsageLimitBody)(body), ({ error }) => {
+    if (!Predicate.isUndefined(error.resets_at)) return Option.some(error.resets_at * 1000)
+    return Option.map(
+      Option.fromUndefinedOr(error.resets_in_seconds),
+      (seconds) => nowMs + seconds * 1000,
+    )
+  })
+
+/** When the spent API limits the headers report are full again, in epoch milliseconds. */
+const apiLimitsReset = (
+  headers: FailureResponse["headers"],
+  nowMs: number,
+): Option.Option<number> =>
+  Option.flatMap(Schema.decodeOption(RateLimitHeaders)(headers), (limits) => {
+    const limit = (remaining: Option.Option<number>, resetMs: Option.Option<number>) => ({
+      remaining,
+      resetAt: Option.map(resetMs, (ms) => nowMs + ms),
+    })
+    return spentLimitsReset([
+      limit(limits["x-ratelimit-remaining-requests"], limits["x-ratelimit-reset-requests"]),
+      limit(limits["x-ratelimit-remaining-tokens"], limits["x-ratelimit-reset-tokens"]),
+    ])
+  })
+
+/**
+ * When a retry of an OpenAI failure can succeed: the latest of the typed
+ * retry-after and, for a rate-limited request only, ChatGPT's usage-limit
+ * body and the reset of the API limits that are spent. Each is decoded by
+ * schema from the response the failure kept.
+ */
+const openAiRetryAt = (cause: unknown, nowMs: number): Option.Option<number> => {
+  const response = rateLimitResponse(cause)
+  return latestReset([
+    retryAfterAt(cause, nowMs),
+    Option.flatMap(response, ({ body }) =>
+      Option.flatMap(body, (text) => usageLimitReset(text, nowMs)),
+    ),
+    Option.flatMap(response, ({ headers }) => apiLimitsReset(headers, nowMs)),
+  ])
+}
+
 // ── Layer construction helpers ──
 
 /**
@@ -1924,6 +2021,7 @@ export const buildOpenAIModelDriver = (
     retry: {
       ...DEFAULT_RETRY_POLICY,
       transientStreamEvent: ResponsesTransientStreamEvent,
+      retryAt: openAiRetryAt,
     },
     overrides: OPENAI_OVERRIDES,
     resolveModel: (modelName, authInfo, hintsInput, catalog) =>

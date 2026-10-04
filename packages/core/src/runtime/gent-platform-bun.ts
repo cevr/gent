@@ -16,10 +16,20 @@
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter resolves its own executable once, before any Effect runs
 import { realpathSync } from "node:fs"
 import * as os from "node:os"
+// oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter reads Bun's build record, whose paths are relative to the process's directory
+import * as path from "node:path"
 import { Effect, Layer, Option, Result, Schema } from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
-import { GentBuild, GentPlatform, type RuntimeModuleSource, SignalError } from "./gent-platform.js"
+import {
+  GentBuild,
+  GentPlatform,
+  type ModuleBundle,
+  ModuleBundleError,
+  type RuntimeModuleSource,
+  SERVED_MODULE_QUERY,
+  SignalError,
+} from "./gent-platform.js"
 
 /**
  * The compiled build defines this symbol as `{ id, version }`
@@ -86,10 +96,88 @@ export const bindBunModules = Effect.fn("GentPlatform.bindModules")(function* (
   })
 })
 
+/** One build log line: where, then what. */
+const buildLogLine = (log: BuildMessage | ResolveMessage): string =>
+  Option.match(Option.fromNullishOr(log.position), {
+    onNone: () => log.message,
+    onSome: (position) => `${position.file}:${position.line}:${position.column}: ${log.message}`,
+  })
+
+/**
+ * `GentPlatform.bundleModule` on Bun: `Bun.build` with every package import
+ * external. The build's own record (`metafile`) names the files it read,
+ * relative to the process's directory.
+ */
+const bundleBunModule = (entry: string): Effect.Effect<ModuleBundle, ModuleBundleError> =>
+  Effect.tryPromise({
+    try: () =>
+      Bun.build({
+        entrypoints: [entry],
+        target: "bun",
+        format: "esm",
+        packages: "external",
+        metafile: true,
+        // The output names each input relative to this root in a comment, so
+        // the same files build the same text whatever the process's directory.
+        root: path.dirname(entry),
+        throw: false,
+      }),
+    catch: (cause) => new ModuleBundleError({ entry, message: causeMessage(cause) }),
+  }).pipe(
+    Effect.flatMap((result) => {
+      const output = Option.fromNullishOr(result.outputs[0])
+      if (!result.success || Option.isNone(output)) {
+        const message = result.logs.map(buildLogLine).join("\n") || "the build produced no module"
+        return Effect.fail(new ModuleBundleError({ entry, message }))
+      }
+      const recorded = Option.match(Option.fromNullishOr(result.metafile), {
+        onNone: () => [],
+        onSome: (metafile) => Object.keys(metafile.inputs),
+      })
+      const inputs = recorded.map((input) => path.resolve(process.cwd(), input))
+      return Effect.tryPromise({
+        try: () => output.value.text(),
+        catch: (cause) => new ModuleBundleError({ entry, message: causeMessage(cause) }),
+      }).pipe(Effect.map((code): ModuleBundle => ({ code, inputs })))
+    }),
+  )
+
+/**
+ * The code each served specifier imports as (`serveModule`). Bun keeps a
+ * module for the process lifetime, so its code stays here as long.
+ */
+const servedModules = new Map<string, string>()
+
+/**
+ * `GentPlatform.serveModule` on Bun: one runtime plugin, registered with the
+ * first served module, answers each load of a path with the served query from
+ * the map. The file's directory stays the importer's, so its package imports
+ * resolve as the file's own would.
+ */
+const serveBunModule = (specifier: string, code: string): Effect.Effect<void> =>
+  Effect.sync(() => {
+    const first = servedModules.size === 0
+    servedModules.set(specifier, code)
+    if (!first) return
+    Bun.plugin({
+      name: "gent-served-modules",
+      setup: (build) => {
+        build.onLoad({ filter: new RegExp(`\\?${SERVED_MODULE_QUERY}=`) }, (args) => ({
+          contents: Option.getOrElse(Option.fromNullishOr(servedModules.get(args.path)), () => ""),
+          loader: "js",
+        }))
+      },
+    })
+  })
+
 export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
   GentPlatform,
   GentPlatform.of({
     bindModules: bindBunModules,
+
+    bundleModule: bundleBunModule,
+
+    serveModule: serveBunModule,
 
     // oxlint-disable-next-line effect/noGlobals -- GentPlatform.randomId is the one owner of Bun's UUIDv7
     randomId: Effect.sync(() => Bun.randomUUIDv7()),

@@ -1,14 +1,39 @@
 import {
+  ApprovalService,
+  ConfigService,
+  createRpcHarness,
   ErrorOccurred,
   EventId,
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
   MessageReceived,
+  RuntimeEnvironment,
   StreamEnded,
+  textStep,
+  toolCallStep,
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
 } from "@gent/core/test-utils"
+import { BunPlatformLive } from "@gent/core/host"
+import { BuiltinExtensions } from "@gent/extensions"
+import { BunServices } from "@effect/platform-bun"
 import { describe, it, expect, test } from "effect-bun-test"
-import { Cause, Deferred, Effect, Exit, Fiber, Option, Schema, Sink, Stdio, Stream } from "effect"
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+  Sink,
+  Stdio,
+  Stream,
+} from "effect"
 import { TestClock } from "effect/testing"
 import * as Prompt from "effect/ai/Prompt"
 import {
@@ -125,6 +150,7 @@ const branchClient = (input: {
   readonly ownTurn: ReadonlyArray<AgentEvent>
   readonly sendAttempt?: (send: {
     readonly requestId?: string
+    readonly unattended?: boolean
   }) => Effect.Effect<void, RpcClientError>
   readonly sendFailure?: HeadlessRunnerTestError
   readonly respondInteraction?: (answer: {
@@ -168,7 +194,7 @@ const branchClient = (input: {
         ),
     },
     message: {
-      send: (send: { readonly requestId?: string }) =>
+      send: (send: { readonly requestId?: string; readonly unattended?: boolean }) =>
         Option.match(Option.fromUndefinedOr(input.sendAttempt), {
           onNone: () => Effect.void,
           onSome: (attempt) => attempt(send),
@@ -469,6 +495,21 @@ describe("runHeadless", () => {
     }),
   )
 
+  // The server keeps the mark on the message: a usage limit the turn hits
+  // arms no auto-resume, since nobody would watch the turn it starts.
+  headlessTest("the run's message says no user watches the turn it opens", () =>
+    Effect.gen(function* () {
+      const sends: Array<boolean> = []
+      const client = branchClient({
+        ownTurn: [completed()],
+        sendAttempt: (send) => Effect.sync(() => sends.push(send.unattended === true)),
+      })
+      const exit = yield* Effect.exit(run(client))
+      expect(exit._tag).toBe("Success")
+      expect(sends).toEqual([true])
+    }),
+  )
+
   headlessTest("fails when the event stream ends before turn completion", () =>
     Effect.gen(function* () {
       const client = createMockClient({
@@ -707,6 +748,58 @@ const exitCodeOf = (
 
 const interruptedBy = (signal: Option.Option<ExitSignal>, headless: boolean) =>
   makeCliTeardown({ signal: () => signal, interactive: () => !headless })
+
+// A real server: the extension admin verb asks, and a headless run with no
+// user declines, so nothing is written.
+describe("headless extension admin", () => {
+  headlessTest("a headless run declines an extension admin verb, and no config is written", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* makeTempDirectoryScoped("gent-headless-admin-home-")
+      const cwd = yield* makeTempDirectoryScoped("gent-headless-admin-cwd-")
+      const userConfig = path.join(home, ".gent", "config.json")
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        toolCallStep("extensions.disable", { id: "@gent/agents", scope: "user" }),
+        textStep("left as it was"),
+      ])
+      const admin = new Set(["@gent/agents", "@gent/extension-admin"])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [],
+        extensionInputs: BuiltinExtensions.filter((extension) => admin.has(extension.manifest.id)),
+        providerLayer,
+        home,
+        cwd,
+        approvalLayer: ApprovalService.Live,
+        configServiceLayer: ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+          Layer.provide(BunPlatformLive),
+        ),
+      })
+      yield* runHeadless(client, sessionId, branchId, "turn the agents off", {
+        approveAll: false,
+        place: { cwd, home },
+      }).pipe(Effect.timeout("8 seconds"))
+      yield* controls.assertDone
+      // The server writes a default user config at start; the verb adds nothing to it.
+      const written = yield* fs.readFileString(userConfig).pipe(Effect.orElseSucceed(() => ""))
+      expect(written).not.toContain("disabledExtensions")
+      const events = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+        Stream.runCollect,
+      )
+      const output = Array.from(events).flatMap(({ event }) => {
+        if (event._tag !== "ToolCallSucceeded") return []
+        return [event.output]
+      })
+      expect(output).toHaveLength(1)
+      const verb = yield* Schema.decodeEffect(
+        Schema.fromJsonString(Schema.Struct({ applied: Schema.Boolean, detail: Schema.String })),
+      )(output.join(""))
+      expect(verb).toMatchObject({ applied: false, detail: expect.stringContaining("declined") })
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  )
+})
 
 describe("headless readiness", () => {
   // A scripted caller never waits forever: a connection that never becomes

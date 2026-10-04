@@ -542,6 +542,11 @@ export const sessionQuery = <A>(opts: {
   readonly fetch: (
     session: ActiveExtensionSession,
   ) => Effect.Effect<A, { readonly message: string }>
+  /**
+   * Runs with each reply the guard keeps, as it becomes `value`: state a
+   * caller derives from replies changes only for a reply that is shown.
+   */
+  readonly accepted?: (value: A) => void
 }): Effect.Effect<SessionQuery<A>, never, ClientContext> =>
   Effect.gen(function* () {
     const { transport, shell, lifecycle } = yield* ClientContext
@@ -576,6 +581,7 @@ export const sessionQuery = <A>(opts: {
               settle(reply, () => {
                 setStored(Option.some({ session, value }))
                 setError(Option.none())
+                opts.accepted?.(value)
               }),
           }),
         )
@@ -814,6 +820,21 @@ const NoticeRowContribution = Schema.Struct({
 })
 type NoticeRowContribution = typeof NoticeRowContribution.Type
 
+/**
+ * Something an extension holds pending that the user can stop with Esc, such
+ * as an auto-resume armed for when a usage limit resets. Esc on an idle,
+ * empty composer stops the first active one, highest scope first; one press
+ * stops one.
+ */
+const StoppableContribution = Schema.Struct({
+  id: Schema.String,
+  /** Whether there is something to stop now. */
+  active: contributed<() => boolean>(),
+  /** Stop it. The host calls it only while `active` answers true. */
+  stop: contributed<() => void>(),
+})
+type StoppableContribution = typeof StoppableContribution.Type
+
 const AutocompleteContribution = Schema.Struct({
   prefix: Schema.String,
   title: Schema.String,
@@ -879,6 +900,7 @@ const CONTRIBUTION_BUCKETS = {
   statusLabels: StatusLabelContribution,
   noticeRows: NoticeRowContribution,
   autocomplete: AutocompleteContribution,
+  stoppables: StoppableContribution,
 }
 
 type ContributionBucket = keyof typeof CONTRIBUTION_BUCKETS
@@ -1023,6 +1045,11 @@ export const noticeRowContribution = (opts: NoticeRowContribution): ClientContri
 
 export const autocompleteContribution = (opts: AutocompleteContribution): ClientContributions => ({
   autocomplete: [opts],
+})
+
+/** A pending thing Esc stops; the highest scope's claim on an `id` wins. */
+export const stoppableContribution = (opts: StoppableContribution): ClientContributions => ({
+  stoppables: [opts],
 })
 
 /**

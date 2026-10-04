@@ -1,5 +1,18 @@
-import { Cause, Context, Effect, Layer, Option, Predicate, Ref, Schema } from "effect"
 import {
+  Cause,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Order,
+  Predicate,
+  Record,
+  Ref,
+  Schema,
+  Semaphore,
+} from "effect"
+import {
+  ActorCommandId,
   AGENT_PROMPT_PRIORITY,
   type Branch,
   BranchId,
@@ -7,24 +20,31 @@ import {
   defineExtension,
   defineResource,
   ExtensionContext,
+  type ExtensionContextService,
   ExtensionHost,
   ExtensionId,
   getToolId,
+  headChars,
   headTailChars,
   interjectionMessageId,
   isRuntimeUserMessage,
   isSpawnedSession,
+  latestAssistantText,
   type Message,
   type MessageId,
   messagePartsDisplayText,
   RequestId,
   SessionId,
+  sessionThread,
   tool,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
 
 // Test seam: only tests read these exports. renderSessionTree is pure with
 // unit tests; ReadSessionTool is the capability the cell signature tests render.
+// ThreadStartTool, ThreadListTool and ThreadStopTool are the capabilities the
+// thread tests run outside a turn, with ThreadStarts, the permit a
+// turn finds in its profile.
 
 // ── read-session ────────────────────────────────────────────────────────────
 
@@ -621,7 +641,7 @@ const stoppedTurnNotices = Effect.fn("SessionTools.stoppedTurnNotices")(function
 const SendSessionTool = tool({
   id: "session.send",
   description:
-    "Send a message to another session: `parent` for the one that started you, or a session id from delegate.list. A running session reads it at its next step; an idle one wakes to answer. Use it to ask your parent a question, hand a child a correction, or pass a sibling a fact.",
+    "Send a message to another session: `parent` for the one that started you, or a session id from delegate.list or thread.list. A running session reads it at its next step; an idle one wakes to answer. Use it to ask your parent a question, hand a child a correction, or pass a sibling a fact.",
   params: SendSessionParams,
   output: SendSessionResult,
   summary: (input, output) => `to ${output.relation} · ${input.message.trim()}`,
@@ -714,28 +734,480 @@ const SendSessionTool = tool({
   }),
 })
 
-// ── extension ───────────────────────────────────────────────────────────────
+// ── threads ─────────────────────────────────────────────────────────────────
 
 /**
- * `session.send` is how sessions talk; the section is its owner's, shown
- * wherever the tool may run. An agent that denies the tool lacks it, so it
- * sits in the agent's own part of the prompt, after the part a child shares
- * with its parent (core's `AGENT_PROMPT_PRIORITY`).
+ * A thread is the sessions that share one thread key (`sessionThread`), in
+ * the order they were created; its key is its first session's id, and its
+ * current session is the newest. A handoff joins its parent's thread; every
+ * other create starts one. Nothing else records a thread: the key, the order
+ * and the members all come from the stored sessions.
+ *
+ * `thread.start` opens unrelated work beside the starter: a session spawned
+ * under the starter, with its own key, that runs the task as its first turn.
+ * Unlike a delegate child it never reports back: nothing lands on the
+ * starter, so the starter's cached prefix stays as it was and no paid turn
+ * reads a result it does not need. The user reads the thread's replies in the
+ * thread; the model checks on it with `thread.list` and stops it with
+ * `thread.stop`. The starter's own interrupt does not stop a thread. Every
+ * verb is a public `Session` facade verb, so a user extension can write the
+ * same tools.
  */
-const SESSIONS_SECTION = {
-  id: "sessions",
-  priority: AGENT_PROMPT_PRIORITY + 10,
-  content: `# Sessions
 
-- Sessions talk with session.send: correct a running child, answer a child's question, or ask the session that spawned you when you are blocked on a decision in a turn whose reply does not return to it (a child's task turn returns its reply as its completion). A message wakes an idle session.`,
+class ThreadError extends Schema.TaggedError<ThreadError>()("ThreadError", {
+  message: Schema.String,
+}) {}
+
+/** `metadata.customType` on a thread's first message, the task its starter gave it. */
+export const THREAD_TASK_TYPE = "thread-task"
+
+/** Running threads one thread may have, over all its sessions; the delegate's child cap. */
+const MAX_RUNNING_THREADS = 4
+
+/** A thread that loops on a broken model stops here, as a delegate child does. */
+const THREAD_MAX_MODEL_ATTEMPTS = 32
+
+/** The latest reply `thread.list` shows for one named thread, head and tail; a child completion's bound. */
+const THREAD_PREVIEW_CHARS = 4_000
+
+/** The one line of latest reply each row of a whole listing shows. */
+const THREAD_LINE_CHARS = 200
+
+/** A thread's name, from the call or its task; the automatic rename's bound. */
+const THREAD_NAME_CHARS = 80
+
+const THREAD_TASK_PREFIX = "Thread started by session "
+
+/**
+ * A thread's first message says where its task came from and where its
+ * replies go. Without it, a session that a parent spawned reads the sessions
+ * section and reports to its parent with session.send, which wakes the
+ * starter for a result it chose not to wait for.
+ */
+export const threadTaskText = (starter: SessionId, task: string): string =>
+  [
+    `${THREAD_TASK_PREFIX}${starter} for work apart from its own. The user reads your replies in this thread; nothing you write returns to that session, so do not report to it with session.send. When you are blocked, end your turn with your question: the user answers here.`,
+    "",
+    task,
+  ].join("\n")
+
+/** The task without its source line, as the transcript shows it; any other text is returned whole. */
+export const threadTaskBody = (text: string): string =>
+  Option.liftPredicate(text, (value) => value.startsWith(THREAD_TASK_PREFIX)).pipe(
+    Option.flatMap((value) =>
+      Option.liftPredicate(value.indexOf("\n\n"), (split) => split !== -1).pipe(
+        Option.map((split) => value.slice(split + 2)),
+      ),
+    ),
+    Option.getOrElse(() => text),
+  )
+
+type StoredSession = Effect.Success<
+  ReturnType<ExtensionContextService["Session"]["listSessions"]>
+>[number]
+
+type ActiveLoop = Effect.Success<ExtensionContextService["Session"]["listActiveLoops"]>[number]
+
+/** A loop that is doing work: any state but idle. A state that was not read counts as idle. */
+const isWorking = (loop: ActiveLoop): boolean =>
+  Option.exists(loop.status, (status) => status !== "Idle")
+
+const byCreation = (left: StoredSession, right: StoredSession): number =>
+  left.createdAt.getTime() - right.createdAt.getTime() || Order.String(left.id, right.id)
+
+/** One thread a session started, as the thread tools read it. */
+interface StartedThread {
+  readonly thread: SessionId
+  /** Oldest first. */
+  readonly sessions: ReadonlyArray<StoredSession>
+  /** The newest session: the one a message to the thread goes to. */
+  readonly current: StoredSession
+  /** The loops of the thread's sessions that work now. */
+  readonly working: ReadonlyArray<ActiveLoop>
+}
+
+/**
+ * The threads the thread `starter` started: the threads whose first session
+ * any session of `starter` spawned. A thread is one conversation over its
+ * sessions, so after a handoff the newer session owns what the older one
+ * started, and the older one sees what the newer one starts. A handoff
+ * continues its own thread, so it is not one. `sessions` is the starter
+ * thread's tree (`listSessions({ thread })`), which holds every session in
+ * question.
+ */
+const threadsStartedBy = (
+  starter: SessionId,
+  sessions: ReadonlyArray<StoredSession>,
+): ReadonlyArray<{
+  readonly thread: SessionId
+  readonly sessions: ReadonlyArray<StoredSession>
+}> => {
+  const byThread = new Map<SessionId, Array<StoredSession>>()
+  for (const session of sessions) {
+    const key = sessionThread(session)
+    byThread.set(key, [...(byThread.get(key) ?? []), session])
+  }
+  const starters = new Set<string>((byThread.get(starter) ?? []).map((session) => session.id))
+  return [...byThread].flatMap(([thread, members]) => {
+    const first = members.find((session) => session.id === thread)
+    if (Predicate.isUndefined(first?.parentSessionId) || !starters.has(first.parentSessionId)) {
+      return []
+    }
+    return [{ thread, sessions: members.toSorted(byCreation) }]
+  })
+}
+
+const asThreadError = (what: string) =>
+  Effect.mapError(
+    (error: { readonly message: string }) =>
+      new ThreadError({ message: `${what}: ${error.message}` }),
+  )
+
+/**
+ * The threads this session's thread started, wherever in the thread the
+ * caller is. The host reads the thread's sessions by its key, and what is
+ * below them, so a deleted first session (whose handoffs stay) loses none.
+ */
+const startedThreads = Effect.fn("SessionTools.startedThreads")(function* () {
+  const ctx = yield* ExtensionContext
+  const sessions = yield* ctx.Session.listSessions({ thread: ctx.sessionId }).pipe(
+    asThreadError("Cannot list this session's threads"),
+  )
+  const caller = sessions.find((session) => session.id === ctx.sessionId)
+  const thread = Option.getOrElse(
+    Option.map(Option.fromUndefinedOr(caller), sessionThread),
+    () => ctx.sessionId,
+  )
+  const loops = yield* ctx.Session.listActiveLoops.pipe(
+    asThreadError("Cannot read which threads run"),
+  )
+  return threadsStartedBy(thread, sessions).flatMap((found): ReadonlyArray<StartedThread> => {
+    const current = found.sessions.at(-1)
+    if (Predicate.isUndefined(current)) return []
+    const members = new Set<SessionId>(found.sessions.map((session) => session.id))
+    const working = loops.filter((loop) => members.has(loop.sessionId) && isWorking(loop))
+    return [{ ...found, current, working }]
+  })
+})
+
+/** The thread this session's thread started with that key, or a failure that says it is not one. */
+const ownThread = Effect.fn("SessionTools.ownThread")(function* (thread: string) {
+  const found = (yield* startedThreads()).find((entry) => entry.thread === thread)
+  if (Predicate.isUndefined(found)) {
+    return yield* new ThreadError({
+      message: `${thread} is not a thread started by this session's thread; thread.list shows them`,
+    })
+  }
+  return found
+})
+
+const threadName = (text: string): string =>
+  headChars(
+    Option.getOrElse(sessionTitleOf(text), () => "thread"),
+    THREAD_NAME_CHARS,
+  ).trim()
+
+/**
+ * The thread runs as the starter does: its agent and admission, and the
+ * model and reasoning its `/model` choice set, as a `/btw` fork does. Its run
+ * spec caps model attempts as a delegate child's does, unless the starter's
+ * own run spec names a cap.
+ */
+const threadAdmission = (starter: StoredSession): SessionAdmission => ({
+  ...starter.admission,
+  runSpec: {
+    ...starter.admission?.runSpec,
+    overrides: {
+      maxModelAttempts: THREAD_MAX_MODEL_ATTEMPTS,
+      ...starter.admission?.runSpec?.overrides,
+    },
+  },
+})
+
+type SessionAdmission = NonNullable<StoredSession["admission"]>
+
+/**
+ * One start at a time in this process: the count of running threads and the
+ * start it admits are one step, so two starts in one model step cannot both
+ * pass the cap.
+ */
+class ThreadStarts extends Context.Service<ThreadStarts, Semaphore.Semaphore>()(
+  "@gent/extensions/src/session-tools/ThreadStarts",
+) {}
+
+const ThreadStartsResource = defineResource({
+  id: "@gent/session-tools/thread-starts",
+  scope: "process",
+  layer: Layer.effect(ThreadStarts, Semaphore.make(1)),
+})
+
+const ThreadStartParams = Schema.Struct({
+  task: Schema.String.annotate({
+    description:
+      "The whole task. The thread starts with no conversation history: it sees only this text.",
+  }),
+  name: Schema.optionalKey(
+    Schema.String.annotate({
+      description: "A short name for the thread; defaults to the task's first line.",
+    }),
+  ),
+})
+
+const ThreadStartResult = Schema.Struct({
+  /** The thread's key: its first session's id. */
+  thread: SessionId,
+  sessionId: SessionId,
+  branchId: BranchId,
+  /** Where the thread works: in the starter's working tree. */
+  isolation: Schema.Literal("shared"),
+  note: Schema.String,
+})
+
+const ThreadStartTool = tool({
+  id: "thread.start",
+  description:
+    "Start a thread: a new session that works on a task unrelated to yours, beside you, and returns at admission. Its replies go to the user in that thread, never to you, and nothing wakes you when it ends. Use delegate.start instead when you need the result.",
+  promptSnippet: "Start a thread for unrelated work",
+  params: ThreadStartParams,
+  output: ThreadStartResult,
+  summary: (input) => input.name ?? threadName(input.task),
+  execute: Effect.fn("ThreadStartTool.execute")(function* (params: typeof ThreadStartParams.Type) {
+    const ctx = yield* ExtensionContext
+    const task = params.task.trim()
+    const toolCallId = ctx.toolCallId
+    if (task.length === 0 || Predicate.isUndefined(toolCallId)) {
+      return yield* new ThreadError({
+        message: "thread.start needs a task and a host-owned tool call",
+      })
+    }
+    const starter = yield* ctx.Session.getSession().pipe(asThreadError("Cannot read this session"))
+    if (Predicate.isUndefined(starter)) {
+      return yield* new ThreadError({ message: "This session no longer exists" })
+    }
+    const started = yield* Effect.flatMap(ThreadStarts, (permit) =>
+      Semaphore.withPermit(
+        permit,
+        Effect.gen(function* () {
+          // The create comes first: the call's id makes it durable-once, so a
+          // repeat of this call finds its own thread and does not count it.
+          const created = yield* ctx.Session.create({
+            name: threadName(params.name ?? task),
+            parentSessionId: ctx.sessionId,
+            parentBranchId: ctx.branchId,
+            admission: threadAdmission(starter),
+            ...Record.filter(
+              { modelId: starter.modelId, reasoningLevel: starter.reasoningLevel },
+              Predicate.isNotUndefined,
+            ),
+            requestId: RequestId.make(`thread:${toolCallId}`),
+          }).pipe(asThreadError("Cannot start the thread"))
+          const others = (yield* startedThreads()).filter(
+            (entry) => entry.thread !== created.sessionId && entry.working.length > 0,
+          )
+          if (others.length >= MAX_RUNNING_THREADS) {
+            yield* ctx.Session.delete(created.sessionId).pipe(Effect.ignore)
+            const names = others
+              .map((entry) => `${entry.thread} "${entry.current.name ?? ""}"`)
+              .join(", ")
+            return yield* new ThreadError({
+              message: `This session's thread already runs ${MAX_RUNNING_THREADS} threads: ${names}. Stop one with thread.stop, or start this one when one ends.`,
+            })
+          }
+          yield* ctx.Session.send({
+            delivery: "turn",
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: threadTaskText(ctx.sessionId, task),
+            commandId: ActorCommandId.make(`thread-start:${toolCallId}`),
+            completion: "admission",
+            metadata: { customType: THREAD_TASK_TYPE },
+          }).pipe(asThreadError("Cannot send the thread its task"))
+          return created
+        }),
+      ),
+    )
+    yield* ctx.State.changed().pipe(Effect.ignore)
+    return {
+      thread: started.sessionId,
+      sessionId: started.sessionId,
+      branchId: started.branchId,
+      isolation: "shared" as const,
+      note: "This thread edits the same working tree.",
+    }
+  }),
+})
+
+const ThreadListParams = Schema.Struct({
+  thread: Schema.optionalKey(
+    SessionId.annotate({
+      description: "One thread's key: its row then carries the head and tail of its latest reply.",
+    }),
+  ),
+})
+
+const ThreadRow = Schema.Struct({
+  thread: SessionId,
+  name: Schema.String,
+  /** The agent the current session runs as; absent for the default agent. */
+  agent: Schema.optionalKey(Schema.String),
+  /** How many sessions the thread holds: more than one after a handoff. */
+  sessions: Schema.Finite,
+  /** The session a message to the thread goes to. */
+  current: Schema.Struct({ sessionId: SessionId, branchId: BranchId }),
+  status: Schema.Literals(["running", "idle"]),
+  /** The current session's latest reply: one line, or for one named thread its head and tail. */
+  preview: Schema.String,
+})
+
+/** A thread runs while any of its sessions' loops works. */
+const threadStatus = (entry: StartedThread): "running" | "idle" => {
+  if (entry.working.length > 0) return "running"
+  return "idle"
+}
+
+/** The first line of the reply that has words, cut to one row. */
+const firstLine = (text: string): string =>
+  headChars(
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? "",
+    THREAD_LINE_CHARS,
+  )
+
+const ThreadListTool = tool({
+  id: "thread.list",
+  description:
+    "List the threads this thread started, from any of its sessions: each one's status, its current session, and its latest reply. A snapshot; do not call it in a loop to wait for a thread.",
+  params: ThreadListParams,
+  output: Schema.Array(ThreadRow),
+  execute: Effect.fn("ThreadListTool.execute")(function* (params: typeof ThreadListParams.Type) {
+    const ctx = yield* ExtensionContext
+    const named = Option.fromUndefinedOr(params.thread)
+    const threads = yield* Option.match(named, {
+      onNone: () => startedThreads(),
+      onSome: (thread) => Effect.map(ownThread(thread), (found) => [found]),
+    })
+    return yield* Effect.forEach(threads, (entry) =>
+      Effect.gen(function* () {
+        const current = entry.current
+        const branchId = current.activeBranchId
+        if (Predicate.isUndefined(branchId)) return []
+        const detail = yield* ctx.Session.getDetail(current.id).pipe(
+          asThreadError(`Cannot read thread ${entry.thread}`),
+        )
+        const reply = latestAssistantText(
+          detail.branches.find((found) => found.branch.id === branchId)?.messages ?? [],
+        )
+        const preview = Option.match(named, {
+          onNone: () => firstLine(reply),
+          onSome: () => headTailChars(reply, THREAD_PREVIEW_CHARS).text,
+        })
+        const row: typeof ThreadRow.Type = {
+          thread: entry.thread,
+          name: current.name ?? "",
+          ...Record.filter({ agent: current.admission?.agent }, Predicate.isNotUndefined),
+          sessions: entry.sessions.length,
+          current: { sessionId: current.id, branchId },
+          status: threadStatus(entry),
+          preview,
+        }
+        return [row]
+      }),
+    ).pipe(Effect.map((rows) => rows.flat()))
+  }),
+})
+
+const ThreadStopParams = Schema.Struct({
+  thread: SessionId.annotate({
+    description: "The thread's key, from thread.start or thread.list.",
+  }),
+})
+
+const ThreadStopResult = Schema.Struct({
+  /** The loops the stop reached; empty when the thread was idle. */
+  stopped: Schema.Array(Schema.Struct({ sessionId: SessionId, branchId: BranchId })),
+})
+
+const ThreadStopTool = tool({
+  id: "thread.stop",
+  description:
+    "Stop a thread this thread started, from any of its sessions: every turn it runs now ends as interrupted. An idle thread is left as it is.",
+  params: ThreadStopParams,
+  output: ThreadStopResult,
+  execute: Effect.fn("ThreadStopTool.execute")(function* (params: typeof ThreadStopParams.Type) {
+    const ctx = yield* ExtensionContext
+    const found = yield* ownThread(params.thread)
+    const stopped = yield* Effect.forEach(found.working, (loop) =>
+      ctx.Session.stop({
+        sessionId: loop.sessionId,
+        branchId: loop.branchId,
+        ...Option.match(Option.fromUndefinedOr(ctx.toolCallId), {
+          onNone: () => ({}),
+          onSome: (id) => ({
+            requestId: RequestId.make(`thread-stop:${id}:${loop.sessionId}:${loop.branchId}`),
+          }),
+        }),
+      }).pipe(
+        asThreadError(`Cannot stop thread ${params.thread}`),
+        Effect.as({ sessionId: loop.sessionId, branchId: loop.branchId }),
+      ),
+    )
+    return { stopped }
+  }),
+})
+
+// ── extension ───────────────────────────────────────────────────────────────
+
+const SEND_LINE =
+  "- Sessions talk with session.send: correct a running child, answer a child's question, or ask the session that spawned you when you are blocked on a decision in a turn whose reply does not return to it (a child's task turn returns its reply as its completion). A message wakes an idle session."
+
+const THREAD_LINES = [
+  "- Start work unrelated to your current task with thread.start: a new session with its own thread that runs beside you. Its result goes to the user, and nothing returns to you; when you need the answer, delegate the work instead.",
+  "- thread.list shows the threads you started, whether each runs, and its latest reply; read_session reads one in full, session.send messages its current session, and thread.stop stops it. Check on a thread only when the user asks or your work depends on it.",
+]
+
+/**
+ * `session.send` is how sessions talk, and the thread tools open and follow
+ * side work; the section is their owner's. Each line shows only where its
+ * tool may run: an agent that denies one lacks it (a delegate child is
+ * denied `thread.start`), so the section sits in the agent's own part of the
+ * prompt, after the part a child shares with its parent (core's
+ * `AGENT_PROMPT_PRIORITY`).
+ */
+const sessionsSection = (agent: { readonly deniedTools?: ReadonlyArray<string> }) => {
+  const allowed = (capability: Parameters<typeof getToolId>[0], text: ReadonlyArray<string>) => {
+    if (agent.deniedTools?.includes(getToolId(capability)) === true) return []
+    return text
+  }
+  const lines = [
+    ...allowed(SendSessionTool, [SEND_LINE]),
+    ...allowed(ThreadStartTool, THREAD_LINES),
+  ]
+  if (lines.length === 0) return []
+  return [
+    {
+      id: "sessions",
+      priority: AGENT_PROMPT_PRIORITY + 10,
+      content: `# Sessions\n\n${lines.join("\n")}`,
+    },
+  ]
 }
 
 export const SessionToolsExtension = defineExtension({
   id: SESSION_TOOLS_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", ReadSessionTool, RenameSessionTool, SendSessionTool)
-    yield* host.register("resource", SentTurnsResource, UntitledResource)
+    yield* host.register(
+      "tool",
+      ReadSessionTool,
+      RenameSessionTool,
+      SendSessionTool,
+      ThreadStartTool,
+      ThreadListTool,
+      ThreadStopTool,
+    )
+    yield* host.register("resource", SentTurnsResource, UntitledResource, ThreadStartsResource)
     // Every turn end is read twice: as the end of a turn a send opened, and
     // as the sender's own turn, which stops what its sends opened when it was
     // interrupted and settles the record when it was not.
@@ -751,10 +1223,7 @@ export const SessionToolsExtension = defineExtension({
     )
     yield* host.on("turnProjection", ({ agent }) =>
       stoppedTurnNotices().pipe(
-        Effect.map((notices) => {
-          if (agent.deniedTools?.includes(getToolId(SendSessionTool)) === true) return { notices }
-          return { promptSections: [SESSIONS_SECTION], notices }
-        }),
+        Effect.map((notices) => ({ promptSections: sessionsSection(agent), notices })),
       ),
     )
     yield* host.on("turnAfter", (input) =>

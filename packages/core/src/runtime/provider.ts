@@ -3261,26 +3261,36 @@ export const driverCacheWritesByLifetime = Effect.fn("Provider.driverCacheWrites
 
 type ProviderOrAuthError = ProviderError | ProviderAuthError
 
-const retryAfterMs = (error: ProviderError): Option.Option<number> => {
-  if (!AiError.isAiError(error.cause)) return Option.none()
-  return Option.map(Option.fromUndefinedOr(error.cause.retryAfter), Duration.toMillis)
-}
+/**
+ * When a usage limit resets: the time the driver reads from the failure
+ * (`RetryPolicy.retryAt`) when it lies further than `maxDelay` from
+ * `nowMs`, so no retry inside the cap can clear it. None for any other
+ * failure: one the loop retries, or one that names no time.
+ */
+export const limitResetAt = (
+  policy: RetryPolicy,
+  error: ProviderError,
+  nowMs: number,
+): Option.Option<number> =>
+  Option.filter(policy.retryAt(error.cause, nowMs), (at) => at - nowMs > policy.maxDelay)
 
 /**
  * Only a transient `ProviderError` is retried; a credential failure escapes.
- * A retry-after longer than `maxDelay` (a usage limit that resets in hours)
- * escapes too: no retry inside the cap can succeed. A request the provider
- * accepted can still end with an error event inside the stream; the driver's
- * policy names the wire shapes that count.
+ * A failure that resets later than `maxDelay` from now (a usage limit that
+ * resets in hours) escapes too: no retry inside the cap can succeed. A
+ * request the provider accepted can still end with an error event inside the
+ * stream; the driver's policy names the wire shapes that count.
  */
-const isRetryable =
-  (policy: RetryPolicy) =>
-  (error: ProviderOrAuthError): error is ProviderError => {
-    if (!Schema.is(ProviderError)(error)) return false
-    if (Option.exists(retryAfterMs(error), (ms) => ms > policy.maxDelay)) return false
-    if (AiError.isAiError(error.cause)) return error.cause.isRetryable
-    return Schema.is(policy.transientStreamEvent)(error.cause)
-  }
+const isRetryable = (
+  policy: RetryPolicy,
+  error: ProviderOrAuthError,
+  nowMs: number,
+): error is ProviderError => {
+  if (!Schema.is(ProviderError)(error)) return false
+  if (Option.isSome(limitResetAt(policy, error, nowMs))) return false
+  if (AiError.isAiError(error.cause)) return error.cause.isRetryable
+  return Schema.is(policy.transientStreamEvent)(error.cause)
+}
 
 /**
  * What a retry notice says: the provider's reason when an `AiError` carries
@@ -3297,16 +3307,18 @@ const JITTER_FRACTION = 0.25
 
 /**
  * `attempt` counts completed failures; `jitter` is a uniform sample in [0, 1).
- * A retried error's retry-after is within `maxDelay` (`isRetryable`).
+ * The time the failure names wins over the backoff; a retried failure's time
+ * is within `maxDelay` of `nowMs` (`isRetryable`).
  */
 const retryDelay = (
   attempt: number,
   error: ProviderError,
   config: RetryPolicy,
   jitter: number,
+  nowMs: number,
 ): number =>
-  Option.match(retryAfterMs(error), {
-    onSome: (ms) => ms,
+  Option.match(config.retryAt(error.cause, nowMs), {
+    onSome: (at) => Math.max(0, Math.ceil(at - nowMs)),
     onNone: () => {
       const base = config.initialDelay * config.backoffFactor ** attempt
       return Math.min(Math.round(base * (1 + JITTER_FRACTION * jitter)), config.maxDelay)
@@ -3322,10 +3334,11 @@ interface RetryAttemptInfo {
 
 /**
  * Retry a provider call on transient failure under the driver's policy. The
- * provider's own retry-after wins over the backoff; the backoff is capped at
- * `maxDelay`, and a retry-after past it ends the retries. `onRetry` runs before each wait with the delay the schedule
- * will take. `stop` ends a wait early: once it completes, no further attempt
- * runs and the last failure is the result.
+ * time the failure names (`RetryPolicy.retryAt`) wins over the backoff; the
+ * backoff is capped at `maxDelay`, and a time past it ends the retries.
+ * `onRetry` runs before each wait with the delay the schedule will take.
+ * `stop` ends a wait early: once it completes, no further attempt runs and
+ * the last failure is the result.
  */
 export const retryProviderCall =
   <R2 = never>(
@@ -3338,7 +3351,6 @@ export const retryProviderCall =
     effect: Effect.Effect<A, ProviderOrAuthError, R>,
   ) => Effect.Effect<A, ProviderOrAuthError, R | R2>) =>
   <A, R>(effect: Effect.Effect<A, ProviderOrAuthError, R>) => {
-    const retryable = isRetryable(config)
     // meta.attempt is 1-indexed: 1 after the first failure, 2 after the second.
     const schedule = Schedule.fromStepWithMetadata<
       ProviderOrAuthError,
@@ -3348,14 +3360,15 @@ export const retryProviderCall =
       never,
       never
     >(
-      Effect.succeed((meta: Schedule.InputMetadata<ProviderOrAuthError>) => {
-        if (meta.attempt >= config.maxAttempts || !retryable(meta.input)) {
-          return Cause.done(meta.attempt)
-        }
-        const error = meta.input
-        return Effect.gen(function* () {
+      Effect.succeed((meta: Schedule.InputMetadata<ProviderOrAuthError>) =>
+        Effect.gen(function* () {
+          const nowMs = yield* Clock.currentTimeMillis
+          const error = meta.input
+          if (meta.attempt >= config.maxAttempts || !isRetryable(config, error, nowMs)) {
+            return yield* Cause.done(meta.attempt)
+          }
           const jitter = yield* Random.next
-          const delayMs = retryDelay(meta.attempt - 1, error, config, jitter)
+          const delayMs = retryDelay(meta.attempt - 1, error, config, jitter, nowMs)
           if (!Predicate.isUndefined(options?.onRetry)) {
             yield* options.onRetry({
               attempt: meta.attempt,
@@ -3376,13 +3389,12 @@ export const retryProviderCall =
           )
           if (stopped) return yield* Cause.done(meta.attempt)
           return [meta.attempt, Duration.zero] satisfies [number, Duration.Duration]
-        })
-      }),
+        }),
+      ),
     )
 
-    return Effect.retry(effect, { schedule, while: retryable }).pipe(
-      Effect.withSpan("provider.retry"),
-    )
+    // The schedule alone decides: a failure it does not retry ends it.
+    return Effect.retry(effect, { schedule }).pipe(Effect.withSpan("provider.retry"))
   }
 
 // ── scripted-model ──────────────────────────────────────────────────────────
@@ -3529,6 +3541,34 @@ const debugRateLimit = (method: string) =>
     reason: new AiError.RateLimitError({ retryAfter: Duration.seconds(1) }),
   })
 
+/** A user message holding it makes the debug model answer with a usage limit. */
+const USAGE_LIMIT_PHRASE = "debug usage limit"
+
+/** `debug usage limit 2m`: the reset the message names, in seconds, minutes or hours. */
+const USAGE_LIMIT_RESET = /debug usage limit (\d+)([smh])\b/
+
+const usageLimitReset = (text: string): Duration.Duration => {
+  const match = Option.fromNullishOr(USAGE_LIMIT_RESET.exec(text))
+  if (Option.isNone(match)) return Duration.hours(5)
+  const amount = Number(match.value[1])
+  if (match.value[2] === "s") return Duration.seconds(amount)
+  if (match.value[2] === "m") return Duration.minutes(amount)
+  return Duration.hours(amount)
+}
+
+/**
+ * The debug model's usage limit: a 429 whose limit resets in five hours, or
+ * when the message says (`debug usage limit 2m`). Past every retry cap (a
+ * reset more than 30 s away), the turn fails at once and names the reset
+ * time; a shorter one is retried as any rate limit is.
+ */
+const debugUsageLimit = (method: string, text: string) =>
+  AiError.make({
+    module: "LanguageModelLayers",
+    method,
+    reason: new AiError.RateLimitError({ retryAfter: usageLimitReset(text) }),
+  })
+
 const extractLatestUserText = (promptInput: Prompt.RawInput): string => {
   const latest = [...Prompt.make(promptInput).content]
     .reverse()
@@ -3667,6 +3707,16 @@ export const multiToolCallStep = (
  * its assumption in a bash step that sleeps, and answers. The sleep keeps
  * the turn open long enough to answer the question while it runs.
  *
+ * `debug threads` starts two threads with `thread.start` (one plays `debug
+ * tools`, one answers at once), lists them with `thread.list`, and answers.
+ * `debug handoff` calls `handoff`; on a yes the new session continues the
+ * thread, so the Sessions pane shows one row with two sessions.
+ *
+ * `debug usage limit` (not a scenario) fails the step with a rate limit that
+ * resets in five hours, or when the message says (`debug usage limit 2m`;
+ * `debugUsageLimit`), so a scripted run shows the error row that names the
+ * reset time, and an auto-resume that fires inside the run.
+ *
  * A step calls the tools the request advertises: each op as its own call, or,
  * on a turn narrowed to `cell`, one `cell` call whose code awaits the ops.
  */
@@ -3768,6 +3818,37 @@ const ASK_STEPS: ReadonlyArray<ScenarioStep> = [
   { reasoning: "Summarize.", ops: [] },
 ]
 
+const THREAD_STEPS: ReadonlyArray<ScenarioStep> = [
+  {
+    reasoning: "Two jobs apart from this one; each gets a thread of its own.",
+    ops: [
+      { tool: "thread.start", input: { task: "debug tools", name: "widen the greeting" } },
+      {
+        tool: "thread.start",
+        input: { task: "Draft the release notes.", name: "draft release notes" },
+      },
+    ],
+  },
+  { reasoning: "See how they run.", ops: [{ tool: "thread.list", input: {} }] },
+  { reasoning: "Summarize.", ops: [] },
+]
+
+const HANDOFF_STEPS: ReadonlyArray<ScenarioStep> = [
+  {
+    reasoning: "The user asked to hand off.",
+    ops: [
+      {
+        tool: "handoff",
+        input: {
+          context: `Go on with the greeting in ${scenarioFile("a.ts")}.`,
+          reason: "debug handoff",
+        },
+      },
+    ],
+  },
+  { reasoning: "Summarize.", ops: [] },
+]
+
 const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
   {
     phrase: "debug tools",
@@ -3779,6 +3860,16 @@ const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
     steps: ASK_STEPS,
     answer:
       "Wired an in-memory LRU cache. The backend question is still open; I assumed in-memory LRU.",
+  },
+  {
+    phrase: "debug threads",
+    steps: THREAD_STEPS,
+    answer: "Started two threads; the Sessions pane shows them under this session.",
+  },
+  {
+    phrase: "debug handoff",
+    steps: HANDOFF_STEPS,
+    answer: "Handed off.",
   },
 ]
 
@@ -3885,6 +3976,10 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
     streamText: (modelOptions) =>
       Effect.suspend(() => {
         const latestUserText = extractLatestUserText(modelOptions.prompt)
+        const lowered = latestUserText.toLowerCase()
+        if (lowered.includes(USAGE_LIMIT_PHRASE)) {
+          return Effect.fail(debugUsageLimit("Debug.streamText", lowered))
+        }
         const scenario = Option.fromUndefinedOr(
           DEBUG_SCENARIOS.find((entry) => latestUserText.toLowerCase().includes(entry.phrase)),
         )

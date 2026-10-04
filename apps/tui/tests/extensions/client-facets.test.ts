@@ -230,4 +230,42 @@ describe("sessionQuery", () => {
       dispose()
     }),
   )
+
+  it.scopedLive("accepted sees each reply that becomes the value, and never a dropped one", () =>
+    Effect.gen(function* () {
+      let active = "a"
+      const release = yield* Deferred.make<void>()
+      const accepted: Array<string> = []
+      const query = yield* provideClientServices(
+        sessionQuery({
+          initial: "none",
+          follow: false,
+          fetch: (session) => {
+            const id = String(session.sessionId)
+            if (id === "a") return Deferred.await(release).pipe(Effect.as(id))
+            return Effect.succeed(id)
+          },
+          accepted: (value) => {
+            accepted.push(value)
+          },
+        }),
+        {
+          currentSession: () => ({
+            sessionId: SessionId.make(active),
+            branchId: BranchId.make("b"),
+          }),
+        },
+      )
+      query.refresh()
+      expect(query.loading()).toBe(true)
+      // The shell leaves `a` while its read is out: that reply is dropped.
+      active = "b"
+      yield* Deferred.done(release, Exit.void)
+      yield* waitUntil(() => !query.loading(), "a's reply lands")
+      expect(accepted).toEqual([])
+      query.refresh()
+      yield* waitUntil(() => query.value() === "b", "b read")
+      expect(accepted).toEqual(["b"])
+    }),
+  )
 })
