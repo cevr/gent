@@ -2641,6 +2641,30 @@ export class DecisionModelResolver extends Context.Service<
  */
 export const TEST_MODEL_CONTEXT_LIMIT_TOKENS = 128_000
 
+/**
+ * The window `ModelRegistry.Scripted` gives a model the catalog does not
+ * list: the 1M of the default model (Claude Sonnet 5), so a scripted turn
+ * with no catalog hands its window off where one with the catalog does.
+ */
+const SCRIPTED_MODEL_CONTEXT_LIMIT_TOKENS = 1_000_000
+
+/** A catalog entry made up from `modelId` alone: its provider segment, the given window and prices. */
+const madeUpModel = (
+  modelId: string,
+  contextLength: number,
+  pricing: Option.Option<ModelPricing>,
+): Model =>
+  Model.make({
+    id: ModelId.make(modelId),
+    name: modelId,
+    provider: Option.getOrElse(
+      Option.map(parseModelId(modelId), ([providerId]) => providerId),
+      () => ProviderId.make("test"),
+    ),
+    contextLength,
+    pricing: Option.getOrUndefined(pricing),
+  })
+
 type ResolvedProfile = ReturnType<ExtensionRegistryService["getResolved"]>
 
 interface ModelCatalogRecordService {
@@ -2743,6 +2767,33 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
     )
 
   /**
+   * The registry a scripted model (`ScriptedLanguageModel`) runs on: the
+   * catalog's entry when the catalog lists the id (its window, prices and
+   * cache lifetime), else an entry made up from the id with
+   * `SCRIPTED_MODEL_CONTEXT_LIMIT_TOKENS`. A scripted turn sends nothing to a
+   * provider, so it runs with no catalog: offline, with none stored.
+   */
+  static Scripted: Layer.Layer<
+    ModelRegistry,
+    never,
+    Auth | ModelCatalogRecord | ModelCatalogSource
+  > = Layer.effect(
+    ModelRegistry,
+    Effect.gen(function* () {
+      const catalog = yield* ModelRegistry
+      return ModelRegistry.of({
+        get: (modelId) =>
+          Effect.map(
+            catalog.get(modelId),
+            Option.orElse(() =>
+              Option.some(madeUpModel(modelId, SCRIPTED_MODEL_CONTEXT_LIMIT_TOKENS, Option.none())),
+            ),
+          ),
+      })
+    }),
+  ).pipe(Layer.provide(ModelRegistry.Live))
+
+  /**
    * A registry of `models`, or, with none, one that knows every id. `pricing`
    * prices each model the second form makes up; without it they are free.
    */
@@ -2757,19 +2808,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
           const existing = Option.fromUndefinedOr(models.find((model) => model.id === modelId))
           if (Option.isSome(existing)) return Effect.succeedSome(existing.value)
           if (models.length > 0) return Effect.succeedNone
-          const provider = Option.getOrElse(
-            Option.map(parseModelId(modelId), ([providerId]) => providerId),
-            () => ProviderId.make("test"),
-          )
-          return Effect.succeedSome(
-            Model.make({
-              id: ModelId.make(modelId),
-              name: modelId,
-              provider,
-              contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
-              pricing: Option.getOrUndefined(pricing),
-            }),
-          )
+          return Effect.succeedSome(madeUpModel(modelId, TEST_MODEL_CONTEXT_LIMIT_TOKENS, pricing))
         },
       }),
     )

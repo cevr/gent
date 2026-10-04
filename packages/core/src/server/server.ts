@@ -1820,7 +1820,12 @@ interface DependencyOverrides {
     EventStore | GentPlatform | InteractionStorage
   >
   readonly configServiceLayer?: Layer.Layer<ConfigService>
-  readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
+  /** Replaces the catalog registry; a scripted model passes `ModelRegistry.Scripted`. */
+  readonly modelRegistryLayer?: Layer.Layer<
+    ModelRegistry,
+    never,
+    Auth | ModelCatalogRecord | ModelCatalogSource
+  >
   /** The HTTP client the models.dev catalog fetches through; tests pass the fixture client. */
   readonly modelCatalogHttpLayer?: Layer.Layer<HttpClient.HttpClient>
   /** Replaces the auth-backed live resolver (a scripted or fixed model). */

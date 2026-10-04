@@ -8,6 +8,7 @@ import {
   workspaceIdForCwd,
   buildServerRoutes,
   createDependencies,
+  ModelRegistry,
   ModelResolver,
   ScriptedLanguageModel,
   StateLocation,
@@ -134,9 +135,14 @@ export const buildOwnedServer = (
         }),
         extensions: options.extensions ?? BuiltinExtensions,
         branchTools: options.branchTools ?? CellBranchTools,
+        // A scripted model needs no catalog: a model the catalog does not
+        // list (none stored, models.dev unreachable) still runs.
         overrides: {
           modelResolverLayer: Option.getOrUndefined(
             Option.map(languageModelLayer, ModelResolver.fromLanguageModel),
+          ),
+          modelRegistryLayer: Option.getOrUndefined(
+            Option.map(languageModelLayer, () => ModelRegistry.Scripted),
           ),
         },
       }).pipe(Layer.provide(observability)),

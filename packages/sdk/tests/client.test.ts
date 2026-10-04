@@ -310,4 +310,43 @@ describe("Gent.provider.mock tool scenario", () => {
       ),
     30_000,
   )
+
+  // `--debug` keeps its state in memory, so it never has a stored catalog;
+  // offline, or behind a proxy that blocks models.dev, it still runs a turn.
+  it.live(
+    "a scripted turn runs with no catalog: none stored and the catalog unreachable",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDirectoryScoped("gent-debug-offline-")
+          const server = yield* Gent.server({
+            cwd,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+            extensions: BuiltinExtensions,
+          }).pipe(
+            Effect.provide(
+              ConfigProvider.layer(
+                // A closed local port: the catalog's first read fails at once.
+                ConfigProvider.fromEnv({ env: { GENT_MODEL_CATALOG_URL: "http://127.0.0.1:9" } }),
+              ),
+            ),
+          )
+          const { client } = yield* Gent.client(server, { cwd })
+          const { sessionId, branchId } = yield* client.session.create({ cwd })
+          yield* client.message.send({ sessionId, branchId, content: "hello offline" })
+          const messages = yield* waitFor(
+            client.message.list({ branchId }),
+            (all) => all.some((message) => message.role === "assistant"),
+            10_000,
+          )
+          const answer = messages
+            .filter((message) => message.role === "assistant")
+            .map((message) => messagePartsText(message.parts))
+            .join("")
+          expect(answer).toContain("gent debug response.")
+        }).pipe(Effect.timeout("14 seconds")),
+      ),
+    16_000,
+  )
 })

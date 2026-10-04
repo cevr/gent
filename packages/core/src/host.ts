@@ -17,7 +17,7 @@ export {
   readDisabledExtensions,
 } from "./runtime/config.js"
 export { extensionEntryModules } from "./runtime/extension-host.js"
-export { ModelResolver, ScriptedLanguageModel } from "./runtime/provider.js"
+export { ModelRegistry, ModelResolver, ScriptedLanguageModel } from "./runtime/provider.js"
 export { BranchStorage, MessageStorage, SessionStorage } from "./storage/storage.js"
 export {
   provideWorkspaceIdHeader,
