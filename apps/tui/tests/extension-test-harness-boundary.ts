@@ -85,6 +85,8 @@ export const testClientContextDeps = (
       cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
         Effect.runFork(effect)
       },
+      // A test has no terminal to hand over: the effect runs as it is.
+      handover: (effect) => effect,
       pane: makePaneSlot(),
       ...deps.shell,
     },

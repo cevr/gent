@@ -1,7 +1,9 @@
-import { Context, Effect, FileSystem, Layer, Option, Schema } from "effect"
+import { Context, Effect, FileSystem, Layer, Option, Schema, Semaphore } from "effect"
 import { GentPlatform } from "@gent/core/host"
 import { runProcess } from "@gent/core/extensions/api"
 import type { ChildProcessSpawner } from "effect/process"
+import { createContext } from "solid-js"
+import { useRequiredContext } from "./utils"
 
 // ── link opening ────────────────────────────────────────────────────────────
 
@@ -65,6 +67,43 @@ export class LinkOpener extends Context.Service<LinkOpener, LinkOpenerService>()
     Layer.succeed(LinkOpener, LinkOpener.of(impl ?? { open: () => Effect.void }))
 }
 
+// ── terminal handover ───────────────────────────────────────────────────────
+
+/**
+ * Run an effect with the terminal handed to it: the renderer suspends first
+ * and resumes when the effect ends, however it ends. A program that draws on
+ * the terminal itself (an editor, a diff viewer) runs inside one. The verb is
+ * the host's: the editor uses it, and a client extension reaches it as
+ * `ClientShell.handover`.
+ */
+export type Handover = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+
+/**
+ * One terminal, one holder: a handover asked for while another runs waits
+ * for its resume, so two programs never draw at once and the renderer never
+ * resumes under a program still running.
+ */
+export const makeHandover = (terminal: {
+  readonly suspend: () => void
+  readonly resume: () => void
+}): Handover => {
+  const holder = Semaphore.makeUnsafe(1)
+  return (effect) =>
+    Effect.acquireUseRelease(
+      Effect.sync(terminal.suspend),
+      () => effect,
+      () => Effect.sync(terminal.resume),
+    ).pipe(holder.withPermits(1))
+}
+
+const HandoverContext = createContext<Handover>()
+
+/** `ExtensionUIProvider` provides it, and hands the same verb to the client extensions. */
+export const HandoverProvider = HandoverContext.Provider
+
+export const useHandover = (): Handover =>
+  useRequiredContext(HandoverContext, "useHandover must be used within ExtensionUIProvider")
+
 // ── external editor ─────────────────────────────────────────────────────────
 
 /**
@@ -100,8 +139,7 @@ type EditorResult = Schema.Schema.Type<typeof EditorResult>
 
 export const openExternalEditor = (
   currentContent: string,
-  suspend: () => void,
-  resume: () => void,
+  handover: Handover,
   editor: string,
 ): Effect.Effect<
   EditorResult,
@@ -130,14 +168,14 @@ export const openExternalEditor = (
         })
       }
 
-      yield* Effect.sync(suspend)
-
       // Some when the editor settles the result itself: a spawn error, or a non-zero exit.
-      const settled = yield* runProcess(cmd, [...args, tmpPath], {
-        stdin: "inherit",
-        stdout: "inherit",
-        stderr: "inherit",
-      }).pipe(
+      const settled = yield* handover(
+        runProcess(cmd, [...args, tmpPath], {
+          stdin: "inherit",
+          stdout: "inherit",
+          stderr: "inherit",
+        }),
+      ).pipe(
         Effect.map((result): Option.Option<EditorResult> =>
           Option.liftPredicate(EditorResult.cases.cancelled.make({}), () => result.exitCode !== 0),
         ),
@@ -146,7 +184,6 @@ export const openExternalEditor = (
             EditorResult.cases.error.make({ message: `Editor failed: ${e.message}` }),
           ),
         ),
-        Effect.ensuring(Effect.sync(resume)),
       )
       if (Option.isSome(settled)) return settled.value
 

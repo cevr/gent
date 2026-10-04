@@ -41,6 +41,7 @@ export const keys = {
   "ctrl+c": "\x03",
   "ctrl+d": "\x04",
   "ctrl+e": "\x05",
+  "ctrl+g": "\x07",
   "ctrl+j": "\n",
   "ctrl+o": "\x0f",
   "ctrl+p": "\x10",
@@ -151,7 +152,7 @@ const spawnWithDir = (
   tempDir: string,
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
-  size: PtySize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
+  size: PtySize = DEFAULT_PTY_SIZE,
 ): Effect.Effect<TestContext, never, Scope.Scope> =>
   Effect.flatMap(serveModelCatalogFixture, (catalogOrigin) =>
     openPty({
@@ -175,11 +176,17 @@ const spawnWithDir = (
     }),
   )
 
-export const seedAndSpawn = (extraArgs: string[] = [], size?: PtySize) =>
+export const DEFAULT_PTY_SIZE: PtySize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }
+
+export const seedAndSpawn = (
+  extraArgs: string[] = [],
+  size: PtySize = DEFAULT_PTY_SIZE,
+  extraEnv: Record<string, string> = {},
+) =>
   Effect.gen(function* () {
     const tempDir = yield* makeTempDirectoryScoped("gent-e2e-")
     yield* seedAuthKeys(`${tempDir}/auth`).pipe(Effect.orDie)
-    return yield* spawnWithDir(tempDir, extraArgs, {}, size)
+    return yield* spawnWithDir(tempDir, extraArgs, extraEnv, size)
   })
 
 /**

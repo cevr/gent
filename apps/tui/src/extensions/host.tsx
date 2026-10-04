@@ -46,6 +46,8 @@ import {
 } from "./loader-boundary"
 import { useWorkspace } from "../workspace"
 import { useClient } from "../client"
+import { HandoverProvider, makeHandover } from "../os"
+import { useRenderer } from "@opentui/solid"
 import type { BranchId, SessionId } from "@gent/core/protocol"
 
 // ── per-provider client runtime ─────────────────────────────────────────────
@@ -163,6 +165,11 @@ export function ExtensionUIProvider(props: {
 }) {
   const workspace = useWorkspace()
   const client = useClient()
+  const renderer = useRenderer()
+  const handover = makeHandover({
+    suspend: () => renderer.suspend(),
+    resume: () => renderer.resume(),
+  })
 
   const [activityProvider, setActivityProvider] = createSignal<() => ClientActivitySnapshot>(
     () => ({ state: "unknown" }),
@@ -371,6 +378,7 @@ export function ExtensionUIProvider(props: {
       notify: (message) => client.setNotice(message),
       switchSession: (input) => client.switchSession(input.sessionId, input.branchId, input.name),
       cast: client.runtime.cast,
+      handover,
       pane: {
         open: (id) => Option.map(paneOwner(), (owner) => owner.open(id)),
         close: (id) => Option.map(paneOwner(), (owner) => owner.close(id)),
@@ -600,7 +608,12 @@ export function ExtensionUIProvider(props: {
         clientRuntime,
       }}
     >
-      <ToolRenderersProvider value={toolRenderers}>{props.children}</ToolRenderersProvider>
+      {/* The one terminal handover: the host's editor and every client
+          extension (`ClientShell.handover`) share it, so no two programs hold
+          the terminal. */}
+      <HandoverProvider value={handover}>
+        <ToolRenderersProvider value={toolRenderers}>{props.children}</ToolRenderersProvider>
+      </HandoverProvider>
     </ExtensionUIContext.Provider>
   )
 }

@@ -23,10 +23,9 @@ import {
 } from "./ui"
 import { textWidth } from "./bun-adapter"
 import type { InteractionRendererProps } from "./extensions/client-facets.js"
-import { useRenderer } from "@opentui/solid"
 import { useEnv } from "./workspace"
 import { useClient, useRuntime } from "./client"
-import { openExternalEditor, resolveEditor } from "./os"
+import { openExternalEditor, resolveEditor, useHandover } from "./os"
 
 // ── option list ─────────────────────────────────────────────────────────────
 
@@ -459,7 +458,7 @@ const decodePromptMetadata = Schema.decodeUnknownOption(
 )
 
 export function PromptRenderer(props: InteractionRendererProps) {
-  const renderer = useRenderer()
+  const handover = useHandover()
   const env = useEnv()
   const runtime = useRuntime()
   const { theme } = useTheme()
@@ -480,12 +479,7 @@ export function PromptRenderer(props: InteractionRendererProps) {
   createEffect(() => {
     if (!editing()) return
     runtime.call(
-      openExternalEditor(
-        props.event.text,
-        () => renderer.suspend(),
-        () => renderer.resume(),
-        resolveEditor(env.visual, env.editor),
-      ).pipe(
+      openExternalEditor(props.event.text, handover, resolveEditor(env.visual, env.editor)).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
             if (result._tag === "applied") {

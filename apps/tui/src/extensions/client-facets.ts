@@ -32,6 +32,7 @@ import type { ToolRenderer } from "../tool-renderers"
 import type { JSX } from "@opentui/solid"
 import { RGBA } from "@opentui/core"
 import { NamedThemeColor } from "../theme"
+import type { Handover } from "../os"
 import { repliesInView, type ReplyWriter } from "../utils"
 
 // ── effect boundary ─────────────────────────────────────────────────────────
@@ -400,6 +401,15 @@ export interface ClientShell {
   }) => void
   /** Fork an extension-owned Effect from a sync UI callback. */
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
+  /**
+   * Run an effect with the terminal handed to it, for a program that draws
+   * on the terminal itself (`runProcess` with inherited stdio): the renderer
+   * suspends first and resumes when the effect ends, however it ends. One
+   * handover runs at a time, the host's editor included; a second waits.
+   * Keys go to the program while it runs, and transcript rows a running turn
+   * commits meanwhile land on the return.
+   */
+  readonly handover: Handover
   /**
    * The one docked pane under the composer. The host keeps a single slot,
    * shared with its own pickers: opening a pane closes whatever pane or picker

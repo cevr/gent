@@ -4,8 +4,10 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, Option } from "effect"
+import { Effect, FileSystem, Option } from "effect"
+import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
+  DEFAULT_PTY_SIZE,
   keys,
   ptyWaitFor,
   screenWaitFor,
@@ -188,6 +190,49 @@ describe("E2E: Skill Popup", () => {
           timeout: 5_000,
           label: "no skills popup",
         })
+      }).pipe(Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
+})
+
+// The terminal handover (`ClientShell.handover`, the editor's too): the
+// renderer gives the terminal to a program, and takes it back when the
+// program exits, header, composer and footer drawn again.
+describe("E2E: Terminal handover", () => {
+  it.scopedLive(
+    "ctrl+g hands the terminal to the editor and takes it back with the edit",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* makeTempDirectoryScoped("gent-e2e-editor-")
+        const editor = `${dir}/editor`
+        yield* fs.writeFileString(
+          editor,
+          [
+            "#!/bin/sh",
+            "printf 'HANDOVER-PROBE\\n'",
+            "printf 'edited by the probe' > \"$1\"",
+            "",
+          ].join("\n"),
+        )
+        yield* fs.chmod(editor, 0o755)
+        const ctx = yield* seedAndSpawn(["--mock-empty"], DEFAULT_PTY_SIZE, {
+          VISUAL: editor,
+          EDITOR: editor,
+        })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        ctx.pty.write("draft")
+        yield* settlePty(ctx, REPAINT)
+        ctx.pty.write(keys["ctrl+g"])
+        yield* ptyWaitFor(ctx, "HANDOVER-PROBE", { timeout: 10_000 })
+        yield* screenWaitFor(
+          ctx,
+          (visible) =>
+            visible.some((line) => line.includes("┃ edited by the probe")) &&
+            visible.some((line) => line.includes("ctrl+p commands")) &&
+            visible.some((line) => line.includes("ready")),
+          { timeout: 10_000, label: "the screen back with the edit in the composer" },
+        )
       }).pipe(Effect.provide(BunServices.layer)),
     TEST_TIMEOUT,
   )
