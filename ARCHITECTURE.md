@@ -796,7 +796,8 @@ Shape:
   model, an effort, or both, with the `reason` a classifier reads) and a
   default. The catalog lists one as `Model.kind: "virtual"` under its label;
   one the router reports as a problem, or one whose choice names a router, is
-  a catalog failure, and a turn on it fails with `ErrorOccurred` naming why.
+  a catalog failure (extension health lists it under the router's
+  extension), and a turn on it fails with `ErrorOccurred` naming why.
   The turn routes once, before its first request (`routeTurn`,
   `runtime/turn.ts`, model-routing section): it calls `route` with the
   model-visible messages, each choice's catalog entry, and the model the

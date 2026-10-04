@@ -270,7 +270,10 @@ const getBranchTree = (
 
 // ── extension-health ────────────────────────────────────────────────────────
 
-/** Each failed catalog under the extension that contributes its driver. */
+/**
+ * Each failed catalog under the extension that contributes its driver, and
+ * each refused virtual model under the extension that contributes its router.
+ */
 const catalogFailuresByExtension = (
   resolved: ReturnType<ExtensionRegistryService["getResolved"]>,
   failures: ReadonlyArray<ModelCatalogFailure>,
@@ -278,8 +281,11 @@ const catalogFailuresByExtension = (
   const byExtension = new Map<string, Array<ExtensionHealthIssue>>()
   for (const failure of failures) {
     const driver = resolved.modelDrivers.get(failure.driverId)
-    const owner = resolved.extensions.find((extension) =>
-      (extension.contributions.modelDrivers ?? []).some((candidate) => candidate === driver),
+    const router = resolved.modelRouters.get(failure.driverId)
+    const owner = resolved.extensions.find(
+      (extension) =>
+        (extension.contributions.modelDrivers ?? []).some((candidate) => candidate === driver) ||
+        (extension.contributions.modelRouters ?? []).some((candidate) => candidate === router),
     )
     if (Predicate.isUndefined(owner)) continue
     const issues = byExtension.get(owner.manifest.id) ?? []

@@ -317,7 +317,7 @@ describe("router config", () => {
   )
 
   it.scopedLive(
-    "a router with two default choices is refused: the catalog omits it and a turn on it says why",
+    "a router with two default choices is refused: the catalog omits it, health and a turn on it say why",
     () =>
       Effect.gen(function* () {
         const { home, cwd } = yield* writeHome({
@@ -339,6 +339,23 @@ describe("router config", () => {
         })
         const models = yield* session.client.model.list({ sessionId: session.sessionId })
         expect(models.some((model) => model.id === AUTO)).toBe(false)
+        // Health names the bad entry under the router's extension, as it does a failed catalog.
+        const status = yield* session.client.extension.listStatus({
+          scope: { _tag: "Session", id: session.sessionId },
+        })
+        expect(status._tag).toBe("Degraded")
+        if (status._tag !== "Degraded") return
+        expect(
+          status.degradedExtensions
+            .filter((extension) => extension.manifest.id === "@gent/router")
+            .flatMap((extension) => extension.issues),
+        ).toEqual([
+          {
+            _tag: "ModelCatalogFailed",
+            driverId: "router",
+            error: `${AUTO}: choices 1 and 2 are each marked "default": true; mark one`,
+          },
+        ])
         yield* session.send("route me")
         const events = yield* session.afterTurns(1)
         expect(
