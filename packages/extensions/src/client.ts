@@ -2,6 +2,7 @@
 // reads, so a client test builds a real child task with it, not a copy.
 export {
   CHILD_COMPLETION_TYPE,
+  CHILD_TASK_TYPE,
   ChildCompletionDetails,
   childOutcomeWords,
   childTaskBody,
@@ -49,10 +50,15 @@ export {
   type WakePending as WakePendingType,
   WakeRpc,
 } from "./wake.js"
+// threadTaskText, like childTaskText, has only a test reader here: it writes
+// the text threadTaskBody reads.
 export {
   SESSION_MESSAGE_TYPE,
   SESSION_TOOLS_EXTENSION_ID,
   SessionMessageDetails,
   sessionMessageBody,
   sessionMessageText,
+  THREAD_TASK_TYPE,
+  threadTaskBody,
+  threadTaskText,
 } from "./session-tools.js"

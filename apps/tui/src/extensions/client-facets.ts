@@ -542,6 +542,11 @@ export const sessionQuery = <A>(opts: {
   readonly fetch: (
     session: ActiveExtensionSession,
   ) => Effect.Effect<A, { readonly message: string }>
+  /**
+   * Runs with each reply the guard keeps, as it becomes `value`: state a
+   * caller derives from replies changes only for a reply that is shown.
+   */
+  readonly accepted?: (value: A) => void
 }): Effect.Effect<SessionQuery<A>, never, ClientContext> =>
   Effect.gen(function* () {
     const { transport, shell, lifecycle } = yield* ClientContext
@@ -576,6 +581,7 @@ export const sessionQuery = <A>(opts: {
               settle(reply, () => {
                 setStored(Option.some({ session, value }))
                 setError(Option.none())
+                opts.accepted?.(value)
               }),
           }),
         )

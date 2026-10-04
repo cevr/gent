@@ -55,6 +55,8 @@ import {
   SESSION_TOOLS_EXTENSION_ID,
   SessionMessageDetails,
   sessionMessageBody,
+  THREAD_TASK_TYPE,
+  threadTaskBody,
   FilesRpc,
   SkillsRpc,
   makeStartedMemo,
@@ -774,24 +776,34 @@ const senderLine = ({ from }: SessionMessageDetails): string => {
  * The model reads the header `sessionMessageText` writes, then the text. The
  * row puts the sender in its own muted line and `sessionMessageBody` removes
  * the header, old rows included, so blank lines in a name or body stay whole.
- * Details that do not decode draw the plain row.
+ * Details that do not decode draw the plain row. A thread's first message is
+ * its task under a frame the thread's model reads; the row shows the task.
  */
 const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID, {
   setup: Effect.succeed(
-    messageRendererContribution(SESSION_MESSAGE_TYPE, (props) => (
-      <Show
-        when={Option.getOrUndefined(decodeSessionMessageDetails(props.details))}
-        fallback={<UserRow {...props} />}
-      >
-        {(details) => (
-          <UserRow
-            {...props}
-            header={senderLine(details())}
-            content={sessionMessageBody(details().from, props.content)}
-          />
-        )}
-      </Show>
-    )),
+    clientContributions(
+      messageRendererContribution(SESSION_MESSAGE_TYPE, (props) => (
+        <Show
+          when={Option.getOrUndefined(decodeSessionMessageDetails(props.details))}
+          fallback={<UserRow {...props} />}
+        >
+          {(details) => (
+            <UserRow
+              {...props}
+              header={senderLine(details())}
+              content={sessionMessageBody(details().from, props.content)}
+            />
+          )}
+        </Show>
+      )),
+      messageRendererContribution(
+        THREAD_TASK_TYPE,
+        (props) => (
+          <UserRow {...props} header="thread · task" content={threadTaskBody(props.content)} />
+        ),
+        { prompt: threadTaskBody },
+      ),
+    ),
   ),
 })
 

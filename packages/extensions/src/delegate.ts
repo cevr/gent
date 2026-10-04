@@ -566,6 +566,9 @@ const deliverCompletion = (
 
 const CHILD_TASK_PREFIX = "Task from your parent session "
 
+/** `metadata.customType` on a child's first message, the task its parent gave it. */
+export const CHILD_TASK_TYPE = "child-task"
+
 /**
  * The child's first message names where the task came from. Without it a
  * child reads a bare instruction after its system prompt and can take its
@@ -611,6 +614,7 @@ const submitStart = (entry: DelegateEntry) =>
       content: childTaskText(ctx.sessionId, entry.prompt),
       commandId: ActorCommandId.make(startMessageId(entry.requestId)),
       completion: "admission",
+      metadata: { customType: CHILD_TASK_TYPE },
     })
   })
 

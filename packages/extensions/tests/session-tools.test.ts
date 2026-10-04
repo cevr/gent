@@ -7,24 +7,24 @@ import {
   Layer,
   Option,
   Predicate,
-  Semaphore,
+  Record,
+  Schema,
+  type Scope,
   Stream,
 } from "effect"
-import type { LanguageModel } from "effect/ai"
 import { AgentsExtension } from "../src/agents.js"
 import {
   DEFAULT_SESSION_NAME,
   getToolId,
   messagePartsDisplayText,
   sessionThread,
-  type ToolCapability,
 } from "@gent/core/extensions/api"
 import {
   collectTestContributions,
   createE2ELayer,
-  CurrentWorkspaceId,
   createRpcClient,
   createRpcHarness,
+  CurrentWorkspaceId,
   finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -47,10 +47,6 @@ import {
   sessionTitleOf,
   SessionToolsExtension,
   THREAD_TASK_TYPE,
-  ThreadListTool,
-  ThreadStarts,
-  ThreadStartTool,
-  ThreadStopTool,
 } from "../src/session-tools.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import {
@@ -410,43 +406,141 @@ const reply = (text: string) =>
 
 type SessionKey = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
-/**
- * A starter session the test runs the thread tools in, outside a turn, over
- * the real runtime: the facade the tools call creates, sends to and stops the
- * thread sessions as a turn's facade does.
- */
-const threadHarness = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
-  Effect.gen(function* () {
-    const cwd = yield* makeTempDirectoryScoped("gent-threads-")
-    const context = yield* Layer.build(createE2ELayer({ ...e2ePreset, cwd, providerLayer }))
-    const permits = Context.make(ThreadStarts, yield* Semaphore.make(1))
-    const { client } = yield* createRpcClient(Layer.succeedContext(context))
-    const starter: SessionKey = yield* client.session.create({ cwd })
-    const run = <Input, Output, Failure>(
-      capability: ToolCapability<Input, Output, Failure>,
-      input: Input,
-      options: { readonly call: string; readonly at?: SessionKey },
-    ) =>
-      Effect.gen(function* () {
-        const host = yield* runtimeHostContext(options.at ?? starter)
-        return yield* runToolWithCtx(capability, input, {
-          ...host,
-          extensionId: SESSION_TOOLS_EXTENSION_ID,
-          toolCallId: ToolCallId.make(options.call),
-        })
-      }).pipe(
-        Effect.provideContext(Context.merge(context, permits)),
-        Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(cwd)),
-      )
-    return { client, cwd, starter, run }
-  })
+/** One thread-tool call a scripted model step makes. */
+interface ThreadOp {
+  readonly tool: "thread.start" | "thread.list" | "thread.stop"
+  readonly input: Record<string, string>
+  readonly id: string
+}
 
-/** Threads that answer once `gate` opens; until then each is at the model, running. */
-const gatedThreads = (gate: Deferred.Deferred<boolean>) =>
-  LanguageModelLayers.testStream((options) => {
-    if (!isThreadRequest(options.prompt)) return Effect.succeed(reply("starter"))
-    return Deferred.await(gate).pipe(Effect.as(reply("THREAD-REPLY: changelog tidied")))
+/** A thread tool's result as its turn reported it. */
+interface ThreadOpResult {
+  readonly id: string
+  readonly ok: boolean
+  readonly output: string
+}
+
+const THREAD_TOOLS = new Set(["thread.start", "thread.list", "thread.stop"])
+
+const StartedResult = Schema.Struct({ thread: SessionId, sessionId: SessionId, branchId: BranchId })
+const StartedOutput = Schema.fromJsonString(StartedResult)
+const ListedOutput = Schema.fromJsonString(
+  Schema.Array(
+    Schema.Struct({
+      thread: SessionId,
+      sessions: Schema.Finite,
+      current: Schema.Struct({ sessionId: SessionId, branchId: BranchId }),
+      status: Schema.Literals(["running", "idle"]),
+      preview: Schema.String,
+    }),
+  ),
+)
+const StoppedOutput = Schema.fromJsonString(
+  Schema.Struct({
+    stopped: Schema.Array(Schema.Struct({ sessionId: SessionId, branchId: BranchId })),
+  }),
+)
+
+/**
+ * The thread tools as a model calls them, over the RPC harness and the
+ * production extension, its process permit included. `act` sends a session a
+ * message whose turn makes the given calls in one model step and returns
+ * their results once the turn ends. A thread's own turn waits at the model
+ * until `gate` opens, so it runs until then.
+ */
+const threadRig = Effect.gen(function* () {
+  const gate = yield* Deferred.make<boolean>()
+  const scripted = new Map<string, ReadonlyArray<ThreadOp>>()
+  const providerLayer = LanguageModelLayers.testStream((options) => {
+    if (isThreadRequest(options.prompt)) {
+      return Deferred.await(gate).pipe(Effect.as(reply("THREAD-REPLY: changelog tidied")))
+    }
+    if (options.prompt.content.at(-1)?.role === "tool") return Effect.succeed(reply("noted"))
+    const ops = scripted.get(userTexts(options.prompt).at(-1) ?? "") ?? []
+    if (ops.length === 0) return Effect.succeed(reply("nothing to do"))
+    return Effect.succeed(
+      Stream.fromIterable([
+        ...ops.map((op) => toolCallPart(op.tool, op.input, { toolCallId: ToolCallId.make(op.id) })),
+        finishPart({ finishReason: "tool-calls" }),
+      ]),
+    )
   })
+  const cwd = yield* makeTempDirectoryScoped("gent-threads-")
+  const harness = yield* createRpcHarness({
+    ...e2ePreset,
+    cwd,
+    providerLayer,
+    extensionInputs: [AgentsExtension, SessionToolsExtension],
+  })
+  const { client } = harness
+  const starter: SessionKey = { sessionId: harness.sessionId, branchId: harness.branchId }
+  const act = (at: SessionKey, ops: ReadonlyArray<ThreadOp>) =>
+    Effect.gen(function* () {
+      const label = `OPS ${scripted.size + 1}`
+      scripted.set(label, ops)
+      const ids = new Set(ops.map((op) => op.id))
+      const results: Array<ThreadOpResult> = []
+      const turn = yield* client.session.events(at).pipe(
+        Stream.tap(({ event }) =>
+          Effect.sync(() => {
+            if (event._tag !== "ToolCallSucceeded" && event._tag !== "ToolCallFailed") return
+            if (!THREAD_TOOLS.has(event.toolName) || !ids.has(event.toolCallId)) return
+            results.push({
+              id: event.toolCallId,
+              ok: event._tag === "ToolCallSucceeded",
+              output: event.output ?? "",
+            })
+          }),
+        ),
+        // The turn's end that follows its last thread call.
+        Stream.takeUntil(
+          ({ event }) => event._tag === "TurnCompleted" && results.length === ops.length,
+        ),
+        Stream.runDrain,
+        Effect.forkScoped,
+      )
+      yield* client.message.send({ ...at, content: label })
+      yield* Fiber.join(turn)
+      return yield* Effect.forEach(ops, (call) => {
+        const found = results.find((result) => result.id === call.id)
+        if (Predicate.isUndefined(found)) return Effect.die(`no result for ${call.id}`)
+        return Effect.succeed(found)
+      })
+    })
+  let calls = 0
+  const op = (tool: ThreadOp["tool"], input: Record<string, string> = {}): ThreadOp => {
+    calls += 1
+    return { tool, input, id: `thread-op-${calls}` }
+  }
+  /** One call's output, which must have succeeded. */
+  const one = (at: SessionKey, call: ThreadOp) =>
+    Effect.flatMap(act(at, [call]), ([result]) => {
+      if (result?.ok !== true) return Effect.die(`${call.tool} failed: ${result?.output}`)
+      return Effect.succeed(result.output)
+    })
+  /** `at`'s listing, or one thread's row of it. */
+  const list = (at: SessionKey, thread?: string) =>
+    Effect.flatMap(
+      one(at, op("thread.list", Record.filter({ thread }, Predicate.isNotUndefined))),
+      decodeListed,
+    )
+  /** Read `at`'s listing until `ready` holds. */
+  const listUntil = (
+    at: SessionKey,
+    ready: (rows: typeof ListedOutput.Type) => boolean,
+    label: string,
+  ) => waitFor(list(at), ready, 4_000, label)
+  const start = (at: SessionKey, task: string) =>
+    Effect.flatMap(one(at, op("thread.start", { task })), decodeStarted)
+  const stop = (at: SessionKey, thread: string) =>
+    Effect.flatMap(one(at, op("thread.stop", { thread })), decodeStopped)
+  return { client, cwd, starter, gate, act, op, list, listUntil, start, stop }
+})
+
+const decodeStarted = Schema.decodeEffect(StartedOutput)
+const decodeListed = Schema.decodeEffect(ListedOutput)
+const decodeStopped = Schema.decodeEffect(StoppedOutput)
+const decodeStartedResult = Schema.decodeUnknownEffect(StartedResult)
 
 describe("threads", () => {
   it.live(
@@ -514,13 +608,11 @@ describe("threads", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const gate = yield* Deferred.make<boolean>()
-          const { run } = yield* threadHarness(gatedThreads(gate))
-          const started = yield* run(ThreadStartTool, { task: THREAD_TASK }, { call: "start-1" })
-          const running = yield* waitFor(
-            run(ThreadListTool, {}, { call: "list-1" }),
+          const rig = yield* threadRig
+          const started = yield* rig.start(rig.starter, THREAD_TASK)
+          const running = yield* rig.listUntil(
+            rig.starter,
             (rows) => rows[0]?.status === "running",
-            3_000,
             "the thread runs",
           )
           expect(running).toHaveLength(1)
@@ -529,19 +621,18 @@ describe("threads", () => {
             sessions: 1,
             current: { sessionId: started.sessionId, branchId: started.branchId },
           })
-          yield* Deferred.succeed(gate, true)
-          const idle = yield* waitFor(
-            run(ThreadListTool, {}, { call: "list-2" }),
+          yield* Deferred.succeed(rig.gate, true)
+          const idle = yield* rig.listUntil(
+            rig.starter,
             (rows) => rows[0]?.status === "idle" && rows[0].preview.length > 0,
-            3_000,
             "the thread ends",
           )
           expect(idle[0]?.preview).toBe("THREAD-REPLY: changelog tidied")
-          const one = yield* run(ThreadListTool, { thread: started.thread }, { call: "list-3" })
+          const one = yield* rig.list(rig.starter, started.thread)
           expect(one.map((row) => row.preview)).toEqual(["THREAD-REPLY: changelog tidied"])
-        }).pipe(Effect.timeout("8 seconds")),
+        }).pipe(Effect.timeout("12 seconds")),
       ),
-    10_000,
+    15_000,
   )
 
   it.live(
@@ -549,17 +640,16 @@ describe("threads", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const gate = yield* Deferred.make<boolean>()
-          yield* Deferred.succeed(gate, true)
-          const { client, cwd, run } = yield* threadHarness(gatedThreads(gate))
-          const started = yield* run(ThreadStartTool, { task: THREAD_TASK }, { call: "start-1" })
-          const handoff = yield* client.session.create({
-            cwd,
+          const rig = yield* threadRig
+          yield* Deferred.succeed(rig.gate, true)
+          const started = yield* rig.start(rig.starter, THREAD_TASK)
+          const handoff = yield* rig.client.session.create({
+            cwd: rig.cwd,
             parentSessionId: started.sessionId,
             parentBranchId: started.branchId,
             continueThread: true,
           })
-          const rows = yield* run(ThreadListTool, {}, { call: "list-1" })
+          const rows = yield* rig.list(rig.starter)
           expect(rows).toHaveLength(1)
           expect(rows[0]).toMatchObject({
             thread: started.thread,
@@ -576,67 +666,118 @@ describe("threads", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const gate = yield* Deferred.make<boolean>()
-          const { client, cwd, run } = yield* threadHarness(gatedThreads(gate))
-          const started = yield* run(ThreadStartTool, { task: THREAD_TASK }, { call: "start-1" })
-          yield* waitFor(
-            run(ThreadListTool, {}, { call: "list-1" }),
+          const rig = yield* threadRig
+          const started = yield* rig.start(rig.starter, THREAD_TASK)
+          yield* rig.listUntil(
+            rig.starter,
             (rows) => rows[0]?.status === "running",
-            3_000,
             "the thread runs",
           )
-          const other: SessionKey = yield* client.session.create({ cwd })
-          const refused = yield* run(
-            ThreadStopTool,
-            { thread: started.thread },
-            { call: "stop-other", at: other },
-          ).pipe(Effect.flip)
-          expect(refused.message).toContain("is not a thread this session started")
-          const result = yield* run(ThreadStopTool, { thread: started.thread }, { call: "stop-1" })
+          const other: SessionKey = yield* rig.client.session.create({ cwd: rig.cwd })
+          const [refused] = yield* rig.act(other, [
+            rig.op("thread.stop", { thread: started.thread }),
+          ])
+          expect(refused?.ok).toBe(false)
+          expect(refused?.output).toContain("is not a thread started by this session's thread")
+          const result = yield* rig.stop(rig.starter, started.thread)
           expect(result.stopped).toEqual([
             { sessionId: started.sessionId, branchId: started.branchId },
           ])
-          const after = yield* waitFor(
-            run(ThreadListTool, {}, { call: "list-2" }),
+          const after = yield* rig.listUntil(
+            rig.starter,
             (rows) => rows[0]?.status === "idle",
-            3_000,
             "the stopped thread is idle",
           )
           expect(after[0]?.preview).toBe("")
-        }).pipe(Effect.timeout("8 seconds")),
+        }).pipe(Effect.timeout("12 seconds")),
       ),
-    10_000,
+    15_000,
   )
 
   it.live(
-    "a fifth running thread is refused and names the four that run",
+    "eight starts in one model step: four run and the rest are refused, naming them and leaving no session",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const gate = yield* Deferred.make<boolean>()
-          const { client, run } = yield* threadHarness(gatedThreads(gate))
-          for (const index of [1, 2, 3, 4]) {
-            yield* run(ThreadStartTool, { task: `${THREAD_TASK} ${index}` }, { call: `s-${index}` })
+          const rig = yield* threadRig
+          const before = (yield* rig.client.session.list()).length
+          // A step runs up to eight tool calls at once: every start races.
+          const results = yield* rig.act(
+            rig.starter,
+            [1, 2, 3, 4, 5, 6, 7, 8].map((index) =>
+              rig.op("thread.start", { task: `${THREAD_TASK} ${index}` }),
+            ),
+          )
+          const refused = results.filter((result) => !result.ok)
+          expect(refused).toHaveLength(4)
+          const started = yield* Effect.forEach(
+            results.filter((result) => result.ok),
+            (result) => decodeStarted(result.output),
+          )
+          for (const refusal of refused) {
+            expect(refusal.output).toContain("already runs 4 threads")
+            for (const thread of started) expect(refusal.output).toContain(thread.thread)
           }
-          yield* waitFor(
-            run(ThreadListTool, {}, { call: "list-1" }),
-            (rows) => rows.filter((row) => row.status === "running").length === 4,
-            3_000,
+          // The refused start leaves no session behind.
+          expect((yield* rig.client.session.list()).length).toBe(before + 4)
+          const rows = yield* rig.listUntil(
+            rig.starter,
+            (found) => found.filter((row) => row.status === "running").length === 4,
             "four threads run",
           )
-          const before = (yield* client.session.list()).length
-          const refused = yield* run(
-            ThreadStartTool,
-            { task: `${THREAD_TASK} 5` },
-            { call: "s-5" },
-          ).pipe(Effect.flip)
-          expect(refused.message).toContain("already runs 4 threads")
-          // The refused start leaves no session behind.
-          expect((yield* client.session.list()).length).toBe(before)
-          yield* Deferred.succeed(gate, true)
-        }).pipe(Effect.timeout("8 seconds")),
+          expect(rows).toHaveLength(4)
+        }).pipe(Effect.timeout("12 seconds")),
       ),
-    10_000,
+    15_000,
+  )
+
+  it.live(
+    "after a handoff the new session lists, stops and counts the threads its thread started",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rig = yield* threadRig
+          const started = yield* rig
+            .act(
+              rig.starter,
+              [1, 2, 3].map((index) => rig.op("thread.start", { task: `${THREAD_TASK} ${index}` })),
+            )
+            .pipe(Effect.flatMap(Effect.forEach((result) => decodeStarted(result.output))))
+          const handoff: SessionKey = yield* rig.client.session.create({
+            cwd: rig.cwd,
+            parentSessionId: rig.starter.sessionId,
+            parentBranchId: rig.starter.branchId,
+            continueThread: true,
+          })
+          // The handoff starts a fourth: the cap holds four for the whole thread.
+          const own = (yield* rig.start(handoff, `${THREAD_TASK} own`)).thread
+          const rows = yield* rig.listUntil(
+            handoff,
+            (found) => found.length === 4 && found.every((row) => row.status === "running"),
+            "the thread's four threads run",
+          )
+          expect(rows.map((row) => row.thread).toSorted()).toEqual(
+            [...started.map((entry) => entry.thread), own].toSorted(),
+          )
+          // The cap counts every thread the thread started, in either session.
+          const [capped] = yield* rig.act(handoff, [
+            rig.op("thread.start", { task: `${THREAD_TASK} fifth` }),
+          ])
+          expect(capped?.ok).toBe(false)
+          expect(capped?.output).toContain("already runs 4 threads")
+          // The older session's thread is the handoff's to stop.
+          const first = started[0]
+          if (Predicate.isUndefined(first)) return yield* Effect.die("no started thread")
+          const stopped = yield* rig.stop(handoff, first.thread)
+          expect(stopped.stopped).toEqual([
+            { sessionId: first.sessionId, branchId: first.branchId },
+          ])
+          // The older session reads the newer one's thread too.
+          const fromStarter = yield* rig.list(rig.starter)
+          expect(fromStarter.map((row) => row.thread)).toContain(own)
+        }).pipe(Effect.timeout("14 seconds")),
+      ),
+    16_000,
   )
 
   it.live(
@@ -644,11 +785,49 @@ describe("threads", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const gate = yield* Deferred.make<boolean>()
-          yield* Deferred.succeed(gate, true)
-          const { client, starter, run } = yield* threadHarness(gatedThreads(gate))
-          const first = yield* run(ThreadStartTool, { task: THREAD_TASK }, { call: "same" })
-          const second = yield* run(ThreadStartTool, { task: THREAD_TASK }, { call: "same" })
+          // A model never repeats a call id, so a replay is run here as the
+          // host replays a call a lost process left: the registered tool,
+          // its process permit, the same call id twice.
+          const contributions = yield* collectTestContributions(SessionToolsExtension.setup)
+          const start = contributions.tools?.find((tool) => getToolId(tool) === "thread.start")
+          const permit = contributions.resources?.find(
+            (resource) => resource.id === "@gent/session-tools/thread-starts",
+          )
+          if (Predicate.isUndefined(start) || Predicate.isUndefined(permit)) {
+            return yield* Effect.die("session tools register no thread.start or permit")
+          }
+          const cwd = yield* makeTempDirectoryScoped("gent-threads-")
+          const providerLayer = LanguageModelLayers.testStream(() =>
+            Effect.succeed(reply("THREAD-REPLY: changelog tidied")),
+          )
+          const context = yield* Layer.build(createE2ELayer({ ...e2ePreset, cwd, providerLayer }))
+          const buildPermits: Effect.Effect<
+            Context.Context<never>,
+            never,
+            Scope.Scope
+          > = Layer.build(permit.layer).pipe(Effect.orDie)
+          const permits = yield* buildPermits
+          const { client } = yield* createRpcClient(Layer.succeedContext(context))
+          const starter: SessionKey = yield* client.session.create({ cwd })
+          const run = Effect.gen(function* () {
+            const host = yield* runtimeHostContext(starter)
+            // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane
+            const output: unknown = yield* runToolWithCtx(
+              start,
+              { task: THREAD_TASK },
+              {
+                ...host,
+                extensionId: SESSION_TOOLS_EXTENSION_ID,
+                toolCallId: ToolCallId.make("same"),
+              },
+            ).pipe(Effect.orDie)
+            return yield* decodeStartedResult(output)
+          }).pipe(
+            Effect.provideContext(Context.merge(context, permits)),
+            Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(cwd)),
+          )
+          const first = yield* run
+          const second = yield* run
           expect(second.sessionId).toBe(first.sessionId)
           const children = (yield* client.session.list()).filter(
             (session) => session.parentSessionId === starter.sessionId,

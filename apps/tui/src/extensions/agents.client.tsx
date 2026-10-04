@@ -62,18 +62,25 @@ const membersOf = (row: AgentRowEntry): ReadonlyArray<AgentRowEntry["sessionId"]
 const holds = (row: AgentRowEntry, sessionId: string): boolean =>
   membersOf(row).some((member) => member === sessionId)
 
+/** A thread's stable identity: its key, which a handoff keeps while the row's ids move. */
+const threadOf = (row: AgentRowEntry): string => row.thread ?? row.sessionId
+
 /**
  * Descendants of `root` at any depth, in the server's parent-before-child
- * order. The root may be an older session of a thread whose row the newest
- * session names, so the root's own row is the one that holds it.
+ * order. A row stands for every session of its thread, so the root's row is
+ * the one that holds it, and a child names its real parent, which may be an
+ * older session of a thread whose row the newest session names.
  */
 const subtreeRows = (
   rows: ReadonlyArray<AgentRowEntry>,
   root: { readonly sessionId: string },
 ): ReadonlyArray<AgentRowEntry> => {
   const known = new Set<string>([root.sessionId])
+  const take = (row: AgentRowEntry) => {
+    for (const member of membersOf(row)) known.add(member)
+  }
   for (const row of rows) {
-    if (holds(row, root.sessionId)) known.add(row.sessionId)
+    if (holds(row, root.sessionId)) take(row)
   }
   const descendants: Array<AgentRowEntry> = []
   let pending = rows.filter((row) => !holds(row, root.sessionId))
@@ -84,9 +91,9 @@ const subtreeRows = (
     if (next.length === 0) return descendants
     for (const row of next) {
       descendants.push(row)
-      known.add(row.sessionId)
+      take(row)
     }
-    pending = pending.filter((row) => !known.has(row.sessionId))
+    pending = pending.filter((row) => !next.includes(row))
   }
 }
 
@@ -247,8 +254,10 @@ interface AgentsController {
   /** Whether the pane is showing: the host's pane slot names it. */
   readonly open: () => boolean
   /**
-   * Side threads seen running that went idle while the shell was not on
-   * them, oldest first. Opening one, or its next turn, clears it.
+   * Side threads in the shell's thread's subtree seen running that went
+   * idle while the shell was not on them, oldest first, each as its current
+   * row. Opening one, its next turn (on any of its sessions), or its
+   * deletion clears it.
    */
   readonly done: () => ReadonlyArray<AgentRowEntry>
 }
@@ -264,6 +273,13 @@ const sameKey = (left: RowKey, right: RowKey): boolean =>
 /** What a listing row says about its loop's progress: `updatedAt` moves on every step. */
 const progressStamp = (row: AgentRowEntry): string =>
   `${String(row.status)} ${String(row.updatedAt)}`
+
+/** One listing reply and what it was asked: a filter, and the root unless it covers the workspace. */
+interface Listing {
+  readonly rows: ReadonlyArray<AgentRowEntry>
+  readonly query: string
+  readonly root: Option.Option<string>
+}
 
 /** The slow clock a child's own turns are read on; they raise no event in this session. */
 const POLL_EVERY = "2 seconds"
@@ -323,55 +339,89 @@ export const makeAgentsController = (
       readDetail()
     }
 
-    // Each row's section at the last listing, and the side threads that
-    // finished since, keyed by session id. They live here, outside any
-    // component, so the tray keeps them while it hides for the pane.
+    // Each thread's section at the last listing, and the side threads that
+    // finished since, keyed by thread: a handoff moves a row to a new session
+    // but keeps its thread. They live here, outside any component, so the
+    // tray keeps them while it hides for the pane. An entry also names the
+    // thread the shell was on when it finished (`scope`), the root whose
+    // whole listing says whether the thread still exists.
     const lastSection = new Map<string, AgentRowEntry["section"]>()
-    const [done, setDone] = createSignal<ReadonlyArray<AgentRowEntry>>([])
-    const noteFinished = (rows: ReadonlyArray<AgentRowEntry>): void => {
+    const [finished, setFinished] = createSignal<
+      ReadonlyMap<string, { readonly row: AgentRowEntry; readonly scope: string }>
+    >(new Map())
+    const noteFinished = (reply: Listing): void => {
       const here = transport.currentSession().sessionId
-      const listed = new Map(rows.map((row) => [row.sessionId, row]))
-      const kept = done().flatMap((entry) => {
-        const now = listed.get(entry.sessionId) ?? entry
-        if (now.section === "running" || holds(now, here)) return []
-        return [now]
-      })
-      const fresh = rows.filter(
-        (row) =>
-          lastSection.get(row.sessionId) === "running" &&
+      const scope = Option.fromUndefinedOr(reply.rows.find((row) => holds(row, here))).pipe(
+        Option.map(threadOf),
+        Option.getOrElse(() => here),
+      )
+      const listed = new Map(reply.rows.map((row) => [threadOf(row), row]))
+      // Only a whole listing shows that a thread is gone: the workspace's, or
+      // its root's under no filter. A filter hides threads that still exist.
+      const whole = reply.query.trim() === ""
+      const next = new Map<string, { readonly row: AgentRowEntry; readonly scope: string }>()
+      for (const [key, entry] of finished()) {
+        const now = listed.get(key)
+        if (Predicate.isUndefined(now)) {
+          const gone = whole && (Option.isNone(reply.root) || entry.scope === scope)
+          if (!gone) next.set(key, entry)
+          continue
+        }
+        if (now.section === "running" || holds(now, here)) continue
+        next.set(key, { ...entry, row: now })
+      }
+      // What finished is read in the shell's subtree, where the tray shows it.
+      const inView = subtreeRows(reply.rows, { sessionId: here })
+      for (const row of inView) {
+        const key = threadOf(row)
+        if (
+          lastSection.get(key) === "running" &&
           row.section !== "running" &&
           finishesSilently(row) &&
-          !holds(row, here) &&
-          !kept.some((entry) => entry.sessionId === row.sessionId),
-      )
-      for (const row of rows) lastSection.set(row.sessionId, row.section)
-      setDone([...kept, ...fresh])
+          !next.has(key)
+        ) {
+          next.set(key, { row, scope })
+        }
+      }
+      for (const row of inView) lastSection.set(threadOf(row), row.section)
+      setFinished(next)
     }
 
     // The pane refetches across session switches (on `current()` changing and on
     // the poll), so the session query owns the guard that drops a reply for the
-    // session the shell already left.
+    // session the shell already left; a reply it drops changes nothing here.
     // The open pane lists the workspace under the reader's filter. The closed
     // pane leaves only the tray, which draws the current session's subtree,
     // so it reads that subtree alone: its cost follows the subtree, not the
-    // number of stored sessions.
-    const read = (): Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }> => {
-      if (open()) return fetchRows({ query })
-      return fetchRows({ query, root: transport.currentSession().sessionId })
+    // number of stored sessions. The server reads a root as its whole thread.
+    const read = (): Effect.Effect<Listing, { readonly message: string }> => {
+      const asked = query
+      const root = Option.liftPredicate(transport.currentSession().sessionId, () => !open())
+      // No `root` key for the whole workspace: an `undefined` value is no JSON
+      // value, and an in-process request refuses it.
+      const input: ListAgentsInput = Option.match(root, {
+        onNone: () => ({ query: asked }),
+        onSome: (sessionId) => ({ query: asked, root: sessionId }),
+      })
+      return fetchRows(input).pipe(Effect.map((found) => ({ rows: found, query: asked, root })))
     }
-    const listing = yield* sessionQuery({
-      initial: empty,
+    const listing = yield* sessionQuery<Listing>({
+      initial: { rows: empty, query: "", root: Option.none() },
       follow: false,
-      fetch: () =>
-        read().pipe(
-          Effect.tap((rows) =>
-            Effect.sync(() => {
-              noteFinished(rows)
-              detailAfterListing(rows)
-            }),
-          ),
-        ),
+      fetch: read,
+      accepted: (reply) => {
+        noteFinished(reply)
+        detailAfterListing(reply.rows)
+      },
     })
+    const rows = () => listing.value().rows
+    // The shell's thread's subtree, as the latest listing shows it.
+    const done = (): ReadonlyArray<AgentRowEntry> => {
+      const inView = new Set(subtreeRows(rows(), transport.currentSession()).map(threadOf))
+      return Array.from(finished().values(), (entry) => entry.row).filter((row) =>
+        inView.has(threadOf(row)),
+      )
+    }
     const refresh = (next: string): void => {
       query = next
       listing.refresh()
@@ -428,7 +478,7 @@ export const makeAgentsController = (
     yield* lifecycle.scoped(
       Effect.forkScoped(
         Effect.sync(() => {
-          const watching = subtreeRows(listing.value(), transport.currentSession()).some(
+          const watching = subtreeRows(rows(), transport.currentSession()).some(
             (row) => row.section !== "inactive",
           )
           if (open() || watching) tick()
@@ -437,7 +487,7 @@ export const makeAgentsController = (
     )
 
     return {
-      rows: listing.value,
+      rows,
       current: transport.currentSession,
       error: listing.error,
       loading: listing.loading,

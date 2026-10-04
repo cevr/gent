@@ -2997,6 +2997,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/extensions/src/anthropic.ts",
     text: "strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.",
   },
+  {
+    // The replay test runs the registered thread.start twice with one call id,
+    // which no model turn can do; the tool it finds is the erased registration.
+    file: "packages/extensions/tests/session-tools.test.ts",
+    text: "anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane",
+  },
 ]
 
 const approvedCount = (entry: ApprovedSuppressionEntry): number => entry.count ?? 1

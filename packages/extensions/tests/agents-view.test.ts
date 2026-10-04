@@ -367,7 +367,7 @@ describe("agents view projection", () => {
       expect(row?.depth).toBe(0)
     })
 
-    test("a started thread nests under its starter as one row, and so do children of its older sessions", () => {
+    test("a started thread nests under its starter as one row, and a child of an older session nests under the thread but keeps its real parent", () => {
       const rows = projectAgentRows({
         live: [],
         durable: [
@@ -389,8 +389,13 @@ describe("agents view projection", () => {
         [sid("third"), 1, true],
         [sid("child"), 2, true],
       ])
+      // The display nests `child` under the thread row; the field keeps the
+      // persisted parent, the thread's first session.
       expect(find(rows, "child", "b")?.parent).toEqual(
-        Option.some({ sessionId: sid("third"), branchId: bid("b") }),
+        Option.some({ sessionId: sid("first"), branchId: bid("b") }),
+      )
+      expect(find(rows, "third", "b")?.parent).toEqual(
+        Option.some({ sessionId: sid("starter"), branchId: bid("b") }),
       )
     })
 
@@ -589,6 +594,7 @@ const ReplySchema = Schema.Struct({
       depth: Schema.Finite,
       parentSessionId: Schema.optional(Schema.String),
       sideThread: Schema.Boolean,
+      thread: Schema.optional(Schema.String),
       sessions: Schema.optional(Schema.Array(Schema.String)),
       activity: Schema.optional(Schema.String),
       createdAt: Schema.optional(Schema.Finite),
@@ -1110,8 +1116,9 @@ describe("AgentsViewExtension via RPC", () => {
           expect(handoffRow?.section).toBe("idle")
           expect(rowFor(harness.sessionId)).toBeUndefined()
           expect(spawnedRow?.sessions).toBeUndefined()
-          // A child of the parent links to the thread's row.
-          expect(spawnedRow?.parentSessionId).toBe(handoff.sessionId)
+          // A child keeps its persisted parent; a client finds the thread's
+          // row through that row's `sessions`.
+          expect(spawnedRow?.parentSessionId).toBe(harness.sessionId)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
@@ -1146,6 +1153,38 @@ describe("AgentsViewExtension via RPC", () => {
           expect(reply.rows.find((row) => row.sessionId === harness.sessionId)?.live).toBe(true)
           const whole = yield* requestRows(harness, {})
           expect(whole.reply.rows.map((row) => row.sessionId)).toContain(beside.sessionId)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a root listing on a handoff covers its whole thread: the work an older session started is there",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* openHarness
+          const parent = { parentSessionId: harness.sessionId, parentBranchId: harness.branchId }
+          const spawned = yield* harness.client.session.create({
+            cwd: "/nonexistent/agents-view-rpc-spawned",
+            ...parent,
+          })
+          const handoff = yield* harness.client.session.create({
+            cwd: "/nonexistent/agents-view-rpc-handoff",
+            continueThread: true,
+            ...parent,
+          })
+          const { reply } = yield* requestRows(harness, { root: handoff.sessionId })
+          const rowFor = (sessionId: string) =>
+            reply.rows.find((row) => row.sessionId === sessionId)
+          expect(rowFor(handoff.sessionId)?.sessions).toEqual([
+            harness.sessionId,
+            handoff.sessionId,
+          ])
+          expect(rowFor(spawned.sessionId)?.parentSessionId).toBe(harness.sessionId)
+          // Every row names its thread's key, which a handoff does not change.
+          expect(rowFor(handoff.sessionId)?.thread).toBe(harness.sessionId)
+          expect(rowFor(spawned.sessionId)?.thread).toBe(spawned.sessionId)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

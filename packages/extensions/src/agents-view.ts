@@ -1,4 +1,15 @@
-import { Context, Effect, FiberMap, Layer, Option, Order, Ref, Schema, Stream } from "effect"
+import {
+  Context,
+  Effect,
+  FiberMap,
+  Layer,
+  Option,
+  Order,
+  Predicate,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import {
   type AgentEvent,
   BranchId,
@@ -260,9 +271,9 @@ const foldThread = (seed: AgentRow, others: ReadonlyArray<AgentRow>): AgentRow =
 
 /**
  * Fold each thread's sessions (a handoff chain) into one row. A loop with no
- * session row has no key and stays its own row. A parent link that names a
- * folded session moves to its thread's row, so a child of an older session
- * still nests under the thread.
+ * session row has no key and stays its own row. A parent link keeps the
+ * persisted parent; `buildRowTree` nests a child of an older session under
+ * its thread's row through the row's members.
  */
 const groupThreads = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> => {
   const groups = new Map<string, { readonly seed: AgentRow; readonly others: Array<AgentRow> }>()
@@ -276,17 +287,7 @@ const groupThreads = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> =>
       onSome: (group) => group.others.push(row),
     })
   }
-  const folded = Array.from(groups.values(), (group) => foldThread(group.seed, group.others))
-  const rowOf = new Map<string, AgentRowKey>()
-  for (const row of folded) {
-    for (const member of row.members) {
-      rowOf.set(rowKey(member), { sessionId: row.sessionId, branchId: row.branchId })
-    }
-  }
-  return folded.map((row) => ({
-    ...row,
-    parent: Option.map(row.parent, (parent) => rowOf.get(rowKey(parent)) ?? parent),
-  }))
+  return Array.from(groups.values(), (group) => foldThread(group.seed, group.others))
 }
 
 /**
@@ -309,6 +310,12 @@ export const buildRowTree = (loops: ReadonlyArray<AgentRow>): ReadonlyArray<Agen
   const rows = groupThreads(loops)
   const byKey = new Map<string, AgentRow>()
   for (const row of rows) byKey.set(rowKey(row), row)
+  // Each session of a thread stands for the thread's row, so a child of an
+  // older session nests under the thread.
+  const rowOfMember = new Map<string, string>()
+  for (const row of rows) {
+    for (const member of row.members) rowOfMember.set(rowKey(member), rowKey(row))
+  }
 
   const byRecency = (left: AgentRow, right: AgentRow) => {
     const recency =
@@ -318,7 +325,7 @@ export const buildRowTree = (loops: ReadonlyArray<AgentRow>): ReadonlyArray<Agen
   }
   // The parent a row nests under here: one in the same section.
   const parentKeyOf = (row: AgentRow): Option.Option<string> =>
-    Option.map(row.parent, rowKey).pipe(
+    Option.map(row.parent, (parent) => rowOfMember.get(rowKey(parent)) ?? rowKey(parent)).pipe(
       Option.filter((key) => byKey.get(key)?.section === row.section),
     )
   const children = new Map<string, Array<AgentRow>>()
@@ -586,12 +593,19 @@ export const AgentRowEntry = Schema.Struct({
   live: Schema.Boolean,
   depth: Schema.Finite,
   /**
-   * The row this one nests under: the session it was spawned from, or that
-   * session's thread's row when the thread holds more. Absent at a tree root.
+   * The session this one was created from, as stored. Absent at a tree root.
+   * When that session is an older one of a thread, the row it nests under is
+   * the thread's row, whose `sessions` hold it.
    */
   parentSessionId: Schema.optional(SessionId),
   /** The session opened a thread of its own under a parent; a handoff shares its parent's. */
   sideThread: Schema.Boolean,
+  /**
+   * The thread's key: its first session's id. A handoff does not change it,
+   * so a client follows one thread by it while the row's own ids move to the
+   * newest session. Absent for a loop with no stored session.
+   */
+  thread: Schema.optional(SessionId),
   /**
    * A delegate child, whose completion lands in its parent's transcript; the
    * TUI gives it no done row. Absent for any other session.
@@ -611,8 +625,9 @@ export const ListAgentsInput = Schema.Struct({
   /** Case-insensitive substring filter over name, cwd, and ids. */
   query: Schema.optional(Schema.String),
   /**
-   * Only this session and the sessions below it, at any depth: the tray's
-   * read, whose cost follows the subtree rather than the workspace. Absent,
+   * Only this session's thread and the sessions below it, at any depth: the
+   * tray's read, whose cost follows the subtree rather than the workspace. A
+   * handoff's listing so holds what the sessions it continues started. Absent,
    * the listing covers every session in the workspace.
    */
   root: Schema.optional(SessionId),
@@ -638,9 +653,26 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (root: Option.
   // A catalog read that fails is a host defect, not something the caller can
   // recover from, so it dies rather than widening the capability's error type.
   const activeLoops = yield* ctx.Session.listActiveLoops.pipe(Effect.orDie)
-  const sessions = yield* ctx.Session.listSessions({ root: Option.getOrUndefined(root) }).pipe(
-    Effect.orDie,
-  )
+  // A root stands for its whole thread: a handoff's listing holds what the
+  // sessions it continues started. The thread's first session heads it; when
+  // that session is gone, the root's own subtree is what is left.
+  let threadRoot = root
+  if (Option.isSome(root)) {
+    const rootSession = yield* ctx.Session.getSession(root.value).pipe(Effect.orDie)
+    if (Predicate.isNotUndefined(rootSession)) threadRoot = Option.some(sessionThread(rootSession))
+  }
+  const threadSessions = yield* ctx.Session.listSessions({
+    root: Option.getOrUndefined(threadRoot),
+  }).pipe(Effect.orDie)
+  const sessions = yield* Option.match(root, {
+    onNone: () => Effect.succeed(threadSessions),
+    onSome: (sessionId) => {
+      if (threadSessions.some((session) => session.id === sessionId)) {
+        return Effect.succeed(threadSessions)
+      }
+      return ctx.Session.listSessions({ root: sessionId }).pipe(Effect.orDie)
+    },
+  })
   const listed: ReadonlyArray<AgentRowKey> = activeLoops.map((loop) => ({
     sessionId: loop.sessionId,
     branchId: loop.branchId,
@@ -740,6 +772,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
             Option.map(row.parent, (parent) => parent.sessionId),
           ),
           sideThread: row.sideThread,
+          thread: Option.getOrUndefined(row.thread),
           delegate: Option.getOrUndefined(Option.liftPredicate(true as const, () => row.delegate)),
           sessions: Option.getOrUndefined(
             Option.liftPredicate(

@@ -658,16 +658,22 @@ Shape:
   thread. A thread never reports to its starter: nothing lands on the
   starter's branch, so its cached prefix holds and no paid turn reads a
   result it did not ask for; work whose result the starter needs is a
-  delegate child. `thread.list` derives the threads a session started from
-  its subtree (`listSessions({ root })`) grouped by key, keeping the groups
-  whose first session it spawned, with each one's status from
+  delegate child. The thread tools act for the caller's thread, not its
+  session: after a handoff the new session owns what the older one started.
+  `thread.list` reads the subtree of the caller's thread key
+  (`listSessions({ root })`; the caller's own subtree when that session is
+  gone), groups it by key, and keeps the groups whose first session any
+  session of the caller's thread spawned, with each one's status from
   `listActiveLoops`, its current session, and the current session's latest
   reply (one line, or 4,000 characters head and tail for one named thread);
   `read_session` reads the rest and `session.send` messages the current
-  session. `thread.stop` stops each working loop of a thread the session
-  started and refuses any other. One session runs at most four threads: the
-  count and the start it admits hold one process permit (`ThreadStarts`), and
-  a start past the cap deletes the session it made and names the four. The
+  session. `thread.stop` stops each working loop of such a thread and
+  refuses any other. One thread runs at most four threads over all its
+  sessions: the count and the start it admits hold one process permit
+  (`ThreadStarts`), and a start past the cap deletes the session it made and
+  names the four. A thread's first message has `customType: "thread-task"`
+  and a delegate child's `"child-task"`; the transcript shows only the task
+  under a `thread · task` or `delegate · task` header. The
   starter's interrupt does not stop a thread, and a thread's unattended turns
   decline their asks (`turnCanAsk`). A delegate child is denied
   `thread.start`. The `# Sessions` prompt section shows its `thread.*` lines
@@ -1048,17 +1054,25 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   session's ids, name and liveness, the most active session's status, the
   first session's start, parent and side-thread mark, and the additive
   `sessions` field (the member ids, oldest first, when there are two or
-  more). A parent link that names a folded session moves to its thread's
-  row. The activity watchers follow the loops before the fold. The pane shows
+  more) and `thread` field (the key, which a handoff keeps).
+  `parentSessionId` stays the stored parent; the tree nests a child of an
+  older session under its thread's row through the members, and the TUI
+  does the same through `sessions`. A `root` stands for its thread: the
+  listing reads the subtree of the root's thread key, so a handoff's tray
+  holds what the sessions it continues started. The activity watchers follow
+  the loops before the fold. The pane shows
   `N sessions` in the right column (a narrow pane drops the side-thread mark
   first), marks the row current when the shell is on any of its sessions,
   and a second Ctrl+X deletes each session of the thread, newest first, since
   a session delete keeps a same-thread handoff.
 - The tray adds `done · <name>` after its `working` rows (three rows at most,
   the rest counted) for a side thread that a listing showed running and a
-  later one idle while the shell was not on it. The controller keeps that
-  state outside any component, keyed by session id; opening the thread or its
-  next turn clears it. A delegate child gets none: its completion lands in
+  later one idle while the shell was not on it, in the subtree of the shell's
+  thread. The controller keeps that state outside any component, keyed by
+  thread key, and changes it only for a reply `sessionQuery` keeps
+  (`accepted`). Opening the thread, its next turn on any of its sessions, or
+  its absence from a whole listing of the root it finished under (no filter)
+  clears it; a filtered listing never does. A delegate child gets none: its completion lands in
   its parent's transcript, and its row carries the additive `delegate` flag
   (its admission names the `delegate` agent).
 - Child session nesting depth is admitted on the `session.create` command path

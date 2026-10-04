@@ -49,9 +49,13 @@ import {
 import {
   BTW_QUESTION_TYPE,
   CHILD_COMPLETION_TYPE,
+  CHILD_TASK_TYPE,
+  childTaskText,
   forkQuestionText,
   type SessionMessageDetails,
   sessionMessageText,
+  THREAD_TASK_TYPE,
+  threadTaskText,
 } from "@gent/extensions/client"
 import {
   batch,
@@ -941,6 +945,38 @@ describe("transcript message rows", () => {
         expect(frame).not.toContain("A side question, asked in a fork")
         const expandedFrame = yield* renderLoaded([asked], true)
         expect(expandedFrame).toContain("A side question, asked in a fork")
+      }),
+  )
+
+  it.scopedLive(
+    "a thread's and a delegate child's first message show the task, not its frame",
+    () =>
+      Effect.gen(function* () {
+        const task = (id: string, text: string, customType: string): ListMessage => ({
+          ...userMessage("regular-message", id, text, "queued"),
+          pendingMode: absent,
+          metadata: { customType },
+        })
+        const thread = task(
+          "thread-1",
+          threadTaskText(SessionId.make("01a0ca0cb3e7"), "Tidy the changelog."),
+          THREAD_TASK_TYPE,
+        )
+        const child = task(
+          "child-1",
+          childTaskText(SessionId.make("01a0ca0cb3e7"), "Fix the csv quoting."),
+          CHILD_TASK_TYPE,
+        )
+        const frame = yield* renderLoaded([thread, child])
+        expect(frame).toContain("thread · task")
+        expect(frame).toContain("Tidy the changelog.")
+        expect(frame).not.toContain("Thread started by session")
+        expect(frame).toContain("delegate · task")
+        expect(frame).toContain("Fix the csv quoting.")
+        expect(frame).not.toContain("Task from your parent session")
+        const expandedFrame = yield* renderLoaded([thread, child], true)
+        expect(expandedFrame).toContain("Thread started by session")
+        expect(expandedFrame).toContain("Task from your parent session")
       }),
   )
 

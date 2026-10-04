@@ -761,7 +761,7 @@ class ThreadError extends Schema.TaggedError<ThreadError>()("ThreadError", {
 /** `metadata.customType` on a thread's first message, the task its starter gave it. */
 export const THREAD_TASK_TYPE = "thread-task"
 
-/** Running threads one session may have; the delegate's child cap. */
+/** Running threads one thread may have, over all its sessions; the delegate's child cap. */
 const MAX_RUNNING_THREADS = 4
 
 /** A thread that loops on a broken model stops here, as a delegate child does. */
@@ -784,12 +784,23 @@ const THREAD_TASK_PREFIX = "Thread started by session "
  * section and reports to its parent with session.send, which wakes the
  * starter for a result it chose not to wait for.
  */
-const threadTaskText = (starter: SessionId, task: string): string =>
+export const threadTaskText = (starter: SessionId, task: string): string =>
   [
     `${THREAD_TASK_PREFIX}${starter} for work apart from its own. The user reads your replies in this thread; nothing you write returns to that session, so do not report to it with session.send. When you are blocked, end your turn with your question: the user answers here.`,
     "",
     task,
   ].join("\n")
+
+/** The task without its source line, as the transcript shows it; any other text is returned whole. */
+export const threadTaskBody = (text: string): string =>
+  Option.liftPredicate(text, (value) => value.startsWith(THREAD_TASK_PREFIX)).pipe(
+    Option.flatMap((value) =>
+      Option.liftPredicate(value.indexOf("\n\n"), (split) => split !== -1).pipe(
+        Option.map((split) => value.slice(split + 2)),
+      ),
+    ),
+    Option.getOrElse(() => text),
+  )
 
 type StoredSession = Effect.Success<
   ReturnType<ExtensionContextService["Session"]["listSessions"]>
@@ -816,11 +827,13 @@ interface StartedThread {
 }
 
 /**
- * The threads `starter` started: the threads whose first session the starter
- * spawned. A handoff the starter made continues its own thread, so it is not
- * one. Every member of such a thread is below the starter by parent link (a
- * handoff's parent is the session it continues), so the starter's subtree
- * holds them all.
+ * The threads the thread `starter` started: the threads whose first session
+ * any session of `starter` spawned. A thread is one conversation over its
+ * sessions, so after a handoff the newer session owns what the older one
+ * started, and the older one sees what the newer one starts. A handoff
+ * continues its own thread, so it is not one. Every session in question is
+ * below the starter thread's first session by parent link (a handoff's
+ * parent is the session it continues), so that session's subtree holds them.
  */
 const threadsStartedBy = (
   starter: SessionId,
@@ -834,9 +847,12 @@ const threadsStartedBy = (
     const key = sessionThread(session)
     byThread.set(key, [...(byThread.get(key) ?? []), session])
   }
+  const starters = new Set<string>((byThread.get(starter) ?? []).map((session) => session.id))
   return [...byThread].flatMap(([thread, members]) => {
     const first = members.find((session) => session.id === thread)
-    if (first?.parentSessionId !== starter) return []
+    if (Predicate.isUndefined(first?.parentSessionId) || !starters.has(first.parentSessionId)) {
+      return []
+    }
     return [{ thread, sessions: members.toSorted(byCreation) }]
   })
 }
@@ -847,31 +863,46 @@ const asThreadError = (what: string) =>
       new ThreadError({ message: `${what}: ${error.message}` }),
   )
 
+/**
+ * The threads this session's thread started, wherever in the thread the
+ * caller is. The subtree of the thread's first session holds them. When that
+ * session is gone (a deleted session keeps the handoffs of its own thread),
+ * the caller's own subtree is what is left to read.
+ */
 const startedThreads = Effect.fn("SessionTools.startedThreads")(function* () {
   const ctx = yield* ExtensionContext
-  const sessions = yield* ctx.Session.listSessions({ root: ctx.sessionId }).pipe(
+  const caller = yield* ctx.Session.getSession().pipe(asThreadError("Cannot read this session"))
+  const thread = Option.getOrElse(
+    Option.map(Option.fromUndefinedOr(caller), sessionThread),
+    () => ctx.sessionId,
+  )
+  const listed = yield* ctx.Session.listSessions({ root: thread }).pipe(
     asThreadError("Cannot list this session's threads"),
   )
+  let sessions = listed
+  if (!listed.some((session) => session.id === ctx.sessionId)) {
+    sessions = yield* ctx.Session.listSessions({ root: ctx.sessionId }).pipe(
+      asThreadError("Cannot list this session's threads"),
+    )
+  }
   const loops = yield* ctx.Session.listActiveLoops.pipe(
     asThreadError("Cannot read which threads run"),
   )
-  return threadsStartedBy(ctx.sessionId, sessions).flatMap(
-    (found): ReadonlyArray<StartedThread> => {
-      const current = found.sessions.at(-1)
-      if (Predicate.isUndefined(current)) return []
-      const members = new Set<SessionId>(found.sessions.map((session) => session.id))
-      const working = loops.filter((loop) => members.has(loop.sessionId) && isWorking(loop))
-      return [{ ...found, current, working }]
-    },
-  )
+  return threadsStartedBy(thread, sessions).flatMap((found): ReadonlyArray<StartedThread> => {
+    const current = found.sessions.at(-1)
+    if (Predicate.isUndefined(current)) return []
+    const members = new Set<SessionId>(found.sessions.map((session) => session.id))
+    const working = loops.filter((loop) => members.has(loop.sessionId) && isWorking(loop))
+    return [{ ...found, current, working }]
+  })
 })
 
-/** The thread this session started with that key, or a failure that says it is not one. */
+/** The thread this session's thread started with that key, or a failure that says it is not one. */
 const ownThread = Effect.fn("SessionTools.ownThread")(function* (thread: string) {
   const found = (yield* startedThreads()).find((entry) => entry.thread === thread)
   if (Predicate.isUndefined(found)) {
     return yield* new ThreadError({
-      message: `${thread} is not a thread this session started; thread.list shows them`,
+      message: `${thread} is not a thread started by this session's thread; thread.list shows them`,
     })
   }
   return found
@@ -907,7 +938,7 @@ type SessionAdmission = NonNullable<StoredSession["admission"]>
  * start it admits are one step, so two starts in one model step cannot both
  * pass the cap.
  */
-export class ThreadStarts extends Context.Service<ThreadStarts, Semaphore.Semaphore>()(
+class ThreadStarts extends Context.Service<ThreadStarts, Semaphore.Semaphore>()(
   "@gent/extensions/src/session-tools/ThreadStarts",
 ) {}
 
@@ -939,7 +970,7 @@ const ThreadStartResult = Schema.Struct({
   note: Schema.String,
 })
 
-export const ThreadStartTool = tool({
+const ThreadStartTool = tool({
   id: "thread.start",
   description:
     "Start a thread: a new session that works on a task unrelated to yours, beside you, and returns at admission. Its replies go to the user in that thread, never to you, and nothing wakes you when it ends. Use delegate.start instead when you need the result.",
@@ -986,7 +1017,7 @@ export const ThreadStartTool = tool({
               .map((entry) => `${entry.thread} "${entry.current.name ?? ""}"`)
               .join(", ")
             return yield* new ThreadError({
-              message: `This session already runs ${MAX_RUNNING_THREADS} threads: ${names}. Stop one with thread.stop, or start this one when one ends.`,
+              message: `This session's thread already runs ${MAX_RUNNING_THREADS} threads: ${names}. Stop one with thread.stop, or start this one when one ends.`,
             })
           }
           yield* ctx.Session.send({
@@ -1051,10 +1082,10 @@ const firstLine = (text: string): string =>
     THREAD_LINE_CHARS,
   )
 
-export const ThreadListTool = tool({
+const ThreadListTool = tool({
   id: "thread.list",
   description:
-    "List the threads this session started: each one's status, its current session, and its latest reply. A snapshot; do not call it in a loop to wait for a thread.",
+    "List the threads this thread started, from any of its sessions: each one's status, its current session, and its latest reply. A snapshot; do not call it in a loop to wait for a thread.",
   params: ThreadListParams,
   output: Schema.Array(ThreadRow),
   execute: Effect.fn("ThreadListTool.execute")(function* (params: typeof ThreadListParams.Type) {
@@ -1105,10 +1136,10 @@ const ThreadStopResult = Schema.Struct({
   stopped: Schema.Array(Schema.Struct({ sessionId: SessionId, branchId: BranchId })),
 })
 
-export const ThreadStopTool = tool({
+const ThreadStopTool = tool({
   id: "thread.stop",
   description:
-    "Stop a thread this session started: every turn it runs now ends as interrupted. An idle thread is left as it is.",
+    "Stop a thread this thread started, from any of its sessions: every turn it runs now ends as interrupted. An idle thread is left as it is.",
   params: ThreadStopParams,
   output: ThreadStopResult,
   execute: Effect.fn("ThreadStopTool.execute")(function* (params: typeof ThreadStopParams.Type) {

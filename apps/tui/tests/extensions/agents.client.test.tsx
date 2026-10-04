@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Deferred, Effect, Option } from "effect"
+import { Clock, Deferred, Effect, Exit, Option } from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal, Show } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
@@ -187,7 +187,9 @@ describe("Agents controller listing scope", () => {
         controller.refresh("")
         yield* Effect.yieldNow
 
-        expect(asked).toEqual([{ query: "", root: SessionId.make("here") }, { query: "" }])
+        // Strict: an in-process request refuses an input with an `undefined`
+        // key as no JSON value, so the open pane's input has no `root` key.
+        expect(asked).toStrictEqual([{ query: "", root: SessionId.make("here") }, { query: "" }])
       }),
   )
 })
@@ -1505,6 +1507,21 @@ describe("thread rows", () => {
   )
 
   it.scopedLive(
+    "the tray of a handoff lists the work the session it continues started, by its real parent",
+    () =>
+      Effect.gen(function* () {
+        // `first` spawned `worker`, then handed off to `third`: the worker's
+        // parent stays `first`, whose thread's row is `third`'s.
+        const listed = [thread, child("worker", "running", "first")]
+        const setup = yield* renderScoped(() => (
+          <SubagentTray controller={{ ...controllerOver(listed, "third"), open: () => false }} />
+        ))
+        const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "tray")
+        expect(frame).toContain("working · delegate: worker task")
+      }),
+  )
+
+  it.scopedLive(
     "a second Ctrl+X on a thread's row deletes each of its sessions, newest first",
     () =>
       Effect.gen(function* () {
@@ -1565,8 +1582,21 @@ describe("done threads", () => {
     parentSessionId: starter.sessionId,
   })
 
-  /** A controller over a listing the test changes, with the shell on `here()`. */
-  const controllerOver = (listed: () => ReadonlyArray<AgentRowEntry>, here: () => RowKeyOf) =>
+  /** The gate a test holds tray reads on. */
+  interface ReadGate {
+    gate: Option.Option<Deferred.Deferred<void>>
+  }
+
+  /**
+   * A controller over a listing the test changes, with the shell on `here()`.
+   * While `held` has a gate, a read waits on it, then answers the listing as
+   * it is when the gate opens.
+   */
+  const controllerOver = (
+    listed: (input: ListAgentsInput) => ReadonlyArray<AgentRowEntry>,
+    here: () => RowKeyOf,
+    held: ReadGate = { gate: Option.none() },
+  ) =>
     Effect.gen(function* () {
       const pulses = new Set<
         (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void
@@ -1575,11 +1605,16 @@ describe("done threads", () => {
       const clock = yield* TestClock.make()
       const controller = yield* provideClientServices(
         makeAgentsController(
-          () =>
+          (input) =>
             Effect.sync(() => {
               listings += 1
-              return listed()
-            }),
+              return held.gate
+            }).pipe(
+              Effect.flatMap(
+                Option.match({ onNone: () => Effect.void, onSome: (gate) => Deferred.await(gate) }),
+              ),
+              Effect.map(() => listed(input)),
+            ),
           () => Effect.succeed(detail(1)),
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         {
@@ -1595,10 +1630,11 @@ describe("done threads", () => {
           },
         },
       )
-      const read = (label: string) =>
+      /** One read under `query` (none by default), awaited to its reply. */
+      const read = (label: string, query = "") =>
         Effect.gen(function* () {
           const before = listings
-          controller.refresh("")
+          controller.refresh(query)
           yield* waitUntil(() => listings > before && !controller.loading(), label)
         })
       const pulse = (extensionId: string) => {
@@ -1634,28 +1670,141 @@ describe("done threads", () => {
       }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.scopedLive("a delegate child gets no done row, and a thread that runs again leaves done", () =>
+    Effect.gen(function* () {
+      let section: AgentRowEntry["section"] = "running"
+      const { controller, read } = yield* controllerOver(
+        () => [{ ...threadRow("child", section), delegate: true }, threadRow("again", section)],
+        () => starter,
+      )
+      yield* read("running")
+      section = "idle"
+      yield* read("idle")
+      expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("again")])
+      section = "running"
+      yield* read("running again")
+      expect(controller.done()).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  /** `notes` as one thread over `sessions`, keyed by its first session. */
+  const handedOff = (
+    sessions: ReadonlyArray<string>,
+    section: AgentRowEntry["section"],
+  ): AgentRowEntry => {
+    const newest = sessions.at(-1) ?? "notes"
+    const entry = { ...threadRow(newest, section), thread: SessionId.make(sessions[0] ?? newest) }
+    if (sessions.length === 1) return entry
+    return { ...entry, sessions: sessions.map((id) => SessionId.make(id)) }
+  }
+
   it.scopedLive(
-    "a delegate child, a thread the shell is on, and a thread that runs again get no done row",
+    "a thread is done by its key across a handoff, and its next session's turn clears it",
     () =>
       Effect.gen(function* () {
-        let section: AgentRowEntry["section"] = "running"
-        const here = { sessionId: SessionId.make("watched"), branchId: BranchId.make("w") }
+        let listed = [handedOff(["t1"], "running")]
         const { controller, read } = yield* controllerOver(
-          () => [
-            { ...threadRow("child", section), delegate: true },
-            threadRow("watched", section),
-            threadRow("again", section),
-          ],
+          () => listed,
+          () => starter,
+        )
+        yield* read("t1 runs")
+        // The turn ended on a handoff: the row moves to t2, which is idle.
+        listed = [handedOff(["t1", "t2"], "idle")]
+        yield* read("t2 idle")
+        expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("t2")])
+        // A third session of the thread runs: the thread is not done.
+        listed = [handedOff(["t1", "t2", "t3"], "running")]
+        yield* read("t3 runs")
+        expect(controller.done()).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "a deleted thread leaves done when an unfiltered listing of its root lacks it, never by a filtered one",
+    () =>
+      Effect.gen(function* () {
+        let listed = [threadRow("notes", "running")]
+        const { controller, read } = yield* controllerOver(
+          () => listed,
+          () => starter,
+        )
+        yield* read("running")
+        listed = [threadRow("notes", "idle")]
+        yield* read("idle")
+        expect(controller.done()).toHaveLength(1)
+        // A filter that does not match the thread proves nothing about it.
+        listed = []
+        yield* read("filtered", "other words")
+        listed = [threadRow("notes", "idle")]
+        yield* read("idle again")
+        expect(controller.done()).toHaveLength(1)
+        // The thread is deleted: the root's whole listing no longer holds it.
+        listed = []
+        yield* read("deleted")
+        listed = [threadRow("notes", "idle")]
+        yield* read("a row with its id again")
+        expect(controller.done()).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "done rows belong to the shell's thread: an unrelated session shows none, and coming back shows them",
+    () =>
+      Effect.gen(function* () {
+        const elsewhere = { sessionId: SessionId.make("unrelated"), branchId: BranchId.make("u") }
+        let here: RowKeyOf = starter
+        let section: AgentRowEntry["section"] = "running"
+        const { controller, read } = yield* controllerOver(
+          (input) => {
+            if (input.root === elsewhere.sessionId) return [root("unrelated", "idle")]
+            return [threadRow("notes", section)]
+          },
           () => here,
         )
         yield* read("running")
         section = "idle"
         yield* read("idle")
-        expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("again")])
-        section = "running"
-        yield* read("running again")
+        expect(controller.done()).toHaveLength(1)
+        here = elsewhere
+        yield* read("unrelated")
         expect(controller.done()).toEqual([])
+        here = starter
+        yield* read("back")
+        expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("notes")])
       }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a reply the shell left before it landed changes no done row", () =>
+    Effect.gen(function* () {
+      // `starter` handed off to `next`: one thread, whose row is `next`'s.
+      const own: AgentRowEntry = {
+        ...root("next", "idle"),
+        thread: starter.sessionId,
+        sessions: [starter.sessionId, SessionId.make("next")],
+      }
+      const next = { sessionId: SessionId.make("next"), branchId: BranchId.make("next-b") }
+      let here: RowKeyOf = starter
+      let section: AgentRowEntry["section"] = "running"
+      const held: ReadGate = { gate: Option.none() }
+      const { controller, read, listings } = yield* controllerOver(
+        () => [own, threadRow("notes", section)],
+        () => here,
+        held,
+      )
+      yield* read("running")
+      // The next read is out when the shell moves to the thread's next session.
+      const gate = yield* Deferred.make<void>()
+      held.gate = Option.some(gate)
+      const before = listings()
+      controller.refresh("")
+      yield* waitUntil(() => listings() > before, "the read is out")
+      here = next
+      section = "idle"
+      yield* Deferred.done(gate, Exit.void)
+      yield* waitUntil(() => !controller.loading(), "the reply lands")
+      // The reply was for `starter`; the shell is on `next`. It is dropped.
+      expect(controller.done()).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.scopedLive("a session-tools pulse re-reads the tray, so a started thread shows at once", () =>
