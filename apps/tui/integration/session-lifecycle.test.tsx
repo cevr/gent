@@ -10,7 +10,13 @@ import {
   LanguageModelLayers,
   testAgent,
 } from "@gent/core/test-utils"
-import { DEFAULT_MODEL_ID, Model, ProviderId } from "@gent/core/protocol"
+import {
+  AgentDefinition,
+  DEFAULT_AGENT_NAME,
+  DEFAULT_MODEL_ID,
+  Model,
+  ProviderId,
+} from "@gent/core/protocol"
 import { defineExtension, ExtensionHost } from "@gent/core/extensions/api"
 import { Model as AiModel } from "effect/ai"
 import { Gent } from "@gent/sdk"
@@ -168,8 +174,16 @@ describe("effort command", () => {
     }),
   })
 
+  // The agent's own level: what `default` falls back to.
+  const mediumAgent = AgentDefinition.make({
+    name: DEFAULT_AGENT_NAME,
+    description: "Test agent at medium effort",
+    reasoningEffort: "medium",
+  })
+
   // `/effort off` is `none`, sent as the model's lowest level; `/think` is the
-  // old name; `/effort default` clears the session's level.
+  // old name; `/effort default` clears the session's level. The picker's
+  // `default` row names the agent's level, never the session's override.
   it.live(
     "/effort and its /think alias store the session's level, and the status row shows what is sent",
     () =>
@@ -179,7 +193,7 @@ describe("effort command", () => {
           const { client, runtime } = yield* Gent.test(
             createE2ELayer({
               providerLayer: LanguageModelLayers.debug(),
-              agents: [testAgent],
+              agents: [mediumAgent],
               extensionInputs: [effortDriver],
               models: [effortModel],
               toolRunner: "test",
@@ -204,19 +218,21 @@ describe("effort command", () => {
               Option.fromUndefinedOr(frame.split("\n").find((row) => row.includes("Effort Model"))),
               () => "",
             )
-          yield* waitForFrame(setup, (frame) => statusRow(frame).length > 0, "status row", 3000)
-          const run = (line: string, stored: Option.Option<string>, shown: Option.Option<string>) =>
+          // The snapshot has landed once the row shows the agent's level.
+          yield* waitForFrame(
+            setup,
+            (frame) => statusRow(frame).includes(" medium"),
+            "status row at the agent's level",
+            3000,
+          )
+          const run = (line: string, stored: Option.Option<string>, shown: string) =>
             Effect.gen(function* () {
               yield* Effect.promise(() => setup.mockInput.typeText(line))
               yield* Effect.promise(() => setup.renderOnce())
               setup.mockInput.pressEnter()
               yield* waitForFrame(
                 setup,
-                (frame) =>
-                  Option.match(shown, {
-                    onNone: () => !/\b(low|medium|high)\b/.test(statusRow(frame)),
-                    onSome: (level) => statusRow(frame).includes(` ${level}`),
-                  }),
+                (frame) => statusRow(frame).includes(` ${shown}`),
                 `status row after ${line}`,
                 3000,
               )
@@ -224,10 +240,33 @@ describe("effort command", () => {
               const level: Option.Option<string> = Option.fromNullishOr(session?.reasoningLevel)
               expect([line, level]).toEqual([line, stored])
             })
-          yield* run("/effort off", Option.some("none"), Option.some("low"))
-          yield* run("/think high", Option.some("high"), Option.some("high"))
-          yield* run("/effort max", Option.some("max"), Option.some("high"))
-          yield* run("/effort default", Option.none(), Option.none())
+          // The picker's `default` row, read while the picker is open.
+          const defaultRow = Effect.gen(function* () {
+            yield* Effect.promise(() => setup.mockInput.typeText("/effort"))
+            yield* Effect.promise(() => setup.renderOnce())
+            setup.mockInput.pressEnter()
+            const frame = yield* waitForFrame(
+              setup,
+              (each) => each.includes("Effort ·"),
+              "effort picker",
+              3000,
+            )
+            setup.mockInput.pressEscape()
+            yield* waitForFrame(setup, (each) => !each.includes("Effort ·"), "picker closed", 3000)
+            return Option.getOrElse(
+              Option.fromUndefinedOr(
+                frame.split("\n").find((row) => row.includes("agent or config default")),
+              ),
+              () => "",
+            ).trim()
+          })
+          const agentDefault = /default\s+agent or config default \(medium\)$/
+          expect(yield* defaultRow).toMatch(agentDefault)
+          yield* run("/effort off", Option.some("none"), "low")
+          expect(yield* defaultRow).toMatch(agentDefault)
+          yield* run("/think high", Option.some("high"), "high")
+          yield* run("/effort max", Option.some("max"), "high")
+          yield* run("/effort default", Option.none(), "medium")
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15000,

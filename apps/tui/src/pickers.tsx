@@ -451,9 +451,9 @@ const pickableEfforts = (model: Option.Option<Model>): ReadonlyArray<ReasoningEf
 /** The `default` row's note: the level the session falls back to, and what the model is sent for it. */
 const defaultEffortDetail = (
   model: Option.Option<Model>,
-  resolved: Option.Option<ReasoningEffort>,
+  fallback: Option.Option<ReasoningEffort>,
 ): string =>
-  Option.match(resolved, {
+  Option.match(fallback, {
     onNone: () => "agent or config default",
     onSome: (level) => {
       const sent = Option.match(model, {
@@ -470,12 +470,15 @@ const defaultEffortDetail = (
     },
   })
 
-/** `default`, then the levels `model` accepts (`pickableEfforts`). */
+/**
+ * `default`, then the levels `model` accepts (`pickableEfforts`). `fallback`
+ * is the level without the session's own (`defaultReasoningLevel`).
+ */
 export const reasoningRows = (
   model: Option.Option<Model>,
-  resolved: Option.Option<ReasoningEffort>,
+  fallback: Option.Option<ReasoningEffort>,
 ): readonly PickerRow[] => [
-  { id: DEFAULT_ROW_ID, name: DEFAULT_ROW_ID, detail: defaultEffortDetail(model, resolved) },
+  { id: DEFAULT_ROW_ID, name: DEFAULT_ROW_ID, detail: defaultEffortDetail(model, fallback) },
   ...pickableEfforts(model).map((level) => ({ id: level, name: level, detail: "" })),
 ]
 

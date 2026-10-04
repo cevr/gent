@@ -1853,7 +1853,9 @@ Other notes:
   session's level: `off` stores `none`, and `default` clears it, so the run
   overrides, config and agent decide again. The `/effort` picker lists
   `default` and the levels the model accepts (its catalog `efforts`; none for
-  a model with no reasoning). The status row shows the effort the model is
+  a model with no reasoning); the `default` row names the level without the
+  session's own (`defaultReasoningLevel` on the snapshot and on
+  `session.get`), so an override does not hide it. The status row shows the effort the model is
   sent, after the clamp to the levels it accepts (`effectiveEffort`,
   `@gent/core/protocol`). The change writes no notice and keeps the cache
   (rule 11).

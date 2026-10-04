@@ -1069,6 +1069,7 @@ const getSessionView = Effect.fn("SessionQueries.getSessionView")(function* (ses
       ...session,
       resolvedModelId: route.modelId,
       resolvedReasoningLevel: Option.getOrUndefined(route.reasoningLevel),
+      defaultReasoningLevel: Option.getOrUndefined(route.defaultReasoningLevel),
     }),
   )
 })
@@ -1145,6 +1146,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     agent: route.name,
     resolvedModelId: route.modelId,
     resolvedReasoningLevel: Option.getOrUndefined(route.reasoningLevel),
+    defaultReasoningLevel: Option.getOrUndefined(route.defaultReasoningLevel),
     runtime,
     metrics: snapshotState.metrics,
   })

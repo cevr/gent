@@ -769,7 +769,7 @@ export function Session(props: SessionProps) {
           <SettingsPicker
             open={controller.uiState().overlay._tag === "reasoning"}
             title="Effort"
-            rows={reasoningRows(client.modelInfo(), client.resolvedReasoningLevel())}
+            rows={reasoningRows(client.modelInfo(), client.defaultReasoningLevel())}
             current={Option.some(
               Option.getOrElse(
                 Option.fromUndefinedOr(client.session().reasoningLevel),

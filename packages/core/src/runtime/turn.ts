@@ -1280,6 +1280,8 @@ interface SessionRoute {
   readonly definition: Option.Option<AgentDefinition>
   readonly modelId: ModelId
   readonly reasoningLevel: Option.Option<ReasoningEffort>
+  /** The level without the session's own: what clearing it falls back to. */
+  readonly defaultReasoningLevel: Option.Option<ReasoningEffort>
   /** The driver the model dispatches through, and the catalog id it reaches. */
   readonly modelDriver: EffectiveModelDriver
 }
@@ -1323,13 +1325,18 @@ export const resolveSessionRoute = (params: {
       onSome: resolveAgentModel,
     }),
   )
+  const defaultReasoningLevel = Option.flatMap(definition, (agent) =>
+    Option.fromUndefinedOr(agent.reasoningEffort),
+  )
   return {
     name,
     definition,
     modelId,
-    reasoningLevel: Option.orElse(Option.fromUndefinedOr(params.session.reasoningLevel), () =>
-      Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.reasoningEffort)),
+    reasoningLevel: Option.orElse(
+      Option.fromUndefinedOr(params.session.reasoningLevel),
+      () => defaultReasoningLevel,
     ),
+    defaultReasoningLevel,
     modelDriver: effectiveModelDriver(
       Option.flatMap(definition, (agent) =>
         Option.orElse(Option.fromUndefinedOr(agent.driver), () =>
