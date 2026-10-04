@@ -231,32 +231,29 @@ describe("Cloudflare chat", () => {
       }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
-  it.live("with a gateway id the request names the gateway", () =>
+  // The REST Chat Completions route serves AI Gateway's third-party models
+  // (`author/model`) too. The gateway's models.dev entry, where it has one,
+  // gives the model's facts: GPT-5 Mini reasons, so it takes no temperature.
+  it.live("with a gateway id every request names the gateway; a third-party id goes as given", () =>
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
       const state = makeFakeFetchState()
-      yield* generate(driver, LLAMA, state, signedIn({ accountId: "acct-1", gatewayId: "gw-main" }))
-      const request = onlyRequest(state)
-      expect(request.url).toBe(CHAT_URL)
-      expect(request.headers["cf-aig-gateway-id"]).toBe("gw-main")
-      expect(request.headers["authorization"]).toBe(`Bearer ${TOKEN}`)
-      expect((yield* bodyOf(request))["model"]).toBe(LLAMA)
-    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
-  )
-
-  // models.dev names the Workers AI models; an id it does not list names no
-  // wire format, so no API class can speak it.
-  it.live("a model the Workers AI catalog does not list fails and names the catalog", () =>
-    Effect.gen(function* () {
-      const driver = yield* fixtureDriver()
-      const error = yield* Effect.flip(
-        resolveOn(driver, "openai/gpt-5-mini", signedIn({ accountId: "acct-1" })),
-      )
-      expect(error).toMatchObject({
-        _tag: "DriverError",
-        driver: "cloudflare",
-        reason: 'Cloudflare model "openai/gpt-5-mini" has no entry in the models.dev catalog',
-      })
+      const auth = signedIn({ accountId: "acct-1", gatewayId: "gw-main" })
+      yield* generate(driver, LLAMA, state, auth)
+      yield* generate(driver, "openai/gpt-5-mini", state, auth, { temperature: 0.3 })
+      yield* generate(driver, "mistral/mistral-small-latest", state, auth)
+      expect(state.captured.map((request) => request.url)).toEqual([CHAT_URL, CHAT_URL, CHAT_URL])
+      for (const request of state.captured) {
+        expect(request.headers["cf-aig-gateway-id"]).toBe("gw-main")
+        expect(request.headers["authorization"]).toBe(`Bearer ${TOKEN}`)
+      }
+      const bodies = yield* Effect.forEach(state.captured, bodyOf)
+      expect(bodies.map((body) => body["model"])).toEqual([
+        LLAMA,
+        "openai/gpt-5-mini",
+        "mistral/mistral-small-latest",
+      ])
+      expect(bodies[1]?.["temperature"]).toBeUndefined()
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 

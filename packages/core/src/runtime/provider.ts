@@ -1544,8 +1544,9 @@ interface DriverModelRequest {
 /**
  * Resolve one model of a driver: the driver's own `resolveModel` over its
  * catalog view, else core's composition: the catalog entry, the class that
- * speaks it and the driver's endpoint. A model with no entry, a decision
- * model, and a model no registered class speaks fail with `DriverError`.
+ * speaks it and the driver's endpoint. A decision model fails with
+ * `DriverError` on either path; with core's composition, so do a model with
+ * no entry and a model no registered class speaks.
  */
 export const resolveDriverModel = (
   request: DriverModelRequest,
@@ -1553,6 +1554,13 @@ export const resolveDriverModel = (
   Effect.gen(function* () {
     const { driver, modelName } = request
     const view = driverCatalogView(request.catalog, driver)
+    const entry = catalogModelEntry(view, catalogProviderOf(driver), modelName)
+    if (Option.exists(entry, (value) => value.decision === true)) {
+      return yield* driverFailure(
+        driver,
+        `${driver.id}/${modelName} is a classifier model: it runs no turn; a cell asks it with models.decide`,
+      )
+    }
     const own = driver.resolveModel
     if (Predicate.isNotUndefined(own)) {
       return yield* own(
@@ -1566,17 +1574,10 @@ export const resolveDriverModel = (
     if (Predicate.isUndefined(endpointFor)) {
       return yield* driverFailure(driver, `${driver.name} names no endpoint and no resolveModel`)
     }
-    const entry = catalogModelEntry(view, catalogProviderOf(driver), modelName)
     if (Option.isNone(entry)) {
       return yield* driverFailure(
         driver,
         `${driver.name} model "${modelName}" has no entry in the models.dev catalog`,
-      )
-    }
-    if (entry.value.decision === true) {
-      return yield* driverFailure(
-        driver,
-        `${driver.id}/${modelName} is a classifier model: it runs no turn; a cell asks it with models.decide`,
       )
     }
     const apiClass = apiClassFor(request.apiClasses.values(), entry.value)

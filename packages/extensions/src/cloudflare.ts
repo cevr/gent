@@ -1,22 +1,27 @@
 import { Effect, Option, Predicate, Schema } from "effect"
 import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http"
 import {
+  type ApiEndpoint,
   AuthMethod,
+  type CatalogModel,
+  catalogModelEntry,
   defineExtension,
   ExtensionHost,
+  type ModelCatalogView,
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthInfo,
 } from "@gent/core/extensions/api"
-import { apiKeyFrom, readOptionalEnv } from "./providers.js"
+import { adapterEntry, apiKeyFrom, CHAT_COMPLETIONS_CLASS, readOptionalEnv } from "./providers.js"
 import { typeSafeDecisionModel } from "./typesafe.js"
 
 // Test seam: only tests read buildCloudflareModelDriver, which lets a test
 // run the driver against a fake fetch and a fixture catalog.
 
 /**
- * Cloudflare's REST API for AI on `api.cloudflare.com`: the Workers AI models
- * (`@cf/...`) over OpenAI Chat Completions at `/accounts/{account}/ai/v1`.
+ * Cloudflare's REST API for AI on `api.cloudflare.com`: Workers AI models
+ * (`@cf/...`) and the third-party models AI Gateway serves (`author/model`),
+ * both over OpenAI Chat Completions at `/accounts/{account}/ai/v1`.
  * One Cloudflare API token signs every request (`Authorization: Bearer`); the
  * sign-in also asks the account id, and an AI Gateway id that routes the
  * requests through that gateway (`cf-aig-gateway-id`).
@@ -101,7 +106,8 @@ const accountRoot = (account: Account): string =>
 /**
  * With a gateway id, every request names the gateway: AI Gateway then logs,
  * caches and bills it. Workers AI (`@cf/`) models need the header to go
- * through a gateway at all.
+ * through a gateway at all; third-party models default to the account's
+ * default gateway without it.
  */
 const gatewayHeader =
   (gatewayId: Option.Option<string>) =>
@@ -120,12 +126,30 @@ const gatewayHeader =
  * models.dev lists the Workers AI models under this provider, with the
  * account's `/ai/v1` as their API: core lists them under this driver's id,
  * the chat models over Chat Completions, then the classifier models of
- * models.dev's decision list (Clef and Clef Flash). Its
- * `cloudflare-ai-gateway` list names the `ai-gateway-provider` package, which
- * speaks the gateway's provider-native routes, not this one: its third-party
- * `author/model` ids are neither listed nor resolved.
+ * models.dev's decision list (Clef and Clef Flash).
  */
 const CATALOG_PROVIDER = "cloudflare-workers-ai"
+
+/**
+ * models.dev lists AI Gateway's third-party models (`openai/gpt-5-mini`)
+ * under this provider with the `ai-gateway-provider` package, which speaks
+ * the gateway's provider-native routes. The picker does not show them. The
+ * REST Chat Completions route serves them too, so an id an agent names
+ * resolves there, with this list's entry for the model's facts (reasoning,
+ * temperature) where it has one.
+ */
+const GATEWAY_CATALOG_PROVIDER = "cloudflare-ai-gateway"
+
+/**
+ * The catalog entry a Chat Completions request reads: the Workers AI entry,
+ * else the gateway's, else a bare entry for an id models.dev does not list.
+ * Every one speaks Chat Completions here, whatever package models.dev names.
+ */
+const chatEntry = (catalog: Option.Option<ModelCatalogView>, modelName: string): CatalogModel =>
+  Option.getOrElse(
+    Option.flatMap(catalog, (view) => catalogModelEntry(view, CATALOG_PROVIDER, modelName)),
+    () => adapterEntry(catalog, GATEWAY_CATALOG_PROVIDER, modelName),
+  )
 
 // ── clef decisions ──────────────────────────────────────────────────────────
 
@@ -265,18 +289,38 @@ const unwrapEnvelope = (client: HttpClient.HttpClient): HttpClient.HttpClient =>
 
 // ── driver ──────────────────────────────────────────────────────────────────
 
-/** The Cloudflare driver. `env` holds the variables setup read; a stored token or answer wins. */
+/** The account's Chat Completions route, signed with its token and naming its gateway. */
+const chatEndpoint = (
+  authInfo: Option.Option<ProviderAuthInfo>,
+  env: CloudflareEnv,
+): Effect.Effect<ApiEndpoint, ProviderAuthError> =>
+  Effect.map(accountFrom(authInfo, env), (account) => ({
+    apiKey: Option.some(account.token),
+    baseUrl: Option.some(`${accountRoot(account)}/v1`),
+    transformClient: Option.some(gatewayHeader(account.gatewayId)),
+  }))
+
+/**
+ * The Cloudflare driver. `env` holds the variables setup read; a stored token
+ * or answer wins. Core lists the Workers AI models over the endpoint; the
+ * driver resolves a model itself, since an AI Gateway id has no Workers AI
+ * entry for core to compose.
+ */
 export const buildCloudflareModelDriver = (env: CloudflareEnv): ModelDriverContribution => ({
   id: DRIVER_ID,
   name: "Cloudflare",
   catalogProvider: CATALOG_PROVIDER,
   envCredential: TOKEN_ENV,
-  endpoint: (_modelName, authInfo) =>
-    Effect.map(accountFrom(Option.fromNullishOr(authInfo), env), (account) => ({
-      apiKey: Option.some(account.token),
-      baseUrl: Option.some(`${accountRoot(account)}/v1`),
-      transformClient: Option.some(gatewayHeader(account.gatewayId)),
-    })),
+  endpoint: (_modelName, authInfo) => chatEndpoint(Option.fromNullishOr(authInfo), env),
+  resolveModel: (modelName, authInfo, hints, catalog) =>
+    Effect.flatMap(chatEndpoint(Option.fromNullishOr(authInfo), env), (endpoint) =>
+      CHAT_COMPLETIONS_CLASS.resolveModel({
+        ...endpoint,
+        providerId: DRIVER_ID,
+        model: chatEntry(Option.fromUndefinedOr(catalog), modelName),
+        hints: Option.fromUndefinedOr(hints),
+      }),
+    ),
   resolveDecisionModel: (modelName, authInfo) =>
     Effect.map(accountFrom(Option.fromNullishOr(authInfo), env), (account) =>
       typeSafeDecisionModel(clefBodyModel(modelName), {
