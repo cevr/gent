@@ -24,6 +24,7 @@ import {
   ClientContext,
   type ClientShellTransport,
   type ClientTransport,
+  defineClientExtension,
   type ExtensionClientModule,
   interactionRendererContribution,
   type MessageRenderer,
@@ -1572,6 +1573,30 @@ describe("loadTuiExtensions", () => {
       })
       expect(resolved.interactionRenderers.has("handoff")).toBe(false)
       expect(resolved.interactionRenderers.has("ask-user")).toBe(false)
+    }),
+  )
+  // The client runtime gives every client extension the process spawner, as
+  // the server gives every extension: `runProcess` is the one command helper.
+  it.scopedLive("a client extension runs a process through the spawner its setup yields", () =>
+    Effect.gen(function* () {
+      const runsProcess = defineClientExtension("@test/runs-process", {
+        setup: Effect.gen(function* () {
+          const result = yield* runProcess("true", []).pipe(Effect.orDie)
+          return clientCommandContribution({
+            id: `exit-${result.exitCode}`,
+            title: "Ran a process",
+            onSelect: () => {},
+          })
+        }),
+      })
+      const { fixtureDir } = yield* integrationFixture
+      const resolved = yield* loadTuiExtensions({
+        builtins: [runsProcess],
+        userDir: join(fixtureDir, "no-user"),
+        projectDir: join(fixtureDir, "no-project"),
+      })
+      expect(resolved.failures).toEqual([])
+      expect(commandsOf(resolved).map((command) => command.id)).toContain("exit-0")
     }),
   )
   it.scopedLive("user extensions can add visible renderer, widget, and command surfaces", () =>

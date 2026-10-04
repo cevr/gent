@@ -1,21 +1,11 @@
-import {
-  Cause,
-  Context,
-  Effect,
-  Exit,
-  type FileSystem,
-  Layer,
-  ManagedRuntime,
-  Option,
-  type Path,
-  Scope,
-} from "effect"
+import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Option, Scope } from "effect"
 import {
   type ActiveExtensionSession,
   type AutocompleteContribution,
   type ClientActivitySnapshot,
   type AnyExtensionClientModule,
   type ClientContextDeps,
+  type ClientDeps,
   type ClientRuntime,
   type InteractionRendererComponent,
   makeClientContextLayer,
@@ -67,7 +57,7 @@ import type { BranchId, SessionId } from "@gent/core/protocol"
  * `main.tsx` provides, a test passes its own platform layer.
  */
 export const makeClientRuntime = (
-  platform: Layer.Layer<FileSystem.FileSystem | Path.Path>,
+  platform: Layer.Layer<ClientDeps>,
   deps: ClientContextDeps,
 ): ClientRuntime => ManagedRuntime.make(Layer.merge(platform, makeClientContextLayer(deps)))
 
@@ -146,7 +136,7 @@ interface ExtensionUIContextValue {
   readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
   /** Register dynamic autocomplete contributions (e.g. from session controller) */
   readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
-  /** ManagedRuntime providing FileSystem, Path, ClientContext — used by
+  /** ManagedRuntime providing FileSystem, Path, ChildProcessSpawner, ClientContext — used by
    *  Effect-typed contribution surfaces (autocomplete `items`, etc.). */
   readonly clientRuntime: ClientRuntime
 }
@@ -355,10 +345,10 @@ export function ExtensionUIProvider(props: {
 
   // Per-provider ManagedRuntime that adds the `ClientContext` extensions yield
   // to the platform services the root provides (`uiServices` in `main.tsx`,
-  // read through `ClientProvider`). `loadTuiExtensions` runs each setup on it.
-  const platform = Layer.succeedContext(
-    Context.makeUnsafe<FileSystem.FileSystem | Path.Path>(client.services.mapUnsafe),
-  )
+  // read through `ClientProvider`: `BunPlatformLive` holds the file system,
+  // the path service and the process spawner). `loadTuiExtensions` runs each
+  // setup on it.
+  const platform = Layer.succeedContext(Context.makeUnsafe<ClientDeps>(client.services.mapUnsafe))
   const clientRuntime: ClientRuntime = makeClientRuntime(platform, {
     transport: {
       client: client.client,

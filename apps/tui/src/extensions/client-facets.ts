@@ -10,6 +10,7 @@ import {
   Schema,
   Scope,
 } from "effect"
+import type { ChildProcessSpawner } from "effect/process"
 import {
   type InteractionPresented,
   type AgentName,
@@ -45,12 +46,14 @@ import { repliesInView, type ReplyWriter } from "../utils"
  * The runtime accepts only the Effect setup shape.
  *
  * Solid integration: extensions return contributions; the TUI shell owns one
- * per-provider `ManagedRuntime` that provides `FileSystem | Path | ClientContext`,
- * and runs each setup via `runtime.runPromise`. Async work inside
- * contributions (autocomplete `items`, etc.) is wired via the same runtime —
- * the seam is at the rendering edge, not in the Effect surface.
+ * per-provider `ManagedRuntime` that provides `FileSystem | Path |
+ * ChildProcessSpawner | ClientContext`, and runs each setup via
+ * `runtime.runPromise`. Async work inside contributions (autocomplete
+ * `items`, etc.) is wired via the same runtime — the seam is at the rendering
+ * edge, not in the Effect surface.
  *
- * Layering: `ClientDeps` is the TUI-local *floor* (`FileSystem | Path`).
+ * Layering: `ClientDeps` is the TUI-local *floor* (`FileSystem | Path |
+ * ChildProcessSpawner`).
  * The TUI shell augments its runtime with `ClientContext`, and an extension
  * that yields it widens its `R`. `ClientContext` lives here, not in
  * `@gent/core`, because its facets (the shell, the panes, the activity) are
@@ -62,11 +65,14 @@ import { repliesInView, type ReplyWriter } from "../utils"
 /**
  * The dependency channel a client extension's setup Effect MAY require.
  *
- * `ClientDeps` is the TUI-local floor: file system and path services. It is
- * a floor, not a ceiling: the TUI runtime adds `ClientContext`, and an
- * extension that yields it declares a wider `R`.
+ * `ClientDeps` is the TUI-local floor: the Effect platform services for
+ * files, paths and processes, as a server extension has them (ARCHITECTURE
+ * rule 15). Every client extension gets the same floor, shipped or not, and
+ * runs a command through `runProcess`. It is a floor, not a ceiling: the TUI
+ * runtime adds `ClientContext`, and an extension that yields it declares a
+ * wider `R`.
  */
-type ClientDeps = FileSystem.FileSystem | Path.Path
+export type ClientDeps = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 
 // ── activity facet ──────────────────────────────────────────────────────────
 
@@ -844,6 +850,7 @@ const AutocompleteContribution = Schema.Struct({
    *  - Sync: returned array used directly.
    *  - Effect: run through the TUI shell's `clientRuntime`. R may be any
    *    subset of services the runtime provides (FileSystem | Path |
+   *    ChildProcessSpawner |
    *    ClientContext).
    *  The popup wraps in `createResource` — undefined while loading, items
    *  when resolved. Async work goes through Effect so client extension code
@@ -1050,7 +1057,8 @@ export const autocompleteContribution = (opts: AutocompleteContribution): Client
 
 /**
  * A client extension's setup is an Effect that yields its dependencies
- * from the per-provider TUI runtime — `ClientDeps` (FileSystem | Path) by
+ * from the per-provider TUI runtime — `ClientDeps` (FileSystem | Path |
+ * ChildProcessSpawner) by
  * default, widened to `ClientContext` when the extension yields it; the
  * per-provider `ManagedRuntime` provides it. The setup handles its own
  * failures; one that dies anyway is that extension's load failure, since the
@@ -1064,7 +1072,8 @@ type ExtensionClientSetup<Services extends ClientRuntimeServices = ClientDeps> =
 
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files.
  *
- * `R` defaults to `ClientDeps` (FileSystem | Path). An extension that yields
+ * `R` defaults to `ClientDeps` (FileSystem | Path | ChildProcessSpawner). An
+ * extension that yields
  * `ClientContext` widens `R` and relies on the loader's runtime to provide it.
  */
 export interface ExtensionClientModule<R extends ClientRuntimeServices = ClientDeps> {
