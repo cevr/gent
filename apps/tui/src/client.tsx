@@ -223,6 +223,8 @@ export interface Session {
   readonly modelId?: ModelId
   /** Absent until the session sets one. */
   readonly reasoningLevel?: ReasoningEffort
+  /** `/effort auto`: the effort router picks each turn's level; never with `reasoningLevel`. */
+  readonly reasoningAuto?: true
   /**
    * The directory the session is rooted in, which is not always the TUI's
    * launch directory: `gent resume <id>` and a session switch reach sessions
@@ -240,6 +242,7 @@ const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   name: Schema.String,
   modelId: Schema.optional(ModelId),
   reasoningLevel: Schema.optional(ReasoningEffort),
+  reasoningAuto: Schema.optional(Schema.Literal(true)),
   cwd: Schema.optional(Schema.String),
 })
 
@@ -257,6 +260,8 @@ export const SessionStateEvent = Schema.TaggedUnion({
     sessionId: SessionId,
     modelId: Schema.UndefinedOr(ModelId),
     reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
+    /** Absent: not on `/effort auto`. */
+    reasoningAuto: Schema.optional(Schema.Literal(true)),
   },
 })
 export type SessionStateEvent = Schema.Schema.Type<typeof SessionStateEvent>
@@ -286,6 +291,7 @@ export function transitionSessionState(session: Session, event: SessionStateEven
           ...s,
           modelId: update.modelId,
           reasoningLevel: update.reasoningLevel,
+          reasoningAuto: update.reasoningAuto,
         })),
     }),
   )
@@ -590,9 +596,19 @@ interface ClientAgentValue {
   model: () => string
   /**
    * The level the next turn asks for: the session's, else its route's (a
-   * virtual model), else the default one; None before any is known.
+   * virtual model), else the default one; None before any is known. On
+   * `/effort auto`, the level the newest effort route picked; None before
+   * the first.
    */
   reasoningLevel: () => Option.Option<ReasoningEffort>
+  /** The session is on `/effort auto`: the effort router picks each turn's level. */
+  reasoningAuto: () => boolean
+  /**
+   * Why the newest effort route fell back (`ModelRouted.fallback`): no
+   * classifier signed in, a failed call, a pick the model cannot run. None
+   * when it did not, or before the first.
+   */
+  effortFallback: () => Option.Option<string>
   /**
    * While a turn runs, the level its requests go out at (its newest
    * `StreamStarted`, until its `TurnCompleted`; None when they name none): a
@@ -982,7 +998,8 @@ export function ClientProvider(props: ClientProviderProps) {
   // extension needs) or an extension's own pulse. Both invalidate it
   // explicitly; a rename, which also rebuilds the record, does not.
   const sessionSettings = createMemo(
-    () => `${session().modelId ?? ""}|${session().reasoningLevel ?? ""}`,
+    () =>
+      `${session().modelId ?? ""}|${session().reasoningLevel ?? ""}|${session().reasoningAuto ?? ""}`,
   )
   const [extensionPulses, setExtensionPulses] = createSignal(0)
   const healthKey = (): readonly [Option.Option<number>, SessionId, string, number] => [
@@ -1092,13 +1109,15 @@ export function ClientProvider(props: ClientProviderProps) {
       name: Option.getOrElse(Option.fromNullishOr(snapshot.name), () => current.name),
       modelId: snapshot.modelId,
       reasoningLevel: snapshot.reasoningLevel,
+      reasoningAuto: snapshot.reasoningAuto,
       // The snapshot names no cwd; the record keeps the one it has.
       cwd: current.cwd,
     }
     const sessionChanged =
       current.name !== nextSession.name ||
       current.modelId !== nextSession.modelId ||
-      current.reasoningLevel !== nextSession.reasoningLevel
+      current.reasoningLevel !== nextSession.reasoningLevel ||
+      current.reasoningAuto !== nextSession.reasoningAuto
     if (sessionChanged) {
       dispatchSession(SessionStateEvent.cases.Activated.make({ session: nextSession }))
     }
@@ -1187,6 +1206,7 @@ export function ClientProvider(props: ClientProviderProps) {
             sessionId: event.sessionId,
             modelId: event.modelId,
             reasoningLevel: event.reasoningLevel,
+            reasoningAuto: event.reasoningAuto,
           }),
         )
         break
@@ -1496,13 +1516,24 @@ export function ClientProvider(props: ClientProviderProps) {
       return DEFAULT_MODEL_ID
     },
     // The turn's order (`applyTurnRoute`): the session's own level, else the
-    // route's, else the agent or config default.
-    reasoningLevel: () =>
-      Option.orElse(Option.fromUndefinedOr(session().reasoningLevel), () =>
+    // route's, else the agent or config default. On auto, the effort route's.
+    reasoningLevel: () => {
+      if (agentValue.reasoningAuto())
+        return Option.flatMap(Option.fromUndefinedOr(runtimeMetrics().effortRouted), (route) =>
+          Option.fromUndefinedOr(route.effort),
+        )
+      return Option.orElse(Option.fromUndefinedOr(session().reasoningLevel), () =>
         Option.orElse(
           Option.flatMap(agentValue.routedModel(), (route) => route.effort),
           () => agentStore.defaultReasoningLevel,
         ),
+      )
+    },
+    reasoningAuto: () => session().reasoningAuto === true,
+    effortFallback: () =>
+      Option.fromUndefinedOr(runtimeMetrics().effortRouted).pipe(
+        Option.filter((route) => route.fallback === true),
+        Option.map((route) => route.reason),
       ),
     // From the event fold alone, so the level changes at `TurnCompleted`, in
     // the feed's order; the runtime watch is a second stream with its own.

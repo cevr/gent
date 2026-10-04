@@ -904,6 +904,77 @@ export const effortCarrier = (
   })
 }
 
+/**
+ * A request's effort on the wire: the effort the request applies (`current`,
+ * none when it sends no effort) and the changes it carries (none: a plain
+ * request, whose top level names `current`).
+ */
+interface EffortPlan {
+  readonly current: Option.Option<RunEffort>
+  readonly carrier: Option.Option<EffortCarrier>
+}
+
+/** The effort a plan's top level names (`"default"`: none), and the changes before the reply. */
+const effortWire = (plan: EffortPlan) =>
+  Option.match(plan.carrier, {
+    onNone: () => ({
+      top: Option.getOrElse(plan.current, (): RunEffort => "default"),
+      changes: [],
+    }),
+    onSome: (carrier) => ({ top: carrier.pinned, changes: carrier.changes }),
+  })
+
+/**
+ * Whether the request `hints` describe carries its change of effort and
+ * keeps the prefix the previous request wrote to the cache: the request
+ * carries the change (a plain request changes the top level), and the request before it, at the effort of the history's
+ * last run over the runs before that, is planned the same way, and both name
+ * the same top-level effort and the same changes up to that run. The next
+ * request may add only the change for the reply it asks for. False where the
+ * last run's effort is unknown (no receipt), so no previous plan can be
+ * rebuilt. `planOf` is the driver's own plan, so a driver whose wire cannot
+ * name an effort (a provider default it does not know) is held to what it
+ * sent: a change after a run at the default pins a top level that run did
+ * not name, and is refused.
+ */
+export const keepsEffortPrefix = (
+  hints: ProviderHints,
+  planOf: (hints: Option.Option<ProviderHints>) => EffortPlan,
+): boolean => {
+  const history = Option.getOrElse(
+    Option.fromUndefinedOr(hints.reasoningHistory),
+    (): ReadonlyArray<Option.Option<RunEffort>> => [],
+  )
+  const last = Option.flatten(Option.fromUndefinedOr(history.at(-1)))
+  if (Option.isNone(last)) return false
+  const { reasoning: _next, ...rest } = hints
+  const previousHints: ProviderHints = {
+    ...rest,
+    reasoningHistory: history.slice(0, -1),
+    ...Option.match(
+      Option.filter(last, (effort): effort is ReasoningEffort => effort !== "default"),
+      {
+        onNone: () => ({}),
+        onSome: (reasoning) => ({ reasoning }),
+      },
+    ),
+  }
+  const planned = planOf(Option.some(hints))
+  if (Option.isNone(planned.carrier)) return false
+  const previous = effortWire(planOf(Option.some(previousHints)))
+  const next = effortWire(planned)
+  const before = next.changes.filter((change) => change.run < history.length)
+  return (
+    previous.top === next.top &&
+    before.length === previous.changes.length &&
+    before.every(
+      (change, index) =>
+        change.run === previous.changes[index]?.run &&
+        change.effort === previous.changes[index]?.effort,
+    )
+  )
+}
+
 /** OpenCode's own cap on a thinking budget (`OUTPUT_TOKEN_MAX - 1` in `provider/transform.ts`). */
 const BUDGET_CEILING = 31_999
 

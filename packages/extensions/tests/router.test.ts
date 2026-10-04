@@ -7,7 +7,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Context,
-  type Crypto,
+  Crypto,
   Effect,
   FileSystem,
   Layer,
@@ -29,10 +29,12 @@ import {
   Model,
   ModelId,
   type ModelDriverContribution,
+  omitUndefined,
   ProviderAuthInfo,
   ProviderId,
   type ProviderHints,
   ReasoningEffort,
+  type RunEffort,
   type SessionId,
 } from "@gent/core/extensions/api"
 import type { AgentEvent } from "@gent/core/protocol"
@@ -43,6 +45,8 @@ import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
   type SequenceStep,
+  testAgent,
+  testTurnExtension,
   textStep,
   waitFor,
 } from "@gent/core/test-utils"
@@ -51,10 +55,12 @@ import {
   buildAnthropicModelDriver,
   type ClaudeCredentials,
 } from "../src/anthropic.js"
+import { buildOpenAIModelDriver, type OpenAICredentials, OpenAIExtension } from "../src/openai.js"
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
 import { RouterExtension } from "../src/router.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { fakeFetchLayer, makeFakeFetchState } from "./helpers/fake-http-client.js"
+import { resolveShipped } from "./helpers/api-classes.js"
 import { e2ePreset } from "./helpers/test-preset.js"
 
 const LIGHT = ModelId.make("anthropic/claude-haiku-4-5")
@@ -68,12 +74,17 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 interface JudgeAnswer {
   readonly label: string
   readonly confidence: number
+  /** The label for the effort decision, where the call asks one. */
+  readonly effort?: string
 }
 
-/** What the judge was asked: the classifier model and the encoded input. */
+/** What the judge was asked: the classifier model, the encoded input and the labels offered. */
 interface JudgeCall {
   readonly model: string
   readonly state: string
+  readonly labels: ReadonlyArray<string>
+  /** The effort decision's labels, where the call asks one. */
+  readonly effortLabels?: ReadonlyArray<string>
 }
 
 /**
@@ -104,21 +115,37 @@ const judgeExtension = (answers: ReadonlyArray<JudgeAnswer>, calls: Array<JudgeC
             decide: (options) =>
               Effect.sync(() => {
                 const answer = answers[calls.length] ?? answers.at(-1)
-                calls.push({ model: modelName, state: encodeJson(options.state) })
-                const decision = options.decisions["choice"]
-                let labels: ReadonlyArray<string> = []
-                if (decision?._tag === "Classify") labels = Object.keys(decision.criteria)
-                const label = answer?.label ?? ""
+                const labelsOf = (key: string) =>
+                  Option.flatMap(Option.fromUndefinedOr(options.decisions[key]), (decision) => {
+                    if (decision._tag !== "Classify") return Option.none()
+                    return Option.some(Object.keys(decision.criteria))
+                  })
+                const classified = (labels: ReadonlyArray<string>, label: string) => ({
+                  _tag: "Classify" as const,
+                  label,
+                  probabilities: Object.fromEntries(
+                    labels.map((entry) => [entry, Number(entry === label)]),
+                  ),
+                  confidence: answer?.confidence ?? 0,
+                })
+                const choice = labelsOf("choice")
+                const effort = labelsOf("effort")
+                calls.push({
+                  model: modelName,
+                  state: encodeJson(options.state),
+                  labels: Option.getOrElse(choice, () => []),
+                  ...omitUndefined({ effortLabels: Option.getOrUndefined(effort) }),
+                })
                 return {
                   answers: {
-                    choice: {
-                      _tag: "Classify" as const,
-                      label,
-                      probabilities: Object.fromEntries(
-                        labels.map((entry) => [entry, Number(entry === label)]),
-                      ),
-                      confidence: answer?.confidence ?? 0,
-                    },
+                    ...Option.match(choice, {
+                      onNone: () => ({}),
+                      onSome: (labels) => ({ choice: classified(labels, answer?.label ?? "") }),
+                    }),
+                    ...Option.match(effort, {
+                      onNone: () => ({}),
+                      onSome: (labels) => ({ effort: classified(labels, answer?.effort ?? "") }),
+                    }),
                   },
                   usage: { inputTokens: 21, outputTokens: 0 },
                 }
@@ -533,6 +560,213 @@ describe("router stickiness", () => {
   )
 })
 
+// ── effort auto ─────────────────────────────────────────────────────────────
+
+const EFFORT = ModelId.make("router/effort")
+
+/** The default model as a reasoning model of `efforts` that carries an effort change. */
+const thinkerOf = (efforts: ReadonlyArray<ReasoningEffort>) =>
+  Model.make({
+    id: STRONG,
+    name: "Sonnet 5",
+    provider: ProviderId.make("anthropic"),
+    contextLength: 200_000,
+    reasoning: true,
+    efforts,
+  })
+
+/** A session on `/effort auto` with the shipped extensions, the judge, and the scripted model. */
+const autoEffortSession = Effect.fn("test.autoEffortSession")(function* (params: {
+  readonly home: string
+  readonly cwd: string
+  readonly answers: ReadonlyArray<JudgeAnswer>
+  readonly calls: Array<JudgeCall>
+  readonly model: Model
+}) {
+  const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
+  const harness = yield* createRpcHarness({
+    ...e2ePreset,
+    providerLayer,
+    home: params.home,
+    cwd: params.cwd,
+    models: [params.model],
+    extensionInputs: [...e2ePreset.extensionInputs, judgeExtension(params.answers, params.calls)],
+  })
+  yield* harness.client.auth.setKey({
+    provider: "route-judge",
+    key: "test-key",
+    sessionId: harness.sessionId,
+  })
+  yield* harness.client.session.updateSettings({
+    sessionId: harness.sessionId,
+    reasoningLevel: Option.some("auto"),
+  })
+  const afterTurns = yield* recordBranchEvents(harness.client, harness)
+  yield* harness.client.message.send({
+    sessionId: harness.sessionId,
+    branchId: harness.branchId,
+    content: "debug the flaky scheduler",
+  })
+  return { ...harness, events: yield* afterTurns(1) }
+})
+
+const stepLevels = (events: ReadonlyArray<AgentEvent>) =>
+  events.flatMap((event) => {
+    if (event._tag !== "StreamEnded") return []
+    return [event.reasoningLevel]
+  })
+
+describe("effort auto", () => {
+  it.scopedLive(
+    "with no effort entry, /effort auto asks the cheapest classifier between the built-in levels the model takes",
+    () =>
+      Effect.gen(function* () {
+        const { home, cwd } = yield* writeHome({})
+        const calls: Array<JudgeCall> = []
+        const session = yield* autoEffortSession({
+          home,
+          cwd,
+          answers: [{ label: "choice3", confidence: 0.9 }],
+          calls,
+          // No xhigh: the built-in xhigh choice is not offered.
+          model: thinkerOf(["low", "medium", "high"]),
+        })
+        expect(calls.map((call) => [call.model, call.labels])).toEqual([
+          ["jev-cheap", ["choice1", "choice2", "choice3"]],
+        ])
+        const [routed] = routedEvents(session.events)
+        expect(routed).toMatchObject({
+          selected: EFFORT,
+          model: STRONG,
+          effort: "high",
+          choice: 2,
+          effortOnly: true,
+          classifier: "route-judge/jev-cheap",
+        })
+        expect(routed?.reason).toContain("hard work")
+        expect(stepLevels(session.events)).toEqual(["high"])
+        // The effort router is not a model: the catalog does not list it.
+        const models = yield* session.client.model.list({ sessionId: session.sessionId })
+        expect(models.some((model) => model.id === EFFORT)).toBe(false)
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunServices.layer)),
+    20_000,
+  )
+
+  it.scopedLive(
+    "an effort entry replaces the built-in levels; one that names a model is refused, health says why, and auto runs at the agent's level",
+    () =>
+      Effect.gen(function* () {
+        const configured = yield* writeHome({
+          routers: {
+            effort: {
+              classifier: "route-judge/jev-dear",
+              choices: [
+                { effort: "low", reason: "chat" },
+                { effort: "max", reason: "deep work", default: true },
+              ],
+            },
+          },
+        })
+        const calls: Array<JudgeCall> = []
+        const session = yield* autoEffortSession({
+          ...configured,
+          answers: [{ label: "choice2", confidence: 0.9 }],
+          calls,
+          model: thinkerOf(["low", "medium", "high", "xhigh", "max"]),
+        })
+        expect(calls.map((call) => [call.model, call.labels])).toEqual([
+          ["jev-dear", ["choice1", "choice2"]],
+        ])
+        expect(routedEvents(session.events).map((event) => event.effort)).toEqual(["max"])
+        expect(stepLevels(session.events)).toEqual(["max"])
+
+        const refused = yield* writeHome({
+          routers: {
+            effort: { choices: [{ model: STRONG, effort: "low", reason: "chat" }] },
+          },
+        })
+        const unrouted = yield* autoEffortSession({
+          ...refused,
+          answers: [{ label: "choice1", confidence: 0.9 }],
+          calls: [],
+          model: thinkerOf(["low", "medium", "high"]),
+        })
+        const status = yield* unrouted.client.extension.listStatus({
+          scope: { _tag: "Session", id: unrouted.sessionId },
+        })
+        expect(status._tag).toBe("Degraded")
+        if (status._tag !== "Degraded") return
+        expect(
+          status.degradedExtensions
+            .filter((extension) => extension.manifest.id === "@gent/router")
+            .flatMap((extension) => extension.issues),
+        ).toEqual([
+          {
+            _tag: "ModelCatalogFailed",
+            driverId: "router",
+            error: `${EFFORT}: choice 1 names a model; an effort choice sets only an effort`,
+          },
+        ])
+        expect(routedEvents(unrouted.events)).toEqual([])
+        // The main agent's own level.
+        expect(stepLevels(unrouted.events)).toEqual(["high"])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+    25_000,
+  )
+
+  it.scopedLive(
+    "under router/auto on /effort auto, one classifier call picks the model and the effort: two receipts, one charge",
+    () =>
+      Effect.gen(function* () {
+        const { home, cwd } = yield* writeHome(autoRouter(Option.none()))
+        const calls: Array<JudgeCall> = []
+        const thinking = (model: Model) =>
+          Model.make({ ...model, reasoning: true, efforts: ["low", "medium", "high"] })
+        const session = yield* routedSession({
+          home,
+          cwd,
+          answers: [{ label: "choice2", confidence: 0.9, effort: "choice3" }],
+          calls,
+          replies: 1,
+          models: pricedModels.map(thinking),
+        })
+        yield* session.client.session.updateSettings({
+          sessionId: session.sessionId,
+          reasoningLevel: Option.some("auto"),
+        })
+        yield* session.send("debug the flaky scheduler")
+        const events = yield* session.afterTurns(1)
+        // One call: the model's labels and the built-in levels both models take.
+        expect(calls.map((call) => [call.labels, call.effortLabels])).toEqual([
+          [
+            ["choice1", "choice2"],
+            ["choice1", "choice2", "choice3"],
+          ],
+        ])
+        const [modelRoute, effortRoute] = routedEvents(events)
+        expect(modelRoute).toMatchObject({ selected: AUTO, model: STRONG, choice: 1 })
+        expect(String(modelRoute?.classifier)).toBe("route-judge/jev-cheap")
+        expect(effortRoute).toMatchObject({
+          selected: EFFORT,
+          model: STRONG,
+          effort: "high",
+          choice: 2,
+          effortOnly: true,
+        })
+        expect(effortRoute?.reason).toContain("hard work")
+        // The call is charged on the model route; the effort route names no classifier.
+        expect(
+          [effortRoute?.classifier, effortRoute?.costUsd].map((field) =>
+            Option.fromUndefinedOr(field),
+          ),
+        ).toEqual([Option.none(), Option.none()])
+        expect(stepModels(events)).toEqual([STRONG])
+        expect(stepLevels(events)).toEqual(["high"])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunServices.layer)),
+    20_000,
+  )
+})
+
 // ── the wire ────────────────────────────────────────────────────────────────
 
 /** One server-sent event of the Messages stream: its type, and its fields as the wire has them. */
@@ -637,15 +871,18 @@ const decodeMessages = Schema.decodeUnknownSync(
 )
 
 const OPUS = ModelId.make("anthropic/claude-opus-5")
+const SOL = ModelId.make("openai/gpt-6.1-sol")
 const MID_CONVERSATION_BETA = "mid-conversation-output-config-2026-07-01"
 
 const isReasoningEffort = Schema.is(ReasoningEffort)
+const isRunEffort = (value: string): value is RunEffort =>
+  value === "default" || isReasoningEffort(value)
 
 /** What one step of a turn sent: the hints it resolved its model with, and its prompt. */
 interface SentStep {
   readonly reasoning: Option.Option<ReasoningEffort>
   readonly maxTokens: Option.Option<number>
-  readonly reasoningHistory: ReadonlyArray<Option.Option<ReasoningEffort>>
+  readonly reasoningHistory: ReadonlyArray<Option.Option<RunEffort>>
   readonly prompt: Option.Option<Prompt.Prompt>
 }
 
@@ -694,6 +931,179 @@ const topLevelEffort = (body: Schema.JsonObject): string => {
   const config = body["output_config"]
   if (isJsonObject(config) && Predicate.isString(config["effort"])) return config["effort"]
   return "-"
+}
+
+/** Each step's hints and prompt, kept from the scripted model for the real driver. */
+const keepSentSteps = () => {
+  const sent: Array<SentStep> = []
+  const keep = (reply: string): SequenceStep => ({
+    ...textStep(reply),
+    assertRequest: (request) => {
+      sent.push({
+        reasoning: Option.filter(Option.fromUndefinedOr(request.reasoning), isReasoningEffort),
+        maxTokens: Option.fromUndefinedOr(request.maxTokens),
+        reasoningHistory: request.reasoningHistory.map(Option.filter(isRunEffort)),
+        prompt: Option.none(),
+      })
+    },
+    assertOptions: (options) => {
+      const step = sent.at(-1)
+      if (Predicate.isNotUndefined(step))
+        sent[sent.length - 1] = { ...step, prompt: Option.some(options.prompt) }
+    },
+  })
+  return { sent, keep }
+}
+
+/** What the real Anthropic driver sends on Opus 5 for each kept step, with the hints the turn resolved. */
+const replayOnOpus = Effect.fn("test.replayOnOpus")(function* (
+  sent: ReadonlyArray<SentStep>,
+  cacheKey: string,
+) {
+  const state = makeFakeFetchState()
+  for (const step of sent) {
+    const hints: ProviderHints = {
+      cacheKey,
+      supportsReasoning: true,
+      reasoningHistory: step.reasoningHistory,
+      ...Option.match(step.reasoning, {
+        onNone: () => ({}),
+        onSome: (reasoning) => ({ reasoning }),
+      }),
+      ...Option.match(step.maxTokens, {
+        onNone: () => ({}),
+        onSome: (maxTokens) => ({ maxTokens }),
+      }),
+    }
+    const model = yield* anthropicModelNamed("claude-opus-5", Option.some(hints))
+    yield* LanguageModel.streamText({ prompt: Option.getOrThrow(step.prompt) }).pipe(
+      Stream.runDrain,
+      Effect.provide(
+        Layer.provideMerge(
+          model,
+          fakeFetchLayer(state, () => textReply("answer")),
+        ),
+      ),
+    )
+  }
+  return state.captured
+})
+
+/** The hints a kept step resolved its model with. */
+const sentHints = (step: SentStep, cacheKey: string): ProviderHints => ({
+  cacheKey,
+  supportsReasoning: true,
+  reasoningHistory: step.reasoningHistory,
+  ...Option.match(step.reasoning, { onNone: () => ({}), onSome: (reasoning) => ({ reasoning }) }),
+  ...Option.match(step.maxTokens, { onNone: () => ({}), onSome: (maxTokens) => ({ maxTokens }) }),
+})
+
+/** A Responses reply of one text message. */
+const responsesReply = () => ({
+  status: 200,
+  body: encodeExternalJson({
+    id: "resp-route",
+    object: "response",
+    created_at: 1_700_000_000,
+    model: "gpt-6.1-sol",
+    output: [
+      {
+        id: "msg-route",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "answer", annotations: [], logprobs: [] }],
+      },
+    ],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  }),
+})
+
+/** What the real OpenAI driver sends on GPT-6.1 Sol for each kept step, on an API key. */
+const replayOnSol = Effect.fn("test.replayOnSol")(function* (
+  sent: ReadonlyArray<SentStep>,
+  cacheKey: string,
+) {
+  const driver = buildOpenAIModelDriver(
+    yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL),
+    new Map(),
+    Option.none(),
+    yield* Crypto.Crypto,
+  )
+  const state = makeFakeFetchState()
+  for (const step of sent) {
+    const model = yield* resolveShipped(
+      driver,
+      fixtureModelCatalog(),
+      "gpt-6.1-sol",
+      Option.some(ProviderAuthInfo.cases.Api.make({ key: "route-test-key" })),
+      Option.some(sentHints(step, cacheKey)),
+    )
+    yield* LanguageModel.generateText({ prompt: Option.getOrThrow(step.prompt) }).pipe(
+      Effect.provide(Layer.provideMerge(model, fakeFetchLayer(state, responsesReply))),
+      Effect.scoped,
+    )
+  }
+  return state.captured.map((request) => decodeWireBody(request.body ?? ""))
+}, Effect.provide(BunServices.layer))
+
+/** A Responses body without its input. */
+const withoutInput = (body: Schema.JsonObject): Schema.Json =>
+  Object.fromEntries(Object.entries(body).filter(([key]) => key !== "input"))
+
+/** A Responses body's input, up to the trailing system and developer items the next request drops. */
+const conversationInput = (body: Schema.JsonObject): ReadonlyArray<Schema.Json> => {
+  const input = body["input"]
+  if (!Array.isArray(input)) return []
+  const items: ReadonlyArray<Schema.Json> = input
+  const instruction = (item: Schema.Json) =>
+    isJsonObject(item) && (item["role"] === "system" || item["role"] === "developer")
+  let end = items.length
+  while (end > 0 && items.slice(end - 1, end).some(instruction)) end -= 1
+  return items.slice(0, end)
+}
+
+/**
+ * The bytes a cache keeps across an effort change carried inside the
+ * conversation: the second request's top level and earlier messages are the
+ * first's, and the change rides as a marker after the run before it.
+ */
+const expectEffortRidesInside = (
+  captured: ReadonlyArray<{
+    readonly body?: string
+    readonly headers: Readonly<Record<string, string>>
+  }>,
+  first: string,
+  then: string,
+) => {
+  expect(captured).toHaveLength(2)
+  const bodies = captured.map((request) => decodeWireBody(request.body ?? ""))
+  const at = (index: number) => Option.getOrThrow(Option.fromUndefinedOr(bodies[index]))
+  const opening = at(0)
+  const next = at(1)
+  // The top level keeps the conversation's first effort: the cache holds.
+  expect(topLevelEffort(next)).toBe(first)
+  expect(withoutCacheControl(withoutMessages(next))).toEqual(
+    withoutCacheControl(withoutMessages(opening)),
+  )
+  const earlier = wireMessages(opening)
+  expect(wireMessages(next).slice(0, earlier.length)).toEqual(earlier)
+  expect(wireMessages(next).map(messageKind)).toEqual([
+    "user",
+    "assistant",
+    `effort:${then}`,
+    "user",
+  ])
+  expect(
+    captured.map((request) =>
+      (request.headers["anthropic-beta"] ?? "").split(",").includes(MID_CONVERSATION_BETA),
+    ),
+  ).toEqual([false, true])
+  // No prefill: each request ends on the user's message.
+  expect(captured.map((request) => lastInput(request.body ?? ""))).toEqual([
+    "user:text",
+    "user:text",
+  ])
 }
 
 /** The type of the last block of the last message a request sent, with its role. */
@@ -782,26 +1192,7 @@ describe("router on the wire", () => {
         })
         // The turn runs on the scripted model; each step keeps the hints it
         // resolved its model with and the prompt it sent, for the real driver.
-        const sent: Array<SentStep> = []
-        const keep = (reply: string): SequenceStep => ({
-          ...textStep(reply),
-          assertRequest: (request) => {
-            sent.push({
-              reasoning: Option.filter(
-                Option.fromUndefinedOr(request.reasoning),
-                isReasoningEffort,
-              ),
-              maxTokens: Option.fromUndefinedOr(request.maxTokens),
-              reasoningHistory: request.reasoningHistory.map(Option.filter(isReasoningEffort)),
-              prompt: Option.none(),
-            })
-          },
-          assertOptions: (options) => {
-            const step = sent.at(-1)
-            if (Predicate.isNotUndefined(step))
-              sent[sent.length - 1] = { ...step, prompt: Option.some(options.prompt) }
-          },
-        })
+        const { sent, keep } = keepSentSteps()
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           keep("answer 1"),
           keep("answer 2"),
@@ -865,58 +1256,210 @@ describe("router on the wire", () => {
           [Option.some("high"), [Option.some("low")]],
         ])
 
-        // The real driver sends each step's prompt with the hints the turn resolved.
-        const state = makeFakeFetchState()
-        for (const step of sent) {
-          const hints: ProviderHints = {
-            cacheKey: sessionId,
-            supportsReasoning: true,
-            reasoningHistory: step.reasoningHistory,
-            ...Option.match(step.reasoning, {
-              onNone: () => ({}),
-              onSome: (reasoning) => ({ reasoning }),
-            }),
-            ...Option.match(step.maxTokens, {
-              onNone: () => ({}),
-              onSome: (maxTokens) => ({ maxTokens }),
-            }),
-          }
-          const model = yield* anthropicModelNamed("claude-opus-5", Option.some(hints))
-          yield* LanguageModel.streamText({ prompt: Option.getOrThrow(step.prompt) }).pipe(
-            Stream.runDrain,
-            Effect.provide(
-              Layer.provideMerge(
-                model,
-                fakeFetchLayer(state, () => textReply("answer")),
-              ),
-            ),
-          )
-        }
-        expect(state.captured).toHaveLength(2)
-        const bodies = state.captured.map((request) => decodeWireBody(request.body ?? ""))
-        const at = (index: number) => Option.getOrThrow(Option.fromUndefinedOr(bodies[index]))
-        const first = at(0)
-        const second = at(1)
-        // The top level keeps the conversation's first effort: the cache holds.
-        expect(topLevelEffort(second)).toBe("low")
-        expect(withoutCacheControl(withoutMessages(second))).toEqual(
-          withoutCacheControl(withoutMessages(first)),
-        )
-        // The earlier messages are byte-equal; the change rides as a marker
-        // after the run before it, ahead of the turn it applies to.
-        const earlier = wireMessages(first)
-        expect(wireMessages(second).slice(0, earlier.length)).toEqual(earlier)
-        expect(wireMessages(second).map(messageKind)).toEqual([
-          "user",
-          "assistant",
-          "effort:high",
-          "user",
+        // The real driver sends each step's prompt with the hints the turn
+        // resolved; the change rides as a marker ahead of the turn it applies to.
+        expectEffortRidesInside(yield* replayOnOpus(sent, sessionId), "low", "high")
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "/effort auto changes the level between turns on Opus 5 inside the conversation: the cached prefix holds",
+    () =>
+      Effect.gen(function* () {
+        const { home, cwd } = yield* writeHome({})
+        const { sent, keep } = keepSentSteps()
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          keep("answer 1"),
+          keep("answer 2"),
         ])
-        expect(
-          state.captured.map((request) =>
-            (request.headers["anthropic-beta"] ?? "").split(",").includes(MID_CONVERSATION_BETA),
-          ),
-        ).toEqual([false, true])
+        const calls: Array<JudgeCall> = []
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          home,
+          cwd,
+          models: [
+            Model.make({
+              id: OPUS,
+              name: "Opus 5",
+              provider: ProviderId.make("anthropic"),
+              contextLength: 1_000_000,
+              reasoning: true,
+              efforts: ["low", "medium", "high", "xhigh", "max"],
+              pricing: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+            }),
+          ],
+          extensionInputs: [
+            ...e2ePreset.extensionInputs,
+            judgeExtension(
+              [
+                { label: "choice1", confidence: 0.9 },
+                { label: "choice3", confidence: 0.9 },
+              ],
+              calls,
+            ),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(OPUS),
+          reasoningLevel: Option.some("auto"),
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* client.message.send({ sessionId, branchId, content: "hello" })
+        yield* afterTurns(1)
+        yield* client.message.send({ sessionId, branchId, content: "now the hard part" })
+        const events = yield* afterTurns(2)
+        yield* controls.assertDone
+
+        // One classification per user turn; the model stays, the level moves.
+        expect(calls).toHaveLength(2)
+        expect(routedEvents(events).map((event) => [event.model, event.effort])).toEqual([
+          [OPUS, "low"],
+          [OPUS, "high"],
+        ])
+        expect(sent.map((step) => [step.reasoning, step.reasoningHistory])).toEqual([
+          [Option.some("low"), []],
+          [Option.some("high"), [Option.some("low")]],
+        ])
+        expectEffortRidesInside(yield* replayOnOpus(sent, sessionId), "low", "high")
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+    30_000,
+  )
+  it.scopedLive(
+    "on Opus 5 a turn after /effort off keeps thinking off on /effort auto: no level carries over it, so no classifier is asked",
+    () =>
+      Effect.gen(function* () {
+        const { home, cwd } = yield* writeHome({})
+        const { sent, keep } = keepSentSteps()
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          keep("answer 1"),
+          keep("answer 2"),
+        ])
+        const calls: Array<JudgeCall> = []
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          home,
+          cwd,
+          models: [
+            Model.make({
+              id: OPUS,
+              name: "Opus 5",
+              provider: ProviderId.make("anthropic"),
+              contextLength: 1_000_000,
+              reasoning: true,
+              efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+              pricing: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+            }),
+          ],
+          extensionInputs: [
+            ...e2ePreset.extensionInputs,
+            judgeExtension([{ label: "choice3", confidence: 0.9 }], calls),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(OPUS),
+          reasoningLevel: Option.some("none"),
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* client.message.send({ sessionId, branchId, content: "hello" })
+        yield* afterTurns(1)
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some("auto") })
+        yield* client.message.send({ sessionId, branchId, content: "now the hard part" })
+        const events = yield* afterTurns(2)
+        yield* controls.assertDone
+
+        // A move from none turns thinking on at the top level, which rewrites the cache.
+        expect(calls).toEqual([])
+        const [held] = routedEvents(events)
+        expect(held).toMatchObject({ model: OPUS, effort: "none", effortOnly: true })
+        expect(held?.reason).toContain("carries no change from none")
+        expect(held?.fallback).toBeUndefined()
+        expect(sent.map((step) => [step.reasoning, step.reasoningHistory])).toEqual([
+          [Option.some("none"), []],
+          [Option.some("none"), [Option.some("none")]],
+        ])
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+    30_000,
+  )
+  it.scopedLive(
+    "on GPT-6.1 Sol, high then the provider default then /effort auto holds the default: the third request keeps the second's bytes",
+    () =>
+      Effect.gen(function* () {
+        const { home, cwd } = yield* writeHome({})
+        const { sent, keep } = keepSentSteps()
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          keep("answer 1"),
+          keep("answer 2"),
+          keep("answer 3"),
+        ])
+        const calls: Array<JudgeCall> = []
+        // An agent with no level of its own: `/effort default` sends the provider default.
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          providerLayer,
+          home,
+          cwd,
+          models: [
+            Model.make({
+              id: SOL,
+              name: "GPT-6.1 Sol",
+              provider: ProviderId.make("openai"),
+              contextLength: 400_000,
+              reasoning: true,
+              efforts: ["low", "medium", "high", "xhigh"],
+              pricing: { input: 2, output: 10, cacheRead: 0.2 },
+            }),
+          ],
+          extensionInputs: [
+            testTurnExtension,
+            RouterExtension,
+            OpenAIExtension,
+            judgeExtension([{ label: "choice1", confidence: 0.9 }], calls),
+          ],
+        })
+        yield* client.auth.setKey({ provider: "route-judge", key: "test-key", sessionId })
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(SOL),
+          reasoningLevel: Option.some("high"),
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* client.message.send({ sessionId, branchId, content: "first" })
+        yield* afterTurns(1)
+        // `/effort default`: the request names no effort, so the top level has none.
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.none() })
+        yield* client.message.send({ sessionId, branchId, content: "second" })
+        yield* afterTurns(2)
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some("auto") })
+        yield* client.message.send({ sessionId, branchId, content: "third" })
+        const events = yield* afterTurns(3)
+        yield* controls.assertDone
+
+        const bodies = yield* replayOnSol(sent, sessionId)
+        expect(bodies).toHaveLength(3)
+        const second = Option.getOrThrow(Option.fromUndefinedOr(bodies[1]))
+        const third = Option.getOrThrow(Option.fromUndefinedOr(bodies[2]))
+        // The cached prefix: the third request's top level and earlier input are the second's.
+        expect(withoutInput(third)).toEqual(withoutInput(second))
+        const earlier = conversationInput(second)
+        expect(earlier.length).toBeGreaterThan(0)
+        expect(conversationInput(third).slice(0, earlier.length)).toEqual([...earlier])
+        // A change after the default run would pin the top level again: the level holds,
+        // and no classifier is asked.
+        expect(calls).toEqual([])
+        const [held] = routedEvents(events)
+        expect(held?.reason).toContain("carries no change from default")
+        expect(sent.map((step) => step.reasoning)).toEqual([
+          Option.some("high"),
+          Option.none(),
+          Option.none(),
+        ])
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
     30_000,
   )

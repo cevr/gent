@@ -580,6 +580,12 @@ export class Session extends Schema.Class<Session>("Session")({
   /** Session-scoped model; wins over the agent definition and config for every turn. */
   modelId: Schema.optional(ModelId),
   reasoningLevel: Schema.optional(ReasoningEffort),
+  /**
+   * `/effort auto`: each turn asks the effort router for its level
+   * (`ModelRouterContribution.effort`). Never set with `reasoningLevel`;
+   * stored as `auto` in the same column, which an older build reads as none.
+   */
+  reasoningAuto: Schema.optional(Schema.Literal(true)),
   activeBranchId: Schema.optional(BranchId),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),

@@ -250,6 +250,42 @@ describe("session metrics fold", () => {
     expect(foldSessionMetrics([started(1, { reasoningDefault: true })]).turnEffort).toEqual({})
   })
 
+  test("an effort route is held apart from the model route, and both are charged", () => {
+    const route = {
+      sessionId,
+      branchId,
+      messageId: MessageId.make("m"),
+      model: ModelId.make("anthropic/claude-opus-5"),
+      reason: "picked",
+      durationMs: 1,
+      costUsd: 0.001,
+    }
+    const metrics = foldSessionMetrics([
+      wrap(
+        AgentEvent.cases.ModelRouted.make({
+          ...route,
+          selected: ModelId.make("router/auto"),
+          effort: "high",
+        }),
+      ),
+      wrap(
+        AgentEvent.cases.ModelRouted.make({
+          ...route,
+          selected: ModelId.make("router/effort"),
+          effort: "low",
+          effortOnly: true,
+        }),
+      ),
+    ])
+    expect(metrics.routed).toMatchObject({ selected: "router/auto", effort: "high" })
+    expect(metrics.effortRouted).toEqual({
+      model: ModelId.make("anthropic/claude-opus-5"),
+      effort: "low",
+      reason: "picked",
+    })
+    expect(metrics.costUsd).toBeCloseTo(0.002, 12)
+  })
+
   test("a branch with no projection carries no context block", () => {
     expect(foldSessionMetrics([])).toEqual({
       turns: 0,

@@ -22,6 +22,7 @@ import {
   type ModelCatalogView,
   ModelId,
   ProviderAuthError,
+  type RunEffort,
 } from "@gent/core/extensions/api"
 import {
   createRpcHarness,
@@ -180,6 +181,50 @@ describe("driver catalog", () => {
       "openai/gpt-5.5-pro": Option.some(["medium", "high", "xhigh"]),
     })
   })
+
+  it.live(
+    "the Anthropic driver carries an effort change on a model that takes markers, while thinking stays planned the same",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* anthropicDriverIn("1h")
+        const carriesEffort = Option.getOrThrow(Option.fromUndefinedOr(driver.carriesEffort))
+        const reasoningOptions: CatalogModel["reasoningOptions"] = [
+          { type: "effort", values: ["low", "medium", "high", "xhigh", "max"] },
+        ]
+        const catalog = anthropicCatalog(
+          { id: "claude-opus-5", name: "Opus 5", reasoning: true, reasoningOptions },
+          { id: "claude-sonnet-5", name: "Sonnet 5", reasoning: true, reasoningOptions },
+          { id: "claude-sonnet-5-5", name: "Sonnet 5.5", reasoning: true, reasoningOptions },
+          { id: "claude-opus-5-5", name: "Opus 5.5", reasoning: true, reasoningOptions },
+        )
+        const carries = (model: string, history: ReadonlyArray<RunEffort>) =>
+          carriesEffort(
+            model,
+            {
+              reasoning: "low",
+              reasoningHistory: history.map(Option.some),
+              cacheKey: "session",
+              supportsReasoning: true,
+            },
+            catalog,
+          )
+        expect([
+          carries("claude-opus-5", ["high"]),
+          carries("claude-sonnet-5-5", ["high"]),
+          // `none` turns thinking off on Opus 5: a move to low turns it on, at the top level.
+          carries("claude-opus-5", ["none"]),
+          // No markers before Sonnet 5.5.
+          carries("claude-sonnet-5", ["high"]),
+          // A run at the model's default was carried as a marker of the
+          // level it runs at (high on Opus 5, medium on Opus 5.5): the top
+          // level stays the first run's, so a later change rides on.
+          carries("claude-opus-5", ["high", "default"]),
+          carries("claude-opus-5-5", ["high", "default"]),
+          // A first run at the default named no top level; the change keeps it unnamed.
+          carries("claude-opus-5", ["default"]),
+        ]).toEqual([true, true, false, false, true, true, true])
+      }).pipe(Effect.provide(BunServices.layer)),
+  )
 
   test("a driver lists only its own provider's models a turn can drive", () => {
     const catalog = catalogOf(

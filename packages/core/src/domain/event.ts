@@ -123,6 +123,13 @@ export const AgentEvent = Schema.TaggedUnion({
     /** What the classifier calls cost at the catalog's price; absent when unpriced or none. */
     costUsd: Schema.optional(Schema.Finite),
     durationMs: Schema.Finite,
+    /**
+     * True for the effort route of `/effort auto`: `selected` names the
+     * effort router (`router/effort`), `model` is the model the turn runs
+     * on, unchanged, and `effort` the level every step of the turn asks for
+     * (absent: the turn names none, as its last request did).
+     */
+    effortOnly: Schema.optional(Schema.Literal(true)),
   },
   StreamEnded: {
     sessionId: SessionId,
@@ -321,6 +328,8 @@ export const AgentEvent = Schema.TaggedUnion({
     sessionId: SessionId,
     modelId: Schema.optional(ModelId),
     reasoningLevel: Schema.optional(ReasoningEffort),
+    /** `/effort auto`: the effort router picks each turn's level; never with `reasoningLevel`. */
+    reasoningAuto: Schema.optional(Schema.Literal(true)),
   },
   BranchCreated: {
     sessionId: SessionId,

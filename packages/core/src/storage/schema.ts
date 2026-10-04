@@ -117,6 +117,21 @@ export const MESSAGE_CHUNK_SELECT = `SELECT m.id, m.session_id, m.branch_id, m.k
 
 const decodeAdmission = Schema.decodeEffect(Schema.fromJsonString(SessionAdmission))
 
+/**
+ * The `reasoning_level` of a session on `/effort auto`. An older build
+ * reads it as no level: it is not a `ReasoningEffort`.
+ */
+const REASONING_AUTO = "auto"
+
+/** The `reasoning_level` a session stores: `auto`, its level, or none. */
+export const storedReasoningLevel = (
+  session: Pick<Session, "reasoningLevel" | "reasoningAuto">,
+): Option.Option<string> =>
+  Option.orElse(
+    Option.liftPredicate(REASONING_AUTO, () => session.reasoningAuto === true),
+    () => Option.fromUndefinedOr(session.reasoningLevel),
+  )
+
 const rowToSession = (row: SessionRow) =>
   Effect.gen(function* () {
     const createdAt = yield* decodeDateFromMillis(row.created_at)
@@ -132,6 +147,9 @@ const rowToSession = (row: SessionRow) =>
       modelId: Option.getOrUndefined(Option.fromNullishOr(row.model_id)),
       reasoningLevel: Option.getOrUndefined(
         Option.fromNullishOr(row.reasoning_level).pipe(Option.filter(isReasoningEffort)),
+      ),
+      reasoningAuto: Option.getOrUndefined(
+        Option.liftPredicate(true as const, () => row.reasoning_level === REASONING_AUTO),
       ),
       activeBranchId: Option.getOrUndefined(Option.fromNullishOr(row.active_branch_id)),
       parentSessionId: Option.getOrUndefined(Option.fromNullishOr(row.parent_session_id)),

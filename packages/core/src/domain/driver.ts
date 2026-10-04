@@ -724,6 +724,26 @@ export interface ModelDriverContribution {
   readonly cacheWritesByLifetime?: (
     metadata: Response.ProviderMetadata,
   ) => ReadonlyArray<CacheWriteByLifetime>
+  /**
+   * Whether the request `hints` describe carries its effort inside the
+   * conversation: where `hints.reasoning` differs from the levels of the
+   * earlier runs (`hints.reasoningHistory`), the request sends the change as
+   * an effort marker or a configuration update and keeps the bytes the
+   * previous request (the last run's level over the runs before it) wrote
+   * to the cache: the same top-level effort and the same changes before the
+   * reply. False where the change would go at the top of the request (it
+   * rewrites the cache), or this history cannot carry it (a change that
+   * turns thinking on or off, or one after a run at a provider default the
+   * wire did not name). Core asks it before `/effort auto`
+   * changes the level on a warm cache; a change it does not carry holds the
+   * level. Absent: no change is carried. `catalog` is the driver's view, as
+   * `resolveModel` gets it; a resolver with no catalog passes none.
+   */
+  readonly carriesEffort?: (
+    modelName: string,
+    hints: ProviderHints,
+    catalog?: ModelCatalogView,
+  ) => boolean
 }
 
 // ── ModelRouterContribution — virtual models ──
@@ -785,12 +805,35 @@ export interface ModelRouteInput {
   readonly current: Option.Option<ModelRouteCurrent>
   /** The session is a spawned child: its requests ask for the child cache lifetime. */
   readonly child: boolean
+  /**
+   * On `/effort auto`, where the same router serves the effort router: its
+   * choices, to pick in the same call (`ModelRouteDecision.effort`).
+   */
+  readonly effort?: ModelEffortRouteInput
 }
 
-/** The choice a router picked, and why, in a few words. */
-export interface ModelRouteDecision {
+/**
+ * The effort router's part of a model route: its choices and, aligned with
+ * them, a model a choice's level runs on (none: no choice of the model route
+ * takes that level from this history).
+ */
+interface ModelEffortRouteInput {
+  readonly model: VirtualModel
+  readonly candidates: ReadonlyArray<Option.Option<Model>>
+}
+
+/** A choice a router picked, and why, in a few words. */
+export interface ModelRouteChoice {
   readonly choice: number
   readonly reason: string
+}
+
+/**
+ * The choice a router picked, and why. Where the input carried the effort
+ * router, `effort` is its pick; absent, core asks the effort router alone.
+ */
+export interface ModelRouteDecision extends ModelRouteChoice {
+  readonly effort?: ModelRouteChoice
 }
 
 /**
@@ -807,6 +850,22 @@ export interface ModelRouterContribution {
   readonly name: string
   readonly models: ReadonlyArray<VirtualModel>
   readonly problems?: ReadonlyArray<VirtualModelProblem>
+  /**
+   * The effort router `/effort auto` runs (`Session.reasoningAuto`): every
+   * choice sets an effort and names no model. Not a model id: it is not
+   * listed or selectable. Core routes it at a user turn's first step, after
+   * a model route, with each choice's candidate the turn's model (none for a
+   * level the model does not take), and records the pick as a `ModelRouted`
+   * with `effortOnly`. A spawned child is never routed. On a warm cache a
+   * choice is a candidate only where its level is the one the cache was
+   * written at or the driver carries the change
+   * (`ModelDriverContribution.carriesEffort`); with no other candidate the
+   * level holds and `route` is not asked. Where the session runs on one of
+   * this router's virtual models, the model route's input carries the
+   * effort router too (`ModelRouteInput.effort`), so one call picks both.
+   * The first registered router with one serves it.
+   */
+  readonly effort?: VirtualModel
   readonly route: (
     input: ModelRouteInput,
   ) => Effect.Effect<ModelRouteDecision, ExtensionServiceError, ExtensionContext>
