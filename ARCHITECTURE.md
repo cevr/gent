@@ -77,7 +77,8 @@ updates this list in the same commit.
     `w*h/750` with no cap (it bounds the high-resolution models), OpenAI's tiles or 32-pixel patches by model at the
     `high` detail, which each OpenAI image part names
     (`Model.imagePartOptions`) so the estimate and the request agree. A model
-    of an unknown class counts the highest of the known costs. Images are
+    of a class that names no cost counts the highest of every shipped cost
+    (`KNOWN_IMAGE_COSTS`; a test holds each shipped class to it). Images are
     bounded too: a request carries
     at most the newest 20 and about 12 MB of base64 (`Model.imageLimit`, from
     the API class: Chat Completions takes 5 and 4 MB), and past either it

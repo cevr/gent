@@ -1148,7 +1148,7 @@ type ImageCost = ReturnType<ImageCostOf>
  * older models, 32-pixel patches (a multiplier, and the patch budget the
  * `high` detail shrinks an image to) for the newer ones.
  */
-const OPENAI_IMAGE_COSTS: ReadonlyArray<readonly [RegExp, ImageCost]> = [
+export const OPENAI_IMAGE_COSTS: ReadonlyArray<readonly [RegExp, ImageCost]> = [
   [/^gpt-4o-mini/, { _tag: "Tiles", baseTokens: 2_833, tileTokens: 5_667 }],
   [/^gpt-4o/, { _tag: "Tiles", baseTokens: 85, tileTokens: 170 }],
   [/^gpt-4\.1-mini/, { _tag: "Patches", multiplier: 1.62, maxPatches: 6_144 }],

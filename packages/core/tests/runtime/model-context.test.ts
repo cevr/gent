@@ -351,9 +351,10 @@ describe("projectModelContext", () => {
     )
     expect(imageCost(patches, 1024, 1024)).toBe(Math.ceil(1024 * 1.2))
     expect(imageCost(patches, 2000, 2000)).toBe(3_000)
-    // An unknown API class counts the highest known cost: OpenAI's one tile, then uncapped pixels.
-    expect(imageCost(Option.none(), 150, 100)).toBe(85 + 170)
-    expect(imageCost(Option.none(), 1500, 1000)).toBe(2_000)
+    // An unknown API class counts the highest known cost: here gpt-4o-mini's tiles,
+    // one tile for 150x100, six for 1500x1000 (cut to 1152x768).
+    expect(imageCost(Option.none(), 150, 100)).toBe(2_833 + 5_667)
+    expect(imageCost(Option.none(), 1500, 1000)).toBe(2_833 + 6 * 5_667)
   })
 
   test("five 1024x1024 images on an OpenAI tile model count at OpenAI's cost and leave the window", () => {
@@ -381,6 +382,8 @@ describe("projectModelContext", () => {
     const mini = ImageCost.cases.Tiles.make({ baseTokens: 2_833, tileTokens: 5_667 })
     expect(estimateTokens([results], Option.some(mini))).toBeGreaterThanOrEqual(5 * 25_501)
     expect(failure(projectModelContext(window, budgetAt(mini)))._tag).toBe("BudgetExceeded")
+    // A model whose API class names no cost counts the highest known one: it is refused too.
+    expect(failure(projectModelContext(window, budget(111_616)))._tag).toBe("BudgetExceeded")
   })
 
   test("rejects an oversized newest user turn instead of returning an empty prompt", () => {

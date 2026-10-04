@@ -757,7 +757,18 @@ describe("tool image bound in a turn", () => {
     () =>
       Effect.gen(function* () {
         const paths = Array.from({ length: 26 }, (_, index) => `shot-${index + 1}.png`)
-        const { prompts, stored, home } = yield* imageTurn({ paths })
+        // A Messages model, so each image counts at its class's cost: a model whose
+        // class names none counts gpt-4o-mini's tiles, and 26 would fill the window.
+        const model = modelFromCatalog("p", { id: "bound", name: "Bound" }, MESSAGES_CLASS)
+        const { prompts, stored, home } = yield* imageTurn({
+          paths,
+          agent: AgentDefinition.make({
+            name: testAgent.name,
+            description: "Bound",
+            model: model.id,
+          }),
+          models: [Model.make({ ...model, contextLength: 200_000 })],
+        })
         // One request before any image, then one after each.
         expect(prompts).toHaveLength(27)
 

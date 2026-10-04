@@ -319,14 +319,25 @@ const tokensAtCost = (cost: ImageCost, width: number, height: number): number =>
   })
 
 /**
- * The costs a model of an unknown API class may count at: Anthropic's pixels,
- * OpenAI's tiles at `gpt-4o`'s rates, and OpenAI's patches at the `high`
- * detail of its newest models. Such a model counts each image at the highest.
+ * Every cost a shipped API class counts an image at: Anthropic's pixels, and
+ * each OpenAI rate of tiles and patches (`gpt-4o-mini`'s tiles the highest).
+ * A model whose class names no cost counts each image at the highest of
+ * these, so no known rule counts more. A test holds each shipped class's
+ * costs to this list.
  */
-const KNOWN_IMAGE_COSTS: ReadonlyArray<ImageCost> = [
+export const KNOWN_IMAGE_COSTS: ReadonlyArray<ImageCost> = [
   ImageCost.cases.Pixels.make({ pixelsPerToken: 750 }),
+  ImageCost.cases.Tiles.make({ baseTokens: 2_833, tileTokens: 5_667 }),
   ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 }),
+  ImageCost.cases.Tiles.make({ baseTokens: 75, tileTokens: 150 }),
+  ImageCost.cases.Tiles.make({ baseTokens: 70, tileTokens: 140 }),
   ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 2_500 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 6_144 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 1_536 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.5, maxPatches: 1_536 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.62, maxPatches: 6_144 }),
+  ImageCost.cases.Patches.make({ multiplier: 1.72, maxPatches: 1_536 }),
+  ImageCost.cases.Patches.make({ multiplier: 2.46, maxPatches: 1_536 }),
 ]
 
 /**

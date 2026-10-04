@@ -32,6 +32,7 @@ import {
   LanguageModelLayers,
   listModelCatalog,
   modelCatalogFixture,
+  KNOWN_IMAGE_COSTS,
   storedCredentialModel,
   textStep,
 } from "@gent/core/test-utils"
@@ -51,6 +52,8 @@ import {
   EMPTY_CREDENTIAL_CELL,
   freshEnoughAt,
   makeCredentialCache,
+  OPENAI_IMAGE_COSTS,
+  openAiImageCost,
 } from "../src/providers.js"
 import {
   AnthropicPlatform,
@@ -211,6 +214,19 @@ describe("driver catalog", () => {
     expect(costOf("claude-sonnet-4-5", MESSAGES_CLASS)).toEqual([
       [{ _tag: "Pixels", pixelsPerToken: 750 }, Option.none()],
     ])
+  })
+
+  test("every cost a shipped API class counts is one core bounds a class with no cost by", () => {
+    // A model no table row names takes each class's default cost.
+    const entry: CatalogModel = { id: "no-such-model", name: "None" }
+    const shipped = [
+      ...OPENAI_IMAGE_COSTS.map(([, cost]) => cost),
+      openAiImageCost(entry),
+      ...[...SHIPPED_API_CLASSES.values()].flatMap((apiClass) =>
+        Option.toArray(Option.map(Option.fromUndefinedOr(apiClass.imageCost), (of) => of(entry))),
+      ),
+    ]
+    for (const cost of shipped) expect(KNOWN_IMAGE_COSTS).toContainEqual(cost)
   })
 
   test("a model lists the effort levels its API class sends", () => {
