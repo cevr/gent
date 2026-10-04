@@ -20,9 +20,10 @@
 #
 # The current link changes in one rename, and a version directory never
 # changes once it is in place, so a gent that runs keeps its own pair. One
-# install at a time holds <root>/.lock while it switches and prunes. The
-# current and the previous version stay, and so does every version a running
-# gent marks in <version>/.in-use/<pid>. `gent upgrade` runs the release's own
+# install at a time holds <root>/.lock while it switches and prunes; another
+# waits 60 seconds for it, then stops and names the lock. The current and the
+# previous version stay, and so does every version a running gent marks in
+# <version>/.in-use/<pid>. `gent upgrade` runs the release's own
 # install.sh. GENT_RELEASES_URL names another release host, such as a mirror,
 # with the same paths as the GitHub releases page.
 #
@@ -64,7 +65,7 @@ main() {
         shift
         ;;
       -h | --help)
-        sed -n '2,29p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
+        sed -n '2,30p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
         return 0
         ;;
       *)
@@ -192,45 +193,22 @@ check_pair() {
 # ── the layout ──────────────────────────────────────────────────────────────
 
 # The lock is a directory: mkdir makes it or fails, in one step, on every
-# system. It holds the owner's PID. A lock whose owner is gone is moved aside
-# (one rename, so one waiter wins it) and removed.
+# system. It holds the owner's PID. A waiter never takes a lock over, since
+# no check tells a crashed owner from a live one for certain: it waits 60
+# seconds, then stops and names the lock for a person to remove.
 take_lock() {
-  waited=0
-  unnamed=0
-  while :; do
-    if mkdir "$lock" 2>/dev/null; then
-      echo "$$" >"$lock/pid"
-      locked=1
-      return 0
-    fi
+  tries=0
+  until mkdir "$lock" 2>/dev/null; do
+    [ -d "$lock" ] || fail "could not create the lock $lock"
     owner="$(cat "$lock/pid" 2>/dev/null || true)"
-    stale=0
-    if [ -n "$owner" ]; then
-      unnamed=0
-      kill -0 "$owner" 2>/dev/null || stale=1
-    else
-      # A new lock names its owner at once; one that stays unnamed lost its owner.
-      unnamed=$((unnamed + 1))
-      [ "$unnamed" -lt 5 ] || stale=1
-    fi
-    if [ "$stale" = 1 ]; then
-      if mv "$lock" "$root/.lock-stale-$$" 2>/dev/null; then
-        taken="$(cat "$root/.lock-stale-$$/pid" 2>/dev/null || true)"
-        if [ "$taken" = "$owner" ]; then
-          rm -rf "$root/.lock-stale-$$"
-        elif [ ! -e "$lock" ]; then
-          # Another waiter took the stale lock first: give its lock back.
-          mv "$root/.lock-stale-$$" "$lock" 2>/dev/null || true
-        fi
-      fi
-      continue
-    fi
-    if [ "$waited" = 0 ]; then
-      say "waiting for another install (PID ${owner:-starting}) to finish"
-      waited=1
-    fi
+    [ "$tries" != 0 ] || say "waiting for another install (PID ${owner:-unknown}) to finish"
+    tries=$((tries + 1))
+    [ "$tries" -le 60 ] ||
+      fail "another install holds $lock (PID ${owner:-unknown}) and did not finish within 60 seconds; remove $lock if no install runs"
     sleep 1
   done
+  locked=1
+  echo "$$" >"$lock/pid"
 }
 
 release_lock() {
@@ -291,7 +269,10 @@ link_bin() {
 }
 
 # Keep the new version, the one it replaces, and every version a gent that
-# runs still uses; remove the rest.
+# runs still uses; remove the rest. A gent that starts writes its marker,
+# then checks that its pair is still in place; prune moves a version aside
+# (one rename), then looks for markers again. So either prune sees the new
+# marker and puts the version back, or the gent sees its pair gone and stops.
 prune() {
   for dir in "$root"/versions/*; do
     [ -d "$dir" ] || continue
@@ -299,7 +280,14 @@ prune() {
     [ "$name" = "$placed" ] && continue
     [ -n "$previous" ] && [ "$name" = "$previous" ] && continue
     in_use "$dir" && continue
-    remove_tree "$dir"
+    aside="$root/versions/.prune-$name-$$"
+    [ ! -e "$aside" ] || continue
+    mv "$dir" "$aside" 2>/dev/null || continue
+    if in_use "$aside"; then
+      mv "$aside" "$dir" || say "could not put back $name, which a running gent uses; it is in $aside"
+      continue
+    fi
+    remove_tree "$aside"
   done
 }
 

@@ -22,6 +22,7 @@ import {
   Match,
   Option,
   Path,
+  type PlatformError,
   Runtime,
   Schema,
   Stdio,
@@ -1095,7 +1096,8 @@ const installRoot = (path: Path.Path, executable: string): Option.Option<string>
  * the scope: `<version>/.in-use/<pid>`. install.sh never prunes a version
  * with a live marker, so a gent that runs, and its server, keep their
  * gent-cell across updates. A source run or a gent outside an install marks
- * nothing, and a marker that cannot be written is skipped: it only protects.
+ * nothing. A gent whose marker cannot be written, or whose pair is gone once
+ * the marker is in place, does not start: it would run without gent-cell.
  */
 export const markVersionInUse = Effect.gen(function* () {
   const platform = yield* GentPlatform
@@ -1104,14 +1106,37 @@ export const markVersionInUse = Effect.gen(function* () {
   if ((yield* platform.build)._tag === "Source") return
   const executable = yield* platform.execPath
   if (Option.isNone(installRoot(path, executable))) return
-  const markers = path.join(path.dirname(executable), ".in-use")
+  const versionDir = path.dirname(executable)
+  const markers = path.join(versionDir, ".in-use")
   const marker = path.join(markers, String(yield* platform.pid))
-  yield* Effect.acquireRelease(
-    fs
-      .makeDirectory(markers, { recursive: true })
-      .pipe(Effect.andThen(fs.writeFileString(marker, "")), Effect.ignore),
-    () => fs.remove(marker).pipe(Effect.ignore),
+  const removed = new CliStartupError({
+    message: `this version of gent was removed during start (${versionDir}); run gent again`,
+  })
+  const unmarked = (error: PlatformError.PlatformError) => {
+    if (error.reason._tag === "NotFound") return removed
+    return new CliStartupError({
+      message: `could not mark ${versionDir} in use: ${error.message}`,
+      cause: error,
+    })
+  }
+  // Not recursive: a version directory that prune removed stays removed.
+  yield* fs.makeDirectory(markers).pipe(
+    Effect.catchEager((error) => {
+      if (error.reason._tag === "AlreadyExists") return Effect.void
+      return Effect.fail(error)
+    }),
+    Effect.mapError(unmarked),
   )
+  yield* Effect.acquireRelease(fs.writeFileString(marker, "").pipe(Effect.mapError(unmarked)), () =>
+    fs.remove(marker).pipe(Effect.ignore),
+  )
+  // The other half of prune's handshake (install.sh moves a version aside,
+  // then looks for markers again): with the marker written, a pair still in
+  // place stays in place.
+  const pair = yield* Effect.forEach([executable, path.join(versionDir, "gent-cell")], (file) =>
+    fs.exists(file),
+  ).pipe(Effect.mapError(unmarked))
+  if (!pair.every(Boolean)) return yield* removed
 })
 
 class UpgradeError extends Schema.TaggedError<UpgradeError>()("UpgradeError", {

@@ -172,20 +172,34 @@ const services = Layer.merge(BunServices.layer, BunGentPlatformLive)
 
 /**
  * A directory to put first on PATH whose `mv` runs the real one, but fails
- * a move of a staged pair when `FAIL_PAIR_MOVE` is set and waits 2 seconds
- * after a move of the current link when `SLOW_SWITCH` is set. It reproduces
- * a failed replacement and an updater that stalls between switch and prune.
+ * a move of a staged pair when `FAIL_PAIR_MOVE` is set, waits 2 seconds
+ * after a move of the current link when `SLOW_SWITCH` is set, and, when
+ * `MARK_BEFORE_PRUNE` names a PID, writes that PID's in-use marker into a
+ * version just before prune moves it aside. It reproduces a failed
+ * replacement, an updater that stalls between switch and prune, and a gent
+ * that starts while prune looks at its version.
  */
 const MV_WRAPPER = `#!/bin/sh
 case " $* " in
   *"/pair "*) [ -z "$FAIL_PAIR_MOVE" ] || exit 1 ;;
+  *"/.prune-"*)
+    if [ -n "$MARK_BEFORE_PRUNE" ]; then
+      mkdir -p "$1/.in-use" && : >"$1/.in-use/$MARK_BEFORE_PRUNE"
+    fi
+    ;;
 esac
 /bin/mv "$@"
 status=$?
 case " $* " in
-  *"/.gent-link-"*) [ -z "$SLOW_SWITCH" ] || sleep 2 ;;
+  *"/.gent-link-"*) [ -z "$SLOW_SWITCH" ] || /bin/sleep 2 ;;
 esac
 exit $status
+`
+
+/** A `sleep` that returns at once when `FAST_SLEEP` is set: a bounded wait ends in no time. */
+const SLEEP_WRAPPER = `#!/bin/sh
+[ -z "$FAST_SLEEP" ] || exit 0
+exec /bin/sleep "$@"
 `
 
 const wrappedPath = (home: string) =>
@@ -195,7 +209,9 @@ const wrappedPath = (home: string) =>
     const dir = path.join(home, "wrapped-bin")
     yield* fs.makeDirectory(dir, { recursive: true })
     yield* fs.writeFileString(path.join(dir, "mv"), MV_WRAPPER)
+    yield* fs.writeFileString(path.join(dir, "sleep"), SLEEP_WRAPPER)
     yield* fs.chmod(path.join(dir, "mv"), 0o755)
+    yield* fs.chmod(path.join(dir, "sleep"), 0o755)
     return `${dir}:/usr/bin:/bin`
   })
 
@@ -409,18 +425,80 @@ describe("install.sh", () => {
     }).pipe(Effect.timeout("60 seconds"), Effect.provide(services)),
   )
 
-  it.scopedLive("a lock whose owner is gone does not block an install", () =>
+  it.scopedLive("two waiters on a stale lock both fail closed and leave it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* makeTempDirectoryScoped("gent-install-home-")
+      const releases = yield* threeReleases
+      expect((yield* install(home, releases, ["--version", "1.1.0"])).exitCode).toBe(0)
+      const lock = path.join((yield* layout(home)).root, ".lock")
+      const gone = (yield* runProcess("sh", ["-c", "echo $"])).stdout.trim()
+      yield* fs.makeDirectory(lock)
+      yield* fs.writeFileString(path.join(lock, "pid"), `${gone}\n`)
+
+      const env = { PATH: yield* wrappedPath(home), FAST_SLEEP: "1" }
+      const [first, second] = yield* Effect.all(
+        [
+          install(home, releases, ["--version", "1.2.0"], env),
+          install(home, releases, ["--version", "1.3.0"], env),
+        ],
+        { concurrency: "unbounded" },
+      )
+      for (const waiter of [first, second]) {
+        expect(waiter.exitCode).toBe(1)
+        expect(waiter.stderr).toContain(`${lock} (PID ${gone})`)
+        expect(waiter.stderr).toContain(`remove ${lock} if no install runs`)
+      }
+      expect((yield* fs.readFileString(path.join(lock, "pid"))).trim()).toBe(gone)
+      expect((yield* layout(home)).current).toEqual(Option.some("versions/1.1.0/gent"))
+    }).pipe(Effect.timeout("60 seconds"), Effect.provide(services)),
+  )
+
+  it.scopedLive("a lock that names an unrelated live process ends the wait", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const home = yield* makeTempDirectoryScoped("gent-install-home-")
       const releases = yield* threeReleases
       const lock = path.join((yield* layout(home)).root, ".lock")
-      const gone = yield* runProcess("sh", ["-c", "echo $$"])
+      // This test process lives on, as a reused PID would.
+      const live = String(yield* (yield* GentPlatform).pid)
       yield* fs.makeDirectory(lock, { recursive: true })
-      yield* fs.writeFileString(path.join(lock, "pid"), `${gone.stdout.trim()}\n`)
-      expect((yield* install(home, releases, ["--version", "1.2.0"])).exitCode).toBe(0)
-      expect(yield* fs.exists(lock)).toBe(false)
+      yield* fs.writeFileString(path.join(lock, "pid"), `${live}\n`)
+      const waiter = yield* install(home, releases, ["--version", "1.2.0"], {
+        PATH: yield* wrappedPath(home),
+        FAST_SLEEP: "1",
+      })
+      expect(waiter.exitCode).toBe(1)
+      expect(waiter.stderr).toContain(`${lock} (PID ${live})`)
+      expect((yield* layout(home)).versions).toEqual([])
+    }).pipe(Effect.timeout("40 seconds"), Effect.provide(services)),
+  )
+
+  it.scopedLive("prune keeps a version whose marker appears while it looks", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* makeTempDirectoryScoped("gent-install-home-")
+      const releases = yield* threeReleases
+      for (const version of ["1.1.0", "1.2.0"]) {
+        expect((yield* install(home, releases, ["--version", version])).exitCode).toBe(0)
+      }
+      // A gent of 1.1.0 starts after prune's first look and marks its version.
+      const live = String(yield* (yield* GentPlatform).pid)
+      const result = yield* install(home, releases, ["--version", "1.3.0"], {
+        PATH: yield* wrappedPath(home),
+        MARK_BEFORE_PRUNE: live,
+      })
+      expect(result.exitCode).toBe(0)
+      const root = (yield* layout(home)).root
+      expect((yield* layout(home)).versions).toEqual(["1.1.0", "1.2.0", "1.3.0"])
+      const cell = yield* runProcess(path.join(root, "versions", "1.1.0", "gent-cell"), [])
+      expect(cell.exitCode).toBe(0)
+      expect([
+        ...(yield* fs.readDirectory(path.join(root, "versions", "1.1.0", ".in-use"))),
+      ]).toEqual([live])
     }).pipe(Effect.timeout("60 seconds"), Effect.provide(services)),
   )
 
@@ -751,11 +829,38 @@ describe("the in-use marker", () => {
       const home = yield* makeTempDirectoryScoped("gent-marker-home-")
       const versionDir = path.join(home, "gent", "versions", "1.2.0")
       yield* fs.makeDirectory(versionDir, { recursive: true })
+      for (const name of ["gent", "gent-cell"]) {
+        yield* fs.writeFileString(path.join(versionDir, name), "#!/bin/sh\n")
+      }
       const pid = String(yield* (yield* GentPlatform).pid)
       expect(yield* markedAs(path.join(versionDir, "gent"), compiled("1.2.0"))).toEqual({
         whileOpen: [pid],
         after: [],
       })
+    }).pipe(Effect.timeout("30 seconds"), Effect.provide(services)),
+  )
+
+  it.scopedLive("a gent whose version was removed during start refuses to start", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* makeTempDirectoryScoped("gent-marker-home-")
+      const versions = path.join(home, "gent", "versions")
+      yield* fs.makeDirectory(versions, { recursive: true })
+      // Prune removed 1.2.0 between the start and the marker.
+      const gone = yield* markedAs(path.join(versions, "1.2.0", "gent"), compiled("1.2.0")).pipe(
+        Effect.flip,
+      )
+      expect(gone.message).toContain("was removed during start")
+      expect(gone.message).toContain("run gent again")
+      expect(yield* fs.exists(path.join(versions, "1.2.0"))).toBe(false)
+
+      // A version directory without its pair is just as gone.
+      const emptied = path.join(versions, "1.3.0")
+      yield* fs.makeDirectory(emptied)
+      const empty = yield* markedAs(path.join(emptied, "gent"), compiled("1.3.0")).pipe(Effect.flip)
+      expect(empty.message).toContain("was removed during start")
+      expect([...(yield* fs.readDirectory(path.join(emptied, ".in-use")))]).toEqual([])
     }).pipe(Effect.timeout("30 seconds"), Effect.provide(services)),
   )
 
