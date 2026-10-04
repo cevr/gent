@@ -615,14 +615,16 @@ const openHarness = Effect.gen(function* () {
 
 type Harness = Effect.Success<typeof openHarness>
 
+/** The listing, asked by the harness's session or by `at`. */
 const requestRows = (
   harness: Harness,
   input: { readonly query?: string; readonly root?: string },
+  at: { readonly sessionId: SessionId; readonly branchId: BranchId } = harness,
 ) =>
   Effect.gen(function* () {
     const raw = yield* harness.client.extension.request({
-      sessionId: harness.sessionId,
-      branchId: harness.branchId,
+      sessionId: at.sessionId,
+      branchId: at.branchId,
       extensionId: ref(AgentsViewRpc.ListAgents).extensionId,
       capabilityId: ref(AgentsViewRpc.ListAgents).capabilityId,
       input,
@@ -1185,6 +1187,41 @@ describe("AgentsViewExtension via RPC", () => {
           // Every row names its thread's key, which a handoff does not change.
           expect(rowFor(handoff.sessionId)?.thread).toBe(harness.sessionId)
           expect(rowFor(spawned.sessionId)?.thread).toBe(spawned.sessionId)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a root listing on a thread whose first session is gone still holds every session left and what they started",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* openHarness
+          // A1 hands off to A2, A2 spawns C and hands off to A3.
+          const second = yield* harness.client.session.create({
+            cwd: "/nonexistent/agents-view-rpc-second",
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+            continueThread: true,
+          })
+          const spawned = yield* harness.client.session.create({
+            cwd: "/nonexistent/agents-view-rpc-spawned",
+            parentSessionId: second.sessionId,
+            parentBranchId: second.branchId,
+          })
+          const third = yield* harness.client.session.create({
+            cwd: "/nonexistent/agents-view-rpc-third",
+            parentSessionId: second.sessionId,
+            parentBranchId: second.branchId,
+            continueThread: true,
+          })
+          yield* harness.client.session.delete({ sessionId: harness.sessionId })
+          const { reply } = yield* requestRows(harness, { root: third.sessionId }, third)
+          const rowFor = (sessionId: string) =>
+            reply.rows.find((row) => row.sessionId === sessionId)
+          expect(rowFor(third.sessionId)?.sessions).toEqual([second.sessionId, third.sessionId])
+          expect(rowFor(spawned.sessionId)?.parentSessionId).toBe(second.sessionId)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

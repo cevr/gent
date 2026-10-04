@@ -1670,6 +1670,28 @@ describe("done threads", () => {
       }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.scopedLive(
+    "a thread the reader watched finish from inside it is not done back at its starter",
+    () =>
+      Effect.gen(function* () {
+        let section: AgentRowEntry["section"] = "running"
+        let here: RowKeyOf = starter
+        const { controller, read } = yield* controllerOver(
+          () => [threadRow("notes", section)],
+          () => here,
+        )
+        yield* read("running, seen from the starter")
+        // The reader opens the thread while it runs and sees it finish there.
+        here = { sessionId: SessionId.make("notes"), branchId: BranchId.make("notes-branch") }
+        yield* read("running, seen inside")
+        section = "idle"
+        yield* read("idle, seen inside")
+        here = starter
+        yield* read("back at the starter")
+        expect(controller.done()).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("a delegate child gets no done row, and a thread that runs again leaves done", () =>
     Effect.gen(function* () {
       let section: AgentRowEntry["section"] = "running"

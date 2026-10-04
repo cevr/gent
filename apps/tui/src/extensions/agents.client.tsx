@@ -383,7 +383,10 @@ export const makeAgentsController = (
           next.set(key, { row, scope })
         }
       }
-      for (const row of inView) lastSection.set(threadOf(row), row.section)
+      // The reader sees the thread the shell is on too: a finish watched from
+      // inside it is seen, so it is no done row back at its starter.
+      const seen = [...inView, ...reply.rows.filter((row) => holds(row, here))]
+      for (const row of seen) lastSection.set(threadOf(row), row.section)
       setFinished(next)
     }
 

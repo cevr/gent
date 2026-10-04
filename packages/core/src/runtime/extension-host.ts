@@ -3151,9 +3151,9 @@ export const makeExtensionHostContextProvider = (
           inWorkspace,
         ),
         listSessions: (params) =>
-          Option.match(Option.fromUndefinedOr(params?.root), {
+          Option.match(Option.fromUndefinedOr(params?.thread), {
             onNone: () => sessions((storage) => storage.listSessions),
-            onSome: (root) => relationships((storage) => storage.getSessionTree(root)),
+            onSome: (member) => relationships((storage) => storage.getThreadTree(member)),
           }).pipe(Effect.mapError(sessionError("listSessions")), inWorkspace),
         listActiveLoops: registry((stateRegistry) =>
           Effect.gen(function* () {

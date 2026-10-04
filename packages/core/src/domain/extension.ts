@@ -939,13 +939,15 @@ export interface ExtensionSessionService {
   readonly holdResident: Effect.Effect<void, never, Scope.Scope>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
   /**
-   * Every session in the workspace, or with a `root` only that session and
-   * the sessions below it by parent link, at any depth; a read that costs
-   * the subtree, not the workspace. The durable half of an agent catalog:
-   * survives restarts, but says nothing about what is running now.
+   * Every session in the workspace, or with `thread` only the sessions of
+   * that session's thread and the sessions below any of them by parent link,
+   * at any depth; a read that costs the thread's subtree, not the workspace.
+   * The thread is read by its key, so a deleted first session loses none of
+   * the rest. The durable half of an agent catalog: survives restarts, but
+   * says nothing about what is running now.
    */
   readonly listSessions: (params?: {
-    readonly root?: SessionId
+    readonly thread?: SessionId
   }) => Effect.Effect<ReadonlyArray<Session>, ExtensionServiceError>
   /**
    * Loops materialized right now. The live half of an agent catalog: carries

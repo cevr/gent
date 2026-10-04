@@ -660,9 +660,11 @@ Shape:
   result it did not ask for; work whose result the starter needs is a
   delegate child. The thread tools act for the caller's thread, not its
   session: after a handoff the new session owns what the older one started.
-  `thread.list` reads the subtree of the caller's thread key
-  (`listSessions({ root })`; the caller's own subtree when that session is
-  gone), groups it by key, and keeps the groups whose first session any
+  `thread.list` reads the caller's thread tree (`listSessions({ thread })`:
+  every session with the caller's thread key and every session below any of
+  them, so a deleted first session, whose handoffs stay detached, loses none
+  of the rest; the agents view reads a `root` the same way), groups it by
+  key, and keeps the groups whose first session any
   session of the caller's thread spawned, with each one's status from
   `listActiveLoops`, its current session, and the current session's latest
   reply (one line, or 4,000 characters head and tail for one named thread);
@@ -1068,7 +1070,9 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - The tray adds `done · <name>` after its `working` rows (three rows at most,
   the rest counted) for a side thread that a listing showed running and a
   later one idle while the shell was not on it, in the subtree of the shell's
-  thread. The controller keeps that state outside any component, keyed by
+  thread. The thread the shell is on counts as seen too, so a finish the
+  reader watched inside the thread is no done row back at its starter; a done
+  row is made only for a descendant. The controller keeps that state outside any component, keyed by
   thread key, and changes it only for a reply `sessionQuery` keeps
   (`accepted`). Opening the thread, its next turn on any of its sessions, or
   its absence from a whole listing of the root it finished under (no filter)

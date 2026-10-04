@@ -1,15 +1,4 @@
-import {
-  Context,
-  Effect,
-  FiberMap,
-  Layer,
-  Option,
-  Order,
-  Predicate,
-  Ref,
-  Schema,
-  Stream,
-} from "effect"
+import { Context, Effect, FiberMap, Layer, Option, Order, Ref, Schema, Stream } from "effect"
 import {
   type AgentEvent,
   BranchId,
@@ -640,7 +629,7 @@ const ListAgentsOutput = Schema.Struct({
 
 /**
  * Join the live loop enumeration against durable session storage, before the
- * query filter: the whole workspace, or with a `root` only its subtree.
+ * query filter: the whole workspace, or with a `root` only its thread's tree.
  *
  * Neither catalog is sufficient alone: the live one is empty after a restart,
  * and the durable one cannot say what is running. `projectAgentRows` above
@@ -654,25 +643,10 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (root: Option.
   // recover from, so it dies rather than widening the capability's error type.
   const activeLoops = yield* ctx.Session.listActiveLoops.pipe(Effect.orDie)
   // A root stands for its whole thread: a handoff's listing holds what the
-  // sessions it continues started. The thread's first session heads it; when
-  // that session is gone, the root's own subtree is what is left.
-  let threadRoot = root
-  if (Option.isSome(root)) {
-    const rootSession = yield* ctx.Session.getSession(root.value).pipe(Effect.orDie)
-    if (Predicate.isNotUndefined(rootSession)) threadRoot = Option.some(sessionThread(rootSession))
-  }
-  const threadSessions = yield* ctx.Session.listSessions({
-    root: Option.getOrUndefined(threadRoot),
-  }).pipe(Effect.orDie)
-  const sessions = yield* Option.match(root, {
-    onNone: () => Effect.succeed(threadSessions),
-    onSome: (sessionId) => {
-      if (threadSessions.some((session) => session.id === sessionId)) {
-        return Effect.succeed(threadSessions)
-      }
-      return ctx.Session.listSessions({ root: sessionId }).pipe(Effect.orDie)
-    },
-  })
+  // sessions it continues started, even with the thread's first session gone.
+  const sessions = yield* ctx.Session.listSessions({ thread: Option.getOrUndefined(root) }).pipe(
+    Effect.orDie,
+  )
   const listed: ReadonlyArray<AgentRowKey> = activeLoops.map((loop) => ({
     sessionId: loop.sessionId,
     branchId: loop.branchId,

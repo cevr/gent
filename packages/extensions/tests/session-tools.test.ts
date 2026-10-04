@@ -781,6 +781,45 @@ describe("threads", () => {
   )
 
   it.live(
+    "with the thread's first session deleted, its newest session still lists, stops and counts what the thread started",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rig = yield* threadRig
+          // A1 hands off to A2, A2 starts C and hands off to A3.
+          const handoff = (from: SessionKey) =>
+            rig.client.session.create({
+              cwd: rig.cwd,
+              parentSessionId: from.sessionId,
+              parentBranchId: from.branchId,
+              continueThread: true,
+            })
+          const second: SessionKey = yield* handoff(rig.starter)
+          const child = yield* rig.start(second, THREAD_TASK)
+          const third: SessionKey = yield* handoff(second)
+          // A delete of A1 keeps its handoffs and what they started.
+          yield* rig.client.session.delete({ sessionId: rig.starter.sessionId })
+          const rows = yield* rig.list(third)
+          expect(rows.map((row) => row.thread)).toEqual([child.thread])
+          // The cap counts C: three more run, and a fifth is refused.
+          const more = yield* rig.act(
+            third,
+            [1, 2, 3, 4].map((index) =>
+              rig.op("thread.start", { task: `${THREAD_TASK} ${index}` }),
+            ),
+          )
+          expect(more.map((result) => result.ok)).toEqual([true, true, true, false])
+          expect(more.at(-1)?.output).toContain("already runs 4 threads")
+          const stopped = yield* rig.stop(third, child.thread)
+          expect(stopped.stopped).toEqual([
+            { sessionId: child.sessionId, branchId: child.branchId },
+          ])
+        }).pipe(Effect.timeout("14 seconds")),
+      ),
+    16_000,
+  )
+
+  it.live(
     "a repeated start of one tool call is one thread",
     () =>
       Effect.scoped(

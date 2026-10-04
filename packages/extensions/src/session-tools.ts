@@ -831,9 +831,9 @@ interface StartedThread {
  * any session of `starter` spawned. A thread is one conversation over its
  * sessions, so after a handoff the newer session owns what the older one
  * started, and the older one sees what the newer one starts. A handoff
- * continues its own thread, so it is not one. Every session in question is
- * below the starter thread's first session by parent link (a handoff's
- * parent is the session it continues), so that session's subtree holds them.
+ * continues its own thread, so it is not one. `sessions` is the starter
+ * thread's tree (`listSessions({ thread })`), which holds every session in
+ * question.
  */
 const threadsStartedBy = (
   starter: SessionId,
@@ -865,26 +865,19 @@ const asThreadError = (what: string) =>
 
 /**
  * The threads this session's thread started, wherever in the thread the
- * caller is. The subtree of the thread's first session holds them. When that
- * session is gone (a deleted session keeps the handoffs of its own thread),
- * the caller's own subtree is what is left to read.
+ * caller is. The host reads the thread's sessions by its key, and what is
+ * below them, so a deleted first session (whose handoffs stay) loses none.
  */
 const startedThreads = Effect.fn("SessionTools.startedThreads")(function* () {
   const ctx = yield* ExtensionContext
-  const caller = yield* ctx.Session.getSession().pipe(asThreadError("Cannot read this session"))
+  const sessions = yield* ctx.Session.listSessions({ thread: ctx.sessionId }).pipe(
+    asThreadError("Cannot list this session's threads"),
+  )
+  const caller = sessions.find((session) => session.id === ctx.sessionId)
   const thread = Option.getOrElse(
     Option.map(Option.fromUndefinedOr(caller), sessionThread),
     () => ctx.sessionId,
   )
-  const listed = yield* ctx.Session.listSessions({ root: thread }).pipe(
-    asThreadError("Cannot list this session's threads"),
-  )
-  let sessions = listed
-  if (!listed.some((session) => session.id === ctx.sessionId)) {
-    sessions = yield* ctx.Session.listSessions({ root: ctx.sessionId }).pipe(
-      asThreadError("Cannot list this session's threads"),
-    )
-  }
   const loops = yield* ctx.Session.listActiveLoops.pipe(
     asThreadError("Cannot read which threads run"),
   )
